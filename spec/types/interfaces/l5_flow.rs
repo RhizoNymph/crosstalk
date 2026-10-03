@@ -1,0 +1,129 @@
+//! L5 flow detection: accesses, channels and transmissions. Consumer group
+//! `flow`.
+//!
+//! Triggered by `ConversationDelta` (tool calls and results become
+//! accesses), `ContentMatched` (confirms transmissions), the clock (evidence
+//! windows and idle windows close) and `PolicyChanged`.
+//!
+//! Implementations:
+//! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,
+//!   `BashExtractor` (tree-sitter-bash), `FileToolExtractor`, `McpExtractor`,
+//!   `UrlScanFallback`.
+//! - `ChannelRegistry`: `PgChannelRegistry`.
+//! - `Correlator`: `WindowedCorrelator`, which buffers evidence that arrives
+//!   out of order. A content match can be processed before the access that
+//!   opens its transmission, because they come from different consumer
+//!   groups.
+
+use crate::derived::flow::access::{Access, AccessKind, Extraction};
+use crate::derived::flow::channel::policy::{Policy, PolicyAuthor};
+use crate::derived::flow::evidence::CoAccess;
+use crate::derived::flow::resource::{Locator, ResourcePattern};
+use crate::derived::flow::transmission::{Confirmed, Route};
+use crate::derived::provenance::matching::ContentMatch;
+use crate::ids::{AgentId, ChannelId, TransmissionId};
+use crate::observed::message::{ToolCall, ToolResult};
+use crate::support::{NonEmpty, Timestamp};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedAccess {
+    pub kind: AccessKind,
+    pub locator: Locator,
+    pub via: Extraction,
+}
+
+pub trait ResourceExtractor {
+    /// Whether this extractor understands the tool at all.
+    fn handles(&self, call: &ToolCall) -> bool;
+
+    /// Accesses implied by one call. `result` is present once the harness has
+    /// sent it back (in the next request, or in the same response for
+    /// server-side tools); reads are only recorded with a result.
+    fn extract(
+        &self,
+        call: &ToolCall,
+        result: Option<&ToolResult>,
+    ) -> Result<Vec<ExtractedAccess>, ExtractError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelLookup {
+    /// Already a resource of this channel.
+    Known(ChannelId),
+    /// First sighting, but it matches a declared channel's pattern.
+    Declared(ChannelId),
+    /// Matches nothing: the caller creates a discovered channel.
+    New,
+}
+
+pub trait ChannelRegistry {
+    async fn lookup(&self, locator: &Locator) -> Result<ChannelLookup, RegistryError>;
+
+    async fn declare(
+        &mut self,
+        pattern: ResourcePattern,
+        policy: Policy,
+        by: PolicyAuthor,
+    ) -> Result<ChannelId, RegistryError>;
+
+    async fn set_policy(&mut self, channel: ChannelId, policy: Policy)
+    -> Result<(), RegistryError>;
+}
+
+/// What the correlator decided. The flow consumer applies these to stored
+/// transmissions and publishes the matching events.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransmissionUpdate {
+    Open {
+        transmission: TransmissionId,
+        to: AgentId,
+        route: Route,
+        co_access: Option<CoAccess>,
+    },
+    Confirm {
+        transmission: TransmissionId,
+        confirmed: Confirmed,
+    },
+    Suspect {
+        transmission: TransmissionId,
+        co_access: NonEmpty<CoAccess>,
+    },
+    Discard {
+        transmission: TransmissionId,
+    },
+}
+
+/// Owns the open-evidence windows. Runs in one task per flow shard and is
+/// fed over a channel, so it takes `&mut self` and does no I/O.
+pub trait Correlator {
+    fn on_access(&mut self, access: &Access, channel: ChannelId) -> Vec<TransmissionUpdate>;
+
+    fn on_match(
+        &mut self,
+        content: &ContentMatch,
+        channel: Option<ChannelId>,
+    ) -> Vec<TransmissionUpdate>;
+
+    /// Close evidence windows and expire suspected transmissions up to `now`.
+    fn on_tick(&mut self, now: Timestamp) -> Vec<TransmissionUpdate>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractError {
+    /// The arguments were not valid JSON for this tool's schema.
+    Arguments { reason: String },
+    /// A shell or code argument failed to parse.
+    Parse { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistryError {
+    Store {
+        reason: String,
+    },
+    UnknownChannel(ChannelId),
+    /// The pattern overlaps an existing declared channel's pattern.
+    OverlappingDeclaration {
+        existing: ChannelId,
+    },
+}

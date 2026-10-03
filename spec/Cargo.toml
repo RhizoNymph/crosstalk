@@ -1,0 +1,11 @@
+[package]
+name = "crosstalk-spec"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Type-checks the crosstalk type specification. Not part of the build."
+
+[lib]
+path = "types/mod.rs"
+
+[dependencies]
