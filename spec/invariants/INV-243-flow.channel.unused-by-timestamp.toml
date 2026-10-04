@@ -12,7 +12,7 @@ timestamps, not processing order, or consumer lag produces false alerts.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::late_processed_access_prevents_unused"
+dst = "crosstalk_flow::dst::late_processed_access_prevents_unused"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

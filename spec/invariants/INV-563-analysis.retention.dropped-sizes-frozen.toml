@@ -13,7 +13,7 @@ its final ones.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::dropped_version_keeps_all_time_sizes_only"
+unit = "crosstalk_analysis::tests::dropped_version_keeps_all_time_sizes_only"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

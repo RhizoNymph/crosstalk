@@ -13,7 +13,7 @@ read. The error must be raised before any entry of the batch is written.
 """
 
 [evidence]
-unit = ["crosstalk::provenance::tests::insert_on_wrong_shard_errors", "crosstalk::provenance::tests::lookup_on_wrong_shard_errors"]
+unit = ["crosstalk_provenance::tests::insert_on_wrong_shard_errors", "crosstalk_provenance::tests::lookup_on_wrong_shard_errors"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -12,8 +12,8 @@ after fusion, before the page's cursor is taken from its last hit.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::hybrid_fusion_truncates_to_limit"
-integration = "crosstalk::analysis::tests::pg_hybrid_search_respects_limit"
+unit = "crosstalk_analysis::tests::hybrid_fusion_truncates_to_limit"
+integration = "crosstalk_analysis::tests::pg_hybrid_search_respects_limit"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

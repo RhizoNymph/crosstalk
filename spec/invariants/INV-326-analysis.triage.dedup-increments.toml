@@ -11,7 +11,7 @@ re-date or un-acknowledge an alert someone is already handling.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::dedup_increments_occurrences_by_one", "crosstalk::analysis::tests::dedup_preserves_state_and_raised_at"]
+unit = ["crosstalk_analysis::tests::dedup_increments_occurrences_by_one", "crosstalk_analysis::tests::dedup_preserves_state_and_raised_at"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

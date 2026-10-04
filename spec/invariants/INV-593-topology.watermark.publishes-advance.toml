@@ -13,7 +13,7 @@ forget.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::watermark_advanced_once_per_advance"
+dst = "crosstalk_topology::dst::watermark_advanced_once_per_advance"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

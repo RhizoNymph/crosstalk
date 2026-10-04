@@ -13,7 +13,7 @@ agent's filesystem, so symlinks are not followed.
 """
 
 [evidence]
-property = "crosstalk::flow::resource::tests::equivalent_paths_share_resource_id"
+property = "crosstalk_flow::resource::tests::equivalent_paths_share_resource_id"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

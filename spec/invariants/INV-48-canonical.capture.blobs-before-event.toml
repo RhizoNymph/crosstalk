@@ -13,8 +13,8 @@ runs a consumer against the real blob store and bus.
 """
 
 [evidence]
-dst = "crosstalk::canonical::tests::dst_blobs_written_before_capture_published"
-integration = "crosstalk::canonical::tests::consumer_reads_every_referenced_blob"
+dst = "crosstalk_canonical::tests::dst_blobs_written_before_capture_published"
+integration = "crosstalk_canonical::tests::consumer_reads_every_referenced_blob"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

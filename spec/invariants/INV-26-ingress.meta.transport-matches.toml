@@ -11,7 +11,7 @@ follows the response actually received, not the request's stream flag.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::meta::transport_follows_response"
+unit = "crosstalk_ingress::tests::meta::transport_follows_response"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -15,8 +15,8 @@ checks the parsed canonical value equals the original exactly.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::snowflake_id_survives_canonicalization"
-property = "crosstalk::canonical::tests::large_integers_round_trip_exactly"
+unit = "crosstalk_canonical::tests::snowflake_id_survives_canonicalization"
+property = "crosstalk_canonical::tests::large_integers_round_trip_exactly"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-api"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The HTTP and SSE server for the crosstalk L8 surface."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

@@ -11,7 +11,7 @@ keeps storage bounded without dropping anything still protected.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::retention_enforced_after_activation_unpin_and_start"
+dst = "crosstalk_analysis::tests::retention_enforced_after_activation_unpin_and_start"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

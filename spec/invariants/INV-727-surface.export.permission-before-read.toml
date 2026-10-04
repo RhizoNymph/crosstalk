@@ -14,7 +14,7 @@ audit record's Forbidden check exact.
 
 [evidence]
 unit = "crosstalk_spec::tests::export::required_permission_is_content_for_content_or_a_projection"
-integration = "crosstalk::surface::export::tests::export_without_permission_reads_nothing"
+integration = "crosstalk_surface::export::tests::export_without_permission_reads_nothing"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -12,7 +12,7 @@ so the confidence is the only thing that tells them apart.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::access_keeps_extraction"
+unit = "crosstalk_flow::tests::access_keeps_extraction"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -11,8 +11,8 @@ without Content (surface.query.read-models-need-view).
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::evidence_without_content_forbidden"
-integration = "crosstalk::surface::integration::transmission_routes_enforce_permissions"
+unit = "crosstalk_surface::tests::evidence_without_content_forbidden"
+integration = "crosstalk_surface::integration::transmission_routes_enforce_permissions"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

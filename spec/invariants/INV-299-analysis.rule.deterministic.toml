@@ -12,7 +12,7 @@ RuleContext (channel_policy and transmission_embedding).
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::rule_evaluation_is_deterministic"
+property = "crosstalk_analysis::tests::rule_evaluation_is_deterministic"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

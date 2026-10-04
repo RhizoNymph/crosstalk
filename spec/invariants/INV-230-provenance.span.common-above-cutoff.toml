@@ -13,8 +13,8 @@ relayed.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::span_with_one_rare_fingerprint_is_not_common"
-property = "crosstalk::provenance::props::common_spans_have_only_frequent_fingerprints"
+unit = "crosstalk_provenance::tests::span_with_one_rare_fingerprint_is_not_common"
+property = "crosstalk_provenance::props::common_spans_have_only_frequent_fingerprints"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

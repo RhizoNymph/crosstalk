@@ -12,7 +12,7 @@ already passed.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::topic_changes_announced_after_commit"
+dst = "crosstalk_analysis::dst::topic_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

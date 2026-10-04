@@ -12,7 +12,7 @@ off an exchange twice. One chunk may report both events, in order.
 """
 
 [evidence]
-property = ["crosstalk::ingress::tests::framer::events_form_ordered_prefix", "crosstalk::ingress::tests::websocket::turn_events_form_ordered_prefix"]
+property = ["crosstalk_ingress::tests::framer::events_form_ordered_prefix", "crosstalk_ingress::tests::websocket::turn_events_form_ordered_prefix"]
 
 [evidence-review]
 property = { agent = "false", human = "false" }

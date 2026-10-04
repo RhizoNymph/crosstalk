@@ -11,7 +11,7 @@ did not happen.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_agent_renamed_once"
+dst = "crosstalk_reconstruct::tests::dst_agent_renamed_once"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

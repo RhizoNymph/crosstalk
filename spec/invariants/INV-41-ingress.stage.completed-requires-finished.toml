@@ -10,7 +10,7 @@ a cut-off output as the agent's full turn.
 """
 
 [evidence]
-dst = "crosstalk::ingress::tests::sim::upstream_close_before_finished_is_failure"
+dst = "crosstalk_ingress::tests::sim::upstream_close_before_finished_is_failure"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

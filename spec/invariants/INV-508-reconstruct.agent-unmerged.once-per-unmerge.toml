@@ -12,7 +12,7 @@ publishing.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_agent_unmerged_once"
+dst = "crosstalk_reconstruct::tests::dst_agent_unmerged_once"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

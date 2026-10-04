@@ -22,7 +22,7 @@ unit = [
     "crosstalk_spec::tests::graph::nodes_beyond_endpoints_and_ancestors_are_rejected",
     "crosstalk_spec::tests::graph::node_counts_agree_with_edges",
 ]
-property = "crosstalk::topology::props::graph_nodes_pass_check"
+property = "crosstalk_topology::props::graph_nodes_pass_check"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

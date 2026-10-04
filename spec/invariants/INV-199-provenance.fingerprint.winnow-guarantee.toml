@@ -12,7 +12,7 @@ the same run selects the same fingerprint wherever it appears.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::shared_run_of_k_plus_w_minus_1_shares_fingerprint"
+property = "crosstalk_provenance::props::shared_run_of_k_plus_w_minus_1_shares_fingerprint"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -11,7 +11,7 @@ waiting here slows capture, never forwarding.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::mpsc_queue_never_exceeds_capacity"
+dst = "crosstalk_transport::dst::mpsc_queue_never_exceeds_capacity"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

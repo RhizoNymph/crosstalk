@@ -11,7 +11,7 @@ evidence must still become a transmission rather than be dropped.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::tool_result_without_access_opens_direct"
+dst = "crosstalk_flow::dst::tool_result_without_access_opens_direct"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

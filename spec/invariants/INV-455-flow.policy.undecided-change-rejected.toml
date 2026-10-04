@@ -12,7 +12,7 @@ logged at warn so the producer's bug is visible.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::undecided_policy_changed_is_acked_without_effect"
+unit = "crosstalk_flow::tests::undecided_policy_changed_is_acked_without_effect"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

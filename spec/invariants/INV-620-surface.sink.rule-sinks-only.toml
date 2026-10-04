@@ -11,7 +11,7 @@ for them; skipping one loses the alert.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::alerts_go_to_their_rule_sinks"
+unit = "crosstalk_surface::tests::alerts_go_to_their_rule_sinks"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -13,7 +13,7 @@ write is visible on the next query.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::policy_read_your_writes_under_bus_delay"
+dst = "crosstalk_surface::dst::policy_read_your_writes_under_bus_delay"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

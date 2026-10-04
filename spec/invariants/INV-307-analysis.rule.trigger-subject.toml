@@ -11,8 +11,8 @@ for the right subject, and dedup would fold unrelated conditions together.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::each_rule_kind_drafts_on_its_trigger"
-property = "crosstalk::analysis::tests::rule_ignores_non_trigger_events"
+unit = "crosstalk_analysis::tests::each_rule_kind_drafts_on_its_trigger"
+property = "crosstalk_analysis::tests::rule_ignores_non_trigger_events"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

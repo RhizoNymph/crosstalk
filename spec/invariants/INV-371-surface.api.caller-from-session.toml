@@ -13,8 +13,8 @@ builds one (surface.operators.caller-from-directory).
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::caller_ignores_operator_in_request"
-integration = "crosstalk::surface::integration::forged_operator_field_has_no_effect"
+unit = "crosstalk_surface::tests::caller_ignores_operator_in_request"
+integration = "crosstalk_surface::integration::forged_operator_field_has_no_effect"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

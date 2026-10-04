@@ -13,7 +13,7 @@ on the decoded size is ingress.encoding.decoded-size-bounded.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::encoding::oversized_body_tee_abandons_capture"
+unit = "crosstalk_ingress::tests::encoding::oversized_body_tee_abandons_capture"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

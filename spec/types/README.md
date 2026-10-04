@@ -1,16 +1,24 @@
 # Crosstalk type specification
 
 The data model of the gateway, written as Rust so it type-checks. The crate
-in `spec/Cargo.toml` builds these modules as a library and runs their tests;
-it is not part of the gateway's build. The types are also the JSON wire
-format between the gateway, the operator UI and other gateway nodes
-(`wire/`, and `docs/features/wire_contract.md` with its area pages under `docs/features/wire/`).
+in `spec/Cargo.toml` (`crosstalk-spec`) builds these modules as a library
+and runs their tests. It is a member of the root workspace and the shared
+boundary crate: every implementation crate under `crates/` depends on it,
+and layer crates depend on each other only through it
+(`docs/features/workspace.md`). The types are also the JSON wire format
+between the gateway, the operator UI and other gateway nodes (`wire/`, and
+`docs/features/wire_contract.md` with its area pages under
+`docs/features/wire/`).
+
+From the repository root:
 
 ```sh
-cargo check --manifest-path spec/Cargo.toml
-cargo test  --manifest-path spec/Cargo.toml
+cargo check -p crosstalk-spec
+cargo test  -p crosstalk-spec
 # after an intended change to a type's JSON: rewrite its golden files, then review the diff
-CROSSTALK_BLESS=1 cargo test --manifest-path spec/Cargo.toml wire
+CROSSTALK_BLESS=1 cargo test -p crosstalk-spec wire
+# every workspace check: fmt, clippy, tests, docs and the invariant validator
+scripts/check.sh
 ```
 
 ## Layout
@@ -162,7 +170,8 @@ spec/types/
 - **Ids never cross types.** Entity ids are ULIDs and content ids are BLAKE3
   digests, each its own newtype.
 - **The types are the wire format.** The only dependencies are `serde`
-  and `serde_json`, pinned exactly (the UI's pins; `spec/Cargo.lock` is
+  and `serde_json`, pinned exactly (the UI's pins, declared once in the
+  workspace's `[workspace.dependencies]`; the root `Cargo.lock` is
   committed). Structs are objects with snake_case keys; enums with data
   are adjacently tagged (`{"type": "snake_case", "data": ..}`) and
   all-unit enums are snake_case strings; entity ids are ULID text, digests

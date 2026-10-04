@@ -15,8 +15,8 @@ stores, not the state machine.
 """
 
 [evidence]
-dst = "crosstalk::provenance::dst::expired_span_never_matched"
-integration = "crosstalk::provenance::integration::pg_lookup_after_evict_has_no_hits"
+dst = "crosstalk_provenance::dst::expired_span_never_matched"
+integration = "crosstalk_provenance::integration::pg_lookup_after_evict_has_no_hits"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

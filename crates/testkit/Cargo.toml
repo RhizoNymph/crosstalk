@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-testkit"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Test support for crosstalk: builders for common spec values, the recorded-traffic corpus and its loader, and fake upstreams that replay it."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

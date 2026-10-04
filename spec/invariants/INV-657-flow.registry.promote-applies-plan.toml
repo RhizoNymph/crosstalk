@@ -12,8 +12,8 @@ resources the new pattern covers.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::promote_applies_plan"
-integration = "crosstalk::flow::tests::pg_promote_applies_plan_in_one_transaction"
+unit = "crosstalk_flow::tests::promote_applies_plan"
+integration = "crosstalk_flow::tests::pg_promote_applies_plan_in_one_transaction"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

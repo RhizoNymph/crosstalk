@@ -15,7 +15,7 @@ they renormalize to the narrower total and can rise.
 """
 
 [evidence]
-property = "crosstalk::topology::props::narrowed_filter_graph_is_dominated"
+property = "crosstalk_topology::props::narrowed_filter_graph_is_dominated"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

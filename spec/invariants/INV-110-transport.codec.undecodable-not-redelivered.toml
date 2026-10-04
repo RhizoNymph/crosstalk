@@ -14,7 +14,7 @@ carries values and never decodes.
 """
 
 [evidence]
-integration = "crosstalk::transport::integration::jetstream_terminates_undecodable_message"
+integration = "crosstalk_transport::integration::jetstream_terminates_undecodable_message"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

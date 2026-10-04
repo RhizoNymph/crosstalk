@@ -14,8 +14,8 @@ the new one.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::confirmation_publishes_cause_confirmation", "crosstalk::analysis::tests::refit_publishes_cause_refit"]
-dst = "crosstalk::analysis::tests::confirmation_during_refit_gets_one_of_each_cause"
+unit = ["crosstalk_analysis::tests::confirmation_publishes_cause_confirmation", "crosstalk_analysis::tests::refit_publishes_cause_refit"]
+dst = "crosstalk_analysis::tests::confirmation_during_refit_gets_one_of_each_cause"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

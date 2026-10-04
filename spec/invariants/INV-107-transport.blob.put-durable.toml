@@ -11,7 +11,7 @@ pointing at missing messages.
 """
 
 [evidence]
-integration = ["crosstalk::transport::integration::pg_blob_store_put_survives_restart", "crosstalk::transport::integration::object_store_blobs_put_survives_restart"]
+integration = ["crosstalk_transport::integration::pg_blob_store_put_survives_restart", "crosstalk_transport::integration::object_store_blobs_put_survives_restart"]
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

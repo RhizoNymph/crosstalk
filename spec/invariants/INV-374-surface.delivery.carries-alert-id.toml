@@ -11,7 +11,7 @@ deduplicate on it and link back to the alert in the UI.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::webhook_payload_has_alert_id", "crosstalk::surface::tests::slack_payload_has_alert_id", "crosstalk::surface::tests::log_sink_line_has_alert_id"]
+unit = ["crosstalk_surface::tests::webhook_payload_has_alert_id", "crosstalk_surface::tests::slack_payload_has_alert_id", "crosstalk_surface::tests::log_sink_line_has_alert_id"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

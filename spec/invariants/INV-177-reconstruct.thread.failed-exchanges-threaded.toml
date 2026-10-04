@@ -13,8 +13,8 @@ stream is truncated or the client disconnects.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::failed_exchange_is_threaded",
-  "crosstalk::reconstruct::tests::failed_exchange_without_partial_response_is_threaded",
+  "crosstalk_reconstruct::tests::failed_exchange_is_threaded",
+  "crosstalk_reconstruct::tests::failed_exchange_without_partial_response_is_threaded",
 ]
 
 [evidence-review]

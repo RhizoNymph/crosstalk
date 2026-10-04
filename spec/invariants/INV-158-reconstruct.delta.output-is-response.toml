@@ -12,7 +12,7 @@ failed exchange may already have been delivered to the harness and acted on.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::delta_output_is_exchange_response"
+property = "crosstalk_reconstruct::tests::delta_output_is_exchange_response"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

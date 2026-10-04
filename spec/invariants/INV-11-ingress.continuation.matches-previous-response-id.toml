@@ -12,7 +12,7 @@ it could not stitch the increment onto its history.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::continuation::previous_response_id_recorded"
+unit = "crosstalk_ingress::tests::continuation::previous_response_id_recorded"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

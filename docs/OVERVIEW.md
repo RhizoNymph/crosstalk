@@ -19,29 +19,39 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: design. The data model is specified in spec/types; there is no
-    implementation yet. The spec types are also the JSON wire format
-    between the gateway, the operator UI and other gateway nodes.
+    Status: workspace scaffolded, implementation not started. The data
+    model is specified in spec/types (crate crosstalk-spec), and the spec
+    types are also the JSON wire format between the gateway, the operator
+    UI and other gateway nodes. The root Cargo.toml is a virtual workspace
+    of spec plus one empty library per implementation crate under crates/
+    (crosstalk-<dir>), with the dependency rule between them enforced by an
+    architecture test and every check run by scripts/check.sh (workspace).
 
   subsystems:
+    spec: >
+      crosstalk-spec (spec/): the shared boundary crate. Types, per-layer
+      traits, invariants and wire goldens. Every implementation crate
+      depends on it, and layer crates reach each other only through it.
     ingest: >
-      L0 ingress (reverse and forward proxy, upstream routing, credential
+      Crates crosstalk-ingress, crosstalk-canonical and
+      crosstalk-reconstruct. L0 ingress (reverse and forward proxy, upstream routing, credential
       hashing, provider adapters, SSE framing and WebSocket taps), L1
       canonicalization (wire format and dialect to canonical Exchange and
       Message), L3 reconstruction (agent identity, the merge log with exact
       unmerge and vetoes, renames, harness claims seen per agent,
       conversation threading, WebSocket increment resolution).
     transport: >
-      L2: the event bus (in-process channels on one node, NATS JetStream
+      Crate crosstalk-transport. L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
       between components.
     detect: >
-      L4 provenance (span extraction, novelty classification, fingerprint
+      Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
       channel registry with promotion and supersession, write/read
       correlation into transmissions, and the operator verdict log kept
       beside each transmission).
     insight: >
+      Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
       sizes, lineage, pins and retention, paged search, stored projection
       jobs fitted in the background, built-in and user alert rules with
@@ -61,9 +71,23 @@ Overview:
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
       and trailer manifest; alert sinks).
+    serve: >
+      Crates crosstalk-api (the HTTP and SSE server for the L8 surface),
+      crosstalk-client (the L8 traits over HTTP, for the UI) and
+      crosstalk-gateway (the crosstalk binary: config, wiring, process
+      roles). The only crates allowed to depend on layer crates.
+    support: >
+      Crates crosstalk-store (Postgres pool, per-layer migrations, test
+      database), crosstalk-memory (in-memory reference stores),
+      crosstalk-sim (deterministic simulation) and crosstalk-testkit
+      (builders, recorded corpus, fake upstreams). Layer crates may depend
+      on store; memory, sim and testkit are their dev-dependencies only.
 
   data_flow: >
-    Harness request (via its base URL, or via the gateway as HTTPS proxy) →
+    Each layer below runs in its own crate (crosstalk-<layer>); layer crates
+    exchange data only as spec bus events or through spec traits that
+    crosstalk-gateway hands them at wiring time, never by calling each
+    other's code. Harness request (via its base URL, or via the gateway as HTTPS proxy) →
     L0 routes it to its upstream, hashes the credential, forwards it
     unchanged without waiting for its body to decode, decodes the body
     concurrently off the hot path, and tees the response (or each WebSocket
@@ -257,4 +281,24 @@ Features Index:
       - docs/features/wire/analysis.md
       - docs/features/wire/surface_actions.md
       - docs/features/wire/surface_reads.md
+  workspace:
+    description: >
+      The virtual Cargo workspace (members spec and crates/*, ui excluded,
+      edition 2024, unsafe forbidden, shared exact pins, one lock), one
+      empty library per implementation crate, the dependency rule (layer
+      crates never depend on each other or on api, client or gateway, take
+      transport only as a dev-dependency, and take memory, sim and testkit
+      only as dev-dependencies) checked by an architecture test over cargo
+      metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
+      validator), and the invariant evidence path convention
+      (crosstalk_spec:: or crosstalk_<crate>::, checked by
+      scripts/inv_check.py together with the existence of reviewed spec
+      tests).
+    entry_points:
+      - Cargo.toml
+      - crates/gateway/tests/architecture.rs
+      - scripts/check.sh
+      - scripts/inv_check.py
+    depends_on: [type_spec]
+    doc: docs/features/workspace.md
 ```

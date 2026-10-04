@@ -12,7 +12,7 @@ the new prompt.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::new_system_only_when_first_or_changed"
+property = "crosstalk_reconstruct::tests::new_system_only_when_first_or_changed"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

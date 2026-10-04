@@ -17,11 +17,11 @@ servers would look like different content and break hashes and threading.
 
 [evidence]
 unit = [
-  "crosstalk::canonical::tests::vllm_sglang_reference_reasoning_agree",
-  "crosstalk::canonical::tests::sglang_null_reasoning_is_absent",
-  "crosstalk::canonical::tests::sglext_chunks_ignored",
+  "crosstalk_canonical::tests::vllm_sglang_reference_reasoning_agree",
+  "crosstalk_canonical::tests::sglang_null_reasoning_is_absent",
+  "crosstalk_canonical::tests::sglext_chunks_ignored",
 ]
-property = "crosstalk::canonical::tests::normalization_independent_of_dialect"
+property = "crosstalk_canonical::tests::normalization_independent_of_dialect"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

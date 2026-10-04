@@ -14,7 +14,7 @@ the type does not enforce this.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::conflict_names_two_distinct_canonical_agents"
+property = "crosstalk_reconstruct::tests::conflict_names_two_distinct_canonical_agents"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

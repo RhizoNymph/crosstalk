@@ -14,8 +14,8 @@ and no block is dropped or duplicated.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::anthropic_user_turn_with_tool_results_splits"
-property = "crosstalk::canonical::tests::split_preserves_block_sequence"
+unit = "crosstalk_canonical::tests::anthropic_user_turn_with_tool_results_splits"
+property = "crosstalk_canonical::tests::split_preserves_block_sequence"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ caches resolving superseded ids to themselves.
 """
 
 [evidence]
-integration = "crosstalk::flow::tests::pg_promote_publishes_after_commit"
+integration = "crosstalk_flow::tests::pg_promote_publishes_after_commit"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

@@ -17,8 +17,8 @@ overwrite who resolved it.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_alert_actions_match_lifecycle_model"
-unit = "crosstalk::surface::tests::alert_action_transition_table"
+property = "crosstalk_surface::tests::prop_alert_actions_match_lifecycle_model"
+unit = "crosstalk_surface::tests::alert_action_transition_table"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

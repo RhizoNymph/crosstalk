@@ -11,7 +11,7 @@ read None.
 """
 
 [evidence]
-integration = "crosstalk::transport::integration::blob_put_visible_from_other_node"
+integration = "crosstalk_transport::integration::blob_put_visible_from_other_node"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

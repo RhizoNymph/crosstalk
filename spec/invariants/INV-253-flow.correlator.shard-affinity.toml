@@ -18,7 +18,7 @@ pair correlatable.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::channel_evidence_reaches_one_shard"
+dst = "crosstalk_flow::dst::channel_evidence_reaches_one_shard"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

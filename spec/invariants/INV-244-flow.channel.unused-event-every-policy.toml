@@ -11,7 +11,7 @@ unreviewed or unsanctioned declarations from any later rule.
 """
 
 [evidence]
-unit = "crosstalk::flow::channel::tests::unused_published_for_every_policy"
+unit = "crosstalk_flow::channel::tests::unused_published_for_every_policy"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

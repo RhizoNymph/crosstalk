@@ -14,8 +14,8 @@ and would make the exchange depend on capture order.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::websocket_turn_request_is_its_increment"
-property = "crosstalk::canonical::tests::increment_request_comes_from_frame_alone"
+unit = "crosstalk_canonical::tests::websocket_turn_request_is_its_increment"
+property = "crosstalk_canonical::tests::increment_request_comes_from_frame_alone"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

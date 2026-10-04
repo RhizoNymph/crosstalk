@@ -16,8 +16,8 @@ canonical channel.
 """
 
 [evidence]
-property = "crosstalk::flow::registry::tests::lookup_agrees_with_precedence_model"
-integration = "crosstalk::flow::registry::integration::pg_lookup_precedence"
+property = "crosstalk_flow::registry::tests::lookup_agrees_with_precedence_model"
+integration = "crosstalk_flow::registry::integration::pg_lookup_precedence"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

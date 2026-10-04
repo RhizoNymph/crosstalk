@@ -16,8 +16,8 @@ when the log can still be reached.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::every_action_outcome_is_audited", "crosstalk::surface::tests::forbidden_action_is_audited"]
-property = "crosstalk::surface::tests::prop_one_audit_record_per_act_call"
+unit = ["crosstalk_surface::tests::every_action_outcome_is_audited", "crosstalk_surface::tests::forbidden_action_is_audited"]
+property = "crosstalk_surface::tests::prop_one_audit_record_per_act_call"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

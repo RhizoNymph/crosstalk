@@ -11,7 +11,7 @@ what was fitted, and the spec can be fitted again with the same seed.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::projection_frames_expire_after_retention"
+dst = "crosstalk_analysis::dst::projection_frames_expire_after_retention"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

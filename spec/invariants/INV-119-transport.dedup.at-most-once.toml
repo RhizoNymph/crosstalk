@@ -15,7 +15,7 @@ again, which is why entity-level idempotency is still required.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::dedup_hands_each_id_once_per_group"
+dst = "crosstalk_transport::dst::dedup_hands_each_id_once_per_group"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

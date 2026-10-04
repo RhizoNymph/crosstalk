@@ -14,7 +14,7 @@ must be framed the same way.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::framer::events_independent_of_request_body"
+property = "crosstalk_ingress::tests::framer::events_independent_of_request_body"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

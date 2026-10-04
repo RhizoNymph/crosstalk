@@ -13,7 +13,7 @@ providers and the same file passed between agents is recognized.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::media_hash_is_of_decoded_bytes"
+unit = "crosstalk_canonical::tests::media_hash_is_of_decoded_bytes"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

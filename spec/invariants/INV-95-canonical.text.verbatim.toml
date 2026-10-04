@@ -13,8 +13,8 @@ string escapes are decoded; nothing else changes.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::text_with_edge_whitespace_and_nfd_kept"
-property = "crosstalk::canonical::tests::text_parts_preserve_strings"
+unit = "crosstalk_canonical::tests::text_with_edge_whitespace_and_nfd_kept"
+property = "crosstalk_canonical::tests::text_parts_preserve_strings"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

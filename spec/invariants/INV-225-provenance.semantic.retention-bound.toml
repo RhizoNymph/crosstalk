@@ -15,8 +15,8 @@ store for leftovers.
 """
 
 [evidence]
-dst = "crosstalk::provenance::dst::derived_data_evicted_after_retention"
-integration = ["crosstalk::provenance::integration::pg_index_evicts_expired_spans", "crosstalk::provenance::integration::pg_observations_age_out", "crosstalk::provenance::integration::semantic_store_evicts_expired_spans"]
+dst = "crosstalk_provenance::dst::derived_data_evicted_after_retention"
+integration = ["crosstalk_provenance::integration::pg_index_evicts_expired_spans", "crosstalk_provenance::integration::pg_observations_age_out", "crosstalk_provenance::integration::semantic_store_evicts_expired_spans"]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

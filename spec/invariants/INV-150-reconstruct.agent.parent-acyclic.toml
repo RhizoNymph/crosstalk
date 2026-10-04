@@ -11,7 +11,7 @@ spawn tree, in the topology view and in sub-agent grouping, loop forever.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::parent_links_are_acyclic"
+property = "crosstalk_reconstruct::tests::parent_links_are_acyclic"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-analysis"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L6 analysis for crosstalk: embeddings, topics, search, alert rules and triage, and projections."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

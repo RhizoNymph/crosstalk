@@ -12,8 +12,8 @@ activation waits for all of them.
 """
 
 [evidence]
-integration = "crosstalk::topology::integration::pg_frontier_covers_pending_deliveries"
-dst = "crosstalk::topology::dst::frontier_bounds_every_pending_input"
+integration = "crosstalk_topology::integration::pg_frontier_covers_pending_deliveries"
+dst = "crosstalk_topology::dst::frontier_bounds_every_pending_input"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ would then index as the agent's output.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::error_status_normalizes_to_upstream_failure"
+unit = "crosstalk_canonical::tests::error_status_normalizes_to_upstream_failure"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ through Responding within that chunk.
 """
 
 [evidence]
-dst = "crosstalk::ingress::tests::sim::stage_transitions_follow_exchange_machine"
+dst = "crosstalk_ingress::tests::sim::stage_transitions_follow_exchange_machine"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -13,8 +13,8 @@ parser gap visible. The property feeds arbitrary bodies with status 200.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::garbled_200_body_is_unparseable_failure"
-property = "crosstalk::canonical::tests::unparseable_success_bodies_keep_request"
+unit = "crosstalk_canonical::tests::garbled_200_body_is_unparseable_failure"
+property = "crosstalk_canonical::tests::unparseable_success_bodies_keep_request"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -11,7 +11,7 @@ review point at them; a wrong seed sends the operator to the wrong resource.
 """
 
 [evidence]
-unit = "crosstalk::flow::channel::tests::discovered_channel_seeded_by_first_access"
+unit = "crosstalk_flow::channel::tests::discovered_channel_seeded_by_first_access"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

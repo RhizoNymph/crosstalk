@@ -16,8 +16,8 @@ assistant content, and tool result content.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::unknown_block_kept_in_place"
-property = "crosstalk::canonical::tests::unknown_blocks_round_trip_as_canonical_json"
+unit = "crosstalk_canonical::tests::unknown_block_kept_in_place"
+property = "crosstalk_canonical::tests::unknown_blocks_round_trip_as_canonical_json"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

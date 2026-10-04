@@ -11,8 +11,8 @@ wrong subject.
 """
 
 [evidence]
-property = "crosstalk::transport::tests::subscription_yields_only_subscribed_subjects"
-integration = "crosstalk::transport::integration::jetstream_subject_filter"
+property = "crosstalk_transport::tests::subscription_yields_only_subscribed_subjects"
+integration = "crosstalk_transport::integration::jetstream_subject_filter"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

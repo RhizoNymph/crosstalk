@@ -11,7 +11,7 @@ agents would see no effect.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_merge_visible_to_later_canonical_calls"
+dst = "crosstalk_reconstruct::tests::dst_merge_visible_to_later_canonical_calls"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

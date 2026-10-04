@@ -11,7 +11,7 @@ requests cannot overshoot it.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::concurrent_enqueues_respect_pending_limit"
+dst = "crosstalk_analysis::dst::concurrent_enqueues_respect_pending_limit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

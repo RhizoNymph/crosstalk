@@ -15,8 +15,8 @@ configuration.
 """
 
 [evidence]
-unit = "crosstalk::transport::tests::subscribe_rejects_different_retry_policy"
-integration = "crosstalk::transport::integration::jetstream_rejects_group_retry_mismatch"
+unit = "crosstalk_transport::tests::subscribe_rejects_different_retry_policy"
+integration = "crosstalk_transport::integration::jetstream_rejects_group_retry_mismatch"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

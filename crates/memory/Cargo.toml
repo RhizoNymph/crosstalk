@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-memory"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "In-memory reference implementations of every stateful store trait in the crosstalk spec."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

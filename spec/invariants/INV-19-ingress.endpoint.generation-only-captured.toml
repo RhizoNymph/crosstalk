@@ -12,7 +12,7 @@ forwarded (ingress.passthrough.request-unchanged).
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::endpoint::non_generation_routes_not_captured"
+unit = "crosstalk_ingress::tests::endpoint::non_generation_routes_not_captured"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

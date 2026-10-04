@@ -12,7 +12,7 @@ has no reason to read them; this pins it.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::resolution_ignores_labels"
+property = "crosstalk_reconstruct::tests::resolution_ignores_labels"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

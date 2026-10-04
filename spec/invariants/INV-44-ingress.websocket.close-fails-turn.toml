@@ -11,7 +11,7 @@ results detection needs), and the reason must say which side went away.
 """
 
 [evidence]
-dst = "crosstalk::ingress::tests::sim::websocket_close_fails_in_flight_turn"
+dst = "crosstalk_ingress::tests::sim::websocket_close_fails_in_flight_turn"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

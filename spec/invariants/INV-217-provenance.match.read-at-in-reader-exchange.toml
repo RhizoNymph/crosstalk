@@ -12,7 +12,7 @@ read that an earlier delta already matched.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::read_at_points_into_reader_delta"
+property = "crosstalk_provenance::props::read_at_points_into_reader_delta"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

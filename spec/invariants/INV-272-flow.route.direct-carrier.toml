@@ -11,7 +11,7 @@ extracted resource must take the Channel route so policy applies.
 """
 
 [evidence]
-property = "crosstalk::flow::correlator::tests::direct_route_carrier"
+property = "crosstalk_flow::correlator::tests::direct_route_carrier"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

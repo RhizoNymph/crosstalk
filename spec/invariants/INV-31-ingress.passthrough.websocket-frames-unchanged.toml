@@ -13,8 +13,8 @@ so equality is on message payloads, not on wire bytes.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::websocket::messages_relayed_unchanged"
-integration = "crosstalk::ingress::tests::integration::codex_websocket_relayed_unchanged_live"
+property = "crosstalk_ingress::tests::websocket::messages_relayed_unchanged"
+integration = "crosstalk_ingress::tests::integration::codex_websocket_relayed_unchanged_live"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

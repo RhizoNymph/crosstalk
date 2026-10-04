@@ -13,7 +13,7 @@ does not orphan the merged agent's conversations.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::continuation_extends_longest_matching_conversation"
+property = "crosstalk_reconstruct::tests::continuation_extends_longest_matching_conversation"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

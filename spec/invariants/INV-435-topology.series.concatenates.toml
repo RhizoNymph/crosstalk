@@ -13,7 +13,7 @@ fetched incrementally.
 """
 
 [evidence]
-property = "crosstalk::topology::props::series_concatenate_over_adjacent_grids"
+property = "crosstalk_topology::props::series_concatenate_over_adjacent_grids"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

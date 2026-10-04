@@ -10,7 +10,7 @@ the event that follows the mark.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::version_marked_dropped_before_any_deletion"
+dst = "crosstalk_analysis::tests::version_marked_dropped_before_any_deletion"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

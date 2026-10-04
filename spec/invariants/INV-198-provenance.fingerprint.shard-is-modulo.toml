@@ -14,7 +14,7 @@ value on fixed inputs; the property test covers all values.
 
 [evidence]
 unit = ["crosstalk_spec::tests::provenance::fingerprint_shard_is_in_range", "crosstalk_spec::tests::provenance::fingerprint_shard_is_stable", "crosstalk_spec::tests::provenance::single_shard_owns_everything"]
-property = "crosstalk::provenance::props::shard_is_fingerprint_modulo_shards"
+property = "crosstalk_provenance::props::shard_is_fingerprint_modulo_shards"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

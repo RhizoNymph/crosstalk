@@ -23,8 +23,8 @@ attributed exchange after the unmerge moves it to Provisional.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::first_exchange_moves_registered_to_provisional",
-  "crosstalk::reconstruct::tests::discovered_agent_starts_provisional",
+  "crosstalk_reconstruct::tests::first_exchange_moves_registered_to_provisional",
+  "crosstalk_reconstruct::tests::discovered_agent_starts_provisional",
 ]
 
 [evidence-review]

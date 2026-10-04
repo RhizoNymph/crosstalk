@@ -15,8 +15,8 @@ of a (transmission, version) pair wins, whatever a later one says.
 """
 
 [evidence]
-property = "crosstalk::topology::props::apply_is_idempotent_per_transmission_and_version"
-integration = "crosstalk::topology::integration::timescale_apply_redelivery_counts_once"
+property = "crosstalk_topology::props::apply_is_idempotent_per_transmission_and_version"
+integration = "crosstalk_topology::integration::timescale_apply_redelivery_counts_once"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

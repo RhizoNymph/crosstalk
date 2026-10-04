@@ -12,8 +12,8 @@ expects a hit on that span.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::originated_span_fingerprints_are_indexed"
-property = "crosstalk::provenance::props::originated_span_is_found_by_its_own_text"
+unit = "crosstalk_provenance::tests::originated_span_fingerprints_are_indexed"
+property = "crosstalk_provenance::props::originated_span_is_found_by_its_own_text"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

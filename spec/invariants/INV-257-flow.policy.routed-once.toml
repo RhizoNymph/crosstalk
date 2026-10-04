@@ -11,7 +11,7 @@ Unobserved transmissions have no channel and are not policy-routed.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::confirmed_routed_once"
+dst = "crosstalk_flow::dst::confirmed_routed_once"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

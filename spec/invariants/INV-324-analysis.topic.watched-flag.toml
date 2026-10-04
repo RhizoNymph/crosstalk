@@ -13,8 +13,8 @@ topic.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::outlier_is_never_watched", "crosstalk::analysis::tests::topic_in_disabled_or_stale_rule_is_not_watched", "crosstalk::analysis::tests::topic_in_rule_of_other_version_is_not_watched"]
-property = "crosstalk::analysis::tests::watched_iff_topic_in_enabled_watched_rule_of_version"
+unit = ["crosstalk_analysis::tests::outlier_is_never_watched", "crosstalk_analysis::tests::topic_in_disabled_or_stale_rule_is_not_watched", "crosstalk_analysis::tests::topic_in_rule_of_other_version_is_not_watched"]
+property = "crosstalk_analysis::tests::watched_iff_topic_in_enabled_watched_rule_of_version"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ and no watched-topic rule can fire until the first real fit is ready.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::unfitted_model_has_version_zero", "crosstalk::analysis::tests::version_zero_assigns_outlier"]
+unit = ["crosstalk_analysis::tests::unfitted_model_has_version_zero", "crosstalk_analysis::tests::version_zero_assigns_outlier"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

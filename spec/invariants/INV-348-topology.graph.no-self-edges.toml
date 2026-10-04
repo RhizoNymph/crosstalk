@@ -14,7 +14,7 @@ this.
 """
 
 [evidence]
-property = "crosstalk::topology::props::graph_has_no_self_edges_after_merges"
+property = "crosstalk_topology::props::graph_has_no_self_edges_after_merges"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

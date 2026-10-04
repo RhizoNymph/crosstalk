@@ -14,9 +14,9 @@ identity there would make them unattributable.
 
 [evidence]
 unit = [
-    "crosstalk::surface::tests::identity_and_rule_actions_stamp_caller",
-    "crosstalk::surface::tests::set_verdict_stamps_caller",
-    "crosstalk::surface::tests::pin_and_unpin_outcomes",
+    "crosstalk_surface::tests::identity_and_rule_actions_stamp_caller",
+    "crosstalk_surface::tests::set_verdict_stamps_caller",
+    "crosstalk_surface::tests::pin_and_unpin_outcomes",
 ]
 
 [evidence-review]

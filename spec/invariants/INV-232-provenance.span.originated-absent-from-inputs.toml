@@ -21,7 +21,7 @@ committed.
 """
 
 [evidence]
-property = ["crosstalk::provenance::props::originated_span_not_fingerprint_matchable_in_inputs", "crosstalk::provenance::props::output_matching_other_agents_span_is_relayed"]
+property = ["crosstalk_provenance::props::originated_span_not_fingerprint_matchable_in_inputs", "crosstalk_provenance::props::output_matching_other_agents_span_is_relayed"]
 
 [evidence-review]
 property = { agent = "false", human = "false" }

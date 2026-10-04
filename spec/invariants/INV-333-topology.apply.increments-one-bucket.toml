@@ -14,7 +14,7 @@ to this contribution's, which is why EdgeStats can hold them as non-zero.
 """
 
 [evidence]
-property = "crosstalk::topology::props::first_apply_increments_only_its_bucket"
+property = "crosstalk_topology::props::first_apply_increments_only_its_bucket"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

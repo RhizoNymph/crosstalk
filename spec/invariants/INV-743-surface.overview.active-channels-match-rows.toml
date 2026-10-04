@@ -20,7 +20,7 @@ unit = [
     "crosstalk_spec::tests::overview::active_channels_are_the_channels_rows_count_transmissions_on",
     "crosstalk_spec::tests::overview::rows_count_the_transmissions_the_graph_routes_through_each_channel",
 ]
-integration = "crosstalk::surface::integration::pg_overview_active_channels_match_channel_rows"
+integration = "crosstalk_surface::integration::pg_overview_active_channels_match_channel_rows"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

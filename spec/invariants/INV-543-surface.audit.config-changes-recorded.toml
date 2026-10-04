@@ -13,8 +13,8 @@ re-run would then see as no change and never record.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::config_reload_records_each_change_once"
-integration = "crosstalk::surface::integration::config_entry_committed_with_change"
+dst = "crosstalk_surface::dst::config_reload_records_each_change_once"
+integration = "crosstalk_surface::integration::config_entry_committed_with_change"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -1,6 +1,21 @@
-[package]
-name = "crosstalk"
+[workspace]
+members = ["spec", "crates/*"]
+exclude = ["ui"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+publish = false
 
-[dependencies]
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Clippy runs with its default lint set; scripts/check.sh denies every warning.
+[workspace.lints.clippy]
+
+# Shared pins. Only what a member uses today; a crate that needs another
+# dependency adds its pin here (exact, `=`, matching the UI where they overlap).
+[workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"

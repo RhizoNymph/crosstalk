@@ -17,7 +17,7 @@ unit = [
     "crosstalk_spec::tests::rules::embedding_model_change_makes_only_current_semantic_rules_stale",
     "crosstalk_spec::tests::rules::query_under_its_own_model_is_current",
 ]
-integration = "crosstalk::analysis::tests::pg_model_change_marks_semantic_rules_stale"
+integration = "crosstalk_analysis::tests::pg_model_change_marks_semantic_rules_stale"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

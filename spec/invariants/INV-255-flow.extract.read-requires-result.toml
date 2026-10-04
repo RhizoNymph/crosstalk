@@ -12,7 +12,7 @@ the call's arguments are what was written.
 """
 
 [evidence]
-property = "crosstalk::flow::extract::tests::no_read_without_result"
+property = "crosstalk_flow::extract::tests::no_read_without_result"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

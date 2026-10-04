@@ -13,7 +13,7 @@ shorter chain already matches.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::decoded_match_lists_codecs_in_decode_order"
+property = "crosstalk_provenance::props::decoded_match_lists_codecs_in_decode_order"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

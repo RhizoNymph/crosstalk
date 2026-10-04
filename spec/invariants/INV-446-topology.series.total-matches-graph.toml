@@ -14,7 +14,7 @@ an activation between the two queries switches buckets.
 """
 
 [evidence]
-property = "crosstalk::topology::props::series_total_equals_graph_total"
+property = "crosstalk_topology::props::series_total_equals_graph_total"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

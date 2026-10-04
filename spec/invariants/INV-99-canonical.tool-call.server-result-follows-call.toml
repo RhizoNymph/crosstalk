@@ -13,8 +13,8 @@ field would produce results that pair with nothing, or with a client call.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::anthropic_web_search_result_follows_its_call"
-property = "crosstalk::canonical::tests::server_results_pair_with_earlier_server_calls"
+unit = "crosstalk_canonical::tests::anthropic_web_search_result_follows_its_call"
+property = "crosstalk_canonical::tests::server_results_pair_with_earlier_server_calls"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

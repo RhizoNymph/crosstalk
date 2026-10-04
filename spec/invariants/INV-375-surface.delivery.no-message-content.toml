@@ -12,7 +12,7 @@ no content, and sinks must not enrich it from the blob store.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::webhook_payload_has_no_content", "crosstalk::surface::tests::slack_payload_has_no_content"]
+unit = ["crosstalk_surface::tests::webhook_payload_has_no_content", "crosstalk_surface::tests::slack_payload_has_no_content"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

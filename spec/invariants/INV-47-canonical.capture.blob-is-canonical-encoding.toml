@@ -13,7 +13,7 @@ would also fragment storage per provider and per serialization.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::capture_puts_canonical_encoding_under_message_hash"
+unit = "crosstalk_canonical::tests::capture_puts_canonical_encoding_under_message_hash"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

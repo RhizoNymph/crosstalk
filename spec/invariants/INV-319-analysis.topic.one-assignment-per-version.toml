@@ -12,8 +12,8 @@ statistics and make its topic ambiguous. The store keys assignments on
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::redelivered_confirmation_assigns_once_per_version"
-integration = "crosstalk::analysis::tests::assignment_store_rejects_duplicate_transmission_version"
+dst = "crosstalk_analysis::tests::redelivered_confirmation_assigns_once_per_version"
+integration = "crosstalk_analysis::tests::assignment_store_rejects_duplicate_transmission_version"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -13,7 +13,7 @@ source would credit two authors for the same bytes.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::reader_output_match_agrees_with_relay_span"
+property = "crosstalk_provenance::props::reader_output_match_agrees_with_relay_span"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

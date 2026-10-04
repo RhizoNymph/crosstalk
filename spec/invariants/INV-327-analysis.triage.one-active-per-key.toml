@@ -12,8 +12,8 @@ active states.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::concurrent_triage_opens_one_alert_per_key"
-integration = "crosstalk::analysis::tests::alert_store_rejects_second_active_alert_per_key"
+dst = "crosstalk_analysis::tests::concurrent_triage_opens_one_alert_per_key"
+integration = "crosstalk_analysis::tests::alert_store_rejects_second_active_alert_per_key"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ retry_after below initial_backoff is raised to it.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::redelivery_waits_at_least_initial_backoff"
+dst = "crosstalk_transport::dst::redelivery_waits_at_least_initial_backoff"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

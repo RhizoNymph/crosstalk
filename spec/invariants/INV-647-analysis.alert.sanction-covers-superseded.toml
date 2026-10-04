@@ -12,8 +12,8 @@ unrelated channels.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::sanction_suppresses_superseded_channel_alerts"
-integration = "crosstalk::analysis::tests::pg_sanction_after_promotion"
+unit = "crosstalk_analysis::tests::sanction_suppresses_superseded_channel_alerts"
+integration = "crosstalk_analysis::tests::pg_sanction_after_promotion"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

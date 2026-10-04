@@ -13,7 +13,7 @@ first and second processing.
 """
 
 [evidence]
-dst = "crosstalk::provenance::dst::redelivered_delta_is_idempotent"
+dst = "crosstalk_provenance::dst::redelivered_delta_is_idempotent"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

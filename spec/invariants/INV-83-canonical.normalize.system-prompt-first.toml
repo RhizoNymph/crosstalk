@@ -15,7 +15,7 @@ prompts as an input channel between agents.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::top_level_system_prompt_becomes_first_message"
+unit = "crosstalk_canonical::tests::top_level_system_prompt_becomes_first_message"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

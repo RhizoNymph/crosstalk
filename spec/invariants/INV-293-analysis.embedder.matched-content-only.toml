@@ -12,8 +12,8 @@ the operator having agreed to it.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::analyzer_embeds_matched_spans_only"
-property = "crosstalk::analysis::tests::embedded_text_is_substring_of_matched_content"
+unit = "crosstalk_analysis::tests::analyzer_embeds_matched_spans_only"
+property = "crosstalk_analysis::tests::embedded_text_is_substring_of_matched_content"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

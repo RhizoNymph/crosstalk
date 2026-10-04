@@ -13,8 +13,8 @@ character boundaries.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::segment_spans_on_char_boundaries"
-fuzz = "crosstalk::provenance::fuzz::segment_arbitrary_output"
+property = "crosstalk_provenance::props::segment_spans_on_char_boundaries"
+fuzz = "crosstalk_provenance::fuzz::segment_arbitrary_output"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

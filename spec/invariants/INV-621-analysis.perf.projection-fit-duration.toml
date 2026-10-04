@@ -10,7 +10,7 @@ threshold for a single-threaded, seeded UMAP over 100,000 embeddings.
 """
 
 [evidence]
-bench = "crosstalk::analysis::bench::projection_fit_100k_p99"
+bench = "crosstalk_analysis::bench::projection_fit_100k_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ treated differently on the wire from the one it imitates.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::client::harness_headers_do_not_affect_forwarding"
+property = "crosstalk_ingress::tests::client::harness_headers_do_not_affect_forwarding"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

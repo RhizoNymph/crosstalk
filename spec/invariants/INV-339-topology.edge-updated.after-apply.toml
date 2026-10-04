@@ -12,7 +12,7 @@ never happened.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::edge_updated_never_precedes_persisted_apply"
+dst = "crosstalk_topology::dst::edge_updated_never_precedes_persisted_apply"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

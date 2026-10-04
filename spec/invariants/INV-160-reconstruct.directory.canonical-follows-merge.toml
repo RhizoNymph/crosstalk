@@ -12,7 +12,7 @@ between two agents that were later merged becomes a self-edge readers drop.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::canonical_follows_merge_table"
+property = "crosstalk_reconstruct::tests::canonical_follows_merge_table"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

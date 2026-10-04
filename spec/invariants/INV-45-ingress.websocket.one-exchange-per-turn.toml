@@ -10,8 +10,8 @@ exchanges with no request. One turn, one exchange matches the HTTP case.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::websocket::one_started_per_response_create"
-dst = "crosstalk::ingress::tests::sim::websocket_turns_yield_one_exchange_each"
+property = "crosstalk_ingress::tests::websocket::one_started_per_response_create"
+dst = "crosstalk_ingress::tests::sim::websocket_turns_yield_one_exchange_each"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

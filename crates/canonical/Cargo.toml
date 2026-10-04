@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-canonical"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L1 canonicalization for crosstalk: per-protocol normalizers from a raw exchange to canonical exchanges and messages."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

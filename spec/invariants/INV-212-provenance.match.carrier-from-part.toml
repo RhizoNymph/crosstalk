@@ -13,7 +13,7 @@ channels.
 """
 
 [evidence]
-unit = ["crosstalk::provenance::tests::carrier_for_tool_result", "crosstalk::provenance::tests::carrier_for_user_turn", "crosstalk::provenance::tests::carrier_for_system_prompt", "crosstalk::provenance::tests::carrier_for_reader_output"]
+unit = ["crosstalk_provenance::tests::carrier_for_tool_result", "crosstalk_provenance::tests::carrier_for_user_turn", "crosstalk_provenance::tests::carrier_for_system_prompt", "crosstalk_provenance::tests::carrier_for_reader_output"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

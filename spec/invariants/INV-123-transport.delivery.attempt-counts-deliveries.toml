@@ -14,8 +14,8 @@ group, since each group gets its own deliveries.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::attempt_counts_deliveries_per_group"
-integration = "crosstalk::transport::integration::jetstream_attempt_matches_delivery_count"
+dst = "crosstalk_transport::dst::attempt_counts_deliveries_per_group"
+integration = "crosstalk_transport::integration::jetstream_attempt_matches_delivery_count"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

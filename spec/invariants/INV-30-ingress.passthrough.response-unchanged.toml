@@ -13,8 +13,8 @@ agent and can alter its behaviour, contaminating what the gateway measures.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::passthrough::response_relayed_unchanged"
-integration = "crosstalk::ingress::tests::integration::response_relayed_unchanged_live"
+property = "crosstalk_ingress::tests::passthrough::response_relayed_unchanged"
+integration = "crosstalk_ingress::tests::integration::response_relayed_unchanged_live"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

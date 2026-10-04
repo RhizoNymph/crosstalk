@@ -12,8 +12,8 @@ and watched-topic alerts would silently be wrong after every re-fit.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::classification_topic_belongs_to_its_version"
-integration = "crosstalk::analysis::tests::stored_assignments_reference_topics_of_same_version"
+property = "crosstalk_analysis::tests::classification_topic_belongs_to_its_version"
+integration = "crosstalk_analysis::tests::stored_assignments_reference_topics_of_same_version"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ see EdgeUpdated at least once for every bucket that changed.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::crash_between_apply_and_publish_still_publishes"
+dst = "crosstalk_topology::dst::crash_between_apply_and_publish_still_publishes"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

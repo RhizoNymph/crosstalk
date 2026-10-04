@@ -16,7 +16,7 @@ kind, and one-line data keeps each item one SSE event.
 
 [evidence]
 unit = "crosstalk_spec::tests::wire::surface_actions::live::sse_event_names_and_ids_match_the_item_json"
-integration = "crosstalk::surface::live::integration::sse_frames_carry_name_and_cursor"
+integration = "crosstalk_surface::live::integration::sse_frames_carry_name_and_cursor"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

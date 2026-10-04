@@ -13,7 +13,7 @@ disable one.
 
 [evidence]
 unit = "crosstalk_spec::tests::rules::new_user_rules_are_enabled_and_current"
-integration = "crosstalk::analysis::tests::pg_create_rule_assigns_fresh_id"
+integration = "crosstalk_analysis::tests::pg_create_rule_assigns_fresh_id"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

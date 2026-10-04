@@ -11,8 +11,8 @@ insert that ignores conflicts on the hash.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::concurrent_puts_of_same_bytes_succeed"
-integration = "crosstalk::transport::integration::pg_blob_store_concurrent_identical_puts"
+dst = "crosstalk_transport::dst::concurrent_puts_of_same_bytes_succeed"
+integration = "crosstalk_transport::integration::pg_blob_store_concurrent_identical_puts"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

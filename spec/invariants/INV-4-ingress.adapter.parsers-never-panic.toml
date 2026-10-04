@@ -14,7 +14,7 @@ counting it. Bad input must surface as DecodeError or FrameError.
 """
 
 [evidence]
-fuzz = ["crosstalk::ingress::fuzz::decode_request", "crosstalk::ingress::fuzz::framer_push", "crosstalk::ingress::fuzz::websocket_tap_frames"]
+fuzz = ["crosstalk_ingress::fuzz::decode_request", "crosstalk_ingress::fuzz::framer_push", "crosstalk_ingress::fuzz::websocket_tap_frames"]
 
 [evidence-review]
 fuzz = { agent = "false", human = "false" }

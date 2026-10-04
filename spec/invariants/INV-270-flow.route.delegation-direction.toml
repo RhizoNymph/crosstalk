@@ -11,7 +11,7 @@ triage.
 """
 
 [evidence]
-unit = "crosstalk::flow::correlator::tests::delegation_direction"
+unit = "crosstalk_flow::correlator::tests::delegation_direction"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

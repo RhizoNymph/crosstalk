@@ -11,8 +11,8 @@ JetStreamBus this pins the bus wire codec as an exact round trip.
 """
 
 [evidence]
-property = "crosstalk::transport::tests::delivered_envelope_equals_published"
-integration = "crosstalk::transport::integration::jetstream_envelope_round_trips_across_redelivery"
+property = "crosstalk_transport::tests::delivered_envelope_equals_published"
+integration = "crosstalk_transport::integration::jetstream_envelope_round_trips_across_redelivery"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

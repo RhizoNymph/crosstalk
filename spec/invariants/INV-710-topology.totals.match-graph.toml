@@ -17,7 +17,7 @@ unit = [
     "crosstalk_spec::tests::overview::totals_do_not_depend_on_weighting",
     "crosstalk_spec::tests::overview::an_empty_graph_counts_nothing",
 ]
-property = "crosstalk::topology::props::totals_match_graph"
+property = "crosstalk_topology::props::totals_match_graph"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

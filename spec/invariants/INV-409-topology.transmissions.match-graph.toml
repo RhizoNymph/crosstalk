@@ -15,8 +15,8 @@ not yet applied, or ones whose ends have since merged into one agent.
 """
 
 [evidence]
-property = "crosstalk::topology::props::edge_transmissions_match_fold"
-integration = "crosstalk::topology::integration::timescale_edge_transmissions_match_graph"
+property = "crosstalk_topology::props::edge_transmissions_match_fold"
+integration = "crosstalk_topology::integration::timescale_edge_transmissions_match_graph"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ the evidence and not on a guess made at the edge.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::client::harness_headers_recorded_per_harness_fixture"
+unit = "crosstalk_ingress::tests::client::harness_headers_recorded_per_harness_fixture"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -13,7 +13,7 @@ also change message hashes between a response and its echo.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::dialect_tool_call_ids_kept_verbatim"
+unit = "crosstalk_canonical::tests::dialect_tool_call_ids_kept_verbatim"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

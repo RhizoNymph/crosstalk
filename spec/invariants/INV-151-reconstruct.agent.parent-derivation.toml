@@ -16,10 +16,10 @@ main agent.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::parent_from_harness_parent_id_in_scope",
-  "crosstalk::reconstruct::tests::parent_id_from_other_scope_is_ignored",
-  "crosstalk::reconstruct::tests::subagent_parent_is_session_main_agent",
-  "crosstalk::reconstruct::tests::main_agent_has_no_parent",
+  "crosstalk_reconstruct::tests::parent_from_harness_parent_id_in_scope",
+  "crosstalk_reconstruct::tests::parent_id_from_other_scope_is_ignored",
+  "crosstalk_reconstruct::tests::subagent_parent_is_session_main_agent",
+  "crosstalk_reconstruct::tests::main_agent_has_no_parent",
 ]
 
 [evidence-review]

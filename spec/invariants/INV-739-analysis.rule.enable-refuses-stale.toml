@@ -26,7 +26,7 @@ unit = [
     "crosstalk_spec::tests::rules::enabling_a_stale_rule_is_refused_in_either_status",
     "crosstalk_spec::tests::rules::disabling_a_stale_enabled_rule_works",
 ]
-integration = "crosstalk::analysis::tests::pg_enable_of_stale_rule_refused_without_effect"
+integration = "crosstalk_analysis::tests::pg_enable_of_stale_rule_refused_without_effect"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -12,7 +12,7 @@ active alert is left. After a withdrawal, drafts open alerts again.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::dst_rejected_subject_opens_nothing"
+dst = "crosstalk_analysis::tests::dst_rejected_subject_opens_nothing"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

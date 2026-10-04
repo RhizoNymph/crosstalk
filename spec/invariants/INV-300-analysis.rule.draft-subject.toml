@@ -13,7 +13,7 @@ reviewed.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::each_rule_kind_sets_its_subject"
+unit = "crosstalk_analysis::tests::each_rule_kind_sets_its_subject"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

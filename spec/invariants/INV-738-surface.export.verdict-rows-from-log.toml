@@ -18,7 +18,7 @@ unit = [
     "crosstalk_spec::tests::export::verdict_rows_exist_only_for_judgeable_states",
     "crosstalk_spec::tests::export::verdict_rows_refuse_another_transmissions_log",
 ]
-integration = "crosstalk::surface::export::tests::verdict_export_matches_logs"
+integration = "crosstalk_surface::export::tests::verdict_export_matches_logs"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

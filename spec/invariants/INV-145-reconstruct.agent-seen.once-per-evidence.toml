@@ -12,7 +12,7 @@ belongs to reconstruction.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_agent_seen_once_per_evidence"
+dst = "crosstalk_reconstruct::tests::dst_agent_seen_once_per_evidence"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

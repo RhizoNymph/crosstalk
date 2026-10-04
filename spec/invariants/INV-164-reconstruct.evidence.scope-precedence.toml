@@ -14,9 +14,9 @@ the upstream, which still keeps ids from different servers apart.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::account_scopes_harness_ids",
-  "crosstalk::reconstruct::tests::stable_credential_scopes_harness_ids_without_account",
-  "crosstalk::reconstruct::tests::rotating_shared_or_no_credential_scopes_to_upstream",
+  "crosstalk_reconstruct::tests::account_scopes_harness_ids",
+  "crosstalk_reconstruct::tests::stable_credential_scopes_harness_ids_without_account",
+  "crosstalk_reconstruct::tests::rotating_shared_or_no_credential_scopes_to_upstream",
 ]
 
 [evidence-review]

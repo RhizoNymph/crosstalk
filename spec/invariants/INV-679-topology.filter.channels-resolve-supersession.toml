@@ -12,7 +12,7 @@ view would empty out the moment an operator promotes.
 
 [evidence]
 unit = "crosstalk_spec::tests::channels::filter_listing_a_superseded_channel_selects_its_superseder"
-property = "crosstalk::topology::props::filter_channels_resolve"
+property = "crosstalk_topology::props::filter_channels_resolve"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

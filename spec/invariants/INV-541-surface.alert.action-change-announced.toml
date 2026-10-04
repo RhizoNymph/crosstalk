@@ -10,7 +10,7 @@ alert update only through this notification.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::acknowledge_announces_alert_change"
+dst = "crosstalk_surface::dst::acknowledge_announces_alert_change"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

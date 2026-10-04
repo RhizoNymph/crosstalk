@@ -12,7 +12,7 @@ schema and framed with another's.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::adapter::classify_predicates_are_disjoint"
+property = "crosstalk_ingress::tests::adapter::classify_predicates_are_disjoint"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

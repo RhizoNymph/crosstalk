@@ -12,7 +12,7 @@ to read that message. The types do not tie the two fields together.
 """
 
 [evidence]
-property = "crosstalk::canonical::tests::exchange_hashes_resolve_to_messages"
+property = "crosstalk_canonical::tests::exchange_hashes_resolve_to_messages"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

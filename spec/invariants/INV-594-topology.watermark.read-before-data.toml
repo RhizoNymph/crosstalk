@@ -13,7 +13,7 @@ and are read the same way.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::results_carry_watermark_read_first"
+dst = "crosstalk_topology::dst::results_carry_watermark_read_first"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

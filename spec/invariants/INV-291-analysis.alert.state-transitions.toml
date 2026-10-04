@@ -14,8 +14,8 @@ alert unchanged.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::resolved_alert_rejects_every_action", "crosstalk::analysis::tests::suppressed_alert_rejects_every_action", "crosstalk::analysis::tests::open_alert_cannot_be_resolved_directly"]
-property = "crosstalk::analysis::tests::alert_transitions_agree_with_lifecycle_model"
+unit = ["crosstalk_analysis::tests::resolved_alert_rejects_every_action", "crosstalk_analysis::tests::suppressed_alert_rejects_every_action", "crosstalk_analysis::tests::open_alert_cannot_be_resolved_directly"]
+property = "crosstalk_analysis::tests::alert_transitions_agree_with_lifecycle_model"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

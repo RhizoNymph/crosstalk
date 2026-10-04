@@ -14,8 +14,8 @@ Conflict(AlertNotActive) for one the new state no longer allows.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::racing_alert_actions_single_transition"
-integration = "crosstalk::surface::integration::concurrent_acknowledge_postgres"
+dst = "crosstalk_surface::dst::racing_alert_actions_single_transition"
+integration = "crosstalk_surface::integration::concurrent_acknowledge_postgres"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

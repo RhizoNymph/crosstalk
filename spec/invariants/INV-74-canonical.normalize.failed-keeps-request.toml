@@ -14,8 +14,8 @@ The property feeds arbitrary partial bodies to every normalizer.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::failed_exchange_keeps_request_with_bad_partial_body"
-property = "crosstalk::canonical::tests::failed_response_bytes_never_fail_normalization"
+unit = "crosstalk_canonical::tests::failed_exchange_keeps_request_with_bad_partial_body"
+property = "crosstalk_canonical::tests::failed_response_bytes_never_fail_normalization"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

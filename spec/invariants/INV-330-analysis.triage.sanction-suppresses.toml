@@ -16,8 +16,8 @@ on a sanctioned channel, and stay. Resolved alerts keep their resolution.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::sanction_suppresses_open_and_acknowledged_channel_alerts", "crosstalk::analysis::tests::sanction_leaves_transmission_alerts_and_resolved_alerts"]
-property = "crosstalk::analysis::tests::sanction_suppresses_exactly_active_channel_alerts"
+unit = ["crosstalk_analysis::tests::sanction_suppresses_open_and_acknowledged_channel_alerts", "crosstalk_analysis::tests::sanction_leaves_transmission_alerts_and_resolved_alerts"]
+property = "crosstalk_analysis::tests::sanction_suppresses_exactly_active_channel_alerts"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

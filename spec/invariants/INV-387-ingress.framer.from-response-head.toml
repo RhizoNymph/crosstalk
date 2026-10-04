@@ -15,7 +15,7 @@ accurate source (ingress.meta.transport-matches).
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::framer::framer_chosen_from_protocol_and_response_head"
+unit = "crosstalk_ingress::tests::framer::framer_chosen_from_protocol_and_response_head"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

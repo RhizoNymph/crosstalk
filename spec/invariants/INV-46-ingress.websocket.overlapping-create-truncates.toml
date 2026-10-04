@@ -12,8 +12,8 @@ to it. The frame is still relayed (ingress.passthrough.websocket-frames-unchange
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::websocket::overlapping_create_truncates_previous_turn"
-dst = "crosstalk::ingress::tests::sim::websocket_overlapping_create_yields_two_exchanges"
+property = "crosstalk_ingress::tests::websocket::overlapping_create_truncates_previous_turn"
+dst = "crosstalk_ingress::tests::sim::websocket_overlapping_create_yields_two_exchanges"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

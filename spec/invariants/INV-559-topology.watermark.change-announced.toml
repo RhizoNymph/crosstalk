@@ -11,7 +11,7 @@ watermark, and wait for an event that already passed.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::watermark_announced_after_queries_report_it"
+dst = "crosstalk_topology::dst::watermark_announced_after_queries_report_it"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

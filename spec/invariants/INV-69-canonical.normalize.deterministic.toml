@@ -13,7 +13,7 @@ node identity or hash-map iteration order.
 """
 
 [evidence]
-property = "crosstalk::canonical::tests::normalize_is_deterministic"
+property = "crosstalk_canonical::tests::normalize_is_deterministic"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

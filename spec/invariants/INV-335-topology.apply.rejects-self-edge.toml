@@ -14,7 +14,7 @@ What the consumer does with the error is a separate invariant
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::apply_self_edge_errors_and_stores_nothing"
+unit = "crosstalk_topology::tests::apply_self_edge_errors_and_stores_nothing"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

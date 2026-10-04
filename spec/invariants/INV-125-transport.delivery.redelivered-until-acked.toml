@@ -13,8 +13,8 @@ an envelope and are handled by transport.codec.undecodable-not-redelivered.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::unacked_delivery_is_redelivered_until_budget"
-integration = "crosstalk::transport::integration::jetstream_redelivers_after_ack_wait"
+dst = "crosstalk_transport::dst::unacked_delivery_is_redelivered_until_budget"
+integration = "crosstalk_transport::integration::jetstream_redelivers_after_ack_wait"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

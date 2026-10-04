@@ -298,7 +298,7 @@ variant does not compile until it is added to its golden. After an
 intended format change:
 
 ```sh
-CROSSTALK_BLESS=1 cargo test --manifest-path spec/Cargo.toml wire
+CROSSTALK_BLESS=1 cargo test -p crosstalk-spec wire
 git diff spec/types/tests/golden
 ```
 
@@ -381,7 +381,7 @@ is in its golden.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `spec/Cargo.toml`, `spec/Cargo.lock` | `serde = "=1.0.229"` (derive) and `serde_json = "=1.0.151"`, the UI's pins; the lockfile resolves to the UI's versions | — |
+| `spec/Cargo.toml`, `Cargo.toml`, `Cargo.lock` | `serde = "=1.0.229"` (derive) and `serde_json = "=1.0.151"`, the UI's pins, declared in the root `[workspace.dependencies]`; the workspace lockfile resolves to the UI's versions | — |
 | `spec/types/wire/mod.rs` | The conventions (and the three leniencies), the request marker and decoder, the refusal wrapper, the text decoder, the negative trait assertion macro | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `decode_text` (crate), `assert_not_impl!` (module) |
 | `spec/types/wire/time.rs` | `Timestamp`'s RFC 3339 text and its serde impls | `Timestamp::rfc3339`, `Timestamp::parse_rfc3339`, `InvalidTimestamp`, `TimestampField`, `TooLateForText`, `MAX`, `MAX_TEXT`, `TEXT_LEN` |
 | `spec/types/wire/duration.rs` | Durations as whole microseconds in `_micros` fields | `micros`, `UnfitDuration` |

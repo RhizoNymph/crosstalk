@@ -13,8 +13,8 @@ complete response, so only L1 may assign it.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::failure::each_cause_classified"
-dst = "crosstalk::ingress::tests::sim::first_failure_cause_wins"
+unit = "crosstalk_ingress::tests::failure::each_cause_classified"
+dst = "crosstalk_ingress::tests::sim::first_failure_cause_wins"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

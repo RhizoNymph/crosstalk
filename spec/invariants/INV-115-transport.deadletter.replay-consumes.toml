@@ -13,7 +13,7 @@ If the replayed envelope fails again it is dead-lettered as a new DeadLetter.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::replay_removes_dead_letter"
+dst = "crosstalk_transport::dst::replay_removes_dead_letter"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

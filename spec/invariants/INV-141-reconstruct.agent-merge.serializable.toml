@@ -11,7 +11,7 @@ chain that no sequential order could produce.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_concurrent_merges_are_serializable"
+dst = "crosstalk_reconstruct::tests::dst_concurrent_merges_are_serializable"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

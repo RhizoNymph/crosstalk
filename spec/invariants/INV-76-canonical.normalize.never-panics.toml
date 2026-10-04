@@ -15,11 +15,11 @@ recorded traffic.
 
 [evidence]
 fuzz = [
-  "crosstalk::canonical::fuzz::normalize_anthropic_messages",
-  "crosstalk::canonical::fuzz::normalize_openai_chat",
-  "crosstalk::canonical::fuzz::normalize_openai_responses",
-  "crosstalk::canonical::fuzz::normalize_gemini_generate",
-  "crosstalk::canonical::fuzz::normalize_gemini_code_assist",
+  "crosstalk_canonical::fuzz::normalize_anthropic_messages",
+  "crosstalk_canonical::fuzz::normalize_openai_chat",
+  "crosstalk_canonical::fuzz::normalize_openai_responses",
+  "crosstalk_canonical::fuzz::normalize_gemini_generate",
+  "crosstalk_canonical::fuzz::normalize_gemini_code_assist",
 ]
 
 [evidence-review]

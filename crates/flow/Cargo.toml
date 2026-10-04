@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-flow"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L5 flow for crosstalk: resource extraction, the channel registry, the correlator and the verdict store."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

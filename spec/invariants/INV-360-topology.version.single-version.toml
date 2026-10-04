@@ -13,7 +13,7 @@ surface which version's topic ids to label the result with.
 """
 
 [evidence]
-property = "crosstalk::topology::props::graph_reads_one_topic_version"
+property = "crosstalk_topology::props::graph_reads_one_topic_version"
 
 [evidence-review]
 property = { agent = "false", human = "false" }
