@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.api.caller-from-session"
+statement = "The surface builds every Caller's operator and permissions from the verified session or token of the HTTP request, never from request parameters, headers other than the session credential, or the body."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Every permission check and every recorded author (audit record, policy
+decision, merge request, alert transition) trusts Caller. If any field
+could come from the request itself, a View user could claim Govern or act
+as another operator.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::caller_ignores_operator_in_request"
+integration = "crosstalk::surface::integration::forged_operator_field_has_no_effect"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
