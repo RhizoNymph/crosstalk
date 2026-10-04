@@ -61,7 +61,7 @@ impl Scope {
 /// The bucket boundary at or before `at`.
 pub fn align_down(at: Timestamp, width: BucketWidth) -> Timestamp {
     let micros = at.as_micros();
-    Timestamp::from_micros(micros - micros % width.as_micros().get())
+    Timestamp::from_micros(micros - micros % width.as_micros())
 }
 
 /// The bucket boundary at or after `at`.
