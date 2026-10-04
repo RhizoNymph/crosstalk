@@ -16,4 +16,4 @@ Non-generation endpoints are uncaptured by design and are not losses.
 unit = ["crosstalk_ingress::tests::capture::unclassified_request_counted", "crosstalk_ingress::tests::capture::decode_error_counted", "crosstalk_ingress::tests::capture::channel_full_counted"]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

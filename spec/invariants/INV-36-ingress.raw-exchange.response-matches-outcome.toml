@@ -14,4 +14,4 @@ be indexed as a finished one.
 dst = "crosstalk_ingress::tests::sim::raw_response_variant_matches_final_stage"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

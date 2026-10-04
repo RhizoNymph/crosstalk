@@ -13,4 +13,4 @@ the agent actually received and set ended_at too early.
 dst = "crosstalk_ingress::tests::sim::handoff_waits_for_stream_end_after_frame_error"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

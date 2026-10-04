@@ -16,4 +16,4 @@ its upstream's.
 unit = "crosstalk_ingress::tests::adapter::dialect_follows_configured_upstream"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

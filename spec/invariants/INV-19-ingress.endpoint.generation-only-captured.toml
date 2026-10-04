@@ -15,4 +15,4 @@ forwarded (ingress.passthrough.request-unchanged).
 unit = "crosstalk_ingress::tests::endpoint::non_generation_routes_not_captured"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

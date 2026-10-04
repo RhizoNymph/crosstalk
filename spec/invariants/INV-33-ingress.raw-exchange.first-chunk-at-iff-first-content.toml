@@ -14,4 +14,4 @@ exchange that never produced content misstates time to first token.
 dst = "crosstalk_ingress::tests::sim::first_chunk_at_set_on_first_content"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
