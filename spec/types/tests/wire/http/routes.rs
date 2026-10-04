@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use super::super::harness::assert_golden;
 use super::super::surface_actions::actions::{every_action, every_request};
 use super::AREA;
-use super::client::LANDING;
 use crate::interfaces::l8_surface::http::path::{Segment, match_template, segments};
 use crate::interfaces::l8_surface::http::{
     Method, Place, ResponseBody, Route, RoutePermission, Source, Target, resolve,
@@ -237,12 +236,11 @@ fn documented(doc: &str) -> RoutePermission {
 }
 
 /// Every `QueryApi` method has a route, and the route needs exactly the
-/// permission the method's documentation names. A route whose method has
-/// not landed yet is one of `LANDING`, and only while it has not.
+/// permission the method's documentation names.
 #[test]
 fn query_routes_need_the_permission_their_method_documents() {
     let methods = query_api_methods();
-    assert!(methods.len() >= 37, "parsed {} methods", methods.len());
+    assert!(methods.len() >= 39, "parsed {} methods", methods.len());
     let routes: HashMap<&str, Route> = Route::all()
         .into_iter()
         .filter_map(|route| match route.spec().source {
@@ -260,16 +258,7 @@ fn query_routes_need_the_permission_their_method_documents() {
             "QueryApi::{method}: {doc}"
         );
     }
-    for route in LANDING {
-        let Source::Query(method) = route.spec().source else {
-            panic!("{route:?} is a query route");
-        };
-        assert!(
-            methods.iter().all(|(name, _)| name != method),
-            "QueryApi::{method} has landed: remove {route:?} from LANDING"
-        );
-    }
-    assert_eq!(routes.len(), methods.len() + LANDING.len());
+    assert_eq!(routes.len(), methods.len());
 }
 
 /// An action's route needs the action's permission, for every action.

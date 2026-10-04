@@ -1,10 +1,14 @@
 [invariant]
 id = "surface.action.rejections-typed"
-statement = "An operator action other than SetVerdict, PinTopicVersion and UnpinTopicVersion that L3, L5 or L6 refuses returns NotFound for ResolveError::UnknownAgent and UnknownMerge, PromotionRefusal::UnknownChannel and RuleError::UnknownRule; Conflict(AgentMerged) for ResolveError::AgentMerged; Conflict(MergeIntoSelf) for ResolveError::MergeIntoSelf, naming the request's two agents and their canonical agent; Conflict(MergeAlreadyReverted) for MergeAlreadyReverted; Conflict(ChannelSuperseded) for PromotionRefusal::Superseded; Conflict(ChannelNotDiscovered) for NotDiscovered; Conflict(PatternOverlaps) for PatternOverlaps; InvalidInput(PatternMissesSeed) for PatternMissesSeed; Conflict(RuleNotEditable) for RuleError::NotEditable; Conflict(RuleStale) for RuleError::Stale; Conflict(TopicVersionNotCurrent) for TopicVersionNotCurrent; InvalidInput(UnknownTopics) for UnknownTopics; InvalidInput(UnknownSink) for UnknownSink; InvalidInput(QueryTooLong) for Embed(TooLong); and Store for ResolveError::Vetoed, which only a resolver merge can meet, and for RuleError::Embed(Model), a failure of the embedding model rather than of the request."
+statement = "An operator action that the layer owning its effect refuses returns, through the one ActionError::from per store error: for SetPolicy (RegistryError) NotFound for UnknownChannel, Conflict(PatternOverlaps) for OverlappingDeclaration, Conflict(ChannelSuperseded) for Superseded, and Store for Store and for InvalidCursor; for PromoteChannel (PromoteError, PromotionRefusal) NotFound for UnknownChannel, Conflict(ChannelSuperseded) for Superseded, Conflict(ChannelNotDiscovered) for NotDiscovered, InvalidInput(PatternMissesSeed) for PatternMissesSeed, Conflict(PatternOverlaps) for PatternOverlaps and Store for Store; for MergeAgents, Unmerge and RenameAgent (ResolveError) NotFound for UnknownAgent and UnknownMerge, Conflict(AgentMerged) for AgentMerged, Conflict(MergeIntoSelf) for MergeIntoSelf naming the request's two agents and their canonical agent, Conflict(MergeAlreadyReverted) for MergeAlreadyReverted, and Store for Store and for Vetoed, which only a resolver merge can meet; for SetVerdict (VerdictError) NotFound for UnknownTransmission, Conflict(TransmissionNotJudgeable) for NotJudgeable and Store for Store; for CreateRule, UpdateRule and SetRuleEnabled (RuleError) NotFound for UnknownRule, Conflict(RuleNotEditable) for NotEditable, Conflict(RuleStale) for Stale, Conflict(TopicVersionNotCurrent) for TopicVersionNotCurrent, InvalidInput(UnknownTopics) for UnknownTopics, InvalidInput(UnknownSink) for UnknownSink, InvalidInput(QueryTooLong) for Embed(TooLong), and Store for Store and for Embed(Model), a failure of the embedding model rather than of the request; for PinTopicVersion and UnpinTopicVersion (CatalogError) NotFound for UnknownVersion, Conflict(TopicVersionFitting) for StillFitting, Conflict(TopicVersionDropped) for VersionNotRetained, and Store for Store and for InvalidCursor, and (PinError) NotFound for UnknownVersion, Conflict(TopicVersionFitting) for Fitting and Conflict(TopicVersionDropped) for Dropped."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
+Every action names its refusals here, with no exception: SetVerdict and
+the pins, which the UI used to map by hand, have their From impls in
+query_errors.rs like the rest. A cursor error reported to an action, which
+takes no cursor, is a fault and so Store.
 The UI shows these to the operator. Collapsing them into a store error
 would hide that a retry is pointless (already unmerged, a built-in rule)
 or that the request needs changing (rename the canonical agent instead,
@@ -32,6 +36,10 @@ those are query refusals.
 unit = [
     "crosstalk_surface::tests::layer_rejections_map_to_action_errors",
     "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors",
+    "crosstalk_spec::tests::action_errors::registry_refusals_map_to_typed_action_errors",
+    "crosstalk_spec::tests::action_errors::verdict_refusals_map_to_typed_action_errors",
+    "crosstalk_spec::tests::action_errors::catalog_refusals_of_a_pin_map_to_typed_action_errors",
+    "crosstalk_spec::tests::action_errors::history_refusals_of_a_pin_map_as_the_catalog_refusals_do",
     "crosstalk_spec::tests::query_errors::rule_store_errors_map_to_typed_action_errors",
     "crosstalk_spec::tests::agent_reads::resolve_errors_map_to_action_errors",
 ]

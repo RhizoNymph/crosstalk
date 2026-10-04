@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::aggregates::alert::RuleQueryText;
 use crate::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::resource::{Host, ResourcePattern};
@@ -10,7 +11,7 @@ use crate::ids::{AlertId, AlertRuleId, EventId, MergeId, SinkId, TopicId};
 use crate::interfaces::l2_transport::ConsumerGroup;
 use crate::interfaces::l8_surface::{ActionKind, OperatorAction, Permission, PolicyKind};
 use crate::observed::agent::{AgentLabel, MergeAuthor, MergeRequest};
-use crate::support::{NonBlank, NonEmpty, Similarity};
+use crate::support::{NonEmpty, Similarity};
 use crate::tests::fixtures::{agent, channel, transmission};
 
 fn watched() -> UserRule {
@@ -25,7 +26,7 @@ fn watched() -> UserRule {
 
 fn semantic() -> UserRule {
     UserRule::SemanticQuery {
-        text: NonBlank::new("credentials").expect("not blank"),
+        text: RuleQueryText::new("credentials").expect("valid query text"),
         threshold: Similarity::new(0.7).expect("in range"),
     }
 }

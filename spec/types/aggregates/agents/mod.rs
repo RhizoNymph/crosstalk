@@ -297,6 +297,9 @@ pub enum InvalidCluster {
     /// A merge record that names nothing in the cluster.
     UnrelatedMerge(MergeId),
     DuplicateMerge(MergeId),
+    /// An alias whose merge (its `MergedInto::merge`) is not among the
+    /// records as an unreverted record with the alias as source.
+    AliasMergeMissing(AgentId),
     /// A veto with neither end in the cluster.
     UnrelatedVeto {
         a: AgentId,
@@ -378,6 +381,12 @@ impl AgentCluster {
         if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(InvalidCluster::DuplicateMerge(pair[0]));
         }
+        if let Some(alias) = aliases
+            .iter()
+            .find(|alias| merging_record(&merges, alias).is_none())
+        {
+            return Err(InvalidCluster::AliasMergeMissing(alias.id));
+        }
         if let Some(veto) = vetoes
             .iter()
             .find(|veto| !in_cluster(veto.a()) && !in_cluster(veto.b()))
@@ -435,6 +444,17 @@ impl AgentCluster {
         &self.merges
     }
 
+    /// The record that merged `alias` into this agent: when and by whom
+    /// (`MergeRecord::at`, `by`), and what reverting it would restore. Every
+    /// alias has one ([`InvalidCluster::AliasMergeMissing`]), so `None` only
+    /// for an id that is not an alias. This is where a merged agent's merge
+    /// time and author live: `MergedInto` names the record and does not
+    /// copy it.
+    pub fn merge_of(&self, alias: AgentId) -> Option<&MergeRecord> {
+        let alias = self.aliases.iter().find(|agent| agent.id == alias)?;
+        merging_record(&self.merges, alias)
+    }
+
     /// Oldest first.
     pub fn vetoes(&self) -> &[MergeVeto] {
         &self.vetoes
@@ -454,6 +474,19 @@ impl AgentCluster {
     pub fn contains(&self, id: AgentId) -> bool {
         id == self.profile.id || self.profile.aliases.binary_search(&id).is_ok()
     }
+}
+
+/// The unreverted record in `merges` that merged `alias`: the one its
+/// `MergedInto::merge` names, with `alias` as its source. `None` when
+/// `alias` is not merged or its record is missing, reverted or about
+/// another agent.
+fn merging_record<'a>(merges: &'a [MergeRecord], alias: &Agent) -> Option<&'a MergeRecord> {
+    let AgentState::Merged(merged) = &alias.state else {
+        return None;
+    };
+    merges.iter().find(|record| {
+        record.id() == merged.merge && record.source() == alias.id && record.reverted().is_none()
+    })
 }
 
 /// `QueryApi::agent`'s answer: one canonical agent's cluster and its

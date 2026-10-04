@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.audit.config-sinks-and-retention"
+statement = "A config load that defines, changes or removes an alert sink, or changes the topic-version retention policy or the projection frame retention, records one config entry per change (SetSink, RemoveSink, SetTopicRetention, SetFrameRetention) in the change's transaction, naming the sink as its subject for a sink change, and records nothing when the value is unchanged."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+A sink change redirects where alerts go, and a lower keep_last or a
+shorter frame retention drops data on the next enforcement; neither has
+an operator action, so the config entry is the only record of who changed
+what, when. Writing it in the change's transaction keeps the log and the
+running config from disagreeing.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::audit::every_config_change_names_its_subjects",
+    "crosstalk_surface::tests::config_load_audits_sink_and_retention_changes",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

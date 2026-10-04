@@ -1,6 +1,7 @@
+use crate::aggregates::alert::{RULE_QUERY_MAX_CHARS, RuleQueryText};
 use crate::support::{
-    Blank, ByteRange, DisplayText, EmptyRange, EmptyWindow, InvalidText, NonBlank, NonEmpty,
-    OutOfRange, Share, Similarity, TimeWindow,
+    Blank, ByteRange, DisplayText, EmptyRange, EmptyWindow, InvalidQueryText, InvalidText,
+    NonBlank, NonEmpty, OutOfRange, QueryText, Share, Similarity, TimeWindow,
 };
 use crate::tests::fixtures::at;
 
@@ -113,4 +114,39 @@ fn display_text_rejects_blank_long_and_control_text() {
 fn display_text_counts_characters_not_bytes() {
     assert!(Short::new("éééé").is_ok());
     assert_eq!(Short::MAX_CHARS, 4);
+}
+
+type ShortQuery = QueryText<4>;
+
+#[test]
+fn query_text_is_trimmed_and_may_span_lines() {
+    assert_eq!(
+        ShortQuery::new("  a\nb ").map(|t| t.as_str().to_owned()),
+        Ok("a\nb".to_owned())
+    );
+}
+
+#[test]
+fn query_text_rejects_blank_and_long_text_by_characters() {
+    assert_eq!(ShortQuery::new(" \t\n "), Err(InvalidQueryText::Blank));
+    assert_eq!(
+        ShortQuery::new("abcde"),
+        Err(InvalidQueryText::TooLong { max: 4, got: 5 })
+    );
+    // Characters, not bytes, and counted after trimming.
+    assert!(ShortQuery::new(" éééé ").is_ok());
+    assert_eq!(ShortQuery::MAX_CHARS, 4);
+}
+
+#[test]
+fn a_rule_query_is_bounded() {
+    assert_eq!(RuleQueryText::MAX_CHARS, RULE_QUERY_MAX_CHARS);
+    assert!(RuleQueryText::new(&"q".repeat(RULE_QUERY_MAX_CHARS)).is_ok());
+    assert_eq!(
+        RuleQueryText::new(&"q".repeat(RULE_QUERY_MAX_CHARS + 1)),
+        Err(InvalidQueryText::TooLong {
+            max: RULE_QUERY_MAX_CHARS,
+            got: RULE_QUERY_MAX_CHARS + 1
+        })
+    );
 }

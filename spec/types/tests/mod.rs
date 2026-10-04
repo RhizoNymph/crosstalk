@@ -5,9 +5,11 @@
 
 mod fixtures;
 
+mod action_errors;
 mod agent_reads;
 mod agents;
 mod aggregates;
+mod alerts;
 mod audit;
 mod channel_reads;
 mod channels;

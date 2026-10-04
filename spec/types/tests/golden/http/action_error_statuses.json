@@ -377,6 +377,18 @@
     }
   },
   {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "unsupported_format",
+        "data": {
+          "format": "parquet"
+        }
+      }
+    }
+  },
+  {
     "status": 400,
     "error": {
       "type": "invalid_input",

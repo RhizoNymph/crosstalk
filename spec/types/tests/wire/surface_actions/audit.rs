@@ -13,12 +13,14 @@ use super::super::{ULID_A, ULID_B, ULID_C, id, ts};
 use super::actions::every_action;
 use super::{caller, operator, operator_name};
 use crate::aggregates::alert::AlertRuleKind;
+use crate::aggregates::projection::FrameRetention;
+use crate::aggregates::retention::RetentionPolicy;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::ids::{
     AccountHash, AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ConfigHash, ExportId, MergeId,
-    OperatorId, ProjectionId, SecretVersion, TransmissionId,
+    OperatorId, ProjectionId, SecretVersion, SinkId, TransmissionId,
 };
 use crate::interfaces::l8_surface::audit::{
     AuditBody, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome,
@@ -29,6 +31,7 @@ use crate::interfaces::l8_surface::export::{
     ExportRecord, ExportRequest, ExportTrailer, GatewayVersion, settled_window,
 };
 use crate::interfaces::l8_surface::operators::AccessMode;
+use crate::interfaces::l8_surface::sinks::SinkKind;
 use crate::interfaces::l8_surface::{
     ActionOutcome, CallerSnapshot, ConflictKind, InputError, OperatorAction, Permission,
     PermissionSet, PolicyKind, QueryError,
@@ -114,7 +117,11 @@ fn every_config_change() -> Vec<ConfigChange> {
             | ConfigChange::ProvisionRule { .. }
             | ConfigChange::SetAccessMode(_)
             | ConfigChange::SetOperator { .. }
-            | ConfigChange::RemoveOperator { .. } => change,
+            | ConfigChange::RemoveOperator { .. }
+            | ConfigChange::SetSink { .. }
+            | ConfigChange::RemoveSink { .. }
+            | ConfigChange::SetTopicRetention(_)
+            | ConfigChange::SetFrameRetention { .. } => change,
         }
     }
     let account = AccountHash::from_keyed_digest(SecretVersion(1), Blake3::from_bytes([0x11; 32]));
@@ -149,6 +156,20 @@ fn every_config_change() -> Vec<ConfigChange> {
         },
         ConfigChange::RemoveOperator {
             operator: id(OperatorId::from_ulid_text, ULID_B),
+        },
+        ConfigChange::SetSink {
+            sink: id(SinkId::from_ulid_text, ULID_A),
+            kind: SinkKind::Webhook,
+            name: "security on-call".into(),
+        },
+        ConfigChange::RemoveSink {
+            sink: id(SinkId::from_ulid_text, ULID_B),
+        },
+        ConfigChange::SetTopicRetention(RetentionPolicy::new(5).expect("at least 2")),
+        ConfigChange::SetFrameRetention {
+            frame_retention_micros: FrameRetention::from_days(
+                NonZeroU16::new(90).expect("non-zero"),
+            ),
         },
     ]
     .into_iter()
@@ -349,6 +370,33 @@ fn config_changes_and_outcomes_golden_with_every_variant() {
     assert_golden(AREA, "config_outcomes", &outcomes);
 }
 
+/// A retention policy decodes only through its constructor, a frame
+/// retention is never zero, and a sink's endpoint is not part of its
+/// change.
+#[test]
+fn sink_and_retention_changes_decode_checked() {
+    assert_rejected::<ConfigChange>(
+        r#"{"type": "set_topic_retention", "data": {"keep_last": 1}}"#,
+        "invalid retention policy: TooFew { min: 2, got: 1 }",
+    );
+    assert_rejected::<ConfigChange>(
+        r#"{"type": "set_topic_retention", "data": {"keep_last": 3, "pinned": []}}"#,
+        "unknown field `pinned`",
+    );
+    assert_rejected::<ConfigChange>(
+        r#"{"type": "set_frame_retention", "data": {"frame_retention_micros": 0}}"#,
+        "nonzero",
+    );
+    // A sink's endpoint is never recorded: it can carry a credential.
+    assert_rejected::<ConfigChange>(
+        &format!(
+            r#"{{"type": "set_sink", "data": {{"sink": "{ULID_A}", "kind": "webhook",
+                "name": "on-call", "url": "https://hooks.example/T0K3N"}}}}"#
+        ),
+        "unknown field `url`",
+    );
+}
+
 fn every_subject() -> Vec<AuditSubject> {
     fn declared(subject: AuditSubject) -> AuditSubject {
         match subject {
@@ -361,7 +409,8 @@ fn every_subject() -> Vec<AuditSubject> {
             | AuditSubject::Operator(_)
             | AuditSubject::TopicVersion(_)
             | AuditSubject::Export(_)
-            | AuditSubject::Projection(_) => subject,
+            | AuditSubject::Projection(_)
+            | AuditSubject::Sink(_) => subject,
         }
     }
     [
@@ -375,6 +424,7 @@ fn every_subject() -> Vec<AuditSubject> {
         AuditSubject::TopicVersion(TopicModelVersion(4)),
         AuditSubject::Export(export_id()),
         AuditSubject::Projection(id(ProjectionId::from_ulid_text, ULID_A)),
+        AuditSubject::Sink(id(SinkId::from_ulid_text, ULID_C)),
     ]
     .into_iter()
     .map(declared)

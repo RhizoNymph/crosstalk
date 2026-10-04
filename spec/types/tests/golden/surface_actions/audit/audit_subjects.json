@@ -38,5 +38,9 @@
   {
     "type": "projection",
     "data": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+  },
+  {
+    "type": "sink",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
   }
 ]

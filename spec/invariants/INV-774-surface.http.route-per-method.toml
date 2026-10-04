@@ -12,10 +12,7 @@ client and server that disagree on the wire and fail only at run time.
 Route::spec and Route::index match every route with no wildcard, and the
 test client implements QueryApi over the table, so a new method or route
 does not compile until it has its row; the tests then check every
-recorded request against the table. QueryApi::present and
-QueryApi::alert_rule land with docs/spec-ui-gaps: their routes are in the
-table already and the test's LANDING list names them until the methods
-exist, after which it fails until the list is emptied.
+recorded request against the table.
 """
 
 [evidence]

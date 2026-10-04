@@ -1,0 +1,24 @@
+[invariant]
+id = "analysis.rule.query-text-bounded"
+statement = "A semantic rule's query text, as a UserRule or a stored SemanticQuery, is trimmed, non-empty and at most RULE_QUERY_MAX_CHARS characters, and decoding refuses blank or longer text."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The rule form checks the text before sending, which needs a bound a
+client can compute; EmbedError::TooLong names no limit and depends on the
+model's tokenizer. A character bound well inside the embedding models'
+context leaves QueryTooLong to unusual scripts, and refusing longer text
+on decode keeps it from reaching the embedder at all.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::QueryText::new"
+unit = [
+    "crosstalk_spec::tests::support::query_text_rejects_blank_and_long_text_by_characters",
+    "crosstalk_spec::tests::support::a_rule_query_is_bounded",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

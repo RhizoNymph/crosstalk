@@ -16,7 +16,7 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, ChannelId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, SinkId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::actions::{ActionOutcome, OperatorAction};
@@ -40,7 +40,7 @@ use crate::interfaces::l8_surface::overview::OverviewCounts;
 use crate::interfaces::l8_surface::permissions::Caller;
 use crate::interfaces::l8_surface::sinks::{AlertSink, SinkError, SinkInfo};
 use crate::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
-use crate::interfaces::l8_surface::{AlertFilter, OperatorActions, QueryApi};
+use crate::interfaces::l8_surface::{AlertFilter, OperatorActions, Present, QueryApi};
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
@@ -123,6 +123,13 @@ impl QueryApi for Dummy {
         _filter: &AlertRuleFilter,
         _page: &PageRequest<AlertRuleList>,
     ) -> Result<Page<AlertRuleDef, AlertRuleList>, QueryError> {
+        match *self {}
+    }
+    async fn alert_rule(
+        &self,
+        _caller: &Caller,
+        _id: AlertRuleId,
+    ) -> Result<Option<AlertRuleDef>, QueryError> {
         match *self {}
     }
     async fn sinks(&self, _caller: &Caller) -> Result<Vec<SinkInfo>, QueryError> {
@@ -320,6 +327,9 @@ impl QueryApi for Dummy {
     async fn operators(&self, _caller: &Caller) -> Result<Vec<Operator>, QueryError> {
         match *self {}
     }
+    async fn present(&self, _caller: &Caller) -> Result<Present, QueryError> {
+        match *self {}
+    }
     async fn export(
         &self,
         _caller: &Caller,
@@ -350,6 +360,7 @@ fn query_api<T: QueryApi>(x: &T, never: &Dummy) {
     assert_send(x.agent(arg(never), arg(never), arg(never)));
     assert_send(x.agent_names(arg(never), arg(never)));
     assert_send(x.alert_rules(arg(never), arg(never), arg(never)));
+    assert_send(x.alert_rule(arg(never), arg(never)));
     assert_send(x.sinks(arg(never)));
     assert_send(x.dead_letters(arg(never), arg(never), arg(never)));
     assert_send(x.alerts(arg(never), arg(never), arg(never)));
@@ -377,6 +388,7 @@ fn query_api<T: QueryApi>(x: &T, never: &Dummy) {
     assert_send(x.detection_quality(arg(never), arg(never)));
     assert_send(x.audit(arg(never), arg(never), arg(never)));
     assert_send(x.operators(arg(never)));
+    assert_send(x.present(arg(never)));
     assert_send(x.export(arg(never), arg(never)));
 }
 

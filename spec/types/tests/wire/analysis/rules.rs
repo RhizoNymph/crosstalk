@@ -13,9 +13,10 @@ use crate::aggregates::alert::{
     AlertRule, AlertRuleDef, AlertRuleKind, BuiltinRule, ContentRule, QueryWatch, RuleName,
     RuleRevision, RuleStatus, SemanticQuery, TopicWatch, UserRule, WatchedTopics,
 };
+use crate::aggregates::alert::{RULE_QUERY_MAX_CHARS, RuleQueryText};
 use crate::ids::{AlertRuleId, SinkId};
 use crate::paging::{AlertRuleList, Cursor, Page, PageSize};
-use crate::support::{NonBlank, NonEmpty};
+use crate::support::NonEmpty;
 
 const AREA: &str = "rules";
 
@@ -40,7 +41,7 @@ fn watched(version_n: u32, topics: [usize; 2]) -> WatchedTopics {
 
 fn query() -> SemanticQuery {
     SemanticQuery {
-        text: NonBlank::new("credentials pasted into a shared doc").expect("not blank"),
+        text: RuleQueryText::new("credentials pasted into a shared doc").expect("valid query text"),
         embedding: embedding(model()),
     }
 }
@@ -165,7 +166,7 @@ fn user_rules_golden_as_requests() {
     let watch_one = declared(UserRule::watch_topic(version(3), topic(2)));
     assert_request_golden(AREA, "user_rule_watch_topic_default_threshold", &watch_one);
     let semantic = declared(UserRule::SemanticQuery {
-        text: NonBlank::new("credentials pasted into a shared doc").expect("not blank"),
+        text: RuleQueryText::new("credentials pasted into a shared doc").expect("valid query text"),
         threshold: sim(0.5),
     });
     assert_request_golden(AREA, "user_rule_semantic_query", &semantic);
@@ -321,8 +322,24 @@ fn user_rules_refuse_what_a_client_must_not_send() {
     );
     assert_rejected::<UserRule>(
         r#"{"type": "semantic_query", "data": {"text": "   ", "threshold": 0.5}}"#,
-        "invalid non-blank text",
+        "invalid query text: Blank",
     );
+    // A query over the bound is refused on decode, before any embedding;
+    // one at the bound decodes.
+    let semantic = |chars: usize| {
+        format!(
+            r#"{{"type": "semantic_query", "data": {{"text": "{}", "threshold": 0.5}}}}"#,
+            "q".repeat(chars)
+        )
+    };
+    assert_rejected::<UserRule>(
+        &semantic(RULE_QUERY_MAX_CHARS + 1),
+        &format!(
+            "invalid query text: TooLong {{ max: {RULE_QUERY_MAX_CHARS}, got: {} }}",
+            RULE_QUERY_MAX_CHARS + 1
+        ),
+    );
+    assert!(serde_json::from_str::<UserRule>(&semantic(RULE_QUERY_MAX_CHARS)).is_ok());
     // The author is stamped from the caller, never sent.
     assert_rejected::<UserRule>(
         &format!(

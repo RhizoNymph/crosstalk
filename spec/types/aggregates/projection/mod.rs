@@ -28,8 +28,9 @@
 //! that still admits it (bottom-k selection).
 //!
 //! **Points are frozen at fit time.** A stored point carries the canonical
-//! agents, route kind, topic (under the pinned version) and confirmation
-//! time as they were when the sample was read. Later merges, verdicts and
+//! agents, route kind and channel ([`PointRoute`]), topic (under the
+//! pinned version) and confirmation time as they were when the sample was
+//! read. Later merges, verdicts and
 //! re-fits do not change a stored projection; a client that needs current
 //! canonical agents resolves the frame's agent tables through the agent
 //! list, where a merged agent names its canonical one.
@@ -48,8 +49,9 @@
 //!
 //! **Retention.** A projection's [`ProjectionInfo`] (spec, requester and
 //! status) is kept for as long as the audit log. Its frame is kept for
-//! `projection.frame_retention_days` after it was fitted (default 180), then
-//! dropped, and the projection becomes `Expired`: reading it returns
+//! [`FrameRetention`] after it was fitted (config
+//! `projection.frame_retention_days`, default 180, reported by
+//! `QueryApi::present`), then dropped, and the projection becomes `Expired`: reading it returns
 //! `ProjectionNotRetained`, while its spec still says exactly what it was and
 //! can be fitted again with the same seed. The catalog keeps every
 //! version's topics (`TopicCatalog::topics`), so a frame's topic ids always
@@ -78,14 +80,16 @@
 
 pub mod frame;
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::{RouteKind, TopicSlot};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
-use crate::ids::{AgentId, OperatorId, ProjectionId, TopicId, TransmissionId};
+use crate::derived::flow::transmission::Route;
+use crate::ids::{AgentId, ChannelId, OperatorId, ProjectionId, TopicId, TransmissionId};
 use crate::support::{Finite, TimeWindow, Timestamp, Watermark};
 use crate::wire::{Rejected, WireRequest};
 
@@ -118,7 +122,7 @@ impl From<ProjectionLimit> for u32 {
 }
 
 impl ProjectionLimit {
-    /// Bounds a fit to minutes and a frame to about 5 MB (48 bytes per point
+    /// Bounds a fit to minutes and a frame to about 5 MB (52 bytes per point
     /// plus its tables), which a browser canvas still renders interactively.
     pub const MAX: u32 = 100_000;
 
@@ -135,6 +139,57 @@ impl ProjectionLimit {
 
     pub fn get(self) -> NonZeroU32 {
         self.0
+    }
+}
+
+/// How long a ready projection's frame is kept after its fit: config
+/// `projection.frame_retention_days` (default
+/// [`FrameRetention::DEFAULT_DAYS`]). Never zero. A frame fitted at `t` is
+/// readable at least until [`FrameRetention::expires_at`]`(t)` under the
+/// retention in force; then the store drops it and the job becomes
+/// `Expired`.
+///
+/// On the wire, whole microseconds in a `_micros` field
+/// (`"frame_retention_micros": 15552000000000`); `0` is a decode error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FrameRetention(NonZeroU64);
+
+impl FrameRetention {
+    pub const DEFAULT_DAYS: u16 = 180;
+    const MICROS_PER_DAY: u64 = 86_400_000_000;
+
+    pub const fn from_micros(micros: NonZeroU64) -> Self {
+        Self(micros)
+    }
+
+    /// `days` whole days.
+    pub const fn from_days(days: NonZeroU16) -> Self {
+        // At most 65,535 days: no overflow.
+        match NonZeroU64::new(days.get() as u64 * Self::MICROS_PER_DAY) {
+            Some(micros) => Self(micros),
+            None => Self(NonZeroU64::MIN),
+        }
+    }
+
+    pub const fn as_micros(self) -> NonZeroU64 {
+        self.0
+    }
+
+    pub fn as_duration(self) -> Duration {
+        Duration::from_micros(self.0.get())
+    }
+
+    /// When a frame fitted at `fitted_at` expires under this retention,
+    /// saturating at the latest timestamp.
+    pub fn expires_at(self, fitted_at: Timestamp) -> Timestamp {
+        Timestamp::from_micros(fitted_at.as_micros().saturating_add(self.0.get()))
+    }
+}
+
+impl Default for FrameRetention {
+    fn default() -> Self {
+        Self::from_days(NonZeroU16::new(Self::DEFAULT_DAYS).unwrap_or(NonZeroU16::MIN))
     }
 }
 
@@ -642,6 +697,75 @@ impl ProjectionInfo {
     }
 }
 
+/// A projected point's route as the frame stores it: its kind and, for a
+/// channel route, the channel. The channel is the canonical one when the
+/// sample was read (resolved through supersession then), so a point can be
+/// coloured and named by channel without reading its transmission; a
+/// client that needs the channel in force now resolves the frame's channel
+/// table in one `channel_names` batch, where a channel superseded since is
+/// named by the channel that superseded it. A delegation's direction and a
+/// direct route's carrier are not kept.
+///
+/// A channel route always names its channel, and no other route names
+/// one. On the wire, adjacently tagged: `{"type": "channel", "data":
+/// "<channel id>"}`, `{"type": "delegation"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PointRoute {
+    Channel(ChannelId),
+    Delegation,
+    Direct,
+    Unobserved,
+}
+
+impl PointRoute {
+    /// A stored route as a point keeps it. `route`'s channel must already
+    /// be resolved through supersession (`Route::resolved`).
+    pub fn of(route: &Route) -> Self {
+        match route {
+            Route::Channel(channel) => Self::Channel(*channel),
+            Route::Delegation(_) => Self::Delegation,
+            Route::Direct(_) => Self::Direct,
+            Route::Unobserved => Self::Unobserved,
+        }
+    }
+
+    /// The route from its kind and channel, as a frame's columns hold them:
+    /// `None` unless the channel is given exactly for a channel route.
+    pub fn from_parts(kind: RouteKind, channel: Option<ChannelId>) -> Option<Self> {
+        match (kind, channel) {
+            (RouteKind::Channel, Some(channel)) => Some(Self::Channel(channel)),
+            (RouteKind::Delegation, None) => Some(Self::Delegation),
+            (RouteKind::Direct, None) => Some(Self::Direct),
+            (RouteKind::Unobserved, None) => Some(Self::Unobserved),
+            (RouteKind::Channel, None)
+            | (RouteKind::Delegation | RouteKind::Direct | RouteKind::Unobserved, Some(_)) => None,
+        }
+    }
+
+    pub fn kind(self) -> RouteKind {
+        match self {
+            Self::Channel(_) => RouteKind::Channel,
+            Self::Delegation => RouteKind::Delegation,
+            Self::Direct => RouteKind::Direct,
+            Self::Unobserved => RouteKind::Unobserved,
+        }
+    }
+
+    /// The channel of a channel route; `None` for every other route.
+    pub fn channel(self) -> Option<ChannelId> {
+        match self {
+            Self::Channel(channel) => Some(channel),
+            Self::Delegation | Self::Direct | Self::Unobserved => None,
+        }
+    }
+}
+
 /// One point of a projection: a row of a [`ProjectionFrame`]. On the wire
 /// (an export's point rows) `x` and `y` are JSON numbers, finite by type, so
 /// they always encode and a non-finite one is a decode error.
@@ -655,7 +779,9 @@ pub struct ProjectedPoint {
     /// two agents had been merged by then; the topology graph drops such
     /// transmissions.
     pub to: AgentId,
-    pub route: RouteKind,
+    /// The route kind, and a channel route's canonical channel, when the
+    /// sample was read.
+    pub route: PointRoute,
     /// The topic under the spec's topic version; `None` for an outlier.
     pub topic: Option<TopicId>,
     /// `Confirmed::at`.

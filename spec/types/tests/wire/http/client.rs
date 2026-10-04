@@ -28,7 +28,7 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, ChannelId, ProjectionId, TransmissionId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
@@ -53,7 +53,7 @@ use crate::interfaces::l8_surface::operators::Operator;
 use crate::interfaces::l8_surface::overview::OverviewCounts;
 use crate::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crate::interfaces::l8_surface::{
-    AlertFilter, Caller, Permission, QueryApi, QueryError, SinkInfo,
+    AlertFilter, Caller, Permission, Present, QueryApi, QueryError, SinkInfo,
 };
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
@@ -61,12 +61,6 @@ use crate::paging::{
     TopicList, TransmissionList,
 };
 use crate::support::{NonBlank, TimeWindow};
-
-/// The routes whose methods land with `docs/spec-ui-gaps`
-/// (`QueryApi::present`, `QueryApi::alert_rule`). When that branch merges,
-/// `TableClient` stops compiling until it implements them; then this list
-/// empties and the test below that checks it fails until it does.
-pub(super) const LANDING: [Route; 2] = [Route::Present, Route::AlertRule];
 
 /// No export is ever streamed by the table client.
 pub(super) enum NoRows {}
@@ -198,6 +192,14 @@ impl QueryApi for TableClient {
         self.send(Route::AlertRules, |b| {
             b.query("filter", filter).query("page", page)
         })
+    }
+
+    async fn alert_rule(
+        &self,
+        _: &Caller,
+        id: AlertRuleId,
+    ) -> Result<Option<AlertRuleDef>, QueryError> {
+        self.send(Route::AlertRule, |b| b.path("id", &id))
     }
 
     async fn sinks(&self, _: &Caller) -> Result<Vec<SinkInfo>, QueryError> {
@@ -484,6 +486,10 @@ impl QueryApi for TableClient {
         self.send(Route::Operators, |b| b)
     }
 
+    async fn present(&self, _: &Caller) -> Result<Present, QueryError> {
+        self.send(Route::Present, |b| b)
+    }
+
     async fn export(
         &self,
         _: &Caller,
@@ -524,6 +530,7 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     )
     .expect("a valid request");
     let alert = id(AlertId::from_ulid_text, ULID_A);
+    let rule = id(AlertRuleId::from_ulid_text, ULID_B);
     let projection = id(ProjectionId::from_ulid_text, ULID_B);
     let w = window();
     // Every call answers `NotFound`; what matters is what it recorded.
@@ -536,6 +543,7 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     let _ = ready(client.agent(c, agent(ULID_A), w));
     let _ = ready(client.agent_names(c, &agents));
     let _ = ready(client.alert_rules(c, &AlertRuleFilter::default(), &page()));
+    let _ = ready(client.alert_rule(c, rule));
     let _ = ready(client.sinks(c));
     let _ = ready(client.dead_letters(c, group, &page()));
     let _ = ready(client.alerts(c, &AlertFilter::default(), &page()));
@@ -575,6 +583,7 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     let _ = ready(client.audit(c, &AuditFilter::default(), &page()));
     let _ = ready(client.operators(c));
     let _ = ready(client.export(c, &export));
+    let _ = ready(client.present(c));
     client.calls()
 }
 
@@ -650,8 +659,7 @@ fn every_query_method_encodes_to_its_route() {
 }
 
 /// Every query route of the table is some method's (none is orphaned), and
-/// each is called by exactly one method; only the landing routes have no
-/// method yet.
+/// each is called by exactly one method.
 #[test]
 fn every_query_route_is_called_by_one_method() {
     let called: Vec<Route> = every_call(false)
@@ -662,11 +670,7 @@ fn every_query_route_is_called_by_one_method() {
     assert_eq!(unique.len(), called.len(), "a route called by two methods");
     for route in Route::all() {
         let is_query = matches!(route.spec().source, Source::Query(_));
-        assert_eq!(
-            unique.contains(&route),
-            is_query && !LANDING.contains(&route),
-            "{route:?}"
-        );
+        assert_eq!(unique.contains(&route), is_query, "{route:?}");
     }
 }
 

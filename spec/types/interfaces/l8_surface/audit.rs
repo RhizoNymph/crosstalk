@@ -30,15 +30,18 @@
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::AlertRuleKind;
+use crate::aggregates::projection::FrameRetention;
+use crate::aggregates::retention::RetentionPolicy;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::ids::{
     AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ConfigHash, ExportId, MergeId, OperatorId,
-    ProjectionId, TransmissionId,
+    ProjectionId, SinkId, TransmissionId,
 };
 use crate::interfaces::l8_surface::export::ExportRecord;
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
+use crate::interfaces::l8_surface::sinks::SinkKind;
 use crate::interfaces::l8_surface::{
     ActionError, ActionOutcome, CallerSnapshot, ConflictKind, InputError, OperatorAction,
     Permission, PermissionSet, PolicyKind,
@@ -76,6 +79,8 @@ pub enum AuditSubject {
     Export(ExportId),
     /// A stored projection an export read.
     Projection(ProjectionId),
+    /// An alert sink config defined, changed or removed.
+    Sink(SinkId),
 }
 
 /// What an operator call came to: the exact result `act` returned, split so
@@ -325,6 +330,31 @@ pub enum ConfigChange {
     /// Config no longer defines this operator: it keeps its name, loses
     /// every permission, and gets no further `Caller`.
     RemoveOperator { operator: OperatorId },
+    /// Defined an alert sink, or changed its kind, name or endpoint. The
+    /// endpoint itself is not recorded: a webhook URL or a Slack token can
+    /// carry a credential, and the log is readable with Audit alone.
+    /// From the change on, alerts of the rules listing the sink are
+    /// delivered as it now says.
+    SetSink {
+        sink: SinkId,
+        kind: SinkKind,
+        name: String,
+    },
+    /// Config no longer defines this sink: `QueryApi::sinks` stops listing
+    /// it and a rule naming it in `CreateRule` or `UpdateRule` is
+    /// `InvalidInput(UnknownSink)`.
+    RemoveSink { sink: SinkId },
+    /// Changed how many topic-model versions retention keeps
+    /// ([`RetentionPolicy`]). The catalog enforces the new policy when it
+    /// starts with it, so a lower `keep_last` drops versions then, each
+    /// with its own `TopicVersionDropped`.
+    SetTopicRetention(RetentionPolicy),
+    /// Changed how long a ready projection's frame is kept after its fit
+    /// ([`FrameRetention`], `Present::frame_retention`). It applies to
+    /// every stored frame from the change on.
+    SetFrameRetention {
+        frame_retention_micros: FrameRetention,
+    },
 }
 
 impl ConfigChange {
@@ -339,6 +369,10 @@ impl ConfigChange {
             Self::SetOperator { operator, .. } | Self::RemoveOperator { operator } => {
                 vec![AuditSubject::Operator(*operator)]
             }
+            Self::SetSink { sink, .. } | Self::RemoveSink { sink } => {
+                vec![AuditSubject::Sink(*sink)]
+            }
+            Self::SetTopicRetention(_) | Self::SetFrameRetention { .. } => Vec::new(),
         }
     }
 }

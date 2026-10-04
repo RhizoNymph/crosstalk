@@ -56,6 +56,16 @@ audit log ◀── OperatorRecord { caller: CallerSnapshot, action: OperatorAct
   record whose outcome contradicts its snapshot's permissions is a decode
   error. The constructors take `impl Into<CallerSnapshot>`: the surface
   passes the call's `Caller`, decoding the snapshot it read.
+- A config entry's `ConfigChange` covers sinks and retention as well as
+  channels, agents, rules, the access mode and operators: `set_sink`
+  (`{"sink", "kind", "name"}`, never the endpoint, which can carry a
+  credential: `surface.audit.sink-endpoint-not-recorded`), `remove_sink`,
+  `set_topic_retention` (a `RetentionPolicy`, `{"keep_last": 3}`, decoded
+  through its constructor) and `set_frame_retention`
+  (`{"frame_retention_micros": ..}`, never zero). A sink change names
+  `AuditSubject::Sink` (`{"type": "sink", "data": "<id>"}`).
+- `SearchMode::default()` is `hybrid`, the mode a client that has not
+  picked one sends.
 
 ## Live feed and SSE framing
 
@@ -120,7 +130,7 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 | `spec/types/interfaces/l8_surface/permissions.rs` | `CallerSnapshot` (checked; `NoPermissions`), `PermissionSet` as an array in `Permission::ALL` order |
 | `spec/types/interfaces/l8_surface/live.rs` | `LiveItem::event_name`, `LiveEnd::EVENT_NAME`, `LiveCursor`'s text (no leading zeros) |
 | `spec/types/tests/wire/surface_actions/` | `actions.rs`, `audit.rs`, `live.rs`, `lists.rs`, `operators.rs` |
-| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 59 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody` and `UiEvent` |
+| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 59 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody`, `ConfigChange`, `AuditSubject` and `UiEvent` |
 
 ## Invariants
 

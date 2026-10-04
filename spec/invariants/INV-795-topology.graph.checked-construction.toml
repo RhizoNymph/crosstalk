@@ -1,0 +1,26 @@
+[invariant]
+id = "topology.graph.checked-construction"
+statement = "Every TopologyGraph value was built by TopologyGraph::new, so it has no self-edge, no (from, to, route) twice, every share equal to its stat under the weighting over the total of that stat within SHARE_TOLERANCE, and nodes as the node rules require; its fields are private and read through accessors."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The UI renders and sums a graph from the response alone, and the overview
+and channel rows count from it (EdgeTotals::of, ChannelCounts::routed). With
+public fields a graph breaking a rule could be built in process and pass
+to those readers unchecked, as BipartiteGraph already prevented for the
+channel-centred view. Checking at construction makes the decode check and
+EdgeStore::graph's promise the same rule.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::edge::TopologyGraph::new"
+unit = [
+    "crosstalk_spec::tests::graph::a_graph_is_built_only_through_its_checks",
+    "crosstalk_spec::tests::graph::a_graph_refuses_a_self_edge",
+    "crosstalk_spec::tests::graph::a_graph_refuses_an_edge_twice",
+    "crosstalk_spec::tests::graph::a_graph_refuses_shares_that_are_not_their_stat_over_the_total",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

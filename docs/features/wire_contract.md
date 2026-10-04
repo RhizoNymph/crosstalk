@@ -37,8 +37,8 @@ travel, what decoding checks, its goldens) is a page under
   action errors) is on this page; the rest are the [area pages](#areas).
 - The live feed's SSE framing (the JSON each SSE field carries) and the
   projection's split into JSON and binary.
-- How the UI consumes the contract, and which spec type replaces each of
-  its stand-ins.
+- How the UI consumes the contract, and which spec type or method answers
+  each of its remaining stand-ins and workarounds.
 
 ## Non-scope
 
@@ -245,8 +245,8 @@ on the wire.
   `ExportLine`, `CallerSnapshot`, `ProjectionInfo`, `ProjectionSpec`,
   `AlertRuleDef`, `Alert`, `AlertState`, `Envelope`, `BusEvent`,
   `DeadLetter`, `Supersession`, `SupersededInto`, `Policy`, `Retention`,
-  `AlertRule`, `VerdictRow`, `ConfigChange`, `ConfigRecord`, `Operator`
-  and `PermissionSet`. The table in `wire/authority.rs` names what each
+  `AlertRule`, `VerdictRow`, `ConfigChange`, `ConfigRecord`, `Operator`,
+  `PermissionSet` and `Present` (the gateway's clock and config). The table in `wire/authority.rs` names what each
   one holds that the server stamps, with one assertion per type.
   `wire/authority.rs` asserts all of this at compile time (a hand-written
   `assert_not_impl!`, the `static_assertions` technique), and its
@@ -266,8 +266,10 @@ turns into an `OperatorAction` with the caller
 are adjacently tagged; `Permission`, `ProjectionStatusKind` and
 `DecodeErrorKind` are strings. An action error encodes exactly as the
 query error `QueryError::from` makes of it, so a client reads both with
-one decoder. `InputError::MalformedRequest { kind, reason }` is the one
-new variant: `kind` is `syntax` (not JSON, or trailing input), `eof` (cut
+one decoder. `InputError::UnsupportedFormat { format }` names an export
+format the gateway does not write (`Present::export_formats`).
+`InputError::MalformedRequest { kind, reason }` is the one
+variant the HTTP layer produces itself: `kind` is `syntax` (not JSON, or trailing input), `eof` (cut
 short) or `data` (JSON of the wrong shape, including a refused checked
 value), and `reason` is serde_json's message with line and column. An
 undecodable request reaches no store, and an undecodable action never
@@ -321,12 +323,9 @@ the spec types themselves:
   `serde_json::from_slice` into the method's result type (`Page<Alert,
   AlertList>`, `Option<Alert>`, …), and an error body into `QueryError` or
   `ActionError`.
-- The stand-ins in `ui/src/contract/` are deleted, and the UI imports the
-  spec's types (the table below). Where a stand-in's shape differs from
-  the spec's, the spec's is the contract: the UI's `ConflictKind` variants
-  carry no data and its `InputError` is `Field { field, reason }`, while
-  the spec's carry the ids involved and `MalformedRequest { kind, reason }`
-  respectively; the UI's `Alert` and `AlertState` match the spec's.
+- It imports the spec's types for everything it reads and sends. What it
+  still declares itself (`ui/src/contract/`, its alert-state helper and
+  its workarounds) has a spec answer listed below, so those go too.
 - It sends actions as `ActionRequest` (never `OperatorAction`, which holds
   a stamped merge author), and reads the audit log's callers as
   `CallerSnapshot` values, which never become a `Caller`.
@@ -338,27 +337,52 @@ the spec types themselves:
 
 ### What replaces the UI's stand-ins
 
-For deleting `ui/src/contract/` on `feat/ui`. Paths are
-under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
-`aggregates/`.
+For deleting what is left of the UI's own contract on `feat/ui`: the
+module `ui/src/contract/` (`present.rs`, `formats.rs`), the helper
+`ui/src/backend/alert_state.rs`, and the workarounds `docs/features/ui.md`
+lists under "Remaining gaps". Every other type the UI reads or sends is
+already the spec's. Paths are under `spec/types/`; `l8/` is
+`interfaces/l8_surface/`, `agg/` is `aggregates/`.
 
-| Stand-in file | Replaced by | Still no spec type |
-| --- | --- | --- |
-| `mod.rs` | `MergeId`, `ProjectionId`, `SinkId`, `AuditId` in `ids.rs` (ULID text on the wire) | — |
-| `actions.rs` | `ActionRequest` (l8/actions/request.rs), what the UI sends: one variant per action, `MergeAgents { from, into }` with no author. `OperatorAction` (l8/actions.rs) is what the audit log returns, a merge carrying its stamped author; `ActionOutcome`. Rules take `UserRule`; `SetRuleEnabled { id, enabled }`; new `PinTopicVersion`, `UnpinTopicVersion`, `Unchanged`; `ChannelPromoted { channel, superseded }`. `requires` is `ActionKind`'s `required_permission` (`ActionRequest::kind`) | `also_requires`: dropped (`SetVerdict` needs Triage only) |
-| `agents.rs` | `AgentLabel`, `ActiveAgentState`, `AgentState` (`Merged(MergedInto)`), `Agent` (observed/agent.rs); `InvalidText` (support.rs); `CanonicalStateKind` (agg/node.rs) for `AgentStateKind`; `MergeRecord`, `MergeVeto` (observed/agent/merge.rs); `SeenClaim` (claims.rs); `AgentName`, `AgentRow` for `AgentSummary`, `AgentDetail` (agg/agents/mod.rs); `AgentFilter` (agg/agents/filter.rs) for `AgentListFilter` | `AgentState::is_merged` (use `merged_into`) |
-| `alerts.rs` | `Alert`, `AlertState`, `SuppressReason` (agg/alert/mod.rs), `AlertStateKind` (l8_surface.rs): the same shapes | `AlertState::kind`, `is_active` helpers |
-| `channels.rs` | `CanonicalOriginKind` (agg/node.rs) for `OriginKind`; `DetectionKind` (derived/flow/channel/detection.rs, via `ChannelOrigin::detection_kind`); `Policy::kind` for `policy_kind`; `SupersededInto` for `Supersession`; `ChannelName`; `ChannelRow` for `ChannelSummary` (standing, activity and counts as above); `ChannelFilter` with `OriginFilter` (l8/lists.rs) for `ChannelListFilter`; `PromotionPreview`; `ResourceUse` (agg/access.rs) | — |
-| `errors.rs` | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (l8/errors.rs). Conflicts carry the ids involved, several renamed (`AlertNotActive`, `MergeAlreadyReverted`, `RuleNotEditable`, `TransmissionNotJudgeable`); `PatternMissesSeed` is an `InputError` | `InputError::Field { field, reason }`: specific variants and `MalformedRequest` instead |
-| `evidence.rs` | `Excerpt` (l8/excerpt.rs: highlight `Range<u32>`, `elided_before`/`elided_after` as `u64`, plus `highlight_cut`), `InvalidExcerpt`, `MatchEvidence` (quotes are `Excerpted`: `Shown` or `BodyDropped`), `AccessDetail` (adds the canonical `agent`), `TransmissionEvidence` (l8/evidence.rs); the request's `ExcerptWindow` | `TransmissionEvidence::verdicts`, deliberately: the evidence view reads a transmission's verdicts from `QueryApi::verdicts` (its `VerdictLog`, revisions included), the one source of verdict history; `Excerpt::elided() -> (u32, u32)` |
-| `graph.rs` | `ChannelShape` (l8/channels.rs); `ChannelNode`, `InvalidNodes` (agg/node.rs); `TopologyGraph` (agg/edge.rs, `Watermarked`) for `TopologyView`; `WeightedAccess` for `AccessEdge`, `BipartiteGraph`, `InvalidBipartite` (agg/access.rs) for `BipartiteView`; `TopologySeries` (agg/series.rs) for `Timeline`; `EdgeSelector` and `TransmissionSelection` for `TransmissionSelector::{Edge, Ids}`; `TransmissionStateKind`, `TransmissionSummary` (l8/summary.rs: sender, bytes, topic and verdict inside `SummaryState`); `RouteKind::from(&Route)` for `route_kind` | `TimelineBucket` (a series is a value per grid point); `TransmissionSelector::All`, deliberately: a selection is either the ids of a filtered view's rows (`TransmissionSelection`, at most 100,000) or an edge drill-down (`EdgeSelector`), never every transmission |
-| `lists.rs` | `Cursor<L>`, `PageRequest<L>`, `Page<T, L>` (paging.rs), typed by list | `PageRequest::first` |
-| `research.rs` | `ProjectionParams`, `InvalidParams`, `ProjectionInfo` for `ProjectionMeta`, `ProjectionStatus` for `ProjectionJob` (agg/projection/mod.rs); `FrameColumns`, `ProjectionFrame`, `InvalidFrame` (agg/projection/frame.rs; binary, not JSON); `QualityRow`, `MatchClass` for `MatchKindName` (agg/quality.rs); `ExportDataset` (each carrying its selection), `ExportFormat`, `ExportRequest` (l8/export/request.rs); `AuditAuthor` for `Actor` (an operator record's and an export record's caller is a `CallerSnapshot`, l8/permissions.rs: the operator and the permissions it held), `AuditBody` for `AuditedAction`, `AuditOutcome`, `AuditEntry`, `AuditSubject`, `AuditFilter` (l8/audit.rs); `Operator` (l8/operators.rs). For reading an export, which no stand-in covers: `ExportLine`, `ExportHeader`, `ExportRow`, `ExportTrailer`, `read_jsonl`, `verify_export` | `ProjectionJob::Running { done, total }` progress; a channel column in `PointCategories`; `ExportRequest::scope` (inside the dataset) |
-| `rules.rs` | `BuiltinRule`, `UserRule` for `UserRuleSpec`, `RuleDefinition` for the stored `UserRule`, `AlertRule` for `RuleKind`, `RuleName`, `StaleReason`, `RuleStatus`, `AlertRuleDef` for `RuleDef` (agg/alert/rules.rs); `NonBlank` and `InputError::QueryTooLong` for `QueryText`; `SinkKind`, `SinkInfo` (l8/sinks.rs) | `OperatorRuleStatus` (a `bool` in `SetRuleEnabled`); `RuleAuthor` (a user rule's `created`); `UserRule::spec` |
-| `scope.rs` | `TopologyFilter` (agg/filter.rs, adds `topic_version`), `FalseDetections` for `VerdictFilter` | `Scope`: the window is a separate argument; `ExportScope` and `ProjectionSpec` are the nearest |
-| `search.rs` | `SearchMode`, `SearchRequest` (l8/lists.rs), `NonBlank` for `SearchText`, `Blank` for `EmptySearch`; results are `SearchResults` (l6_analysis.rs) | `Default` for `SearchMode` |
-| `topics.rs` | `TopicVersionInfo`, `TopicSizes`/`TopicSize` for `TopicStats`, `LineageEntry` for `TopicRemap`, `TopicLineage` for `TopicVersionRemap` (agg/topic_history.rs) | `TopicStats::trend` (use `series` by topic); `TopicVersionInfo::embedding_model` |
-| `verdict.rs` | `Verdict`, `TransmissionVerdict` (derived/flow/verdict.rs), the log as `VerdictLog` | — |
+**The stand-in module and helper.** Each becomes spec API, so the files
+are deleted.
+
+| UI stand-in | Spec answer |
+| --- | --- |
+| `contract/present.rs`: `Present::bucket_width` | `QueryApi::present(&Caller)` (View) returns a `Present` (l8/present.rs) whose `bucket_width` equals L7's `EdgeStore::bucket_width`; a client reads it once per view instead of from a trait the backend implements |
+| `contract/present.rs`: `Present::now` | `Present::now`, the gateway's wall clock when it answered (never before the watermark) |
+| `contract/formats.rs`: `ExportFormats::export_formats` | `Present::export_formats`: an `ExportFormats` (l8/export/request.rs; non-empty, distinct, in offer order, `["jsonl"]` on the wire). An export in another format is `InvalidInput(UnsupportedFormat { format })` after the permission check and before anything is read, audited as refused, so the fixture's Parquet refusal changes from `Store` to that |
+| `backend/alert_state.rs`: `kind`, `is_active` | `AlertState::kind` and `AlertState::is_active` (agg/alert/mod.rs); `AlertStateKind` moved there, still re-exported as `l8_surface::AlertStateKind`, and gained `ALL` and `is_active` |
+
+**The workarounds.** What each one in the UI's list maps to after this
+branch.
+
+| UI workaround | After this branch |
+| --- | --- |
+| Projection frames have no channel column; `data::projection::point_channels` reads `transmissions_by_id` once per page of channel-routed points | `ProjectedPoint::route` is a `PointRoute` (agg/projection/mod.rs): its kind and, for a channel route, the canonical channel when the sample was read. The frame (format 2, agg/projection/frame.rs) adds a channels table and a channel index column (`NO_CHANNEL` off channel routes), so `point_channels` goes; one `channel_names` batch over `FrameTables::channels` names them, resolving a channel superseded since to the channel in force. Shape changes for the UI: `point.route == RouteKind::Channel` becomes `point.route.kind()` or `point.route.channel()`, and an export's point row carries `{"type": "channel", "data": "<id>"}` |
+| No `QueryApi::alert_rule(id)`; `pages::common::rules::rule` lists every rule | `QueryApi::alert_rule(&Caller, AlertRuleId)` (View): the `AlertRuleDef` `alert_rules` lists under the id, `None` for an id no rule had |
+| `MergedInto` has no time or author; alias rows search `AgentCluster::merges()` | Not duplicated into `MergedInto`: `AgentCluster::merge_of(alias)` (agg/agents/mod.rs) returns the record that merged it (`MergeRecord::at`, `by`), and `AgentCluster::new` refuses a cluster missing an alias's unreverted record (`AliasMergeMissing`), so the lookup never fails for an alias |
+| `AlertRuleConfig::default_remap_threshold` not exposed; `DEFAULT_REMAP` is 0.80 | `Present::default_remap_threshold` |
+| The rules' current topic version not exposed; the rule form uses `topic_versions().active()` | `Present::current_rule_version`, the version `CreateRule` and `UpdateRule` check against. It is not the active version: it moves on `TopicVersionReady`, before L7 activates the version, so a form built from `active()` can be refused with `TopicVersionNotCurrent` |
+| Frame retention not exposed | `Present::frame_retention_micros`, a `FrameRetention` (agg/projection/mod.rs); a ready projection expires at `FrameRetention::expires_at(fitted_at)` |
+| `SearchMode` has no `Default`; `DEFAULT_MODE` is `Hybrid` | `SearchMode::default()` is `Hybrid` |
+| Semantic rule text has no length bound | `UserRule::SemanticQuery::text` and `SemanticQuery::text` are a `RuleQueryText` (`QueryText<RULE_QUERY_MAX_CHARS>`, 1,000 characters; support.rs), which a form checks with `RuleQueryText::new`; decoding refuses longer text. `InvalidInput(QueryTooLong)` stays for text within the bound the model still refuses |
+| `TopologyGraph` has public fields and no checked constructor; the fixture calls `check_nodes` | `TopologyGraph::new(TopologyGraphParts)` (agg/edge.rs) checks edges, shares and nodes; fields are private behind `window()`, `weighting()`, `topic_version()`, `nodes()`, `edges()`, `into_parts()`. `check` and `check_nodes` are gone: the fixture builds its graphs with `new`. The JSON is unchanged |
+| No `From<PinError>` or `From<CatalogError>` for `ActionError`; `pins::refusal` maps them | Both in l8/query_errors.rs: unknown `NotFound`, fitting `Conflict(TopicVersionFitting)`, dropped `Conflict(TopicVersionDropped)` |
+| No `From<VerdictError>` for `ActionError`; `triage::set_verdict` builds the refusals | In l8/query_errors.rs, the same variants as the query mapping |
+| No `ActionError` mapping for `RegistryError`; `channels` checks the supersession itself | `From<RegistryError> for ActionError`: `Superseded` is `Conflict(ChannelSuperseded)`, `UnknownChannel` `NotFound` |
+| `ConfigChange` has no variant for sinks or retention | `SetSink { sink, kind, name }` (never the endpoint), `RemoveSink`, `SetTopicRetention(RetentionPolicy)`, `SetFrameRetention { frame_retention_micros }`, and `AuditSubject::Sink` (l8/audit.rs) |
+| No `Send` bounds on the traits | Not this branch: `docs/spec-send-traits` converts every trait method |
+
+**Left as they are.** `ChannelNode::locator_summary` stays preformatted
+(the UI names channel nodes from `channel_names`, which it needs anyway);
+`EdgeTransmission` still has no state or verdict (a page's rows are one
+`transmissions_by_id` call away, by their ids, when a view needs them); `Watermark`'s field stays
+public, since a watermark does not know the bucket width it must align
+to, so no constructor of its own can check the boundary. The open
+semantics the UI's list names (self-edges in search, `edge_transmissions`
+alignment, `channels` over all time, a watched-topic rule on an unknown
+version) are not answered here.
 
 ## Areas
 
@@ -370,7 +394,7 @@ under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
 | [topology.md](wire/topology.md) | the topology aggregates and their requests, agent read models, the bus framing and the exhaustive `BusEvent` index, dead letters | `topology`, `agents`, `bus` |
 | [analysis.md](wire/analysis.md) | alert rules, topics, retention, projections (info JSON and frame bytes), search, insight events; finite floats | `rules`, `topics`, `projections`, `insight` |
 | [surface_actions.md](wire/surface_actions.md) | `ActionRequest` and `OperatorAction`, the audit log and `CallerSnapshot`, the live feed and its SSE framing, operators, sinks, list filters, overview | `surface_actions` |
-| [surface_reads.md](wire/surface_reads.md) | channel, transmission and evidence read models, excerpts, export requests, manifests, rows and JSONL lines | `surface_reads` |
+| [surface_reads.md](wire/surface_reads.md) | channel, transmission and evidence read models, excerpts, the gateway's present and config, export requests, manifests, rows and JSONL lines | `surface_reads` |
 | [http_api.md](http_api.md) | the HTTP binding: the route table, the status of every error, the `POST` read bodies, the 401's `AuthError` | `http` |
 
 Coverage the goldens guarantee across the areas: every `BusEvent` variant
@@ -378,7 +402,8 @@ has a golden inside a full envelope in its layer's area plus the
 exhaustive index in `bus/`; every `UiEvent`, `ActionRequest`,
 `OperatorAction` and `AuditBody` variant has a golden; every
 `ConflictKind` and `InputError` variant (including `MalformedRequest`,
-`EmptySelection`, `ExcerptContextTooLong`, `TooManyIds` and `SelfMerge`)
+`EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `SelfMerge` and
+`UnsupportedFormat`)
 is in `errors/conflict_kinds` and `errors/input_errors`. Each is built
 behind an exhaustive `match`, so a new variant does not compile until it
 is in its golden.
@@ -407,7 +432,7 @@ is in its golden.
 | `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
 | `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
-| `spec/types/tests/golden/<area>/` | 372 goldens: 371 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`) | — |
+| `spec/types/tests/golden/<area>/` | 375 goldens: 374 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`) | — |
 
 ## Invariants and constraints
 

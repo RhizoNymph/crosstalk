@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.projection.frame-columns"
-statement = "Every ProjectionFrame has one entry per point in every column, every sender, reader and route index in range of its table and every topic index in range or OUTLIER, and tables whose entries are distinct, all used, and in order of first use."
+statement = "Every ProjectionFrame has one entry per point in every column, every sender, reader and route index in range of its table, every topic index in range or OUTLIER and every channel index in range or NO_CHANNEL, and tables (senders, readers, route kinds, topics, channels) whose entries are distinct, all used, and in order of first use."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
@@ -12,7 +12,7 @@ encode to equal bytes, which read-identical relies on.
 
 [evidence]
 type = ["crosstalk_spec::aggregates::projection::frame::ProjectionFrame::new", "crosstalk_spec::aggregates::projection::frame::ProjectionFrame::from_points"]
-unit = ["crosstalk_spec::tests::projection_frame::new_accepts_canonical_parts", "crosstalk_spec::tests::projection_frame::new_rejects_columns_of_different_lengths", "crosstalk_spec::tests::projection_frame::new_rejects_an_index_past_its_table", "crosstalk_spec::tests::projection_frame::new_accepts_outlier_only_in_the_topic_column", "crosstalk_spec::tests::projection_frame::new_rejects_tables_out_of_first_use_order", "crosstalk_spec::tests::projection_frame::new_rejects_unused_table_entries", "crosstalk_spec::tests::projection_frame::new_rejects_duplicate_table_entries", "crosstalk_spec::tests::projection_frame::from_points_interns_in_order_of_first_use"]
+unit = ["crosstalk_spec::tests::projection_frame::new_accepts_canonical_parts", "crosstalk_spec::tests::projection_frame::new_rejects_columns_of_different_lengths", "crosstalk_spec::tests::projection_frame::new_rejects_an_index_past_its_table", "crosstalk_spec::tests::projection_frame::new_accepts_outlier_only_in_the_topic_column", "crosstalk_spec::tests::projection_frame::new_rejects_tables_out_of_first_use_order", "crosstalk_spec::tests::projection_frame::new_rejects_unused_table_entries", "crosstalk_spec::tests::projection_frame::new_rejects_duplicate_table_entries", "crosstalk_spec::tests::projection_frame::from_points_interns_in_order_of_first_use", "crosstalk_spec::tests::projection_frame::channels_intern_in_order_of_first_use", "crosstalk_spec::tests::projection_frame::new_checks_the_channel_column_like_any_other"]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

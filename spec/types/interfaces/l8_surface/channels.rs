@@ -168,7 +168,7 @@ impl ChannelCounts {
     /// [`EdgeTotals::of`]: crate::aggregates::edge::EdgeTotals::of
     pub fn routed(graph: &TopologyGraph) -> HashMap<ChannelId, u64> {
         let mut routed: HashMap<ChannelId, u64> = HashMap::new();
-        for edge in &graph.edges {
+        for edge in graph.edges() {
             if let Route::Channel(channel) = edge.route {
                 let sum = routed.entry(channel).or_default();
                 *sum = sum.saturating_add(edge.stats.transmissions.get());

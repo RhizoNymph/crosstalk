@@ -7,12 +7,6 @@
 //! new `QueryApi` method has a route is checked by the client the tests
 //! build over this table (`tests::http::client`), which implements
 //! `QueryApi` and so does not compile until every method names its route.
-//!
-//! **Landing with `docs/spec-ui-gaps`.** [`Route::Present`] (`GET /present`)
-//! and [`Route::AlertRule`] (`GET /alert-rules/{id}`) are the routes of
-//! `QueryApi::present` and `QueryApi::alert_rule`, which that branch adds.
-//! Their rows are here so the table is complete when it lands; until then
-//! no method calls them.
 
 use super::super::{ActionKind, Permission};
 use super::{Arg, Method, ResponseBody, RoutePermission, RouteSpec, Source, Status, Success};
@@ -33,7 +27,6 @@ pub enum Route {
     AgentNames,
     // QueryApi: rules, sinks, dead letters, alerts
     AlertRules,
-    /// `QueryApi::alert_rule`, landing with `docs/spec-ui-gaps`.
     AlertRule,
     Sinks,
     DeadLetters,
@@ -68,7 +61,6 @@ pub enum Route {
     Audit,
     Operators,
     Export,
-    /// `QueryApi::present`, landing with `docs/spec-ui-gaps`.
     Present,
     /// `OperatorActions::act`: every kind is `POST /actions`, told apart by
     /// the `ActionRequest`'s `type`.

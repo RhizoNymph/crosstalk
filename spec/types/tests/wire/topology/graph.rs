@@ -12,7 +12,7 @@ use super::{
 };
 use crate::aggregates::edge::{
     EdgeKey, EdgeStats, EdgeTotals, EdgeTransmission, EdgeTransmissionPage, TopicSlot,
-    TopologyGraph, Weighting,
+    TopologyGraph, TopologyGraphParts, Weighting,
 };
 use crate::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
 use crate::aggregates::watermark::Watermarked;
@@ -21,8 +21,8 @@ use crate::ids::TransmissionId;
 use crate::paging::{Cursor, EdgeTransmissionList, Page, PageSize};
 use crate::support::{NonEmpty, TimeWindow, Watermark};
 
-fn graph() -> TopologyGraph {
-    TopologyGraph {
+fn parts() -> TopologyGraphParts {
+    TopologyGraphParts {
         window: hour(),
         weighting: Weighting::Transmissions,
         topic_version: version(),
@@ -31,10 +31,14 @@ fn graph() -> TopologyGraph {
     }
 }
 
+fn graph() -> TopologyGraph {
+    TopologyGraph::new(parts()).expect("a valid graph")
+}
+
 /// `QueryApi::topology`'s answer, and the graph of a quiet window.
 #[test]
 fn topology_graph_goldens() {
-    assert_eq!(graph().check(), Ok(()));
+    assert!(TopologyGraph::new(parts()).is_ok());
     assert_golden(
         AREA,
         "topology_graph",
@@ -43,12 +47,13 @@ fn topology_graph_goldens() {
             value: graph(),
         },
     );
-    let quiet = TopologyGraph {
+    let quiet = TopologyGraph::new(TopologyGraphParts {
         weighting: Weighting::MatchedBytes,
         nodes: Vec::new(),
         edges: Vec::new(),
-        ..graph()
-    };
+        ..parts()
+    })
+    .expect("an empty graph is valid");
     assert_golden(AREA, "topology_graph_empty", &quiet);
     assert_golden(AREA, "edge_totals", &EdgeTotals::of(&graph()));
 }

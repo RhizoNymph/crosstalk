@@ -49,9 +49,10 @@ pub mod rules;
 
 pub use rules::{
     AlertRule, AlertRuleConfig, AlertRuleDef, AlertRuleKind, AlertRuleSet, BuiltinRule,
-    ContentRule, InsertError, InvalidRuleDef, NotEditable, QueryWatch, ReservedRuleId,
-    RuleDefinition, RuleName, RuleRemapError, RuleRevision, RuleStatus, SemanticQuery, StaleReason,
-    StaleRule, TopicWatch, UserRule, WatchedTopics, is_reserved_rule_id,
+    ContentRule, InsertError, InvalidRuleDef, NotEditable, QueryWatch, RULE_QUERY_MAX_CHARS,
+    ReservedRuleId, RuleDefinition, RuleName, RuleQueryText, RuleRemapError, RuleRevision,
+    RuleStatus, SemanticQuery, StaleReason, StaleRule, TopicWatch, UserRule, WatchedTopics,
+    is_reserved_rule_id,
 };
 
 use std::num::NonZeroU32;
@@ -163,6 +164,55 @@ pub enum AlertState {
         at: Timestamp,
         reason: SuppressReason,
     },
+}
+
+impl AlertState {
+    /// The state without its data: what `AlertFilter::states` matches and
+    /// the inbox's tabs show. One exhaustive match, so a new state needs a
+    /// kind.
+    pub fn kind(&self) -> AlertStateKind {
+        match self {
+            Self::Open => AlertStateKind::Open,
+            Self::Acknowledged { .. } => AlertStateKind::Acknowledged,
+            Self::Resolved { .. } => AlertStateKind::Resolved,
+            Self::Suppressed { .. } => AlertStateKind::Suppressed,
+        }
+    }
+
+    /// Open or acknowledged: still waiting for someone. Only an active
+    /// alert is deduplicated into, suppressed, acknowledged or resolved;
+    /// acknowledging or resolving any other is `Conflict(AlertNotActive)`.
+    pub fn is_active(&self) -> bool {
+        self.kind().is_active()
+    }
+}
+
+/// An [`AlertState`] without its data. On the wire, a string:
+/// `"acknowledged"` (a request inside `AlertFilter`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertStateKind {
+    Open,
+    Acknowledged,
+    Resolved,
+    Suppressed,
+}
+
+impl AlertStateKind {
+    pub const ALL: [Self; 4] = [
+        Self::Open,
+        Self::Acknowledged,
+        Self::Resolved,
+        Self::Suppressed,
+    ];
+
+    /// Whether alerts in this state are active (open or acknowledged).
+    pub fn is_active(self) -> bool {
+        match self {
+            Self::Open | Self::Acknowledged => true,
+            Self::Resolved | Self::Suppressed => false,
+        }
+    }
 }
 
 /// How many stored changes an alert has had: 1 when opened, one more per

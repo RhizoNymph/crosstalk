@@ -6,7 +6,10 @@
       "transmission": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
       "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
       "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
-      "route": "channel",
+      "route": {
+        "type": "channel",
+        "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+      },
       "topic": null,
       "confirmed_at": "2026-10-04T09:16:41.250000Z",
       "x": 3.25,

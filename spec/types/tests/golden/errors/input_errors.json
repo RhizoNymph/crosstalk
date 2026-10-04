@@ -41,6 +41,12 @@
     }
   },
   {
+    "type": "unsupported_format",
+    "data": {
+      "format": "parquet"
+    }
+  },
+  {
     "type": "malformed_request",
     "data": {
       "kind": "data",

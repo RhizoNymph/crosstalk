@@ -34,8 +34,6 @@ tested against them.
   and the status when a frame is not ready.
 - `POST /exports`: content types, `Content-Disposition`, and what a
   failure mid-stream looks like.
-- The routes of `QueryApi::present` and `QueryApi::alert_rule`, which land
-  with `docs/spec-ui-gaps` (see [Landing routes](#landing-routes)).
 
 ## Non-scope
 
@@ -156,7 +154,7 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | GET | `/agents/{id}` | id p, window q | 200 JSON | View | `agent` |
 | POST | `/query/agent-names` | body `IdBatch<AgentId>` | 200 JSON | View | `agent_names` |
 | GET | `/alert-rules` | filter q, page q | 200 JSON | View | `alert_rules` |
-| GET | `/alert-rules/{id}` | id p | 200 JSON | View | `alert_rule` (landing) |
+| GET | `/alert-rules/{id}` | id p | 200 JSON | View | `alert_rule` |
 | GET | `/sinks` | — | 200 JSON | Govern | `sinks` |
 | GET | `/dead-letters` | group q?, page q | 200 JSON | Operate | `dead_letters` |
 | GET | `/alerts` | filter q, page q | 200 JSON | View | `alerts` |
@@ -184,7 +182,7 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | GET | `/audit` | filter q, page q | 200 JSON | Audit | `audit` |
 | GET | `/operators` | — | 200 JSON | View | `operators` |
 | POST | `/exports` | body `ExportRequest` | 200 `application/x-ndjson` or `application/vnd.apache.parquet` | View, or Content by the request | `export` |
-| GET | `/present` | — | 200 JSON | View | `present` (landing) |
+| GET | `/present` | — | 200 JSON | View | `present` |
 | POST | `/actions` | body `ActionRequest` | 200 JSON (`ActionOutcome`) | the kind's: Govern, Triage or Operate | `OperatorActions::act`, one route per `ActionKind` |
 | GET | `/live` | `last-event-id` header?, cursor query_text? | 200 `text/event-stream` | View | `LiveFeed::subscribe` |
 
@@ -214,7 +212,7 @@ An `ActionError` gets the status of `QueryError::from` of it.
 | `NotFound`, and a path no route serves | 404 | |
 | `Conflict(_)`, except `ProjectionQueueFull` | 409 | Well-formed, but the state does not allow it now. |
 | `VersionNotRetained`, `ProjectionNotRetained` | 410 | The data existed and retention dropped it for good. |
-| `InvalidInput(_)`, any other input error | 422 | Read, but invalid whatever the state. |
+| `InvalidInput(_)`, any other input error | 422 | Read, but invalid whatever the state. This includes `UnsupportedFormat`, an export format outside `Present::export_formats`. |
 | `Conflict(ProjectionQueueFull)` | 429 | Capacity: retry later, unchanged. |
 | `Store` | 503 | A store or the bus failed; retrying may succeed. |
 
@@ -349,8 +347,8 @@ keep the digest beside the frame rather than hash 5 MB on every read.
 `POST /exports` takes an `ExportRequest` body.
 
 - **Refused before streaming.** A refusal (`Forbidden`, `ExportTooLarge`
-  409, a version or projection error) is the usual status and JSON, and no
-  body byte is sent.
+  409, `UnsupportedFormat` 422, a version or projection error) is the
+  usual status and JSON, and no body byte is sent.
 - **Accepted.** The status and headers are sent once `export` returns the
   header, before any row is read:
   - `200`;
@@ -374,22 +372,6 @@ The body read until then has no trailer, which `read_jsonl` and
 `verify_export` refuse (`NoTrailer`), and a Parquet file cut before its
 footer does not open. HTTP trailers are not used.
 
-### Landing routes
-
-`Route::Present` (`GET /present`) and `Route::AlertRule`
-(`GET /alert-rules/{id}`) are the routes of `QueryApi::present` and
-`QueryApi::alert_rule`, which `docs/spec-ui-gaps` adds. Their rows are in
-the table and the golden already. Until the methods exist, the test
-client's `LANDING` list excuses them from "every query route is called by
-its method".
-
-When that branch merges:
-
-1. `TableClient` stops compiling until it implements the two methods.
-2. The permission test fails until `LANDING` is emptied.
-3. That branch's new `InputError::UnsupportedFormat` stops `input_status`
-   compiling until its status is chosen. 422 is the expected answer.
-
 ## Files
 
 | File | Role | Key exports |
@@ -405,7 +387,7 @@ When that branch merges:
 | `spec/types/interfaces/l8_surface/http/frame.rs` | `GET /projections/{id}/frame` | `OCTET_STREAM`, `MAX_AGE_LIMIT`, `FrameCache` (`of`, `etag`, `cache_control`, `not_modified`) |
 | `spec/types/interfaces/l8_surface/http/export.rs` | `POST /exports` | `JSONL`, `PARQUET`, `content_type`, `extension`, `dataset_name`, `file_name`, `content_disposition` |
 | `spec/types/interfaces/l8_surface/actions.rs` | `ActionKind::ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` now returns | — |
-| `spec/types/tests/wire/http/` | `routes.rs` (golden, completeness, permissions from the methods' docs, ambiguity), `client.rs` (`TableClient`: a `QueryApi` over the table), `request.rs`, `status.rs`, `auth.rs`, `sse.rs`, `frame.rs`, `export.rs`, `bodies.rs` | `TableClient`, `LANDING` |
+| `spec/types/tests/wire/http/` | `routes.rs` (golden, completeness, permissions from the methods' docs, ambiguity), `client.rs` (`TableClient`: a `QueryApi` over the table), `request.rs`, `status.rs`, `auth.rs`, `sse.rs`, `frame.rs`, `export.rs`, `bodies.rs` | `TableClient` |
 | `spec/types/tests/golden/http/` | `route_table`, `query_error_statuses`, `action_error_statuses`, `auth_errors`, `bodies/*` (seven bodies) | — |
 
 ## Invariants and constraints

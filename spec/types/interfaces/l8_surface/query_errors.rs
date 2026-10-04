@@ -43,9 +43,18 @@
 //! - Client input the HTTP layer cannot decode as the route's request type
 //!   (`crate::wire::DecodeError`) is `InvalidInput(MalformedRequest)`, for
 //!   a query and for an action alike.
+//! - An export in a format the gateway does not write
+//!   (`ExportFormats::check`) is `InvalidInput(UnsupportedFormat)`.
+//! - A store error that reaches both a query and an action maps to the same
+//!   variant either way, with two exceptions an action cannot meet as a
+//!   query does: a dropped topic-model version is
+//!   `Conflict(TopicVersionDropped)` for an action (pinning reads no
+//!   dropped data) and `VersionNotRetained` for a query, and a cursor error
+//!   reported to an action, which takes no cursor, is a `Store` fault.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
+use crate::aggregates::retention::PinError;
 use crate::batch::TooManyIds;
 use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::{BlobError, BusError};
@@ -60,7 +69,7 @@ use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError, InvalidWindow};
-use crate::interfaces::l8_surface::export::ExportPlanError;
+use crate::interfaces::l8_surface::export::{ExportPlanError, UnsupportedFormat};
 use crate::interfaces::l8_surface::summary::InvalidSelection;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
@@ -260,6 +269,94 @@ impl From<VerdictError> for QueryError {
                 Self::Conflict(ConflictKind::TransmissionNotJudgeable { transmission })
             }
         }
+    }
+}
+
+/// For `SetPolicy` (`ChannelRegistry::set_policy`, and the supersession
+/// check through the registry before `PolicyChanged` is published). Each
+/// refusal maps as it does for a query; an action takes no cursor, so a
+/// registry reporting `InvalidCursor` to one is a fault, reported as a
+/// store failure.
+impl From<RegistryError> for ActionError {
+    fn from(error: RegistryError) -> Self {
+        match error {
+            RegistryError::Store { reason } => Self::Store { reason },
+            RegistryError::UnknownChannel(_) => Self::NotFound,
+            RegistryError::OverlappingDeclaration { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+            RegistryError::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            RegistryError::InvalidCursor => Self::Store {
+                reason: "registry cursor error reported to an action".to_owned(),
+            },
+        }
+    }
+}
+
+/// For `SetVerdict` (`TransmissionVerdicts::set`): the same variants the
+/// query mapping gives, so a refused verdict reads the same wherever it is
+/// shown.
+impl From<VerdictError> for ActionError {
+    fn from(error: VerdictError) -> Self {
+        match error {
+            VerdictError::Store { reason } => Self::Store { reason },
+            VerdictError::UnknownTransmission(_) => Self::NotFound,
+            VerdictError::NotJudgeable(transmission) => {
+                Self::Conflict(ConflictKind::TransmissionNotJudgeable { transmission })
+            }
+        }
+    }
+}
+
+/// For `PinTopicVersion` and `UnpinTopicVersion` (`TopicCatalog::pin`,
+/// `unpin`). An action reads no dropped data, so a dropped version is
+/// `Conflict(TopicVersionDropped)`, not `VersionNotRetained` as for a
+/// query; an action takes no cursor, so `InvalidCursor` is a fault,
+/// reported as a store failure.
+impl From<CatalogError> for ActionError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::Store { reason } => Self::Store { reason },
+            CatalogError::UnknownVersion(_) => Self::NotFound,
+            CatalogError::StillFitting(version) => {
+                Self::Conflict(ConflictKind::TopicVersionFitting { version })
+            }
+            CatalogError::VersionNotRetained(version) => {
+                Self::Conflict(ConflictKind::TopicVersionDropped { version })
+            }
+            CatalogError::InvalidCursor => Self::Store {
+                reason: "catalog cursor error reported to an action".to_owned(),
+            },
+        }
+    }
+}
+
+/// For `PinTopicVersion` and `UnpinTopicVersion` refused by the history
+/// itself (`TopicVersionHistory::pin`, `unpin`): the same variants as the
+/// catalog's refusals of the same cases.
+impl From<PinError> for ActionError {
+    fn from(error: PinError) -> Self {
+        match error {
+            PinError::UnknownVersion(_) => Self::NotFound,
+            PinError::Fitting(version) => {
+                Self::Conflict(ConflictKind::TopicVersionFitting { version })
+            }
+            PinError::Dropped { version, .. } => {
+                Self::Conflict(ConflictKind::TopicVersionDropped { version })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::export`: a format the gateway does not write, refused
+/// after the permission check and before anything is read.
+impl From<UnsupportedFormat> for QueryError {
+    fn from(error: UnsupportedFormat) -> Self {
+        Self::InvalidInput(InputError::UnsupportedFormat {
+            format: error.format,
+        })
     }
 }
 

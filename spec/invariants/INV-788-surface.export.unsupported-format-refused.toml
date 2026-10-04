@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.export.unsupported-format-refused"
+statement = "QueryApi::export with a request whose format is not in present().export_formats returns InvalidInput(UnsupportedFormat { format }) naming that format, after the permission check and before reading the watermark or any data, and its audit entry is Refused with that error."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A gateway need not write every format (Parquet needs a Thrift footer and
+column encoders), and a format it cannot write is the client's to change
+whatever the state, so it is InvalidInput, not a Store failure a retry
+might cure. Refusing before anything is read means nothing is planned or
+streamed for it, and auditing it keeps the export log complete.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::a_format_the_gateway_does_not_write_is_refused",
+    "crosstalk_spec::tests::action_errors::an_unwritten_export_format_is_invalid_input",
+    "crosstalk_surface::tests::export_refuses_an_unwritten_format_before_reading",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

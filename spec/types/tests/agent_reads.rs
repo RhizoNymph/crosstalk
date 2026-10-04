@@ -400,11 +400,78 @@ fn cluster_merges_name_it_once_each() {
         .expect("first revert");
     let repointing = MergeRecord::new(MergeId::from_ulid(24), request(7, 1), at(7), vec![agent(3)]);
     let history = AgentClusterParts {
-        merges: vec![reverted, repointing, merge_record(20, 2, 1, 10)],
+        merges: vec![
+            reverted,
+            repointing,
+            merge_record(20, 2, 1, 10),
+            merge_record(21, 3, 1, 30),
+        ],
         ..cluster_parts()
     };
     let cluster = AgentCluster::new(history).expect("every record names the cluster");
     assert!(cluster.merges()[0].reverted().is_some());
+}
+
+/// A merged agent's merge time and author come from its merge record,
+/// which the cluster always holds: `MergedInto` names it, never copies it.
+#[test]
+fn each_alias_finds_the_record_that_merged_it() {
+    let cluster = AgentCluster::new(cluster_parts()).expect("valid cluster");
+    let of = |id: u128| cluster.merge_of(agent(id)).map(MergeRecord::id);
+    assert_eq!(of(2), Some(MergeId::from_ulid(20)));
+    assert_eq!(of(3), Some(MergeId::from_ulid(21)));
+    let record = cluster.merge_of(agent(2)).expect("an alias");
+    assert_eq!(
+        (record.at(), record.by(), record.source(), record.target()),
+        (
+            at(10),
+            MergeAuthor::Operator(operator()),
+            agent(2),
+            agent(1)
+        )
+    );
+    // The canonical agent and agents outside the cluster are no aliases.
+    assert_eq!(of(1), None);
+    assert_eq!(of(9), None);
+}
+
+#[test]
+fn an_alias_without_its_unreverted_merge_record_is_refused() {
+    let missing = AgentClusterParts {
+        merges: vec![merge_record(20, 2, 1, 10)],
+        ..cluster_parts()
+    };
+    assert_eq!(
+        AgentCluster::new(missing),
+        Err(InvalidCluster::AliasMergeMissing(agent(3)))
+    );
+    let mut reverted = merge_record(20, 2, 1, 10);
+    reverted
+        .revert(crate::observed::agent::Reversal {
+            by: operator(),
+            at: at(11),
+            restored: Vec::new(),
+        })
+        .expect("first revert");
+    let reverted = AgentClusterParts {
+        merges: vec![reverted, merge_record(21, 3, 1, 30)],
+        ..cluster_parts()
+    };
+    assert_eq!(
+        AgentCluster::new(reverted),
+        Err(InvalidCluster::AliasMergeMissing(agent(2)))
+    );
+    // Alias 2 naming alias 3's record: the record's source is another
+    // agent.
+    let mut parts = cluster_parts();
+    parts.aliases = vec![
+        record(agent(3), merged_into(agent(1), 21), None),
+        record(agent(2), merged_into(agent(1), 21), None),
+    ];
+    assert_eq!(
+        AgentCluster::new(parts),
+        Err(InvalidCluster::AliasMergeMissing(agent(2)))
+    );
 }
 
 #[test]

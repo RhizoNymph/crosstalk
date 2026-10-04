@@ -47,6 +47,8 @@ It is part of the [query surface](query_surface.md). The types are in
 ```text
 export(caller, request)
   1. request.required_permission() ── missing ─▶ Forbidden { missing }; audit Refused; nothing read
+     Present::export_formats.check(format) ── not written ─▶ InvalidInput(UnsupportedFormat { format });
+                                                           audit Refused; nothing read
   2. W = EdgeStore::watermark()
   3. ExportSource::plan(request, W)
        resolve the filter's version (TopicVersionSelector::resolve, topics_outside),
@@ -194,7 +196,8 @@ fields in declaration order: ids as `u128` LE, times and counts as `u64`
 LE, options and strings tagged and length-prefixed, floats as their bits;
 a transmission row writes its summary's fields, then its class and
 content, with each excerpt's text, highlight and elided counts or the
-dropped body's hash; `export/digest.rs` has the table). The surface's
+dropped body's hash; a point row writes its route's kind code and, for a
+channel route, the channel's id; `export/digest.rs` has the table). The surface's
 row types have no canonical byte form of their own (their serde form is
 the implementation's), so the encoding lives here. The wire bytes are the encoder's; the
 digest does not depend on them, so a JSONL and a Parquet export of the
@@ -271,6 +274,11 @@ columns are the implementation's; a reader turns each row back into an
 ### Errors
 
 Before streaming, export returns a `QueryError`: `Forbidden { missing }`;
+`InvalidInput(UnsupportedFormat { format })` for a format the gateway does
+not write (not in `present`'s `export_formats`, an `ExportFormats`:
+non-empty, distinct, in the order a form offers them;
+`QueryError::from(UnsupportedFormat)`), checked right after the
+permission, before the watermark is read;
 `ExportPlanError` through its one `From` impl (`Store`; a version through
 `VersionUnavailable` as for a linked view; `TopicsNotInVersion`;
 `UnalignedWindow` for edges and accesses; a projection through
@@ -303,7 +311,7 @@ can end after it started, so it has its own record rather than a place in
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/types/interfaces/l8_surface/export/mod.rs` | Module docs and re-exports | — |
-| `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked), `InvalidExportRequest`, `ExportDataset`, `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `ExportFormat`, `ExportLimits` (`check`) |
+| `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked), `InvalidExportRequest`, `ExportDataset`, `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `ExportFormat`, `ExportFormats` (checked: non-empty, distinct; `check`), `InvalidExportFormats`, `UnsupportedFormat`, `ExportLimits` (`check`) |
 | `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow` (checked: `new`, `of`), `InvalidTransmissionRow`, `TransmissionContent` (`of`), `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
 | `spec/types/interfaces/l8_surface/export/manifest.rs` | Header and trailer | `ExportHeader` (checked), `ExportHeaderParts`, `InvalidHeader`, `ExportBasis`, `GatewayVersion`, `settled_window`, `ExportTrailer` (decode checked), `InvalidTrailer`, `ExportEnd`, `ExportFailure`, `SourceFailure` |
 | `spec/types/interfaces/l8_surface/export/framing.rs` | The JSONL framing and the Parquet footer keys | `ExportLine`, `read_jsonl`, `JsonlExport` (`verify`), `JsonlError`, `JsonlErrorKind`, `PARQUET_HEADER_KEY`, `PARQUET_TRAILER_KEY` |
@@ -361,7 +369,9 @@ can end after it started, so it has its own record rather than a place in
   depend on the format. `verify_export` accepts exactly a complete,
   untampered export; a truncated one never verifies.
 - An export over `ExportLimits::max_rows` is `Conflict(ExportTooLarge)`
-  before anything is sent.
+  before anything is sent. An export in a format outside
+  `present().export_formats` is `InvalidInput(UnsupportedFormat)` before
+  anything is read (`surface.export.unsupported-format-refused`).
 - Every export call is audited: one `Refused` entry, or `Started` before
   the first row and then one `Ended` or `Abandoned`. An export record is
   `Forbidden` exactly when its caller lacks the request's permission.

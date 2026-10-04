@@ -188,7 +188,7 @@ pub trait EdgeStore {
 
     /// The graph over canonical agents: edges resolved, summed, filtered and
     /// shared, and one node per endpoint and ancestor
-    /// (`TopologyGraph::check_nodes` holds), with the watermark read before
+    /// (`TopologyGraph::new` accepts it), with the watermark read before
     /// its buckets. Fails with `UnalignedWindow` for a window not on bucket
     /// boundaries.
     fn graph(

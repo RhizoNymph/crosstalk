@@ -478,8 +478,9 @@ impl TopologyGraph {
     /// The stat under the graph's weighting summed over its edges: the
     /// denominator of every share. Saturates at `u64::MAX`.
     pub fn total(&self) -> u64 {
-        self.edges.iter().fold(0, |sum, edge| {
-            sum.saturating_add(self.weighting.stat(edge.stats).get())
+        let weighting = self.weighting();
+        self.edges().iter().fold(0, |sum, edge| {
+            sum.saturating_add(weighting.stat(edge.stats).get())
         })
     }
 }

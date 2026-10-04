@@ -89,14 +89,13 @@ use crate::aggregates::alert::{
 use crate::aggregates::alert::{
     AlertRuleConfig, AlertRuleDef, AlertRuleSet, RuleRevision, TopicWatch,
 };
-use crate::aggregates::edge::RouteKind;
 #[cfg(doc)]
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::filter::{TopologyFilter, VersionUnavailable};
 use crate::aggregates::projection::frame::ProjectionFrame;
 use crate::aggregates::projection::{
-    FitFailure, InvalidTransition, Projection, ProjectionInfo, ProjectionParams, ProjectionSpec,
-    ProjectionStatusKind,
+    FitFailure, InvalidTransition, PointRoute, Projection, ProjectionInfo, ProjectionParams,
+    ProjectionSpec, ProjectionStatusKind,
 };
 use crate::aggregates::retention::{Pin, PinChange, RetentionPolicy};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
@@ -161,7 +160,9 @@ pub trait TopicCatalog {
 
     /// Pin `version` ([`TopicVersionHistory::pin`]): `UnknownVersion`,
     /// `StillFitting` or `VersionNotRetained` when it is unknown, fitting or
-    /// dropped, changing nothing. Serialized with `enforce_retention`.
+    /// dropped, changing nothing; the surface maps each with
+    /// `ActionError::from` (`NotFound`, `Conflict(TopicVersionFitting)`,
+    /// `Conflict(TopicVersionDropped)`). Serialized with `enforce_retention`.
     fn pin(
         &self,
         version: TopicModelVersion,
@@ -330,7 +331,9 @@ pub struct SampleRow {
     /// Canonical when the sample was read.
     pub from: AgentId,
     pub to: AgentId,
-    pub route: RouteKind,
+    /// The route kind and, for a channel route, the channel resolved
+    /// through supersession when the sample was read.
+    pub route: PointRoute,
     /// Under the spec's topic version; `None` for an outlier.
     pub topic: Option<TopicId>,
     pub confirmed_at: Timestamp,

@@ -70,5 +70,31 @@
     "data": {
       "operator": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
     }
+  },
+  {
+    "type": "set_sink",
+    "data": {
+      "sink": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "kind": "webhook",
+      "name": "security on-call"
+    }
+  },
+  {
+    "type": "remove_sink",
+    "data": {
+      "sink": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "set_topic_retention",
+    "data": {
+      "keep_last": 5
+    }
+  },
+  {
+    "type": "set_frame_retention",
+    "data": {
+      "frame_retention_micros": 7776000000000
+    }
   }
 ]

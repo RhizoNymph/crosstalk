@@ -1,5 +1,6 @@
 use crate::aggregates::alert::AlertRuleKind;
-use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
+use crate::aggregates::projection::{FitFailure, FrameRetention, ProjectionStatusKind};
+use crate::aggregates::retention::RetentionPolicy;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::{PolicyAuthor, PolicyKind};
 use crate::derived::flow::resource::{Host, ResourcePattern};
@@ -14,7 +15,9 @@ use crate::interfaces::l8_surface::audit::{
     AuditBody, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome,
     ConfigRecord, InvalidOperatorRecord, OperatorRecord, OutcomeKind, Rejection,
 };
+use crate::interfaces::l8_surface::export::ExportFormat;
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
+use crate::interfaces::l8_surface::sinks::SinkKind;
 use crate::interfaces::l8_surface::{
     ActionError, ActionKind, ActionOutcome, CallerSnapshot, ConflictKind, InputError,
     OperatorAction, Permission, PermissionSet, QueryError,
@@ -442,6 +445,30 @@ fn every_config_change_names_its_subjects() {
             },
             vec![AuditSubject::Operator(operator(5))],
         ),
+        (
+            ConfigChange::SetSink {
+                sink: SinkId::from_ulid(6),
+                kind: SinkKind::Slack,
+                name: "security".into(),
+            },
+            vec![AuditSubject::Sink(SinkId::from_ulid(6))],
+        ),
+        (
+            ConfigChange::RemoveSink {
+                sink: SinkId::from_ulid(7),
+            },
+            vec![AuditSubject::Sink(SinkId::from_ulid(7))],
+        ),
+        (
+            ConfigChange::SetTopicRetention(RetentionPolicy::new(3).expect("at least 2")),
+            Vec::new(),
+        ),
+        (
+            ConfigChange::SetFrameRetention {
+                frame_retention_micros: FrameRetention::default(),
+            },
+            Vec::new(),
+        ),
     ];
     for (change, subjects) in cases {
         assert_eq!(change.subjects(), subjects, "{change:?}");
@@ -646,6 +673,7 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::EmptySelection
             | InputError::ExcerptContextTooLong { .. }
             | InputError::TooManyIds { .. }
+            | InputError::UnsupportedFormat { .. }
             | InputError::MalformedRequest { .. } => input,
         }
     }
@@ -667,6 +695,9 @@ fn every_input_error() -> Vec<InputError> {
         InputError::TooManyIds {
             max: 1000,
             got: 1001,
+        },
+        InputError::UnsupportedFormat {
+            format: ExportFormat::Parquet,
         },
         InputError::MalformedRequest {
             kind: DecodeErrorKind::Data,

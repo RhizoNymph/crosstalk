@@ -66,8 +66,13 @@ Overview:
       supersession, a promotion preview computed by the promotion's own
       plan, batch names over one bounded id batch, transmission rows by id
       with a per-state shape, the evidence behind a transmission with
-      excerpts cut from stored bodies, the overview's counts and one alert
-      by id; typed query and action errors; the operator directory with a
+      excerpts cut from stored bodies, the overview's counts, one alert
+      and one alert rule by id; the present (the gateway's clock, L7's
+      bucket width, the export formats it writes, the topic version rules
+      are written against, the default remap threshold, the frame
+      retention); typed query and action errors, with one From impl per
+      store error behind every query and every action; the operator
+      directory with a
       trusted single-user mode; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
@@ -133,7 +138,11 @@ Overview:
     with merged agents and superseded channels resolved at read time (a
     late confirmation on a superseded channel advances the superseding
     channel's detection); projection fits run as background jobs whose
-    stored frames read back exactly. Every store publishes an id-only
+    stored frames read back exactly, each point carrying its route's
+    channel as it was when the sample was read. A client reads the present
+    first (clock, bucket width, export formats, rule version, remap
+    threshold, frame retention) to build valid requests; an export in a
+    format the gateway does not write is refused before anything is read. Every store publishes an id-only
     Changed after each committed change (agents, channels, verdicts,
     alerts, rules, topic versions, projection jobs, the watermark), which
     the live feed streams to the UI over SSE so it re-queries (resumable by
@@ -200,8 +209,10 @@ Features Index:
       merged agents and superseded channels resolved at read time; the
       channel-centred graph and graph nodes; promotion with supersession;
       stored projections and their columnar frame; verdicts and detection
-      quality; watermarked aggregates and retention; typed query and action
-      errors with one From impl per store error; operator actions; the
+      quality; watermarked aggregates and retention; the present (clock
+      and the config a request is built with) and one rule by id; typed
+      query and action errors with one From impl per store error, every
+      action's refusals included; operator actions; the
       append-only audit log of actions, config changes and exports; and the
       id-only SSE live feed fed by every store's Changed. Its traits'
       futures are Send, so a UI or client may be generic over QueryApi.
@@ -213,6 +224,7 @@ Features Index:
       - spec/types/interfaces/l8_surface/query_errors.rs
       - spec/types/interfaces/l8_surface/audit.rs
       - spec/types/interfaces/l8_surface/live.rs
+      - spec/types/interfaces/l8_surface/present.rs
     depends_on: [type_spec]
     doc: docs/features/query_surface.md
   read_models:
@@ -225,7 +237,8 @@ Features Index:
       and channel names over one bounded IdBatch; transmission rows by id
       with a per-state shape; the evidence behind a transmission with
       bounded excerpts; the overview's counts, which agree with the channel
-      and agent rows; and one alert by id.
+      and agent rows; and one alert by id. An agent's detail finds each
+      alias's merge record (when and by whom it was merged).
     entry_points:
       - spec/types/aggregates/agents/mod.rs
       - spec/types/interfaces/l8_surface/channels.rs
@@ -243,7 +256,9 @@ Features Index:
       between a header (request, resolved topic version, watermark,
       embedding model, gateway version, planned rows) and a trailer (rows
       sent, a format-independent digest over a canonical row encoding,
-      Complete or the failure). Reads only data settled before the
+      Complete or the failure). A format the gateway does not write (outside
+      the present's export formats) is refused as UnsupportedFormat before
+      anything is read. Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
       reproduces it; transmission rows are the surface's transmission
       summaries and their quoted text the evidence page's; content needs
@@ -347,8 +362,7 @@ Features Index:
       caller from a bearer token or the __Host-crosstalk-session cookie
       only (401 AuthError otherwise), SSE resume and framing, projection
       frame caching by digest, and export downloads whose trailer records
-      a failure after the status. The routes of QueryApi::present and
-      alert_rule are in the table ahead of docs/spec-ui-gaps.
+      a failure after the status.
     entry_points:
       - spec/types/interfaces/l8_surface/http.rs
       - spec/types/interfaces/l8_surface/http/routes.rs

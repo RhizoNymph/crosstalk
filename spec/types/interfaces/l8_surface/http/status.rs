@@ -162,6 +162,7 @@ pub fn input_status(input: &InputError) -> Status {
         | InputError::SelfMerge
         | InputError::EmptySelection
         | InputError::ExcerptContextTooLong { .. }
-        | InputError::TooManyIds { .. } => Status::UnprocessableContent,
+        | InputError::TooManyIds { .. }
+        | InputError::UnsupportedFormat { .. } => Status::UnprocessableContent,
     }
 }
