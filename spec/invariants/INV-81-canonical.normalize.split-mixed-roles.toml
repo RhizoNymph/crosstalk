@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.normalize.split-mixed-roles"
+statement = "A provider message whose blocks belong to more than one canonical role becomes one canonical message per maximal run of same-role blocks, in original block order."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Canonical roles cannot mix (tool results live only in Tool messages), but
+Anthropic puts `tool_result` blocks inside user turns, often followed by
+user text. A user turn [tool_result, tool_result, text] becomes Tool then
+User. Grouping by maximal run rather than by role keeps block order even
+when roles interleave, so provenance sees inputs in the order the model did,
+and no block is dropped or duplicated.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::anthropic_user_turn_with_tool_results_splits"
+property = "crosstalk::canonical::tests::split_preserves_block_sequence"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

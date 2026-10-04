@@ -1,0 +1,24 @@
+[invariant]
+id = "canonical.normalize.unknown-block-kept"
+statement = "A content block the normalizer does not recognize becomes an Unknown part at the block's position, with the block's type as kind and the block's canonical JSON as raw."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Providers add block types without notice. Failing the exchange would lose
+everything else in it, and silently dropping the block would change the
+message hash (breaking echo matching) and could hide exactly the content
+that crossed between agents. Keeping it in place, as canonical JSON, keeps
+the hash stable across re-serialization and lets the exchange be
+re-normalized once support is added. It applies in every part list that
+has an Unknown variant: system prompt arrays (SystemPart), user and
+assistant content, and tool result content.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::unknown_block_kept_in_place"
+property = "crosstalk::canonical::tests::unknown_blocks_round_trip_as_canonical_json"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

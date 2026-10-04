@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.message.parts-match-role"
+statement = "Tool calls appear only in Assistant messages."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Provenance decides what an agent produced and what it read by role. A tool
+result inside a user message would be misread as a human turn, and a tool
+call outside an assistant message as input. The role is the MessageBody
+variant and each variant's part type admits only that role's parts:
+ToolCall only in AssistantPart, ToolResult only in Tool's NonEmpty or in
+AssistantPart::ServerToolResult (results of provider-hosted tools returned
+inside the response). Mixed provider messages cannot be represented, so
+normalizers must split them.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::message::MessageBody"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

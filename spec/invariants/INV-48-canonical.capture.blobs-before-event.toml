@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.capture.blobs-before-event"
+statement = "Every blob an exchange references, by message hash or through a message's media parts, is in the blob store before L1 publishes that exchange's ExchangeCaptured."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+ExchangeCaptured carries only hashes. A consumer that receives it reads the
+bodies from the blob store, possibly on another node, and has no way to wait
+for a body that is still being written. L1 therefore awaits every put before
+publishing, and publishes nothing when a put fails. The simulation injects
+put failures and delays and reorders task scheduling; the integration test
+runs a consumer against the real blob store and bus.
+"""
+
+[evidence]
+dst = "crosstalk::canonical::tests::dst_blobs_written_before_capture_published"
+integration = "crosstalk::canonical::tests::consumer_reads_every_referenced_blob"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
