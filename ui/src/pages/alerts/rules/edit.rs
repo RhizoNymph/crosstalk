@@ -208,6 +208,18 @@ async fn submit(
     Ok(settled(&outcome, flash))
 }
 
+/// What a rule of `kind` does, under the form's title.
+fn subtitle(kind: RuleKindChoice) -> &'static str {
+    match kind {
+        RuleKindChoice::Watched => {
+            "Watched-topic rules follow their topics across re-fits while they remap above the threshold."
+        }
+        RuleKindChoice::Semantic => {
+            "Semantic query rules raise an alert for transmissions whose text is at least as similar to the query as the threshold."
+        }
+    }
+}
+
 #[page("/alerts/rules/new")]
 async fn new_rule_get(cx: &Cx) -> Result<impl View> {
     let state = view_state(cx).await?;
@@ -349,10 +361,7 @@ async fn rule_page(
                 };
                 let version = editor.options.choices.version.0;
                 let watched = editor.kind == RuleKindChoice::Watched;
-                page_header(
-                    title: &editor.title,
-                    subtitle: "Watched-topic rules follow their topics across re-fits while they remap above the threshold.",
-                )
+                page_header(title: &editor.title, subtitle: subtitle(editor.kind))
                 if let Some((status, reason)) = editor.status {
                     <div class="mb-3 flex flex-wrap items-center gap-2 text-sm">
                         state_badge(label: status_label(status), tone: status_tone(status))
@@ -415,6 +424,11 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("New semantic query rule"));
         assert!(reply.body.contains("Describe what to look for"));
+        assert!(reply.body.contains(subtitle(RuleKindChoice::Semantic)));
+        assert!(
+            !reply.body.contains(subtitle(RuleKindChoice::Watched)),
+            "a semantic rule is not described as a watched-topic rule"
+        );
         let reply = get(&format!("/alerts/rules/new?{q}&kind=regex")).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
