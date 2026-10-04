@@ -182,6 +182,13 @@ pub enum RequestClass {
     Unknown,
 }
 
+/// Digests under the previous secret version during a rotation overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviousDigests {
+    pub credential: Option<CredentialHash>,
+    pub account: Option<AccountHash>,
+}
+
 /// Everything known about the caller, from the connection and headers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientContext {
@@ -191,6 +198,10 @@ pub struct ClientContext {
     pub credential: Option<CredentialRef>,
     /// ChatGPT-Account-ID and similar, hashed.
     pub account: Option<AccountHash>,
+    /// During a secret rotation overlap, the same credential and account
+    /// hashed under the previous `SecretVersion`, so identity resolution can
+    /// link evidence across the change. `None` outside an overlap.
+    pub previous_digests: Option<PreviousDigests>,
     pub harness: Option<HarnessClaim>,
     pub ids: HarnessIds,
     pub class: RequestClass,
