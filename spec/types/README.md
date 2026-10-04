@@ -173,28 +173,83 @@ Code Assist) and self-hosted vLLM or SGLang. See
 `design/lifecycles/cascade.yaml` (next to the repository) simulates these
 lifecycles, with scenarios for channel discovery, sanctioned and unused
 channels, suspected transmissions, delegation, direct relays, late content,
-policy resets and topic re-fits. The model agrees with these types on
+policy resets, topic re-fits, promotion with supersession (and a late
+confirmation on the superseded channel), merges and exact unmerges with
+vetoes, verdicts set and revised, stale rules refused on enable and
+retargeted by update, topic-version pins and retention, and projection
+jobs requeued after a crash. The model agrees with these types on
 behaviour; the rows below are where it represents something differently,
-either to work around the simulator or because the types keep it in-process:
+either to work around the simulator or because the types keep it
+in-process. In general, a refused operator action is a trigger the target
+drops in its current state, where the types return a typed `ActionError`,
+and the `Changed` notifications and the live feed are not modelled.
 
 | Cascade | Here |
 | --- | --- |
-| `Agent.registered` | `AgentState::Registered`. Scenarios pre-declare every agent, so one first seen in traffic starts `registered` there and `Provisional` here |
+| **Agents** | |
+| `Agent.active.registered` | `AgentState::Registered`. Scenarios pre-declare every agent, so one first seen in traffic starts `registered` there and `Provisional` here |
+| `Agent.active` (`registered`, `provisional`, `established`) and `merged`; `unmerge` and `rename` re-enter `active` through its deep history `prior` | `ActiveAgentState`, and `AgentState::Merged(MergedInto { prior, .. })`; `Agent::revert` restores `prior`, and `Agent::rename` changes only the `label` |
+| `Agent.merge`, fired by the operator (target in the payload's `into`) or by `ResolverMergeFound`; the target-is-canonical check is a lone guard, always taken | `IdentityResolver::merge(MergeRequest { by: Operator \| Resolver })`, which refuses a merged source or target (`Conflict(AgentMerged)`) |
+| `MergeRecord` machine, spawned on `AgentMerged` (`unwritten` → `applied` → `reverted`); `MergeRecord.revert` is the operator's `Unmerge` | `MergeRecord`, written in the merge's transaction and returned as its `MergeId`; `MergeRecord::revert` refuses a second revert (`Conflict(MergeAlreadyReverted)`) |
+| `ResolverMergeFound`, `MergeReverted` | in-process in L3: the resolver's merge decision, and `MergeRecord::revert` inside `IdentityResolver::unmerge` |
+| no repointing: an agent merged into a source that is merged again keeps pointing where it did | `Agent::repoint` and `Agent::restore`, with `MergeRecord::repointed` and `Reversal::restored` (instance fields cannot change in the simulator) |
+| `MergeVeto` machine per directed agent pair (`none`, `vetoed`), consulted by the resolver when an exchange's `sameAs` stand-in carries the other agent's strong evidence; an operator merge from `from` into `into` clears it | `MergeVeto` stores the pair unordered and `separates` tests whole clusters; an operator merge deletes every veto between the two clusters. The cascade checks only the declared pair, in its declared direction |
+| `AgentUnmerged`, `AgentRenamed` handled by `ReadModels` with no rules | applied by the `AgentDirectory` cache and the graph nodes' labels; no entity changes state |
+| **Channels** | |
 | `Channel.undiscovered` | no record: a channel exists once declared or discovered |
-| `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` (under `DeclaredHistory::BeforeTraffic`) |
-| `Channel.observed` … `dormant` | `TrafficDetection` |
+| `Channel` top-level states `declared`, `discovered`, `promoted`, `superseded`, each holding its detection; the traffic detection transitions are written out once per origin that runs them | `ChannelOrigin` (`Declared` with `DeclaredHistory::BeforeTraffic` or `Promoted`, `Discovered`, `Superseded`) holding `DeclaredDetection` or `TrafficDetection` |
+| `Channel.declared.awaiting_traffic` / `unused`; `declared.observed` … `dormant` | `DeclaredDetection::AwaitingTraffic` / `Unused` / `InUse(TrafficDetection)` |
+| `Channel.discovered.*`, `promoted.*` | `TrafficDetection`; promotion keeps the detection leaf (`ChannelOrigin::promoted`) |
+| `Channel.superseded.*`: the leaf it had, with no transitions out (detection frozen) | `ChannelOrigin::Superseded { seed, detection, supersession: Supersession { by, at } }` |
+| `Channel.promote`, refused (dropped) in a declared, promoted or superseded channel; the pattern check is a lone guard | `PromoteChannel { channel, pattern, policy, note }` → `Promotion` → `ChannelRegistry::promote` and `promotion::plan`, refusing `ChannelSuperseded`, `ChannelNotDiscovered`, `PatternMissesSeed`, `PatternOverlaps` |
+| `Channel.supersededBy` stand-in; `ChannelPromoted` supersedes every channel naming the promoted one | `promotion::plan`: every other discovered channel whose seed the pattern matches |
+| the promotion's policy decision, chosen by the `ChannelPolicy.promotion` stand-in through literal selectors (`allow`, `disallow`, `reset`) | the `PolicyDecision` in the `Promotion`, recorded in the promoted channel's `PolicyHistory` in the promotion's transaction |
+| an `Exchange.resource` after a promotion names the promoted channel | `ChannelRegistry::lookup` returns `Known(canonical)` for a superseded channel's resources, so new accesses land on the superseding channel |
+| a late `Channel.confirm` on a superseded channel is dropped and not forwarded | the superseded channel's detection stays as it was; the types do not say whether such a confirmation advances the superseding channel's `TrafficDetection::Active::last_transmission` |
 | `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic`; `unreviewed.never_reviewed` / `unreviewed.reset` are `Unreviewed(None)` / `Unreviewed(Some(_))`; its `unused` trigger is the `SanctionedUnused` rule's policy check |
+| `ChannelPolicy.superseded.*`: the policy frozen where it was, taking no `allow`, `disallow` or `reset` | the superseded channel keeps its `Policy` and `PolicyHistory`; `ChannelRegistry::set_policy` refuses (`Superseded { channel, by }`) and the surface returns `Conflict(ChannelSuperseded)` |
+| `SupersededTraffic`, forwarded to the superseding channel's policy (a one-step cycle marked `bounded`) | in-process: confirmed traffic on a superseded channel is judged by the policy of `ChannelDirectory::canonical`; the alert keeps the superseded channel as its stored subject |
 | `ChannelSanctioned` | `PolicyChanged { policy: Sanctioned(_) }`; other policy changes are applied by the policy transition alone |
-| `Alert.fired` / `deduplicated` | `AlertDraft` / `TriageOutcome::Deduplicated` |
-| `Alert.subjectKind` / `subject` | `AlertSubject`: the channel for new-channel, traffic and sanctioned-unused alerts, the transmission for suspected-transmission and content alerts |
-| `ContentRule` machine | a user `AlertRuleDef` (`ContentRule::WatchedTopic` / `SemanticQuery`); its `enabled` is `RuleStatus::Enabled` and its `stale` is `TopicWatch::Stale` or `QueryWatch::Stale` (`Disabled` and `RuleDisabled` suppression are not modelled) |
-| `TopicModel` machine, `TopicModelRefitted` | the analyze consumer's in-process fit; `TopicVersionReady` is the bus event |
-| `ResponseCompleted`, `ExchangeFailed`, `ExchangeNormalized` | in-process on the proxy node (`RawExchange`, `NormalizedExchange`) |
+| `Alert.supersededBy`, copied from the channel's stand-in when the alert is raised; `ChannelSanctioned` suppresses alerts whose `subject` or `supersededBy` is the channel | `AlertTriage::channel_sanctioned` compares resolved subjects (`AlertSubject::resolved`) at suppression time |
+| **Transmissions and verdicts** | |
 | `ContentMatched` / `DelegationMatched` / `DirectMatched` / `OutputMatched`, selected by `Exchange` stand-in fields | one `ContentMatched` carrying a `Carrier`; the correlator chooses the route (delegation direction and the direct carrier are not modelled) |
-| `TransmissionClassified` / `TransmissionReclassified` | `TransmissionClassified { cause: Confirmation \| Refit }` |
 | no sender field; `originAgent` in the confirming match's payload | `Confirmed::from()`, known only once confirmed |
-| `Transmission.aggregated` is not final (re-fits loop through it) | `Aggregated` is final; a re-fit records a new `TopicAssignment` |
+| `Transmission.judgeable` compound (`suspected`, `confirmed`, `classified`, `aggregated`, `discarded`); verdict triggers drop in `detected` and `awaiting_content` | `TransmissionState::judgeable` (`Judgeable` / `NotJudgeable`), checked by `TransmissionVerdict::new`; the surface returns `Conflict(TransmissionNotJudgeable)` |
+| `Transmission.judgeable.aggregated` is not final (re-fits loop through it) | `Aggregated` is final; a re-fit records a new `TopicAssignment` |
+| `Transmission.judgeable.discarded` is final for detection but takes verdict self-loops (through the parent) | `Discarded` is terminal and judgeable |
+| `TransmissionOpened`, which spawns the transmission's `Verdict` | no bus event: a transmission's `VerdictLog` is empty until its first record |
+| `Verdict` machine: `unlogged`, then `no_verdict` / `genuine` / `false_detection`; each transition is one appended record | the last record of the `VerdictLog` (`None` when never judged or withdrawn), with consecutive `VerdictRevision`s, which the cascade does not count |
+| `JudgedGenuine`, `JudgedFalseDetection`, `JudgementWithdrawn` | in-process in `TransmissionVerdicts::set`: the state check passed |
+| `VerdictGenuine` / `VerdictFalseDetection` / `VerdictWithdrawn` | `VerdictSet { verdict: Some(Genuine) \| Some(FalseDetection) \| None, revision, .. }` |
+| a repeated verdict: the transmission's self-loop is taken and the `Verdict` drops the trigger | `Unchanged`: nothing appended, nothing published |
+| `VerdictGenuine` and `VerdictWithdrawn` handled with no rules | every reader updates its `CurrentVerdict`; triage reopens nothing |
+| `TransmissionClassified` / `TransmissionReclassified` | `TransmissionClassified { cause: Confirmation \| Refit }` |
 | a late `match` is dropped in `discarded` | late content opens a new transmission; the simulator only shows this for content from a later exchange |
 | a confirmation on an `active` channel is dropped | it updates `TrafficDetection::Active::last_transmission` |
 | no correlator buffering | a tool-result match whose call yields no access opens `Direct(ToolResult)` when its window closes |
+| a late match is held back with manual queue steps (`{ step: 1 }`) in the promotion scenario | the `provenance` and `flow` consumer groups lag independently, so a match can reach the correlator after its window closed |
+| **Alerts and rules** | |
+| `Alert.fired` / `deduplicated` / `rejected` / `inactive` | `AlertDraft` / `TriageOutcome::Deduplicated` / `OperatorRejected` / `RuleInactive`; the simulator always takes the first guard (`open`), so the other three are never reached |
+| `Alert.subjectKind` / `subject` | `AlertSubject`: the channel for new-channel, traffic and sanctioned-unused alerts, the transmission for suspected-transmission and content alerts |
+| `ContentRule` machine: `unsaved`, then `current.{enabled,disabled}` and `stale.{enabled,disabled}` | a user `AlertRuleDef` (`ContentRule::WatchedTopic` / `SemanticQuery`): `current` / `stale` is `TopicWatch` or `QueryWatch` `Current` / `Stale`, the children are `RuleStatus`; `unsaved` is no record before `AlertRuleStore::create` |
+| `ContentRule.enable` drops in either `stale` leaf | `Conflict(RuleStale)`, added to `ConflictKind` by a sibling change; until it lands, `AlertRuleDef::set_enabled` and `AlertRuleStore::set_enabled` document that enabling a stale rule leaves it stale |
+| `ContentRule.update` from `stale` to `current.enabled`, and from `current` back to the status it had | `AlertRuleStore::update` / `AlertRuleDef::update`: a stale rule is retargeted and enabled, a current one keeps its status |
+| `ContentRule.unmappedIn` stand-in: on `TopicVersionReady` the rules naming the version take `remap_stale` before the others take `remap` | `AlertRuleDef::remap` with `TopicLineage::remap` over the stored lineage and the rule's threshold |
+| `ContentRule.embedding_model_changed`, fired by `Config` | `AlertRuleDef::embedding_model_changed` when alerts starts with an embedder of another model |
+| `RuleDisabled`; other rule changes are `AlertRuleChanged`, handled with no rules | `AlertRuleChanged`; a disable also calls `AlertTriage::rule_disabled` in the same transaction (`SuppressReason::RuleDisabled`) |
+| built-in rules are `AlertEngine` rules that always fire | `BuiltinRule`s can be enabled and disabled like user rules |
+| **Topic versions and projections** | |
+| `TopicVersion` machine; `planned` is a re-fit that has not started, `abandoned` a failed fit | `TopicVersionInfo` in the `TopicVersionHistory`; a failed fit leaves no version |
+| `TopicVersion.fitting.running` / `fitting.classifying` | both `TopicVersionStatus::Fitting` |
+| `TopicVersion` `ready`, `active`, `superseded`, each `unpinned` or `pinned`, and `dropped` | `TopicVersionStatus` with `Retention::Retained { pin }`, and `Retention::Dropped` |
+| `TopicModelRefitted` | the analyze consumer's in-process fit, after the lineage is stored; `TopicVersionReady` is the bus event |
+| `TopicVersion.activate` on `TopicVersionReady` | L7 activates a version once its buckets are complete; until then it is `Ready` and a pinned view of it is `Conflict(TopicVersionNotActivated)` |
+| `TopicVersion.supersededBy` / `droppedAfter` stand-ins, selected on `TopicVersionActivated` | `TopicVersionActivated { version, previous }` supersedes every older version; `RetentionPolicy::to_drop` decides drops from `keep_last`, pins and activation |
+| `TopicVersionUnpinned`, after which `enforce_retention` is a lone guard, always taken | in-process in the catalog; `to_drop` keeps a version still among the `keep_last` most recent active ones, which the simulator would drop |
+| `TopicVersion.pin` drops in `planned`, `fitting`, `dropped` and when pinned; `unpin` drops when unpinned | `NotFound`, `Conflict(TopicVersionFitting)`, `Conflict(TopicVersionDropped)`, `Unchanged` |
+| `Projection` machine: `unrequested`, `queued`, `fitting`, `ready`, `failed`, `expired`; `Fitter` fires claim, complete and fail, and `Clock` the lease lapse and frame retention | `ProjectionInfo` / `ProjectionStatus` with `start`, `requeue`, `complete`, `fail` and `expire`; `unrequested` is no record before `ProjectionStore::enqueue`, whose `Conflict(ProjectionQueueFull)` is a lone guard here |
+| `Projection.version_dropped` from `queued` on `TopicVersionDropped` | `Failed { started_at: None, .. }`; a fitting job finds the version gone when it reads its sample |
+| **Elsewhere** | |
+| `ResponseCompleted`, `ExchangeFailed`, `ExchangeNormalized` | in-process on the proxy node (`RawExchange`, `NormalizedExchange`) |
 | guarded triggers take their first guard (`Span.classify`, `Agent.evidence`) | the guard is decided by the data: a reader-output span is `Relayed`, and an agent is `Established` only with corroborating evidence |
+| no watermark | the `Watermark` has no lifecycle; it decides when buckets are final, and no machine models buckets |
