@@ -1,0 +1,32 @@
+[
+  {
+    "type": "observed",
+    "data": {
+      "first_access": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "candidate",
+    "data": {
+      "first_cross_access": {
+        "write": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "read": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "lag_micros": 30250000
+      }
+    }
+  },
+  {
+    "type": "active",
+    "data": {
+      "since": "2026-10-04T12:00:30.250000Z",
+      "last_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+    }
+  },
+  {
+    "type": "dormant",
+    "data": {
+      "since": "2026-10-11T12:00:30.250000Z",
+      "last_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+    }
+  }
+]

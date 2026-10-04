@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.topic.one-assignment-per-version"
+statement = "No transmission ever has more than one TopicAssignment under the same TopicModelVersion, even when TransmissionConfirmed is redelivered or arrives during a re-fit."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Delivery is at least once and re-assignment after a re-fit races new
+confirmations, so the same (transmission, version) pair can be assigned
+twice. Two assignments would double-count the transmission in topic
+statistics and make its topic ambiguous. The store keys assignments on
+(transmission, version).
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::redelivered_confirmation_assigns_once_per_version"
+integration = "crosstalk::analysis::tests::assignment_store_rejects_duplicate_transmission_version"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

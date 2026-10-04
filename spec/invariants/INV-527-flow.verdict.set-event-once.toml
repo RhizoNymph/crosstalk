@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.verdict.set-event-once"
+statement = "Each TransmissionVerdicts::set that returns Appended(r) publishes exactly one VerdictSet with revision r, written in the same transaction as the record, and one that returns Unchanged or an error publishes none."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Triage, the edge store, search and the projection learn verdicts only
+from this event. A lost event leaves alerts open and false detections in
+excluded views; an event without a record would suppress alerts for a
+verdict nobody can read back. The outbox write in the record's
+transaction makes the two commit together.
+"""
+
+[evidence]
+dst = "crosstalk::flow::tests::dst_verdict_set_once"
+integration = "crosstalk::flow::tests::pg_verdict_set_outbox"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

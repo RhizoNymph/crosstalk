@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.channel.promoted-traffic-detection"
+statement = "A promoted channel's detection is a TrafficDetection, so it is never AwaitingTraffic or Unused."
+kind = "representation"
+requires = ["type"]
+rationale = """
+A promoted channel was discovered from traffic, so "declared but never
+used" is false for it, and DeclaredChannelUnused would raise a false
+SanctionedUnused alert. `DeclaredHistory::Promoted` carries a
+`TrafficDetection`, while only `DeclaredHistory::BeforeTraffic` carries a
+`DeclaredDetection`.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::channel::DeclaredHistory"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.live.config-heartbeat-within-retention"
+statement = "Every LiveConfig has a non-zero per-stream buffer, a non-zero heartbeat interval and a retention longer than that interval."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A zero buffer would end every stream as Lagged at once. A retention no
+longer than the heartbeat interval would let a heartbeat's cursor leave
+the log before the client could use it, turning every reconnect into a
+resync.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::live::LiveConfig::new"
+unit = "crosstalk_spec::tests::live::live_config_requires_heartbeat_within_retention"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

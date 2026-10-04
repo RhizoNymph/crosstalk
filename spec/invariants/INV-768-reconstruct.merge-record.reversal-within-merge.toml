@@ -1,0 +1,30 @@
+[invariant]
+id = "reconstruct.merge-record.reversal-within-merge"
+statement = "A MergeRecord's reversal is dated no earlier than the merge, and its restored agents are a subsequence of the record's repointed agents (each one the merge repointed, in the record's order, at most once): MergeRecord::revert refuses any other reversal with InvalidReversal and changes nothing, and decoding a record refuses it as InvalidMergeRecord::Reversal."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An unmerge restores only agents the merge repointed (Agent::restore moves
+an agent only when the record is in its repointed_by), and it happens after
+the merge it undoes. A stored record that claimed to restore an agent its
+merge never touched, or to be reverted before it was made, would show the
+audit trail and the agent detail a history that never happened, and a
+reader replaying the log would restore the wrong agents. Checking it in
+revert, which decoding goes through, keeps every record in memory and on
+the wire one the resolver could have written.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::observed::agent::MergeRecord::revert",
+    "crosstalk_spec::observed::agent::InvalidReversal",
+]
+unit = [
+    "crosstalk_spec::tests::agents::a_reversal_restores_only_agents_the_merge_repointed_in_its_order",
+    "crosstalk_spec::tests::agents::a_reversal_is_not_dated_before_its_merge",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_reversal_the_merge_cannot_have",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

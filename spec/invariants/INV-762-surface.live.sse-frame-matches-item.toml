@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.live.sse-frame-matches-item"
+statement = "Each LiveItem is sent as one SSE event whose event field is LiveItem::event_name (the item's JSON type), whose id field is LiveCursor::encode of its cursor (the JSON's cursor), and whose data field is the item's JSON on one line; a stream ends with one event named LiveEnd::EVENT_NAME, whose data is the LiveEnd and which has no id field."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The browser keeps the last SSE id and sends it back as Last-Event-ID on
+reconnect, which Resume::from_last_event_id reads, so the id must be the
+cursor's exact text for replay to resume where the client stopped;
+heartbeats carry an id too, so it is always the newest cursor passed. The
+end event carries no id, so it leaves the client's resume point on the
+last item. Naming each event after its JSON type lets a client listen per
+kind, and one-line data keeps each item one SSE event.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::wire::surface_actions::live::sse_event_names_and_ids_match_the_item_json"
+integration = "crosstalk::surface::live::integration::sse_frames_carry_name_and_cursor"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

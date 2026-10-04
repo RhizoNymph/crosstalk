@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.topic.classified-carries-confirmed-facts"
+statement = "Every TransmissionClassified carries the at and matched_bytes of the transmission's Confirmed state, whichever version it is published under."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Topology buckets and weights edges by these two fields. If a re-fit
+republished a transmission with a different time or byte count, the same
+communication would land in a different bucket or with a different weight
+under each version, and versions could not be compared.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::reclassification_keeps_at_and_matched_bytes"
+property = "crosstalk::analysis::tests::classified_fields_match_confirmed"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

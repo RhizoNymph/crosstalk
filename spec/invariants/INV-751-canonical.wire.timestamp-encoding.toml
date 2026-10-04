@@ -1,0 +1,27 @@
+[invariant]
+id = "canonical.wire.timestamp-encoding"
+statement = "A Timestamp up to 9999-12-31T23:59:59.999999Z encodes as RFC 3339 UTC text YYYY-MM-DDTHH:MM:SS.ffffffZ with exactly six fractional digits, a later one fails to encode, and decoding accepts exactly the texts encoding writes."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Timestamps are microseconds since the epoch, so microsecond text is exact
+both ways, and a fixed width makes the text sort as the time does. Accepting
+only that one shape (upper-case T and Z, no offset, no other precision, no
+leap second, no impossible date, nothing before the epoch) keeps every
+timestamp to one text. RFC 3339 has four-digit years, so a later time has
+no text and encoding it is an error rather than a wrong date.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::time::timestamps_match_reference_texts_both_ways",
+    "crosstalk_spec::tests::wire::time::civil_dates_agree_with_day_by_day_counting",
+    "crosstalk_spec::tests::wire::time::timestamps_round_trip_across_the_range",
+    "crosstalk_spec::tests::wire::time::the_last_timestamp_with_a_text_is_the_end_of_9999",
+    "crosstalk_spec::tests::wire::time::parsing_refuses_every_other_shape",
+    "crosstalk_spec::tests::wire::time::timestamps_reject_anything_but_the_text",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

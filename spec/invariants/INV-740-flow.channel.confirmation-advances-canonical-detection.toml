@@ -1,0 +1,28 @@
+[invariant]
+id = "flow.channel.confirmation-advances-canonical-detection"
+statement = "When the flow consumer applies a confirmation of a transmission whose stored route names a channel that has since been superseded, it changes the detection of the channel that channel resolves to (ChannelDirectory::canonical) exactly as a confirmation routed to that channel would, leaving it TrafficDetection::Active with last_transmission naming the transmission, publishes Changed::Channel for it, and leaves the superseded channel's own detection unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A transmission opened before a promotion keeps the superseded channel's id
+in its stored route, and its content can arrive after the promotion,
+because the provenance and flow groups lag independently. Everything else
+resolves that route at read time: the transmission counts on the
+canonical channel in edges and channel rows, and the canonical channel's
+policy judges it. Advancing the canonical channel's detection keeps its
+Active state and last transmission consistent with those counts; advancing
+the superseded channel's would revive a channel that takes no traffic, and
+dropping the confirmation would leave the canonical channel Dormant while
+its row counts a new transmission. The lifecycle simulation drops the
+confirmation instead; the mapping table in spec/types/README.md records
+the difference.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::late_confirmation_on_a_superseded_channel_advances_its_superseder"
+integration = "crosstalk::flow::tests::pg_late_confirmation_after_promotion"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

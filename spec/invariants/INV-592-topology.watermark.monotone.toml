@@ -1,0 +1,16 @@
+[invariant]
+id = "topology.watermark.monotone"
+statement = "The watermark EdgeStore::watermark returns never decreases, including across restarts of L7."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Clients cache what is before the watermark as final. A watermark that
+moved back, after a restart for example, would mean they hold values
+that can still change.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::watermark_never_decreases_across_restarts"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

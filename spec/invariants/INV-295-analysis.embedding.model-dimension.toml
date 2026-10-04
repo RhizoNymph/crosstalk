@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.embedding.model-dimension"
+statement = "Every Embedding has exactly as many values as its model's dimension."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Similarity between vectors of different lengths is undefined, and pgvector
+columns are declared with a fixed dimension, so a short or long vector
+would either fail the insert late or be silently truncated. Embedding's
+fields are private and Embedding::new rejects any length other than
+EmbeddingModel::dimension with InvalidEmbedding::WrongDimension, so
+analysis code never sees a mis-sized vector.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic::Embedding::new"
+unit = ["crosstalk_spec::tests::aggregates::embedding_rejects_wrong_dimension", "crosstalk_spec::tests::aggregates::embedding_accepts_unit_vectors_of_the_model_dimension"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,6 @@
+{
+  "limit": 5000,
+  "neighbors": 15,
+  "min_dist_milli": 100,
+  "seed": 42
+}

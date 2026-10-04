@@ -1,0 +1,31 @@
+[invariant]
+id = "surface.query.read-models-need-view"
+statement = "QueryApi::channel, channel_names, promotion_preview, agent, agent_names, transmissions_by_id, alert and overview return Forbidden with missing View, reading nothing, when the caller lacks View."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+These reads show structure and no message text: channel ids, patterns,
+seed locators, resources and counts; agent identity (evidence, aliases,
+merges, labels); a transmission's state, parties, route, times, byte
+counts, topic id and verdict; an alert as the alert list shows it; and
+counts. That is what View covers, at the level of the topology view and
+the channel and agent lists (surface.query.list-unauthorized-forbidden),
+so View is enough and is required. The promotion preview needs View, not
+Govern: it changes nothing and shows nothing View does not already show
+through channels and channel_resources, so a reviewer without Govern can
+prepare a promotion for an operator who has it; PromoteChannel itself
+still needs Govern. The check is per endpoint, so a new read without one
+fails a test rather than opening a door.
+"""
+
+[evidence]
+unit = [
+    "crosstalk::surface::tests::channel_reads_without_view_forbidden",
+    "crosstalk::surface::tests::agent_reads_without_view_forbidden",
+    "crosstalk::surface::tests::rows_alert_and_overview_without_view_forbidden",
+]
+integration = "crosstalk::surface::integration::transmission_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

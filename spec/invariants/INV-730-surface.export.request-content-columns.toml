@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.export.request-content-columns"
+statement = "ExportRequest::new refuses include_content for a dataset without content columns (accesses and verdicts) with NoContentColumns naming the dataset, and accepts every other combination of dataset, format and include_content."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A request for columns that cannot be delivered would either be silently
+ignored, leaving a manifest that claims content the rows lack, or be
+refused mid-way. Refusing it when the request is built keeps the request
+recorded in the manifest and the audit log an exact description of the
+rows. Which datasets have content columns is one exhaustive match
+(ExportDatasetKind::has_content_columns).
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::request::ExportRequest::new"
+unit = [
+    "crosstalk_spec::tests::export::request_refuses_content_for_datasets_without_content_columns",
+    "crosstalk_spec::tests::export::content_columns_by_dataset",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_requests_are_decoded_through_their_constructor",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

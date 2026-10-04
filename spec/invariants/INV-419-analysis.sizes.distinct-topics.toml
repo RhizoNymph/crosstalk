@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.sizes.distinct-topics"
+statement = "No topic appears twice in a TopicSizes."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Two sizes for one topic would leave the UI to guess which is right and
+would double its weight in a size chart. TopicSizes::new returns
+DuplicateTopic otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicSizes::new"
+unit = "crosstalk_spec::tests::topic_history::sizes_list_each_topic_once"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

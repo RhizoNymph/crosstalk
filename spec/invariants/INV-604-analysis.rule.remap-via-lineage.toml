@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.rule.remap-via-lineage"
+statement = "AlertRuleDef::remap(lineage) sets a current watched-topic rule's watch to TopicLineage::remap of its topics and threshold, returns Unchanged for a stale one, refuses any other rule or version without effect, and never changes the rule's status."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Carrying rules over with the same function and lineage the UI shows means
+the two cannot disagree about where a topic went. A stale rule stays stale
+whatever later fits show, so only an operator update brings it back.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::rules::remap_carries_current_topics_over_the_lineage",
+    "crosstalk_spec::tests::rules::remap_below_threshold_makes_the_rule_stale_and_keeps_status",
+    "crosstalk_spec::tests::rules::remap_leaves_stale_rules_stale",
+    "crosstalk_spec::tests::rules::remap_refuses_other_rules_and_versions_without_effect",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

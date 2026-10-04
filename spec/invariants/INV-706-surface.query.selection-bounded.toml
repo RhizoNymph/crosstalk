@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.query.selection-bounded"
+statement = "A TransmissionSelection holds between 1 and TransmissionSelection::MAX distinct ids, newest first."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An empty selection lists nothing and an unbounded one lets a request read
+the whole table. MAX equals the largest projection sample, so a lasso over
+a whole projection still fits. Ordering the ids the way rows are listed
+makes the cursor's request digest independent of how the client ordered
+them.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection::new"
+unit = [
+    "crosstalk_spec::tests::summary::a_selection_is_distinct_newest_first",
+    "crosstalk_spec::tests::summary::a_selection_is_bounded",
+    "crosstalk_spec::tests::wire::surface_reads::transmissions::transmission_selections_are_decoded_through_their_constructor",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

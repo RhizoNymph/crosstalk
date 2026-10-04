@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.projection.crash-requeues"
+statement = "A job whose fitter stops while it is Fitting returns to Queued once its lease lapses and is later fitted to Ready or Failed; a fitter crash never leaves a job Fitting indefinitely and never makes it Failed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Failed records only deterministic outcomes (FitFailure), so a citation's
+"failed" means refitting would fail too. A transient crash must therefore
+be retried, and since the layout is deterministic and the frame is written
+in one transaction with the Ready status, a retry cannot leave a partial or
+second frame.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::fitter_crash_requeues_job"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

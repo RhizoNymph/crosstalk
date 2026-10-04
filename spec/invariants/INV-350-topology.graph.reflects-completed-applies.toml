@@ -1,0 +1,23 @@
+[invariant]
+id = "topology.graph.reflects-completed-applies"
+statement = "A graph query that starts after an apply has returned Ok counts that contribution whenever its classification version is the graph's topic_version, the window contains its at and the filter admits it."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+TimescaleEdgeStore serves buckets from continuous aggregates, which are
+materialized on a refresh schedule and by default ignore data older than
+the refresh policy's start offset. Without real-time aggregation over the
+unmaterialized tail, and a refresh that covers late arrivals (a
+transmission classified hours after it happened, or every transmission
+during a re-fit rebuild), EdgeUpdated would point at a bucket whose query
+does not yet show the change, and late transmissions would never appear.
+"""
+
+[evidence]
+integration = [
+  "crosstalk::topology::integration::timescale_graph_reads_unmaterialized_apply",
+  "crosstalk::topology::integration::timescale_late_contribution_in_materialized_bucket_counts",
+]
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

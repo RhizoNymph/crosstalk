@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.graph.shares-sum-to-one"
+statement = "The shares of a TopologyGraph with at least one edge sum to 1 within an absolute error of 1e-9."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Shares are fractions of all communication in the filtered window, which
+the view renders as edge weights. A sum away from 1 means an edge was
+dropped after the total was computed (a top-N cut, a pagination limit) or
+the total included transmissions the edges do not. The Share type only
+bounds each value to 0..=1; it says nothing about their sum. An empty graph
+has no shares and is exempt.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::nonempty_graph_shares_sum_to_one"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

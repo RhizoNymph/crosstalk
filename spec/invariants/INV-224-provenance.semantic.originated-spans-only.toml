@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.semantic.originated-spans-only"
+statement = "Every span passed to SemanticMatcher::insert is in state Originated, Indexed or Propagated."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The same reasoning as the fingerprint index: a paraphrase of a Relayed or
+Common span credits the relayer, or everyone, as the author, and storing an
+Expired span undoes its eviction. SemanticMatcher::insert takes an
+&OriginatedSpan, which OriginatedSpan::new builds only from Originated,
+Indexed or Propagated spans, so every SemanticHit names an originated span.
+"""
+
+[evidence]
+type = ["crosstalk_spec::derived::provenance::span::OriginatedSpan::new", "crosstalk_spec::interfaces::l4_provenance::SemanticMatcher::insert"]
+unit = "crosstalk_spec::tests::provenance::only_live_originated_spans_can_be_indexed"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

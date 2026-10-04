@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.registry.lookup-never-superseded"
+statement = "ChannelRegistry::lookup never returns a superseded channel: a locator whose resource belongs to a superseded channel is Known on the channel that superseded it."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "integration"]
+rationale = """
+A superseded channel accepts no new resources or accesses. New
+AccessRecorded events then name the canonical channel, so the correlator
+opens transmissions on it and its policy judges them; only records stored
+before the promotion carry the old id and resolve at read time.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::lookup_of_superseded_resource_is_known_on_superseder"
+integration = "crosstalk::flow::tests::pg_lookup_after_promotion"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

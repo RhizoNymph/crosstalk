@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.rule.sanctioned-unused-requires-sanction"
+statement = "On a DeclaredChannelUnused event, a SanctionedUnused rule drafts exactly when the context reports the channel's policy as Sanctioned."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+DeclaredChannelUnused fires for any declared channel whose idle window
+closed. An idle channel is only worth alerting on when someone sanctioned
+it as an expected route (a broken integration); an unreviewed or
+unsanctioned declared channel going quiet is not a fault.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::sanctioned_unused_drafts_for_sanctioned_channel", "crosstalk::analysis::tests::sanctioned_unused_silent_for_unreviewed_channel", "crosstalk::analysis::tests::sanctioned_unused_silent_for_unsanctioned_channel"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

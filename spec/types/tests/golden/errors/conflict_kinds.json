@@ -1,0 +1,134 @@
+[
+  {
+    "type": "alert_not_active",
+    "data": {
+      "alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "agent_merged",
+    "data": {
+      "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "merge_already_reverted",
+    "data": {
+      "merge": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "merge_into_self",
+    "data": {
+      "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "canonical": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+    }
+  },
+  {
+    "type": "channel_superseded",
+    "data": {
+      "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "by": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "channel_not_discovered",
+    "data": {
+      "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "pattern_overlaps",
+    "data": {
+      "existing": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "rule_not_editable",
+    "data": {
+      "rule": "00000000000000000000000001"
+    }
+  },
+  {
+    "type": "rule_stale",
+    "data": {
+      "rule": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "topic_version_not_current",
+    "data": {
+      "requested": 3,
+      "current": 4
+    }
+  },
+  {
+    "type": "transmission_not_judgeable",
+    "data": {
+      "transmission": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "topic_version_fitting",
+    "data": {
+      "version": 5
+    }
+  },
+  {
+    "type": "topic_version_dropped",
+    "data": {
+      "version": 1
+    }
+  },
+  {
+    "type": "topic_version_not_activated",
+    "data": {
+      "version": 5
+    }
+  },
+  {
+    "type": "topics_not_in_version",
+    "data": {
+      "version": 4,
+      "topics": [
+        "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      ]
+    }
+  },
+  {
+    "type": "embedding_model_changed"
+  },
+  {
+    "type": "projection_not_ready",
+    "data": {
+      "projection": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "status": "fitting"
+    }
+  },
+  {
+    "type": "projection_failed",
+    "data": {
+      "projection": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "failure": {
+        "type": "too_few_points",
+        "data": {
+          "needed": 16,
+          "got": 9
+        }
+      }
+    }
+  },
+  {
+    "type": "projection_queue_full"
+  },
+  {
+    "type": "export_too_large",
+    "data": {
+      "rows": 2000001,
+      "limit": 2000000
+    }
+  }
+]

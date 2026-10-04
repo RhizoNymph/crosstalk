@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.routing.auth-hosts-never-intercepted"
+statement = "InterceptAllowlist::new rejects any host list that contains a vendor auth host from InterceptAllowlist::AUTH_HOSTS, so no interception allowlist can include one."
+kind = "confidentiality"
+requires = ["type", "unit"]
+rationale = """
+OAuth refresh and Copilot token-exchange requests carry refresh tokens and
+the credentials that mint new access tokens. The proxy must never decrypt
+them, even through a misconfigured allowlist. Because the allowlist can only
+be built through this checked constructor, that mistake becomes a config
+error instead of a credential exposure, and refresh traffic is always
+tunnelled.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l0_ingress::InterceptAllowlist::new"
+unit = "crosstalk_spec::tests::infrastructure::intercept_allowlist_rejects_auth_hosts"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

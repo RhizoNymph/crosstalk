@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.claims.latest-time"
+statement = "Observing the same claims at the same times into a ClaimSet in any order, with any repeats, yields the same set, in which each claim's last_seen is the latest time it was observed."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+The claim store is fed from at-least-once deliveries of ExchangeCaptured
+in no fixed order. Keeping the maximum time makes recording idempotent and
+order-independent.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::graph::observing_keeps_the_latest_time_in_any_order"
+property = "crosstalk::reconstruct::props::claim_observation_order_independent"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

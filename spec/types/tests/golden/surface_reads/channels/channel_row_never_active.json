@@ -1,0 +1,41 @@
+{
+  "channel": {
+    "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+    "origin": {
+      "type": "declared",
+      "data": {
+        "declaration": {
+          "pattern": {
+            "type": "url_prefix",
+            "data": {
+              "host": "wiki.example.com",
+              "path_prefix": "/team"
+            }
+          },
+          "by": {
+            "type": "config"
+          },
+          "at": "2026-10-01T00:00:00.000000Z"
+        },
+        "history": {
+          "type": "before_traffic",
+          "data": {
+            "type": "awaiting_traffic"
+          }
+        }
+      }
+    },
+    "resources": [],
+    "policy": {
+      "type": "unreviewed",
+      "data": null
+    }
+  },
+  "seed": null,
+  "standing": {
+    "type": "in_force",
+    "data": {
+      "type": "never"
+    }
+  }
+}

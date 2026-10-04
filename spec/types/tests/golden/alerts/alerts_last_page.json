@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "rule": "00000000000000000000000001",
+      "subject": {
+        "type": "channel",
+        "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      },
+      "raised_at": "2026-10-04T12:34:56.789012Z",
+      "occurrences": 3,
+      "state": {
+        "type": "open"
+      }
+    }
+  ],
+  "next": null
+}

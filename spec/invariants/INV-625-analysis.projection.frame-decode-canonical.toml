@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.projection.frame-decode-canonical"
+statement = "Whenever ProjectionFrame::decode accepts a byte string, encoding the frame it returns gives back exactly that byte string; every other byte string is rejected with a FrameDecodeError, without panicking."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "fuzz"]
+rationale = """
+One frame has exactly one encoding, so stored bytes can be compared or
+hashed to tell whether two reads returned the same projection. A decoder
+that accepted trailing bytes, non-zero padding or non-canonical tables
+would let two encodings of one frame exist.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::projection_frame::decode_rejects_short_input", "crosstalk_spec::tests::projection_frame::decode_rejects_bad_magic_and_format", "crosstalk_spec::tests::projection_frame::decode_rejects_a_zero_sample_size", "crosstalk_spec::tests::projection_frame::decode_rejects_any_other_length", "crosstalk_spec::tests::projection_frame::decode_rejects_non_zero_padding", "crosstalk_spec::tests::projection_frame::decode_rejects_an_unknown_route_kind", "crosstalk_spec::tests::projection_frame::decode_checks_the_frame_invariants"]
+fuzz = "crosstalk::analysis::fuzz::frame_decode"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+fuzz = { agent = "false", human = "false" }

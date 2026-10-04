@@ -1,0 +1,14 @@
+[
+  {
+    "type": "reverse_proxy",
+    "data": {
+      "route": "anthropic"
+    }
+  },
+  {
+    "type": "forward_proxy",
+    "data": {
+      "host": "chatgpt.com"
+    }
+  }
+]

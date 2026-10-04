@@ -1,0 +1,17 @@
+[invariant]
+id = "provenance.span.disjoint"
+statement = "No two SpanDrafts returned for one output overlap: spans in the same part have disjoint byte ranges."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Each byte of output has one provenance. Overlapping spans would let the same
+text be both Originated and Relayed, index it twice, and double-count
+matched bytes when L5 sums a transmission's evidence.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::segment_spans_do_not_overlap"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+{
+  "id": "01J9Z4A1B2C3D4E5F6G7H8J9K0",
+  "at": "2026-10-04T12:35:04.001337Z",
+  "event": {
+    "type": "ingest",
+    "data": {
+      "type": "conversation_delta",
+      "data": {
+        "exchange": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "conversation": "01J9Z3R0S1T2V3W4X5Y6Z7A8B9",
+        "new_inputs": [
+          "90c6783d80fad0eefa7c2c8887502d4a9d8839e043cd5f51582aa89f71cc9fb5"
+        ],
+        "new_system": null,
+        "output": "a9f4b3d22a523fdada41c85c175425bcd15b32b4cd0f54d9433accd52d7195a1"
+      }
+    }
+  }
+}

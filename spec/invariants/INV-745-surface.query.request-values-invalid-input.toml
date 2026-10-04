@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.query.request-values-invalid-input"
+statement = "QueryError::from maps InvalidSelection::Empty to InvalidInput(EmptySelection), InvalidSelection::TooMany to InvalidInput(TooManyIds) and InvalidWindow to InvalidInput(ExcerptContextTooLong), each with the bound and the count it was refused with."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+transmissions_by_id and transmission_evidence take checked values the
+surface builds from the request before reading anything. A refusal is the
+client's to fix whatever the state, so it is InvalidInput with the bound,
+not a store failure or a free-text reason. Too many ids is the same
+TooManyIds a name lookup reports (surface.query.names-batch-bounded), with
+the selection's larger bound, so a client splits either the same way.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::query_errors::selections_the_surface_cannot_build_are_invalid_input",
+    "crosstalk_spec::tests::query_errors::windows_the_surface_cannot_build_are_invalid_input",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

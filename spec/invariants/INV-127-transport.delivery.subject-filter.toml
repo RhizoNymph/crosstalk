@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.delivery.subject-filter"
+statement = "A subscription yields only deliveries whose envelope's subject, as given by BusEvent::subject, is one of the subjects it subscribed with."
+kind = "coordination"
+requires = ["property", "integration"]
+rationale = """
+Consumers match on the event variants they subscribed to and treat anything
+else as a bug. Routing by the event's own subject, rather than by a subject
+the publisher passes separately, means an envelope cannot be filed under the
+wrong subject.
+"""
+
+[evidence]
+property = "crosstalk::transport::tests::subscription_yields_only_subscribed_subjects"
+integration = "crosstalk::transport::integration::jetstream_subject_filter"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

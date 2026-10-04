@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.harness.recorded-as-sent"
+statement = "ClientIdentifier::harness returns the HarnessClaim, HarnessIds and RequestClass that the request's own headers state, inferring nothing from its body, credential or other requests."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+These are claims: pi and oh-my-pi send Claude Code's User-Agent and session
+header. L3 decides what they are worth within a credential or account
+scope; L0 must hand over exactly what was said, so that decision rests on
+the evidence and not on a guess made at the edge.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::client::harness_headers_recorded_per_harness_fixture"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

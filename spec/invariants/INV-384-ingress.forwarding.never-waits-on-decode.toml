@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.forwarding.never-waits-on-decode"
+statement = "The proxy starts sending a routed or intercepted HTTP request upstream, streams its body and relays the upstream response without waiting for decode_request on that request to start or finish."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Decoding parses the whole JSON body, and for zstd or gzip bodies (Codex on
+ChatGPT auth) decompresses it first. Doing that before forwarding would add
+its full cost to every request's time to first token and tie the hot path to
+parser speed on multi-megabyte histories. The body is teed instead: the
+forward path streams the original bytes as soon as the request is routed,
+and decode_request runs concurrently on the copy. A decoder that is slow,
+stalls or fails can delay or lose capture of the exchange, never the
+request or its response.
+"""
+
+[evidence]
+dst = ["crosstalk::ingress::tests::sim::forwarding_proceeds_while_decode_stalled", "crosstalk::ingress::tests::sim::response_relayed_before_decode_finishes"]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

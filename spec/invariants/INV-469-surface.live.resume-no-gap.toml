@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.live.resume-no-gap"
+statement = "A stream whose resume plan is Replay after seq n delivers, in feed order and each exactly once, every feed entry after n whose event is visible_to its Caller, with no entry skipped where replay from the log hands over to live delivery."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Reconnecting is routine (proxies drop idle connections, laptops sleep, a
+Lagged stream must reconnect). The handover is the risky moment: entries
+appended while the replay is read must be delivered once, not lost between
+the log read and the live subscription or delivered twice. The stream task
+subscribes to the live fan-out before reading the log and discards live
+entries at or below the last replayed seq.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::resume_replays_then_goes_live_without_gap"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.totals.match-graph"
+statement = "EdgeStore::totals for a window and filter equals EdgeTotals::of the graph EdgeStore::graph returns for the same window and filter under either weighting: its topic version, the transmissions and matched bytes counted into its edges, and the number of distinct channels its Route::Channel edges name."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "property"]
+rationale = """
+The overview's numbers must be the topology's numbers. Defining the totals
+as a function of the graph, and checking the store's cheaper path against
+it, keeps them from drifting while letting the overview skip node metadata
+and per-edge rows.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::overview::totals_sum_the_edges_and_count_distinct_channels",
+    "crosstalk_spec::tests::overview::totals_do_not_depend_on_weighting",
+    "crosstalk_spec::tests::overview::an_empty_graph_counts_nothing",
+]
+property = "crosstalk::topology::props::totals_match_graph"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

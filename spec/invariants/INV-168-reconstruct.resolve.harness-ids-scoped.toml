@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.resolve.harness-ids-scoped"
+statement = "Two exchanges that carry the same harness session or agent id under different IdentityScopes, and share no other identity evidence, do not resolve to the same agent."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Harness ids are client-asserted (oh-my-pi sends Claude Code's session
+header), so the same id under two credentials or accounts names two agents.
+Matching ids across scopes would merge unrelated callers and let any client
+attach itself to another's agent by copying a header. `IdentityEvidence`
+carries the scope inside the harness variants, so equal ids in different
+scopes are different evidence values.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::harness_ids_do_not_match_across_scopes"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

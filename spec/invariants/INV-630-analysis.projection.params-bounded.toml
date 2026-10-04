@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.projection.params-bounded"
+statement = "Every ProjectionParams has between 2 and 200 UMAP neighbours and a minimum distance between 0 and 1,000 thousandths, and every ProjectionSpec's filter selects Pinned of its own topic_version."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Out-of-range UMAP parameters either fail deep inside the fit or produce a
+degenerate layout, after the job has waited in the queue. Holding the
+minimum distance as an integer keeps a recorded spec exact through any
+serialization, and a spec that said Current would not say which topics its
+points carry.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::projection::ProjectionParams::new", "crosstalk_spec::aggregates::projection::ProjectionSpec::new"]
+unit = ["crosstalk_spec::tests::projection::params_reject_neighbors_outside_range", "crosstalk_spec::tests::projection::params_reject_min_dist_above_one", "crosstalk_spec::tests::projection::params_keep_every_field", "crosstalk_spec::tests::projection::spec_pins_the_filter_to_the_resolved_version"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

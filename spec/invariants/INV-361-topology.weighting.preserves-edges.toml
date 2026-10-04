@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.weighting.preserves-edges"
+statement = "Changing only a graph query's weighting returns the same (from, to, route) edges with the same stats."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Weighting chooses what a share is a share of; it is a presentation choice
+and must not change which communication is shown. Only shares may differ
+between Transmissions and MatchedBytes weighting. This is possible because
+EdgeStats holds both counts as NonZeroU64, so no edge has a zero stat
+under either weighting and neither weighting has reason to drop one.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::weighting_changes_only_shares"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

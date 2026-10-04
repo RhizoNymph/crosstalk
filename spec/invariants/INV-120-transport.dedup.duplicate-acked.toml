@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.dedup.duplicate-acked"
+statement = "When the dedup wrapper withholds a duplicate delivery from consumer logic, it acks that delivery."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A suppressed duplicate that is neither acked nor nacked comes back after
+every ack timeout until its retry budget runs out, holding a slot in the
+consumer's pending window, and then lands in the dead-letter store as a
+false failure of an envelope that was handled successfully.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::dedup_acks_suppressed_duplicates"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

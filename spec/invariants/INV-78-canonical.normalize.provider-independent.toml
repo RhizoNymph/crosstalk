@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.normalize.provider-independent"
+statement = "Rendering the same canonical conversation in two wire protocols and normalizing each yields messages with identical hashes."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Agents behind different APIs communicate: one agent's output, produced
+through Anthropic Messages, can reach another agent through OpenAI Chat or
+Responses. Content addressing is only protocol-neutral if the wire format
+leaves no trace in the canonical message. The property renders generated
+conversations, restricted to parts both protocols can express, through each
+pair of wire protocols; the unit cases pin recorded fixtures for each.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::fixture_conversation_hashes_agree_across_protocols"
+property = "crosstalk::canonical::tests::hashes_independent_of_wire_protocol"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

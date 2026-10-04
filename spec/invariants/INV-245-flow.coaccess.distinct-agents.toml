@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.coaccess.distinct-agents"
+statement = "The write and read accesses joined by a CoAccess are by different agents."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An agent reading back its own write is not communication; it would open a
+transmission from an agent to itself. `CoAccess::new` rejects it with
+`InvalidCoAccess::SameAgent`.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::evidence::CoAccess::new"
+unit = "crosstalk_spec::tests::flow::co_access_rejects_invalid_pairs"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

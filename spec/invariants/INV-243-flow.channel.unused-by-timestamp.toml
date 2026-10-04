@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.channel.unused-by-timestamp"
+statement = "A declared channel moves to Unused only if no access matching it is timestamped before its idle window closed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+DeclaredChannelUnused claims nobody used the channel, and for a sanctioned
+channel it raises SanctionedUnused. Accesses reach the flow consumer after
+capture, normalization and threading, so an access made inside the window
+can be processed after the idle tick. The decision must follow access
+timestamps, not processing order, or consumer lag produces false alerts.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::late_processed_access_prevents_unused"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

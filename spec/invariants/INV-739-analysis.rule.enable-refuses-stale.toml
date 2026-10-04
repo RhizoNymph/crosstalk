@@ -1,0 +1,33 @@
+[invariant]
+id = "analysis.rule.enable-refuses-stale"
+statement = "AlertRuleDef::set_enabled(true) on a stale rule returns StaleRule naming the rule and changes nothing, whether the rule is disabled or went stale while enabled, while set_enabled(false) is accepted for every rule, stale or not, and leaves its staleness as it was."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A stale rule names topic ids from a superseded fit, or a query embedded
+with a model the embedder no longer uses, so it cannot evaluate. Accepting
+an enable would show the operator a rule switched on that watches nothing;
+refusing it says what to do instead: UpdateRule retargets the rule and
+enables it (analysis.rule.update-makes-current). Disabling stays open so
+an operator can silence a stale rule's alerts without first fixing it. A
+rule that goes stale while enabled keeps its status
+(analysis.rule.remap-via-lineage, analysis.rule.semantic-stale-on-model-change);
+it is refused only when someone asks to enable it again. Through the
+store this is RuleError::Stale, which stores nothing and publishes no
+AlertRuleChanged, and through the surface Conflict(RuleStale). This
+replaces analysis.rule.enable-keeps-stale, under which the enable
+succeeded and left the rule stale.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::rules::set_enabled_reports_whether_it_changed_and_never_clears_staleness",
+    "crosstalk_spec::tests::rules::enabling_a_stale_rule_is_refused_in_either_status",
+    "crosstalk_spec::tests::rules::disabling_a_stale_enabled_rule_works",
+]
+integration = "crosstalk::analysis::tests::pg_enable_of_stale_rule_refused_without_effect"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

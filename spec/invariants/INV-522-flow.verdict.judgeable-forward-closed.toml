@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.verdict.judgeable-forward-closed"
+statement = "Every transition the correlator or the flow consumer applies to a transmission in a judgeable state leaves it in a judgeable state."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+Verdicts are stored beside the transmission and are not ordered with the
+correlator. They need no ordering only because judgeability never goes
+away: Suspected moves to Confirmed or Discarded, Confirmed to Classified
+and Aggregated, and all of these are judgeable. A transition back to
+Detected or AwaitingContent would leave a verdict on a state that takes
+none.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::verdicts::judgeability_survives_every_forward_transition"
+property = "crosstalk::flow::tests::prop_judgeable_states_stay_judgeable"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

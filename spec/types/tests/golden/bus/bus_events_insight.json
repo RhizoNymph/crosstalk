@@ -1,0 +1,153 @@
+[
+  {
+    "type": "insight",
+    "data": {
+      "type": "transmission_classified",
+      "data": {
+        "cause": "confirmation",
+        "transmission": "00000000000000000000000001",
+        "from": "00000000000000000000000001",
+        "to": "00000000000000000000000002",
+        "route": {
+          "type": "unobserved"
+        },
+        "at": "1970-01-01T00:00:00.000008Z",
+        "matched_bytes": 1,
+        "classification": {
+          "version": 1,
+          "topic": null,
+          "watched": false
+        }
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "topic_version_ready",
+      "data": {
+        "version": 1,
+        "transmissions": 1
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "topic_version_activated",
+      "data": {
+        "version": 1,
+        "previous": 0
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "topic_version_dropped",
+      "data": {
+        "version": 0
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "watermark_advanced",
+      "data": "1970-01-01T00:00:00.000009Z"
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "edge_updated",
+      "data": {
+        "from": "00000000000000000000000001",
+        "to": "00000000000000000000000002",
+        "route": {
+          "type": "unobserved"
+        },
+        "topic": {
+          "version": 1,
+          "topic": null
+        },
+        "bucket": {
+          "start": "1970-01-01T00:00:00.000000Z",
+          "end": "1970-01-01T00:00:00.000060Z"
+        }
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "alert_opened",
+      "data": {
+        "id": "00000000000000000000000001",
+        "rule": "00000000000000000000000001",
+        "subject": {
+          "type": "channel",
+          "data": "00000000000000000000000001"
+        },
+        "raised_at": "1970-01-01T00:00:00.000009Z",
+        "occurrences": 1,
+        "state": {
+          "type": "open"
+        }
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "alert_changed",
+      "data": {
+        "alert": {
+          "id": "00000000000000000000000001",
+          "rule": "00000000000000000000000001",
+          "subject": {
+            "type": "channel",
+            "data": "00000000000000000000000001"
+          },
+          "raised_at": "1970-01-01T00:00:00.000009Z",
+          "occurrences": 2,
+          "state": {
+            "type": "open"
+          }
+        },
+        "revision": 2
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "alert_rule_changed",
+      "data": {
+        "rule": {
+          "id": "00000000000000000000000001",
+          "rule": {
+            "type": "builtin",
+            "data": "new_channel"
+          },
+          "status": "disabled",
+          "sinks": []
+        },
+        "revision": 2
+      }
+    }
+  },
+  {
+    "type": "insight",
+    "data": {
+      "type": "policy_changed",
+      "data": {
+        "channel": "00000000000000000000000001",
+        "policy": {
+          "type": "unreviewed",
+          "data": null
+        }
+      }
+    }
+  }
+]

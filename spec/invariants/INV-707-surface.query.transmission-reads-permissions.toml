@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.query.transmission-reads-permissions"
+statement = "QueryApi::transmission_evidence returns Forbidden with missing Content, reading nothing, to a Caller without Content."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Excerpts are message text, so the evidence needs Content. The rest of the
+evidence page (its transmission row, the alert that led to it, the
+verdict log) needs only View, so the page's header renders for a viewer
+without Content (surface.query.read-models-need-view).
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::evidence_without_content_forbidden"
+integration = "crosstalk::surface::integration::transmission_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

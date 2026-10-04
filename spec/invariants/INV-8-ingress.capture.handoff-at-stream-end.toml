@@ -1,0 +1,16 @@
+[invariant]
+id = "ingress.capture.handoff-at-stream-end"
+statement = "The proxy hands an exchange's RawExchange to capture only after its response stream has ended, even when a FrameError occurred earlier."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A framing error fails the exchange but does not stop the bytes reaching the
+client. Handing off at the error would freeze partial_body short of what
+the agent actually received and set ended_at too early.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::handoff_waits_for_stream_end_after_frame_error"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

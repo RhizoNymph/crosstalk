@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.action.set-policy-carries-request"
+statement = "The PolicyChanged published for a SetPolicy names the requested channel, has the Policy variant of the requested PolicyKind, and carries a decision holding the requested note for every PolicyKind, including Unreviewed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The event is the only way the decision reaches flow detection. A handler
+that published to the wrong channel, mapped PolicyKind to the wrong Policy
+variant or dropped the note would apply a policy the operator did not
+choose, and the note is the record of why. An operator reset produces
+Policy::Unreviewed(Some(decision)), never Unreviewed(None), which is
+reserved for a channel nobody has reviewed; otherwise a reset would be
+indistinguishable from never having been reviewed.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::set_policy_event_matches_request"
+property = "crosstalk::surface::tests::prop_set_policy_event_matches_request"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

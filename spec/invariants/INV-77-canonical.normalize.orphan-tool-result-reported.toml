@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.normalize.orphan-tool-result-reported"
+statement = "In a FullHistory exchange, a tool result whose call id matches no earlier tool call in the request yields a NormalizeWarning::OrphanToolResult with that call id, not an error."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Harnesses compact or truncate history, leaving tool results whose calls are
+gone. Failing the exchange would discard exactly the reads that read-side
+detection needs, so the result is kept in its Tool message and the orphan
+is reported. Scoped to FullHistory: an Increment request carries tool
+results for calls in the previous response, which L1 never sees, so warning
+there would fire on every WebSocket turn; reconstruction resolves those.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::canonical::tests::orphan_tool_result_warns_and_is_kept",
+  "crosstalk::canonical::tests::increment_tool_results_do_not_warn",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

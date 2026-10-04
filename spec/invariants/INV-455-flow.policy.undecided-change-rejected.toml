@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.policy.undecided-change-rejected"
+statement = "A PolicyChanged whose policy is Unreviewed(None) changes no channel's policy or history, and its delivery is acked rather than retried."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Such an event carries no decision to record. Applying it would reset a
+reviewed channel to never-reviewed with no author; retrying it would only
+dead-letter it after wasted attempts, since it can never succeed. It is
+logged at warn so the producer's bug is visible.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::undecided_policy_changed_is_acked_without_effect"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.match.bytes-within-span"
+statement = "Every ContentMatch of kind Exact has matched_bytes at most the byte length of its origin span's range."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+matched_bytes is the evidence weight L5 sums into a transmission and L7
+weights edges by. Counting overlapping k-grams or several occurrences of the
+same span as separate bytes inflates it past the text that exists. The
+bound is stated for Exact matches only: matched_bytes is measured on the
+reader's side, and encoded (base64 grows text by a third), reflowed or
+paraphrased text can legitimately be longer than the origin span.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::exact_matched_bytes_within_origin_span"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.tool-call.execution-classified"
+statement = "A normalized tool call is marked ToolExecution::Server exactly when the provider executes it upstream."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Server-side tools (provider-hosted web search, web fetch, code execution)
+return their results as ServerToolResult parts in the same assistant
+message, while client tools return theirs in a Tool message of a later
+request. Flow detection looks for the result in a different place for each;
+a misclassified call is either paired with nothing or with the wrong
+result, losing the read it records.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::server_tool_use_marked_server"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

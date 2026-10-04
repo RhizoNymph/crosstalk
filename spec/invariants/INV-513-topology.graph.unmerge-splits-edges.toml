@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.graph.unmerge-splits-edges"
+statement = "Merging and then reverting that merge's record, with no other change, returns every TopologyGraph to its value before the merge."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Merges and unmerges change only the AgentDirectory; stored buckets keep
+their agent ids. The graph re-keys at read time, so after an unmerge the
+edges that were summed under the target split again on the next read. A
+cache keyed by canonical agent that ignored AgentUnmerged would keep
+showing the merge.
+"""
+
+[evidence]
+property = "crosstalk::topology::tests::unmerge_restores_graph"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

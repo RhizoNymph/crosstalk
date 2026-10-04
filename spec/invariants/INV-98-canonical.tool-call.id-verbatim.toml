@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.tool-call.id-verbatim"
+statement = "A canonical ToolCallId is the call id string the wire format carried, unchanged, in every dialect."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Dialects mint ids in different formats (vLLM `chatcmpl-tool-<uuid>`,
+SGLang `call_<24hex>`, Anthropic `toolu_…`). Pairing a tool result with its
+call, in the same request or across a WebSocket increment, works only if
+both sides keep the id exactly; stripping prefixes or re-minting ids would
+also change message hashes between a response and its echo.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::dialect_tool_call_ids_kept_verbatim"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

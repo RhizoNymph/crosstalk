@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.route.delegation-direction"
+statement = "A Delegation route is ParentToChild when the sender is the reader's parent and ChildToParent when the reader is the sender's parent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The direction separates a task handed down from a result handed back. The
+two are different edges in the topology and mean different things in
+triage.
+"""
+
+[evidence]
+unit = "crosstalk::flow::correlator::tests::delegation_direction"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

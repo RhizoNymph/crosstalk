@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.action.self-merge-invalid-input"
+statement = "A MergeAgents request naming one agent as both source and target is refused while the surface builds the action (OperatorAction::merge_agents returns SelfMerge) and is returned as InvalidInput(SelfMerge), without calling OperatorActions::act."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The request is invalid whatever the merge table holds, so it is an input
+error, not a conflict; MergeAgents holds a MergeRequest, which cannot name
+one agent twice, so no such action exists to act on or audit. Two
+different ids of one cluster are a conflict instead (Conflict(MergeIntoSelf)),
+because only the merge table knows they are one.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agent_reads::a_self_merge_is_invalid_input_before_act",
+    "crosstalk_spec::tests::wire::surface_actions::actions::stamping_a_self_merge_is_refused",
+    "crosstalk::surface::tests::self_merge_never_reaches_act",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

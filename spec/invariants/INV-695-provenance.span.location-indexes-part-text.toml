@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.span.location-indexes-part-text"
+statement = "Every SpanLocation L4 records, for a span or as a content match's read_at, names a part whose Message::part_text exists and a range that ends within that text and starts and ends on its character boundaries."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+The evidence page cuts excerpts from stored bodies with these locations. A
+location measured on another text (decoded, normalized or joined
+differently) would highlight the wrong bytes, or fail as a fault in the
+stored records.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::locations_index_part_text"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

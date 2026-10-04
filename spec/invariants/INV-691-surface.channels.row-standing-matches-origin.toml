@@ -1,0 +1,31 @@
+[invariant]
+id = "surface.channels.row-standing-matches-origin"
+statement = "A ChannelRow carries exactly its channel's seed resource (present only when the channel has a seed), is superseded exactly when its channel is, with the channel's own superseding channel and time and the operator taken by SupersededInto::of from that channel's promotion declaration, carries counts and last activity only when in force, and never shows a channel whose detection has traffic as never active."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The channel list and the channel page are read from these rows. A superseded
+row showing counts of its own would count every access to its resources
+twice once the list is summed, because accesses to a superseded channel's
+resources resolve to, and are counted on, the channel that superseded it.
+So a superseded row carries no counts: its supersession names the row that
+does. Taking the operator from the superseding promotion's declaration means
+a row cannot credit a supersession to anyone but the operator who promoted.
+A discovered or promoted channel exists because of an access, so showing it
+as never active would be false.
+"""
+
+[evidence]
+type = ["crosstalk_spec::interfaces::l8_surface::channels::ChannelRow::new", "crosstalk_spec::interfaces::l8_surface::channels::SupersededInto::of"]
+unit = [
+    "crosstalk_spec::tests::channel_reads::rows_in_force_carry_activity_and_superseded_rows_carry_their_supersession",
+    "crosstalk_spec::tests::channel_reads::rows_carry_exactly_the_channels_seed_resource",
+    "crosstalk_spec::tests::channel_reads::row_standing_follows_the_channels_origin",
+    "crosstalk_spec::tests::channel_reads::a_channel_with_traffic_is_never_listed_as_inactive",
+    "crosstalk_spec::tests::channel_reads::superseded_into_names_the_promoting_operator",
+    "crosstalk_spec::tests::wire::surface_reads::channels::channel_rows_are_decoded_through_their_constructor",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

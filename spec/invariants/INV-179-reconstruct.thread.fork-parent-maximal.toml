@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.fork-parent-maximal"
+statement = "A Forks outcome's parent shares a longest common prefix of non-system messages with the request among the conversations of the same canonical agent."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A fork can share a prefix with several conversations (the root and earlier
+forks of it). Choosing a shorter match puts already-scanned messages into
+new_inputs and attaches the fork to the wrong branch in the conversation
+tree.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::fork_parent_has_longest_common_prefix"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

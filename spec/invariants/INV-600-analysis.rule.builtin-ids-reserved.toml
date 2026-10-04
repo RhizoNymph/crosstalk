@@ -1,0 +1,24 @@
+[invariant]
+id = "analysis.rule.builtin-ids-reserved"
+statement = "Each BuiltinRule's id is its fixed value from 1 to 5, inside the reserved range of ids with a zero ULID timestamp, and AlertRuleDef::user and load refuse any id in that range."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Alerts and their deduplication key name the rule by id, and the same
+built-in must have the same id on every deployment and after a rebuild of
+the rule table. Generated ULIDs never have a zero timestamp, so user rules
+can never collide with a built-in.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::alert::BuiltinRule::id"
+unit = [
+    "crosstalk_spec::tests::rules::builtin_ids_are_fixed_distinct_and_reserved",
+    "crosstalk_spec::tests::rules::reserved_range_is_the_zero_ulid_timestamp",
+    "crosstalk_spec::tests::rules::user_rules_cannot_take_a_reserved_id",
+    "crosstalk_spec::tests::wire::analysis::rules::stored_rules_refuse_ids_their_constructors_refuse",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

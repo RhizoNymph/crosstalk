@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.framer.events-prefix-ordered"
+statement = "The FrameEvents reported across all pushes for one HTTP response, or for one WebSocket turn, form a prefix of the sequence FirstContent, Finished."
+kind = "coordination"
+requires = ["property"]
+rationale = """
+FirstContent moves an exchange to Responding and Finished to Completed.
+A repeated FirstContent would re-stamp first_chunk_at, a Finished before
+FirstContent would skip Responding, and any event after Finished (from
+trailing blank lines or an OpenAI [DONE] sentinel) could complete or hand
+off an exchange twice. One chunk may report both events, in order.
+"""
+
+[evidence]
+property = ["crosstalk::ingress::tests::framer::events_form_ordered_prefix", "crosstalk::ingress::tests::websocket::turn_events_form_ordered_prefix"]
+
+[evidence-review]
+property = { agent = "false", human = "false" }

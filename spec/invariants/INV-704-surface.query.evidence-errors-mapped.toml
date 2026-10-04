@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.query.evidence-errors-mapped"
+statement = "QueryError::from maps every BlobError and every EvidenceError to Store with a reason naming its cause, and an EvidenceError::Blob as the BlobError it holds."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Nothing about a failed evidence read is for the operator to fix: the store
+is down, or a stored record is missing or does not fit its body. Store
+says retry or escalate, and the reason tells whoever reads the logs which
+record is wrong. A dropped body is not among them.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::query_errors::blob_errors_are_store_failures",
+    "crosstalk_spec::tests::query_errors::evidence_errors_are_store_failures_naming_their_cause",
+    "crosstalk_spec::tests::query_errors::evidence_blob_errors_map_as_blob_errors_do",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

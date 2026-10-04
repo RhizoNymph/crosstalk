@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.rule.draft-subject"
+statement = "A draft's subject is the event's channel for NewChannel, UnreviewedTraffic, UnsanctionedTraffic and SanctionedUnused, and the event's transmission for SuspectedTransmission, WatchedTopic and SemanticQuery."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Triage deduplicates on (rule, subject), so the subject decides what counts
+as the same alert. Traffic alerts keyed by channel fold every transmission
+on an unreviewed channel into one alert with a rising occurrence count;
+content alerts keyed by transmission stay separate so each one can be
+reviewed.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::each_rule_kind_sets_its_subject"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

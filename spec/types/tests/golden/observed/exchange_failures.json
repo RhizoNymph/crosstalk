@@ -1,0 +1,32 @@
+[
+  {
+    "type": "upstream",
+    "data": {
+      "status": 529
+    }
+  },
+  {
+    "type": "upstream_unreachable"
+  },
+  {
+    "type": "stream_truncated"
+  },
+  {
+    "type": "malformed_stream",
+    "data": {
+      "offset": 40961
+    }
+  },
+  {
+    "type": "upstream_error_event"
+  },
+  {
+    "type": "unparseable_response"
+  },
+  {
+    "type": "client_disconnected"
+  },
+  {
+    "type": "timeout"
+  }
+]
