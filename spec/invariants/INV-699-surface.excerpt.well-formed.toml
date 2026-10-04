@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.excerpt.well-formed"
+statement = "Every Excerpt has a non-empty highlight inside its text whose ends fall on character boundaries, at most Excerpt::MAX_HIGHLIGHT bytes highlighted, at most ExcerptWindow::MAX_CONTEXT bytes of context on either side, and no text after a highlight that was cut, and every ExcerptWindow is at most ExcerptWindow::MAX_CONTEXT bytes."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The UI slices an excerpt into before, matched and after; a highlight off a
+character boundary would panic or render mojibake, and an empty one would
+mark nothing. The bounds keep one evidence page small whatever a span's
+size: one excerpt is at most MAX_HIGHLIGHT plus twice MAX_CONTEXT bytes.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::interfaces::l8_surface::excerpt::Excerpt::new",
+    "crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow::new",
+]
+unit = [
+    "crosstalk_spec::tests::excerpt::new_rejects_each_malformed_excerpt",
+    "crosstalk_spec::tests::excerpt::window_is_bounded",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

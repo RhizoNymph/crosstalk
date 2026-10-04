@@ -11,8 +11,10 @@ that produces the data is in [type_spec.md](type_spec.md).
   directory, including trusted (single-user, no login) mode, and the
   permission each query and action needs.
 - The queries: paginated lists (channels, agents, alert rules, alerts,
-  dead letters, the audit log, edge transmissions, search hits, a version's
-  topics, projection jobs, a channel's resources), the linked views sharing
+  dead letters, the audit log, edge transmissions, transmission rows by
+  id, search hits, a version's topics, projection jobs, a channel's
+  resources), one alert by id, the evidence behind a transmission with
+  excerpts of its message text, the overview's counts, the linked views sharing
   one `TopologyFilter` and one resolved topic-model version (topology, the
   channel-centred topology, series, search, edge drill-down, projection
   fits), the topic history, stored projections and their columnar frame,
@@ -68,11 +70,13 @@ Every query and action checks one `Permission` before reading or changing
 anything, and returns `Forbidden { missing }` without effect when the
 caller lacks it. View is structure: ids, counts, times, similarities, the
 topology (agent-centred and channel-centred, with node metadata and
-harness claims), series, edge drill-down rows, channels (rows, names and
-promotion previews) and their resources, policy histories, agents, rules, alerts, the topic history,
-verdict logs and detection quality; no message text and no topic labels.
-Content is anything derived from message text: transmissions, search,
-topics, projections and their jobs. Govern is identity, policy, rules and
+harness claims), series, edge drill-down rows, transmission rows by id,
+the overview's counts, channels (rows, names and promotion previews) and
+their resources, policy histories, agents, rules, alerts, the topic
+history, verdict logs and detection quality; no message text and no topic
+labels. Content is anything derived from message text: transmissions and
+their evidence, search, topics, projections and their jobs. Govern is
+identity, policy, rules and
 their sinks (`QueryApi::sinks` too, since a delivery error can name an
 endpoint) and topic-version pins; Triage is working alerts and judging
 transmissions; Operate is the pipeline (dead letters); Audit is the audit
@@ -168,11 +172,12 @@ slow client never blocks the feed or other clients, and end with
 ### Lists and pagination
 
 Channels, agents, alert rules, alerts, dead letters, edge transmissions,
-search hits, a version's topics, projection jobs, a channel's resources and
-the audit log are read a `Page` at a time. A `PageRequest<L>` holds a
-`PageSize` (1 to 500) and, after the first page, the `Cursor<L>` from the
-previous page. `L` is a marker per list (`ChannelList`, `AgentList`,
-`AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`,
+transmission rows by id, search hits, a version's topics, projection jobs,
+a channel's resources and the audit log are read a `Page` at a time. A
+`PageRequest<L>` holds a `PageSize` (1 to 500) and, after the first page,
+the `Cursor<L>` from the previous page. `L` is a marker per list
+(`ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`,
+`DeadLetterList`, `EdgeTransmissionList`, `TransmissionList`,
 `SearchList`, `TopicList`, `ProjectionList`, `AuditList`,
 `ResourceUseList`), so a cursor only fits its own list. Each list is
 ordered by a unique sort key that never changes, descending (ids,
@@ -297,6 +302,137 @@ order): it is as credible as its best evidence. State and verdict are both
 read at query time. Rows are unique per key, never all zero, and ordered
 (`DetectionQuality::new`).
 
+### Transmission rows
+
+`QueryApi::transmissions_by_id(caller, selection, version, page)` (View)
+serves the explore page's lasso and search selections and the evidence
+page's header (`l8_surface/summary.rs`):
+
+1. A `TransmissionSelection` (checked) holds 1 to 100,000 distinct ids
+   (`ProjectionLimit::MAX`, so a lasso over a whole projection fits),
+   sorted newest first; repeats count once.
+2. The first page resolves `version` (a `TopicVersionSelector`) as a linked
+   view does, with the catalog's retention deciding what is retained;
+   errors as for a linked view. The cursor (`TransmissionList`, keyed by
+   `TransmissionId`, newest first) binds the selection and pins the
+   resolved version, which every `TransmissionPage` reports.
+3. Each id of a stored transmission gives one `TransmissionSummary::of`
+   row; ids of no stored transmission are left out. No window and no
+   filter: the selection came from a view that applied them, and
+   re-filtering could drop rows the selection shows. Not `Watermarked`:
+   rows are each transmission's current state, not buckets.
+
+A `TransmissionSummary { id, to, route, opened_at, state }` names the
+canonical reader and the route with its channel resolved. Its
+`SummaryState` carries per state exactly what that state knows:
+
+| State | `Delivery` (canonical sender, `Confirmed::at`, matched bytes) | `TopicUnder` | Verdict |
+| --- | --- | --- | --- |
+| `Detected`, `AwaitingContent` | — | — | — (not judgeable) |
+| `Suspected`, `Discarded` | — | — | current |
+| `Confirmed` | yes | — (not classified yet) | current |
+| `Classified`, `Aggregated` | yes | `Topic`, `Outlier` or `Unassigned` under the page's version | current |
+
+`TransmissionSummary::of` is the definition: it reads the current verdict
+(`VerdictLog::current`) only for a judgeable state and the topic only for
+a classified one. The summary is the reusable transmission row (export
+uses it too). The drill-down behind an edge keeps its own rows
+(`EdgeTransmission`): they are what the edge counted, from L7's stored
+contributions, so their matched bytes sum to the edge's, while a summary
+reads the transmission now, which a later content match can still extend;
+and L7 holds no state, opened time or verdict to build a summary from.
+
+### Evidence and excerpts
+
+`QueryApi::transmission_evidence(caller, id, window)` (Content) returns the
+text behind one transmission, `None` for an unknown id. Verdicts stay in
+`verdicts` (View).
+
+1. **Assembly** (`l8_surface/evidence.rs`). The surface reads the
+   transmission, and `TransmissionEvidence::assemble` lists from it: one
+   `MatchEvidence { content_match, origin, read }` per content match of its
+   `Confirmed`, in stored order (none before confirmation), and one
+   `AccessDetail { access, resource, agent }` per distinct access its
+   co-access records name (`TransmissionState::co_accesses`), in order of
+   first mention, write before read. The surface supplies each match's two
+   excerpts and each access's record and resource; a detail for another
+   access, or a resource the access did not touch, is refused, so the
+   evidence always belongs to its transmission. Records keep their stored
+   ids; `AccessDetail::agent` is the access's canonical agent, and the
+   canonical sender, reader and route are the transmission's row.
+2. **Text** (`observed/message/text.rs`). A `SpanLocation` is a part and a
+   byte range into `Message::part_text` of that part: a text part's text,
+   visible reasoning, a tool call's argument text, a tool result's text
+   contents joined with `"\n"` (`TOOL_RESULT_SEPARATOR`); media, opaque
+   reasoning and unknown blocks have none. `origin` is cut around the origin
+   span's location, `read` around the match's `read_at`, as the text
+   arrived (before decoding).
+3. **Excerpt** (`l8_surface/excerpt.rs`). `Excerpted::of(location, body,
+   window)` takes what `BlobStore::get` returned for the location's
+   message, decoded, and cuts `Excerpt::cut(part_text, range, window)`:
+   - `ExcerptWindow` is the context per side, 0 to 2,048 bytes (default
+     256). Each window edge moves inward to the nearest character boundary,
+     so an excerpt never shows more than the window and never splits a
+     character.
+   - The matched range is highlighted whole up to 8,192 bytes
+     (`Excerpt::MAX_HIGHLIGHT`); a longer one is cut at the last character
+     boundary within that, its remaining bytes counted in `highlight_cut`,
+     and no context follows it.
+   - `elided_before` and `elided_after` count the part's bytes not shown,
+     so `elided_before + text + highlight_cut + elided_after` is the part's
+     length.
+   - `Excerpt::new` (checked) holds the shape: a non-empty highlight inside
+     the text on character boundaries, bounded context and highlight, no
+     text after a cut highlight.
+4. **Retention.** L1 stores every body before publishing
+   `ExchangeCaptured`, so a body the blob store no longer returns was
+   dropped by content retention: that side is
+   `Excerpted::BodyDropped { message }` and the rest of the evidence is
+   still returned. A location that does not fit its stored body (another
+   message, no such part, a part with no text, a range outside the text or
+   off a character boundary) is an `ExcerptError`, never a panic.
+5. **Failure.** Anything that keeps the evidence from being read is an
+   `EvidenceError` (a store failure, a `BlobError`, a missing span, access
+   or resource, an `ExcerptError`, records that do not belong together),
+   which maps to `Store` with a reason naming the cause.
+
+Matches are not paged: a transmission is one reader exchange's matches
+from one sender, and each excerpt is at most 12 KiB.
+
+### Overview counts
+
+`QueryApi::overview(caller, window, filter)` (View,
+`l8_surface/overview.rs`) returns `Watermarked<OverviewCounts>` without
+paging any list:
+
+- **Activity** (`EdgeTotals`), scoped by the window and the filter: what
+  `topology` counts for them, read from the buckets
+  (`EdgeStore::totals`, defined as `EdgeTotals::of` the graph):
+  transmissions counted into the graph's edges, their matched bytes, and
+  **active channels**, the distinct canonical channels a
+  `Route::Channel` edge names, that is, the channels that carried at
+  least one counted transmission. Also the resolved topic version. Fails
+  as `topology` does (unaligned window, the version's errors,
+  `TopicsNotInVersion`).
+- **Queues** (`QueueCounts`), not scoped: **open alerts** are the alerts
+  whose `AlertState` is `Open` (not acknowledged, resolved or suppressed),
+  as `alerts` with `states: [Open]` lists them; **unreviewed channels**
+  are the channels not superseded whose current `Policy` is `Unreviewed`
+  (never reviewed or reset), the review queue. A superseded channel is
+  reviewed through its superseding channel. `QueueCounts::tally` is the
+  definition. A backlog does not depend on a window: an alert raised last
+  week still waits.
+
+The watermark is read before anything else and governs the activity; the
+queues are as of the read, with no settling point.
+
+### One alert
+
+`QueryApi::alert(caller, id)` (View) returns the `Alert` that `alerts`
+lists under `id` (its subject as raised; matching against channels and
+agents resolves it with `AlertSubject::resolved`), or `None`. Alert pages
+and audit links resolve through it.
+
 ### Topic versions
 
 Every linked view is computed under one concrete topic-model version and
@@ -336,21 +472,24 @@ variant for variant (`l8_surface/errors.rs`). How each store error becomes
 one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
-`ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError` and
-`BusError` (the dead-letter list); for actions `PromotionRefusal`,
-`PromoteError` and `RuleError` (rule management; enabling a stale rule is
-`Conflict(RuleStale)`, since only `UpdateRule` can retarget it). The
-promotion preview reads `PromoteError` through that same action mapping
-(`PromotionPreview::from_registry`), keeping conflicts as its answer and
-converting the rest with `QueryError::from`, so it adds no mapping of its
-own. `InputError::TooManyIds` is a batch lookup over its cap
+`ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`BusError` (the dead-letter list), `BlobError` and `EvidenceError` (the
+evidence: every cause is `Store`, its reason naming it); for actions
+`PromotionRefusal`, `PromoteError` and `RuleError` (rule management;
+enabling a stale rule is `Conflict(RuleStale)`, since only `UpdateRule` can
+retarget it). The promotion preview reads `PromoteError` through that same
+action mapping (`PromotionPreview::from_registry`), keeping conflicts as
+its answer and converting the rest with `QueryError::from`, so it adds no
+mapping of its own. `InputError::TooManyIds` is a batch lookup over its cap
 (`channel_names`). The edge store's writes fail with `EdgeError`, which
 never reaches a query.
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
 `VersionUnavailable::NotRetained` or `CatalogError::VersionNotRetained`)
-and `ProjectionNotRetained` for a projection's frame. An action reads no
+and `ProjectionNotRetained` for a projection's frame. A message body
+dropped by content retention is not an error: the evidence shows that
+side as `Excerpted::BodyDropped`. An action reads no
 dropped data, so pinning a dropped version is
 `Conflict(TopicVersionDropped)`. `InputError::QueryTooLong` covers any text
 too long to embed, a search's or a semantic rule's. No query error is a
@@ -470,8 +609,8 @@ and `Changed::Watermark` (for the feed), at most one per recompute and in
 steady state one per bucket width. Once `W` is exposed, no bucket of an
 activated, retained version ending at or before `W` changes. Every
 aggregate response (`TopologyGraph`, `BipartiteGraph`, `TopologySeries`,
-`TopicSizes`, `EdgeTransmissionPage`, `ResourceUsePage`, a page of
-`ChannelRow`s and one `ChannelRow`) is `Watermarked`
+`TopicSizes`, `EdgeTransmissionPage`, `ResourceUsePage`, `OverviewCounts`,
+a page of `ChannelRow`s and one `ChannelRow`) is `Watermarked`
 with `EdgeStore::watermark` read before its data: accesses and
 transmissions are both keyed by event time, so L7's watermark is a sound,
 conservative bound for the access buckets and L5's resource use too. A
@@ -689,7 +828,9 @@ policy.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/types/aliases.rs` | Read-time resolution of merged agents and superseded channels | `Aliases`, `Resolve`, `NoAliases` |
-| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`, `SearchList`, `TopicList`, `ProjectionList`, `AuditList`, `ResourceUseList` |
+| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`, `TransmissionList`, `SearchList`, `TopicList`, `ProjectionList`, `AuditList`, `ResourceUseList` |
+| `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
+| `spec/types/aggregates/edge.rs` (part) | What a graph counts in total | `EdgeTotals` (`of`), read by `EdgeStore::totals` |
 | `spec/types/derived/flow/verdict.rs` | Operator verdicts beside the detector's state | `Verdict`, `Judgeable`, `NotJudgeable`, `TransmissionState::judgeable`, `TransmissionVerdict` (checked), `VerdictRevision`, `VerdictLog` (checked append), `VerdictRecorded`, `CurrentVerdict` (`observe`, `is_false_detection`), `Observed` |
 | `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses, and what it would cover | `Promotion` (checked), `Registered`, `plan` (takes the `Declaration`), `PromotionPlan`, `PromotionRefusal`, `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/aggregates/access.rs` | Access buckets, the channel-centred graph and resource use | `AccessEdge`, `WeightedAccess`, `BipartiteParts`, `BipartiteGraph` (checked), `InvalidBipartite`, `AgentAccesses`, `ResourceUse` (checked), `ResourceUsePage` |
@@ -706,12 +847,16 @@ policy.
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
 | `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (incl. `TooManyIds`) |
 | `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`, `MAX_BATCH`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
+| `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage` |
+| `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `EvidenceError`, `EvidenceRecord` |
+| `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError` |
+| `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError` (to `ActionError`) |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError` (to `ActionError`) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `channel_reads.rs` (channel rows and counts, the channel filter, names, the promotion preview's agreement with promotion) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `channel_reads.rs` (channel rows and counts, the channel filter, names, the promotion preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs`, `overview.rs` (transmission rows, evidence, excerpts, part text, overview counts) | — |
 
 ## Invariants and constraints
 
@@ -852,9 +997,26 @@ policy.
   else. Activation deletes nothing; data is deleted only after the catalog
   marks the version dropped, and a query never sees a version half
   deleted.
+- A `TransmissionSummary`'s shape follows its state: a sender, matched
+  bytes and confirmation time from `Confirmed` on, a topic from
+  `Classified` on, a verdict only in judgeable states. A selection holds 1
+  to 100,000 distinct ids; a traversal of `transmissions_by_id` lists one
+  row per stored id, none for others, under one resolved version.
+- A `TransmissionEvidence` lists exactly its transmission's content matches
+  and the distinct accesses its co-access records name, each with its own
+  resource. An `Excerpt` has a non-empty highlight inside its text on
+  character boundaries, at most 2,048 bytes of context per side and 8,192
+  highlighted, and accounts for every byte of the part. A body retention
+  dropped is `BodyDropped`, never an error; a location that does not fit
+  its body is an `ExcerptError`, never a panic.
+- The overview's activity equals `EdgeTotals::of` the topology graph for
+  the same window and filter; its queues are the `Open` alerts and the
+  unsuperseded `Unreviewed` channels, unscoped. `alert(id)` equals the
+  alert `alerts` lists under that id. Evidence needs Content; rows by id,
+  one alert and the overview need View.
 - Every `Watermarked` response (`topology`, `channel_topology`, `series`,
-  `edge_transmissions`, `channel_resources`, `channel`, `channels`,
-  `topic_sizes`) carries the
+  `overview`, `edge_transmissions`, `channel_resources`, `channel`,
+  `channels`, `topic_sizes`) carries the
   watermark `EdgeStore::watermark` returned before any of its data was
   read; a stored projection carries the watermark its sample was read
   under.

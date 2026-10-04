@@ -42,8 +42,9 @@
 //! ([`channels`]).
 //!
 //! **Lists.** Channels, agents, alert rules, alerts, dead letters, the audit
-//! log, the transmissions behind an edge, search hits, the topics of a
-//! version and stored projections are read a page at a time with the
+//! log, the transmissions behind an edge, transmission rows by id, search
+//! hits, the topics of a version and stored projections are read a page at
+//! a time with the
 //! cursors of [`crate::paging`], so a traversal is stable under concurrent
 //! inserts. Their filters and request types are in [`lists`]. Whole values
 //! with their own invariants (a policy history, the topic version history,
@@ -69,7 +70,7 @@
 //! a channel (policy, promotion) refuse a superseded one with
 //! `Conflict(ChannelSuperseded)`, naming the channel to act on instead.
 //!
-//! **Watermarks.** `topology`, `channel_topology`, `series`,
+//! **Watermarks.** `topology`, `channel_topology`, `series`, `overview`,
 //! `edge_transmissions`, `channel_resources`, `channel`, `channels` and
 //! `topic_sizes` return their
 //! result [`Watermarked`]: with L7's watermark (`EdgeStore::watermark`),
@@ -85,6 +86,16 @@
 //! buckets or assignments would be read; its history entry, topics, lineage
 //! and all-time sizes stay readable.
 //!
+//! **Transmissions.** `transmissions_by_id` lists a selection's rows
+//! ([`summary::TransmissionSummary`]: canonical parties, resolved route,
+//! state with what it knows, topic under one resolved version, current
+//! verdict; no content) for View. `transmission_evidence` returns the text
+//! behind one transmission ([`evidence::TransmissionEvidence`]: excerpts
+//! of both sides of each content match, cut from the stored bodies as
+//! [`excerpt`] defines, and the accesses behind its co-access records) for
+//! Content. Neither is `Watermarked`: both read a transmission's current
+//! state, not buckets. Verdicts stay in `verdicts`.
+//!
 //! **Projections.** `fit_projection` resolves and pins the filter's version,
 //! records a queued job and returns its id at once; the fit runs in the
 //! background ([`crate::aggregates::projection`]). `projection_status` and
@@ -99,10 +110,14 @@ pub mod actions;
 pub mod audit;
 pub mod channels;
 pub mod errors;
+pub mod evidence;
+pub mod excerpt;
 pub mod lists;
 pub mod live;
 pub mod operators;
+pub mod overview;
 pub mod query_errors;
+pub mod summary;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -123,21 +138,25 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{AlertId, ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::observed::agent::Agent;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
-    TopicList,
+    TopicList, TransmissionList,
 };
 use crate::support::{TimeWindow, Timestamp};
 
 use audit::{AuditEntry, AuditFilter};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
+use evidence::TransmissionEvidence;
+use excerpt::ExcerptWindow;
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage};
 use operators::Operator;
+use overview::OverviewCounts;
+use summary::{TransmissionPage, TransmissionSelection};
 
 pub use actions::{ActionKind, ActionOutcome, OperatorAction};
 pub use errors::{ActionError, ConflictKind, InputError, QueryError};
@@ -182,11 +201,14 @@ pub enum Permission {
     /// history, agents, alert
     /// rules, alerts and the topic history (versions, sizes, lineage): ids,
     /// counts, times and similarities, no message content and no topic
-    /// labels or terms. Also verdict logs and detection quality.
+    /// labels or terms. Also verdict logs, detection quality, transmission
+    /// rows by id (state, parties, route, times, byte counts, topic ids,
+    /// verdict) and the overview's counts.
     View,
-    /// Transmission content, search, topics (their labels and terms come
-    /// from message text) and projections: fitting them, their jobs and
-    /// their points.
+    /// Transmission content (the stored record and the evidence page's
+    /// excerpts of message text), search, topics (their labels and terms
+    /// come from message text) and projections: fitting them, their jobs
+    /// and their points.
     Content,
     /// Identity and policy: channel policy and promotion, agent merges,
     /// unmerges and renames, alert rules and their sinks (what the gateway
@@ -414,6 +436,14 @@ pub trait QueryApi {
         page: &PageRequest<AlertList>,
     ) -> Result<Page<Alert, AlertList>, QueryError>;
 
+    /// View. One alert, for alert pages and audit links: the same value
+    /// `alerts` lists under `id` (its subject as raised; see
+    /// [`AlertSubject`]). Alert ids are never aliased. `None` for an
+    /// unknown id.
+    ///
+    /// [`AlertSubject`]: crate::aggregates::alert::AlertSubject
+    async fn alert(&self, caller: &Caller, id: AlertId) -> Result<Option<Alert>, QueryError>;
+
     /// View. L7's exposed watermark (`EdgeStore::watermark`).
     async fn watermark(&self, caller: &Caller) -> Result<Watermark, QueryError>;
 
@@ -428,6 +458,24 @@ pub trait QueryApi {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<TopologyGraph>, QueryError>;
+
+    /// View. The overview's counts ([`overview`]) without paging any list:
+    /// the activity `topology` counts for the same window and filter
+    /// ([`EdgeStore::totals`]: transmissions, matched bytes, active
+    /// channels, and the resolved topic version), and the queues as of the
+    /// read (open alerts, unreviewed channels), which no window or filter
+    /// narrows. The watermark is read before anything else and governs the
+    /// activity; the queues have no settling point. Fails as `topology`
+    /// does (`InvalidInput(UnalignedWindow)`, the topic version's errors,
+    /// `Conflict(TopicsNotInVersion)`).
+    ///
+    /// [`EdgeStore::totals`]: crate::interfaces::l7_topology::EdgeStore::totals
+    async fn overview(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<OverviewCounts>, QueryError>;
 
     /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels as
     /// nodes, access edges (writes nobody read included) and the same
@@ -463,7 +511,7 @@ pub trait QueryApi {
     /// View. The transmissions `topology` counts into one of its edges for
     /// the same window and filter (`EdgeStore::transmissions`): ids, times,
     /// byte counts and topic ids, no content. Content is behind
-    /// `transmission` and `search`.
+    /// `transmission`, `transmission_evidence` and `search`.
     async fn edge_transmissions(
         &self,
         caller: &Caller,
@@ -472,6 +520,24 @@ pub trait QueryApi {
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
     ) -> Result<Watermarked<EdgeTransmissionPage>, QueryError>;
+
+    /// View. One [`TransmissionSummary::of`] row per transmission of
+    /// `selection` (a lasso or a search's hits), newest id first; ids of no
+    /// stored transmission are left out. Topics are read under `version`,
+    /// resolved on the first page as a linked view resolves it (errors as
+    /// for any linked view; the catalog's retention decides what is
+    /// retained) and pinned by the cursor. No window and no filter: the
+    /// selection came from a view that applied them. Not `Watermarked`:
+    /// rows are each transmission's current state.
+    ///
+    /// [`TransmissionSummary::of`]: summary::TransmissionSummary::of
+    async fn transmissions_by_id(
+        &self,
+        caller: &Caller,
+        selection: &TransmissionSelection,
+        version: TopicVersionSelector,
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<TransmissionPage, QueryError>;
 
     /// View. Exactly [`EdgeStore::series`], under the version the filter's
     /// selector resolves to; a grid for another bucket width is
@@ -526,12 +592,31 @@ pub trait QueryApi {
         page: &PageRequest<SearchList>,
     ) -> Result<SearchResults, QueryError>;
 
-    /// Content.
+    /// Content. The stored record, ids as stored.
     async fn transmission(
         &self,
         caller: &Caller,
         id: TransmissionId,
     ) -> Result<Option<Transmission>, QueryError>;
+
+    /// Content. The text behind a transmission
+    /// ([`TransmissionEvidence::assemble`]): for each content match the
+    /// sender's and the reader's excerpt, cut with `window` from the stored
+    /// bodies ([`Excerpted::of`]), and the access and resource behind each
+    /// access its co-access records name, with the access's canonical
+    /// agent. A body content retention dropped is
+    /// [`Excerpted::BodyDropped`], and the rest is still returned. `None`
+    /// for an unknown id. A record the transmission names that cannot be
+    /// read is `Store` ([`evidence::EvidenceError`]).
+    ///
+    /// [`Excerpted::of`]: excerpt::Excerpted::of
+    /// [`Excerpted::BodyDropped`]: excerpt::Excerpted::BodyDropped
+    async fn transmission_evidence(
+        &self,
+        caller: &Caller,
+        id: TransmissionId,
+        window: ExcerptWindow,
+    ) -> Result<Option<TransmissionEvidence>, QueryError>;
 
     /// Content. A version's topics, newest id first, and the version they
     /// belong to. `Current` is the catalog's active version; a pinned one may

@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.query.transmission-reads-permissions"
+statement = "QueryApi::transmission_evidence returns Forbidden to a Caller without Content, and QueryApi::transmissions_by_id, alert and overview return Forbidden to a Caller without View."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Excerpts are message text, so the evidence needs Content. A transmission
+row holds ids, times, byte counts, a topic id and a verdict, an alert is
+what the alert list shows, and the overview holds counts: View, so the
+evidence page's header and the overview render for a viewer without
+Content.
+"""
+
+[evidence]
+unit = [
+    "crosstalk::surface::tests::evidence_without_content_forbidden",
+    "crosstalk::surface::tests::rows_alert_and_overview_without_view_forbidden",
+]
+integration = "crosstalk::surface::integration::transmission_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

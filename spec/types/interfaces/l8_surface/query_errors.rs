@@ -24,11 +24,15 @@
 //!   naming the channel that superseded it.
 //! - Enabling a stale alert rule is `Conflict(RuleStale)`: the rule needs
 //!   an update, not a retry.
+//! - Stored records that cannot be read or do not fit together (a missing
+//!   span, a location outside its body, a corrupt blob) are `Store`, with a
+//!   diagnostic reason. A message body content retention dropped is not an
+//!   error: the evidence reports it as `Excerpted::BodyDropped`.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
 use crate::derived::flow::channel::promotion::PromotionRefusal;
-use crate::interfaces::l2_transport::BusError;
+use crate::interfaces::l2_transport::{BlobError, BusError};
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::{
@@ -36,6 +40,9 @@ use crate::interfaces::l6_analysis::{
 };
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
+use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
+use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
+use crate::observed::message::text::NoPartText;
 
 impl From<VersionUnavailable> for QueryError {
     fn from(error: VersionUnavailable) -> Self {
@@ -245,5 +252,62 @@ impl From<AuditError> for QueryError {
             },
             AuditError::InvalidCursor => Self::InvalidCursor,
         }
+    }
+}
+
+/// For `QueryApi::transmission_evidence` reading message bodies
+/// (`BlobStore::get`). A body that is no longer stored is `Ok(None)`, not an
+/// error; both errors are store failures.
+impl From<BlobError> for QueryError {
+    fn from(error: BlobError) -> Self {
+        let reason = match error {
+            BlobError::Unavailable { reason } => format!("blob store unavailable: {reason}"),
+            BlobError::Corrupt(hash) => format!("blob corrupt: {hash:?}"),
+        };
+        Self::Store { reason }
+    }
+}
+
+/// For `QueryApi::transmission_evidence`. Every cause is a store failure
+/// or a fault in the stored records; the reason names it.
+impl From<EvidenceError> for QueryError {
+    fn from(error: EvidenceError) -> Self {
+        let reason = match error {
+            EvidenceError::Store { reason } => reason,
+            EvidenceError::Blob(blob) => return blob.into(),
+            EvidenceError::Missing(record) => match record {
+                EvidenceRecord::Span(id) => format!("span missing: {id:?}"),
+                EvidenceRecord::Access(id) => format!("access missing: {id:?}"),
+                EvidenceRecord::Resource(id) => format!("resource missing: {id:?}"),
+            },
+            EvidenceError::Excerpt(excerpt) => match excerpt {
+                ExcerptError::WrongMessage { expected, got } => {
+                    format!("body {got:?} returned for {expected:?}")
+                }
+                ExcerptError::Part(NoPartText::NoSuchPart { index, parts }) => {
+                    format!("location names part {index} of {parts}")
+                }
+                ExcerptError::Part(NoPartText::NotText { index }) => {
+                    format!("location names part {index}, which has no text")
+                }
+                ExcerptError::Cut(CutError::OutsideText { end, len }) => {
+                    format!("location ends at {end}, past {len} bytes of text")
+                }
+                ExcerptError::Cut(CutError::NotCharBoundary { at }) => {
+                    format!("location boundary {at} splits a character")
+                }
+            },
+            EvidenceError::Invalid(invalid) => match invalid {
+                InvalidEvidence::ResourceMismatch {
+                    access,
+                    expected,
+                    got,
+                } => format!("access {access:?} names {expected:?}, got {got:?}"),
+                InvalidEvidence::WrongAccess { asked, got } => {
+                    format!("asked for access {asked:?}, got {got:?}")
+                }
+            },
+        };
+        Self::Store { reason }
     }
 }

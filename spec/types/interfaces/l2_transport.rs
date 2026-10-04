@@ -143,6 +143,10 @@ pub trait BlobStore {
     /// Idempotent: putting the same bytes twice returns the same hash.
     async fn put(&self, bytes: &[u8]) -> Result<MessageHash, BlobError>;
 
+    /// `None` when no body is stored under `hash`. L1 stores every body
+    /// before publishing `ExchangeCaptured`, so for a hash a span, match or
+    /// access names, `None` means content retention dropped it; the
+    /// evidence page shows that as `Excerpted::BodyDropped`.
     async fn get(&self, hash: MessageHash) -> Result<Option<Vec<u8>>, BlobError>;
 }
 

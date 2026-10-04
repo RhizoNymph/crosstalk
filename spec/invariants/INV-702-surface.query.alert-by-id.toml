@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.query.alert-by-id"
+statement = "QueryApi::alert returns the Alert that QueryApi::alerts lists under the id, equal field for field, and None for an id no alert has."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Alert pages and audit links resolve one alert by id; reading it the way
+the list does keeps the page and the inbox from disagreeing about its
+subject or state.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::alert_by_id_matches_the_list"
+integration = "crosstalk::surface::integration::pg_alert_by_id"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

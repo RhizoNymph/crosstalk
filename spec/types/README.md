@@ -17,10 +17,12 @@ spec/types/
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, MergeId, ProjectionId, SinkId), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList)
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
+│   ├── message/
+│   │   └── text.rs        Message::part_text (what a span location indexes), part_count, NoPartText, TOOL_RESULT_SEPARATOR
 │   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
 │   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest
 │   ├── agent/
@@ -37,7 +39,7 @@ spec/types/
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
 │       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
-│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire), Confirmed
+│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed
 │       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
 │       └── channel/
 │           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
@@ -47,7 +49,7 @@ spec/types/
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
 │   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
-│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTransmissionPage
+│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTotals (of), EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
@@ -68,19 +70,23 @@ spec/types/
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
-│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore
+│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
 │   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi, OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
 │   └── l8_surface/
 │       ├── actions.rs     OperatorAction (kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
 │       ├── errors.rs      QueryError, ActionError, ConflictKind, InputError
 │       ├── query_errors.rs the From impls: each store error to one QueryError or ActionError
+│       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
+│       ├── evidence.rs    TransmissionEvidence (assemble), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, EvidenceError
+│       ├── excerpt.rs     ExcerptWindow (checked), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
+│       ├── overview.rs    OverviewCounts, QueueCounts (tally)
 │       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
 │       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)

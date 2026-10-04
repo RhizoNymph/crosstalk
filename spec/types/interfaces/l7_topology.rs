@@ -44,9 +44,9 @@
 //! exposed, no bucket of a version that has been activated whose window ends
 //! at or before it changes: `apply` refuses such a contribution with
 //! `LateContribution`, which signals a frontier that broke its contract and
-//! is logged at error and dead-lettered. Graph, series and transmission
-//! queries read the watermark before their data and return it with the
-//! result ([`Watermarked`]); see [`crate::aggregates::watermark`].
+//! is logged at error and dead-lettered. Graph, totals, series and
+//! transmission queries read the watermark before their data and return it
+//! with the result ([`Watermarked`]); see [`crate::aggregates::watermark`].
 //!
 //! **Topic version.** Graph, series and edge-transmission queries read the
 //! buckets and contributions of one version: the filter's selector resolved
@@ -76,7 +76,8 @@ use std::num::NonZeroU64;
 
 use crate::aggregates::access::{AccessEdge, BipartiteGraph};
 use crate::aggregates::edge::{
-    EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
+    EdgeKey, EdgeSelector, EdgeTotals, EdgeTransmissionPage, TopologyFilter, TopologyGraph,
+    Weighting,
 };
 #[cfg(doc)]
 use crate::aggregates::filter::TopicVersionSelector;
@@ -182,6 +183,17 @@ pub trait EdgeStore {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<TopologyGraph>, EdgeQueryError>;
+
+    /// What `graph` counts for the same window and filter, without nodes,
+    /// edges or shares: exactly [`EdgeTotals::of`] of `graph`'s value, with
+    /// the watermark read before the buckets. Cheaper than `graph`: no node
+    /// metadata is read and nothing is returned per edge. Fails like
+    /// `graph`.
+    async fn totals(
+        &self,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<EdgeTotals>, EdgeQueryError>;
 
     /// The channel-centred graph: access buckets in `window` with agents and
     /// channels resolved, filtered by [`TopologyFilter::admits_access`] and
@@ -290,8 +302,8 @@ pub enum EdgeError {
     },
 }
 
-/// Why a read (`graph`, `series`, `transmissions`, `watermark`) failed. A
-/// dropped version is `Version(NotRetained)`.
+/// Why a read (`graph`, `totals`, `series`, `transmissions`, `watermark`)
+/// failed. A dropped version is `Version(NotRetained)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeQueryError {
     Store {

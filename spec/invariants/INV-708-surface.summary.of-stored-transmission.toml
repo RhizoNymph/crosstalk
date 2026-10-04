@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.summary.of-stored-transmission"
+statement = "TransmissionSummary::of names the transmission's canonical reader, its route with the channel resolved through supersession, its opened time and state, and once confirmed its canonical sender, Confirmed::at and Confirmed::matched_bytes, reading the current verdict only for a judgeable state and the topic only for a classified or aggregated one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Every list of transmissions (explore selections, the evidence page header,
+export) builds its rows with this one function, so rows agree with each
+other and with the linked views, which resolve the same aliases.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::summary::the_row_names_canonical_agents_and_the_resolved_route",
+    "crosstalk_spec::tests::summary::the_row_has_what_its_state_knows_and_nothing_else",
+    "crosstalk_spec::tests::summary::a_classified_row_carries_the_topic_under_the_pages_version",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
