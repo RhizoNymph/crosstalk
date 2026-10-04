@@ -21,7 +21,9 @@ Overview:
 
     Status: design. The data model is specified in spec/types; there is no
     implementation yet. The spec types are also the JSON wire format
-    between the gateway, the operator UI and other gateway nodes.
+    between the gateway, the operator UI and other gateway nodes. The
+    phased implementation plan, with its dependencies and milestones, is
+    docs/roadmap.md.
 
   subsystems:
     ingest: >
