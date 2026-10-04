@@ -11,6 +11,9 @@
 //!   feeds it, ends sessions and opens streams.
 //! - [`export`] plans, audits and streams exports; [`export::SpecExportSource`]
 //!   is an `ExportSource` over the spec's read traits.
+//! - [`nodes::NodeCache`] is the spec's `NodeFacts`, kept current from
+//!   L3's and L5's events by [`nodes::NodeFeeder`]; the wiring hands it to
+//!   the edge store, whose graphs describe their nodes with it.
 //! - Time comes from the injected spec `Clock`; ids the surface mints come
 //!   from one ULID generator over it.
 //!
@@ -24,11 +27,13 @@ mod cursor;
 pub mod export;
 mod ids;
 pub mod live;
+pub mod nodes;
 mod query;
 mod service;
 pub mod stores;
 
 pub use config::SurfaceConfig;
+pub use nodes::{NodeCache, NodeFeeder};
 pub use service::Surface;
 pub use stores::{EvidenceRecords, RecordReadError, SurfaceStores};
 

@@ -12,6 +12,7 @@ mod content;
 mod export;
 pub(crate) mod fakes;
 mod live;
+mod nodes;
 mod permissions;
 mod reads;
 pub(crate) mod world;

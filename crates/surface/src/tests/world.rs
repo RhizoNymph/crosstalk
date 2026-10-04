@@ -21,7 +21,7 @@ use crosstalk_memory::support::{IdSequence, ManualClock, Outbox, drain};
 use crosstalk_memory::surface::audit::InMemoryAuditLog;
 use crosstalk_memory::surface::operators::InMemoryOperatorStore;
 use crosstalk_memory::surface::sinks::{InMemorySinkRegistry, SinkConfig};
-use crosstalk_memory::topology::env::{Env, StaticNodes};
+use crosstalk_memory::topology::env::Env;
 use crosstalk_memory::topology::store::{EdgeStoreConfig, InMemoryEdgeStore};
 use crosstalk_spec::aggregates::alert::{AlertDraft, AlertRuleConfig, AlertSubject, BuiltinRule, TriageOutcome};
 use crosstalk_spec::aggregates::projection::FrameRetention;
@@ -67,6 +67,7 @@ use crosstalk_testkit::ids::Ids;
 use super::fakes::{CountingEmbedder, RecordingBus, TestEvidence};
 use crate::export::SpecExportSource;
 use crate::live::{FeedHandle, FeedWriter};
+use crate::nodes::{NodeCache, NodeFeeder};
 use crate::{Surface, SurfaceConfig, SurfaceStores};
 
 /// Every bucket is one minute.
@@ -120,7 +121,8 @@ impl ChannelDirectory for Directory {
     }
 }
 
-pub type Edges = InMemoryEdgeStore<Env<InMemoryTopicCatalog, Directory, StaticNodes>>;
+pub type Edges = InMemoryEdgeStore<Env<InMemoryTopicCatalog, Directory, NodeCache>>;
+pub type Nodes = NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>;
 pub type Alerts = InMemoryAlertStore<CountingEmbedder, Directory>;
 pub type Search = InMemorySearchIndex<Directory>;
 pub type Export =
@@ -146,7 +148,7 @@ pub struct World {
     pub blobs: MemoryBlobStore,
     pub evidence: TestEvidence,
     pub export: Export,
-    pub nodes: StaticNodes,
+    pub nodes: NodeCache,
     /// Keeps the dead letters' bus running.
     pub mpsc: MpscBus,
 }
@@ -272,6 +274,8 @@ pub struct Fixture {
     pub events: UnboundedReceiver<BusEvent>,
     pub clock: ManualClock,
     pub feed: FeedHandle,
+    /// Keeps `world.nodes` current; [`Fixture::relay`] feeds it.
+    pub node_feeder: Nodes,
 }
 
 pub fn config() -> SurfaceConfig {
@@ -353,7 +357,7 @@ impl Fixture {
             transmissions.clone(),
             outbox.clone(),
         );
-        let nodes = StaticNodes::new();
+        let nodes = NodeCache::new();
         let Some(timing) = CorrelationTiming::new(
             Duration::from_secs(1),
             Duration::from_secs(30),
@@ -421,12 +425,18 @@ impl Fixture {
             SeededRandom::new(42),
             feed.clone(),
         );
+        let node_feeder = NodeFeeder::new(
+            world.nodes.clone(),
+            world.agents.clone(),
+            world.channels.clone(),
+        );
         let mut fixture = Self {
             world,
             surface,
             events,
             clock,
             feed,
+            node_feeder,
         };
         fixture.load_operators().await;
         fixture
@@ -470,6 +480,24 @@ impl Fixture {
     /// Everything the stores published since the last call.
     pub fn published(&mut self) -> Vec<BusEvent> {
         drain(&mut self.events)
+    }
+
+    /// Hand everything the stores published since the last call to the
+    /// node facts and the live feed, as the gateway's consumers would, and
+    /// return it.
+    pub async fn relay(&mut self) -> Vec<BusEvent> {
+        let events = self.published();
+        for event in &events {
+            if let Err(error) = self.node_feeder.apply(event).await {
+                panic!("node facts: {error}");
+            }
+            if let BusEvent::Changed(changed) = event
+                && let Err(error) = self.feed.append(*changed).await
+            {
+                panic!("feed: {error}");
+            }
+        }
+        events
     }
 
     /// The `Changed` notifications among `published`.
