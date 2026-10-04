@@ -56,7 +56,7 @@ fn every_fit_failure() -> Vec<FitFailure> {
     .collect()
 }
 
-fn every_conflict() -> Vec<ConflictKind> {
+pub(super) fn every_conflict() -> Vec<ConflictKind> {
     fn declared(kind: ConflictKind) -> ConflictKind {
         match kind {
             ConflictKind::AlertNotActive { .. }
@@ -158,7 +158,7 @@ fn every_conflict() -> Vec<ConflictKind> {
     .collect()
 }
 
-fn every_input_error() -> Vec<InputError> {
+pub(super) fn every_input_error() -> Vec<InputError> {
     fn declared(input: InputError) -> InputError {
         match input {
             InputError::UnalignedWindow
@@ -204,7 +204,7 @@ fn every_input_error() -> Vec<InputError> {
     .collect()
 }
 
-fn every_query_error() -> Vec<QueryError> {
+pub(super) fn every_query_error() -> Vec<QueryError> {
     fn declared(error: QueryError) -> QueryError {
         match error {
             QueryError::Store { .. }
@@ -242,7 +242,7 @@ fn every_query_error() -> Vec<QueryError> {
     .collect()
 }
 
-fn every_action_error() -> Vec<ActionError> {
+pub(super) fn every_action_error() -> Vec<ActionError> {
     fn declared(error: ActionError) -> ActionError {
         match error {
             ActionError::Store { .. }

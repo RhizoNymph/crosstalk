@@ -1,0 +1,32 @@
+[invariant]
+id = "surface.http.status-mapping"
+statement = "ErrorStatus::status is total over QueryError, ActionError (every ConflictKind and InputError matched with no wildcard) and AuthError, gives each error the status its golden table records, gives an ActionError the status of QueryError::from of it, and every error response carries the error's wire JSON as its body."
+kind = "domain"
+property = "postcondition"
+requires = ["type", "unit", "integration"]
+rationale = """
+Intermediaries, logs and clients branch on the status before decoding the
+body, so one error must always get one status: a new variant does not
+compile until its status is decided, and a changed status is a golden
+diff. 400 is reserved for requests that could not be read
+(MalformedRequest, InvalidCursor), 422 for input read and invalid
+whatever the state, 409 for state conflicts, 410 for data retention
+dropped, 429 for a full fit queue, 503 for a failed store, 401 for no
+caller and 403 for a caller without the permission. Actions and queries
+share one table because a client decodes both errors with one decoder.
+"""
+
+[evidence]
+type = ["crosstalk_spec::interfaces::l8_surface::http::status::conflict_status", "crosstalk_spec::interfaces::l8_surface::http::status::input_status"]
+unit = [
+    "crosstalk_spec::tests::wire::http::status::error_status_tables_golden",
+    "crosstalk_spec::tests::wire::http::status::an_action_error_has_its_query_error_status",
+    "crosstalk_spec::tests::wire::http::status::statuses_tell_the_cases_apart",
+    "crosstalk_spec::tests::wire::http::status::status_codes_are_distinct",
+]
+integration = "crosstalk_api::integration::errors_answer_with_their_status_and_json"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

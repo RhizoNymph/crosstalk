@@ -71,7 +71,10 @@ Overview:
       trusted single-user mode; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
-      and trailer manifest; alert sinks).
+      and trailer manifest; alert sinks; and the HTTP binding of all of it:
+      one route per query, action kind and the live feed, a status for
+      every error, and the caller taken from a bearer token or session
+      cookie only).
     serve: >
       Crates crosstalk-api (the HTTP and SSE server for the L8 surface),
       crosstalk-client (the L8 traits over HTTP, for the UI) and
@@ -149,6 +152,15 @@ Overview:
     topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes and
     every export (refused, or started and then ended or abandoned).
+    Over HTTP each request is authenticated from its Authorization bearer
+    token or session cookie alone (401 without a caller), resolved to its
+    one route of the route table (404 without one), its path, query and
+    body decoded strictly as the route's types (400 MalformedRequest
+    otherwise), and answered with the method's JSON or the error's JSON
+    under the error's status; the live feed is GET /live (resumed from
+    Last-Event-ID or a cursor parameter), a projection frame is cached by
+    its digest until its retention ends, and an export streams with its
+    status sent before the first row and any later failure in its trailer.
     Across process boundaries every value travels as the JSON of its spec
     type (the wire contract): the UI's requests are decoded only as
     WireRequest types (an action as an ActionRequest, which the surface
@@ -264,7 +276,8 @@ Features Index:
       projection as ProjectionInfo JSON plus octet-stream frame bytes; an
       export as JSONL lines; golden files pinning every shape of every
       area (observed, provenance, flow, topology, agents, bus, analysis,
-      surface actions, surface reads), rewritten with CROSSTALK_BLESS=1.
+      surface actions, surface reads, and the HTTP binding's route table
+      and status tables), rewritten with CROSSTALK_BLESS=1.
       One page for the conventions and harness, one per area under
       docs/features/wire/.
     entry_points:
@@ -321,4 +334,26 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, workspace]
     doc: docs/features/blob_store.md
+  http_api:
+    description: >
+      The HTTP binding of the L8 surface, as checked spec: the route table
+      (one Route per QueryApi method, per ActionKind on POST /actions, and
+      GET /live; method, path template, where each argument travels,
+      success status and content type, permission), reads as GET with JSON
+      query parameters except the ones whose filter, id batch, selection
+      or search text needs a body (POST /query/...), the client's
+      RequestBuilder and the server's resolve, PathParams and QueryParams,
+      the status of every QueryError, ActionError and AuthError, the
+      caller from a bearer token or the __Host-crosstalk-session cookie
+      only (401 AuthError otherwise), SSE resume and framing, projection
+      frame caching by digest, and export downloads whose trailer records
+      a failure after the status. The routes of QueryApi::present and
+      alert_rule are in the table ahead of docs/spec-ui-gaps.
+    entry_points:
+      - spec/types/interfaces/l8_surface/http.rs
+      - spec/types/interfaces/l8_surface/http/routes.rs
+      - spec/types/interfaces/l8_surface/http/status.rs
+      - spec/types/interfaces/l8_surface/http/auth.rs
+    depends_on: [query_surface, read_models, export, wire_contract]
+    doc: docs/features/http_api.md
 ```

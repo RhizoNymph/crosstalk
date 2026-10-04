@@ -33,6 +33,9 @@ It is part of the [query surface](query_surface.md). The types are in
   defined over). The JSON inside each JSONL line, and the `ExportRequest`
   a client sends, follow the [wire contract](wire_contract.md); this
   feature fixes only how lines are framed.
+- The download over HTTP (`POST /exports`, content types,
+  `Content-Disposition`, what a failure after the status looks like): the
+  [HTTP API](http_api.md#export).
 - Resuming an interrupted export; a client runs it again.
 - Listing past exports: the audit log lists them, filtered by
   `AuditSubject::Export`.

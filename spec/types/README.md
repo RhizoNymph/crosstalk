@@ -107,7 +107,7 @@ spec/types/
 │   └── l8_surface/
 │       ├── permissions.rs Caller (built only by the directory; never serialized), CallerSnapshot (checked; an audit record's plain copy of a caller, never a WireRequest), Permission, PermissionSet (an array in Permission::ALL order)
 │       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName (checked text); the directory and config never serialized
-│       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects; stamped, never a WireRequest), ActionKind, ActionOutcome (subjects), SupersededChannels
+│       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects; stamped, never a WireRequest), ActionKind (ALL, index, required_permission), ActionOutcome (subjects), SupersededChannels
 │       ├── actions/request.rs ActionRequest (a WireRequest: one variant per action, no author; into_action stamps the caller, of, kind)
 │       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, MalformedRequest); adjacently tagged on the wire
 │       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError
@@ -120,19 +120,30 @@ spec/types/
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveItem (event_name: the SSE event; its cursor is the SSE id), LiveCursor (its text on the wire), LiveEnd (EVENT_NAME), FeedWindow (checked), LiveConfig (checked; neither serialized)
 │       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome, ConfigChange, AuditSubject, AuditFilter (a WireRequest)
 │       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError
-│       └── export/        QueryApi::export: one dataset streamed between a header and a trailer
-│           ├── mod.rs     module docs and re-exports
-│           ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportLimits
-│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows
-│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
-│           ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
-│           ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
-│           ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
-│           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
-│           └── record.rs  ExportRecord (checked; keeps a CallerSnapshot), ExportEvent: exports in the audit log
+│       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
+│       │   ├── mod.rs     module docs and re-exports
+│       │   ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportLimits
+│       │   ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows
+│       │   ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
+│       │   ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
+│       │   ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
+│       │   ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
+│       │   ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
+│       │   └── record.rs  ExportRecord (checked; keeps a CallerSnapshot), ExportEvent: exports in the audit log
+│       ├── http.rs        the HTTP binding (docs/features/http_api.md): Method, Place, Arg, RouteSpec, Success, ResponseBody, RoutePermission, Source
+│       └── http/
+│           ├── routes.rs  Route: one per QueryApi method, per ActionKind (POST /actions) and GET /live; all, index, spec (exhaustive)
+│           ├── path.rs    templates, resolve (method and path to a Target), PathParams, PathArg (ids and versions as path text)
+│           ├── request.rs RequestBuilder (a call as an EncodedRequest, checked against the table), QueryParams (strict query string), check_body
+│           ├── bodies.rs  the POST read bodies (WireRequests): GraphBody, OverviewBody, EdgeTransmissionsBody, TransmissionsBody, SeriesBody, SearchBody, FitProjectionBody
+│           ├── status.rs  Status, ErrorStatus (every QueryError, ActionError, ConflictKind, InputError and AuthError, no wildcard)
+│           ├── auth.rs    CredentialHeaders (bearer token or __Host-crosstalk-session cookie only), Verification, authenticate, AuthError (the 401 body)
+│           ├── sse.rs     GET /live: resume (Last-Event-ID, then cursor), event_frame, end_frame, headers
+│           ├── frame.rs   GET /projections/{id}/frame: FrameCache (digest ETag, retention-bounded immutable caching, 304)
+│           └── export.rs  POST /exports: content types, Content-Disposition file name
 └── tests/                 tests for the invariants checked at runtime, one module per subject
     ├── send.rs, send/     compile-time check that every async trait method's future is Send and every associated stream Send + 'static (Dummy, assert_send)
-    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area
+    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area; http/ the HTTP binding (TableClient: a QueryApi over the route table)
     └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
 

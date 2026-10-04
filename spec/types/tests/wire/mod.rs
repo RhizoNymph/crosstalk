@@ -14,6 +14,7 @@ mod analysis;
 mod bus;
 mod errors;
 mod flow;
+mod http;
 mod ids;
 mod observed;
 mod paging;

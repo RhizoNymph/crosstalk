@@ -81,7 +81,7 @@ fn golden_name(request: &ActionRequest) -> &'static str {
 }
 
 /// One request of every variant, in declaration order.
-pub(super) fn every_request() -> Vec<ActionRequest> {
+pub(in crate::tests::wire) fn every_request() -> Vec<ActionRequest> {
     let rule = id(AlertRuleId::from_ulid_text, ULID_C);
     vec![
         ActionRequest::SetPolicy {
@@ -192,7 +192,7 @@ fn every_kind() -> HashSet<ActionKind> {
 
 /// Every action, as the surface stamps it from `every_request` for a
 /// caller holding Govern.
-pub(super) fn every_action() -> Vec<OperatorAction> {
+pub(in crate::tests::wire) fn every_action() -> Vec<OperatorAction> {
     let caller = caller(&[Permission::Govern]);
     every_request()
         .into_iter()

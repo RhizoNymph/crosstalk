@@ -79,6 +79,10 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
   data the `LiveEnd` string (`"lagged"`), with no `id`, so the client's
   resume point stays its last cursor
   (`surface.live.sse-frame-matches-item`).
+- The endpoint (`GET /live`), resuming from `Last-Event-ID` or a `cursor`
+  query parameter, and the response headers are the
+  [HTTP API](../http_api.md#live-feed)'s; `http::sse::event_frame` and
+  `end_frame` write these frames.
 - `UiEvent` is adjacently tagged with `{"id": ..}` (or `{"at": ..}`,
   `{"version": ..}`) data; `ResyncReason` and `LiveEnd` are strings;
   `Resume` is adjacently tagged, though the server builds it from the
