@@ -1,7 +1,6 @@
 //! Sections of the agent page: evidence, claims, sub-agents, aliases, merge
 //! history and vetoes.
 
-use crosstalk_spec::observed::agent::{Agent, AgentState};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
@@ -12,7 +11,9 @@ use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     claim_badge, data_table, empty_state, error_panel, format_time, kind_badge, short_id,
 };
-use crate::contract::agents::{ClaimSeen, MergeRecord, MergeVeto};
+use crate::contract::agents::{
+    ActiveAgentState, Agent, AgentState, ClaimSeen, MergeRecord, MergeVeto,
+};
 use crate::contract::errors::QueryError;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::lookup::OperatorNames;
@@ -26,23 +27,37 @@ fn link(id: crosstalk_spec::ids::AgentId, state: &ViewState) -> AgentLink {
     (agent_url(id, state), short_id(id.to_ulid()))
 }
 
-/// The state of an agent with its time, in words.
-pub fn state_text(state: &AgentState, operators: &OperatorNames) -> String {
+/// An active state with its time, in words.
+pub fn active_text(state: ActiveAgentState) -> String {
     match state {
-        AgentState::Registered { at } => format!("registered in config at {}", format_time(*at)),
-        AgentState::Provisional { first_seen } => {
+        ActiveAgentState::Registered { at } => {
+            format!("registered in config at {}", format_time(at))
+        }
+        ActiveAgentState::Provisional { first_seen } => {
             format!(
                 "first seen {}; not yet corroborated",
-                format_time(*first_seen)
+                format_time(first_seen)
             )
         }
-        AgentState::Established { since } => format!("established since {}", format_time(*since)),
-        AgentState::Merged { into, at, by } => format!(
-            "merged into {} at {} by {}",
+        ActiveAgentState::Established { since } => {
+            format!("established since {}", format_time(since))
+        }
+    }
+}
+
+/// The state of an agent with its time, in words. A merged agent also says
+/// what it was before the merge.
+pub fn state_text(state: &AgentState, operators: &OperatorNames) -> String {
+    match (state.active(), state) {
+        (Some(active), _) => active_text(active),
+        (None, AgentState::Merged { into, at, by, prior }) => format!(
+            "merged into {} at {} by {}; before: {}",
             short_id(into.to_ulid()),
             format_time(*at),
-            operators.merge_author(*by)
+            operators.merge_author(*by),
+            active_text(*prior)
         ),
+        (None, _) => String::new(),
     }
 }
 
@@ -78,10 +93,30 @@ pub struct MergeRow {
     pub repointed: usize,
     /// Who reverted it and when.
     pub reverted: Option<String>,
+    /// For a merge in force: the state an unmerge restores, in words.
+    pub restores: Option<String>,
 }
 
+/// The state an unmerge of `merge` would restore: the prior state its
+/// merged agent keeps, when that agent is among `agents`.
+fn restores(merge: &MergeRecord, agents: &[Agent]) -> Option<String> {
+    if merge.reverted.is_some() {
+        return None;
+    }
+    agents
+        .iter()
+        .find(|a| a.id == merge.from)
+        .and_then(|a| match a.state {
+            AgentState::Merged { prior, .. } => Some(active_text(prior)),
+            _ => None,
+        })
+}
+
+/// Merge history rows. `agents` are the agents whose prior states are
+/// known (the page's aliases).
 pub fn merge_rows(
     merges: &[MergeRecord],
+    agents: &[Agent],
     operators: &OperatorNames,
     state: &ViewState,
 ) -> Vec<MergeRow> {
@@ -97,6 +132,7 @@ pub fn merge_rows(
             reverted: m.reverted.map(|(by, at)| {
                 format!("reverted by {} at {}", operators.name(by), format_time(at))
             }),
+            restores: restores(m, agents),
         })
         .collect()
 }
@@ -255,6 +291,9 @@ pub async fn merges_section(
                                     Some(text) => <span class="text-xs text-zinc-500">(text)</span>,
                                     None => {
                                         <span class="text-xs">"in force"</span>
+                                        if let Some(restores) = row.restores.clone() {
+                                            <div class="text-xs text-zinc-500">"unmerging restores: " (restores)</div>
+                                        }
                                         if let Some(action) = unmerge_action.clone() {
                                             <form method="post" action=(action) class="ml-2 inline">
                                                 <input type="hidden" name="action" value="unmerge">
@@ -326,8 +365,9 @@ mod tests {
                 Timestamp::from_micros(1_790_985_600_000_000),
             )),
         };
-        let rows = merge_rows(&[record], &operators, &state());
+        let rows = merge_rows(&[record], &[], &operators, &state());
         assert_eq!(rows[0].by, "identity resolver");
+        assert_eq!(rows[0].restores, None, "a reverted merge restores nothing");
         assert_eq!(rows[0].repointed, 1);
         assert_eq!(
             rows[0].reverted.as_deref(),
@@ -345,6 +385,56 @@ mod tests {
             &OperatorNames::default(),
         );
         assert_eq!(text, "established since 2026-10-03 00:00:00 UTC");
+        let merged = state_text(
+            &AgentState::Merged {
+                into: AgentId::from_ulid(3),
+                at: Timestamp::from_micros(1_790_985_600_000_000),
+                by: MergeAuthor::Resolver,
+                prior: ActiveAgentState::Provisional {
+                    first_seen: Timestamp::from_micros(1_790_985_600_000_000),
+                },
+            },
+            &OperatorNames::default(),
+        );
+        assert_eq!(
+            merged,
+            "merged into …000003 at 2026-10-03 00:00:00 UTC by identity resolver; \
+             before: first seen 2026-10-03 00:00:00 UTC; not yet corroborated"
+        );
+    }
+
+    #[test]
+    fn merges_in_force_say_what_an_unmerge_restores() {
+        use crosstalk_spec::support::NonEmpty;
+
+        use crate::pages::agents::evidence::tests::credential;
+
+        let at = Timestamp::from_micros(1_790_985_600_000_000);
+        let record = MergeRecord {
+            id: MergeId::from_ulid(1),
+            from: AgentId::from_ulid(2),
+            into: AgentId::from_ulid(3),
+            by: MergeAuthor::Resolver,
+            at,
+            repointed: Vec::new(),
+            reverted: None,
+        };
+        let alias = Agent {
+            id: AgentId::from_ulid(2),
+            evidence: NonEmpty::new(credential(1)),
+            parent: None,
+            state: AgentState::Merged {
+                into: AgentId::from_ulid(3),
+                at,
+                by: MergeAuthor::Resolver,
+                prior: ActiveAgentState::Established { since: at },
+            },
+        };
+        let rows = merge_rows(&[record], &[alias], &OperatorNames::default(), &state());
+        assert_eq!(
+            rows[0].restores.as_deref(),
+            Some("established since 2026-10-03 00:00:00 UTC")
+        );
     }
 
     #[tokio::test]
@@ -362,6 +452,7 @@ mod tests {
             by: "ada".into(),
             repointed: 0,
             reverted,
+            restores: None,
         };
         let rows = vec![row(None), row(Some("reverted by ada at t".into()))];
         let again = rows.clone();

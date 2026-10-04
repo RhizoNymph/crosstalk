@@ -2,12 +2,13 @@
 //! suppress reasons, deduplicated occurrence counts and every subject kind,
 //! consistent with each channel's policy history.
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId};
 use crosstalk_spec::support::Timestamp;
 
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;

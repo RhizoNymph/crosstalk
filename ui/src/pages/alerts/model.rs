@@ -1,27 +1,19 @@
 //! Alerts as rows: state, who moved it there, rule name and subject link.
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertState, SuppressReason};
 use crosstalk_spec::interfaces::l8_surface::AlertStateKind;
 
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::components::{format_time, short_id};
 use crate::pages::common::links::alert_subject;
 use crate::pages::common::lookup::{OperatorNames, RuleNames};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
-pub fn state_kind(state: &AlertState) -> AlertStateKind {
-    match state {
-        AlertState::Open => AlertStateKind::Open,
-        AlertState::Acknowledged { .. } => AlertStateKind::Acknowledged,
-        AlertState::Resolved { .. } => AlertStateKind::Resolved,
-        AlertState::Suppressed { .. } => AlertStateKind::Suppressed,
-    }
-}
-
 pub fn suppress_reason(reason: SuppressReason) -> &'static str {
     match reason {
         SuppressReason::ChannelSanctioned => "channel sanctioned",
         SuppressReason::RuleDisabled => "rule disabled",
+        SuppressReason::OperatorRejected => "rejected as a false detection",
     }
 }
 
@@ -67,7 +59,7 @@ impl AlertRow {
         Self {
             id: alert.id.to_ulid(),
             short: short_id(alert.id.to_ulid()),
-            state: state_kind(&alert.state),
+            state: alert.state.kind(),
             state_detail,
             note,
             rule: rules.name(alert.rule),
@@ -157,5 +149,26 @@ pub(crate) mod tests {
         assert!(suppressed.state_detail.starts_with("rule disabled at"));
         assert!(!suppressed.can_resolve());
         assert!(open.rule.starts_with("rule …"));
+    }
+
+    #[test]
+    fn rejected_alerts_say_they_were_judged_false() {
+        let row = AlertRow::new(
+            &alert(
+                1,
+                AlertState::Suppressed {
+                    at: Timestamp::from_micros(1_790_985_600_000_000),
+                    reason: SuppressReason::OperatorRejected,
+                },
+            ),
+            &RuleNames::default(),
+            &OperatorNames::default(),
+            &state(),
+        );
+        assert_eq!(row.state, AlertStateKind::Suppressed);
+        assert_eq!(
+            row.state_detail,
+            "rejected as a false detection at 2026-10-03 00:00:00 UTC"
+        );
     }
 }

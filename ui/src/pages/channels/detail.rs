@@ -1,7 +1,6 @@
 //! `/channels/{id}`: one channel's origin, detection, policy, resources,
 //! alerts and policy history. Posting `set-policy` changes its policy.
 
-use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, PolicyKind};
 use topcoat::Result;
@@ -17,6 +16,7 @@ use super::sections::{
     HistoryRow, ResourceRow, alerts_section, history_rows, history_section, resource_rows,
     resources_section,
 };
+use crate::contract::alerts::Alert;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};

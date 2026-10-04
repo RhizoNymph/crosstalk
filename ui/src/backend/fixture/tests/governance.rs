@@ -1,6 +1,6 @@
 //! Governance actions: policy, promotion, merges, renames and rules.
 
-use crosstalk_spec::aggregates::alert::{AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
@@ -9,13 +9,14 @@ use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
-use crosstalk_spec::observed::agent::AgentState;
 use crosstalk_spec::support::{NonEmpty, Similarity};
 
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
+use crate::contract::agents::AgentState;
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;

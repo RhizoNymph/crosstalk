@@ -7,11 +7,10 @@ use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::observed::agent::AgentState;
 use crosstalk_spec::support::Timestamp;
 
 use crate::backend::fixture::store::ChannelRecord;
-use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
+use crate::contract::agents::{AgentState, AgentStateKind, AgentSummary, ClaimSeen};
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
 use crate::contract::graph::{ChannelNode, ChannelShape};
 

@@ -3,15 +3,16 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind};
+use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::support::TimeWindow;
 
+use crate::contract::alerts::Alert;
 use crate::backend::Result;
 use crate::backend::fixture::world::confirmed;
 use crate::contract::agents::{AgentDetail, AgentSummary};
@@ -177,15 +178,6 @@ pub fn agent(ctx: &Ctx, id: AgentId) -> Option<AgentDetail> {
     })
 }
 
-fn alert_kind(state: &AlertState) -> AlertStateKind {
-    match state {
-        AlertState::Open => AlertStateKind::Open,
-        AlertState::Acknowledged { .. } => AlertStateKind::Acknowledged,
-        AlertState::Resolved { .. } => AlertStateKind::Resolved,
-        AlertState::Suppressed { .. } => AlertStateKind::Suppressed,
-    }
-}
-
 /// Whether an alert is about `channel`: its subject is the channel, or a
 /// transmission routed through it (both after supersession).
 fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
@@ -204,7 +196,7 @@ pub fn alerts(ctx: &Ctx, filter: &AlertFilter, page: &PageRequest) -> Result<Pag
         .state
         .alerts
         .iter()
-        .filter(|a| filter.states.is_empty() || filter.states.contains(&alert_kind(&a.state)))
+        .filter(|a| filter.states.is_empty() || filter.states.contains(&a.state.kind()))
         .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
         .map(|a| (newest_first(a.raised_at, a.id.as_ulid()), a.clone()))
         .collect();

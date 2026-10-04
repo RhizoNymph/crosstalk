@@ -1,14 +1,14 @@
 //! Triage and pipeline actions, and the audit entry every action leaves.
 
-use crosstalk_spec::aggregates::alert::{AlertState, AlertSubject};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::derived::flow::transmission::TransmissionState;
 use crosstalk_spec::ids::{AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 
-use super::super::actions::effects::FALSE_DETECTION_NOTE;
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
@@ -123,7 +123,7 @@ async fn verdicts_judge_only_what_has_evidence() {
             .await;
         assert_eq!(result.err(), conflict(ConflictKind::NotJudgeable));
     }
-    // A false detection resolves the transmission's active alerts.
+    // A false detection suppresses the transmission's active alerts.
     let (alert, tx) = {
         let state = b.state.read().await;
         let a = state
@@ -146,7 +146,7 @@ async fn verdicts_judge_only_what_has_evidence() {
     assert_eq!(b.act(&c, verdict.clone()).await, Ok(ActionOutcome::Applied));
     assert!(matches!(
         alert_state(&b, alert).await,
-        AlertState::Resolved { note: Some(n), at, .. } if n == FALSE_DETECTION_NOTE && at == NOW
+        AlertState::Suppressed { reason: SuppressReason::OperatorRejected, at } if at == NOW
     ));
     let excluded = scope_with(
         week().window,

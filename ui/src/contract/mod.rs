@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod agents;
+pub mod alerts;
 pub mod channels;
 pub mod errors;
 pub mod evidence;

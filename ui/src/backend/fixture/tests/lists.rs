@@ -7,11 +7,11 @@ use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permission};
-use crosstalk_spec::observed::agent::AgentState;
 
 use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, researcher, shared, week, window};
+use crate::contract::agents::AgentState;
 use crate::backend::Backend;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::errors::QueryError;
@@ -428,7 +428,7 @@ async fn alert_filter_by_state_and_channel() {
     assert!(!rows.is_empty());
     assert!(
         rows.iter()
-            .all(|a| a.state == crosstalk_spec::aggregates::alert::AlertState::Open)
+            .all(|a| a.state == crate::contract::alerts::AlertState::Open)
     );
     let wiki = channel(ChannelKey::HijackedWiki);
     let about = AlertFilter {

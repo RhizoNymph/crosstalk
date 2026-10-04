@@ -9,7 +9,6 @@ pub mod fixture;
 
 use std::future::Future;
 
-use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
@@ -18,6 +17,7 @@ use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::TimeWindow;
 
+use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentSummary};

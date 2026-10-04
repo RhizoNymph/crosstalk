@@ -3,18 +3,20 @@
 
 use std::collections::HashSet;
 
-use crosstalk_spec::aggregates::alert::{AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::topic::{Assignment, TopicModelVersion};
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::Policy;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::observed::agent::{AgentState, MergeAuthor};
+use crosstalk_spec::observed::agent::MergeAuthor;
 use crosstalk_spec::observed::client::HarnessFamily;
 
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::shared;
+use crate::contract::agents::AgentState;
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, RuleKind, RuleStatus, StaleReason, UserRule};
 use crate::contract::verdict::Verdict;
 
@@ -281,6 +283,7 @@ fn alerts_cover_every_state_reason_subject_and_dedup() {
     for reason in [
         SuppressReason::ChannelSanctioned,
         SuppressReason::RuleDisabled,
+        SuppressReason::OperatorRejected,
     ] {
         assert!(
             alerts.iter().any(

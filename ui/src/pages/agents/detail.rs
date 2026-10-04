@@ -90,7 +90,7 @@ pub fn profile(
         claims: summary.claims.clone(),
         evidence: evidence_rows(detail.agent.evidence.iter(), &[]),
         aliases: alias_rows(&detail.aliases, operators, state),
-        merges: merge_rows(&detail.merges, operators, state),
+        merges: merge_rows(&detail.merges, &detail.aliases, operators, state),
         vetoes: veto_rows(&detail.vetoes, operators, state),
     }
 }
@@ -274,12 +274,12 @@ async fn agent_page(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crosstalk_spec::observed::agent::{Agent, AgentState};
     use crosstalk_spec::support::{NonEmpty, Timestamp};
     use topcoat::router::StatusCode;
 
     use super::*;
     use crate::components::href::tests::state;
+    use crate::contract::agents::{Agent, AgentState};
     use crate::pages::agents::evidence::tests::{credential, harness};
     use crate::pages::agents::list::tests::summary;
     use crate::testing::{get, post};
