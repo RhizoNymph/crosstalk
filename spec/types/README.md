@@ -26,6 +26,7 @@ spec/types/
 ├── wire/                  the JSON wire contract: conventions, requests and authority
 │   ├── mod.rs             conventions, WireRequest, decode_request, DecodeError, DecodeErrorKind, Rejected (checked constructors' refusals as decode errors)
 │   ├── time.rs            Timestamp as RFC 3339 UTC at microsecond precision (rfc3339, parse_rfc3339), InvalidTimestamp, TooLateForText, MAX
+│   ├── duration.rs        Duration as whole microseconds in a `<what>_micros` field (serde `with` module; micros, UnfitDuration)
 │   └── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
@@ -44,17 +45,17 @@ spec/types/
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
 │   │   └── matching.rs    ContentMatch, MatchKind, Codec, Carrier
 │   └── flow/
-│       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps)
+│       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps; a WireRequest)
 │       ├── access.rs      Access, AccessOp, Extraction
-│       ├── evidence.rs    Evidence, CoAccess (checked)
-│       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
-│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed
-│       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
+│       ├── evidence.rs    Evidence, CoAccess (checked; `lag_micros` on the wire, decode checks two accesses and a positive lag)
+│       ├── timing.rs      CorrelationTiming (checked; config, not wire data): evidence window, suspected TTL, settle_after
+│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed (no sender on the wire; rebuilt on decode)
+│       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked; never a request), VerdictLog (from_records, InvalidVerdictLog; records carry revisions on the wire; never a request), CurrentVerdict
 │       └── channel/
-│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
-│           ├── promotion.rs Promotion (checked), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples), COVERAGE_CAP
+│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration (never a request), DeclaredHistory, Seed
+│           ├── promotion.rs Promotion (checked; never serialized), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples; decode checks InvalidCoverage), COVERAGE_CAP
 │           ├── detection.rs DeclaredDetection, TrafficDetection (a superseded channel's is frozen), DetectionKind
-│           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
+│           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked; never a request), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
 │   ├── agents/
@@ -77,7 +78,7 @@ spec/types/
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
-│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
+│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet); bus payloads inside an Envelope, never requests
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap

@@ -1,0 +1,41 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "at": "2026-10-04T12:34:56.789012Z",
+  "event": {
+    "type": "detect",
+    "data": {
+      "type": "channel_promoted",
+      "data": {
+        "channel": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "declaration": {
+          "pattern": {
+            "type": "url_prefix",
+            "data": {
+              "host": "wiki.internal.example",
+              "path_prefix": "/projects/crosstalk"
+            }
+          },
+          "by": {
+            "type": "operator",
+            "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+          },
+          "at": "2026-10-04T13:00:00.000000Z"
+        },
+        "policy": {
+          "kind": "sanctioned",
+          "decision": {
+            "by": {
+              "type": "operator",
+              "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+            },
+            "at": "2026-10-04T13:00:00.000000Z",
+            "note": null
+          }
+        },
+        "superseded": [
+          "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+        ]
+      }
+    }
+  }
+}

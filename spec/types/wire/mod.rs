@@ -16,6 +16,7 @@
 //! | entity id (`AgentId`, …) | 26 upper-case characters of Crockford base32 ULID text, `"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"` ([`crate::ids`]) |
 //! | content id (`MessageHash`, …), [`Blake3`](crate::support::Blake3) | 64 lower-case hex digits |
 //! | [`Timestamp`](crate::support::Timestamp) | RFC 3339 UTC at fixed microsecond precision, `"2026-10-04T12:34:56.789012Z"` ([`time`]) |
+//! | `std::time::Duration` | whole microseconds as a number, in a field named `<what>_micros`: `"lag_micros": 30000000` ([`duration`]) |
 //! | `Option<T>` | `T` or `null`; `None` is always written as `null`, never left out |
 //! | `Vec<T>`, [`NonEmpty<T>`](crate::support::NonEmpty), [`IdBatch<T>`](crate::batch::IdBatch) | array |
 //! | `HashMap<K, V>` keyed by an id | object keyed by the id's text |
@@ -253,4 +254,5 @@ macro_rules! assert_not_impl {
 }
 
 pub mod authority;
+pub mod duration;
 pub mod time;

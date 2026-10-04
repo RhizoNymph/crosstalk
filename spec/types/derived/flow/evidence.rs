@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::derived::flow::access::{Access, AccessOp};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::AccessId;
+use crate::wire::Rejected;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Evidence {
@@ -25,15 +26,21 @@ pub enum Evidence {
 ///
 /// Built only through [`CoAccess::new`], which checks the two accesses.
 ///
-/// On the wire, `{"write": .., "read": .., "lag": {"secs": .., "nanos": ..}}`
-/// (serde's form of a `Duration`). Decoding cannot rerun [`CoAccess::new`]:
-/// its checks read the two accesses, which the value names only by id.
+/// On the wire, `{"write": .., "read": .., "lag_micros": 30000000}`: the lag
+/// in whole microseconds ([`crate::wire::duration`]). Decoding cannot rerun
+/// [`CoAccess::new`], whose checks read the two accesses (their resources,
+/// agents, operations and times) and the correlation window, none of which
+/// the value holds. It checks what the value can know about itself: the
+/// write and the read are two accesses (`WrongOperations`, since one access
+/// is not both a write and a read), and the lag is positive
+/// (`ReadNotAfterWrite`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", try_from = "RawCoAccess")]
 pub struct CoAccess {
     write: AccessId,
     read: AccessId,
-    lag: Duration,
+    #[serde(with = "crate::wire::duration")]
+    lag_micros: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +51,37 @@ pub enum InvalidCoAccess {
     WrongOperations,
     ReadNotAfterWrite,
     OutsideWindow,
+}
+
+/// [`CoAccess`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawCoAccess {
+    write: AccessId,
+    read: AccessId,
+    #[serde(with = "crate::wire::duration")]
+    lag_micros: Duration,
+}
+
+impl TryFrom<RawCoAccess> for CoAccess {
+    type Error = Rejected<InvalidCoAccess>;
+
+    fn try_from(raw: RawCoAccess) -> Result<Self, Self::Error> {
+        if raw.write == raw.read {
+            return Err(Rejected::new("co-access", InvalidCoAccess::WrongOperations));
+        }
+        if raw.lag_micros.is_zero() {
+            return Err(Rejected::new(
+                "co-access",
+                InvalidCoAccess::ReadNotAfterWrite,
+            ));
+        }
+        Ok(Self {
+            write: raw.write,
+            read: raw.read,
+            lag_micros: raw.lag_micros,
+        })
+    }
 }
 
 impl CoAccess {
@@ -68,7 +106,7 @@ impl CoAccess {
         Ok(Self {
             write: write.id,
             read: read.id,
-            lag,
+            lag_micros: lag,
         })
     }
 
@@ -80,7 +118,8 @@ impl CoAccess {
         self.read
     }
 
+    /// How long after the write the read was, in whole microseconds.
     pub fn lag(&self) -> Duration {
-        self.lag
+        self.lag_micros
     }
 }
