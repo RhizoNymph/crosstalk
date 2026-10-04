@@ -16,7 +16,8 @@ use proptest::prelude::*;
 
 use crosstalk_spec::aggregates::alert::{
     Alert, AlertDraft, AlertRule, AlertRuleConfig, AlertRuleDef, AlertSubject, BuiltinRule,
-    NotEditable, RuleName, RuleStatus, StaleRule, TriageOutcome, UserRule, WatchedTopics,
+    NotEditable, RuleName, RuleQueryText, RuleStatus, StaleRule, TriageOutcome, UserRule,
+    WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::topic_history::TopicLineage;
@@ -25,7 +26,7 @@ use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId, TopicId};
 use crosstalk_spec::interfaces::l6_analysis::{
     AlertRuleStore, AlertTriage, RuleError, TriageError,
 };
-use crosstalk_spec::support::{Change, NonBlank, NonEmpty, Timestamp};
+use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 
 use super::search::harness_model;
 use crate::analysis::alerts::triage::AlertActionError;
@@ -474,7 +475,7 @@ fn semantic(words: &[u8]) -> Option<UserRule> {
         .collect::<Vec<_>>()
         .join(" ");
     Some(UserRule::SemanticQuery {
-        text: NonBlank::new(&text).ok()?,
+        text: RuleQueryText::new(&text).ok()?,
         threshold: similarity(0.5)?,
     })
 }

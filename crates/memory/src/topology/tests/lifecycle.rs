@@ -123,14 +123,14 @@ async fn activate_keeps_every_version_and_graph_reads_one() {
     );
     assert_eq!(world.store.contributions().len(), 3);
     let current = graph(&world, all(), &TopologyFilter::default()).await;
-    assert_eq!(current.topic_version, v1);
+    assert_eq!(current.topic_version(), v1);
     assert_eq!(edge_counts(&current), vec![(1, 2, 1, 4)]);
     let pinned = TopologyFilter {
         topic_version: TopicVersionSelector::Pinned(TopicModelVersion(0)),
         ..TopologyFilter::default()
     };
     let old = graph(&world, all(), &pinned).await;
-    assert_eq!(old.topic_version, TopicModelVersion(0));
+    assert_eq!(old.topic_version(), TopicModelVersion(0));
     assert_eq!(edge_counts(&old), vec![(1, 2, 1, 4), (2, 3, 1, 4)]);
 }
 

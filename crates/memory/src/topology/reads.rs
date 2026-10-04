@@ -8,7 +8,7 @@ use crosstalk_spec::aggregates::access::{AccessEdge, BipartiteGraph, BipartitePa
 use crosstalk_spec::aggregates::agents::AgentTraffic;
 use crosstalk_spec::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTotals, EdgeTransmission, EdgeTransmissionPage, TopologyFilter,
-    TopologyGraph, Weighting,
+    TopologyGraph, TopologyGraphParts, Weighting,
 };
 use crosstalk_spec::aggregates::filter::VersionUnavailable;
 use crosstalk_spec::aggregates::node::GraphNode;
@@ -59,17 +59,15 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
         let counted = counted(state, &self.env, version, window, filter);
         let edges = edges(&counted, weighting)?;
         let endpoints: Vec<AgentId> = edges.iter().flat_map(|edge| [edge.from, edge.to]).collect();
-        let graph = TopologyGraph {
+        let nodes = nodes(&self.env, endpoints, [], &edges);
+        TopologyGraph::new(TopologyGraphParts {
             window,
             weighting,
             topic_version: version,
-            nodes: nodes(&self.env, endpoints, [], &edges),
+            nodes,
             edges,
-        };
-        graph
-            .check()
-            .map_err(|error| store_error(format!("built an invalid graph: {error:?}")))?;
-        Ok(graph)
+        })
+        .map_err(|error| store_error(format!("built an invalid graph: {error:?}")))
     }
 
     /// The aligned graph read every graph-shaped query shares: the
@@ -354,7 +352,7 @@ impl<V: TopologyEnv> EdgeStore for InMemoryEdgeStore<V> {
             self.read_graph(window, Weighting::Transmissions, &TopologyFilter::default())?;
         let counts: BTreeMap<AgentId, AgentTraffic> = graph
             .value
-            .nodes
+            .nodes()
             .iter()
             .filter_map(|node| match node {
                 GraphNode::Agent(agent) => Some((

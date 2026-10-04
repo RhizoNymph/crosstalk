@@ -105,7 +105,7 @@ pub fn edge_counts(graph: &TopologyGraph) -> Vec<(u64, u64, u64, u64)> {
     let number =
         |id: crosstalk_spec::ids::AgentId| u64::try_from(id.as_ulid() - (1u128 << 100)).unwrap();
     graph
-        .edges
+        .edges()
         .iter()
         .map(|edge| {
             (

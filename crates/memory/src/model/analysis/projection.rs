@@ -6,12 +6,11 @@ use std::time::Duration;
 
 use proptest::prelude::*;
 
-use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::filter::TopologyFilter;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, ProjectedPoint, ProjectionInfo, ProjectionLimit, ProjectionParams, ProjectionSpec,
-    ProjectionStatusKind,
+    FitFailure, PointRoute, ProjectedPoint, ProjectionInfo, ProjectionLimit, ProjectionParams,
+    ProjectionSpec, ProjectionStatusKind,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::Watermark;
@@ -100,7 +99,7 @@ fn frame(id: ProjectionId, matching: u64, watermark: u64) -> Option<ProjectionFr
                 transmission: transmission(n),
                 from: agent(1),
                 to: agent(2),
-                route: RouteKind::Unobserved,
+                route: PointRoute::Unobserved,
                 topic: None,
                 confirmed_at: ts(n),
                 x: Finite::new(0.25).ok()?,

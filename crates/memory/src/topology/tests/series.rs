@@ -139,8 +139,8 @@ async fn edge_series_sum_to_graph_edge_stats_and_total() {
         let SeriesGroups::ByEdge(edges) = by_edge.groups() else {
             panic!("grouped by edge");
         };
-        assert_eq!(edges.len(), graph.edges.len());
-        for (series, edge) in edges.iter().zip(&graph.edges) {
+        assert_eq!(edges.len(), graph.edges().len());
+        for (series, edge) in edges.iter().zip(graph.edges()) {
             assert_eq!(
                 (series.key.from, series.key.to, &series.key.route),
                 (edge.from, edge.to, &edge.route)
@@ -155,7 +155,7 @@ async fn edge_series_sum_to_graph_edge_stats_and_total() {
         ] {
             let grouped = series(&world, grid(10, 50, 10), weighting, grouping).await;
             assert_eq!(grouped.total(), graph.total());
-            assert_eq!(grouped.topic_version(), graph.topic_version);
+            assert_eq!(grouped.topic_version(), graph.topic_version());
         }
     }
 }

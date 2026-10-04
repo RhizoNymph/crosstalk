@@ -114,7 +114,7 @@ impl Ledger {
 /// A graph's edges as the fold lists them.
 fn graph_edges(graph: &TopologyGraph) -> Vec<FoldEdge> {
     let mut edges: Vec<_> = graph
-        .edges
+        .edges()
         .iter()
         .map(|edge| {
             (
@@ -138,16 +138,17 @@ fn check_graph(
     directory: &StaticDirectory,
     filter: &TopologyFilter,
 ) -> Result<(), Divergence> {
-    holds(step, graph.check().is_ok(), || {
-        format!("graph breaks its rules: {:?}", graph.check())
+    let rules = TopologyGraph::new(graph.clone().into_parts()).map(|_| ());
+    holds(step, rules.is_ok(), || {
+        format!("graph breaks its rules: {rules:?}")
     })?;
-    if !graph.edges.is_empty() {
-        let sum: f64 = graph.edges.iter().map(|edge| edge.share.get()).sum();
+    if !graph.edges().is_empty() {
+        let sum: f64 = graph.edges().iter().map(|edge| edge.share.get()).sum();
         holds(step, (sum - 1.0).abs() <= 1e-9, || {
             format!("shares sum to {sum}")
         })?;
     }
-    let expected = ledger.fold(directory, graph.topic_version, graph.window, filter);
+    let expected = ledger.fold(directory, graph.topic_version(), graph.window(), filter);
     let got = graph_edges(graph);
     holds(step, got == expected, || {
         format!("graph edges differ from the fold:\n  graph: {got:?}\n  fold:  {expected:?}")

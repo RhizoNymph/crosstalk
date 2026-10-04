@@ -322,7 +322,7 @@ caught (`#[should_panic]`).
   (`EdgeTotals::of` the graph), the channel-centred graph (plus access
   buckets), the drill-down, agent traffic (the graph's node counts) and
   series (the fold cut into grid steps) are all built from it, and the
-  results pass the spec's checked constructors (`TopologyGraph::check`,
+  results pass the spec's checked constructors (`TopologyGraph::new`,
   `BipartiteGraph::new`, `TopologySeries::new`).
 - **Search.** Scores depend on the query, the model and the document
   only: text is the fraction of the query's distinct terms (maximal
@@ -333,7 +333,8 @@ caught (`#[should_panic]`).
   changed index model `WrongModel`. Samples take every admitted document
   with an embedding of the spec's model, keep the `limit` smallest seeded
   BLAKE3 keys (ties to the smaller id), and read the watermark from a
-  `WatermarkRead`.
+  `WatermarkRead`. Each row's route is a `PointRoute`, its channel
+  resolved through supersession when the sample is read.
 - **Projection jobs.** Jobs move only through the spec's `ProjectionInfo`
   transitions. `claim` takes the oldest queued job by (`requested_at`, id)
   and records a lease; `requeue_lapsed` returns every fitting job whose
@@ -383,7 +384,7 @@ sizes against a count of the assignments (`analysis.sizes.match-
 assignments`); the queue bound (`analysis.projection.queue-bounded`); at
 most one active alert per (rule, subject); every graph against an
 independent fold over the contributions the harness applied, with
-`TopologyGraph::check` and shares summing to 1, and every series' total
+the graph's parts re-checked by `TopologyGraph::new` and shares summing to 1, and every series' total
 against the graph's (`topology.graph.matches-fold-model`,
 `topology.series.total-matches-graph`); audit entries never changing
 (`surface.audit.append-only`). Text and hybrid search ranking is the

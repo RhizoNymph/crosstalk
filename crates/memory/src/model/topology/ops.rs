@@ -257,7 +257,7 @@ fn share_key(share: f64) -> i64 {
 fn graph_view(read: &Watermarked<TopologyGraph>) -> GraphView {
     let mut edges: Vec<_> = read
         .value
-        .edges
+        .edges()
         .iter()
         .map(|edge| {
             (
@@ -273,9 +273,9 @@ fn graph_view(read: &Watermarked<TopologyGraph>) -> GraphView {
     edges.sort();
     GraphView {
         watermark: read.watermark,
-        version: read.value.topic_version,
+        version: read.value.topic_version(),
         edges,
-        nodes: node_keys(&read.value.nodes),
+        nodes: node_keys(&read.value.nodes()),
     }
 }
 
@@ -752,7 +752,7 @@ pub async fn play<S: EdgeSubject>(
                     .graph(grid.window(), weighting(*bytes), &filter)
                     .await;
                 if let Ok(graph) = graph
-                    && graph.value.topic_version == series.value.topic_version()
+                    && graph.value.topic_version() == series.value.topic_version()
                 {
                     holds(step, graph.value.total() == series.value.total(), || {
                         format!(

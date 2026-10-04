@@ -24,9 +24,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::filter::{FilterSubject, TopologyFilter, VersionUnavailable};
-use crosstalk_spec::aggregates::projection::{FitFailure, ProjectionSpec};
+use crosstalk_spec::aggregates::projection::{FitFailure, PointRoute, ProjectionSpec};
 use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::{CurrentVerdict, Observed, Verdict, VerdictRevision};
@@ -494,7 +493,7 @@ where
                     transmission: *id,
                     from: AgentDirectory::canonical(&index.directory, doc.from),
                     to: AgentDirectory::canonical(&index.directory, doc.to),
-                    route: RouteKind::of(&doc.route),
+                    route: PointRoute::of(&doc.route.resolved(Directories(&index.directory))),
                     topic: index.topic_of(version, *id),
                     confirmed_at: doc.confirmed_at,
                     embedding,

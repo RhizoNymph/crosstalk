@@ -2,7 +2,7 @@
 
 use crosstalk_spec::aggregates::agents::AgentTraffic;
 use crosstalk_spec::aggregates::edge::{
-    EdgeSelector, EdgeTotals, RouteKind, TopologyFilter, Weighting,
+    EdgeSelector, EdgeTotals, RouteKind, TopologyFilter, TopologyGraph, Weighting,
 };
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::aggregates::node::{CanonicalStateKind, GraphNode};
@@ -100,7 +100,7 @@ async fn apply_is_idempotent_per_transmission_and_version() {
     let after = graph(&world, window(20, 30).unwrap(), &TopologyFilter::default()).await;
     assert_eq!(edge_counts(&after), vec![(1, 2, 2, 12)]);
     let other_bucket = graph(&world, window(30, 40).unwrap(), &TopologyFilter::default()).await;
-    assert!(other_bucket.edges.is_empty());
+    assert!(other_bucket.edges().is_empty());
 }
 
 #[tokio::test]
@@ -140,7 +140,7 @@ async fn fresh_store_graph_reports_version_zero() {
     assert_eq!(
         graph(&world, all(), &TopologyFilter::default())
             .await
-            .topic_version,
+            .topic_version(),
         TopicModelVersion(0)
     );
 }
@@ -188,9 +188,9 @@ async fn channel_filter_excludes_non_channel_routes() {
         ..TopologyFilter::default()
     };
     let filtered = graph(&world, all(), &filter).await;
-    assert_eq!(filtered.edges.len(), 1);
-    assert_eq!(filtered.edges[0].route, Route::Channel(channel(1)));
-    assert_eq!(filtered.edges[0].stats.transmissions.get(), 2);
+    assert_eq!(filtered.edges().len(), 1);
+    assert_eq!(filtered.edges()[0].route, Route::Channel(channel(1)));
+    assert_eq!(filtered.edges()[0].stats.transmissions.get(), 2);
     // Listing the superseded channel selects its superseder.
     let by_old = TopologyFilter {
         channels: vec![channel(2)],
@@ -228,8 +228,8 @@ async fn route_kind_filter_maps_each_route_variant() {
             ..TopologyFilter::default()
         };
         let filtered = graph(&world, all(), &filter).await;
-        assert_eq!(filtered.edges.len(), 1);
-        assert_eq!(RouteKind::of(&filtered.edges[0].route), kind);
+        assert_eq!(filtered.edges().len(), 1);
+        assert_eq!(RouteKind::of(&filtered.edges()[0].route), kind);
     }
 }
 
@@ -251,7 +251,7 @@ async fn merge_rekeys_sums_and_drops_edges_and_unmerge_restores_graph() {
     world.directory.merge(agent(1), agent(2)).unwrap();
     let merged = graph(&world, all(), &TopologyFilter::default()).await;
     assert_eq!(edge_counts(&merged), vec![(2, 3, 2, 12)]);
-    let node_ids: Vec<_> = merged.nodes.iter().map(GraphNode::id).collect();
+    let node_ids: Vec<_> = merged.nodes().iter().map(GraphNode::id).collect();
     assert!(!node_ids.contains(&crosstalk_spec::aggregates::node::NodeId::Agent(agent(1))));
     world.directory.unmerge(agent(1));
     assert_eq!(
@@ -286,9 +286,9 @@ async fn weighting_changes_only_shares() {
         .unwrap()
         .value;
     assert_eq!(edge_counts(&counted), edge_counts(&weighed));
-    let shares = |graph: &crosstalk_spec::aggregates::edge::TopologyGraph| {
+    let shares = |graph: &TopologyGraph| {
         graph
-            .edges
+            .edges()
             .iter()
             .map(|edge| edge.share.get())
             .collect::<Vec<_>>()
@@ -296,9 +296,9 @@ async fn weighting_changes_only_shares() {
     assert_eq!(shares(&counted), vec![1.0 / 3.0, 2.0 / 3.0]);
     assert_eq!(shares(&weighed), vec![0.1, 0.9]);
     for graph in [counted, weighed] {
-        let sum: f64 = graph.edges.iter().map(|edge| edge.share.get()).sum();
+        let sum: f64 = graph.edges().iter().map(|edge| edge.share.get()).sum();
         assert!((sum - 1.0).abs() <= 1e-9);
-        graph.check().unwrap();
+        TopologyGraph::new(graph.into_parts()).unwrap();
     }
 }
 
@@ -348,9 +348,9 @@ async fn graph_nodes_cover_endpoints_and_ancestors() {
         },
     );
     let graph = graph(&world, all(), &TopologyFilter::default()).await;
-    graph.check_nodes().unwrap();
+    TopologyGraph::new(graph.clone().into_parts()).unwrap();
     let agents: Vec<_> = graph
-        .nodes
+        .nodes()
         .iter()
         .filter_map(|node| match node {
             GraphNode::Agent(agent) => Some((
@@ -498,7 +498,7 @@ async fn judge_leaves_buckets_and_exclude_subtracts() {
     assert_eq!(graph(&world, all(), &include).await, before);
     let excluded = graph(&world, all(), &exclude).await;
     assert_eq!(edge_counts(&excluded), vec![(1, 2, 1, 6)]);
-    assert_eq!(excluded.edges[0].share.get(), 1.0);
+    assert_eq!(excluded.edges()[0].share.get(), 1.0);
     world
         .store
         .apply(&plain(4, 1, 2, Route::Unobserved, 22, 9))
@@ -574,7 +574,7 @@ async fn edge_transmissions_match_graph() {
     );
     let graph = graph(&world, all(), &TopologyFilter::default()).await;
     let edge_stat = graph
-        .edges
+        .edges()
         .iter()
         .find(|graph_edge| {
             graph_edge.from == agent(1)
@@ -747,8 +747,8 @@ async fn channel_topology_counts_unread_writes() {
         ]
     );
     let plain_graph = graph(&world, all(), &TopologyFilter::default()).await;
-    assert_eq!(bipartite.transmissions(), plain_graph.edges.as_slice());
-    assert_eq!(bipartite.topic_version(), plain_graph.topic_version);
+    assert_eq!(bipartite.transmissions(), plain_graph.edges());
+    assert_eq!(bipartite.topic_version(), plain_graph.topic_version());
     // A topic filter keeps no access of a channel without such a topic.
     let channel_nodes = bipartite
         .nodes()

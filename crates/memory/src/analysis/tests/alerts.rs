@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crosstalk_spec::aggregates::alert::{
     AlertDraft, AlertRevision, AlertRuleConfig, AlertState, AlertSubject, BuiltinRule, RuleName,
-    RuleStatus, SuppressReason, TriageOutcome, UserRule, WatchedTopics,
+    RuleQueryText, RuleStatus, SuppressReason, TriageOutcome, UserRule, WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
@@ -18,7 +18,7 @@ use crosstalk_spec::ids::{AlertId, AlertRuleId};
 use crosstalk_spec::interfaces::l6_analysis::{AlertRuleStore, AlertTriage, TopicCatalog};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind};
 use crosstalk_spec::paging::{PageRequest, PageSize};
-use crosstalk_spec::support::{Change, NonBlank, NonEmpty};
+use crosstalk_spec::support::{Change, NonEmpty};
 
 use super::support::{at, fit_ready};
 use crate::analysis::alerts::triage::AlertActionError;
@@ -146,7 +146,7 @@ pub(super) fn watch(version: TopicModelVersion, topics: &[u64]) -> UserRule {
 
 pub(super) fn semantic(text: &str) -> UserRule {
     UserRule::SemanticQuery {
-        text: NonBlank::new(text).unwrap(),
+        text: RuleQueryText::new(text).unwrap(),
         threshold: similarity(0.5).unwrap(),
     }
 }

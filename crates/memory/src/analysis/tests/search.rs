@@ -741,7 +741,7 @@ async fn sampled_point_resolves_merged_agents() {
     assert_eq!(row.transmission, transmission(1));
     assert_eq!(row.from, agent(7));
     assert_eq!(row.to, agent(2));
-    assert_eq!(row.route, RouteKind::Channel);
+    assert_eq!(row.route.kind(), RouteKind::Channel);
     assert_eq!(row.topic, None);
     assert_eq!(row.confirmed_at, at(10));
 }
