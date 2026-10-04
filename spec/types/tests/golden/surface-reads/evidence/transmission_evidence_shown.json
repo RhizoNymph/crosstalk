@@ -1,0 +1,178 @@
+{
+  "transmission": {
+    "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+    "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+    "route": {
+      "type": "channel",
+      "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+    },
+    "opened_at": "2026-10-04T09:16:40.002513Z",
+    "state": {
+      "type": "confirmed",
+      "data": {
+        "content": [
+          {
+            "origin": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+            "origin_agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "reader": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "reader_exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "read_at": {
+              "part": {
+                "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+                "index": 2
+              },
+              "range": {
+                "start": 12,
+                "end": 59
+              }
+            },
+            "carrier": {
+              "type": "tool_result",
+              "data": "toolu_01VfA7wiki"
+            },
+            "kind": {
+              "type": "exact"
+            },
+            "matched_bytes": 47
+          }
+        ],
+        "co_access": [
+          {
+            "write": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "read": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "lag": {
+              "secs": 97,
+              "nanos": 584513000
+            }
+          }
+        ],
+        "at": "2026-10-04T09:16:41.250000Z"
+      }
+    }
+  },
+  "matches": [
+    {
+      "content_match": {
+        "origin": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "origin_agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "reader": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "reader_exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "read_at": {
+          "part": {
+            "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+            "index": 2
+          },
+          "range": {
+            "start": 12,
+            "end": 59
+          }
+        },
+        "carrier": {
+          "type": "tool_result",
+          "data": "toolu_01VfA7wiki"
+        },
+        "kind": {
+          "type": "exact"
+        },
+        "matched_bytes": 47
+      },
+      "quotes": {
+        "origin": {
+          "type": "shown",
+          "data": {
+            "text": "e plan: ship v2.4 on Friday after QA signs off Thursday. Owners",
+            "highlight": {
+              "start": 8,
+              "end": 55
+            },
+            "elided_before": 6,
+            "elided_after": 7,
+            "highlight_cut": 0
+          }
+        },
+        "read": {
+          "type": "shown",
+          "data": {
+            "text": "e body) ship v2.4 on Friday after QA signs off Thursday. (edite",
+            "highlight": {
+              "start": 8,
+              "end": 55
+            },
+            "elided_before": 4,
+            "elided_after": 8,
+            "highlight_cut": 0
+          }
+        }
+      }
+    }
+  ],
+  "accesses": [
+    {
+      "access": {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "exchange": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "resource": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+        "at": "2026-10-04T09:15:02.418000Z",
+        "via": "structured",
+        "op": {
+          "type": "write",
+          "data": {
+            "call": {
+              "message": "10171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9",
+              "index": 1
+            },
+            "spans": []
+          }
+        }
+      },
+      "resource": {
+        "id": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+        "locator": {
+          "type": "url",
+          "data": {
+            "scheme": "https",
+            "host": "wiki.example.com",
+            "path": "/team/release-plan",
+            "query": null
+          }
+        },
+        "first_seen": "2026-10-04T09:15:02.418000Z"
+      },
+      "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    },
+    {
+      "access": {
+        "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "resource": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+        "at": "2026-10-04T09:16:40.002513Z",
+        "via": "structured",
+        "op": {
+          "type": "read",
+          "data": {
+            "result": {
+              "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+              "index": 2
+            }
+          }
+        }
+      },
+      "resource": {
+        "id": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+        "locator": {
+          "type": "url",
+          "data": {
+            "scheme": "https",
+            "host": "wiki.example.com",
+            "path": "/team/release-plan",
+            "query": null
+          }
+        },
+        "first_seen": "2026-10-04T09:15:02.418000Z"
+      },
+      "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  ]
+}

@@ -166,14 +166,91 @@ impl AccessDetail {
 
 /// Everything the evidence page shows about one transmission, besides its
 /// summary and verdicts. Built only by [`TransmissionEvidence::assemble`].
-/// A response; decoding cannot rerun `assemble`, which reads the stored
-/// records the transmission names.
+///
+/// A response. Decoding reruns `assemble` over the decoded transmission,
+/// answering each match and access it asks for with the next decoded one,
+/// so decoded evidence lists exactly the matches and accesses its
+/// transmission names, in its order ([`InvalidTransmissionEvidence`]).
+/// What it cannot recheck is the stored records themselves: the quotes'
+/// text and each access's resource and canonical agent are as received.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", try_from = "RawTransmissionEvidence")]
 pub struct TransmissionEvidence {
     transmission: Transmission,
     matches: Vec<MatchEvidence>,
     accesses: Vec<AccessDetail>,
+}
+
+/// Decoded evidence that is not what `assemble` makes of its transmission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidTransmissionEvidence {
+    /// The match at `index` is not the transmission's content match there.
+    OtherMatch { index: usize },
+    /// More or fewer matches than the transmission's content matches.
+    MatchCount { expected: usize, got: usize },
+    /// More or fewer accesses than the co-access records name.
+    AccessCount { got: usize },
+    /// An access out of the order of first mention.
+    Invalid(InvalidEvidence),
+}
+
+impl From<InvalidEvidence> for InvalidTransmissionEvidence {
+    fn from(error: InvalidEvidence) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+/// [`TransmissionEvidence`]'s fields, decoded without the checks. Decoding
+/// goes through [`TransmissionEvidence::assemble`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTransmissionEvidence {
+    transmission: Transmission,
+    matches: Vec<MatchEvidence>,
+    accesses: Vec<AccessDetail>,
+}
+
+impl TryFrom<RawTransmissionEvidence> for TransmissionEvidence {
+    type Error = Rejected<InvalidTransmissionEvidence>;
+
+    fn try_from(raw: RawTransmissionEvidence) -> Result<Self, Self::Error> {
+        let reject = |error| Rejected::new("transmission evidence", error);
+        let expected = raw
+            .transmission
+            .state
+            .confirmed()
+            .map_or(0, |confirmed| confirmed.content().iter().count());
+        let got = raw.matches.len();
+        if got != expected {
+            return Err(reject(InvalidTransmissionEvidence::MatchCount {
+                expected,
+                got,
+            }));
+        }
+        let accesses_got = raw.accesses.len();
+        let mut matches = raw.matches.into_iter().enumerate();
+        let mut accesses = raw.accesses.into_iter();
+        let evidence = Self::assemble(
+            raw.transmission,
+            |content_match| match matches.next() {
+                Some((_, listed)) if listed.content_match == *content_match => Ok(listed.quotes),
+                Some((index, _)) => Err(InvalidTransmissionEvidence::OtherMatch { index }),
+                None => Err(InvalidTransmissionEvidence::MatchCount { expected, got }),
+            },
+            |_| {
+                accesses
+                    .next()
+                    .ok_or(InvalidTransmissionEvidence::AccessCount { got: accesses_got })
+            },
+        )
+        .map_err(reject)?;
+        if accesses.next().is_some() {
+            return Err(reject(InvalidTransmissionEvidence::AccessCount {
+                got: accesses_got,
+            }));
+        }
+        Ok(evidence)
+    }
 }
 
 impl TransmissionEvidence {

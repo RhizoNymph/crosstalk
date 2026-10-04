@@ -113,7 +113,10 @@ impl Default for ExcerptWindow {
 ///   UTF-8;
 /// - at most [`ExcerptWindow::MAX_CONTEXT`] bytes of context on each side,
 ///   and at most [`Excerpt::MAX_HIGHLIGHT`] bytes highlighted;
-/// - when the matched range was cut, the highlight ends the text.
+/// - when the matched range was cut, the highlight ends the text;
+/// - the byte counts add up to a part: the matched range ends within
+///   `u32::MAX` bytes of the part's start (where a [`ByteRange`] can name
+///   it), and the part's length fits a `u64`.
 ///
 /// On the wire, its fields, the highlight as `{"start": .., "end": ..}`
 /// (serde's form of a `Range`); decoding goes through [`Excerpt::new`].
@@ -154,6 +157,10 @@ pub enum InvalidExcerpt {
     },
     /// The highlight was cut, but text follows it.
     ContextAfterCut,
+    /// The byte counts do not add up to a part: the matched range would
+    /// end past `u32::MAX` (`elided_before + highlight.end + highlight_cut`),
+    /// or the part's length overflows a `u64`.
+    CountsOverflow,
 }
 
 /// [`Excerpt`]'s fields, decoded without the checks.
@@ -233,6 +240,15 @@ impl Excerpt {
         }
         if highlight_cut > 0 && end_at != len {
             return Err(InvalidExcerpt::ContextAfterCut);
+        }
+        let range_end = elided_before
+            .checked_add(u64::from(end))
+            .and_then(|at| at.checked_add(highlight_cut));
+        let part_len = range_end
+            .and_then(|at| at.checked_add(count(len - end_at)))
+            .and_then(|at| at.checked_add(elided_after));
+        if range_end.is_none_or(|at| at > u64::from(u32::MAX)) || part_len.is_none() {
+            return Err(InvalidExcerpt::CountsOverflow);
         }
         Ok(Self {
             text,

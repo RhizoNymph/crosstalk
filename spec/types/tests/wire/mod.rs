@@ -14,6 +14,7 @@ mod ids;
 mod paging;
 mod requests;
 mod support;
+mod surface_reads;
 mod time;
 
 use std::path::Path;

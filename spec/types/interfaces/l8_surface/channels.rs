@@ -473,10 +473,42 @@ pub fn resolve_names(
 /// On the wire, `{"type": "promotes", "data": <PromotionCoverage>}` or
 /// `{"type": "refused", "data": <ConflictKind>}`. A response, never a
 /// request. Decoding cannot rerun [`PromotionPreview::from_registry`], which
-/// takes the registry's answer.
+/// takes the registry's answer, but it refuses a conflict that no refused
+/// promotion maps to ([`NotAPromotionConflict`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(try_from = "Outcome", into = "Outcome")]
 pub struct PromotionPreview(Outcome);
+
+/// A refused preview whose conflict is not one `PromoteChannel` is refused
+/// with: only `ChannelSuperseded`, `ChannelNotDiscovered` and
+/// `PatternOverlaps` are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotAPromotionConflict(pub ConflictKind);
+
+impl TryFrom<Outcome> for PromotionPreview {
+    type Error = Rejected<NotAPromotionConflict>;
+
+    fn try_from(outcome: Outcome) -> Result<Self, Self::Error> {
+        match outcome {
+            Outcome::Refused(
+                ConflictKind::ChannelSuperseded { .. }
+                | ConflictKind::ChannelNotDiscovered { .. }
+                | ConflictKind::PatternOverlaps { .. },
+            )
+            | Outcome::Promotes(_) => Ok(Self(outcome)),
+            Outcome::Refused(other) => Err(Rejected::new(
+                "promotion preview",
+                NotAPromotionConflict(other),
+            )),
+        }
+    }
+}
+
+impl From<PromotionPreview> for Outcome {
+    fn from(preview: PromotionPreview) -> Self {
+        preview.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(

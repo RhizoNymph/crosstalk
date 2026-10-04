@@ -35,6 +35,7 @@
 //! | `OperatorAction` | holds a `MergeRequest`, so an author | 2 |
 //! | `OperatorRecord`, `AuditEntry` | caller, time | 2 |
 //! | `ExportHeader`, `ExportRecord` | caller, time | 2 |
+//! | `ExportLine` | holds an `ExportHeader` | 2 |
 //! | `ProjectionInfo` | requester, time | 2 |
 //! | `AlertRuleDef` | creator, time | 2 |
 //! | `Alert`, `AlertState` | who acknowledged or resolved, when | 2 |
@@ -118,7 +119,7 @@ use crate::interfaces::l8_surface::audit::{
 };
 use crate::interfaces::l8_surface::channels::{PromotionPreview, SupersededInto};
 use crate::interfaces::l8_surface::export::rows::VerdictRow;
-use crate::interfaces::l8_surface::export::{ExportHeader, ExportRecord};
+use crate::interfaces::l8_surface::export::{ExportHeader, ExportLine, ExportRecord};
 use crate::interfaces::l8_surface::operators::{Operator, OperatorDirectory, RequestIdentity};
 use crate::interfaces::l8_surface::{Caller, OperatorAction, PermissionSet};
 use crate::observed::agent::{MergeAuthor, MergeRecord, MergeRequest, MergeVeto, Reversal};
@@ -149,6 +150,7 @@ assert_not_impl!(OperatorRecord: WireRequest);
 assert_not_impl!(AuditEntry: WireRequest);
 assert_not_impl!(ExportHeader: WireRequest);
 assert_not_impl!(ExportRecord: WireRequest);
+assert_not_impl!(ExportLine: WireRequest);
 assert_not_impl!(ProjectionInfo: WireRequest);
 assert_not_impl!(AlertRuleDef: WireRequest);
 assert_not_impl!(Alert: WireRequest);

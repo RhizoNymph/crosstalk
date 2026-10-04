@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.excerpt.counts-fit-a-part"
+statement = "Every Excerpt's byte counts describe a part a ByteRange can index: elided_before plus the highlight's end plus highlight_cut is at most u32::MAX, and elided_before plus the text's length plus highlight_cut plus elided_after fits a u64."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The counts place the excerpt in its part: elided_before plus the highlight
+start is where the matched range starts, and the four counts sum to the
+part's length (Excerpt::part_len). The matched range came from a
+SpanLocation, whose ByteRange is u32, so an excerpt claiming to end past
+u32::MAX describes no stored location, and a sum that overflows would make
+part_len wrong. Excerpt::cut never builds either; Excerpt::new, and so
+decoding, refuses them.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::excerpt::Excerpt::new"
+unit = [
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpts_are_decoded_through_their_constructor",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

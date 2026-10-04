@@ -1,0 +1,61 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "request": {
+    "dataset": {
+      "type": "projection",
+      "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    },
+    "format": "jsonl",
+    "include_content": false
+  },
+  "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "started_at": "2026-10-04T12:05:30.120000Z",
+  "watermark": "2026-10-04T12:00:00.000000Z",
+  "basis": {
+    "type": "projection",
+    "data": {
+      "projection": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "spec": {
+        "window": {
+          "start": "2026-10-03T00:00:00.000000Z",
+          "end": "2026-10-04T00:00:00.000000Z"
+        },
+        "filter": {
+          "agents": [],
+          "channels": [],
+          "route_kinds": [],
+          "topics": [],
+          "topic_version": {
+            "type": "pinned",
+            "data": 4
+          },
+          "false_detections": "include"
+        },
+        "topic_version": 4,
+        "params": {
+          "limit": 5000,
+          "neighbors": 15,
+          "min_dist_milli": 100,
+          "seed": 42
+        },
+        "embedding_model": {
+          "name": "text-embedding-3-small",
+          "dimension": 1536
+        }
+      },
+      "fitted": {
+        "started_at": "2026-10-04T00:10:00.000000Z",
+        "fitted_at": "2026-10-04T00:12:31.904000Z",
+        "watermark": "2026-10-04T00:05:00.000000Z",
+        "matching": 1830,
+        "points": 1830
+      }
+    }
+  },
+  "embedding_model": {
+    "name": "text-embedding-3-small",
+    "dimension": 1536
+  },
+  "gateway": "0.4.1",
+  "rows": 1830
+}
