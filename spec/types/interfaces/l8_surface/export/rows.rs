@@ -64,7 +64,7 @@ use crate::interfaces::l8_surface::evidence::{MatchQuotes, TransmissionEvidence}
 use crate::interfaces::l8_surface::summary::{
     Delivery, TopicUnder, TransmissionStateKind, TransmissionSummary,
 };
-use crate::support::{NonEmpty, TimeWindow, Timestamp};
+use crate::support::{Finite, NonEmpty, TimeWindow, Timestamp};
 use crate::wire::Rejected;
 
 use super::digest::encode_route;
@@ -291,14 +291,13 @@ pub struct TopicRow {
 }
 
 /// On the wire, `terms` is an array of `[term, weight]` pairs; a weight is a
-/// JSON number, so a non-finite one (which `Topic::terms` does not exclude)
-/// would not encode.
+/// finite JSON number ([`Finite`], as in `Topic::terms`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicContent {
     pub label: String,
     /// Top c-TF-IDF terms, highest weight first, as `Topic::terms`.
-    pub terms: Vec<(String, f32)>,
+    pub terms: Vec<(String, Finite)>,
 }
 
 /// One point of a stored projection, as its frame holds it.

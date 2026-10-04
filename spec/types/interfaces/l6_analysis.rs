@@ -194,6 +194,8 @@ pub enum SearchQuery {
     },
 }
 
+/// A response (inside [`SearchResults`]); `score` is a [`Similarity`], a
+/// finite JSON number in `0.0..=1.0`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SearchHit {
@@ -204,7 +206,12 @@ pub struct SearchHit {
 
 /// One page of hits, in descending (score, `TransmissionId`), and the
 /// topic-model version the filter's topics were evaluated under: the one
-/// the first page resolved, pinned by the cursor for every later page.
+/// the first page resolved, pinned by the cursor for every later page. The
+/// response of `QueryApi::search`.
+///
+/// The only wire types of this layer are these two; the traits, the
+/// in-process [`SearchQuery`], samples and every store error stay off the
+/// wire (store errors reach a client as the `QueryError` they map to).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SearchResults {

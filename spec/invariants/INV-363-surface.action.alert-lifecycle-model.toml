@@ -5,7 +5,7 @@ kind = "domain"
 property = "model-based"
 requires = ["property", "unit"]
 rationale = """
-The model is the operator half of the lifecycle in aggregates/alert.rs:
+The model is the operator half of the lifecycle in aggregates/alert/mod.rs:
 Acknowledge moves Open to Acknowledged{by, at}; Resolve moves Open or
 Acknowledged to Resolved{by, at, note}; both return Applied. An
 Acknowledge on Acknowledged or a Resolve on Resolved is accepted, changes

@@ -32,6 +32,12 @@ unit = [
     "crosstalk_spec::tests::wire::observed::identity::agents_refuse_unknown_fields_variants_and_invalid_parts",
     "crosstalk_spec::tests::wire::observed::ingest::ingest_envelopes_refuse_unknown_fields_and_variants",
     "crosstalk_spec::tests::wire::provenance::provenance_enums_refuse_unknown_and_invalid_variants",
+    "crosstalk_spec::tests::wire::analysis::rules::rules_refuse_unknown_fields_variants_and_out_of_range_values",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_versions_refuse_unknown_shapes",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_histories_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::projections::projections_refuse_unknown_shapes_and_non_finite_points",
+    "crosstalk_spec::tests::wire::analysis::insight::insight_events_refuse_unknown_and_invalid_payloads",
 ]
 
 [evidence-review]

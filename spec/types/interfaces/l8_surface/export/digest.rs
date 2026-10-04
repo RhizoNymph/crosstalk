@@ -235,7 +235,7 @@ fn topic(row: &TopicRow, out: &mut Vec<u8>) {
         len(content.terms.len(), out);
         for (term, weight) in &content.terms {
             string(term, out);
-            float(*weight, out);
+            float(weight.get(), out);
         }
     });
 }
@@ -249,8 +249,8 @@ fn point(row: &PointRow, out: &mut Vec<u8>) {
     out.push(route_code(point.route));
     option(point.topic, out, |topic, out| id(topic.as_ulid(), out));
     time(point.confirmed_at, out);
-    float(point.x, out);
-    float(point.y, out);
+    float(point.x.get(), out);
+    float(point.y.get(), out);
     option(row.content.as_ref(), out, label);
 }
 

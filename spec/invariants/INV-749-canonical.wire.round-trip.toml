@@ -31,6 +31,22 @@ unit = [
     "crosstalk_spec::tests::wire::observed::identity::claim_sets_golden",
     "crosstalk_spec::tests::wire::observed::ingest::every_ingest_event_golden_inside_an_envelope",
     "crosstalk_spec::tests::wire::provenance::provenance_goldens",
+    "crosstalk_spec::tests::wire::analysis::rules::stored_rules_golden_for_every_kind_and_watch_state",
+    "crosstalk_spec::tests::wire::analysis::rules::alert_rules_page_golden",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_golden_as_requests",
+    "crosstalk_spec::tests::wire::analysis::rules::rule_kinds_statuses_and_revisions_golden",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_model_versions_golden_as_requests",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_history_golden_in_every_status_and_retention",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_sizes_golden_over_a_window_and_all_time",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_lineage_golden",
+    "crosstalk_spec::tests::wire::analysis::topics::topics_and_embeddings_golden",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_params_golden_as_a_request",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_infos_golden_in_every_status",
+    "crosstalk_spec::tests::wire::analysis::projections::projections_page_golden",
+    "crosstalk_spec::tests::wire::analysis::projections::projected_points_golden",
+    "crosstalk_spec::tests::wire::analysis::insight::insight_events_golden_in_envelopes",
+    "crosstalk_spec::tests::wire::analysis::insight::classification_causes_golden",
+    "crosstalk_spec::tests::wire::analysis::projections::a_projection_travels_as_info_json_and_frame_bytes",
 ]
 
 [evidence-review]

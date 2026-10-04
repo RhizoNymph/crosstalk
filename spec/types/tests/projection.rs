@@ -10,7 +10,7 @@ use crate::aggregates::projection::{
 };
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{OperatorId, ProjectionId, TopicId};
-use crate::support::{TimeWindow, Watermark};
+use crate::support::{Finite, TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 
 const VERSION: TopicModelVersion = TopicModelVersion(3);
@@ -83,8 +83,8 @@ fn point(n: u128) -> ProjectedPoint {
         route: RouteKind::Unobserved,
         topic: Some(TopicId::from_ulid(7)),
         confirmed_at: at(10),
-        x: 0.5,
-        y: -1.5,
+        x: Finite::new(0.5).expect("finite"),
+        y: Finite::new(-1.5).expect("finite"),
     }
 }
 

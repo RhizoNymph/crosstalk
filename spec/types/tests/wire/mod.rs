@@ -10,6 +10,7 @@ pub mod harness;
 
 mod agents;
 mod alerts;
+mod analysis;
 mod bus;
 mod errors;
 mod flow;

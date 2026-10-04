@@ -55,6 +55,25 @@
 //! version's topics (`TopicCatalog::topics`), so a frame's topic ids always
 //! resolve to labels.
 //!
+//! **On the wire.** [`ProjectionParams`] is a request (`fit_projection`);
+//! [`ProjectionInfo`], with its [`ProjectionSpec`] and
+//! [`ProjectionStatus`], is a response (`projection_status`,
+//! `projections`) and never a request, because the surface stamps its
+//! requester and times. A [`Projection`] has no JSON form: its frame is
+//! binary. `QueryApi::projection` is answered in two halves: the job record
+//! is the JSON `ProjectionInfo` that `projection_status` returns, and the
+//! frame is `application/octet-stream`, the bytes of
+//! [`ProjectionFrame::encode`]. The UI reads `projection_status` (JSON)
+//! and, once the status is `ready`, fetches the frame bytes, decodes them
+//! with [`ProjectionFrame::decode`] and joins the two with
+//! [`Projection::new`], which refuses a frame that does not belong to the
+//! job. An error on the frame request (`NotFound`,
+//! `Conflict(ProjectionNotReady)`, `Conflict(ProjectionFailed)`,
+//! `ProjectionNotRetained`) is a `QueryError` in JSON like any other. The
+//! UMAP minimum distance is held in thousandths, so no float of a spec is
+//! on the wire; a [`ProjectedPoint`]'s coordinates are
+//! [`Finite`].
+//!
 //! [`TopologyFilter`]: crate::aggregates::filter::TopologyFilter
 
 pub mod frame;
@@ -67,7 +86,7 @@ use crate::aggregates::edge::{RouteKind, TopicSlot};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{AgentId, OperatorId, ProjectionId, TopicId, TransmissionId};
-use crate::support::{TimeWindow, Timestamp, Watermark};
+use crate::support::{Finite, TimeWindow, Timestamp, Watermark};
 use crate::wire::{Rejected, WireRequest};
 
 use frame::ProjectionFrame;
@@ -620,9 +639,8 @@ impl ProjectionInfo {
 }
 
 /// One point of a projection: a row of a [`ProjectionFrame`]. On the wire
-/// (an export's point rows) `x` and `y` are JSON numbers: a frame holds only
-/// finite coordinates (`InvalidFrame::NonFinite`), so they always encode.
-/// Decoding does not recheck that.
+/// (an export's point rows) `x` and `y` are JSON numbers, finite by type, so
+/// they always encode and a non-finite one is a decode error.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ProjectedPoint {
@@ -638,12 +656,16 @@ pub struct ProjectedPoint {
     pub topic: Option<TopicId>,
     /// `Confirmed::at`.
     pub confirmed_at: Timestamp,
-    pub x: f32,
-    pub y: f32,
+    pub x: Finite,
+    pub y: Finite,
 }
 
 /// A ready projection as `QueryApi::projection` returns it: its job record
 /// and its stored frame.
+///
+/// Not serialized: on the wire the record is the JSON [`ProjectionInfo`]
+/// and the frame its binary encoding, served separately (see the module
+/// docs), and a client rebuilds the pair with [`Projection::new`].
 ///
 /// Built only through [`Projection::new`]: the job is `Ready` and the
 /// frame's header agrees with it (id, topic version, watermark, sample size,

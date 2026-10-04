@@ -28,7 +28,7 @@ use crate::interfaces::l8_surface::summary::{
     Delivery, SummaryState, TopicUnder, TransmissionStateKind, TransmissionSummary,
 };
 use crate::observed::message::ToolName;
-use crate::support::{Blake3, ByteRange, NonEmpty};
+use crate::support::{Blake3, ByteRange, Finite, NonEmpty};
 use crate::tests::export::{V, header, parts, scope, scoped_basis, window};
 use crate::tests::fixtures::{agent, at, channel, transmission};
 
@@ -302,7 +302,7 @@ fn strings_are_length_prefixed_so_boundaries_cannot_shift() {
             matched_bytes: 1,
             content: Some(TopicContent {
                 label: label.into(),
-                terms: vec![(term.into(), 0.5)],
+                terms: vec![(term.into(), Finite::new(0.5).expect("finite"))],
             }),
         })
         .encode(&mut out);

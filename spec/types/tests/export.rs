@@ -32,7 +32,7 @@ use crate::interfaces::l8_surface::export::{
 };
 use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionSummary};
 use crate::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
-use crate::support::{TimeWindow, Watermark};
+use crate::support::{Finite, TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 use crate::tests::operators::caller;
 use crate::tests::verdicts::{confirmed, every_state};
@@ -156,8 +156,8 @@ fn point(n: u128, topic: Option<TopicId>) -> ProjectedPoint {
         route: RouteKind::Unobserved,
         topic,
         confirmed_at: at(100),
-        x: 0.25,
-        y: -2.0,
+        x: Finite::new(0.25).expect("finite"),
+        y: Finite::new(-2.0).expect("finite"),
     }
 }
 

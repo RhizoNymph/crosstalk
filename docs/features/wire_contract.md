@@ -465,6 +465,91 @@ The same change to `BTreeMap` would fix its order, and `channel_names`'s.
 | `spec/types/tests/wire/bus.rs` | `Envelope`, the exhaustive `BusEvent` and `Changed` index, `Subject`, `DeadLetter`, `ConsumerGroup` |
 | `spec/types/tests/golden/{topology,agents,bus}/` | 36, 8 and 12 goldens |
 
+### Analysis
+
+Alert rules, topics and their history, retention, projections, search
+results and the insight bus events (L6). Tests in
+`spec/types/tests/wire/analysis/` (one module per area: `rules.rs`,
+`topics.rs`, `projections.rs`, `insight.rs`), goldens in
+`spec/types/tests/golden/{rules,topics,projections,insight}/`.
+
+| Type | Wire role |
+| --- | --- |
+| `UserRule` (with `WatchedTopics`) | request: the rule a client writes in `CreateRule` and `UpdateRule`; its author and time are stamped outside it |
+| `TopicModelVersion` | request: the number `topic_sizes` (as `Option`, `null` for the active version) and `topic_lineage` take, and the pin and unpin actions carry; an unknown version is the query's `NotFound`, not a decode error |
+| `ProjectionParams` (with `ProjectionLimit`) | request: `fit_projection`'s parameters, seed included |
+| `AlertRuleDef`, `AlertRule`, `ContentRule`, `TopicWatch`, `QueryWatch`, `SemanticQuery`, `BuiltinRule`, `AlertRuleKind`, `RuleStatus`, `RuleRevision` | response (`alert_rules`) and bus payload (`AlertRuleChanged`); `AlertRuleDef` is stamped (its creator) |
+| `TopicVersionHistory`, `TopicVersionInfo`, `TopicVersionStatus`, `FitRecord`, `CompletedFit`, `Retention`, `Pin` | response (`topic_versions`); `Pin` is stamped |
+| `TopicSizes`, `TopicSize`, `TopicLineage`, `LineageEntry`, `LineageLink`, `Topic`, `Embedding`, `EmbeddingModel` | response (`topic_sizes`, `topic_lineage`, `topics`) |
+| `ProjectionInfo`, `ProjectionSpec`, `ProjectionStatus`, `Fitted`, `ProjectedPoint` | response (`projection_status`, `projections`, an export's point rows); `ProjectionInfo` is stamped (its requester) |
+| `SearchResults`, `SearchHit` | response (`search`) |
+| `InsightEvent`, `ClassificationCause`, `AlertRevision` | bus payload, inside `Envelope` |
+| `Projection`, `ProjectionFrame` | no serde: see below |
+| `AlertRuleSet`, `AlertRuleConfig`, `RuleDefinition`, `StaleReason`, `AlertDraft`, `TriageOutcome`, `RetentionPolicy`, `PinChange`, `TopicVersionStatusKind`, `TopicAssignment`, `Assignment`, `SearchQuery`, `Sample`, the L6 traits and store errors | not on the wire: in-memory indexes, config, in-process values, and errors that reach a client as the `QueryError` they map to |
+
+**Checked decoding.** `AlertRuleDef` decodes through `AlertRuleDef::builtin`
+for a built-in rule and `AlertRuleDef::load` for a user rule (`load`
+accepts every stored status and staleness), so a built-in rule under any
+id but its fixed one, or a user rule under an id in the reserved range, is
+`invalid alert rule: BuiltinId` or `Reserved` (`InvalidRuleDef`), in a
+response and on the bus alike. `TopicVersionInfo`, `TopicVersionHistory`,
+`TopicSizes`, `LineageEntry`, `TopicLineage`, `Embedding`, `ProjectionLimit`,
+`ProjectionParams` and `ProjectionInfo` decode through their constructors,
+with a rejection test per constructor error. `TopicVersionHistory` is
+`{"versions": [..]}`: the active version's index is found again from the
+statuses. `ProjectionSpec` decodes through `ProjectionSpec::new`, which
+pins the filter to the resolved version, so a spec sent with
+`{"type": "current"}` decodes pinned (normalization, as `NonBlank` trims).
+
+**Floats are finite.** Every float in these types is behind a checked
+type: similarities, thresholds and search scores are `Similarity`
+(`0.0..=1.0`), embeddings are unit-norm (`Embedding::new`), and a topic
+term's c-TF-IDF weight (`Topic::terms`, and an export's
+`TopicContent::terms`) and a projected point's `x` and `y` are `Finite`
+(`support.rs`: an `f32` never NaN or infinite, a JSON number). JSON has no
+NaN, but serde_json narrows a JSON number to `f32` through `f64`, so `1e39`
+decodes to infinity; each of these types refuses it
+(`canonical.wire.finite-floats`). The UMAP minimum distance is held in
+thousandths (`min_dist_milli`), so no float of a spec is on the wire.
+
+**Tuples.** A user rule's `created` is `[operator, time]` and a topic's
+`terms` is `[[term, weight], ..]`, per the tuple convention.
+
+**`QueryApi::projection`.** A `Projection` (its job record and its frame)
+has no JSON form, because the frame is binary with its own layout
+(`ProjectionFrame::encode` and `decode`). The answer is split by content
+type:
+
+- the job record is JSON: the `ProjectionInfo` that `projection_status`
+  returns, its `status` saying whether a frame exists (`ready`);
+- the frame is `application/octet-stream`: the bytes of
+  `ProjectionFrame::encode`, identical on every read until it expires, so
+  cacheable for as long as the job is `ready`;
+- an error on either (`NotFound`, `Conflict(ProjectionNotReady)`,
+  `Conflict(ProjectionFailed)`, `ProjectionNotRetained`) is the usual
+  `QueryError` JSON.
+
+The UI reads `projection_status` (or the `projections` list), and once a
+job is `ready` fetches its frame bytes, decodes them with
+`ProjectionFrame::decode` into the spec type (typed-array views over the
+same bytes for the canvas) and joins the two with `Projection::new`, which
+refuses a frame whose header disagrees with the job (id, topic version,
+watermark, limit, counts). `a_projection_travels_as_info_json_and_frame_bytes`
+pins that round trip. The routes themselves are HTTP routing, outside
+this feature; the split is a decision for the user to confirm.
+
+**Bus events.** Each `InsightEvent` variant has a golden inside a full
+`Envelope` (`{"id", "at", "event": {"type": "insight", "data": {"type":
+.., "data": ..}}}`), so the NATS bytes of every analysis event are pinned;
+an unknown insight variant or field, a zero revision and a rule with a
+refused id are decode errors there too.
+
+**Module split.** `aggregates/alert.rs` reached 1000 lines and is now
+`aggregates/alert/mod.rs` (alerts) and `aggregates/alert/rules.rs`
+(rules), with every rule type re-exported, so `aggregates::alert::<Type>`
+paths are unchanged. The Files row for `aggregates/alert.rs` below names
+the alert types, which stay in `alert/mod.rs`.
+
 ## Files
 
 | File | Role | Key exports |

@@ -38,6 +38,16 @@ unit = [
     "crosstalk_spec::tests::wire::observed::identity::agents_refuse_unknown_fields_variants_and_invalid_parts",
     "crosstalk_spec::tests::wire::provenance::content_matches_refuse_what_their_constructor_refuses",
     "crosstalk_spec::tests::wire::provenance::provenance_enums_refuse_unknown_and_invalid_variants",
+    "crosstalk_spec::tests::wire::analysis::rules::stored_rules_refuse_ids_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_infos_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_histories_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_sizes_and_lineage_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::topics::topics_refuse_non_finite_weights_and_bad_embeddings",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_params_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_infos_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_specs_decode_pinned",
+    "crosstalk_spec::tests::wire::analysis::insight::insight_events_refuse_unknown_and_invalid_payloads",
 ]
 
 [evidence-review]

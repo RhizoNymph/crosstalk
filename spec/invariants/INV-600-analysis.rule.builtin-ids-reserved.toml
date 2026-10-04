@@ -16,6 +16,7 @@ unit = [
     "crosstalk_spec::tests::rules::builtin_ids_are_fixed_distinct_and_reserved",
     "crosstalk_spec::tests::rules::reserved_range_is_the_zero_ulid_timestamp",
     "crosstalk_spec::tests::rules::user_rules_cannot_take_a_reserved_id",
+    "crosstalk_spec::tests::wire::analysis::rules::stored_rules_refuse_ids_their_constructors_refuse",
 ]
 
 [evidence-review]

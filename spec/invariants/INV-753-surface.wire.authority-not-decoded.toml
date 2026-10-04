@@ -25,6 +25,10 @@ unit = [
     "crosstalk_spec::tests::wire::requests::authority_keys_are_found_at_any_depth",
     "crosstalk_spec::tests::wire::alerts::alert_list_request_and_response_golden",
     "crosstalk_spec::tests::wire::paging::paging_goldens",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_golden_as_requests",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_model_versions_golden_as_requests",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_params_golden_as_a_request",
 ]
 
 [evidence-review]
