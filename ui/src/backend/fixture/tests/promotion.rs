@@ -21,10 +21,11 @@ use super::super::world::ChannelKey;
 use super::channels::{row, rows};
 use super::{caller, collect, fresh, graph_of, researcher, scope_with, shared, week};
 use crate::backend::Backend;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::pages::channels::promote::patterns::candidates;
 use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
+use crosstalk_spec::interfaces::l8_surface::actions::SupersededChannels;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
 
 use super::actions_support::{alert_state, channel, find_alert};
 
@@ -134,7 +135,7 @@ async fn sanctioning_records_the_decision_and_suppresses_the_channels_own_alerts
         .await;
     assert_eq!(
         result.err(),
-        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded {
+        Some(ActionError::Conflict(ConflictKind::ChannelSuperseded {
             channel: old,
             by: notes
         }))
@@ -184,8 +185,11 @@ async fn promotion_previews_what_promote_then_does() {
         .await;
     assert_eq!(
         outcome,
-        Ok(ActionOutcome::ChannelPromoted(wiki)),
-        "the promoted channel keeps its id"
+        Ok(ActionOutcome::ChannelPromoted {
+            channel: wiki,
+            superseded: SupersededChannels::new([talk]),
+        }),
+        "the promoted channel keeps its id and names what it superseded"
     );
     let all = all_time().expect("window");
     let resources = collect(50, async |p| {
@@ -265,7 +269,7 @@ async fn an_overlapping_pattern_is_a_conflict_in_the_preview_and_the_action() {
         b.act(&c, promote(talk, host, PolicyKind::Sanctioned))
             .await
             .err(),
-        Some(QueryError::Conflict(overlap))
+        Some(ActionError::Conflict(overlap))
     );
 }
 
@@ -296,13 +300,20 @@ async fn previews_agree_with_promotions() {
                 .act(&c, promote(id, pattern.clone(), PolicyKind::Sanctioned))
                 .await;
             match preview {
-                Err(error) => assert_eq!(acted.err(), Some(error)),
+                Err(error) => assert_eq!(acted.err().map(QueryError::from), Some(error)),
                 Ok(preview) => match preview.conflict() {
                     Some(kind) => {
-                        assert_eq!(acted.err(), Some(QueryError::Conflict(kind.clone())));
+                        assert_eq!(acted.err(), Some(ActionError::Conflict(kind.clone())));
                     }
                     None => {
-                        assert_eq!(acted, Ok(ActionOutcome::ChannelPromoted(id)));
+                        let Ok(ActionOutcome::ChannelPromoted {
+                            channel,
+                            superseded,
+                        }) = acted
+                        else {
+                            panic!("expected a promotion, got {acted:?}");
+                        };
+                        assert_eq!(channel, id);
                         let state = b.state.read().await;
                         let now_superseded: HashSet<ChannelId> = state
                             .channels
@@ -317,6 +328,8 @@ async fn previews_agree_with_promotions() {
                             .copied()
                             .collect();
                         assert_eq!(now_superseded, previewed, "{key:?} {pattern:?}");
+                        let returned: HashSet<ChannelId> = superseded.iter().collect();
+                        assert_eq!(returned, previewed, "the outcome names what it superseded");
                     }
                 },
             }
@@ -421,26 +434,26 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
     };
     assert_eq!(
         refused(talk, pattern.clone()).await,
-        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded {
+        Some(ActionError::Conflict(ConflictKind::ChannelSuperseded {
             channel: talk,
             by: wiki
         }))
     );
     assert_eq!(
         refused(wiki, pattern.clone()).await,
-        Some(QueryError::Conflict(ConflictKind::ChannelNotDiscovered {
+        Some(ActionError::Conflict(ConflictKind::ChannelNotDiscovered {
             channel: wiki
         }))
     );
     assert_eq!(
         refused(notes, pattern.clone()).await,
-        Some(QueryError::Conflict(ConflictKind::ChannelNotDiscovered {
+        Some(ActionError::Conflict(ConflictKind::ChannelNotDiscovered {
             channel: notes
         }))
     );
     let pastebin = channel(&b, ChannelKey::Pastebin);
     assert_eq!(
         refused(pastebin, pattern).await,
-        Some(QueryError::InvalidInput(InputError::PatternMissesSeed))
+        Some(ActionError::InvalidInput(InputError::PatternMissesSeed))
     );
 }

@@ -11,32 +11,31 @@ use crosstalk_spec::aggregates::alert::{
     WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aggregates::topic_history::TopicVersionHistory;
 use crosstalk_spec::ids::{AlertRuleId, OperatorId, SinkId, TopicId};
 use crosstalk_spec::interfaces::l6_analysis::RuleError;
-use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
-use crosstalk_spec::support::{NonEmpty, Timestamp};
+use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome};
+use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 
-use crate::backend::Result;
-use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::backend::fixture::world::topics::embed;
-use crate::contract::actions::ActionOutcome;
 
-use super::effects;
+use super::{Acted, Stamp, effects, outcome_of};
 
 /// How the surface reports a rule store refusal.
-fn refused(error: RuleError) -> QueryError {
-    ActionError::from(error).into()
+fn refused(error: RuleError) -> ActionError {
+    ActionError::from(error)
 }
 
-/// What an operator wrote, resolved against the store as of `current`, the
-/// topic version rules are written against. Sinks are checked first, then
+/// What an operator wrote, resolved against the catalog as of `current`,
+/// the topic version rules are written against. Sinks are checked first, then
 /// the definition: an unknown version or topic is `UnknownTopics`, a known
 /// version other than `current` is `TopicVersionNotCurrent`, and text the
 /// embedder cannot take is `Embed`.
 pub fn resolve(
     world: &World,
+    catalog: &TopicVersionHistory,
     current: TopicModelVersion,
     rule: &UserRule,
     sinks: &[SinkId],
@@ -56,7 +55,7 @@ pub fn resolve(
                 version,
                 topics: ids,
             } = topics;
-            if world.topics.history.get(*version).is_none() {
+            if catalog.get(*version).is_none() {
                 return Err(RuleError::UnknownTopics(ids.clone()));
             }
             if *version != current {
@@ -102,32 +101,35 @@ pub fn insert(
     created: (OperatorId, Timestamp),
     definition: RuleDefinition,
     sinks: Vec<SinkId>,
-) -> Result<()> {
+) -> Result<(), ActionError> {
     let rule = AlertRuleDef::user(id, name, created, definition, sinks).map_err(|e| {
-        QueryError::Store {
+        ActionError::Store {
             reason: format!("rule id {:?} is reserved", e.0),
         }
     })?;
-    state.rules.insert(rule).map_err(|e| QueryError::Store {
+    state.rules.insert(rule).map_err(|e| ActionError::Store {
         reason: format!("storing rule {id:?}: {e:?}"),
     })
 }
 
+/// Stores a new enabled user rule created by the caller at the acceptance
+/// time, against the active topic version.
 pub fn create(
     world: &World,
     state: &mut State,
-    by: OperatorId,
+    stamp: Stamp,
     name: &RuleName,
     rule: &UserRule,
     sinks: &[SinkId],
-) -> Result<ActionOutcome> {
-    let definition = resolve(world, world.topics.active(), rule, sinks).map_err(refused)?;
-    let id = AlertRuleId::from_ulid(state.mint.ulid(NOW));
+) -> Acted {
+    let current = state.active_version();
+    let definition = resolve(world, &state.catalog, current, rule, sinks).map_err(refused)?;
+    let id = AlertRuleId::from_ulid(state.mint.ulid(stamp.at));
     insert(
         state,
         id,
         name.clone(),
-        (by, NOW),
+        (stamp.by, stamp.at),
         definition,
         sinks.to_vec(),
     )?;
@@ -136,7 +138,8 @@ pub fn create(
 
 /// `AlertRuleDef::update`: same kind only, creator kept; a stale rule is
 /// retargeted and enabled. A built-in rule is refused before anything is
-/// resolved. Its alerts are left as they are.
+/// resolved. Its alerts are left as they are. `Unchanged` when the rule
+/// already reads so.
 pub fn update(
     world: &World,
     state: &mut State,
@@ -144,7 +147,7 @@ pub fn update(
     name: &RuleName,
     rule: &UserRule,
     sinks: &[SinkId],
-) -> Result<ActionOutcome> {
+) -> Acted {
     let stored = state
         .rules
         .get(id)
@@ -152,33 +155,29 @@ pub fn update(
     if matches!(stored.rule(), AlertRule::Builtin(_)) {
         return Err(refused(RuleError::NotEditable(NotEditable { rule: id })));
     }
-    let definition = resolve(world, world.topics.active(), rule, sinks).map_err(refused)?;
+    let current = state.active_version();
+    let definition = resolve(world, &state.catalog, current, rule, sinks).map_err(refused)?;
     state
         .rules
         .get_mut(id)
         .ok_or_else(|| refused(RuleError::UnknownRule(id)))?
         .update(name.clone(), definition, sinks.to_vec())
-        .map_err(|e| refused(RuleError::NotEditable(e)))?;
-    Ok(ActionOutcome::Applied)
+        .map(outcome_of)
+        .map_err(|e| refused(RuleError::NotEditable(e)))
 }
 
 /// `AlertRuleDef::set_enabled` on any rule: enabling a stale rule is
 /// refused and changes nothing; disabling suppresses the rule's active
-/// alerts at `at`.
-pub fn set_enabled(
-    state: &mut State,
-    id: AlertRuleId,
-    enabled: bool,
-    at: Timestamp,
-) -> Result<ActionOutcome> {
-    state
+/// alerts at `at`. `Unchanged` when the rule already had that status.
+pub fn set_enabled(state: &mut State, id: AlertRuleId, enabled: bool, at: Timestamp) -> Acted {
+    let change = state
         .rules
         .get_mut(id)
         .ok_or_else(|| refused(RuleError::UnknownRule(id)))?
         .set_enabled(enabled)
         .map_err(|e| refused(RuleError::Stale(e)))?;
-    if !enabled {
+    if change == Change::Applied && !enabled {
         effects::suppress_rule_alerts(state, id, at);
     }
-    Ok(ActionOutcome::Applied)
+    Ok(outcome_of(change))
 }

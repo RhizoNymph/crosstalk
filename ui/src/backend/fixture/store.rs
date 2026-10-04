@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::alert::{Alert, AlertRuleSet, RuleStatus};
 use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo};
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aggregates::topic_history::{TopicVersionHistory, TopicVersionInfo};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyHistory, Recorded};
 use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
@@ -97,6 +99,9 @@ pub struct State {
     /// The agents, the merge log and the vetoes.
     pub identity: Identity,
     pub channels: BTreeMap<ChannelId, ChannelRecord>,
+    /// The topic catalog: every version with its status and retention.
+    /// Pins change it (`TopicCatalog::pin`, `unpin`).
+    pub catalog: TopicVersionHistory,
     /// Each judged transmission's append-only log. A transmission never
     /// judged has no entry: its log is empty.
     pub verdicts: BTreeMap<TransmissionId, VerdictLog>,
@@ -113,10 +118,16 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(identity: Identity, channels: Vec<ChannelRecord>, mint: Mint) -> Self {
+    pub fn new(
+        identity: Identity,
+        channels: Vec<ChannelRecord>,
+        catalog: TopicVersionHistory,
+        mint: Mint,
+    ) -> Self {
         Self {
             identity,
             channels: channels.into_iter().map(|r| (r.channel.id, r)).collect(),
+            catalog,
             verdicts: BTreeMap::new(),
             alerts: Vec::new(),
             // Generation replaces it with the configured settings.
@@ -126,6 +137,21 @@ impl State {
             projections: Vec::new(),
             mint,
         }
+    }
+
+    /// The version graphs and series read, and views default to.
+    pub fn active_version(&self) -> TopicModelVersion {
+        self.catalog.active().version()
+    }
+
+    pub fn version_info(&self, version: TopicModelVersion) -> Option<&TopicVersionInfo> {
+        self.catalog.get(version)
+    }
+
+    /// Whether `version` is known and its data not dropped.
+    pub fn retains(&self, version: TopicModelVersion) -> bool {
+        self.version_info(version)
+            .is_some_and(|info| info.retention().is_retained())
     }
 
     /// The channel in force for `id` (`Channel::canonical`: one step, a

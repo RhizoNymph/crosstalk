@@ -32,6 +32,8 @@ pub struct VersionTab {
     /// Retention dropped its data: sizes over a window and linked views
     /// refuse it.
     pub dropped: bool,
+    /// Still being fitted: it cannot be pinned yet.
+    pub fitting: bool,
     pub in_view: bool,
 }
 
@@ -77,6 +79,7 @@ pub fn version_tabs(history: &TopicVersionHistory, in_view: TopicModelVersion) -
                 pinned: retention.pin().is_some(),
                 newest: Some(info.version()) == newest,
                 dropped: !retention.is_retained(),
+                fitting: matches!(info.status(), TopicVersionStatus::Fitting { .. }),
                 in_view: info.version() == in_view,
             }
         })

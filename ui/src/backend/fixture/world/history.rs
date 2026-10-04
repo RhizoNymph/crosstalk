@@ -14,6 +14,7 @@ use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::{EventId, OperatorId};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
+use crosstalk_spec::interfaces::l8_surface::actions::SupersededChannels;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -22,10 +23,10 @@ use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
 use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictRecorded};
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::channels::{ChannelKey, ChannelPlan, DESIGN_DOCS_AT, PASTEBIN_DECIDED_AT};
@@ -199,6 +200,12 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     }
     let (key, promotion) = team_notes_promotion();
     let channel = plan.id(key)?;
+    // What the promotion superseded, as the registry stored it.
+    let superseded = SupersededChannels::new(state.channels.values().filter_map(|record| {
+        let stored = record.channel();
+        let by = stored.origin.supersession()?.by;
+        (by == channel).then_some(stored.id)
+    }));
     let PolicyAuthor::Operator(by) = promotion.declaration().by else {
         return Err(GenError::Missing("the promotion's operator".to_owned()));
     };
@@ -213,7 +220,10 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
         promotion.at(),
         by,
         promote,
-        ActionOutcome::ChannelPromoted(channel),
+        ActionOutcome::ChannelPromoted {
+            channel,
+            superseded,
+        },
     );
     Ok(())
 }

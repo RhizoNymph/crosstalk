@@ -17,7 +17,7 @@ use super::super::text::Theme;
 use super::super::world::topics::QUERY_CONTEXT_CHARS;
 use super::{caller, collect, first, fresh, researcher, shared};
 use crate::backend::{Backend, alert_state};
-use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
 
 fn name(text: &str) -> RuleName {
     RuleName::new(text).expect("name")
@@ -194,14 +194,14 @@ async fn rules_are_resolved_against_the_current_version_and_sinks() {
     let cases = [
         (
             refused(watch(&b, 1, Theme::Incidents), Vec::new()),
-            QueryError::Conflict(ConflictKind::TopicVersionNotCurrent {
+            ActionError::Conflict(ConflictKind::TopicVersionNotCurrent {
                 requested: TopicModelVersion(1),
                 current: TopicModelVersion(2),
             }),
         ),
         (
             refused(watch(&b, 9, Theme::Incidents), Vec::new()),
-            QueryError::InvalidInput(InputError::UnknownTopics),
+            ActionError::InvalidInput(InputError::UnknownTopics),
         ),
         (
             refused(
@@ -219,17 +219,17 @@ async fn rules_are_resolved_against_the_current_version_and_sinks() {
                 },
                 Vec::new(),
             ),
-            QueryError::InvalidInput(InputError::UnknownTopics),
+            ActionError::InvalidInput(InputError::UnknownTopics),
         ),
         (
             refused(watch(&b, 2, Theme::Incidents), vec![SinkId::from_ulid(9)]),
-            QueryError::InvalidInput(InputError::UnknownSink {
+            ActionError::InvalidInput(InputError::UnknownSink {
                 sink: SinkId::from_ulid(9),
             }),
         ),
         (
             refused(semantic(&"key ".repeat(QUERY_CONTEXT_CHARS)), Vec::new()),
-            QueryError::InvalidInput(InputError::QueryTooLong),
+            ActionError::InvalidInput(InputError::QueryTooLong),
         ),
     ];
     for (action, error) in cases {
@@ -259,7 +259,7 @@ async fn builtin_rules_switch_but_never_edit() {
         )
         .await
         .err(),
-        Some(QueryError::Conflict(ConflictKind::RuleNotEditable {
+        Some(ActionError::Conflict(ConflictKind::RuleNotEditable {
             rule: builtin
         }))
     );
@@ -311,7 +311,7 @@ async fn builtin_rules_switch_but_never_edit() {
         )
         .await
         .err(),
-        Some(QueryError::NotFound)
+        Some(ActionError::NotFound)
     );
 }
 
@@ -325,7 +325,7 @@ async fn stale_rules_are_updated_not_enabled() {
         let enable = OperatorAction::SetRuleEnabled { id, enabled: true };
         assert_eq!(
             b.act(&c, enable).await.err(),
-            Some(QueryError::Conflict(ConflictKind::RuleStale { rule: id }))
+            Some(ActionError::Conflict(ConflictKind::RuleStale { rule: id }))
         );
         assert_eq!(stored(&b, id).await, before, "a refusal changes nothing");
         // Disabling is always allowed and leaves it stale.
@@ -358,7 +358,7 @@ async fn stale_rules_are_updated_not_enabled() {
         };
         assert_eq!(
             b.act(&c, as_query).await.err(),
-            Some(QueryError::Conflict(ConflictKind::RuleNotEditable {
+            Some(ActionError::Conflict(ConflictKind::RuleNotEditable {
                 rule: id
             }))
         );

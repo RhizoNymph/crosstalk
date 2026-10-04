@@ -8,9 +8,9 @@ use topcoat::view::{View, component, view};
 use crate::components::badge::Badge;
 use crate::components::error_panel;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL};
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
 use crate::pages::common::form::{FormFields, POLICIES, note, policy, policy_code};
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 pub fn parse(
     channel: ChannelId,

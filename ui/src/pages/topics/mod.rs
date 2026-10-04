@@ -10,8 +10,10 @@
 //! dropped keeps its topics and lineage but has no sizes over a window: its
 //! table shows the typed error (409). Topic labels and terms come from
 //! message text, so the page needs `Content`; without it the page says so.
+//! With `Govern`, the picker pins or unpins the shown version ([`pin`]).
 
 pub mod model;
+pub mod pin;
 
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
@@ -29,11 +31,13 @@ use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::sparkline::sparkline;
 use crate::components::table::{ROW, TD, TD_NUM};
 use crate::components::{
-    Tab, data_table, empty_state, error_panel, format_time, href, page_header, segmented,
+    Tab, data_table, empty_state, error_panel, flash_banner, format_time, href, page_header,
+    segmented,
 };
 use crate::error::UiError;
 use crate::pages::alerts::rules::form::DEFAULT_REMAP;
-use crate::pages::common::action::{require, status_of};
+use crate::pages::common::action::{Failure, require, status_of};
+use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::invalid;
 use crate::pages::common::rules::all_rules;
 use crate::pages::common::topics::{Trends, all_topics, topic_trends};
@@ -173,20 +177,41 @@ async fn topics_get(cx: &Cx) -> Result<impl View> {
         .map_err(|e| invalid("query", e))
         .and_then(|q| parse_version(q.ver.as_deref()))
         .map(|v| v.unwrap_or(state.scope.topic_version));
-    Ok(view! { topics_page(state: state, selected: selected) })
+    let flash = flash(cx);
+    Ok(view! { topics_page(state: state, selected: selected, flash: flash, failure: None) })
 }
 
+/// The page; `failure` is a refused pin post, shown next to the picker's
+/// pin control (or at the top when the picker is not shown).
 #[component]
 async fn topics_page(
     cx: &Cx,
     state: ViewState,
     selected: std::result::Result<TopicModelVersion, UiError>,
+    flash: Option<Flash>,
+    failure: Option<Failure<()>>,
 ) -> Result<impl View> {
     let caller = caller(cx);
     let allowed = require(&caller, Permission::View).and(selected);
     let content = can(&caller, Permission::Content);
+    let status = failure.as_ref().map(Failure::status);
+    // The body shows a refused pin next to the picker; without a body it
+    // goes at the top.
+    let (pin_error, top_error) = match failure.map(|f| f.error) {
+        Some(error) if content && allowed.is_ok() => (Some(error), None),
+        error => (None, error),
+    };
     Ok(view! {
         page_header(title: "Topics", subtitle: "What transmissions are about, per topic-model version, and how topics carried over after a re-fit.")
+        if let Some(status) = status {
+            (status)
+        }
+        if let Some(error) = top_error {
+            <div class="mb-4">error_panel(error: &error)</div>
+        }
+        if let Some(flash) = flash {
+            flash_banner(message: flash.message())
+        }
         match allowed {
             Err(error) => {
                 (status_of(&error))
@@ -197,26 +222,30 @@ async fn topics_page(
                     <p class="text-sm">"Topics need the Content permission: their labels and terms come from message text."</p>
                 </div>
             },
-            Ok(selected) => topics_body(state: state, selected: selected),
+            Ok(selected) => topics_body(state: state, selected: selected, pin_error: pin_error),
         }
     })
 }
 
-/// The version picker and the link that makes the shown version the
-/// view's.
+/// The version picker, the link that makes the shown version the view's,
+/// and the shown version's pin control.
 struct Picker {
     tabs: Vec<Tab>,
     detail: String,
     /// `None` when the shown version already is the view's.
     use_url: Option<String>,
+    /// The pin or unpin the shown version takes, for a `Govern` caller.
+    pin: Option<pin::PinChoice>,
 }
 
-fn picker(state: &ViewState, tabs: &[VersionTab], selected: TopicModelVersion) -> Picker {
-    let detail = tabs
-        .iter()
-        .find(|t| t.version == selected.0)
-        .map(|t| t.detail.clone())
-        .unwrap_or_default();
+fn picker(
+    state: &ViewState,
+    tabs: &[VersionTab],
+    selected: TopicModelVersion,
+    govern: bool,
+) -> Picker {
+    let shown = tabs.iter().find(|t| t.version == selected.0);
+    let detail = shown.map(|t| t.detail.clone()).unwrap_or_default();
     let mut use_state = state.clone();
     use_state.scope.topic_version = selected;
     Picker {
@@ -236,18 +265,33 @@ fn picker(state: &ViewState, tabs: &[VersionTab], selected: TopicModelVersion) -
             .collect(),
         detail,
         use_url: (selected != state.scope.topic_version).then(|| href(PATH, &use_state, &[])),
+        pin: shown.filter(|_| govern).and_then(pin::choice),
     }
 }
 
 #[component]
-async fn topics_body(cx: &Cx, state: ViewState, selected: TopicModelVersion) -> Result<impl View> {
+async fn topics_body(
+    cx: &Cx,
+    state: ViewState,
+    selected: TopicModelVersion,
+    pin_error: Option<UiError>,
+) -> Result<impl View> {
     let caller = caller(cx);
     let loaded = load(cx, &caller, &state, selected).await;
+    let govern = can(&caller, Permission::Govern);
     let picked = loaded
         .as_ref()
         .ok()
-        .map(|l| picker(&state, &l.tabs, l.selected));
+        .map(|l| picker(&state, &l.tabs, l.selected, govern));
     let rules_url = href("/alerts/rules", &state, &[]);
+    let pin_url = href(PATH, &state, &[]);
+    // A refused pin is shown in the picker's row, or above the body when
+    // the picker could not be built.
+    let (row_error, body_error) = if picked.is_some() {
+        (pin_error, None)
+    } else {
+        (None, pin_error)
+    };
     Ok(view! {
         if let Some(picked) = picked {
             <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -258,7 +302,16 @@ async fn topics_body(cx: &Cx, state: ViewState, selected: TopicModelVersion) -> 
                     Some(url) => <a class=(format!("{LINK} text-xs")) href=(url)>"Use v" (selected.0) " in every view"</a>,
                     None => <span class="text-xs text-zinc-500">"· the version every view reads"</span>,
                 }
+                if let Some(choice) = picked.pin {
+                    pin::pin_control(action: pin_url, version: selected.0, choice: choice)
+                }
+                if let Some(error) = row_error {
+                    <div class="basis-full">error_panel(error: &error)</div>
+                }
             </div>
+        }
+        if let Some(error) = body_error {
+            <div class="mb-4">error_panel(error: &error)</div>
         }
         match loaded {
             Err(error) => {

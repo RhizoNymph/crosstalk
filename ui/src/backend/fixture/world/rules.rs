@@ -18,7 +18,7 @@ use crate::backend::fixture::actions::rules::{insert, resolve};
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 use super::history::{CONFIG_AT, OPERATOR_RESEARCHER, operator_action};
 use super::topics::{self, V1_UNMAPPED};
@@ -162,7 +162,7 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
     for (text, rule, at, sinks) in user {
         let id = AlertRuleId::from_ulid(state.mint.ulid(at));
         let name = RuleName::new(text).map_err(|e| GenError::invalid("RuleName", e))?;
-        let definition = resolve(world, topics::version_at(at), &rule, &sinks)
+        let definition = resolve(world, &state.catalog, topics::version_at(at), &rule, &sinks)
             .map_err(|e| GenError::invalid("rule definition", e))?;
         let action = OperatorAction::CreateRule {
             name: name.clone(),

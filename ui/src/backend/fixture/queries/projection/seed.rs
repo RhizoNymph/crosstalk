@@ -95,7 +95,7 @@ pub fn seed(world: &World, state: &mut State, by: OperatorId) -> Result<()> {
     state.projections.push(Job::record(failed));
 
     let last_day = window(minus(NOW, DAY), NOW)?;
-    let active = world.topics.active();
+    let active = state.active_version();
     let fitting = queued(
         world,
         state,

@@ -26,6 +26,7 @@ use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::Result;
+use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::{TxRecord, World, confirmed};
 
 use super::Ctx;
@@ -56,11 +57,15 @@ pub fn resolve(
 /// unknown `NotFound`, never activated `Conflict(TopicVersionNotActivated)`,
 /// dropped by retention `VersionNotRetained`, topics outside the version
 /// `Conflict(TopicsNotInVersion)`.
-pub fn resolve_version(world: &World, filter: &TopologyFilter) -> Result<TopicModelVersion> {
+pub fn resolve_version(
+    world: &World,
+    state: &State,
+    filter: &TopologyFilter,
+) -> Result<TopicModelVersion> {
     resolve(
         filter,
-        &world.topics.history,
-        |version| world.topics.retains(version),
+        &state.catalog,
+        |version| state.retains(version),
         |topic| {
             world
                 .topics
@@ -77,10 +82,12 @@ pub fn resolve_version(world: &World, filter: &TopologyFilter) -> Result<TopicMo
 /// topics to check): what `transmissions_by_id` reads topics under.
 pub fn resolve_selector(
     world: &World,
+    state: &State,
     selector: TopicVersionSelector,
 ) -> Result<TopicModelVersion> {
     resolve_version(
         world,
+        state,
         &TopologyFilter {
             topic_version: selector,
             ..TopologyFilter::default()
@@ -91,11 +98,11 @@ pub fn resolve_selector(
 /// The version a traversal's cursor pinned on its first page: still
 /// readable, or `VersionNotRetained` once retention dropped it. A version
 /// the catalog never had came from a cursor the fixture did not issue.
-pub fn pinned_version(world: &World, version: TopicModelVersion) -> Result<TopicModelVersion> {
-    if world.topics.info(version).is_none() {
+pub fn pinned_version(state: &State, version: TopicModelVersion) -> Result<TopicModelVersion> {
+    if state.version_info(version).is_none() {
         return Err(QueryError::InvalidCursor);
     }
-    if !world.topics.retains(version) {
+    if !state.retains(version) {
         return Err(QueryError::VersionNotRetained { version });
     }
     Ok(version)
@@ -145,8 +152,8 @@ impl<'a> Linked<'a> {
         pinned: Option<TopicModelVersion>,
     ) -> Result<Self> {
         let version = match pinned {
-            Some(version) => pinned_version(ctx.world, version)?,
-            None => resolve_version(ctx.world, filter)?,
+            Some(version) => pinned_version(ctx.state, version)?,
+            None => resolve_version(ctx.world, ctx.state, filter)?,
         };
         Ok(Self {
             ctx,

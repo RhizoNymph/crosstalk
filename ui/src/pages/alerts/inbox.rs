@@ -19,9 +19,8 @@ use crate::components::{
     PageLinks, Tab, data_table, empty_state, error_panel, flash_banner, href, kind_badge,
     page_header, pagination, short_id, tabs,
 };
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
-use crate::pages::common::action::{Failure, done, perform, require, status_of};
+use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, note};
 use crate::pages::common::lookup::operator_names;
@@ -30,6 +29,7 @@ use crate::pages::common::rules::rule_names;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 use crosstalk_spec::paging::{AlertList, Cursor};
 
 const PATH: &str = "/alerts";
@@ -147,7 +147,10 @@ async fn alerts_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vie
     let state = view_state(cx).await?;
     let (failure, tab) = match parse(&fields) {
         Ok((action, flash, tab)) => match perform(cx, action).await {
-            Ok(_) => return Err(done(PATH, &state, &[("tab", tab_code(tab))], flash)),
+            Ok(outcome) => {
+                let flash = settled(&outcome, flash);
+                return Err(done(PATH, &state, &[("tab", tab_code(tab))], flash));
+            }
             Err(error) => {
                 let row = id::<AlertId>(&fields, "alert").ok().map(RowForm);
                 (Failure::new(row, error, fields), tab)

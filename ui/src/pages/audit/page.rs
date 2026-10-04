@@ -17,7 +17,6 @@ use crate::components::{
     PageLinks, data_table, empty_state, error_panel, filter_chip, format_time, href, page_header,
     pagination, short_id, state_inputs,
 };
-use crate::contract::actions::ActionOutcome;
 use crate::contract::research::{AuditEntry, AuditOutcome, AuditSubject};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
@@ -28,6 +27,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::ActionOutcome;
 use crosstalk_spec::paging::{AuditList, Cursor};
 
 const PATH: &str = "/audit";
@@ -52,19 +52,28 @@ fn created(
     query: &AuditQuery,
     state: &ViewState,
 ) -> Option<(String, String)> {
-    match *outcome {
-        ActionOutcome::Applied => None,
+    match outcome {
+        ActionOutcome::Applied | ActionOutcome::Unchanged => None,
         ActionOutcome::RuleCreated(id) => Some((
             format!("created rule {}", short_id(id.to_ulid())),
-            rule_url(id, state),
+            rule_url(*id, state),
         )),
-        ActionOutcome::ChannelPromoted(id) => Some((
-            format!("declared channel {}", short_id(id.to_ulid())),
-            channel_url(id, state),
+        ActionOutcome::ChannelPromoted {
+            channel,
+            superseded,
+        } => Some((
+            match superseded.as_slice().len() {
+                0 => format!("declared channel {}", short_id(channel.to_ulid())),
+                n => format!(
+                    "declared channel {}, superseding {n}",
+                    short_id(channel.to_ulid())
+                ),
+            },
+            channel_url(*channel, state),
         )),
         ActionOutcome::Merged(id) => Some((
             format!("merge {}", short_id(id.to_ulid())),
-            list_href(state, &query.with_subject(Some(AuditSubject::Merge(id)))),
+            list_href(state, &query.with_subject(Some(AuditSubject::Merge(*id)))),
         )),
     }
 }
@@ -275,11 +284,11 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::actions::OperatorAction;
     use crate::contract::research::{Actor, AuditedAction};
     use crate::testing::get;
     use crosstalk_spec::ids::AuditId;
     use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+    use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
     #[test]
     fn rows_link_and_filter_by_subject() {
@@ -348,7 +357,10 @@ mod tests {
                 note: None,
             }),
             subject: Some(AuditSubject::Channel(ChannelId::from_ulid(3))),
-            outcome: AuditOutcome::Applied(ActionOutcome::ChannelPromoted(ChannelId::from_ulid(8))),
+            outcome: AuditOutcome::Applied(ActionOutcome::ChannelPromoted {
+                channel: ChannelId::from_ulid(8),
+                superseded: Default::default(),
+            }),
             ..entry
         };
         let row = audit_row(

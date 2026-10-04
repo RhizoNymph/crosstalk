@@ -44,10 +44,11 @@ use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, Transmis
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, SinkInfo};
 use crosstalk_spec::support::TimeWindow;
 
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crosstalk_spec::ids::ProjectionId;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, ActionOutcome, OperatorAction, QueryError,
+};
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
@@ -415,11 +416,16 @@ pub trait Backend: Send + Sync + 'static {
         page: &PageRequest<DeadLetterList>,
     ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>>> + Send;
 
-    // Actions (item 13).
+    // Actions: exactly `OperatorActions::act`.
 
+    /// Checks the action's one required permission before any effect
+    /// (`Forbidden` naming it), applies the action with the author and
+    /// time stamped from the caller and the acceptance time, and leaves one
+    /// audit entry whose outcome is what it returns. `Unchanged` when the
+    /// state already matched.
     fn act(
         &self,
         caller: &Caller,
         action: OperatorAction,
-    ) -> impl Future<Output = Result<ActionOutcome>> + Send;
+    ) -> impl Future<Output = std::result::Result<ActionOutcome, ActionError>> + Send;
 }

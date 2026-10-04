@@ -15,7 +15,7 @@ use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, 
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
-use crate::contract::actions::OperatorAction;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 use super::channels::{
     ChannelKey, ChannelPlan, MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT, SHARED_FILE_DECIDED_AT,

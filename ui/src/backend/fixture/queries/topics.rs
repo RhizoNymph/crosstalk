@@ -36,16 +36,15 @@ use super::page::{Key, digest, paginate, pinned, versioned};
 const TOPICS: &str = "topics";
 
 pub fn versions(ctx: &Ctx) -> TopicVersionHistory {
-    ctx.world.topics.history.clone()
+    ctx.state.catalog.clone()
 }
 
 /// A version whose fit has returned: unknown is `NotFound`, fitting
 /// `Conflict(TopicVersionFitting)`.
 fn fitted<'a>(ctx: &'a Ctx<'a>, version: TopicModelVersion) -> Result<&'a TopicVersionInfo> {
     let info = ctx
-        .world
-        .topics
-        .info(version)
+        .state
+        .version_info(version)
         .ok_or(CatalogError::UnknownVersion(version))?;
     if info.status().kind() == TopicVersionStatusKind::Fitting {
         return Err(CatalogError::StillFitting(version).into());
@@ -81,7 +80,7 @@ pub fn sizes(
     window: Option<TimeWindow>,
 ) -> Result<Watermarked<TopicSizes>> {
     let topics = &ctx.world.topics;
-    let version = version.unwrap_or_else(|| topics.active());
+    let version = version.unwrap_or_else(|| ctx.state.active_version());
     let info = fitted(ctx, version)?;
     let frozen: Option<Timestamp> = match (info.retention(), window) {
         (Retention::Dropped { .. }, Some(_)) => {
@@ -127,11 +126,10 @@ pub fn sizes(
 }
 
 pub fn lineage(ctx: &Ctx, from: TopicModelVersion) -> Result<Option<TopicLineage>> {
-    let topics = &ctx.world.topics;
-    topics
-        .info(from)
+    ctx.state
+        .version_info(from)
         .ok_or(CatalogError::UnknownVersion(from))?;
-    Ok(topics.lineage(from).cloned())
+    Ok(ctx.world.topics.lineage(from).cloned())
 }
 
 /// A page of a version's topics, newest id first. A later page reads the
@@ -148,7 +146,7 @@ pub fn topics(
         }
         (_, Some(cursor)) => cursor,
         (TopicVersionSelector::Pinned(asked), None) => asked,
-        (TopicVersionSelector::Current, None) => ctx.world.topics.active(),
+        (TopicVersionSelector::Current, None) => ctx.state.active_version(),
     };
     fitted(ctx, version)?;
     let items: Vec<(Key, _)> = ctx

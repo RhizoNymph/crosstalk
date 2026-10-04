@@ -56,12 +56,13 @@ use crosstalk_spec::interfaces::l8_surface::lists::{
 };
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, SinkInfo};
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, Permission, SinkInfo,
+};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
 
 use super::{Backend, Result};
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::present::Present;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crosstalk_spec::aggregates::series::BucketWidth;
@@ -520,7 +521,11 @@ impl Backend for FixtureBackend {
             .await
     }
 
-    async fn act(&self, caller: &Caller, action: OperatorAction) -> Result<ActionOutcome> {
+    async fn act(
+        &self,
+        caller: &Caller,
+        action: OperatorAction,
+    ) -> std::result::Result<ActionOutcome, ActionError> {
         let mut state = self.state.write().await;
         actions::act(&self.world, &mut state, caller, action)
     }

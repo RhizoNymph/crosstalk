@@ -7,6 +7,7 @@ mod channels;
 mod governance;
 mod graph;
 mod lists;
+mod outcomes;
 mod projections;
 mod promotion;
 mod reads_support;

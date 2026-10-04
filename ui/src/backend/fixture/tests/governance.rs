@@ -7,10 +7,10 @@ use crosstalk_spec::interfaces::l8_surface::Permission;
 use super::super::clock::NOW;
 use super::{caller, fresh, graph_of, node_ids, researcher, week};
 use crate::backend::Backend;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crosstalk_spec::aggregates::agents::AgentLookup;
 use crosstalk_spec::ids::AgentId;
-use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
 use crosstalk_spec::observed::agent::{AgentLabel, AgentState, MergeVeto};
 
 use super::actions_support::*;
@@ -110,7 +110,7 @@ async fn merge_then_unmerge_restores_the_graph() {
     assert_eq!(node_ids(&before.value), node_ids(&after.value));
     assert!(matches!(
         b.act(&c, OperatorAction::Unmerge { merge: id }).await.err(),
-        Some(QueryError::Conflict(
+        Some(ActionError::Conflict(
             ConflictKind::MergeAlreadyReverted { .. }
         ))
     ));
@@ -130,7 +130,7 @@ async fn merges_name_canonical_agents_only() {
     // table never redirects (spec: both agents must be canonical).
     assert_eq!(
         b.act(&c, merge(&b, "cx3", "al1")).await.err(),
-        Some(QueryError::Conflict(ConflictKind::AgentMerged {
+        Some(ActionError::Conflict(ConflictKind::AgentMerged {
             agent: al1,
             into: cx1
         }))
@@ -138,13 +138,13 @@ async fn merges_name_canonical_agents_only() {
     // So is a merged source.
     assert!(matches!(
         b.act(&c, merge(&b, "al0", "cx0")).await.err(),
-        Some(QueryError::Conflict(ConflictKind::AgentMerged { .. }))
+        Some(ActionError::Conflict(ConflictKind::AgentMerged { .. }))
     ));
     // Two ids of one cluster are checked first, whichever way round.
     let (pi2, al3) = (agent(&b, "pi2"), agent(&b, "al3"));
     assert_eq!(
         b.act(&c, merge(&b, "pi2", "al3")).await.err(),
-        Some(QueryError::Conflict(ConflictKind::MergeIntoSelf {
+        Some(ActionError::Conflict(ConflictKind::MergeIntoSelf {
             from: pi2,
             into: al3,
             canonical: pi2
@@ -152,7 +152,7 @@ async fn merges_name_canonical_agents_only() {
     );
     assert!(matches!(
         b.act(&c, merge(&b, "al2", "al3")).await.err(),
-        Some(QueryError::Conflict(ConflictKind::MergeIntoSelf { .. }))
+        Some(ActionError::Conflict(ConflictKind::MergeIntoSelf { .. }))
     ));
     // Naming the canonical agent goes ahead.
     let ActionOutcome::Merged(id) = b.act(&c, merge(&b, "cx3", "cx1")).await.expect("merge") else {
@@ -179,13 +179,13 @@ async fn merges_name_canonical_agents_only() {
         b.act(&c, OperatorAction::Unmerge { merge: unknown })
             .await
             .err(),
-        Some(QueryError::NotFound)
+        Some(ActionError::NotFound)
     );
     // Merging needs Govern.
     let triage = caller(&[Permission::View, Permission::Triage]);
     assert_eq!(
         b.act(&triage, merge(&b, "cc5", "cc6")).await.err(),
-        Some(QueryError::Forbidden {
+        Some(ActionError::Forbidden {
             missing: Permission::Govern
         })
     );
@@ -268,7 +268,7 @@ async fn rename_labels_canonical_agents_only() {
         )
         .await
         .err(),
-        Some(QueryError::Conflict(ConflictKind::AgentMerged {
+        Some(ActionError::Conflict(ConflictKind::AgentMerged {
             agent: alias,
             into: agent(&b, "cc0")
         }))

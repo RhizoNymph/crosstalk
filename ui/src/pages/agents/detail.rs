@@ -26,7 +26,7 @@ use crate::components::{
 };
 use crate::error::UiError;
 use crate::pages::common::action::{
-    Failure, done, error_for, fields_for, general_error, perform, require, status_of,
+    Failure, done, error_for, fields_for, general_error, perform, require, settled, status_of,
 };
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
@@ -149,7 +149,9 @@ async fn agent_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View
     let id = agent_id(cx)?;
     let failure = match parse(id, &fields) {
         Ok((form, action, flash)) => match perform(cx, action).await {
-            Ok(_) => return Err(done(&agent_path(id), &state, &[], flash)),
+            Ok(outcome) => {
+                return Err(done(&agent_path(id), &state, &[], settled(&outcome, flash)));
+            }
             Err(error) => Failure::new(Some(form), error, fields),
         },
         Err((form, error)) => Failure::new(form, error, fields),

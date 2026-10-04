@@ -7,9 +7,9 @@ use crosstalk_spec::support::Timestamp;
 
 use crate::backend::alert_state;
 use crate::backend::fixture::store::State;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{Actor, AuditEntry, AuditOutcome, AuditSubject, AuditedAction};
 use crosstalk_spec::ids::AuditId;
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 pub fn is_active(alert: &Alert) -> bool {
     alert_state::is_active(&alert.state)
@@ -120,6 +120,8 @@ pub fn subject(action: &OperatorAction, outcome: Option<&ActionOutcome>) -> Opti
             Some(ActionOutcome::RuleCreated(id)) => Some(AuditSubject::Rule(*id)),
             _ => None,
         },
-        OperatorAction::ReplayDeadLetter { .. } => None,
+        OperatorAction::ReplayDeadLetter { .. }
+        | OperatorAction::PinTopicVersion { .. }
+        | OperatorAction::UnpinTopicVersion { .. } => None,
     }
 }

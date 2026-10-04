@@ -151,7 +151,7 @@ Features Index:
   ui:
     description: >
       Operator web UI: an overview, topology (agents or bipartite with
-      channels) with an edge drawer, transmission evidence with verdicts, search and UMAP exploration, topics, channels,
+      channels) with an edge drawer, transmission evidence with verdicts, search and UMAP exploration, topics (with version pins), channels,
       agents, alerts and rules, export, audit and pipeline. Defines the L8
       additions it needs.
     entry_points:

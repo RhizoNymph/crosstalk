@@ -6,8 +6,8 @@ use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::researcher;
-use crate::contract::actions::OperatorAction;
 use crosstalk_spec::aggregates::alert::{Alert, AlertState};
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 pub fn agent(b: &FixtureBackend, key: &str) -> AgentId {
     b.world.scenario.agent(key).expect("agent")

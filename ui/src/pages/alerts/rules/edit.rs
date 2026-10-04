@@ -25,9 +25,8 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::{Tone, error_panel, href, page_header, state_badge};
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
-use crate::pages::common::action::{Failure, done, perform, require, status_of};
+use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
@@ -37,6 +36,7 @@ use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(rule_ulid);
@@ -204,8 +204,8 @@ async fn submit(
             Flash::RuleUpdated,
         ),
     };
-    perform(cx, action).await?;
-    Ok(flash)
+    let outcome = perform(cx, action).await?;
+    Ok(settled(&outcome, flash))
 }
 
 #[page("/alerts/rules/new")]

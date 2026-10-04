@@ -24,7 +24,7 @@ use crate::components::{
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::error::UiError;
 use crate::pages::channels::sections::{HistoryRow, history_rows};
-use crate::pages::common::action::{Failure, done, perform, require, status_of};
+use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
@@ -113,7 +113,9 @@ async fn alert_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View
     let id = alert_id(cx)?;
     let error = match parse_action(id, &fields) {
         Ok((action, flash)) => match perform(cx, action).await {
-            Ok(_) => return Err(done(&alert_path(id), &state, &[], flash)),
+            Ok(outcome) => {
+                return Err(done(&alert_path(id), &state, &[], settled(&outcome, flash)));
+            }
             Err(error) => error,
         },
         Err(error) => error,
@@ -312,8 +314,15 @@ mod tests {
         let reply = session.get(&url).await;
         assert!(reply.body.contains("handled"));
         assert!(!reply.body.contains(">Resolve</button>"));
-        // Resolving again is a conflict, shown on the page.
+        // Resolving again changes nothing, and says so.
         let reply = session.post(&url, "action=resolve").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
+        let back = reply.location.expect("location");
+        assert!(back.ends_with("&flash=unchanged"), "{back}");
+        let reply = session.get(&back).await;
+        assert!(reply.body.contains("Nothing to change"));
+        // Acknowledging a resolved alert is a conflict, shown on the page.
+        let reply = session.post(&url, "action=acknowledge").await;
         assert_eq!(reply.status, StatusCode::CONFLICT);
         assert!(
             reply

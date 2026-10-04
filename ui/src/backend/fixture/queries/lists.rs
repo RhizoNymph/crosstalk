@@ -4,11 +4,11 @@
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 
 use crate::backend::Result;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction,
 };
 use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 use crosstalk_spec::paging::{AuditList, DeadLetterList, Page, PageRequest};
 
 use super::Ctx;
@@ -25,9 +25,11 @@ fn concerns(ctx: &Ctx, entry: &AuditEntry) -> Vec<AuditSubject> {
     if let AuditOutcome::Applied(outcome) = &entry.outcome {
         match outcome {
             ActionOutcome::RuleCreated(id) => out.push(AuditSubject::Rule(*id)),
-            ActionOutcome::ChannelPromoted(id) => out.push(AuditSubject::Channel(*id)),
+            ActionOutcome::ChannelPromoted { channel, .. } => {
+                out.push(AuditSubject::Channel(*channel))
+            }
             ActionOutcome::Merged(id) => out.push(AuditSubject::Merge(*id)),
-            ActionOutcome::Applied => {}
+            ActionOutcome::Applied | ActionOutcome::Unchanged => {}
         }
     }
     let merges: Vec<MergeId> = out

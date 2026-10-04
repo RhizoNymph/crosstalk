@@ -79,7 +79,7 @@ fn position(params: ProjectionParams, counted: &Counted) -> (f32, f32) {
 /// Fits `spec` as the job `id` started at `at`.
 pub fn fit(ctx: &Ctx, spec: &ProjectionSpec, id: ProjectionId, at: Timestamp) -> Result<Outcome> {
     let version = spec.topic_version();
-    if !ctx.world.topics.retains(version) {
+    if !ctx.state.retains(version) {
         return Ok(Outcome::Failed(FitFailure::VersionNotRetained { version }));
     }
     let linked = match Linked::new(ctx, spec.window(), spec.filter()) {

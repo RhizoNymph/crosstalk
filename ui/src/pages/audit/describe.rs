@@ -4,10 +4,10 @@ use crosstalk_spec::observed::agent::MergeRequest;
 
 use crate::components::locator::format_pattern;
 use crate::components::{badge::Badge, short_id};
-use crate::contract::actions::OperatorAction;
 use crate::contract::research::AuditedAction;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 /// One line saying what the action did. Ids are short; the subject column
 /// links the full entity.
@@ -68,6 +68,12 @@ fn describe_operator(action: &OperatorAction) -> String {
             "disabled rule"
         }
         .to_owned(),
+        OperatorAction::PinTopicVersion { version } => {
+            format!("pinned topic model version {}", version.0)
+        }
+        OperatorAction::UnpinTopicVersion { version } => {
+            format!("unpinned topic model version {}", version.0)
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 //! Verdicts: the log (the spec's `VerdictLog`, read with `View`), and the
 //! form that records one (genuine, false detection, or withdraw the
-//! verdict in force). Recording needs `Triage` and `Content`.
+//! verdict in force). Recording needs `Triage` (`SetVerdict`'s one
+//! permission).
 
 use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictLog};
 use crosstalk_spec::ids::TransmissionId;
@@ -10,11 +11,11 @@ use topcoat::view::{View, component, view};
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, SECTION, SECTION_TITLE};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{data_table, error_panel, format_time, kind_badge};
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, invalid, note, required};
 use crate::pages::common::lookup::OperatorNames;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 /// The choices of the form's `verdict` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,8 +110,9 @@ pub fn verdict_rows(log: &VerdictLog, operators: &OperatorNames) -> Vec<VerdictR
 /// What the verdict section offers the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormState {
-    /// The form, posting to `action`.
-    Open { action: String },
+    /// The form, posting to `action`. `content`: whether the caller can
+    /// read the matched text; without it the form says so.
+    Open { action: String, content: bool },
     /// Why there is no form.
     Closed(&'static str),
 }
@@ -169,8 +171,11 @@ pub async fn verdict_section(
             }
             match form {
                 FormState::Closed(reason) => <p class="text-xs text-zinc-500">(reason)</p>,
-                FormState::Open { action } => {
+                FormState::Open { action, content } => {
                     <form method="post" action=(action) class="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+                        if !content {
+                            <p class="mb-2 text-xs text-zinc-500">"The matched text needs the Content permission; judge from the parties, route and timing shown."</p>
+                        }
                         <input type="hidden" name="action" value="set-verdict">
                         <fieldset class="flex flex-wrap items-center gap-4 text-sm">
                             <legend class=(format!("{LABEL} mb-1"))>"Record a verdict"</legend>

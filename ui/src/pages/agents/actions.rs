@@ -1,16 +1,16 @@
 //! The agent page's forms: rename, clear the label, revert a merge, and the
 //! merge confirmation.
 
-use crosstalk_spec::ids::{AgentId, OperatorId};
-use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
-use crosstalk_spec::observed::agent::{AgentLabel, MergeAuthor, MergeRequest};
+use crosstalk_spec::ids::AgentId;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, Caller};
+use crosstalk_spec::observed::agent::AgentLabel;
 use crosstalk_spec::support::InvalidText;
 
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, id, invalid, required};
 use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 /// The forms on the agent page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,16 +65,15 @@ pub fn parse(
     }
 }
 
-/// The merge an operator confirms: `from` becomes `into`. One id twice is
-/// refused here, before any call, as `InvalidInput(SelfMerge)`.
+/// The merge the caller confirms: `from` becomes `into`, authored by the
+/// caller (`OperatorAction::merge_agents`). One id twice is refused here,
+/// before any call and without an audit entry, as `InvalidInput(SelfMerge)`.
 pub fn merge_action(
+    caller: &Caller,
     from: AgentId,
     into: AgentId,
-    operator: OperatorId,
 ) -> Result<OperatorAction, UiError> {
-    MergeRequest::new(from, into, MergeAuthor::Operator(operator))
-        .map(OperatorAction::MergeAgents)
-        .map_err(|e| UiError::Query(QueryError::from(ActionError::from(e))))
+    OperatorAction::merge_agents(caller, from, into).map_err(|e| ActionError::from(e).into())
 }
 
 #[cfg(test)]
@@ -156,16 +155,21 @@ mod tests {
 
     #[test]
     fn merges_are_operator_authored_and_never_self() {
+        use crosstalk_spec::ids::OperatorId;
+        use crosstalk_spec::interfaces::l8_surface::{Permission, QueryError};
+        use crosstalk_spec::observed::agent::MergeAuthor;
+
         let operator = OperatorId::from_ulid(7);
+        let caller = crate::testing::caller_of(operator, &[Permission::Govern]);
         let action =
-            merge_action(AgentId::from_ulid(1), AgentId::from_ulid(2), operator).expect("valid");
+            merge_action(&caller, AgentId::from_ulid(1), AgentId::from_ulid(2)).expect("valid");
         let OperatorAction::MergeAgents(request) = action else {
             panic!("expected a merge");
         };
         assert_eq!(request.by(), MergeAuthor::Operator(operator));
         assert_eq!(request.source(), AgentId::from_ulid(1));
         assert_eq!(
-            merge_action(AgentId::from_ulid(1), AgentId::from_ulid(1), operator),
+            merge_action(&caller, AgentId::from_ulid(1), AgentId::from_ulid(1)),
             Err(UiError::Query(QueryError::InvalidInput(
                 crosstalk_spec::interfaces::l8_surface::InputError::SelfMerge
             )))

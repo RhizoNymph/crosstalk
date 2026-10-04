@@ -108,7 +108,7 @@ pub fn fit(
     filter: &TopologyFilter,
     params: ProjectionParams,
 ) -> Result<ProjectionId> {
-    let version = resolve_version(world, filter)?;
+    let version = resolve_version(world, state, filter)?;
     if pending(state) >= MAX_PENDING {
         return Err(ProjectionStoreError::QueueFull.into());
     }

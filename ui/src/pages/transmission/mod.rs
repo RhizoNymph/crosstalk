@@ -7,7 +7,9 @@
 //! the co-access timeline come from `transmission_evidence`, which needs
 //! `Content`; without it those sections say so. The verdict log comes from
 //! `verdicts` (`View`). Posting `set-verdict` records a verdict (`Triage`
-//! and `Content`).
+//! alone: a verdict reveals no content). The form is offered to `Triage`
+//! callers on a judgeable transmission; without `Content` it says the
+//! matched text is hidden, so the verdict rests on the structure shown.
 
 pub mod model;
 pub mod sections;
@@ -42,7 +44,7 @@ use crate::components::{
 };
 use crate::error::UiError;
 use crate::pages::common::action::{
-    Failure, done, error_for, fields_for, general_error, perform, require, status_of,
+    Failure, done, error_for, fields_for, general_error, perform, require, settled, status_of,
 };
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
@@ -215,13 +217,14 @@ async fn load(
         verdict: summary.state.verdict(),
         edge_url,
     };
-    let form = if !(can(caller, Permission::Triage) && content) {
-        FormState::Closed("Recording a verdict needs the Triage and Content permissions.")
+    let form = if !can(caller, Permission::Triage) {
+        FormState::Closed("Recording a verdict needs the Triage permission.")
     } else if !judgeable(kind) {
         FormState::Closed("Nothing to judge yet: the gateway is still gathering evidence.")
     } else {
         FormState::Open {
             action: href(&transmission_path(id), state, &[]),
+            content,
         }
     };
     let (matches, co_access) = match &evidence {
@@ -266,7 +269,9 @@ async fn transmission_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<im
     let failure = match fields.text("action") {
         Some("set-verdict") => {
             let result = match verdict::parse(id, &fields) {
-                Ok((action, flash)) => perform(cx, action).await.map(|_| flash),
+                Ok((action, flash)) => perform(cx, action)
+                    .await
+                    .map(|outcome| settled(&outcome, flash)),
                 Err(error) => Err(error),
             };
             match result {

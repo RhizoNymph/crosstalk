@@ -258,7 +258,8 @@ fn topic_versions_and_remaps() {
     use crosstalk_spec::support::Similarity;
 
     let w = &shared().world;
-    let history = &w.topics.history;
+    let state = shared().state.try_read().expect("no action runs");
+    let history = &state.catalog;
     let versions: Vec<u32> = history.versions().iter().map(|v| v.version().0).collect();
     assert_eq!(versions, vec![0, 1, 2]);
     assert_eq!(history.active().version(), TopicModelVersion(2));

@@ -9,13 +9,13 @@ use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{AuditOutcome, AuditedAction};
 use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 use crosstalk_spec::observed::agent::AgentLabel;
 
@@ -84,7 +84,7 @@ async fn every_action_appends_one_audit_entry() {
         .await;
     assert_eq!(
         denied.err(),
-        Some(QueryError::Forbidden {
+        Some(ActionError::Forbidden {
             missing: Permission::Govern
         })
     );
@@ -178,7 +178,7 @@ async fn verdicts_judge_only_what_has_evidence() {
             .await;
         assert!(matches!(
             result.err(),
-            Some(QueryError::Conflict(
+            Some(ActionError::Conflict(
                 ConflictKind::TransmissionNotJudgeable { .. }
             ))
         ));
@@ -221,7 +221,10 @@ async fn verdicts_judge_only_what_has_evidence() {
         state.verdicts.get(&tx).map_or(0, |log| log.records().len())
     };
     let before = records(&b);
-    assert_eq!(b.act(&c, verdict.clone()).await, Ok(ActionOutcome::Applied));
+    assert_eq!(
+        b.act(&c, verdict.clone()).await,
+        Ok(ActionOutcome::Unchanged)
+    );
     assert_eq!(records(&b), before);
     let one = TransmissionSelection::new(vec![tx]).expect("selection");
     let row = b
@@ -266,13 +269,22 @@ async fn verdicts_judge_only_what_has_evidence() {
         before + 1,
         "the withdrawal is appended"
     );
-    // Judging needs Content as well as Triage.
-    let triage = caller(&[Permission::View, Permission::Triage]);
+    // Judging needs Triage alone (a verdict reveals no content); a viewer
+    // is forbidden and nothing is appended.
+    let viewer = caller(&[Permission::View, Permission::Content]);
     assert_eq!(
-        b.act(&triage, verdict).await.err(),
-        Some(QueryError::Forbidden {
-            missing: Permission::Content
+        b.act(&viewer, verdict.clone()).await.err(),
+        Some(ActionError::Forbidden {
+            missing: Permission::Triage
         })
+    );
+    assert_eq!(records(&b), before + 1);
+    let triage = caller(&[Permission::View, Permission::Triage]);
+    assert_eq!(b.act(&triage, verdict).await, Ok(ActionOutcome::Applied));
+    let log = b.verdicts(&c, tx).await.expect("ok").expect("found");
+    assert_eq!(
+        log.records().last().map(|r| r.by()),
+        Some(triage.operator())
     );
 }
 
@@ -292,13 +304,13 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
             at: NOW
         }
     );
-    // Acknowledging it again matches the state already there (the spec's
-    // `Unchanged`): accepted, and the first acknowledgement stays.
+    // Acknowledging it again matches the state already there: accepted as
+    // `Unchanged`, and the first acknowledgement stays.
     let oncall = caller(&[Permission::View, Permission::Triage]);
-    assert!(
+    assert_eq!(
         b.act(&oncall, OperatorAction::Acknowledge { alert: open })
-            .await
-            .is_ok()
+            .await,
+        Ok(ActionOutcome::Unchanged)
     );
     assert_eq!(
         alert_state(&b, open).await,
@@ -324,7 +336,9 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
             note: Some("done".into())
         }
     );
-    assert!(matches!(
+    // Resolving it again is a repeat of the transition: `Unchanged`, and
+    // who resolved it stays.
+    assert_eq!(
         b.act(
             &c,
             OperatorAction::Resolve {
@@ -332,16 +346,25 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
                 note: None
             }
         )
-        .await
-        .err(),
-        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
+        .await,
+        Ok(ActionOutcome::Unchanged)
+    );
+    assert!(matches!(
+        alert_state(&b, open).await,
+        AlertState::Resolved { note: Some(_), .. }
+    ));
+    assert!(matches!(
+        b.act(&c, OperatorAction::Acknowledge { alert: open })
+            .await
+            .err(),
+        Some(ActionError::Conflict(ConflictKind::AlertNotActive { .. }))
     ));
     let suppressed = find_alert(&b, |a| matches!(a.state, AlertState::Suppressed { .. })).await;
     assert!(matches!(
         b.act(&c, OperatorAction::Acknowledge { alert: suppressed })
             .await
             .err(),
-        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
+        Some(ActionError::Conflict(ConflictKind::AlertNotActive { .. }))
     ));
     let other_open = find_alert(&b, |a| a.state == AlertState::Open).await;
     b.act(
@@ -362,7 +385,7 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
         )
         .await
         .err(),
-        Some(QueryError::NotFound)
+        Some(ActionError::NotFound)
     );
 }
 
@@ -385,11 +408,11 @@ async fn replaying_a_dead_letter_removes_it() {
     let triage = caller(&[Permission::View, Permission::Triage]);
     assert_eq!(
         b.act(&triage, replay.clone()).await.err(),
-        Some(QueryError::Forbidden {
+        Some(ActionError::Forbidden {
             missing: Permission::Operate
         })
     );
     assert_eq!(b.act(&c, replay.clone()).await, Ok(ActionOutcome::Applied));
     assert_eq!(b.state.read().await.dead_letters.len(), before - 1);
-    assert_eq!(b.act(&c, replay).await.err(), Some(QueryError::NotFound));
+    assert_eq!(b.act(&c, replay).await.err(), Some(ActionError::NotFound));
 }

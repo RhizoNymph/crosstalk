@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 
 use crosstalk_spec::ids::{AgentId, MergeId, OperatorId};
 use crosstalk_spec::interfaces::l3_reconstruction::ResolveError;
-use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
 use crosstalk_spec::observed::agent::{
     Agent, AgentLabel, MergeAuthor, MergeRecord, MergeRequest, MergeVeto, Reversal,
 };
@@ -26,11 +25,6 @@ pub struct Identity {
     /// Oldest first.
     merges: Vec<MergeRecord>,
     vetoes: Vec<MergeVeto>,
-}
-
-/// How the surface reports an identity refusal (`ActionError::from`).
-pub fn refusal(error: ResolveError) -> QueryError {
-    ActionError::from(error).into()
 }
 
 fn fault(what: &str, detail: impl std::fmt::Debug) -> ResolveError {
@@ -420,8 +414,10 @@ mod tests {
             "a merged agent keeps its label"
         );
         assert_eq!(
-            refusal(ResolveError::MergeAlreadyReverted(MergeId::from_ulid(1))),
-            QueryError::Conflict(
+            crosstalk_spec::interfaces::l8_surface::ActionError::from(
+                ResolveError::MergeAlreadyReverted(MergeId::from_ulid(1))
+            ),
+            crosstalk_spec::interfaces::l8_surface::ActionError::Conflict(
                 crosstalk_spec::interfaces::l8_surface::ConflictKind::MergeAlreadyReverted {
                     merge: MergeId::from_ulid(1)
                 }

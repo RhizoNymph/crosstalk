@@ -301,10 +301,10 @@ mod tests {
 
     #[test]
     fn history_names_the_operator_and_keeps_rejections() {
-        use crate::contract::actions::OperatorAction;
         use crate::contract::research::{Actor, AuditedAction};
         use crosstalk_spec::ids::AuditId;
         use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+        use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
         let entry = AuditEntry {
             id: AuditId::from_ulid(1),

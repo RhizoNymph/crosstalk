@@ -212,7 +212,6 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
     ];
     Ok(TopicModel {
         model,
-        history: catalog::history(&topics)?,
         topics,
         lineages,
         theme_topics: vec![vec![None; Theme::ALL.len()], v1_theme, v2_theme],
@@ -226,16 +225,17 @@ pub fn assign(
     theme: Theme,
     rng: &mut Rng,
 ) -> Result<Vec<Assignment>, GenError> {
-    let versions = model.history.versions();
-    let mut out = Vec::with_capacity(versions.len());
-    for info in versions {
-        let outlier_rate = match (info.version().0, theme) {
+    let versions = u32::try_from(model.theme_topics.len())
+        .map_err(|e| GenError::invalid("version count", e))?;
+    let mut out = Vec::with_capacity(model.theme_topics.len());
+    for version in (0..versions).map(TopicModelVersion) {
+        let outlier_rate = match (version.0, theme) {
             (0, _) => 1.0,
             (1, _) => 0.07,
             (_, Theme::Injection) => 0.1,
             _ => 0.05,
         };
-        let topic = model.theme_topic(info.version(), theme);
+        let topic = model.theme_topic(version, theme);
         let assignment = match topic {
             Some(topic) if !rng.chance(outlier_rate) => Assignment::Topic {
                 topic,

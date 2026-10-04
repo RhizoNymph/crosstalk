@@ -1,5 +1,7 @@
 //! The outcome message shown after an action's redirect. The query carries
-//! a code, never text, so a link cannot make the page say something else.
+//! a code, never text, so a link cannot make the page say something else;
+//! the only number a code carries is how many channels a promotion
+//! superseded.
 
 use topcoat::context::Cx;
 use topcoat::router::query_params;
@@ -10,7 +12,11 @@ pub const KEY: &str = "flash";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flash {
     PolicySet,
-    ChannelPromoted,
+    /// The promoted channel, and how many discovered channels the promotion
+    /// superseded.
+    ChannelPromoted {
+        superseded: u16,
+    },
     AgentRenamed,
     LabelCleared,
     Unmerged,
@@ -25,12 +31,22 @@ pub enum Flash {
     VerdictRecorded,
     VerdictWithdrawn,
     ProjectionFitted,
+    VersionPinned,
+    VersionUnpinned,
+    /// The action was accepted, but the state already matched it.
+    Unchanged,
 }
 
+/// The code of a promotion that superseded nothing; one that superseded
+/// `n` channels is `promoted-n`.
+const PROMOTED: &str = "promoted";
+
 impl Flash {
-    pub const ALL: [Self; 16] = [
+    /// Every flash with a fixed code: all but promotions that superseded
+    /// channels.
+    pub const FIXED: [Self; 19] = [
         Self::PolicySet,
-        Self::ChannelPromoted,
+        Self::ChannelPromoted { superseded: 0 },
         Self::AgentRenamed,
         Self::LabelCleared,
         Self::Unmerged,
@@ -45,12 +61,31 @@ impl Flash {
         Self::VerdictRecorded,
         Self::VerdictWithdrawn,
         Self::ProjectionFitted,
+        Self::VersionPinned,
+        Self::VersionUnpinned,
+        Self::Unchanged,
     ];
 
-    pub fn code(self) -> &'static str {
+    /// A promotion's flash for `superseded` channels, saturating at
+    /// `u16::MAX`.
+    pub fn promoted(superseded: usize) -> Self {
+        Self::ChannelPromoted {
+            superseded: u16::try_from(superseded).unwrap_or(u16::MAX),
+        }
+    }
+
+    pub fn code(self) -> String {
+        match self {
+            Self::ChannelPromoted { superseded: 0 } => PROMOTED.to_owned(),
+            Self::ChannelPromoted { superseded } => format!("{PROMOTED}-{superseded}"),
+            fixed => fixed.fixed_code().to_owned(),
+        }
+    }
+
+    fn fixed_code(self) -> &'static str {
         match self {
             Self::PolicySet => "policy-set",
-            Self::ChannelPromoted => "promoted",
+            Self::ChannelPromoted { .. } => PROMOTED,
             Self::AgentRenamed => "renamed",
             Self::LabelCleared => "label-cleared",
             Self::Unmerged => "unmerged",
@@ -65,34 +100,64 @@ impl Flash {
             Self::VerdictRecorded => "verdict-recorded",
             Self::VerdictWithdrawn => "verdict-withdrawn",
             Self::ProjectionFitted => "projection-fitted",
+            Self::VersionPinned => "version-pinned",
+            Self::VersionUnpinned => "version-unpinned",
+            Self::Unchanged => "unchanged",
         }
     }
 
     /// Unknown codes read as no flash: a stale link should not fail.
     pub fn parse(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|f| f.code() == code)
+        if let Some(count) = code
+            .strip_prefix(PROMOTED)
+            .and_then(|rest| rest.strip_prefix('-'))
+        {
+            // Digits only, no leading zero: one code per count.
+            if count.starts_with('0') || !count.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            return count
+                .parse::<u16>()
+                .ok()
+                .map(|superseded| Self::ChannelPromoted { superseded });
+        }
+        Self::FIXED.into_iter().find(|f| f.fixed_code() == code)
     }
 
-    pub fn message(self) -> &'static str {
+    pub fn message(self) -> String {
         match self {
-            Self::PolicySet => "Policy updated.",
-            Self::ChannelPromoted => {
-                "Channel promoted. This declared channel now covers the discovered channels its pattern matches."
+            Self::ChannelPromoted { superseded: 0 } => {
+                "Channel promoted. It is now a declared channel under the same id.".to_owned()
             }
-            Self::AgentRenamed => "Agent renamed.",
-            Self::LabelCleared => "Label cleared.",
-            Self::Unmerged => "Merge reverted. The resolver will not re-merge this pair.",
-            Self::Merged => "Agents merged.",
-            Self::Acknowledged => "Alert acknowledged.",
-            Self::Resolved => "Alert resolved.",
-            Self::RuleCreated => "Rule created.",
-            Self::RuleUpdated => "Rule updated.",
-            Self::RuleEnabled => "Rule enabled.",
-            Self::RuleDisabled => "Rule disabled.",
-            Self::Replayed => "Dead letter replayed to its consumer group.",
-            Self::VerdictRecorded => "Verdict recorded.",
-            Self::VerdictWithdrawn => "Verdict withdrawn.",
-            Self::ProjectionFitted => "Projection fitted.",
+            Self::ChannelPromoted { superseded: 1 } => {
+                "Channel promoted. It superseded 1 discovered channel its pattern matches, which now resolves to it."
+                    .to_owned()
+            }
+            Self::ChannelPromoted { superseded } => format!(
+                "Channel promoted. It superseded {superseded} discovered channels its pattern matches, which now resolve to it."
+            ),
+            Self::PolicySet => "Policy updated.".to_owned(),
+            Self::AgentRenamed => "Agent renamed.".to_owned(),
+            Self::LabelCleared => "Label cleared.".to_owned(),
+            Self::Unmerged => "Merge reverted. The resolver will not re-merge this pair.".to_owned(),
+            Self::Merged => "Agents merged.".to_owned(),
+            Self::Acknowledged => "Alert acknowledged.".to_owned(),
+            Self::Resolved => "Alert resolved.".to_owned(),
+            Self::RuleCreated => "Rule created.".to_owned(),
+            Self::RuleUpdated => "Rule updated.".to_owned(),
+            Self::RuleEnabled => "Rule enabled.".to_owned(),
+            Self::RuleDisabled => "Rule disabled.".to_owned(),
+            Self::Replayed => "Dead letter replayed to its consumer group.".to_owned(),
+            Self::VerdictRecorded => "Verdict recorded.".to_owned(),
+            Self::VerdictWithdrawn => "Verdict withdrawn.".to_owned(),
+            Self::ProjectionFitted => "Projection fitted.".to_owned(),
+            Self::VersionPinned => {
+                "Version pinned. Retention keeps its data until it is unpinned.".to_owned()
+            }
+            Self::VersionUnpinned => {
+                "Version unpinned. Retention may now drop its data.".to_owned()
+            }
+            Self::Unchanged => "Nothing to change: it already was that way.".to_owned(),
         }
     }
 }
@@ -116,19 +181,58 @@ pub fn flash(cx: &Cx) -> Option<Flash> {
 mod tests {
     use super::*;
 
+    fn samples() -> Vec<Flash> {
+        let mut all = Flash::FIXED.to_vec();
+        all.extend([1, 2, 17, u16::MAX].map(|superseded| Flash::ChannelPromoted { superseded }));
+        all
+    }
+
     #[test]
     fn codes_round_trip_and_are_unique() {
-        for flash in Flash::ALL {
-            assert_eq!(Flash::parse(flash.code()), Some(flash));
+        let all = samples();
+        for flash in &all {
+            assert_eq!(Flash::parse(&flash.code()), Some(*flash));
         }
-        let mut codes: Vec<_> = Flash::ALL.iter().map(|f| f.code()).collect();
+        let mut codes: Vec<_> = all.iter().map(|f| f.code()).collect();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), Flash::ALL.len());
+        assert_eq!(codes.len(), all.len());
     }
 
     #[test]
     fn unknown_codes_are_ignored() {
         assert_eq!(Flash::parse("you-have-been-hacked"), None);
+        for code in [
+            "promoted-",
+            "promoted-0",
+            "promoted-01",
+            "promoted-x",
+            "promoted-70000",
+        ] {
+            assert_eq!(Flash::parse(code), None, "{code}");
+        }
+    }
+
+    #[test]
+    fn promotions_count_what_they_superseded() {
+        assert_eq!(Flash::promoted(0).code(), "promoted");
+        assert_eq!(Flash::promoted(3).code(), "promoted-3");
+        assert_eq!(
+            Flash::promoted(100_000),
+            Flash::ChannelPromoted {
+                superseded: u16::MAX
+            }
+        );
+        assert!(
+            Flash::promoted(1)
+                .message()
+                .contains("superseded 1 discovered channel ")
+        );
+        assert!(
+            Flash::promoted(2)
+                .message()
+                .contains("superseded 2 discovered channels")
+        );
+        assert!(!Flash::promoted(0).message().contains("superseded"));
     }
 }

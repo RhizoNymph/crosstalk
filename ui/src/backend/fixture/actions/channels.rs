@@ -1,57 +1,64 @@
-//! Channel policy and promotion (item 16), with the registry's semantics:
-//! a decision is recorded in the channel's policy history and the policy
-//! becomes the history's current one; a promotion follows
-//! `promotion::plan`, keeping the channel's id and superseding the
-//! discovered channels its pattern covers.
+//! Channel policy and promotion, with the registry's semantics: a decision
+//! is recorded in the channel's policy history and the policy becomes the
+//! history's current one; a promotion follows `promotion::plan`, keeping
+//! the channel's id and superseding the discovered channels its pattern
+//! covers.
 
-use crosstalk_spec::derived::flow::channel::policy::{Decision, PolicyAuthor, PolicyDecision};
+use crosstalk_spec::derived::flow::channel::policy::{
+    Decision, PolicyAuthor, PolicyDecision, Recorded,
+};
 use crosstalk_spec::derived::flow::channel::promotion::{self, Promotion};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
-use crosstalk_spec::ids::{ChannelId, OperatorId};
-use crosstalk_spec::interfaces::l5_flow::{PromoteError, RegistryError};
-use crosstalk_spec::interfaces::l8_surface::{ActionError, PolicyKind, QueryError};
+use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l5_flow::PromoteError;
+use crosstalk_spec::interfaces::l8_surface::actions::SupersededChannels;
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, ActionOutcome, ConflictKind, PolicyKind,
+};
 
-use crate::backend::Result;
-use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::queries::channels::registry;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
-use crate::contract::actions::ActionOutcome;
 
-use super::effects;
+use super::{Acted, Stamp, effects};
 
-/// Records the operator's decision in the channel's policy history.
-/// Sanctioning suppresses the active alerts about the channel and the
-/// channels it superseded; setting unreviewed records a reset. A
-/// superseded channel takes no decisions.
+/// Records the operator's decision in the channel's policy history, read
+/// through the channel directory first: an unknown channel is `NotFound`
+/// and a superseded one `Conflict(ChannelSuperseded)` naming the channel to
+/// act on instead. Sanctioning suppresses the active alerts about the
+/// channel and the channels it superseded; setting unreviewed records a
+/// reset. A decision the history already holds (a redelivery) is
+/// `Unchanged`.
 pub fn set_policy(
     state: &mut State,
-    by: OperatorId,
+    stamp: Stamp,
     channel: ChannelId,
     kind: PolicyKind,
     note: Option<String>,
-) -> Result<ActionOutcome> {
+) -> Acted {
     let record = state
         .channels
         .get_mut(&channel)
-        .ok_or(QueryError::NotFound)?;
+        .ok_or(ActionError::NotFound)?;
     if let Some(supersession) = record.channel().origin.supersession() {
-        return Err(RegistryError::Superseded {
+        return Err(ActionError::Conflict(ConflictKind::ChannelSuperseded {
             channel,
             by: supersession.by,
-        }
-        .into());
+        }));
     }
-    record.record(PolicyDecision {
+    let recorded = record.record(PolicyDecision {
         kind,
         decision: Decision {
-            by: PolicyAuthor::Operator(by),
-            at: NOW,
+            by: PolicyAuthor::Operator(stamp.by),
+            at: stamp.at,
             note,
         },
     });
+    if recorded == Recorded::Duplicate {
+        return Ok(ActionOutcome::Unchanged);
+    }
     if kind == PolicyKind::Sanctioned {
-        effects::suppress_channel_alerts(state, channel, NOW);
+        effects::suppress_channel_alerts(state, channel, stamp.at);
     }
     Ok(ActionOutcome::Applied)
 }
@@ -60,23 +67,25 @@ pub fn set_policy(
 /// stored channels: its origin becomes promoted (same id, resources and
 /// detection), the promotion's decision is recorded in its history, and
 /// every channel the plan supersedes becomes superseded by it. A refusal
-/// changes nothing and maps as `ActionError::from(PromoteError)`.
+/// changes nothing and maps as `ActionError::from(PromoteError)`. Returns
+/// the channel and the channels it superseded.
 pub fn promote(
     world: &World,
     state: &mut State,
-    by: OperatorId,
+    stamp: Stamp,
     channel: ChannelId,
     pattern: &ResourcePattern,
     kind: PolicyKind,
     note: Option<String>,
-) -> Result<ActionOutcome> {
-    let promotion = Promotion::new(pattern.clone(), kind, by, NOW, note);
+) -> Acted {
+    let promotion = Promotion::new(pattern.clone(), kind, stamp.by, stamp.at, note);
     let planned = promotion::plan(channel, promotion.declaration(), &registry(world, state))
-        .map_err(|refusal| QueryError::from(ActionError::from(PromoteError::Refused(refusal))))?;
+        .map_err(|refusal| ActionError::from(PromoteError::Refused(refusal)))?;
+    let superseded = SupersededChannels::new(planned.superseded_ids());
     let record = state
         .channels
         .get_mut(&channel)
-        .ok_or(QueryError::NotFound)?;
+        .ok_or(ActionError::NotFound)?;
     record.set_origin(planned.origin);
     record.record(promotion.decision().clone());
     for (id, origin) in planned.superseded {
@@ -85,7 +94,10 @@ pub fn promote(
         }
     }
     if kind == PolicyKind::Sanctioned {
-        effects::suppress_channel_alerts(state, channel, NOW);
+        effects::suppress_channel_alerts(state, channel, stamp.at);
     }
-    Ok(ActionOutcome::ChannelPromoted(channel))
+    Ok(ActionOutcome::ChannelPromoted {
+        channel,
+        superseded,
+    })
 }

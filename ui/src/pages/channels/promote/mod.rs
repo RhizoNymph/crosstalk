@@ -23,15 +23,15 @@ use self::screen::promote_page;
 use super::detail::{channel_id, channel_path};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::error::UiError;
-use crate::pages::common::action::{Failure, done, perform};
+use crate::pages::common::action::{Failure, done, perform, settled};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, invalid, note, policy};
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromoteForm {
@@ -89,13 +89,14 @@ pub fn parse(
     })
 }
 
-/// Promotes the channel; the promoted channel is the same one.
+/// Promotes the channel: the promoted channel (the same id) and the flash
+/// saying how many discovered channels it superseded.
 async fn submit(
     cx: &Cx,
     channel: ChannelId,
     state: &ViewState,
     fields: &FormFields,
-) -> std::result::Result<ChannelId, UiError> {
+) -> std::result::Result<(ChannelId, Flash), UiError> {
     let caller = caller(cx);
     let row = backend(cx)
         .channel(&caller, channel, Some(state.scope.window))
@@ -104,8 +105,11 @@ async fn submit(
         .value;
     let action = parse(channel, promotable_seed(&row)?, fields)?;
     match perform(cx, action).await? {
-        ActionOutcome::ChannelPromoted(promoted) => Ok(promoted),
-        _ => Ok(channel),
+        ActionOutcome::ChannelPromoted {
+            channel: promoted,
+            superseded,
+        } => Ok((promoted, Flash::promoted(superseded.as_slice().len()))),
+        outcome => Ok((channel, settled(&outcome, Flash::promoted(0)))),
     }
 }
 
@@ -124,13 +128,8 @@ async fn promote_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
     let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let error = match submit(cx, id, &state, &fields).await {
-        Ok(promoted) => {
-            return Err(done(
-                &channel_path(promoted),
-                &state,
-                &[],
-                Flash::ChannelPromoted,
-            ));
+        Ok((promoted, flash)) => {
+            return Err(done(&channel_path(promoted), &state, &[], flash));
         }
         Err(error) => error,
     };
@@ -253,6 +252,13 @@ mod tests {
         assert!(
             promoted.starts_with(&format!("/channels/{}?", wiki.to_ulid())),
             "promotion keeps the channel's id: {promoted}"
+        );
+        assert!(promoted.ends_with("&flash=promoted-1"), "{promoted}");
+        let reply = session.get(&promoted).await;
+        assert!(
+            reply
+                .body
+                .contains("It superseded 1 discovered channel its pattern matches")
         );
         let reply = session.get(&format!("{url}&pattern=2")).await;
         assert_eq!(reply.status, StatusCode::CONFLICT);

@@ -56,8 +56,8 @@ pub fn by_id(
     page: &PageRequest<TransmissionList>,
 ) -> Result<TransmissionPage> {
     let version = match page::pinned(BY_ID, page)? {
-        Some(pinned) => pinned_version(ctx.world, pinned)?,
-        None => resolve_selector(ctx.world, selector)?,
+        Some(pinned) => pinned_version(ctx.state, pinned)?,
+        None => resolve_selector(ctx.world, ctx.state, selector)?,
     };
     let items: Vec<(Key, TransmissionSummary)> = selection
         .ids()

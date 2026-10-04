@@ -6,6 +6,5 @@
 //! the gateway's types land, this module is deleted and its users import
 //! those instead.
 
-pub mod actions;
 pub mod present;
 pub mod research;

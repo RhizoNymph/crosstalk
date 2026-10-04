@@ -4,7 +4,7 @@ use topcoat::Result;
 use topcoat::view::{View, component, view};
 
 #[component]
-pub async fn flash_banner(message: &str) -> Result<impl View> {
+pub async fn flash_banner(message: String) -> Result<impl View> {
     Ok(view! {
         <div
             role="status"

@@ -5,10 +5,10 @@ use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use super::actions::{ActionOutcome, OperatorAction};
 use crate::url::scope::Scope;
 use crosstalk_spec::ids::{AuditId, MergeId, ProjectionId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportDataset {

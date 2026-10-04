@@ -28,9 +28,7 @@ use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::alert::AlertRuleConfig;
 use crosstalk_spec::aggregates::topic::{Assignment, EmbeddingModel, Topic, TopicModelVersion};
-use crosstalk_spec::aggregates::topic_history::{
-    TopicLineage, TopicVersionHistory, TopicVersionInfo,
-};
+use crosstalk_spec::aggregates::topic_history::TopicLineage;
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -149,9 +147,6 @@ impl TxRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopicModel {
     pub model: EmbeddingModel,
-    /// Every version, oldest first, numbered from 0 without gaps, with its
-    /// status and retention.
-    pub history: TopicVersionHistory,
     /// Every version's topics, dropped versions' included.
     pub topics: Vec<Topic>,
     /// The lineage from each version to the next, oldest first.
@@ -161,21 +156,6 @@ pub struct TopicModel {
 }
 
 impl TopicModel {
-    /// The version graphs and series read, and views default to.
-    pub fn active(&self) -> TopicModelVersion {
-        self.history.active().version()
-    }
-
-    pub fn info(&self, version: TopicModelVersion) -> Option<&TopicVersionInfo> {
-        self.history.get(version)
-    }
-
-    /// Whether `version` is known and its data not dropped.
-    pub fn retains(&self, version: TopicModelVersion) -> bool {
-        self.info(version)
-            .is_some_and(|info| info.retention().is_retained())
-    }
-
     /// The lineage from `from` to its successor.
     pub fn lineage(&self, from: TopicModelVersion) -> Option<&TopicLineage> {
         self.lineages.iter().find(|lineage| lineage.from() == from)
@@ -284,7 +264,8 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
     let channel_records = channels::finish(&plan, &traffic)?;
     let mut blobs = std::mem::take(&mut traffic.blobs);
     let dropped = retention::drop_old_bodies(&traffic.transmissions, &mut blobs);
-    let mut state = State::new(cast.identity.clone(), channel_records, mint);
+    let catalog = catalog::history(&topic_model.topics)?;
+    let mut state = State::new(cast.identity.clone(), channel_records, catalog, mint);
 
     let mut world = World {
         seed,

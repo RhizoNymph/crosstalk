@@ -21,7 +21,6 @@ use crate::components::{
     PageLinks, data_table, empty_state, error_panel, flash_banner, format_time, href, page_header,
     pagination,
 };
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
@@ -30,6 +29,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 use crosstalk_spec::paging::{Cursor, DeadLetterList};
 
 const PATH: &str = "/pipeline";

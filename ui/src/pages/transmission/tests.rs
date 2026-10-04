@@ -175,7 +175,12 @@ async fn without_content_only_structure_shows() {
         .expect("found");
     assert!(loaded.matches.is_none());
     assert!(loaded.co_access.is_none());
-    assert!(matches!(loaded.form, FormState::Closed(_)));
+    // `SetVerdict` needs Triage alone: the form is offered, saying the
+    // text is hidden.
+    assert!(matches!(
+        loaded.form,
+        FormState::Open { content: false, .. }
+    ));
     assert_eq!(loaded.header.topic, TopicCell::Hidden);
     assert!(loaded.header.from.is_some(), "structure stays");
     assert!(loaded.header.confirmed.is_some() && loaded.header.matched.is_some());

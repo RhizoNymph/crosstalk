@@ -361,7 +361,7 @@ async fn audit_filter_by_operator_subject_and_window() {
     };
     let rows = collect(100, async |p| b.audit(&c, &about, &p).await).await;
     assert!(rows.iter().any(|e| matches!(&e.action,
-        crate::contract::research::AuditedAction::Operator(crate::contract::actions::OperatorAction::SetPolicy { channel, .. }) if *channel == pastebin)));
+        crate::contract::research::AuditedAction::Operator(crosstalk_spec::interfaces::l8_surface::OperatorAction::SetPolicy { channel, .. }) if *channel == pastebin)));
     let recent = AuditFilter {
         window: Some(window(ago(DAY))),
         ..Default::default()

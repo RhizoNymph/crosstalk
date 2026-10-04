@@ -35,7 +35,7 @@ use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::audit::subject::subject_code;
 use crate::pages::common::action::{
-    Failure, done, error_for, fields_for, general_error, perform, require, status_of,
+    Failure, done, error_for, fields_for, general_error, perform, require, settled, status_of,
 };
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
@@ -265,7 +265,10 @@ async fn channel_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
                 Err(error) => Err(error),
             };
             match result {
-                Ok(_) => return Err(done(&channel_path(id), &state, &[], Flash::PolicySet)),
+                Ok(outcome) => {
+                    let flash = settled(&outcome, Flash::PolicySet);
+                    return Err(done(&channel_path(id), &state, &[], flash));
+                }
                 Err(error) => Failure::new(Some(ChannelForm::Policy), error, fields),
             }
         }

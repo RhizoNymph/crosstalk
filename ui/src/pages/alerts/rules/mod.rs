@@ -30,9 +30,8 @@ use crate::components::{
     Tone, content_hidden, data_table, empty_state, error_panel, flash_banner, href, page_header,
     state_badge,
 };
-use crate::contract::actions::OperatorAction;
 use crate::error::UiError;
-use crate::pages::common::action::{Failure, done, perform, require, status_of};
+use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, required};
 use crate::pages::common::lookup::{OperatorNames, operator_names};
@@ -41,6 +40,7 @@ use crate::pages::common::topics::all_topics;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::ids::SinkId;
+use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 
 pub const PATH: &str = "/alerts/rules";
 
@@ -130,7 +130,7 @@ async fn rules_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View
     let state = view_state(cx).await?;
     let error = match parse_toggle(&fields) {
         Ok((action, flash)) => match perform(cx, action).await {
-            Ok(_) => return Err(done(PATH, &state, &[], flash)),
+            Ok(outcome) => return Err(done(PATH, &state, &[], settled(&outcome, flash))),
             Err(error) => error,
         },
         Err(error) => error,

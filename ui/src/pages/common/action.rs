@@ -15,10 +15,10 @@ use super::form::FormFields;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::href;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::error::UiError;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 /// A rejected form post: which form (`None` when the post named no known
 /// form), why, and what was submitted, so the page can show the error next
@@ -79,14 +79,21 @@ pub fn require(caller: &Caller, permission: Permission) -> Result<(), UiError> {
     }
 }
 
-/// Checks the action's permissions, then runs it.
+/// Checks the action's one required permission, then runs it; the
+/// surface's `ActionError` becomes the page's `UiError`.
 pub async fn perform(cx: &Cx, action: OperatorAction) -> Result<ActionOutcome, UiError> {
     let caller = caller(cx);
-    require(&caller, action.requires())?;
-    if let Some(also) = action.also_requires() {
-        require(&caller, also)?;
-    }
+    require(&caller, action.required_permission())?;
     Ok(backend(cx).act(&caller, action).await?)
+}
+
+/// The flash after an accepted action: `applied` when it changed state,
+/// [`Flash::Unchanged`] when the state already matched.
+pub fn settled(outcome: &ActionOutcome, applied: Flash) -> Flash {
+    match outcome {
+        ActionOutcome::Unchanged => Flash::Unchanged,
+        _ => applied,
+    }
 }
 
 /// The response status for a failed action or read.
@@ -109,8 +116,9 @@ pub fn status_of(error: &UiError) -> StatusCode {
 /// Where a successful action sends the browser: `path` with the view state,
 /// the page's own pairs and the flash code.
 pub fn done_url(path: &str, state: &ViewState, extra: &[(&str, &str)], flash: Flash) -> String {
+    let code = flash.code();
     let mut pairs = extra.to_vec();
-    pairs.push((flash::KEY, flash.code()));
+    pairs.push((flash::KEY, code.as_str()));
     href(path, state, &pairs)
 }
 
@@ -148,6 +156,18 @@ mod tests {
         assert_eq!(
             status_of(&UiError::Query(QueryError::NotFound)),
             StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn unchanged_outcomes_say_so() {
+        assert_eq!(
+            settled(&ActionOutcome::Unchanged, Flash::Acknowledged),
+            Flash::Unchanged
+        );
+        assert_eq!(
+            settled(&ActionOutcome::Applied, Flash::Acknowledged),
+            Flash::Acknowledged
         );
     }
 

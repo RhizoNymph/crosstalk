@@ -95,7 +95,7 @@ pub struct ScopeFilter<'a> {
 impl<'a> ScopeFilter<'a> {
     /// Resolves the scope's version as every linked view does.
     pub fn new(ctx: &'a Ctx<'a>, scope: &Scope) -> Result<Self> {
-        let version = resolve_version(ctx.world, &scope.topology_filter())?;
+        let version = resolve_version(ctx.world, ctx.state, &scope.topology_filter())?;
         let f = &scope.filter;
         Ok(Self {
             ctx,
