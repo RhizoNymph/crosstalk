@@ -139,7 +139,7 @@ pub mod query_errors;
 pub mod sinks;
 pub mod summary;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -276,14 +276,14 @@ pub trait QueryApi {
     /// `ChannelDirectory` (a superseded id is named by its channel in
     /// force): the channel's id and its pattern or seed locator. Unknown ids
     /// are left out. Exactly [`channels::resolve_names`] over the registered
-    /// channels. The batch is bounded as for `agent_names`: a request with
+    /// channels, ordered by id as `agent_names` is. The batch is bounded as for `agent_names`: a request with
     /// more than [`IdBatch::MAX`] distinct ids is refused before the call
     /// as `InvalidInput(TooManyIds)` (`QueryError::from(TooManyIds)`).
     async fn channel_names(
         &self,
         caller: &Caller,
         ids: &IdBatch<ChannelId>,
-    ) -> Result<HashMap<ChannelId, ChannelName>, QueryError>;
+    ) -> Result<BTreeMap<ChannelId, ChannelName>, QueryError>;
 
     /// View. What `PromoteChannel { channel, pattern, .. }` would do if the
     /// caller sent it now: the surface builds the declaration the action
@@ -347,7 +347,9 @@ pub trait QueryApi {
     /// canonical agent and that agent's current label, keyed by the id asked
     /// for, so an alias is named by the agent it was merged into
     /// ([`AgentReads::names`]). Unknown ids are absent from the map, not
-    /// errors. A batch is at most [`IdBatch::MAX`] distinct ids; a request
+    /// errors. The map is ordered by id, so its JSON object's keys are in
+    /// ascending ULID text and one answer has one encoding. A batch is at
+    /// most [`IdBatch::MAX`] distinct ids; a request
     /// with more is refused before the call as
     /// `InvalidInput(TooManyIds)` (`QueryError::from(TooManyIds)`). Labels
     /// change only with `Changed::Agent`, so names are not watermarked.
@@ -357,7 +359,7 @@ pub trait QueryApi {
         &self,
         caller: &Caller,
         ids: &IdBatch<AgentId>,
-    ) -> Result<HashMap<AgentId, AgentName>, QueryError>;
+    ) -> Result<BTreeMap<AgentId, AgentName>, QueryError>;
 
     /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
     /// rules newest first. Every rule is listed: none is ever deleted.

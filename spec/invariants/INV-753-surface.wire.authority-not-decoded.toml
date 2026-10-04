@@ -43,6 +43,17 @@ unit = [
     "crosstalk_spec::tests::wire::surface_actions::audit::caller_snapshot_golden_and_of_a_caller",
     "crosstalk_spec::tests::wire::surface_actions::lists::channel_filters_golden_with_every_origin_filter",
     "crosstalk_spec::tests::wire::surface_actions::lists::alert_rule_filters_and_searches_golden",
+    "crosstalk_spec::tests::wire::agents::agent_filter_goldens",
+    "crosstalk_spec::tests::wire::bus::dead_letters_request_and_response_golden",
+    "crosstalk_spec::tests::wire::flow::resources::resource_patterns_are_request_goldens",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpt_window_request_golden",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_requests_golden_for_every_dataset",
+    "crosstalk_spec::tests::wire::surface_reads::transmissions::transmission_selection_request_golden",
+    "crosstalk_spec::tests::wire::topology::filter::edge_selector_golden",
+    "crosstalk_spec::tests::wire::topology::filter::topic_version_selector_goldens",
+    "crosstalk_spec::tests::wire::topology::filter::topology_filter_goldens",
+    "crosstalk_spec::tests::wire::topology::filter::weighting_goldens",
+    "crosstalk_spec::tests::wire::topology::series::series_request_goldens",
 ]
 
 [evidence-review]

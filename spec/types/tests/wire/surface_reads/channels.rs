@@ -2,7 +2,7 @@
 //! (`ChannelRow`, watermarked), `channel_names` (`ChannelName` by id) and
 //! `promotion_preview` (`PromotionPreview`).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
@@ -30,7 +30,7 @@ use crate::interfaces::l8_surface::channels::{
 use crate::paging::{ChannelList, Cursor, Page, PageSize};
 use crate::support::{NonEmpty, Timestamp, Watermark};
 
-const AREA: &str = "surface-reads/channels";
+const AREA: &str = "surface_reads/channels";
 
 fn promoted_at() -> Timestamp {
     ts("2026-10-04T10:02:11.000000Z")
@@ -247,10 +247,17 @@ fn channel_names_golden() {
     assert_golden(AREA, "channel_name_pattern", &pattern_name);
 
     let ids = IdBatch::new([notes_channel_id()]).expect("one id");
-    let names: HashMap<ChannelId, ChannelName> =
+    let names: BTreeMap<ChannelId, ChannelName> =
         resolve_names(&ids, &registry).expect("every channel is named");
     assert_eq!(names.get(&notes_channel_id()), Some(&pattern_name));
     assert_golden(AREA, "channel_names_superseded_id", &names);
+
+    // The map is ordered by id, so several names have one encoding.
+    let ids = IdBatch::new([wiki(), team(), notes_channel_id()]).expect("three ids");
+    let several = resolve_names(&ids, &registry).expect("every channel is named");
+    assert_eq!(several.get(&notes_channel_id()), Some(&pattern_name));
+    assert_eq!(several.len(), 3);
+    assert_golden(AREA, "channel_names_several", &several);
 }
 
 /// `QueryApi::promotion_preview`: what promoting the wiki channel over

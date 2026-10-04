@@ -21,7 +21,11 @@
 //!    ([`Agent::repoint`]) and listed in the record's `repointed`.
 //!
 //! **Reverting record `m`** (`IdentityResolver::unmerge`):
-//! 1. `m` is not reverted yet; reverting it again is refused.
+//! 1. `m` is not reverted yet; reverting it again is refused. The reversal
+//!    is dated no earlier than `m`, and the agents it lists as restored are
+//!    a subsequence of `m.repointed` ([`MergeRecord::revert`] refuses
+//!    anything else, so a stored record never claims to restore an agent its
+//!    merge did not repoint).
 //! 2. `m.from` returns to its `prior` state ([`Agent::revert`]). While `m` is
 //!    unreverted, `m.from` is merged by `m` and by no other record: the only
 //!    way out of `Merged` is reverting the record that put it there.
@@ -109,9 +113,10 @@ pub struct MergeRecord {
 /// [`MergeRecord`]'s fields, decoded without the checks. Decoding goes
 /// through the record's constructors in the order the log applies them:
 /// [`MergeRequest::new`] (a self-merge is refused), [`MergeRecord::new`],
-/// then [`MergeRecord::revert`] with the reversal, if any. A record carries
-/// one `reverted` slot, so the second reversal `revert` refuses cannot be
-/// written (a repeated key is a decode error).
+/// then [`MergeRecord::revert`] with the reversal, if any, which refuses a
+/// reversal dated before the merge or restoring an agent the merge did not
+/// repoint. A record carries one `reverted` slot, so the second reversal
+/// `revert` refuses cannot be written (a repeated key is a decode error).
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawMergeRecord {
@@ -133,7 +138,7 @@ impl TryFrom<RawMergeRecord> for MergeRecord {
         let mut record = Self::new(raw.id, request, raw.at, raw.repointed);
         if let Some(reversal) = raw.reverted {
             record.revert(reversal).map_err(|error| {
-                Rejected::new("merge record", InvalidMergeRecord::AlreadyReverted(error))
+                Rejected::new("merge record", InvalidMergeRecord::Reversal(error))
             })?;
         }
         Ok(record)
@@ -147,8 +152,8 @@ pub enum InvalidMergeRecord {
     /// [`MergeRequest::new`]: the record names one agent as source and
     /// target.
     SelfMerge,
-    /// [`MergeRecord::revert`]: a second reversal of the record.
-    AlreadyReverted(AlreadyReverted),
+    /// [`MergeRecord::revert`]: a reversal the record cannot have.
+    Reversal(InvalidReversal),
 }
 
 /// An operator's unmerge of one record.
@@ -166,6 +171,23 @@ pub struct Reversal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlreadyReverted {
     pub merge: MergeId,
+}
+
+/// Why [`MergeRecord::revert`] refuses a reversal, leaving the record as it
+/// was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidReversal {
+    /// The record is already reverted; the first reversal is kept.
+    AlreadyReverted(AlreadyReverted),
+    /// The reversal is dated before the merge it reverts.
+    BeforeMerge {
+        merged: Timestamp,
+        reverted: Timestamp,
+    },
+    /// `restored` names `agent`, which the record's `repointed` does not
+    /// hold at that place: an agent the merge never repointed, one named
+    /// twice, or one out of the record's order.
+    NotRepointed { agent: AgentId },
 }
 
 impl MergeRecord {
@@ -214,11 +236,28 @@ impl MergeRecord {
         self.reverted.as_ref()
     }
 
-    /// Mark the record reverted. Refuses a second revert and keeps the
-    /// first.
-    pub fn revert(&mut self, reversal: Reversal) -> Result<(), AlreadyReverted> {
+    /// Mark the record reverted. Refuses, changing nothing, a second revert
+    /// (the first is kept), a reversal dated before the merge, and one whose
+    /// `restored` is not a subsequence of the record's `repointed` (an
+    /// unmerge restores only agents this merge repointed, in its order, each
+    /// at most once).
+    pub fn revert(&mut self, reversal: Reversal) -> Result<(), InvalidReversal> {
         if self.reverted.is_some() {
-            return Err(AlreadyReverted { merge: self.id });
+            return Err(InvalidReversal::AlreadyReverted(AlreadyReverted {
+                merge: self.id,
+            }));
+        }
+        if reversal.at < self.at {
+            return Err(InvalidReversal::BeforeMerge {
+                merged: self.at,
+                reverted: reversal.at,
+            });
+        }
+        let mut remaining = self.repointed.iter();
+        for agent in &reversal.restored {
+            if !remaining.any(|repointed| repointed == agent) {
+                return Err(InvalidReversal::NotRepointed { agent: *agent });
+            }
         }
         self.reverted = Some(reversal);
         Ok(())

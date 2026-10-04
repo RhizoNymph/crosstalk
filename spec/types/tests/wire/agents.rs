@@ -6,11 +6,11 @@
 //! the coder (`c`) is its sub-agent; the orchestrator (`d`) is its parent;
 //! an operator vetoed merging the planner with `b`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::harness::{assert_golden, assert_rejected, assert_request_golden, assert_round_trips};
+use super::harness::{assert_golden, assert_rejected, assert_request_golden};
 use super::{ULID_A, ULID_B, ULID_C, id, ts};
 use crate::aggregates::agents::filter::{AgentFilter, AgentText};
 use crate::aggregates::agents::{
@@ -256,8 +256,8 @@ fn agent_detail_goldens() {
     assert_golden(AREA, "agent_unknown", &None::<Watermarked<AgentDetail>>);
 }
 
-/// `QueryApi::agent_names` returns a `HashMap`, whose order is random: the
-/// golden is a one-entry map, and a larger one round-trips.
+/// `QueryApi::agent_names` returns a `BTreeMap`: its keys encode in
+/// ascending id order, so a map of several names has one encoding.
 #[test]
 fn agent_names_golden() {
     let planner = AgentName {
@@ -265,9 +265,9 @@ fn agent_names_golden() {
         label: Some(label("planner")),
     };
     // The merged alias is named by the agent it resolves to.
-    let names = HashMap::from([(e(), planner.clone())]);
+    let names = BTreeMap::from([(e(), planner.clone())]);
     assert_golden(AREA, "agent_names", &names);
-    let more = HashMap::from([
+    let more = BTreeMap::from([
         (a(), planner.clone()),
         (e(), planner),
         (
@@ -278,7 +278,7 @@ fn agent_names_golden() {
             },
         ),
     ]);
-    assert_round_trips(&more);
+    assert_golden(AREA, "agent_names_several", &more);
 }
 
 /// `EdgeStore::agent_traffic` is a `BTreeMap`: its keys encode in ascending

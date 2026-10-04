@@ -46,7 +46,7 @@
 //!
 //! [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -441,15 +441,16 @@ impl ChannelName {
 /// channels: for each id of the batch that the registry knows, keyed by
 /// that id, the [`ChannelName`] of the channel it resolves to
 /// (`Channel::canonical`, what `ChannelDirectory::canonical` returns).
-/// Unknown ids are left out. The batch holds each id once and at most
+/// Unknown ids are left out. The map is ordered by id, so it has one
+/// JSON encoding. The batch holds each id once and at most
 /// [`IdBatch::MAX`] of them, so no batch is refused here. A known id whose
 /// channel in force is missing or unnamable is a store fault.
 pub fn resolve_names(
     ids: &IdBatch<ChannelId>,
     registry: &[Registered<'_>],
-) -> Result<HashMap<ChannelId, ChannelName>, QueryError> {
+) -> Result<BTreeMap<ChannelId, ChannelName>, QueryError> {
     let entry = |id: ChannelId| registry.iter().find(|entry| entry.channel.id == id);
-    let mut names = HashMap::new();
+    let mut names = BTreeMap::new();
     for &id in ids.ids() {
         let Some(asked) = entry(id) else { continue };
         let in_force = asked.channel.canonical();

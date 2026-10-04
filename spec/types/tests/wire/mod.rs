@@ -45,12 +45,31 @@ pub const ULID_A: &str = "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA";
 pub const ULID_B: &str = "01J9Z3M2C5D6E7F8G9H0J1K2M3";
 pub const ULID_C: &str = "01J9Z3N4P5Q6R7S8T9V0W1X2Y3";
 
-/// Every golden file is JSON in the harness's layout: two-space
-/// indentation, no tabs, carriage returns or trailing spaces, and exactly
-/// one trailing newline. (Key order is the encoder's field order, which
-/// only the golden's own test can check: `serde_json::Value` sorts keys.)
+/// Every golden file is in its encoder's layout. A `.json` golden is
+/// pretty JSON: two-space indentation, no tabs, carriage returns or
+/// trailing spaces, and exactly one trailing newline. A `.jsonl` golden (an
+/// export's lines) is one compact JSON value per line, each ended by `\n`:
+/// no blank lines, no indentation, tabs, carriage returns or trailing
+/// spaces. No other file belongs under `golden/`. (Key order is the
+/// encoder's field order, which only the golden's own test can check:
+/// `serde_json::Value` sorts keys.)
 #[test]
 fn every_golden_is_pretty_json_with_one_trailing_newline() {
+    fn check_jsonl(path: &Path, text: &str) {
+        assert!(
+            !text.is_empty() && text.ends_with('\n') && !text.contains("\n\n"),
+            "{path:?}: one value per line, each ended by a newline, no blank lines"
+        );
+        for line in text.lines() {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|error| panic!("{path:?}: `{line}` is not JSON: {error}"));
+            assert!(
+                line.trim() == line && !line.contains('\t') && !line.contains('\r'),
+                "{path:?}: `{line}` is not compact JSON on one line"
+            );
+        }
+    }
+
     fn visit(dir: &Path, found: &mut usize) {
         let entries =
             std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {dir:?}: {error}"));
@@ -62,13 +81,18 @@ fn every_golden_is_pretty_json_with_one_trailing_newline() {
                 visit(&path, found);
                 continue;
             }
-            assert_eq!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("json"),
-                "{path:?}: only .json files belong under golden/"
+            let extension = path.extension().and_then(|ext| ext.to_str());
+            assert!(
+                matches!(extension, Some("json" | "jsonl")),
+                "{path:?}: only .json and .jsonl files belong under golden/"
             );
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("read {path:?}: {error}"));
+            if extension == Some("jsonl") {
+                check_jsonl(&path, &text);
+                *found += 1;
+                continue;
+            }
             serde_json::from_str::<serde_json::Value>(&text)
                 .unwrap_or_else(|error| panic!("{path:?} is not JSON: {error}"));
             assert!(

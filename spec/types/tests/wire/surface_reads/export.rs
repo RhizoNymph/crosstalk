@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::super::harness::{BLESS, assert_golden, assert_rejected, assert_request_golden};
+use super::super::harness::{
+    BLESS, assert_golden, assert_rejected, assert_request_golden, golden_root,
+};
 use super::super::{ULID_A, ULID_B, id, ts};
 use super::fixtures::{
     coder, confirmed_at, day, edited, field, nz, operator, planner, read_at, topic, tx, wiki,
@@ -43,7 +45,7 @@ use crate::interfaces::l8_surface::{Permission, QueryError};
 use crate::support::{Blake3, ByteRange, Finite, NonEmpty, TimeWindow, Watermark};
 use crate::wire::DecodeErrorKind;
 
-const AREA: &str = "surface-reads/export";
+const AREA: &str = "surface_reads/export";
 
 /// The topic-model version every scoped export here resolves to.
 const V: TopicModelVersion = TopicModelVersion(4);
@@ -694,8 +696,7 @@ fn export_events_golden_in_every_variant() {
 // ── JSONL framing ──────────────────────────────────────────────────────────
 
 fn jsonl_golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("types/tests/jsonl/surface-reads/export_complete.jsonl")
+    golden_root().join(AREA).join("export_complete.jsonl")
 }
 
 /// The lines of the small export: its header, two access rows and the

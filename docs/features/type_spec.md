@@ -77,7 +77,9 @@ The types follow data through the stack:
    that record: the source returns to its prior state, each repointed agent
    that nothing moved since points at the source again (`Agent::restore`,
    which forgets the repoints after it), the record is marked reverted
-   (a second revert is refused), a `MergeVeto` between source and target is
+   (`MergeRecord::revert` refuses a second revert, a reversal dated before
+   the merge, and a `restored` list that is not a subsequence of the
+   record's `repointed`: `InvalidReversal`), a `MergeVeto` between source and target is
    recorded, and `AgentUnmerged` lists the restored agents. Records can be
    reverted in any order. The resolver refuses to merge clusters a veto
    separates; an operator merge between them clears those vetoes. Stored
@@ -280,7 +282,7 @@ The types follow data through the stack:
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
 | `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
-| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
+| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`; `InvalidReversal`, `InvalidMergeRecord`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
 | `spec/types/observed/agent/claims.rs` | Harness claims seen per agent | `SeenClaim`, `ClaimSet` (checked; `observe`, `union`), `DuplicateClaim` |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
@@ -351,6 +353,10 @@ The types follow data through the stack:
   `MergeVeto` keeps the pair apart from the resolver, and one
   `AgentUnmerged` lists the restored agents. Reverting the latest record is
   the identity on the merge table and on every topology graph.
+- A record's reversal is dated no earlier than its merge and restores only
+  agents the merge repointed, in the record's order, each at most once
+  (`reconstruct.merge-record.reversal-within-merge`); decoding a stored
+  record checks the same, through `revert`.
 - Labels are display only: never identity evidence, untouched by merges
   and unmerges, and only an active agent can be renamed. An `AgentLabel` is
   trimmed, non-empty, at most 64 characters and free of control

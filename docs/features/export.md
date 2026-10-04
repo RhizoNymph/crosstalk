@@ -217,8 +217,10 @@ the wire contract, so each line is a JSON object with exactly the keys
 | trailer | `"trailer"` | the `ExportTrailer` (`export`, `rows`, `digest`, `end`) | the last line, at most once |
 
 A complete export of two access rows, from the golden
-`spec/types/tests/jsonl/surface-reads/export_complete.jsonl` (header and
-trailer shortened here):
+`spec/types/tests/golden/surface_reads/export/export_complete.jsonl`
+(header and trailer shortened here; the goldens' digests come from the
+tests' stand-in `RowHasher`, not BLAKE3, so they pin the framing and the
+row encoding, not real digest values):
 
 ```text
 {"type":"header","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA","request":{..},"by":"01J9Z3N4P5Q6R7S8T9V0W1X2Y3",..,"rows":2}}
@@ -316,7 +318,7 @@ can end after it started, so it has its own record rather than a place in
 | `spec/types/tests/export_stream.rs` | Encoding, digest, sealer, sealed stream, verification, a transmission row is a confirmed summary | — |
 | `spec/types/tests/evidence.rs` (part) | Export content quotes the evidence | — |
 | `spec/types/tests/wire/surface_reads/export.rs` | Goldens of every request, header basis, row, trailer end, refusal and audit event; decode refusals; the JSONL golden and framing | — |
-| `spec/types/tests/golden/surface-reads/export/`, `spec/types/tests/jsonl/surface-reads/export_complete.jsonl` | The goldens | — |
+| `spec/types/tests/golden/surface_reads/export/` | The goldens, the JSONL one (`export_complete.jsonl`) beside the JSON ones | — |
 
 ## Invariants and constraints
 

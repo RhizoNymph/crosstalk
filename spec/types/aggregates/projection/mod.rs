@@ -244,7 +244,11 @@ impl ProjectionParams {
 ///
 /// Built only through [`ProjectionSpec::new`], which pins the filter's
 /// selector to the resolved version, so a stored spec never says `Current`.
-/// Decoding goes through it too, so a decoded spec's filter is pinned.
+/// Decoding goes through it too, so a decoded spec's filter is pinned. It is
+/// server-stamped (the version and model resolved when the request was
+/// accepted) and never a request (`wire/authority.rs`): a client asks with
+/// `ProjectionParams`, a window and a filter, and only the gateway writes a
+/// spec, so decoding one normalizes rather than refusing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", from = "RawProjectionSpec")]
 pub struct ProjectionSpec {

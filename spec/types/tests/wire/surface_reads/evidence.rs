@@ -17,7 +17,7 @@ use crate::interfaces::l8_surface::evidence::{
 use crate::interfaces::l8_surface::excerpt::{Excerpt, ExcerptWindow, Excerpted};
 use crate::support::ByteRange;
 
-const AREA: &str = "surface-reads/evidence";
+const AREA: &str = "surface_reads/evidence";
 
 /// The planner's text as it wrote it, and the coder's tool result that
 /// quotes it at bytes 12..59.

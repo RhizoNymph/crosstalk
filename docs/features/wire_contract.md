@@ -9,6 +9,11 @@ each shape so a format change is always a reviewed diff. The conventions
 live in `spec/types/wire/`; each type's serde derive or impl sits beside
 the type.
 
+This page holds the conventions, the harness, the authority rules and how
+the UI consumes the contract. Each area's reference (which of its types
+travel, what decoding checks, its goldens) is a page under
+[`wire/`](#areas).
+
 ## Scope
 
 - The JSON conventions: field naming, enum tagging, ids, digests,
@@ -21,18 +26,19 @@ the type.
   `decode_request`, `DecodeError` and its `InputError::MalformedRequest`
   mapping, and the compile-time checks that keep `Caller` and
   server-stamped records out of requests.
-- The golden-file harness: one JSON file per shape, the
-  `CROSSTALK_BLESS=1` rewrite, the rejection and request checks.
-- The reference area, converted completely: ids and digests, the support
-  types, paging, the alert inbox (`alerts`, `alert`) and the query and
-  action errors.
-- Stage 0 of the rest: every type reachable from a wire root (a
-  `QueryApi` argument or result, the operator action and its outcome, the
-  live feed's items, `Envelope`, an export's lines, `AuditEntry`) has its
-  recipe's derives and, if checked, its decode mirror, so every area
-  compiles against every other; its goldens, rejection tests and docs
-  follow per area.
-- How the UI consumes the contract.
+- The golden-file harness: one JSON file per shape (one JSONL file for an
+  export's lines), the `CROSSTALK_BLESS=1` rewrite, the rejection and
+  request checks.
+- Every type reachable from a wire root (a `QueryApi` argument or result,
+  the action a client sends and its outcome, the live feed's items,
+  `Envelope` and every `BusEvent`, an export's lines, `AuditEntry`): its
+  encoding, its decode checks, its goldens. The reference area (ids and
+  digests, the support types, paging, the alert inbox, the query and
+  action errors) is on this page; the rest are the [area pages](#areas).
+- The live feed's SSE framing (the JSON each SSE field carries) and the
+  projection's split into JSON and binary.
+- How the UI consumes the contract, and which spec type replaces each of
+  its stand-ins.
 
 ## Non-scope
 
@@ -40,18 +46,16 @@ the type.
   query string or the body) and status codes beyond "an undecodable
   request is a 400 with its `QueryError`". The spec pins the JSON of each
   argument and result, not the routes.
-- SSE framing and NATS subjects: the live feed's and the bus's own
-  features fix those; this feature fixes the JSON payload they carry.
-- Binary encodings: the projection frame's layout (`ProjectionFrame`) and
-  the export digest's canonical row encoding are defined with their types.
-- Goldens and rejection tests of the remaining areas (observed facts,
-  provenance, flow, topology, analysis, the rest of the surface, export,
-  bus events), written by follow-up workstreams; stage 0 gave their types
-  the recipe's impls only.
+- NATS subjects and stream names: the bus's own feature fixes those; this
+  feature fixes the JSON payload they carry.
+- Binary encodings: the projection frame's layout (`ProjectionFrame`), the
+  export digest's canonical row encoding and Parquet pages are defined
+  with their types.
 - Types no wire root reaches keep no serde impls: traits, in-process
   values (the proxy hot path, the message bodies the blob store holds,
   readers' copies and drafts), store errors that map into `QueryError`,
-  config, and `Projection`, whose frame is binary.
+  config, and `Projection`, whose frame is binary. Each area page lists
+  its own.
 - Schema evolution beyond "change the golden and upgrade every node
   together": there is no versioned envelope and no tolerant reader.
 
@@ -68,7 +72,8 @@ UI (topcoat, crosstalk-spec types)                 gateway
                                                                                = InvalidInput(MalformedRequest)
   response: serde_json::from_slice::<R>  ◀── JSON ── serde_json::to_vec(&R) (R: Serialize + Deserialize)
   error:    serde_json::from_slice::<QueryError>  ◀── JSON ── QueryError (adjacently tagged)
-  live:     UiEvent per SSE `data:` line   ◀── SSE ── LiveFeed
+  live:     LiveItem per SSE event (`event:` its type, `id:` its cursor, `data:` its JSON)  ◀── SSE ── LiveFeed
+  action:   ActionRequest ── decode_request ──▶ into_action(&Caller) ──▶ OperatorAction ──▶ OperatorActions::act
 
 node A ── NATS: Envelope JSON ──▶ node B: serde_json::from_slice::<Envelope>
                                      unknown field or variant ─▶ decode error ─▶ nack, retry, dead letter
@@ -85,12 +90,14 @@ node A ── NATS: Envelope JSON ──▶ node B: serde_json::from_slice::<Env
 | content id (`MessageHash`, `PromptHash`, `ConfigHash`), `Blake3` | 64 lower-case hex digits |
 | secret digest (`CredentialHash`, `AccountHash`) | `{"key": <secret version>, "digest": "<hex>"}` |
 | `Timestamp` | RFC 3339 UTC at fixed microsecond precision, `"2026-10-04T12:34:56.789012Z"` |
+| `std::time::Duration` | whole microseconds, a number, in a field named `<what>_micros`: `"lag_micros": 30250000` ([flow](wire/flow.md#durations)) |
 | `Watermark` | its timestamp |
 | number newtype (`TopicModelVersion`, `SecretVersion`) | the number |
 | `NonZeroU16`, `NonZeroU32`, … | number; `0` is a decode error |
+| float | a number, only behind a checked type that refuses NaN and infinities (`Similarity`, `Share`, `Finite`, `Embedding`) |
 | `Option<T>` | `T` or `null`; `None` is always written |
 | `Vec<T>`, `NonEmpty<T>`, `IdBatch<T>` | array (`NonEmpty`: never empty; `IdBatch`: ascending, distinct) |
-| map keyed by an id | object keyed by the id's text |
+| map keyed by an id | a `BTreeMap`: object keyed by the id's text, in ascending id order |
 | tuple | fixed-length array |
 | `Cursor<L>` | its token string (the list marker is not on the wire) |
 | `PageRequest<L>` | `{"size": 50, "after": null}` |
@@ -123,9 +130,11 @@ parser would need the same shape checks around it; the arithmetic is
 checked against day-by-day counting over the whole range.
 
 **Numbers** are JSON numbers: `u64` counts and the floats of
-`Similarity` and `Share`. The UI is Rust, so `u64` is exact; a JavaScript
-consumer would need a big-integer reader for counts above 2^53. No bare
-`u128` is on the wire (ids are text).
+`Similarity`, `Share`, `Finite` and `Embedding`, each finite by
+construction and on decode (`canonical.wire.finite-floats`). The UI is
+Rust, so `u64` is exact; a JavaScript consumer would need a big-integer
+reader for counts above 2^53. No bare `u128` is on the wire (ids, and
+`ConnectionId`, are text).
 
 ### Strict decoding
 
@@ -142,11 +151,22 @@ Every struct and every adjacently tagged enum sets
   the field silently dropped.
 
 A format change is therefore a coordinated upgrade of every node and the
-UI, and its golden diff is where it is reviewed. Two alternate spellings
-serde still accepts are not unknown fields or variants: a unit variant
-written as `{"type": "open", "data": null}`, and an all-unit enum written
-as `{"open": null}`. The goldens pin the canonical forms; nothing the
-gateway writes uses the others.
+UI, and its golden diff is where it is reviewed.
+
+Three leniencies remain, accepted and documented rather than closed,
+because none of them adds, drops or misreads data:
+
+- a unit variant written as `{"type": "open", "data": null}`;
+- an all-unit enum written as `{"open": null}`;
+- a struct written as a JSON array of its fields in declaration order
+  (`[{"message": .., "index": 0}, {"start": 0, "end": 8}]` decodes as a
+  `SpanLocation`). Serde's derived visitor accepts a sequence for every
+  struct; refusing it would take a hand-written `Deserialize` per type.
+
+None is an unknown field or variant, so strictness holds; a checked type's
+constructor runs on whichever spelling it is decoded from, so its checks
+hold too. The goldens pin the canonical forms, and nothing the gateway
+writes uses the others.
 
 ### Checked types
 
@@ -187,13 +207,14 @@ on the wire.
 ### Requests, responses and authority
 
 - **Requests** implement `WireRequest` (`Serialize + DeserializeOwned`):
-  in the reference area the entity ids, `TimeWindow`, `IdBatch<T>`,
-  `PageRequest<L>`, `AlertFilter`, and `Option` of any request; since
-  stage 0 also `TopologyFilter`, `TopicVersionSelector`, `Weighting`,
-  `EdgeSelector`, `SeriesGrid`, `SeriesGrouping`, `AgentFilter`,
-  `ResourcePattern`, `ProjectionParams`, `ChannelFilter`,
-  `AlertRuleFilter`, `SearchRequest`, `AuditFilter`,
-  `TransmissionSelection`, `ExcerptWindow` and `ExportRequest`. The
+  the entity ids, `TimeWindow`, `IdBatch<T>`, `PageRequest<L>`, `Option`
+  of any request, and `AlertFilter`, `TopologyFilter`,
+  `TopicVersionSelector`, `Weighting`, `EdgeSelector`, `SeriesGrid`,
+  `SeriesGrouping`, `AgentFilter`, `ResourcePattern`, `TopicModelVersion`,
+  `ProjectionParams`, `UserRule`, `ChannelFilter`, `AlertRuleFilter`,
+  `SearchRequest`, `AuditFilter`, `ConsumerGroup`,
+  `TransmissionSelection`, `ExcerptWindow`, `ExportRequest` and
+  `ActionRequest`. The
   gateway's HTTP layer decodes client input only through
   `decode_request::<T: WireRequest>`, so implementing the trait is the one
   decision that lets a client send a type. An axum extractor generic over
@@ -205,7 +226,8 @@ on the wire.
 - **Authority** never comes from the client. `Caller` implements neither
   serde trait, and no decoded value becomes one (an audit record keeps a
   `CallerSnapshot`, `{"operator": .., "permissions": [..]}`, plain data
-  that is not a `Caller`; see "Surface actions" below): the extractor builds it from the verified session through
+  that is not a `Caller`; see [surface actions](wire/surface_actions.md#audit-log)):
+  the extractor builds it from the verified session through
   `OperatorDirectory::caller`, and responses name its `OperatorId`. So do
   `RequestIdentity`, `OperatorDirectory` and `Promotion` (built in process
   from a `PromoteChannel`, the caller and the acceptance time). Every
@@ -215,10 +237,12 @@ on the wire.
   `VerdictLog`, `Pin`, `PolicyDecision`, `Decision`, `PolicyAuthor`,
   `Declaration`, `PolicyHistory`, `PromotionPreview`, `OperatorAction`,
   `OperatorRecord`, `AuditEntry`, `ExportHeader`, `ExportRecord`,
-  `ProjectionInfo`, `AlertRuleDef`, `Alert`, `AlertState`, `Envelope`,
-  `Supersession`, `SupersededInto`, `Policy`, `Retention`, `AlertRule`,
-  `VerdictRow`, `ConfigChange`, `ConfigRecord`, `Operator` and
-  `PermissionSet`.
+  `ExportLine`, `CallerSnapshot`, `ProjectionInfo`, `ProjectionSpec`,
+  `AlertRuleDef`, `Alert`, `AlertState`, `Envelope`, `BusEvent`,
+  `DeadLetter`, `Supersession`, `SupersededInto`, `Policy`, `Retention`,
+  `AlertRule`, `VerdictRow`, `ConfigChange`, `ConfigRecord`, `Operator`
+  and `PermissionSet`. The table in `wire/authority.rs` names what each
+  one holds that the server stamps, with one assertion per type.
   `wire/authority.rs` asserts all of this at compile time (a hand-written
   `assert_not_impl!`, the `static_assertions` technique), and its
   `compile_fail` doctests show decoding a `Caller` or a `Promotion` does
@@ -228,8 +252,8 @@ on the wire.
 `OperatorAction::merge_agents` stamps from the caller, so it cannot be
 what a client sends. The action a client sends is `ActionRequest`, the
 same actions without the author, which `ActionRequest::into_action`
-turns into an `OperatorAction` with the caller (see "Surface actions"
-below).
+turns into an `OperatorAction` with the caller
+([surface actions](wire/surface_actions.md#actions-request-action-outcome)).
 
 ### Errors
 
@@ -248,7 +272,9 @@ becomes an action, so it is not audited.
 
 `spec/types/tests/golden/<area>/<name>.json` holds the exact JSON of one
 value, written by `serde_json::to_string_pretty` with a trailing newline.
-`tests/wire/harness.rs`:
+An export's lines have one `.jsonl` golden
+(`surface_reads/export/export_complete.jsonl`): one compact JSON value per
+line, each ended by `\n`. `tests/wire/harness.rs`:
 
 - `assert_golden(area, name, &value)`: the value encodes to the file byte
   for byte, and the file decodes back to an equal value;
@@ -261,8 +287,10 @@ value, written by `serde_json::to_string_pretty` with a trailing newline.
 - `assert_rejected::<T>(json, reason)`: valid JSON that decodes to no
   value, refused as a data error whose message contains `reason`;
 - `assert_round_trips(&value)` for values with no golden of their own;
-- `every_golden_is_pretty_json_with_one_trailing_newline` keeps hand
-  edits in the encoder's layout.
+- `every_golden_is_pretty_json_with_one_trailing_newline` (in
+  `tests/wire/mod.rs`) keeps hand edits in the encoder's layout: pretty
+  JSON for a `.json` golden, compact lines for a `.jsonl` one, and no
+  other file under `golden/`.
 
 Enums with many variants have one golden listing a value of every
 variant, built through an exhaustive `match` with no wildcard, so a new
@@ -288,291 +316,92 @@ the spec types themselves:
   `serde_json::from_slice` into the method's result type (`Page<Alert,
   AlertList>`, `Option<Alert>`, …), and an error body into `QueryError` or
   `ActionError`.
-- The stand-ins in `ui/src/contract/` are deleted as their areas land, and
-  the UI imports the spec's types. Where a stand-in's shape differs from
+- The stand-ins in `ui/src/contract/` are deleted, and the UI imports the
+  spec's types (the table below). Where a stand-in's shape differs from
   the spec's, the spec's is the contract: the UI's `ConflictKind` variants
   carry no data and its `InputError` is `Field { field, reason }`, while
   the spec's carry the ids involved and `MalformedRequest { kind, reason }`
   respectively; the UI's `Alert` and `AlertState` match the spec's.
+- It sends actions as `ActionRequest` (never `OperatorAction`, which holds
+  a stamped merge author), and reads the audit log's callers as
+  `CallerSnapshot` values, which never become a `Caller`.
 - The fixture backend's JSON fixtures are replaced by the goldens: a
   fixture test reads `spec/types/tests/golden/<area>/<name>.json`
   (`include_str!`), decodes it into the spec type and renders from it, so
   the UI is tested against the exact bytes the gateway sends, and a golden
   change breaks the UI's build or tests in the same review.
 
-## Flow
+### What replaces the UI's stand-ins
 
-The flow area (`derived/flow/`, `interfaces/l5_flow.rs` and
-`l5_flow/verdicts.rs`, `events/detect.rs`): resources, accesses, channels,
-transmissions, verdicts and the L4/L5 bus events. Tests in
-`spec/types/tests/wire/flow/` (one submodule per family: `resources`,
-`channels`, `transmissions`, `verdicts`, `events`, `duration`), goldens in
-`spec/types/tests/golden/flow/`.
+For deleting `ui/src/contract/` on `feat/ui`. Paths are
+under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
+`aggregates/`.
 
-**Which types travel.**
+| Stand-in file | Replaced by | Still no spec type |
+| --- | --- | --- |
+| `mod.rs` | `MergeId`, `ProjectionId`, `SinkId`, `AuditId` in `ids.rs` (ULID text on the wire) | — |
+| `actions.rs` | `ActionRequest` (l8/actions/request.rs), what the UI sends: one variant per action, `MergeAgents { from, into }` with no author. `OperatorAction` (l8/actions.rs) is what the audit log returns, a merge carrying its stamped author; `ActionOutcome`. Rules take `UserRule`; `SetRuleEnabled { id, enabled }`; new `PinTopicVersion`, `UnpinTopicVersion`, `Unchanged`; `ChannelPromoted { channel, superseded }`. `requires` is `ActionKind`'s `required_permission` (`ActionRequest::kind`) | `also_requires`: dropped (`SetVerdict` needs Triage only) |
+| `agents.rs` | `AgentLabel`, `ActiveAgentState`, `AgentState` (`Merged(MergedInto)`), `Agent` (observed/agent.rs); `InvalidText` (support.rs); `CanonicalStateKind` (agg/node.rs) for `AgentStateKind`; `MergeRecord`, `MergeVeto` (observed/agent/merge.rs); `SeenClaim` (claims.rs); `AgentName`, `AgentRow` for `AgentSummary`, `AgentDetail` (agg/agents/mod.rs); `AgentFilter` (agg/agents/filter.rs) for `AgentListFilter` | `AgentState::is_merged` (use `merged_into`) |
+| `alerts.rs` | `Alert`, `AlertState`, `SuppressReason` (agg/alert/mod.rs), `AlertStateKind` (l8_surface.rs): the same shapes | `AlertState::kind`, `is_active` helpers |
+| `channels.rs` | `CanonicalOriginKind` (agg/node.rs) for `OriginKind`; `DetectionKind` (derived/flow/channel/detection.rs, via `ChannelOrigin::detection_kind`); `Policy::kind` for `policy_kind`; `SupersededInto` for `Supersession`; `ChannelName`; `ChannelRow` for `ChannelSummary` (standing, activity and counts as above); `ChannelFilter` with `OriginFilter` (l8/lists.rs) for `ChannelListFilter`; `PromotionPreview`; `ResourceUse` (agg/access.rs) | — |
+| `errors.rs` | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (l8/errors.rs). Conflicts carry the ids involved, several renamed (`AlertNotActive`, `MergeAlreadyReverted`, `RuleNotEditable`, `TransmissionNotJudgeable`); `PatternMissesSeed` is an `InputError` | `InputError::Field { field, reason }`: specific variants and `MalformedRequest` instead |
+| `evidence.rs` | `Excerpt` (l8/excerpt.rs: highlight `Range<u32>`, `elided_before`/`elided_after` as `u64`, plus `highlight_cut`), `InvalidExcerpt`, `MatchEvidence` (quotes are `Excerpted`: `Shown` or `BodyDropped`), `AccessDetail` (adds the canonical `agent`), `TransmissionEvidence` (l8/evidence.rs); the request's `ExcerptWindow` | `TransmissionEvidence::verdicts`, deliberately: the evidence view reads a transmission's verdicts from `QueryApi::verdicts` (its `VerdictLog`, revisions included), the one source of verdict history; `Excerpt::elided() -> (u32, u32)` |
+| `graph.rs` | `ChannelShape` (l8/channels.rs); `ChannelNode`, `InvalidNodes` (agg/node.rs); `TopologyGraph` (agg/edge.rs, `Watermarked`) for `TopologyView`; `WeightedAccess` for `AccessEdge`, `BipartiteGraph`, `InvalidBipartite` (agg/access.rs) for `BipartiteView`; `TopologySeries` (agg/series.rs) for `Timeline`; `EdgeSelector` and `TransmissionSelection` for `TransmissionSelector::{Edge, Ids}`; `TransmissionStateKind`, `TransmissionSummary` (l8/summary.rs: sender, bytes, topic and verdict inside `SummaryState`); `RouteKind::from(&Route)` for `route_kind` | `TimelineBucket` (a series is a value per grid point); `TransmissionSelector::All`, deliberately: a selection is either the ids of a filtered view's rows (`TransmissionSelection`, at most 100,000) or an edge drill-down (`EdgeSelector`), never every transmission |
+| `lists.rs` | `Cursor<L>`, `PageRequest<L>`, `Page<T, L>` (paging.rs), typed by list | `PageRequest::first` |
+| `research.rs` | `ProjectionParams`, `InvalidParams`, `ProjectionInfo` for `ProjectionMeta`, `ProjectionStatus` for `ProjectionJob` (agg/projection/mod.rs); `FrameColumns`, `ProjectionFrame`, `InvalidFrame` (agg/projection/frame.rs; binary, not JSON); `QualityRow`, `MatchClass` for `MatchKindName` (agg/quality.rs); `ExportDataset` (each carrying its selection), `ExportFormat`, `ExportRequest` (l8/export/request.rs); `AuditAuthor` for `Actor` (an operator record's and an export record's caller is a `CallerSnapshot`, l8/permissions.rs: the operator and the permissions it held), `AuditBody` for `AuditedAction`, `AuditOutcome`, `AuditEntry`, `AuditSubject`, `AuditFilter` (l8/audit.rs); `Operator` (l8/operators.rs). For reading an export, which no stand-in covers: `ExportLine`, `ExportHeader`, `ExportRow`, `ExportTrailer`, `read_jsonl`, `verify_export` | `ProjectionJob::Running { done, total }` progress; a channel column in `PointCategories`; `ExportRequest::scope` (inside the dataset) |
+| `rules.rs` | `BuiltinRule`, `UserRule` for `UserRuleSpec`, `RuleDefinition` for the stored `UserRule`, `AlertRule` for `RuleKind`, `RuleName`, `StaleReason`, `RuleStatus`, `AlertRuleDef` for `RuleDef` (agg/alert/rules.rs); `NonBlank` and `InputError::QueryTooLong` for `QueryText`; `SinkKind`, `SinkInfo` (l8/sinks.rs) | `OperatorRuleStatus` (a `bool` in `SetRuleEnabled`); `RuleAuthor` (a user rule's `created`); `UserRule::spec` |
+| `scope.rs` | `TopologyFilter` (agg/filter.rs, adds `topic_version`), `FalseDetections` for `VerdictFilter` | `Scope`: the window is a separate argument; `ExportScope` and `ProjectionSpec` are the nearest |
+| `search.rs` | `SearchMode`, `SearchRequest` (l8/lists.rs), `NonBlank` for `SearchText`, `Blank` for `EmptySearch`; results are `SearchResults` (l6_analysis.rs) | `Default` for `SearchMode` |
+| `topics.rs` | `TopicVersionInfo`, `TopicSizes`/`TopicSize` for `TopicStats`, `LineageEntry` for `TopicRemap`, `TopicLineage` for `TopicVersionRemap` (agg/topic_history.rs) | `TopicStats::trend` (use `series` by topic); `TopicVersionInfo::embedding_model` |
+| `verdict.rs` | `Verdict`, `TransmissionVerdict` (derived/flow/verdict.rs), the log as `VerdictLog` | — |
 
-- Request: `ResourcePattern` (the pattern of `PromoteChannel` and of
-  `promotion_preview`), one request golden per variant.
-- Responses and bus payloads: `Host`, `Locator`, `Resource`, `Access`,
-  `AccessOp`, `AccessKind`, `Extraction`, `CoAccess`, `Transmission`,
-  `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState`,
-  `Confirmed`, `Classification`, `Verdict`, `VerdictRevision`,
-  `TransmissionVerdict`, `VerdictLog`, `Channel`, `Seed`, `ChannelOrigin`,
-  `DeclaredHistory`, `DeclaredDetection`, `TrafficDetection`,
-  `DetectionKind`, `PromotionCoverage`, `DetectEvent`. The stamped ones
-  (`TransmissionVerdict`, `VerdictLog`, `Declaration`, `Supersession`,
-  `Policy`, `Decision`, `PolicyAuthor`, `PolicyDecision`, `PolicyHistory`)
-  are never requests (`wire/authority.rs`).
-- Neither: `Promotion` (authority, built in process), `Evidence`,
-  `NonChannelRoute`, `Judgeable`, `NotJudgeable`, `CurrentVerdict`,
-  `VerdictRecorded`, `Observed`, `PromotionPlan`, `Registered`,
-  `PromotionRefusal`, `TrafficVerdict`, `Recorded`, `CorrelationTiming`
-  (config), and everything in `l5_flow.rs` and `l5_flow/verdicts.rs`
-  (traits, `ExtractedAccess`, `ChannelLookup`, `Promoted`,
-  `TransmissionUpdate`, the store errors that map into `ActionError` or
-  `QueryError`): no wire root reaches them.
+## Areas
 
-**Durations.** A `std::time::Duration` on the wire is its whole
-microseconds as a JSON number, in a field named `<what>_micros`
-(`wire/duration.rs`, applied with `#[serde(with = "crate::wire::duration")]`).
-The convention is crate-wide; `CoAccess::lag` was the only wire duration,
-so its private field is now `lag_micros` (`"lag_micros": 30250000`, where
-stage 0 wrote serde's `{"secs", "nanos"}`); the accessor keeps the name
-`lag`. Encoding refuses a duration with a fraction of a microsecond or
-more than `u64::MAX` microseconds (`UnfitDuration`); decoding accepts the
-integers `0..=u64::MAX` and nothing else. The config durations
-(`CorrelationTiming`, `RetryPolicy`, `LiveConfig`) and the `retry_after`
-argument of `Subscription::nack` are not wire data. A source-scanning test
-(`every_wire_duration_field_uses_the_convention`) fails if a serialized
-`Duration` field lacks the attribute or a field using it is not named
-`_micros`.
+| Page | Covers | Golden directories |
+| --- | --- | --- |
+| this page | ids and digests, timestamps, the support types, paging, the alert inbox, the query and action errors, decoding requests | `ids`, `support`, `paging`, `alerts`, `errors` |
+| [observed.md](wire/observed.md) | exchanges and client context, agent identity and the merge log, harness claims, span locations, content matches, ingest events | `observed`, `provenance` |
+| [flow.md](wire/flow.md) | resources, accesses, channels, transmissions, verdicts, detect events; the duration convention | `flow` |
+| [topology.md](wire/topology.md) | the topology aggregates and their requests, agent read models, the bus framing and the exhaustive `BusEvent` index, dead letters | `topology`, `agents`, `bus` |
+| [analysis.md](wire/analysis.md) | alert rules, topics, retention, projections (info JSON and frame bytes), search, insight events; finite floats | `rules`, `topics`, `projections`, `insight` |
+| [surface_actions.md](wire/surface_actions.md) | `ActionRequest` and `OperatorAction`, the audit log and `CallerSnapshot`, the live feed and its SSE framing, operators, sinks, list filters, overview | `surface_actions` |
+| [surface_reads.md](wire/surface_reads.md) | channel, transmission and evidence read models, excerpts, export requests, manifests, rows and JSONL lines | `surface_reads` |
 
-**Checked types and what decoding checks.**
-
-| Type | Decoding |
-| --- | --- |
-| `Confirmed` | `{"content", "co_access", "at"}`, no sender: `Confirmed::new` rebuilds it as the content's origin agent and refuses several origins or readers; a `from` key is an unknown field |
-| `VerdictLog` | `{"transmission", "records": [{"revision", "record"}]}`: each record with its revision, so the UI can line the log up with `VerdictSet` events and verdict export rows. Decoded through the new `VerdictLog::from_records`, which refuses a gap, repeat or reordering of revisions (`UnexpectedRevision`), a record about another transmission (`Record`) and a record repeating the current verdict (`Unchanged`), each an `InvalidVerdictLog` |
-| `PolicyHistory` | `{"entries": [..]}` through `PolicyHistory::from_entries` (`OutOfOrder`, `Duplicate`) |
-| `CoAccess` | cannot rerun `CoAccess::new`, which reads the two accesses and the window; checks what the value holds: two different accesses (`WrongOperations`) and a positive lag (`ReadNotAfterWrite`) |
-| `PromotionCoverage` | cannot rerun `coverage`, which reads the registry; checks what the value holds (`InvalidCoverage`): no channel superseded twice, each sample strictly newest first, no resource on both sides |
-| `TransmissionVerdict` | field by field: its one check reads the transmission's state, which the record names only by id |
-| `VerdictRevision` | the number; `0` is refused (`NonZeroU32`) |
-
-**Goldens.** One golden per state of `TransmissionState` (inside a
-`Transmission`), per origin of `Channel`, per variant of `ResourcePattern`
-and per `DetectEvent` variant, each event inside a full `Envelope`
-(`{"id", "at", "event": {"type": "detect", "data": {"type": <variant>,
-"data": ..}}}`); lists through an exhaustive `match` for `Locator`,
-`Route`, `DirectCarrier`, `DelegationDirection`, `DeclaredDetection`,
-`TrafficDetection`, `DetectionKind`, `Policy`, `PolicyKind`, `AccessKind`,
-`Extraction` and `Verdict`. The fixtures follow one story: a planner
-writes a wiki page, a coder reads it 30.25 s later, and the planner's text
-is found in the coder's tool result.
-
-**Invariants.** `canonical.wire.duration-encoding`,
-`flow.wire.verdict-log-decode`, `flow.wire.confirmed-sender-derived` and
-`flow.wire.partial-decode-checks`; the general wire invariants
-(`canonical.wire.*`, `surface.wire.authority-not-decoded`) take the area's
-goldens and rejections as evidence.
-
-## Topology
-
-The topology group: the topology aggregates and their requests
-(`aggregates/{access,edge,filter,node,quality,series,watermark}.rs`), the
-agent read models (`aggregates/agents/`), L7's store interface
-(`interfaces/l7_topology.rs`), the transport's wire types
-(`interfaces/l2_transport.rs`) and the bus framing (`events/mod.rs`,
-`events/changed.rs`). Areas `topology`, `agents` and `bus`.
-
-**What each type is.**
-
-- Requests (`WireRequest`, `assert_request_golden`): `TopologyFilter`,
-  `TopicVersionSelector`, `Weighting`, `EdgeSelector` (checked),
-  `SeriesGrid` (checked; its wire form is `{"window", "step"}`, the point
-  count is computed), `SeriesGrouping`, `AgentFilter`, and
-  `ConsumerGroup`, which `QueryApi::dead_letters` takes from the client
-  (`Option<ConsumerGroup>`; `null` lists every group). Any group name
-  decodes; an unknown one lists nothing.
-- Responses: `TopologyGraph` with `GraphNode` (`AgentNode`,
-  `ChannelNode`), `WeightedEdge`, `EdgeStats`, `EdgeTotals`,
-  `EdgeTransmissionPage`, `BipartiteGraph` (checked; on the wire its
-  `BipartiteParts`), `WeightedAccess`, `ResourceUsePage` with
-  `ResourceUse` (checked), `TopologySeries` (checked) with `SeriesGroups`,
-  `Series` and `SeriesEdge`, `DetectionQuality` (checked), `AgentRow`,
-  `AgentProfile` (checked), `AgentDetail` with `AgentCluster` (checked),
-  `AgentName`, `AgentTraffic`, `DeadLetter`.
-- Bus payloads, never requests: `Envelope`, `BusEvent`, `Changed`,
-  `EdgeKey` (checked, in `EdgeUpdated`). `Subject` is a string. `BusEvent`
-  and `DeadLetter` are added to `wire/authority.rs`: a bus event carries
-  the operators and times its node stamped, and a dead letter holds an
-  envelope.
-- Not wire (no root reaches them): `AccessEdge`, `Edge`, `NodeId`,
-  `FilterSubject`, `AccessSubject`, `VersionUnavailable`,
-  `PipelineFrontier`, `EdgeContribution`, `AccessContribution`,
-  `EdgeError`, `EdgeQueryError`, the `EdgeStore`, `FrontierSource`,
-  `EventBus`, `Subscription`, `DeadLetterStore` and `BlobStore` traits,
-  `Delivery`, `DeliveryId`, `RetryPolicy` (config), `BusError`,
-  `BlobError`, and the constructors' error enums.
-
-**The bus framing.** An envelope is `{"id", "at", "event"}`, and the event
-is tagged twice: the layer, then the event.
-
-```json
-{"id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA", "at": "2026-10-04T12:34:56.789012Z",
- "event": {"type": "insight", "data": {"type": "watermark_advanced", "data": "2026-10-04T12:30:00.000000Z"}}}
-```
-
-A layer event's inner tag is its `Subject`'s string (`watermark_advanced`
-above), so a payload read off the bus names its subject; a change
-notification's layer tag is `changed`, its subject, and its inner tag
-names the entity (`{"type": "changed", "data": {"type": "channel", "data":
-"01J9.."}}`). The goldens `bus/bus_events_{ingest,detect,insight,changed}`
-are the exhaustive index: one event of every variant of every layer,
-built from `tests::events`'s fixtures behind a match over every variant
-with no wildcard, so a new event does not compile until it is listed, and
-the test fails until its fixture is in the golden. Each layer's own area
-pins its events with its own fixtures; the index pins that none is
-missing. `bus/changed_every_variant` does the same for `Changed`, and
-`bus/subjects` lists every subject string.
-
-**Graph rules on decode.** `BipartiteGraph`, `TopologySeries`,
-`ResourceUse`, `DetectionQuality`, `SeriesGrid`, `SeriesStep`, `EdgeKey`,
-`EdgeSelector`, `AgentProfile` and `AgentCluster` decode through their
-constructors, so each constructor error is a decode error (one rejection
-test per error variant). `TopologyGraph` keeps public fields (tests build
-graphs that break one rule at a time), so stage 0 decoded it field by
-field; it now decodes through `TopologyGraph::check`, which states every
-rule the type documents and `EdgeStore::graph` promises: no self-edge, no
-(from, to, route) twice, each share its stat under the weighting over the
-total, and the node rules of `check_nodes` (nodes cover endpoints and
-ancestors, no duplicates, no channel node, counts agree). JSON of a graph
-the server would never return is a decode error
-(`topology.wire.graph-decode-checked`). The share helpers are shared with
-`BipartiteGraph::new` (one tolerance, `TopologyGraph::SHARE_TOLERANCE`).
-
-**Maps keyed by ids.** `EdgeStore::agent_traffic` now returns a
-`BTreeMap<AgentId, AgentTraffic>`: ascending id is ascending ULID text,
-so its JSON object has one key order and a golden of several agents is
-stable (`topology.agent-traffic.ordered-keys`). `QueryApi::agent_names`
-still returns a `HashMap<AgentId, AgentName>` (its signature is the
-surface's): its golden is a one-entry map and a larger one round-trips.
-The same change to `BTreeMap` would fix its order, and `channel_names`'s.
-
-| File | Role |
-| --- | --- |
-| `spec/types/tests/wire/topology/` | `mod.rs` (fixtures, JSON edit helpers), `filter.rs` (the linked views' requests), `graph.rs` (`TopologyGraph`, nodes, totals, `EdgeKey`, edge drill-down), `access.rs` (`BipartiteGraph`, `ResourceUse`), `series.rs`, `quality.rs` |
-| `spec/types/tests/wire/agents.rs` | Agent rows, details, names, traffic, the agents filter |
-| `spec/types/tests/wire/bus.rs` | `Envelope`, the exhaustive `BusEvent` and `Changed` index, `Subject`, `DeadLetter`, `ConsumerGroup` |
-| `spec/types/tests/golden/{topology,agents,bus}/` | 36, 8 and 12 goldens |
-
-### Analysis
-
-Alert rules, topics and their history, retention, projections, search
-results and the insight bus events (L6). Tests in
-`spec/types/tests/wire/analysis/` (one module per area: `rules.rs`,
-`topics.rs`, `projections.rs`, `insight.rs`), goldens in
-`spec/types/tests/golden/{rules,topics,projections,insight}/`.
-
-| Type | Wire role |
-| --- | --- |
-| `UserRule` (with `WatchedTopics`) | request: the rule a client writes in `CreateRule` and `UpdateRule`; its author and time are stamped outside it |
-| `TopicModelVersion` | request: the number `topic_sizes` (as `Option`, `null` for the active version) and `topic_lineage` take, and the pin and unpin actions carry; an unknown version is the query's `NotFound`, not a decode error |
-| `ProjectionParams` (with `ProjectionLimit`) | request: `fit_projection`'s parameters, seed included |
-| `AlertRuleDef`, `AlertRule`, `ContentRule`, `TopicWatch`, `QueryWatch`, `SemanticQuery`, `BuiltinRule`, `AlertRuleKind`, `RuleStatus`, `RuleRevision` | response (`alert_rules`) and bus payload (`AlertRuleChanged`); `AlertRuleDef` is stamped (its creator) |
-| `TopicVersionHistory`, `TopicVersionInfo`, `TopicVersionStatus`, `FitRecord`, `CompletedFit`, `Retention`, `Pin` | response (`topic_versions`); `Pin` is stamped |
-| `TopicSizes`, `TopicSize`, `TopicLineage`, `LineageEntry`, `LineageLink`, `Topic`, `Embedding`, `EmbeddingModel` | response (`topic_sizes`, `topic_lineage`, `topics`) |
-| `ProjectionInfo`, `ProjectionSpec`, `ProjectionStatus`, `Fitted`, `ProjectedPoint` | response (`projection_status`, `projections`, an export's point rows); `ProjectionInfo` is stamped (its requester) |
-| `SearchResults`, `SearchHit` | response (`search`) |
-| `InsightEvent`, `ClassificationCause`, `AlertRevision` | bus payload, inside `Envelope` |
-| `Projection`, `ProjectionFrame` | no serde: see below |
-| `AlertRuleSet`, `AlertRuleConfig`, `RuleDefinition`, `StaleReason`, `AlertDraft`, `TriageOutcome`, `RetentionPolicy`, `PinChange`, `TopicVersionStatusKind`, `TopicAssignment`, `Assignment`, `SearchQuery`, `Sample`, the L6 traits and store errors | not on the wire: in-memory indexes, config, in-process values, and errors that reach a client as the `QueryError` they map to |
-
-**Checked decoding.** `AlertRuleDef` decodes through `AlertRuleDef::builtin`
-for a built-in rule and `AlertRuleDef::load` for a user rule (`load`
-accepts every stored status and staleness), so a built-in rule under any
-id but its fixed one, or a user rule under an id in the reserved range, is
-`invalid alert rule: BuiltinId` or `Reserved` (`InvalidRuleDef`), in a
-response and on the bus alike. `TopicVersionInfo`, `TopicVersionHistory`,
-`TopicSizes`, `LineageEntry`, `TopicLineage`, `Embedding`, `ProjectionLimit`,
-`ProjectionParams` and `ProjectionInfo` decode through their constructors,
-with a rejection test per constructor error. `TopicVersionHistory` is
-`{"versions": [..]}`: the active version's index is found again from the
-statuses. `ProjectionSpec` decodes through `ProjectionSpec::new`, which
-pins the filter to the resolved version, so a spec sent with
-`{"type": "current"}` decodes pinned (normalization, as `NonBlank` trims).
-
-**Floats are finite.** Every float in these types is behind a checked
-type: similarities, thresholds and search scores are `Similarity`
-(`0.0..=1.0`), embeddings are unit-norm (`Embedding::new`), and a topic
-term's c-TF-IDF weight (`Topic::terms`, and an export's
-`TopicContent::terms`) and a projected point's `x` and `y` are `Finite`
-(`support.rs`: an `f32` never NaN or infinite, a JSON number). JSON has no
-NaN, but serde_json narrows a JSON number to `f32` through `f64`, so `1e39`
-decodes to infinity; each of these types refuses it
-(`canonical.wire.finite-floats`). The UMAP minimum distance is held in
-thousandths (`min_dist_milli`), so no float of a spec is on the wire.
-
-**Tuples.** A user rule's `created` is `[operator, time]` and a topic's
-`terms` is `[[term, weight], ..]`, per the tuple convention.
-
-**`QueryApi::projection`.** A `Projection` (its job record and its frame)
-has no JSON form, because the frame is binary with its own layout
-(`ProjectionFrame::encode` and `decode`). The answer is split by content
-type:
-
-- the job record is JSON: the `ProjectionInfo` that `projection_status`
-  returns, its `status` saying whether a frame exists (`ready`);
-- the frame is `application/octet-stream`: the bytes of
-  `ProjectionFrame::encode`, identical on every read until it expires, so
-  cacheable for as long as the job is `ready`;
-- an error on either (`NotFound`, `Conflict(ProjectionNotReady)`,
-  `Conflict(ProjectionFailed)`, `ProjectionNotRetained`) is the usual
-  `QueryError` JSON.
-
-The UI reads `projection_status` (or the `projections` list), and once a
-job is `ready` fetches its frame bytes, decodes them with
-`ProjectionFrame::decode` into the spec type (typed-array views over the
-same bytes for the canvas) and joins the two with `Projection::new`, which
-refuses a frame whose header disagrees with the job (id, topic version,
-watermark, limit, counts). `a_projection_travels_as_info_json_and_frame_bytes`
-pins that round trip. The routes themselves are HTTP routing, outside
-this feature; the split is a decision for the user to confirm.
-
-**Bus events.** Each `InsightEvent` variant has a golden inside a full
-`Envelope` (`{"id", "at", "event": {"type": "insight", "data": {"type":
-.., "data": ..}}}`), so the NATS bytes of every analysis event are pinned;
-an unknown insight variant or field, a zero revision and a rule with a
-refused id are decode errors there too.
-
-**Module split.** `aggregates/alert.rs` reached 1000 lines and is now
-`aggregates/alert/mod.rs` (alerts) and `aggregates/alert/rules.rs`
-(rules), with every rule type re-exported, so `aggregates::alert::<Type>`
-paths are unchanged. The Files row for `aggregates/alert.rs` below names
-the alert types, which stay in `alert/mod.rs`.
+Coverage the goldens guarantee across the areas: every `BusEvent` variant
+has a golden inside a full envelope in its layer's area plus the
+exhaustive index in `bus/`; every `UiEvent`, `ActionRequest`,
+`OperatorAction` and `AuditBody` variant has a golden; every
+`ConflictKind` and `InputError` variant (including `MalformedRequest`,
+`EmptySelection`, `ExcerptContextTooLong`, `TooManyIds` and `SelfMerge`)
+is in `errors/conflict_kinds` and `errors/input_errors`. Each is built
+behind an exhaustive `match`, so a new variant does not compile until it
+is in its golden.
 
 ## Files
 
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/Cargo.toml`, `spec/Cargo.lock` | `serde = "=1.0.229"` (derive) and `serde_json = "=1.0.151"`, the UI's pins; the lockfile resolves to the UI's versions | — |
-| `spec/types/wire/mod.rs` | The conventions, the request marker and decoder, the refusal wrapper, the text decoder, the negative trait assertion macro | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `decode_text` (crate), `assert_not_impl!` (module) |
+| `spec/types/wire/mod.rs` | The conventions (and the three leniencies), the request marker and decoder, the refusal wrapper, the text decoder, the negative trait assertion macro | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `decode_text` (crate), `assert_not_impl!` (module) |
 | `spec/types/wire/time.rs` | `Timestamp`'s RFC 3339 text and its serde impls | `Timestamp::rfc3339`, `Timestamp::parse_rfc3339`, `InvalidTimestamp`, `TimestampField`, `TooLateForText`, `MAX`, `MAX_TEXT`, `TEXT_LEN` |
-| `spec/types/wire/authority.rs` | The authority rules and their compile-time checks and `compile_fail` doctests | — |
-| `spec/types/ids.rs` | Ids' text forms and serde impls; entity ids are requests | `from_ulid_text`, `InvalidUlidText` |
-| `spec/types/support.rs` | The building blocks' wire forms | `Blake3::to_hex`, `Blake3::from_hex`, `InvalidHex`, `EmptyList`, `ShareOutOfRange`; `TimeWindow` is a request |
+| `spec/types/wire/duration.rs` | Durations as whole microseconds in `_micros` fields | `micros`, `UnfitDuration` |
+| `spec/types/wire/authority.rs` | The authority rules: one table of every authority and stamped type, one `assert_not_impl!` per type, and the `compile_fail` doctests | — |
+| `spec/types/ids.rs` | Ids' text forms and serde impls; entity ids are requests; the ULID helpers `ConnectionId` reuses | `from_ulid_text`, `InvalidUlidText` |
+| `spec/types/support.rs` | The building blocks' wire forms | `Blake3::to_hex`, `Blake3::from_hex`, `InvalidHex`, `EmptyList`, `ShareOutOfRange`, `Finite`, `NotFinite`; `TimeWindow` is a request |
 | `spec/types/paging.rs` | Page sizes, cursors, page requests (requests) and pages (checked when decoded) | `InvalidPage` |
 | `spec/types/batch.rs` | `IdBatch` as an array, decoded through `IdBatch::new`; a request | — |
-| `spec/types/aggregates/alert.rs` | `Alert`, `AlertState`, `AlertSubject`, `SuppressReason` | — |
+| `spec/types/aggregates/alert/mod.rs` | `Alert`, `AlertState`, `AlertSubject`, `SuppressReason` (the reference area's alert inbox); rules are in `alert/rules.rs` ([analysis](wire/analysis.md)) | — |
 | `spec/types/aggregates/watermark.rs` | `Watermarked<T>` | — |
 | `spec/types/aggregates/topic.rs`, `aggregates/projection/mod.rs` | What the errors carry: `TopicModelVersion`, `EmbeddingModel`, `FitFailure`, `ProjectionStatusKind` | — |
-| `spec/types/interfaces/l8_surface.rs` | `AlertFilter` (a request), `AlertStateKind` | — |
+| `spec/types/interfaces/l8_surface.rs` | `AlertFilter` (a request), `AlertStateKind`; `agent_names` and `channel_names` as `BTreeMap`s | — |
 | `spec/types/interfaces/l8_surface/errors.rs` | The error enums, adjacently tagged | `InputError::MalformedRequest` |
 | `spec/types/interfaces/l8_surface/permissions.rs` | `Permission` as a string, `PermissionSet` as an array; `Caller` never serialized; an audit record's `CallerSnapshot` | `CallerSnapshot`, `NoPermissions` |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | `From<DecodeError>` for `QueryError` and `ActionError` | — |
-| `spec/types/tests/wire/harness.rs` | The golden harness | `assert_golden`, `assert_encodes`, `assert_request_golden`, `assert_request_golden_allowing`, `assert_rejected`, `assert_round_trips`, `authority_key`, `BLESS`, `AUTHORITY_KEYS` |
-| `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | One module per area: goldens, rejections, reference values | — |
-| `spec/types/tests/golden/{ids,support,paging,alerts,errors}/` | The goldens of the reference area | — |
+| `spec/types/tests/wire/harness.rs` | The golden harness | `assert_golden`, `assert_encodes`, `assert_request_golden`, `assert_request_golden_allowing`, `assert_rejected`, `assert_round_trips`, `authority_key`, `golden_root`, `BLESS`, `AUTHORITY_KEYS` |
+| `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
+| `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
+| `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
+| `spec/types/tests/golden/<area>/` | 361 goldens: 360 `.json`, 1 `.jsonl` | — |
 
 ## Invariants and constraints
 
@@ -580,322 +409,36 @@ the alert types, which stay in `alert/mod.rs`.
   equal value (`canonical.wire.round-trip`).
 - A checked type decodes only through its constructor, so invalid JSON is
   a decode error and never a value (`canonical.wire.checked-decode`).
+  Where a constructor reads what the value does not hold, decoding checks
+  what the value can know about itself, and the area page says so
+  (`flow.wire.partial-decode-checks`, `topology.wire.graph-decode-checked`,
+  `surface.export.trailer-self-consistent`).
 - Decoding refuses unknown fields and unknown variants
-  (`canonical.wire.strict-decode`).
+  (`canonical.wire.strict-decode`); the three leniencies above are the only
+  other spellings accepted.
 - Client input is decoded only as a `WireRequest`; `Caller` never
-  serializes, and no server-stamped record is a request
-  (`surface.wire.authority-not-decoded`).
+  serializes, nothing converts a decoded `CallerSnapshot` into one, and no
+  server-stamped record is a request (`surface.wire.authority-not-decoded`).
+  Every `OperatorAction` has exactly one `ActionRequest` form
+  (`surface.wire.action-request-covers-actions`).
 - An undecodable request is `InvalidInput(MalformedRequest)` with the
   decoder's kind and reason (`surface.query.undecodable-request-invalid-input`).
 - Every golden value encodes to its file byte for byte; any change to a
   wire type's JSON fails its golden test until blessed
   (`canonical.wire.goldens-pin-format`).
-- Entity ids are ULID text, content ids and digests lower-case hex, each
-  with one accepted text (`canonical.wire.id-encoding`); timestamps are
-  RFC 3339 UTC with six fractional digits, with one accepted text, and
-  have no text after year 9999 (`canonical.wire.timestamp-encoding`).
+- Entity ids (and `ConnectionId`) are ULID text, content ids and digests
+  lower-case hex, each with one accepted text (`canonical.wire.id-encoding`);
+  timestamps are RFC 3339 UTC with six fractional digits, with one
+  accepted text, and have no text after year 9999
+  (`canonical.wire.timestamp-encoding`); durations are whole microseconds
+  in `_micros` fields (`canonical.wire.duration-encoding`); every float is
+  finite (`canonical.wire.finite-floats`).
+- Every map keyed by an id is a `BTreeMap`, so one value has one encoding
+  (`topology.agent-traffic.ordered-keys`, `surface.query.name-maps-ordered`).
+- A bus event's inner tag is its subject (`transport.wire.event-tag-is-subject`).
 - `None` is always written as `null`; no field is skipped when empty, so
   every shape is fixed.
 - The spec's only dependencies are `serde` and `serde_json`, pinned
   exactly; no other crate is added for the wire.
 
-## Observed
-
-The observed facts and provenance on the wire: exchanges and their client
-context, agent identity and the merge log, harness claims, spans' locations,
-content matches, and the ingest bus events that carry them between nodes.
-Areas `observed` and `provenance`.
-
-**Wire data.** Every type below is a response or bus payload; none is a
-`WireRequest` (no client sends observed facts).
-
-- `observed/exchange.rs`: `Exchange`, `ExchangeMeta`, `Continuation`,
-  `ExchangeOutcome`, `ExchangeFailure`, `TokenUsage`, `ConnectionId`,
-  `ResponseId`, `ModelName` and the string enums `WireProtocol`,
-  `Transport`, `StopReason`. `ExchangeStage` is in memory only.
-- `observed/client.rs`: `ClientContext` and everything it holds
-  (`IngressMode`, `Upstream`, `UpstreamKind`, `Vendor`, `InferenceServer`,
-  `CredentialRef`, `CredentialScheme`, `HarnessClaim`, `HarnessFamily`,
-  `HarnessIds`, `RequestClass`, `PreviousDigests`, `RouteName`,
-  `UpstreamId`). `Dialect`, `Stability` and `EndpointKind` are derived in
-  process and get no serde.
-- `observed/agent.rs`, `agent/claims.rs`, `agent/merge.rs`: `Agent`,
-  `AgentState`, `ActiveAgentState`, `IdentityEvidence`, `IdentityScope`,
-  `MergeAuthor`, `MergedInto`, `SeenClaim`, `Reversal`, and the checked
-  `MergeRequest`, `MergeRecord`, `MergeVeto`, `ClaimSet`. `MergeRequest`,
-  `MergeAuthor`, `MergeRecord`, `Reversal` and `MergeVeto` are stamped
-  (`wire/authority.rs`). `MergeConflict`, `AlreadyReverted`,
-  `InvalidMergeTransition`, `RenameMerged` and `Strength` stay in process.
-- `observed/message.rs`: only `PartRef`, `ToolCallId` and `ToolName`. The
-  message bodies live in the blob store and never travel as JSON.
-- `derived/provenance/span.rs`: `SpanLocation`, `RelaySource`. `Span`,
-  `SpanState`, `Origin`, `SpanEvent` and `OriginatedSpan` stay in process.
-- `derived/provenance/matching.rs`: `ContentMatch` (checked), `Carrier`,
-  `MatchKind`, `Codec`.
-- `events/ingest.rs`: `IngestEvent` and `ConversationDelta`.
-- `interfaces/l3_reconstruction*.rs`: nothing. Its traits, `Resolution`,
-  `ThreadOutcome`, `ResolveError` and `AgentReadError` are in process;
-  `ResolveError` reaches the client only as `ConflictKind` and `QueryError`.
-
-**`ConnectionId` is ULID text.** It was a transparent `u128`, a bare JSON
-number that no JavaScript reader holds exactly and that broke the "no bare
-u128" rule. A connection is an entity the proxy node creates when it
-accepts a WebSocket upgrade, and it is stored in
-`Continuation::Increment` and compared across nodes, so it is a ULID
-minted there and travels as the entity ids' 26-character text
-(`ConnectionId::ulid_text`, `from_ulid_text`, through the crate-visible
-helpers in `ids.rs`). Lower-case hex is for content ids and digests, which
-name content; a connection names no content. It is not a `WireRequest`.
-
-**Checked types decode through their constructors.**
-
-| Type | Refused on decode | Normalized on decode |
-| --- | --- | --- |
-| `MergeRequest` | one agent as source and target (`SelfMerge`) | — |
-| `MergeRecord` | a self-merge (`InvalidMergeRecord::SelfMerge`); a second reversal, which needs a repeated `reverted` key (`duplicate field`) | — |
-| `MergeVeto` | an agent paired with itself (`SelfMerge`) | the pair is ordered, lower id in `a` |
-| `ClaimSet` | a claim listed twice, at the same or another time (`DuplicateClaim`) | entries are ordered latest first, ties by family, User-Agent, version |
-| `ContentMatch` | origin agent is the reader (`SelfMatch`); more matched bytes than the read range (`ExceedsReadRange`); zero matched bytes | — |
-
-`MergeRecord` decodes in the order the log builds it: `MergeRequest::new`,
-`MergeRecord::new`, then `MergeRecord::revert` with the stored reversal,
-instead of setting the reversal field by field. Not rechecked, because no
-constructor checks it: that a reversal's `restored` lists agents of the
-record's `repointed` in its order, and that it comes after the merge.
-`Agent`, `AgentState` and `MergedInto` are plain: whether a merged agent's
-target is canonical needs the merge table, which a value cannot see.
-
-**Ingest events in envelopes.** Each `IngestEvent` variant has a golden
-holding a whole `Envelope` (`envelope_<variant>.json`), so the bus framing
-(`id`, `at`, `{"type": "ingest", "data": {"type": <variant>, "data": ..}}`)
-is pinned with each payload; a rename is pinned with a label and cleared.
-The golden names come from an exhaustive match, so a new variant does not
-compile until it has a golden.
-
-**Renamed for the wire.** `CredentialScheme::OAuthAccessToken` became
-`OauthAccessToken` (the Rust guideline writes a contraction as one word),
-so it encodes as `"oauth_access_token"` rather than
-`"o_auth_access_token"`. `OpenAi…` names still encode as `open_ai…`.
-
-**Strictness gap found.** Besides the two alternate spellings above, serde
-decodes a struct from a positional JSON array (`[{"message": ..,
-"index": 0}, {"start": 0, "end": 8}]` is a `SpanLocation`), across the
-crate. It is not an unknown field or variant; the goldens pin the object
-form.
-
-| File | Role |
-| --- | --- |
-| `spec/types/tests/wire/observed/{mod,exchange,identity,ingest}.rs` | Goldens and rejections for exchanges and client context, identity and the merge log, and ingest events in envelopes |
-| `spec/types/tests/wire/provenance.rs` | Goldens and rejections for span locations, relay sources and content matches |
-| `spec/types/tests/golden/observed/`, `golden/provenance/` | The goldens |
-
-Evidence for `canonical.wire.checked-decode`, `goldens-pin-format`,
-`id-encoding`, `round-trip` and `strict-decode`, and for
-`reconstruct.merge-record.revert-once`, `reconstruct.merge-veto.distinct-pair`
-and `reconstruct.claims.distinct-ordered`.
-
-## Surface actions (surface-actions)
-
-The operator surface's own wire types: the action a client sends and the
-action it becomes, the audit log, the live feed and its SSE framing, the
-operator directory and permissions, alert sinks, the list filters and the
-overview. Tests in `spec/types/tests/wire/surface_actions/` (`actions`,
-`audit`, `live`, `lists`, `operators`), goldens in
-`spec/types/tests/golden/surface_actions/<area>/`.
-
-### Actions: request, action, outcome
-
-```text
-client ── ActionRequest JSON ──▶ decode_request::<ActionRequest>
-                                   └─ into_action(&caller) ─┬─ Ok(OperatorAction) ─▶ act(caller, action) ─▶ ActionOutcome
-                                                            └─ Err(SelfMerge) ─▶ InvalidInput(SelfMerge), never audited
-audit log ◀── OperatorRecord { caller: CallerSnapshot, action: OperatorAction, outcome }
-```
-
-- `ActionRequest` (a `WireRequest`) has one variant per `OperatorAction`
-  variant, same name, same fields, except `MergeAgents { from, into }`,
-  which names no author: `{"type": "merge_agents", "data": {"from":
-  "01J..", "into": "01J.."}}`. Every other variant carries exactly its
-  action's fields, none of which is stamped (where applying an action
-  records an operator or a time, the surface stamps it then).
-- `ActionRequest::into_action(self, &Caller) -> Result<OperatorAction,
-  SelfMerge>` stamps it: a merge is authored by
-  `MergeAuthor::Operator(caller.operator())` through
-  `OperatorAction::merge_agents`, which refuses one agent named twice with
-  the existing `SelfMerge`. It takes no time: no action holds one.
-- `ActionRequest::of(&OperatorAction)` is the inverse and
-  `ActionRequest::kind` names the action kind; with `into_action` all
-  three match exhaustively, so a new action does not compile until it has
-  its request form. Each action comes from exactly one request variant
-  (`surface.wire.action-request-covers-actions`).
-- `OperatorAction` serializes both ways (the audit log returns it) and is
-  never a request; a merge carries `"by": {"type": "operator", "data":
-  ..}`. Sending that form as a request is refused as an unknown field
-  `by`.
-- `ActionOutcome` is adjacently tagged; `SupersededChannels` is an array
-  of channel ids, sorted and deduplicated on decode as its constructor
-  does.
-
-### Audit log
-
-- `AuditEntry { id, at, body }`, `body` one of `operator`, `config`,
-  `export`. `AuditFilter` is a request whose `by` is the client's choice
-  of authors (its golden allows that key).
-- `OperatorRecord` and `ExportRecord` keep a `CallerSnapshot`, not a
-  `Caller`: `{"operator": "01J..", "permissions": ["view", "audit"]}`.
-  It is public plain data (`of(&Caller)`, `operator`, `permissions`,
-  `has`), serde both ways and not a request. Its decode goes through
-  `CallerSnapshot::new`, which refuses an empty set (`NoPermissions`):
-  `OperatorDirectory::caller` never grants one. Nothing converts a
-  snapshot into a `Caller`, so decoding the log yields no authority
-  (`surface.wire.authority-not-decoded`; a `compile_fail` doctest in
-  `wire/authority.rs`). Records decode through their constructors, so a
-  record whose outcome contradicts its snapshot's permissions is a decode
-  error. The constructors take `impl Into<CallerSnapshot>`: the surface
-  passes the call's `Caller`, decoding the snapshot it read.
-
-### Live feed and SSE framing
-
-Each `LiveItem` is one SSE event:
-
-```text
-event: event
-id: 7-1042
-data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}}}
-
-```
-
-- `event` is `LiveItem::event_name`, the item's JSON `type`: `event`,
-  `resync` or `heartbeat`.
-- `id` is the cursor's text, `LiveCursor::encode` (`<epoch>-<seq>`, both
-  decimal, no leading zeros), the same string as the JSON's `cursor`. The
-  browser sends the last one back as `Last-Event-ID`, which
-  `Resume::from_last_event_id` reads. Heartbeats carry one too.
-- `data` is the whole item as one line of JSON.
-- The stream's last event is named `end` (`LiveEnd::EVENT_NAME`), its
-  data the `LiveEnd` string (`"lagged"`), with no `id`, so the client's
-  resume point stays its last cursor
-  (`surface.live.sse-frame-matches-item`).
-- `UiEvent` is adjacently tagged with `{"id": ..}` (or `{"at": ..}`,
-  `{"version": ..}`) data; `ResyncReason` and `LiveEnd` are strings;
-  `Resume` is adjacently tagged, though the server builds it from the
-  `Last-Event-ID` header, not from JSON.
-
-### Operators, sinks, lists, overview
-
-- `Operator { id, name, permissions }`; a former operator's permissions
-  are `[]`. `OperatorName` is checked text (trimmed; `Blank`, `TooLong`,
-  `ControlCharacter` refused). `PermissionSet` is an array in
-  `Permission::ALL` order, decoded from any order with repeats counted
-  once. `AccessMode` is a string.
-- `SinkInfo::last_delivery` is `null`, `{"type": "succeeded", "data":
-  "<timestamp>"}` or `{"type": "failed", "data": <SinkError>}`, never
-  serde's `{"Ok": ..}` form of a `Result`.
-- Requests: `ChannelFilter` (its `OriginFilter` adjacently tagged:
-  `in_force`, `with_superseded`, `superseded`), `AlertRuleFilter`,
-  `SearchRequest` (`text` is checked non-blank text). `AgentFilter` is
-  re-exported from the agents area, which owns its goldens.
-- Responses: `TopicPage`, `OverviewCounts`.
-
-### Not on the wire
-
-`ActionKind`, `OutcomeKind`, `AuditError`, `FeedWindow`, `ResumePlan`,
-`LiveConfig`, `AccessConfig`, `OperatorConfig`, `TrustedOperator`,
-`OperatorDirectory`, `RequestIdentity`, `Unauthenticated`,
-`InvalidAccessConfig` and the traits (`OperatorActions`, `AuditLog`,
-`LiveFeed`, `LiveStream`, `AlertSink`): no wire root reaches them.
-
-## Surface reads
-
-The channel, transmission and evidence read models and export
-(`interfaces/l8_surface/{channels,summary,evidence,excerpt}.rs`,
-`interfaces/l8_surface/export/`). Tests are in
-`spec/types/tests/wire/surface_reads/`, goldens under
-`spec/types/tests/golden/surface-reads/{channels,transmissions,evidence,export}/`,
-and the one JSONL golden at
-`spec/types/tests/jsonl/surface-reads/export_complete.jsonl` (outside
-`golden/`, whose layout check admits only `.json`).
-
-### What each type is on the wire
-
-| Type | Role | Decoded |
-| --- | --- | --- |
-| `TransmissionSelection` | request: an array of ids | through `new` (distinct, newest first, 1 to 100,000) |
-| `ExcerptWindow` | request: `{"context": n}` | through `new` (at most 2,048) |
-| `ExportRequest` (with `ExportDataset`, `ExportScope`, `ExportFormat`) | request | through `new` (no content for accesses or verdicts) |
-| `ChannelRow` (with `ChannelStanding`, `ChannelActivity`, `ChannelCounts`) | response of `channel`, `channels` (watermarked) | through `new` |
-| `SupersededInto`, `ChannelName` (with `ChannelShape`) | response (inside a row; `channel_names` as an object keyed by id) | field by field: `SupersededInto::of` and `ChannelName::of` read the registry; `ChannelRow::new` checks a row's supersession against its channel |
-| `PromotionPreview` | response: `{"type": "promotes", "data": <PromotionCoverage>}` or `{"type": "refused", "data": <ConflictKind>}` | refuses a conflict other than `ChannelSuperseded`, `ChannelNotDiscovered`, `PatternOverlaps` (`NotAPromotionConflict`); the coverage as received |
-| `TransmissionSummary`, `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionPage` | response of `transmissions_by_id` | plain: the per-state shape is the enum |
-| `TransmissionEvidence` (with `MatchEvidence`, `MatchQuotes`, `AccessDetail`) | response of `transmission_evidence` (`Option`) | through `assemble` over its own transmission, answering each request with the next decoded match or access (`InvalidTransmissionEvidence`); `AccessDetail` through `new` |
-| `Excerpt`, `Excerpted` | response (inside evidence and export rows); the highlight as `{"start", "end"}` | `Excerpt` through `new`, which now also refuses counts that fit no part (`CountsOverflow`) |
-| `ExportHeader` (with `ExportBasis`, `GatewayVersion`) | export line, audit event; stamped, never a request | through `ExportHeader::new` (its `ExportHeaderParts`) |
-| `ExportRow` and each dataset's row | export line | `TransmissionRow` through `new` (its delivery is the summary's, not written twice); the rest plain |
-| `ExportTrailer` (with `ExportEnd`, `ExportFailure`, `RowRefused`, `ExportDigest`) | export line, audit event | checked for what the sealer guarantees about it alone (`InvalidTrailer`); rows and digest by `verify_export` |
-| `ExportLine` | one JSONL line: `header`, `row` or `trailer`, adjacently tagged; never a request (it holds the stamped header) | plain; `read_jsonl` checks the framing ([export.md](export.md#formats)) |
-| `ExportEvent` | inside the audit log's `ExportRecord` | plain |
-
-No serde, because no wire root reaches them: `TransmissionStateKind`, the
-error enums (`InvalidSelection`, `InvalidEvidence`, `EvidenceError`,
-`ExcerptError`, `CutError`, `InvalidExcerpt`, `InvalidHeader`,
-`InvalidTrailer`, `InvalidExportRequest`, `SourceFailure`, `JsonlError`),
-`RowKey`, `ExportLimits` (config), `JsonlExport` (what a reader holds), and
-the stream and sealer machinery. `ExportRecord` has its wire form but no
-golden here: its caller field is changing shape in the surface-actions
-area, which goldens the audit log.
-
-### Stage-0 choices changed
-
-- `PromotionPreview` was `transparent` over its outcome; it now decodes
-  through `TryFrom<Outcome>`, refusing a conflict no promotion is refused
-  with (`surface.channels.preview-refusal-is-a-promotion-conflict`).
-- `TransmissionEvidence` decoded field by field; it now decodes through
-  `assemble`, so decoded evidence lists exactly its transmission's matches
-  and co-access accesses, in order (`surface.evidence.follows-transmission`).
-- `ExportTrailer` decoded field by field; it now refuses what no sealer
-  builds (`surface.export.trailer-self-consistent`).
-- `Excerpt::new` refuses counts that place the matched range past
-  `u32::MAX` or overflow the part's length
-  (`surface.excerpt.counts-fit-a-part`); `Excerpt::cut` never builds such
-  counts.
-- `ExportLine` is new: the export group's line format, so a JSONL line
-  is one tagged value.
-
-### What replaces the UI's stand-ins
-
-For the UI agent deleting `ui/src/contract/` on `feat/ui`. Paths are
-under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
-`aggregates/`.
-
-| Stand-in file | Replaced by | Still no spec type |
-| --- | --- | --- |
-| `mod.rs` | `MergeId`, `ProjectionId`, `SinkId`, `AuditId` in `ids.rs` (ULID text on the wire) | — |
-| `actions.rs` | `OperatorAction`, `ActionOutcome` (l8/actions.rs). Rules take `UserRule`; `SetRuleEnabled { id, enabled }`; new `PinTopicVersion`, `UnpinTopicVersion`, `Unchanged`; `ChannelPromoted { channel, superseded }`. The action a client sends is the surface-actions group's `ActionRequest`. `requires` is `required_permission` | `also_requires`: dropped (`SetVerdict` needs Triage only) |
-| `agents.rs` | `AgentLabel`, `ActiveAgentState`, `AgentState` (`Merged(MergedInto)`), `Agent` (observed/agent.rs); `InvalidText` (support.rs); `CanonicalStateKind` (agg/node.rs) for `AgentStateKind`; `MergeRecord`, `MergeVeto` (observed/agent/merge.rs); `SeenClaim` (claims.rs); `AgentName`, `AgentRow` for `AgentSummary`, `AgentDetail` (agg/agents/mod.rs); `AgentFilter` (agg/agents/filter.rs) for `AgentListFilter` | `AgentState::is_merged` (use `merged_into`) |
-| `alerts.rs` | `Alert`, `AlertState`, `SuppressReason` (agg/alert.rs), `AlertStateKind` (l8_surface.rs): the same shapes | `AlertState::kind`, `is_active` helpers |
-| `channels.rs` | `CanonicalOriginKind` (agg/node.rs) for `OriginKind`; `DetectionKind` (derived/flow/channel/detection.rs, via `ChannelOrigin::detection_kind`); `Policy::kind` for `policy_kind`; `SupersededInto` for `Supersession`; `ChannelName`; `ChannelRow` for `ChannelSummary` (standing, activity and counts as above); `ChannelFilter` with `OriginFilter` (l8/lists.rs) for `ChannelListFilter`; `PromotionPreview`; `ResourceUse` (agg/access.rs) | — |
-| `errors.rs` | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (l8/errors.rs). Conflicts carry the ids involved, several renamed (`AlertNotActive`, `MergeAlreadyReverted`, `RuleNotEditable`, `TransmissionNotJudgeable`); `PatternMissesSeed` is an `InputError` | `InputError::Field { field, reason }`: specific variants and `MalformedRequest` instead |
-| `evidence.rs` | `Excerpt` (l8/excerpt.rs: highlight `Range<u32>`, `elided_before`/`elided_after` as `u64`, plus `highlight_cut`), `InvalidExcerpt`, `MatchEvidence` (quotes are `Excerpted`: `Shown` or `BodyDropped`), `AccessDetail` (adds the canonical `agent`), `TransmissionEvidence` (l8/evidence.rs); the request's `ExcerptWindow` | `TransmissionEvidence::verdicts`: read `QueryApi::verdicts` (`VerdictLog`); `Excerpt::elided() -> (u32, u32)` |
-| `graph.rs` | `ChannelShape` (l8/channels.rs); `ChannelNode`, `InvalidNodes` (agg/node.rs); `TopologyGraph` (agg/edge.rs, `Watermarked`) for `TopologyView`; `WeightedAccess` for `AccessEdge`, `BipartiteGraph`, `InvalidBipartite` (agg/access.rs) for `BipartiteView`; `TopologySeries` (agg/series.rs) for `Timeline`; `EdgeSelector` and `TransmissionSelection` for `TransmissionSelector::{Edge, Ids}`; `TransmissionStateKind`, `TransmissionSummary` (l8/summary.rs: sender, bytes, topic and verdict inside `SummaryState`); `RouteKind::from(&Route)` for `route_kind` | `TimelineBucket` (a series is a value per grid point); `TransmissionSelector::All` |
-| `lists.rs` | `Cursor<L>`, `PageRequest<L>`, `Page<T, L>` (paging.rs), typed by list | `PageRequest::first` |
-| `research.rs` | `ProjectionParams`, `InvalidParams`, `ProjectionInfo` for `ProjectionMeta`, `ProjectionStatus` for `ProjectionJob` (agg/projection/mod.rs); `FrameColumns`, `ProjectionFrame`, `InvalidFrame` (agg/projection/frame.rs; binary, not JSON); `QualityRow`, `MatchClass` for `MatchKindName` (agg/quality.rs); `ExportDataset` (each carrying its selection), `ExportFormat`, `ExportRequest` (l8/export/request.rs); `AuditAuthor` for `Actor`, `AuditBody` for `AuditedAction`, `AuditOutcome`, `AuditEntry`, `AuditSubject`, `AuditFilter` (l8/audit.rs); `Operator` (l8/operators.rs). For reading an export, which no stand-in covers: `ExportLine`, `ExportHeader`, `ExportRow`, `ExportTrailer`, `read_jsonl`, `verify_export` | `ProjectionJob::Running { done, total }` progress; a channel column in `PointCategories`; `ExportRequest::scope` (inside the dataset) |
-| `rules.rs` | `BuiltinRule`, `UserRule` for `UserRuleSpec`, `RuleDefinition` for the stored `UserRule`, `AlertRule` for `RuleKind`, `RuleName`, `StaleReason`, `RuleStatus`, `AlertRuleDef` for `RuleDef` (agg/alert.rs); `NonBlank` and `InputError::QueryTooLong` for `QueryText`; `SinkKind`, `SinkInfo` (l8/sinks.rs) | `OperatorRuleStatus` (a `bool` in `SetRuleEnabled`); `RuleAuthor` (a user rule's `created`); `UserRule::spec` |
-| `scope.rs` | `TopologyFilter` (agg/filter.rs, adds `topic_version`), `FalseDetections` for `VerdictFilter` | `Scope`: the window is a separate argument; `ExportScope` and `ProjectionSpec` are the nearest |
-| `search.rs` | `SearchMode`, `SearchRequest` (l8/lists.rs), `NonBlank` for `SearchText`, `Blank` for `EmptySearch`; results are `SearchResults` (l6_analysis.rs) | `Default` for `SearchMode` |
-| `topics.rs` | `TopicVersionInfo`, `TopicSizes`/`TopicSize` for `TopicStats`, `LineageEntry` for `TopicRemap`, `TopicLineage` for `TopicVersionRemap` (agg/topic_history.rs) | `TopicStats::trend` (use `series` by topic); `TopicVersionInfo::embedding_model` |
-| `verdict.rs` | `Verdict`, `TransmissionVerdict` (derived/flow/verdict.rs), the log as `VerdictLog` | — |
-
-### Invariants
-
-New: `surface.export.jsonl-framing`, `surface.export.trailer-self-consistent`,
-`surface.excerpt.counts-fit-a-part`,
-`surface.channels.preview-refusal-is-a-promotion-conflict`. The decode
-tests are also evidence for the area invariants they recheck
-(`surface.channels.row-standing-matches-origin`,
-`surface.evidence.follows-transmission`, `surface.excerpt.well-formed`,
-`surface.query.selection-bounded`, `surface.export.header-matches-request`,
-`surface.export.request-content-columns`,
-`surface.export.transmission-row-confirmed`,
-`surface.export.truncation-detected`) and for the general wire
-invariants (`canonical.wire.checked-decode`, `goldens-pin-format`,
-`round-trip`, `strict-decode`, `surface.wire.authority-not-decoded`).
+The areas' own invariants are listed on their pages.

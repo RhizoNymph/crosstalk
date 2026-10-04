@@ -16,7 +16,7 @@ use crate::interfaces::l8_surface::summary::{
 use crate::paging::{Cursor, Page, PageSize, TransmissionList};
 use crate::support::NonEmpty;
 
-const AREA: &str = "surface-reads/transmissions";
+const AREA: &str = "surface_reads/transmissions";
 
 fn delivery() -> Delivery {
     Delivery {

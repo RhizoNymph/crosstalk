@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.wire.action-request-covers-actions"
-statement = "Every OperatorAction variant has exactly one ActionRequest variant, of the same ActionKind, which carries no server-stamped field and from which ActionRequest::into_action builds the action with the caller's operator as any author, refusing a merge that names one agent twice with SelfMerge; and ActionRequest::of recovers that request from the action."
+statement = "Every OperatorAction variant has exactly one ActionRequest variant, of the same ActionKind, from which ActionRequest::into_action builds the action with the caller's operator as any author, refusing a merge that names one agent twice with SelfMerge; and ActionRequest::of recovers that request from the action."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
@@ -14,7 +14,9 @@ ActionRequest::of and ActionRequest::kind match exhaustively with no
 wildcard, so an action added without its request form does not compile.
 A self-merge is the one request that names no valid action: stamping
 refuses it with the existing SelfMerge, which the surface returns as
-InvalidInput(SelfMerge) without calling act or auditing anything.
+InvalidInput(SelfMerge) without calling act or auditing anything. That
+an ActionRequest, a WireRequest, holds no server-stamped value is
+surface.wire.authority-not-decoded's rule, not restated here.
 """
 
 [evidence]

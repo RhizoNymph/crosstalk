@@ -38,6 +38,7 @@
 //! | `ExportHeader`, `ExportRecord` | caller, time | 2 |
 //! | `ExportLine` | holds an `ExportHeader` | 2 |
 //! | `ProjectionInfo` | requester, time | 2 |
+//! | `ProjectionSpec` | the topic version and embedding model resolved when the request was accepted | 2 |
 //! | `AlertRuleDef` | creator, time | 2 |
 //! | `Alert`, `AlertState` | who acknowledged or resolved, when | 2 |
 //! | `Envelope` (every bus event) | node, time | 2 |
@@ -137,7 +138,7 @@ use serde::de::DeserializeOwned;
 
 use super::WireRequest;
 use crate::aggregates::alert::{Alert, AlertRule, AlertRuleDef, AlertState};
-use crate::aggregates::projection::ProjectionInfo;
+use crate::aggregates::projection::{ProjectionInfo, ProjectionSpec};
 use crate::aggregates::retention::{Pin, Retention};
 use crate::derived::flow::channel::policy::{
     Decision, Policy, PolicyAuthor, PolicyDecision, PolicyHistory,
@@ -181,10 +182,12 @@ assert_not_impl!(PromotionPreview: WireRequest);
 assert_not_impl!(OperatorAction: WireRequest);
 assert_not_impl!(OperatorRecord: WireRequest);
 assert_not_impl!(AuditEntry: WireRequest);
+assert_not_impl!(CallerSnapshot: WireRequest);
 assert_not_impl!(ExportHeader: WireRequest);
 assert_not_impl!(ExportRecord: WireRequest);
 assert_not_impl!(ExportLine: WireRequest);
 assert_not_impl!(ProjectionInfo: WireRequest);
+assert_not_impl!(ProjectionSpec: WireRequest);
 assert_not_impl!(AlertRuleDef: WireRequest);
 assert_not_impl!(Alert: WireRequest);
 assert_not_impl!(AlertState: WireRequest);
@@ -201,4 +204,3 @@ assert_not_impl!(ConfigChange: WireRequest);
 assert_not_impl!(ConfigRecord: WireRequest);
 assert_not_impl!(Operator: WireRequest);
 assert_not_impl!(PermissionSet: WireRequest);
-assert_not_impl!(CallerSnapshot: WireRequest);

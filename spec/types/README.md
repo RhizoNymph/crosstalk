@@ -4,7 +4,7 @@ The data model of the gateway, written as Rust so it type-checks. The crate
 in `spec/Cargo.toml` builds these modules as a library and runs their tests;
 it is not part of the gateway's build. The types are also the JSON wire
 format between the gateway, the operator UI and other gateway nodes
-(`wire/`, and `docs/features/wire_contract.md`).
+(`wire/`, and `docs/features/wire_contract.md` with its area pages under `docs/features/wire/`).
 
 ```sh
 cargo check --manifest-path spec/Cargo.toml
@@ -37,7 +37,7 @@ spec/types/
 │   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest (checked, stamped: never a WireRequest)
 │   ├── agent/
 │   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases; decoding orders the entries and refuses a repeated claim)
-│   │   └── merge.rs       MergeRecord (checked; decodes through new and revert, InvalidMergeRecord), MergedInto, Reversal, MergeVeto (checked; decoding orders the pair), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
+│   │   └── merge.rs       MergeRecord (checked; revert refuses a reversal before the merge or restoring an agent it did not repoint, InvalidReversal; decodes through new and revert, InvalidMergeRecord), MergedInto, Reversal, MergeVeto (checked; decoding orders the pair), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
@@ -95,7 +95,7 @@ spec/types/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore; SearchHit and SearchResults are its only wire types
 │   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic as a BTreeMap, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions (act on a stamped ActionRequest), AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
+│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export; agent_names and channel_names as BTreeMaps in id order), OperatorActions (act on a stamped ActionRequest), AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/
 │       ├── permissions.rs Caller (built only by the directory; never serialized), CallerSnapshot (checked; an audit record's plain copy of a caller, never a WireRequest), Permission, PermissionSet (an array in Permission::ALL order)
 │       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName (checked text); the directory and config never serialized
@@ -115,17 +115,16 @@ spec/types/
 │       └── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │           ├── mod.rs     module docs and re-exports
 │           ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportLimits
-│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence), RowKey (row order), projection_rows, verdict_rows
+│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows
 │           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
 │           ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
 │           ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
 │           ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
 │           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
-│           └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
+│           └── record.rs  ExportRecord (checked; keeps a CallerSnapshot), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
-    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), one module per area
-    ├── golden/            one JSON file per wire shape, <area>/<name>.json
-    └── jsonl/             JSONL goldens (surface-reads/export_complete.jsonl: a complete export, line by line)
+    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area
+    └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
 
 ## Conventions
@@ -167,7 +166,9 @@ spec/types/
   committed). Structs are objects with snake_case keys; enums with data
   are adjacently tagged (`{"type": "snake_case", "data": ..}`) and
   all-unit enums are snake_case strings; entity ids are ULID text, digests
-  lower-case hex, timestamps RFC 3339 UTC at microsecond precision.
+  lower-case hex, timestamps RFC 3339 UTC at microsecond precision,
+  durations whole microseconds in `_micros` fields; floats are always
+  behind a checked finite type and id-keyed maps are `BTreeMap`s.
   Decoding is strict (`deny_unknown_fields`) and a checked type decodes
   only through its constructor (a private raw mirror and `TryFrom`, with
   `wire::Rejected` as the error). What a client may send is a

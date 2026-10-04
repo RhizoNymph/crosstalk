@@ -47,10 +47,10 @@ whose data comes from settled buckets are `Watermarked`.
 | --- | --- | --- | --- |
 | `agents(filter, window, page)` | View | `Watermarked<Page<AgentRow, AgentList>>` | from `EdgeStore::agent_traffic` |
 | `agent(id, window)` | View | `Option<Watermarked<AgentDetail>>` | from `EdgeStore::agent_traffic` |
-| `agent_names(ids)` | View | `HashMap<AgentId, AgentName>` | none (labels change only with `Changed::Agent`) |
+| `agent_names(ids)` | View | `BTreeMap<AgentId, AgentName>` | none (labels change only with `Changed::Agent`) |
 | `channels(filter, page)` | View | `Watermarked<Page<ChannelRow, ChannelList>>` | `EdgeStore::watermark`, read first |
 | `channel(id, window)` | View | `Option<Watermarked<ChannelRow>>` | `EdgeStore::watermark`, read first |
-| `channel_names(ids)` | View | `HashMap<ChannelId, ChannelName>` | none |
+| `channel_names(ids)` | View | `BTreeMap<ChannelId, ChannelName>` | none |
 | `promotion_preview(channel, pattern)` | View | `PromotionPreview` | none (all time, changes nothing) |
 | `transmissions_by_id(selection, version, page)` | View | `TransmissionPage` | none (current state, not buckets) |
 | `transmission_evidence(id, window)` | Content | `Option<TransmissionEvidence>` | none |
@@ -250,10 +250,12 @@ channel it superseded) splits its lookup. One cap and one counting rule
 `TooManyIds` from a name lookup always means the same bound.
 
 - `agent_names(ids: &IdBatch<AgentId>)` returns `AgentName { id, label }`
-  keyed by the id asked for: the canonical agent and its current label, so
+  keyed by the id asked for, in a `BTreeMap`, so the JSON object's keys
+  are in ascending id order and one answer has one encoding
+  (`surface.query.name-maps-ordered`): the canonical agent and its current label, so
   an alias is named by the agent it was merged into.
 - `channel_names(ids: &IdBatch<ChannelId>)` returns `ChannelName { id,
-  shape }` keyed by the id asked for: `id` is the channel in force
+  shape }` keyed by the id asked for, ordered the same way: `id` is the channel in force
   (`ChannelDirectory::canonical`) and `shape` is `ChannelShape::Pattern`
   (declared, before traffic or promoted) or `Seed(Locator)` (discovered).
   `channels::resolve_names` is the reference.
@@ -432,7 +434,7 @@ area ([wire_contract.md](wire_contract.md)).
 | `spec/types/derived/flow/channel/promotion.rs` (part) | What a promotion would cover | `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/support.rs` (part) | A capped list with its exact total | `Capped` (checked: `new`, `first`, `hidden`, `is_complete`), `InvalidCapped` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
-| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`), `NotAPromotionConflict`. Wire: responses only; `ChannelRow` decodes through `new`, a `PromotionPreview` refuses a conflict no promotion is refused with, `SupersededInto` and `ChannelName` decode field by field ([wire_contract.md](wire_contract.md#surface-reads)) |
+| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`), `NotAPromotionConflict`. Wire: responses only; `ChannelRow` decodes through `new`, a `PromotionPreview` refuses a conflict no promotion is refused with, `SupersededInto` and `ChannelName` decode field by field ([wire/surface_reads.md](wire/surface_reads.md)) |
 | `spec/types/interfaces/l8_surface/lists.rs` (part) | The channel list filter | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`; re-exports `AgentFilter` and `AgentText` |
 | `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage`. Wire: `TransmissionSelection` is a `WireRequest` (an array of ids, decoded through `new`); the rest are responses |
 | `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `InvalidTransmissionEvidence`, `EvidenceError`, `EvidenceRecord`. Wire: responses; `TransmissionEvidence` decodes through `assemble`, `AccessDetail` through `new`; the error types are not wire data |

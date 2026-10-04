@@ -8,7 +8,7 @@
 //! surface joins these with L7's traffic counts
 //! (`EdgeStore::agent_traffic`); see [`crate::aggregates::agents`].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::aggregates::agents::filter::AgentFilter;
 use crate::aggregates::agents::{AgentCluster, AgentName, AgentProfile};
@@ -45,7 +45,7 @@ pub trait AgentReads {
     async fn names(
         &self,
         ids: &IdBatch<AgentId>,
-    ) -> Result<HashMap<AgentId, AgentName>, AgentReadError>;
+    ) -> Result<BTreeMap<AgentId, AgentName>, AgentReadError>;
 }
 
 /// When each agent was last seen: the start of the latest exchange

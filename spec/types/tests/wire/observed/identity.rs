@@ -4,7 +4,7 @@
 //! what their constructors refuse, and normalize as they do.
 
 use super::super::harness::{assert_golden, assert_rejected, assert_round_trips};
-use super::super::{ULID_B, ULID_C, ts};
+use super::super::{ULID_A, ULID_B, ULID_C, ts};
 use super::{
     ACCOUNT_HEX, AREA, CREDENTIAL_HEX, PROMPT_HEX, ULID_E, coder, digest, merge, operator, planner,
     reviewer,
@@ -362,6 +362,60 @@ fn merge_records_refuse_a_self_merge_and_a_second_reversal() {
     // both shapes come back as the constructors build them.
     assert_round_trips(&record());
     assert_round_trips(&reverted_record());
+}
+
+#[test]
+fn merge_records_refuse_a_reversal_the_merge_cannot_have() {
+    let agent = reviewer().ulid_text();
+    // Dated before the merge it reverts (13:00).
+    assert_rejected::<MergeRecord>(
+        &record_json(
+            &agent,
+            ULID_B,
+            &REVERSAL.replace("2026-10-04T14:15:30.500000Z", "2026-10-04T12:59:59.999999Z"),
+        ),
+        "invalid merge record: Reversal(BeforeMerge",
+    );
+    // Restoring an agent the merge did not repoint (its `repointed` is
+    // empty).
+    let planner = planner().ulid_text();
+    assert_rejected::<MergeRecord>(
+        &record_json(
+            &agent,
+            ULID_B,
+            &REVERSAL.replace(
+                r#""restored": []"#,
+                &format!(r#""restored": ["{planner}"]"#),
+            ),
+        ),
+        "invalid merge record: Reversal(NotRepointed",
+    );
+    // Restoring the repointed agents out of order, or one twice. Any two
+    // ids other than the record's own agents serve as the repointed pair.
+    let (first, second) = (ULID_A, ULID_C);
+    let repointing = |restored: &str| {
+        record_json(
+            &agent,
+            ULID_B,
+            &REVERSAL.replace(r#""restored": []"#, &format!(r#""restored": {restored}"#)),
+        )
+        .replace(
+            r#""repointed": []"#,
+            &format!(r#""repointed": ["{first}", "{second}"]"#),
+        )
+    };
+    assert_rejected::<MergeRecord>(
+        &repointing(&format!(r#"["{second}", "{first}"]"#)),
+        "invalid merge record: Reversal(NotRepointed",
+    );
+    assert_rejected::<MergeRecord>(
+        &repointing(&format!(r#"["{first}", "{first}"]"#)),
+        "invalid merge record: Reversal(NotRepointed",
+    );
+    // The same record restoring a subsequence in order decodes.
+    let decoded: MergeRecord =
+        serde_json::from_str(&repointing(&format!(r#"["{second}"]"#))).expect("a subsequence");
+    assert_eq!(decoded.reverted().map(|r| r.restored.len()), Some(1));
 }
 
 #[test]

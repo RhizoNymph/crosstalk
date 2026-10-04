@@ -2,8 +2,8 @@
 //! the promotion preview (`channels`), transmission rows and selections
 //! (`transmissions`), evidence and excerpts (`evidence`), and export
 //! requests, manifests, rows and the JSONL framing (`export`). Goldens are
-//! under `golden/surface-reads/<area>/`; the one JSONL golden is under
-//! `jsonl/surface-reads/`, since `golden/` holds only `.json` files.
+//! under `golden/surface_reads/<area>/`, the one JSONL golden
+//! (`export/export_complete.jsonl`) beside the JSON ones.
 
 mod channels;
 mod evidence;

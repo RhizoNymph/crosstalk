@@ -19,7 +19,7 @@
 //! | `std::time::Duration` | whole microseconds as a number, in a field named `<what>_micros`: `"lag_micros": 30000000` ([`duration`]) |
 //! | `Option<T>` | `T` or `null`; `None` is always written as `null`, never left out |
 //! | `Vec<T>`, [`NonEmpty<T>`](crate::support::NonEmpty), [`IdBatch<T>`](crate::batch::IdBatch) | array |
-//! | `HashMap<K, V>` keyed by an id | object keyed by the id's text |
+//! | `BTreeMap<K, V>` keyed by an id | object keyed by the id's text, in ascending id order (every id-keyed map on the wire is a `BTreeMap`, so one value has one encoding) |
 //! | `NonZeroU32` and the other `NonZero*` | number; `0` is a decode error |
 //! | newtype over a number (`TopicModelVersion`, `SecretVersion`) | the number, `#[serde(transparent)]` |
 //! | checked type (private fields, `fn new(..) -> Result`) | the shape of its fields; decoding runs the checked constructor |
@@ -47,6 +47,12 @@
 //! Nodes of different versions in one cluster therefore fail loudly on a
 //! format they do not know instead of silently dropping data; a format
 //! change is a coordinated upgrade, made visible by its golden diff.
+//! Serde still accepts three alternate spellings, none of which adds or
+//! drops data: a unit variant written with `"data": null`, an all-unit enum
+//! written as `{"<variant>": null}`, and a struct written as a JSON array of
+//! its fields in declaration order. The goldens pin the canonical forms,
+//! nothing the gateway writes uses the others, and a checked type's
+//! constructor runs whichever spelling it is decoded from.
 //!
 //! # Checked types: the validating-deserialization pattern
 //!
