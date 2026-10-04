@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-merge.record-agreement"
+statement = "An agent is Merged exactly when one unreverted merge record names it as source, and its MergedInto::merge is that record's id."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+The revert procedure relies on it: reverting record m finds m's source
+merged by m and nothing else, so it can return the agent to the prior state
+m recorded. The only way out of Merged is reverting the record that put
+the agent there, and merges refuse merged sources.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::random_merges_and_reverts_keep_the_invariants",
+    "crosstalk_spec::tests::agents::reverting_out_of_order_returns_repointed_agents_to_the_source",
+]
+property = "crosstalk::reconstruct::tests::merge_log_agrees_with_states"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

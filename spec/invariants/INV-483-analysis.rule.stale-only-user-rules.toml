@@ -1,0 +1,28 @@
+[invariant]
+id = "analysis.rule.stale-only-user-rules"
+statement = "Only a user rule can be stale, a watched-topic rule only through TopicWatch::Stale and a semantic rule only through QueryWatch::Stale, and staleness is independent of whether the rule is enabled or disabled."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Staleness means what the rule was written against was replaced: topic ids
+lost their meaning after a re-fit, or the query's embedding came from a
+model the embedder no longer uses. Built-in rules take no parameters and
+cannot go stale. Keeping staleness apart from the operator's switch lets a
+stale rule be disabled without forgetting that it is stale, so enabling it
+again cannot revive it. The watches exist only inside user rule content,
+and RuleStatus has only Enabled and Disabled.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::alert::ContentRule",
+    "crosstalk_spec::aggregates::alert::RuleStatus",
+]
+unit = [
+    "crosstalk_spec::tests::rules::a_rule_evaluates_only_when_enabled_and_current",
+    "crosstalk_spec::tests::rules::every_builtin_reports_its_kind_and_a_name",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

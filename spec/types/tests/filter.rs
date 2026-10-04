@@ -1,4 +1,6 @@
-use crate::aggregates::alert::{AlertRule, AlertRuleDef, RuleStatus, TopicWatch, WatchedTopics};
+use crate::aggregates::alert::{
+    AlertRuleDef, BuiltinRule, ContentRule, RuleName, RuleStatus, TopicWatch, WatchedTopics,
+};
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{FalseDetections, FilterSubject, TopicVersionSelector};
 use crate::derived::flow::channel::detection::DeclaredDetection;
@@ -8,13 +10,12 @@ use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::ids::PromptHash;
 use crate::ids::{AgentId, AlertRuleId, TopicId};
+use crate::ids::{MergeId, OperatorId};
 use crate::interfaces::l8_surface::PolicyKind;
 use crate::interfaces::l8_surface::lists::{
     AgentFilter, AgentStateKind, AlertRuleFilter, ChannelFilter,
 };
-use crate::observed::agent::{
-    Agent, AgentState, IdentityEvidence, LabelLog, MergeAuthor, MergeableState, Merged,
-};
+use crate::observed::agent::{ActiveAgentState, Agent, AgentState, IdentityEvidence, MergedInto};
 use crate::support::{Blake3, NonEmpty};
 use crate::tests::fixtures::{agent, at, channel};
 
@@ -181,18 +182,18 @@ fn agent_in(state: AgentState) -> Agent {
         )),
         parent: None,
         state,
-        labels: LabelLog::default(),
+        label: None,
     }
 }
 
 #[test]
 fn agent_filter_matches_state_kind() {
-    let merged = agent_in(AgentState::Merged(Merged::new(
-        agent(2),
-        at(5),
-        MergeAuthor::Resolver,
-        MergeableState::Provisional { first_seen: at(1) },
-    )));
+    let merged = agent_in(AgentState::Merged(MergedInto {
+        merge: MergeId::from_ulid(1),
+        into: agent(2),
+        prior: ActiveAgentState::Provisional { first_seen: at(1) },
+        repointed_by: Vec::new(),
+    }));
     let live = agent_in(AgentState::Provisional { first_seen: at(1) });
     let canonical = AgentFilter {
         states: vec![
@@ -208,11 +209,7 @@ fn agent_filter_matches_state_kind() {
 
 #[test]
 fn alert_rule_filter_matches_status() {
-    let rule = |status| AlertRuleDef {
-        id: AlertRuleId::from_ulid(1),
-        rule: AlertRule::NewChannel,
-        status,
-    };
+    let rule = |status| AlertRuleDef::builtin(BuiltinRule::NewChannel, status, Vec::new());
     let disabled_only = AlertRuleFilter {
         statuses: vec![RuleStatus::Disabled],
         stale: None,
@@ -228,13 +225,19 @@ fn alert_rule_filter_matches_staleness_apart_from_status() {
         version: crate::aggregates::topic::TopicModelVersion(1),
         topics: NonEmpty::new(topic(1)),
     };
-    let watched = |watch, status| AlertRuleDef {
-        id: AlertRuleId::from_ulid(2),
-        rule: AlertRule::WatchedTopic {
-            watch,
-            remap_threshold: crate::support::Similarity::new(0.8).expect("in range"),
-        },
-        status,
+    let watched = |watch, status| {
+        AlertRuleDef::load(
+            AlertRuleId::from_ulid(2 << 80),
+            RuleName::new("watched").expect("valid name"),
+            (OperatorId::from_ulid(1), at(1)),
+            ContentRule::WatchedTopic {
+                watch,
+                remap_threshold: crate::support::Similarity::new(0.8).expect("in range"),
+            },
+            status,
+            Vec::new(),
+        )
+        .expect("unreserved id")
     };
     let stale = TopicWatch::Stale {
         last: last.clone(),

@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-label.merge-keeps-labels"
+statement = "Applying a merge or reverting one changes no agent's label."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The target keeps its label and the merged agent keeps its own, so an
+unmerge brings the agent back with the label it had, with no bookkeeping.
+The agent and record transitions do not touch labels; this pins the
+resolver to them.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::merge_and_unmerge_keep_labels"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

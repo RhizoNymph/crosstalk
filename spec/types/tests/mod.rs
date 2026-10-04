@@ -18,6 +18,7 @@ mod paging;
 mod policy;
 mod projection;
 mod provenance;
+mod rules;
 mod series;
 mod support;
 mod surface;

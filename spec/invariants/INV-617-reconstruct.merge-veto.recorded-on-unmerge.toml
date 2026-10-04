@@ -1,0 +1,21 @@
+[invariant]
+id = "reconstruct.merge-veto.recorded-on-unmerge"
+statement = "When IdentityResolver::unmerge(m) returns Ok, a MergeVeto between m.source and m.target by the reverting operator is stored in the same transaction."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The resolver merged these agents because it found the same strong evidence
+on both. That evidence is still stored, so the next exchange would merge
+them again and the operator's unmerge would not stick. Storing the veto
+with the revert means there is no moment where the split is visible but
+unprotected.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::agents::veto_of_a_reverted_merge_separates_its_source_and_target"
+integration = "crosstalk::reconstruct::tests::pg_unmerge_records_veto"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

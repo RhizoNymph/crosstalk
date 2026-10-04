@@ -42,6 +42,7 @@ pub enum Subject {
     AgentSeen,
     AgentMerged,
     AgentUnmerged,
+    AgentRenamed,
     SpanOriginated,
     SpanRelayed,
     ContentMatched,
@@ -51,13 +52,13 @@ pub enum Subject {
     DeclaredChannelUnused,
     TransmissionConfirmed,
     TransmissionSuspected,
-    TransmissionDismissed,
     TransmissionClassified,
     TopicVersionReady,
     TopicVersionActivated,
     EdgeUpdated,
     AlertOpened,
     AlertChanged,
+    AlertRuleChanged,
     PolicyChanged,
 }
 

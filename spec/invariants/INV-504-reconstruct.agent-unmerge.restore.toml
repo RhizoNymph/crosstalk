@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.agent-unmerge.restore"
+statement = "Agent::restore(m) on a merged agent whose repointed_by contains m's id points it at m.source and removes m's id and every later entry from repointed_by, and on any other agent changes nothing and returns false."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the step that returns the agents a record repointed to its source.
+Cutting the history at m, not just popping the last entry, makes reverts
+exact in any order: if x was repointed by m and then by a later merge,
+reverting m first still returns x to m's source. An agent without m in its
+history was unmerged or merged afresh since, and must not move.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::restore_returns_to_the_source_and_forgets_later_repoints",
+    "crosstalk_spec::tests::agents::restore_leaves_agents_the_record_did_not_repoint",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

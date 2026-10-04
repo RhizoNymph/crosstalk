@@ -13,15 +13,19 @@
 //! versions.
 //!
 //! `alerts` evaluates rules against detect and insight events and triages
-//! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned) and
-//! `TransmissionDismissed`. On `TopicVersionReady` it carries every current
-//! watched-topic rule on the predecessor over with [`TopicLineage::remap`]
-//! over the stored lineage, which yields the rule's new [`TopicWatch`]: it
-//! becomes [`TopicWatch::Stale`] exactly when the lineage shows a watched
-//! topic without a successor at or above the rule's threshold. A triage
-//! outcome that changes a stored alert (a deduplicated occurrence, a
-//! suppression) publishes `AlertChanged` with the alert's next
-//! `AlertRevision`. The surface manages rules directly through
+//! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned). On
+//! `TopicVersionReady` it carries every current watched-topic rule on the
+//! predecessor over with [`AlertRuleDef::remap`] (that is,
+//! [`TopicLineage::remap`] over the stored lineage), which yields the rule's
+//! new [`TopicWatch`]: it becomes [`TopicWatch::Stale`] exactly when the
+//! lineage shows a watched topic without a successor at or above the rule's
+//! threshold. When it starts with an [`Embedder`] whose model differs from a
+//! current semantic rule's, it marks the rule stale
+//! ([`AlertRuleDef::embedding_model_changed`]) before evaluating any event.
+//! A triage outcome that changes a stored alert (a deduplicated occurrence,
+//! a suppression) publishes `AlertChanged` with the alert's next
+//! `AlertRevision`; a rule going stale publishes `AlertRuleChanged` with its
+//! next `RuleRevision`. The surface manages rules directly through
 //! `AlertRuleStore`.
 //!
 //! Implementations:
@@ -39,18 +43,20 @@
 //! time, so the views link.
 
 use crate::aggregates::alert::{
-    AlertDraft, AlertRuleKind, KindChanged, RuleStatus, TriageOutcome, WatchedTopics,
+    AlertDraft, AlertRuleKind, NotEditable, RuleName, TriageOutcome, UserRule,
 };
 #[cfg(doc)]
-use crate::aggregates::alert::{AlertRuleDef, ContentRule, TopicWatch};
+use crate::aggregates::alert::{
+    AlertRuleConfig, AlertRuleDef, AlertRuleSet, RuleRevision, TopicWatch,
+};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::projection::{Projection, ProjectionLimit};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::policy::Policy;
 use crate::events::Envelope;
-use crate::ids::{AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
-use crate::support::{NonBlank, Similarity, TimeWindow};
+use crate::ids::{AlertRuleId, ChannelId, OperatorId, SinkId, TopicId, TransmissionId};
+use crate::support::{Change, NonEmpty, Similarity, TimeWindow, Timestamp};
 
 pub trait Embedder {
     fn model(&self) -> EmbeddingModel;
@@ -168,68 +174,59 @@ pub trait AlertTriage {
 
     /// Suppress the active alerts raised by `rule`.
     async fn rule_disabled(&mut self, rule: AlertRuleId) -> Result<u32, TriageError>;
-
-    /// Suppress the active alerts of `SuspectedTransmission` rules whose
-    /// subject is `transmission`, with reason `TransmissionDismissed`.
-    /// Triggered by `TransmissionDismissed`.
-    async fn transmission_dismissed(
-        &mut self,
-        transmission: TransmissionId,
-    ) -> Result<u32, TriageError>;
 }
 
-/// A content rule as an operator asks for it. The store turns it into a
-/// [`ContentRule`]: a semantic query's text is embedded with the current
-/// embedding model.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RuleRequest {
-    /// `topics.version` must be the topic-model version the alerts consumer
-    /// last made current, and every topic must exist in it.
-    WatchedTopic {
-        topics: WatchedTopics,
-        remap_threshold: Similarity,
-    },
-    SemanticQuery {
-        text: NonBlank,
-        threshold: Similarity,
-    },
-}
-
-/// Operator management of alert rules, called by the surface. Rules are
-/// read by the `alerts` consumer group; triage re-checks a rule's status, so
-/// a change takes effect for every draft triaged after it commits.
+/// Operator management of alert rules, called by the surface. The store
+/// holds an [`AlertRuleSet`]: each built-in rule exactly once, and the user
+/// rules. Rules are read by the `alerts` consumer group; triage re-checks a
+/// rule's status, so a change takes effect for every draft triaged after it
+/// commits. Every stored change publishes one `AlertRuleChanged` with the
+/// rule's next [`RuleRevision`]; an `Unchanged` result publishes nothing.
+/// Rules are never deleted.
+///
+/// A [`UserRule`] is resolved before it is stored: a watched-topic rule
+/// must name the topic-model version the alerts consumer last made current
+/// (`TopicVersionNotCurrent` otherwise) and topics that exist in it
+/// (`UnknownTopics`), and `None` takes the configured
+/// [`AlertRuleConfig::default_remap_threshold`]; a semantic query is
+/// embedded with the current model (`Embed` when that fails). Every sink
+/// must be configured (`UnknownSink`).
 pub trait AlertRuleStore {
-    /// Create a content rule with a caller-chosen id. A retry with the same
-    /// id and request changes nothing; the same id with another request is
-    /// `DuplicateId`.
+    /// Create an enabled, current user rule created by `by` at `at`, under
+    /// a fresh id the store assigns. Returns the id.
     async fn create(
         &mut self,
-        id: AlertRuleId,
-        request: RuleRequest,
-        status: RuleStatus,
+        name: RuleName,
+        rule: UserRule,
+        sinks: Vec<SinkId>,
         by: OperatorId,
-    ) -> Result<(), RuleError>;
+        at: Timestamp,
+    ) -> Result<AlertRuleId, RuleError>;
 
-    /// Replace a rule's definition ([`AlertRuleDef::update`]): same kind
-    /// only, status kept, a stale watched-topic rule made current. Its
-    /// alerts are left as they are.
+    /// Replace a user rule's name, definition and sinks
+    /// ([`AlertRuleDef::update`]): same kind only, creator kept. A stale rule
+    /// is retargeted to the current version or model and enabled. Its alerts
+    /// are left as they are. `NotEditable` for a built-in rule or another
+    /// kind.
     async fn update(
         &mut self,
         id: AlertRuleId,
-        request: RuleRequest,
+        name: RuleName,
+        rule: UserRule,
+        sinks: Vec<SinkId>,
         by: OperatorId,
-    ) -> Result<(), RuleError>;
+    ) -> Result<Change, RuleError>;
 
-    /// Enable or disable any rule. Disabling suppresses its active alerts
-    /// (`AlertTriage::rule_disabled`) in the same transaction. Enabling a
-    /// stale rule leaves it stale. Setting the status it already has changes
-    /// nothing.
-    async fn set_status(
+    /// Enable or disable any rule, built in or not
+    /// ([`AlertRuleDef::set_enabled`]). Disabling suppresses its active
+    /// alerts (`AlertTriage::rule_disabled`) in the same transaction.
+    /// Enabling a stale rule leaves it stale.
+    async fn set_enabled(
         &mut self,
         id: AlertRuleId,
-        status: RuleStatus,
+        enabled: bool,
         by: OperatorId,
-    ) -> Result<(), RuleError>;
+    ) -> Result<Change, RuleError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,18 +282,16 @@ pub enum RuleError {
         reason: String,
     },
     UnknownRule(AlertRuleId),
-    /// A create reusing an id with a different request.
-    DuplicateId(AlertRuleId),
-    /// An update to another kind, including any update of a rule that takes
-    /// no parameters.
-    KindChanged(KindChanged),
-    /// A watched-topic request for a version that is not current.
-    NotCurrentVersion {
+    /// An update of a built-in rule, or one changing a rule's kind.
+    NotEditable(NotEditable),
+    /// A watched-topic rule for a version that is not current.
+    TopicVersionNotCurrent {
         requested: TopicModelVersion,
         current: TopicModelVersion,
     },
-    /// A watched topic that does not exist in the requested version.
-    UnknownTopic(TopicId),
+    /// Watched topics that do not exist in the requested version.
+    UnknownTopics(NonEmpty<TopicId>),
+    UnknownSink(SinkId),
     /// The semantic query text could not be embedded.
     Embed(EmbedError),
 }

@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.rule.request-current-version"
-statement = "AlertRuleStore::create and update store a watched-topic rule only when its version is the current topic-model version and every topic exists in that version, and otherwise return NotCurrentVersion or UnknownTopic and change nothing."
+statement = "AlertRuleStore::create and update store a watched-topic rule only when its version is the current topic-model version and every topic exists in that version, and otherwise return TopicVersionNotCurrent or UnknownTopics and change nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -8,7 +8,8 @@ rationale = """
 Topic ids mean something only within one fit. An operator who picked
 topics just before a re-fit completed would otherwise store ids of a
 superseded version that watch nothing, or the wrong topics. Rejecting lets
-the UI reload topics and retry.
+the UI reload topics and retry. Updating a stale rule goes through the same
+check, which is how it is retargeted to the current version.
 """
 
 [evidence]

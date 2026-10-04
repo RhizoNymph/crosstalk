@@ -8,7 +8,7 @@
 //!                               window closes          late match
 //!                                      ▼                    │
 //!                                  Suspected ───────────────┘
-//!                                      └─ expire or dismiss ─▶ Discarded
+//!                                      └─ expire ─▶ Discarded
 //! ```
 //!
 //! **Identity.** A transmission is one (reader exchange, sender, route).
@@ -24,11 +24,11 @@
 //! **Policy.** A channel-routed transmission is judged by the channel policy
 //! in force when it was confirmed.
 //!
-//! **Discarded is final.** A suspected transmission is discarded when its
-//! window expires ([`TransmissionState::expire`]) or when an operator
-//! dismisses it ([`TransmissionState::dismiss`]); nothing else can be
-//! dismissed. Content evidence that arrives afterwards opens a new
-//! transmission through the normal path; the discarded one is never revived.
+//! **Discarded is final.** A suspected transmission is discarded only when
+//! its window expires ([`TransmissionState::expire`]). Content evidence that
+//! arrives afterwards opens a new transmission through the normal path; the
+//! discarded one is never revived. Operator verdicts on transmissions are a
+//! separate axis.
 //!
 //! The sender is unknown until content evidence arrives, so it lives inside
 //! [`Confirmed`], not on the transmission itself.
@@ -38,7 +38,7 @@ use std::num::NonZeroU64;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::provenance::matching::ContentMatch;
-use crate::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionId};
+use crate::ids::{AgentId, ChannelId, TopicId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::{NonEmpty, Timestamp};
 
@@ -125,28 +125,11 @@ pub enum TransmissionState {
         confirmed: Confirmed,
         classification: Classification,
     },
-    /// Suspected, then expired or dismissed. Final.
+    /// Suspected, but no content evidence arrived before expiry. Final.
     Discarded {
+        at: Timestamp,
         co_access: NonEmpty<CoAccess>,
-        reason: DiscardReason,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiscardReason {
-    /// No content evidence arrived before the suspected window expired.
-    Expired { at: Timestamp },
-    /// An operator judged it not a communication.
-    Dismissed(Dismissal),
-}
-
-/// An operator's dismissal. The surface stamps `by` and `at` from the
-/// authenticated caller; callers supply only the note.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dismissal {
-    pub by: OperatorId,
-    pub at: Timestamp,
-    pub note: Option<String>,
 }
 
 /// A transition that applies only to a suspected transmission.
@@ -154,24 +137,14 @@ pub struct Dismissal {
 pub struct NotSuspected;
 
 impl TransmissionState {
-    /// Suspected to Discarded with reason `Dismissed`, keeping its
-    /// co-accesses. Any other state is left unchanged.
-    pub fn dismiss(&mut self, dismissal: Dismissal) -> Result<(), NotSuspected> {
-        self.discard(DiscardReason::Dismissed(dismissal))
-    }
-
-    /// Suspected to Discarded with reason `Expired`, keeping its
-    /// co-accesses. Any other state is left unchanged.
+    /// Suspected to Discarded at `at`, keeping its co-accesses. Any other
+    /// state is left unchanged.
     pub fn expire(&mut self, at: Timestamp) -> Result<(), NotSuspected> {
-        self.discard(DiscardReason::Expired { at })
-    }
-
-    fn discard(&mut self, reason: DiscardReason) -> Result<(), NotSuspected> {
         match self {
             Self::Suspected { co_access, .. } => {
                 *self = Self::Discarded {
+                    at,
                     co_access: co_access.clone(),
-                    reason,
                 };
                 Ok(())
             }

@@ -211,6 +211,58 @@ impl NonBlank {
     }
 }
 
+/// Display text an operator writes: trimmed, non-empty, at most `MAX`
+/// characters (not bytes), and free of control characters. Agent labels and
+/// alert rule names are this with their own limits.
+///
+/// Blank text looks like no text, very long text breaks layout, and control
+/// characters can spoof other text in logs and terminals.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DisplayText<const MAX: usize>(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidText {
+    Blank,
+    TooLong { max: usize, got: usize },
+    ControlCharacter,
+}
+
+impl<const MAX: usize> DisplayText<MAX> {
+    pub const MAX_CHARS: usize = MAX;
+
+    pub fn new(text: &str) -> Result<Self, InvalidText> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidText::Blank);
+        }
+        let chars = trimmed.chars().count();
+        if chars > MAX {
+            return Err(InvalidText::TooLong {
+                max: MAX,
+                got: chars,
+            });
+        }
+        if trimmed.chars().any(char::is_control) {
+            return Err(InvalidText::ControlCharacter);
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether an accepted request changed stored state. The surface reports
+/// `Applied` as `ActionOutcome::Applied` and `Unchanged` as
+/// `ActionOutcome::Unchanged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Applied,
+    /// The state already matched the request.
+    Unchanged,
+}
+
 /// The time before which every aggregate bucket is final. Late content
 /// matches and suspected-to-confirmed upgrades can still change buckets at or
 /// after it; nothing changes a bucket before it. Every aggregate response

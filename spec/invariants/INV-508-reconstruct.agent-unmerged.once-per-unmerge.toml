@@ -1,13 +1,13 @@
 [invariant]
 id = "reconstruct.agent-unmerged.once-per-unmerge"
-statement = "Each unmerge that returns Ok publishes exactly one AgentUnmerged, and one that returns an error, including NotMerged for a repeated request, publishes none."
+statement = "Each unmerge that returns Ok publishes exactly one AgentUnmerged, and one that returns an error, including MergeAlreadyReverted for a repeated request, publishes none."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 Merge-table caches, the live feed and the audit trail follow these events.
 A lost event leaves a cache aliasing an agent the operator split off; a
 duplicate under a fresh envelope id would be applied twice. A retried
-unmerge finds the agent no longer merged and returns NotMerged without
+unmerge finds the record reverted and returns MergeAlreadyReverted without
 publishing.
 """
 

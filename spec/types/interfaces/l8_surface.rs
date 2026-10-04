@@ -2,10 +2,10 @@
 //! feed, the audit log and alert delivery.
 //!
 //! Operator actions flow back down the stack: policy changes are published
-//! as `PolicyChanged` (applied by L5); agent merges, unmerges and labels go
-//! to L3's identity resolver; channel promotion and transmission dismissal go
-//! to L5 (`ChannelRegistry::promote`, `TransmissionReview::dismiss`); alert
-//! rule management goes to L6's `AlertRuleStore`. Every action names its
+//! as `PolicyChanged` (applied by L5); agent merges, unmerges and renames go
+//! to L3's identity resolver; channel promotion goes to L5
+//! (`ChannelRegistry::promote`); alert rule management goes to L6's
+//! `AlertRuleStore`. Every action names its
 //! permission ([`OperatorAction::required_permission`]), checked before any
 //! effect. Wherever an action records an author or time, the surface stamps
 //! them from the authenticated caller and the time it accepted the action;
@@ -20,7 +20,9 @@
 //! - `LiveFeed` ([`live`]): the SSE endpoint the UI subscribes to for new
 //!   alerts and changed edges, channels and policies.
 //! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
-//! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
+//! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`. Each configured
+//!   sink has a [`SinkId`]; an alert is delivered to the sinks its rule
+//!   lists, and `QueryApi::sinks` reports each sink's last delivery.
 //!
 //! **Lists.** Channels, agents, alert rules, dead letters, the audit log and
 //! the transmissions behind an edge are read a page at a time with the cursors
@@ -38,7 +40,7 @@ pub mod audit;
 pub mod lists;
 pub mod live;
 
-use crate::aggregates::alert::{Alert, AlertRuleDef, RuleStatus};
+use crate::aggregates::alert::{Alert, AlertRuleDef, RuleName, UserRule};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -51,16 +53,16 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::ids::{
-    AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, TransmissionId,
+    AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, SinkId, TransmissionId,
 };
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
-use crate::interfaces::l6_analysis::{RuleRequest, SearchQuery, SearchResults};
+use crate::interfaces::l6_analysis::{SearchQuery, SearchResults};
 use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
 use crate::paging::{
     AgentList, AlertRuleList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
     PageRequest,
 };
-use crate::support::TimeWindow;
+use crate::support::{TimeWindow, Timestamp};
 
 use audit::{AuditFilter, AuditRecord};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
@@ -94,10 +96,10 @@ pub enum Permission {
     /// from message text) and projections.
     Content,
     /// Identity and policy: channel policy and promotion, agent merges,
-    /// unmerges and labels, and alert rules (what the gateway alerts on).
+    /// unmerges and renames, and alert rules and their sinks (what the
+    /// gateway alerts on, and where).
     Govern,
-    /// Work alerts: acknowledge, resolve, and dismiss the suspected
-    /// transmissions they are about.
+    /// Work alerts: acknowledge and resolve.
     Triage,
     /// Operate the pipeline: list and replay dead-lettered deliveries. A
     /// replay re-runs a consumer on an old event, so it can reopen alerts or
@@ -157,13 +159,21 @@ pub trait QueryApi {
         page: &PageRequest<AgentList>,
     ) -> Result<Page<Agent, AgentList>, QueryError>;
 
-    /// View. Newest rule first.
+    /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
+    /// rules newest first. Every rule is listed: none is ever deleted.
+    ///
+    /// [`BuiltinRule::ALL`]: crate::aggregates::alert::BuiltinRule::ALL
     async fn alert_rules(
         &self,
         caller: &Caller,
         filter: &AlertRuleFilter,
         page: &PageRequest<AlertRuleList>,
     ) -> Result<Page<AlertRuleDef, AlertRuleList>, QueryError>;
+
+    /// Govern. Every configured alert sink and how its last delivery went,
+    /// for choosing a rule's sinks. Govern rather than View because a
+    /// delivery error can name the sink's endpoint.
+    async fn sinks(&self, caller: &Caller) -> Result<Vec<SinkInfo>, QueryError>;
 
     /// Operate. Dead letters of one consumer group, or of every group,
     /// newest envelope first.
@@ -276,7 +286,7 @@ pub trait QueryApi {
     ) -> Result<Page<AuditRecord, AuditList>, QueryError>;
 }
 
-/// `OperatorAction` is `PartialEq` but not `Eq`: rule requests hold
+/// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
 /// similarity thresholds, which are floats.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OperatorAction {
@@ -286,15 +296,16 @@ pub enum OperatorAction {
         note: Option<String>,
     },
     /// Built with `MergeAuthor::Operator` of the caller; self-merges cannot
-    /// be expressed.
+    /// be expressed. Both agents must be canonical. Returns
+    /// `ActionOutcome::Merged` with the new record's id.
     MergeAgents(MergeRequest),
-    /// Undo `agent`'s merge exactly (`IdentityResolver::unmerge`).
-    UnmergeAgent {
-        agent: AgentId,
+    /// Revert one merge record exactly (`IdentityResolver::unmerge`).
+    Unmerge {
+        merge: MergeId,
     },
-    /// Set (`Some`) or clear (`None`) the display label of `agent`'s
-    /// canonical agent.
-    LabelAgent {
+    /// Set (`Some`) or clear (`None`) an active agent's display label. A
+    /// merged agent is refused, not redirected.
+    RenameAgent {
         agent: AgentId,
         label: Option<AgentLabel>,
     },
@@ -310,26 +321,26 @@ pub enum OperatorAction {
         alert: AlertId,
         note: Option<String>,
     },
-    /// Discard a suspected transmission with reason `Dismissed`, which
-    /// suppresses its `SuspectedTransmission` alerts.
-    DismissTransmission {
-        transmission: TransmissionId,
-        note: Option<String>,
+    /// Create an enabled user rule. The server assigns its id and returns
+    /// `ActionOutcome::RuleCreated`. "Watch this topic" is
+    /// [`UserRule::watch_topic`].
+    CreateRule {
+        name: RuleName,
+        rule: UserRule,
+        sinks: Vec<SinkId>,
     },
-    /// The client chooses the rule's id (a ULID), so a retried create is
-    /// idempotent.
-    CreateAlertRule {
+    /// Replace a user rule's name, definition and sinks. A stale rule is
+    /// retargeted to the current version or model and enabled.
+    UpdateRule {
         id: AlertRuleId,
-        rule: RuleRequest,
-        status: RuleStatus,
+        name: RuleName,
+        rule: UserRule,
+        sinks: Vec<SinkId>,
     },
-    UpdateAlertRule {
-        rule: AlertRuleId,
-        definition: RuleRequest,
-    },
-    SetAlertRuleStatus {
-        rule: AlertRuleId,
-        status: RuleStatus,
+    /// Enable or disable any rule. Staleness cannot be set.
+    SetRuleEnabled {
+        id: AlertRuleId,
+        enabled: bool,
     },
     /// Redeliver a dead-lettered envelope to its consumer group.
     ReplayDeadLetter {
@@ -343,15 +354,14 @@ pub enum OperatorAction {
 pub enum ActionKind {
     SetPolicy,
     MergeAgents,
-    UnmergeAgent,
-    LabelAgent,
+    Unmerge,
+    RenameAgent,
     PromoteChannel,
     Acknowledge,
     Resolve,
-    DismissTransmission,
-    CreateAlertRule,
-    UpdateAlertRule,
-    SetAlertRuleStatus,
+    CreateRule,
+    UpdateRule,
+    SetRuleEnabled,
     ReplayDeadLetter,
 }
 
@@ -360,15 +370,14 @@ impl OperatorAction {
         match self {
             Self::SetPolicy { .. } => ActionKind::SetPolicy,
             Self::MergeAgents(_) => ActionKind::MergeAgents,
-            Self::UnmergeAgent { .. } => ActionKind::UnmergeAgent,
-            Self::LabelAgent { .. } => ActionKind::LabelAgent,
+            Self::Unmerge { .. } => ActionKind::Unmerge,
+            Self::RenameAgent { .. } => ActionKind::RenameAgent,
             Self::PromoteChannel { .. } => ActionKind::PromoteChannel,
             Self::Acknowledge { .. } => ActionKind::Acknowledge,
             Self::Resolve { .. } => ActionKind::Resolve,
-            Self::DismissTransmission { .. } => ActionKind::DismissTransmission,
-            Self::CreateAlertRule { .. } => ActionKind::CreateAlertRule,
-            Self::UpdateAlertRule { .. } => ActionKind::UpdateAlertRule,
-            Self::SetAlertRuleStatus { .. } => ActionKind::SetAlertRuleStatus,
+            Self::CreateRule { .. } => ActionKind::CreateRule,
+            Self::UpdateRule { .. } => ActionKind::UpdateRule,
+            Self::SetRuleEnabled { .. } => ActionKind::SetRuleEnabled,
             Self::ReplayDeadLetter { .. } => ActionKind::ReplayDeadLetter,
         }
     }
@@ -381,15 +390,13 @@ impl OperatorAction {
         match self {
             Self::SetPolicy { .. }
             | Self::MergeAgents(_)
-            | Self::UnmergeAgent { .. }
-            | Self::LabelAgent { .. }
+            | Self::Unmerge { .. }
+            | Self::RenameAgent { .. }
             | Self::PromoteChannel { .. }
-            | Self::CreateAlertRule { .. }
-            | Self::UpdateAlertRule { .. }
-            | Self::SetAlertRuleStatus { .. } => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::DismissTransmission { .. } => {
-                Permission::Triage
-            }
+            | Self::CreateRule { .. }
+            | Self::UpdateRule { .. }
+            | Self::SetRuleEnabled { .. } => Permission::Govern,
+            Self::Acknowledge { .. } | Self::Resolve { .. } => Permission::Triage,
             Self::ReplayDeadLetter { .. } => Permission::Operate,
         }
     }
@@ -412,7 +419,28 @@ pub trait OperatorActions {
 }
 
 pub trait AlertSink {
+    fn id(&self) -> SinkId;
+
     async fn deliver(&self, alert: &Alert) -> Result<(), SinkError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SinkKind {
+    Webhook,
+    Slack,
+    Log,
+}
+
+/// A configured sink, as `QueryApi::sinks` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SinkInfo {
+    pub id: SinkId,
+    pub kind: SinkKind,
+    /// The name from config.
+    pub name: String,
+    /// When its last delivery succeeded, or why it failed. `None` before
+    /// its first delivery.
+    pub last_delivery: Option<Result<Timestamp, SinkError>>,
 }
 
 /// Why a query failed. Every variant is something the UI can act on.
@@ -462,8 +490,8 @@ pub enum ActionError {
 pub enum ConflictKind {
     /// Acknowledging or resolving an alert that is no longer active.
     AlertNotActive { alert: AlertId },
-    /// Acting on a merged agent where only its canonical agent is valid
-    /// (renaming it, for example).
+    /// Acting on a merged agent where only its canonical agent is valid:
+    /// renaming it, or naming it in a merge.
     AgentMerged { agent: AgentId, into: AgentId },
     /// Reverting a merge that was already reverted.
     MergeAlreadyReverted { merge: MergeId },
@@ -475,6 +503,12 @@ pub enum ConflictKind {
     PatternOverlaps { existing: ChannelId },
     /// Changing an alert rule's kind, or editing a built-in rule.
     RuleNotEditable { rule: AlertRuleId },
+    /// A watched-topic rule on a topic-model version that is no longer, or
+    /// not yet, the one rules are written against.
+    TopicVersionNotCurrent {
+        requested: TopicModelVersion,
+        current: TopicModelVersion,
+    },
     /// A verdict on a transmission whose state does not take one.
     TransmissionNotJudgeable { transmission: TransmissionId },
     /// Querying a topic-model version that is still being fitted.
@@ -492,6 +526,11 @@ pub enum InputError {
     PatternMissesSeed,
     /// A watched-topic rule naming topics or a version that do not exist.
     UnknownTopics,
+    /// A rule naming a sink that is not configured.
+    UnknownSink { sink: SinkId },
+    /// A semantic query whose text could not be embedded (too long for the
+    /// model).
+    QueryNotEmbeddable,
 }
 
 impl From<ActionError> for QueryError {

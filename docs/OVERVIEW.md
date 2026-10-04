@@ -66,9 +66,10 @@ Overview:
     policies to the UI over SSE (resumable by cursor, with a resync marker
     when a cursor is too old). Operator actions flow back down: policy
     changes and channel promotion to L5, which records every policy
-    decision in the channel's policy history; transmission dismissal
-    through L5's correlator (L6 then suppresses its alert); agent merges,
-    exact unmerges and display labels to L3; alert rule management to L6.
+    decision in the channel's policy history; agent merges (a log of
+    records), unmerges of one record (with a veto against re-merging) and
+    renames to L3; alert rule management (built-in rules enabled or
+    disabled, user rules created and edited, and their sinks) to L6.
     Every action call is recorded in the audit log with its outcome.
 
 Features Index:

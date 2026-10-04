@@ -13,8 +13,9 @@
   version history and the channel policy history.
 - The live update feed (SSE) and the append-only audit log.
 - Operator actions, each with one required permission: policy, channel
-  promotion, agent merges, unmerges and labels, alert triage, transmission
-  dismissal, alert rule management and dead-letter replay.
+  promotion, agent merges, unmerges of one merge record, and renames, alert
+  triage, alert rule management (built-in and user rules, and the sinks
+  they deliver to) and dead-letter replay.
 
 ## Non-scope
 
@@ -61,17 +62,28 @@ The types follow data through the stack:
    (known agent, new agent, or conflict) from the most specific
    `IdentityEvidence`, with harness ids scoped by `IdentityScope`; it also
    applies `MergeRequest`s, and the `AgentDirectory` resolves merged ids.
-   A merge records on the source's `Merged` its prior `MergeableState` and
-   the agents it repointed; a merge into a merged agent is redirected to
-   that agent's target and recorded as a merge followed by a repoint. An
-   operator unmerge (`IdentityResolver::unmerge`) returns the agent to its
-   prior state and points every agent repointed through it back at it
-   (`Merged::restore_through`), then publishes `AgentUnmerged`; stored
-   records are untouched, so graphs split again on their next read.
-   `IdentityResolver::set_label` appends to the canonical agent's
-   `LabelLog`; labels are never identity evidence, merges and unmerges
-   change no log, and `LabelView` shows the target's label with differing
-   alias labels as history.
+   Merges are a log (`observed::agent::merge`): each merge appends an
+   immutable `MergeRecord { id, from, into, by, at, repointed }` and returns
+   it. Both agents must be canonical; the source becomes
+   `AgentState::Merged(MergedInto)` holding the record's id and its prior
+   `ActiveAgentState` (Registered, Provisional or Established), and every
+   agent merged into the source is repointed to the target and listed in
+   `repointed`. `AgentMerged` is published. An operator unmerge
+   (`IdentityResolver::unmerge`) names one `MergeId` and reverts exactly
+   that record: the source returns to its prior state, each repointed agent
+   that nothing moved since points at the source again (`Agent::restore`,
+   which forgets the repoints after it), the record is marked reverted
+   (a second revert is refused), a `MergeVeto` between source and target is
+   recorded, and `AgentUnmerged` lists the restored agents. Records can be
+   reverted in any order. The resolver refuses to merge clusters a veto
+   separates; an operator merge between them clears those vetoes. Stored
+   records are untouched, so graphs join or split on their next read, and
+   any cache of `AgentDirectory::canonical` must apply `AgentMerged` and
+   `AgentUnmerged` before serving later reads. `IdentityResolver::rename`
+   sets or clears an active agent's `label` (an `AgentLabel`) and publishes
+   `AgentRenamed`; renaming a merged agent is refused, not redirected.
+   Labels are never identity evidence, and merges and unmerges change no
+   label. The UI derives a display name for an agent with no label.
    The `Threader` resolves `Continuation::Increment` exchanges through the
    stored response chain and gives a `ThreadOutcome` holding a
    `ConversationDelta` (new inputs, new system prompt, output), which is
@@ -106,11 +118,8 @@ The types follow data through the stack:
    (`ChannelRegistry::promote`): it keeps its id, resources, policy and
    `TrafficDetection`, gains a non-overlapping pattern that must match its
    seed, and its origin becomes `Declared` with `DeclaredHistory::Promoted`
-   recording the seed. An operator can dismiss a suspected transmission
-   (`TransmissionReview::dismiss`): the request goes through the owning
-   correlator shard (`Correlator::on_dismiss`), so it is ordered with late
-   matches, and the transmission becomes `Discarded` with
-   `DiscardReason::Dismissed`; `TransmissionDismissed` is published.
+   recording the seed. A suspected transmission is discarded only when its
+   window expires (`TransmissionState::expire`).
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
    (`TransmissionClassified`). Re-fits run one at a time. The
@@ -123,10 +132,12 @@ The types follow data through the stack:
    re-fit then re-classifies everything and publishes `TopicVersionReady`,
    and the version becomes `Ready`. On `TopicVersionReady`, every watched
    topic rule that is current on the predecessor is carried over with
-   `TopicLineage::remap`, which yields its new `TopicWatch` (`Current` under
-   the new version, or `Stale` naming the unmapped topics), so the UI's
-   lineage and the rules cannot disagree; the rule's `RuleStatus` is left
-   as the operator set it. `TopicVersionActivated { version, previous }`
+   `AlertRuleDef::remap` (`TopicLineage::remap`), which yields its new
+   `TopicWatch` (`Current` under the new version, or `Stale` naming the
+   unmapped topics), so the UI's lineage and the rules cannot disagree; the
+   rule's `RuleStatus` is left as the operator set it. When `alerts` starts
+   with an embedder whose model differs from a current semantic rule's, the
+   rule becomes `QueryWatch::Stale` (`AlertRuleDef::embedding_model_changed`). `TopicVersionActivated { version, previous }`
    from L7 makes the version `Active` and every older one `Superseded`. `TopicSizes` count topic
    assignments per topic (outliers apart), optionally over a window. The
    `SearchIndex` and the `ProjectionIndex` take a `TopologyFilter` and
@@ -134,14 +145,25 @@ The types follow data through the stack:
    (`SearchResults`, `Projection`). `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), or drops as `RuleInactive` when the rule stopped
-   evaluating, and suppresses on sanctioning, rule disabling or
-   `TransmissionDismissed`. Every stored change to an alert bumps its
-   `AlertRevision` and publishes `AlertChanged`. Operators manage rules
-   through `AlertRuleStore`: create and update content rules from a
-   `RuleRequest` (a watched-topic request must name the current topic-model
-   version; a semantic query's text is embedded), and enable or disable any
-   rule (`RuleStatus`). A rule keeps its kind; updating a stale watched-topic
-   rule is the only way it becomes current.
+   evaluating, and suppresses on sanctioning or rule disabling. Every stored
+   change to an alert bumps its `AlertRevision` and publishes
+   `AlertChanged`. Rules live in an `AlertRuleSet`: the five `BuiltinRule`s,
+   each exactly once under a fixed reserved id, which operators can only
+   enable or disable, and user rules (`WatchedTopic`, `SemanticQuery`)
+   under server-assigned ids. Each `AlertRuleDef` has a name, its sinks
+   (`SinkId`s), a `RuleStatus` and, for user rules, its creator. Operators
+   manage rules through `AlertRuleStore`: `create` resolves a `UserRule`
+   into a current `RuleDefinition` (a watched-topic rule must name the
+   current topic version and existing topics, and takes the configured
+   default remap threshold when it has none; a semantic query's text is
+   embedded and stored with its embedding, which carries the model) and
+   returns the new id; `update` replaces a user rule's name, definition and
+   sinks, and on a stale rule retargets and enables it; `set_enabled`
+   enables or disables any rule. A rule keeps its kind and is never
+   deleted. Staleness (`TopicWatch::Stale`, `QueryWatch::Stale`, reported as
+   a `StaleReason`) is separate from status and no operator action sets it.
+   Every stored change to a rule bumps its `RuleRevision` and publishes
+   `AlertRuleChanged`.
 8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
    `EdgeKey` bucket (per topic-model version, `BucketWidth` wide), activates
    a version once it is complete and publishes `TopicVersionActivated`, and
@@ -167,11 +189,14 @@ The types follow data through the stack:
    ids, counts, times and similarities but no text, and topic labels stay
    behind `Content`. `OperatorActions::act` checks
    `OperatorAction::required_permission` before any effect, then publishes
-   `PolicyChanged` or forwards the action down the stack: merges, unmerges
-   and labels to L3, channel promotion and transmission dismissal to L5,
-   alert rule management to L6; acknowledging and resolving an alert
-   publishes `AlertChanged`. It stamps every author and time from the
-   caller and returns an `ActionEffect`. `AlertSink`s deliver alerts.
+   `PolicyChanged` or forwards the action down the stack: merges
+   (`ActionOutcome::Merged(MergeId)`), unmerges and renames to L3, channel
+   promotion to L5, rule creation (`ActionOutcome::RuleCreated`), updates
+   and enabling to L6; acknowledging and resolving an alert publishes
+   `AlertChanged`. It stamps every author and time from the caller.
+   `AlertSink`s deliver each alert to the sinks its rule lists, and
+   `QueryApi::sinks` (Govern) reports each configured sink as a `SinkInfo`
+   with its last delivery.
    - **Audit log.** Every `act` call leaves one `AuditRecord` (the caller,
      the `OperatorAction` value, the time and an `AuditOutcome`: `Applied`,
      `Unchanged`, `Rejected(Rejection)` or `Forbidden`). `Applied` and
@@ -260,13 +285,13 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run | crate `crosstalk-spec` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
-| `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
+| `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `DisplayText` (checked), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
 | `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
-| `spec/types/observed/agent.rs` | Agent identity, merge records and exact unmerge | `Agent`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `Merged`, `MergeableState`, `MergeRequest`, `MergeAuthor` |
-| `spec/types/observed/agent/label.rs` | Display labels | `AgentLabel`, `Labeled`, `LabelChange`, `LabelLog`, `LabelView`, `PastLabel` |
+| `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
+| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
@@ -274,7 +299,7 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern`, `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
-| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
+| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`), `Confirmed`, `Classification` |
 | `spec/types/derived/flow/channel/mod.rs` | Channels and promotion | `Channel`, `ChannelOrigin` (`promoted`), `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
@@ -284,14 +309,14 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo`, `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
-| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
+| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
-| `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
+| `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent`, `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `QueryApi::sinks`, `SinkInfo`, `SinkKind`, `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table and a seeded random walk over merges and reverts; `rules.rs` for built-in and user rules; `surface.rs` for operator actions) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -329,15 +354,19 @@ exactly `min(matching, limit)` points, none twice, all finite.
   agent alone.
 - Merges are aliases resolved at read time; a merge request is never a
   self-merge.
-- An unmerge restores exactly: the agent returns to its `Merged::prior`
-  (always Provisional or Established), every agent repointed through it
-  points at it again unless it was unmerged or merged afresh since, and one
-  `AgentUnmerged` lists them. Merge then unmerge is the identity on the
-  merge table and on every topology graph.
-- Labels are display only: never identity evidence, set on the canonical
-  agent, untouched by merges and unmerges. An `AgentLabel` is trimmed,
-  non-empty, at most 64 characters and free of control characters, and a
-  `LabelLog` is in time order.
+- Merges are a log of immutable records; both agents of a merge are
+  canonical, so chains are never longer than one. An agent is merged by
+  exactly one unreverted record, the one that names it as source.
+- An unmerge reverts one record exactly, at most once: its source returns
+  to its prior `ActiveAgentState`, every agent it repointed points at the
+  source again unless it was unmerged or merged afresh since, a
+  `MergeVeto` keeps the pair apart from the resolver, and one
+  `AgentUnmerged` lists the restored agents. Reverting the latest record is
+  the identity on the merge table and on every topology graph.
+- Labels are display only: never identity evidence, untouched by merges
+  and unmerges, and only an active agent can be renamed. An `AgentLabel` is
+  trimmed, non-empty, at most 64 characters and free of control
+  characters.
 - Tool arguments are canonical JSON, so an echoed message hashes like the
   original.
 - A conversation's stored history holds non-system messages only. A
@@ -377,9 +406,7 @@ exactly `min(matching, limit)` points, none twice, all finite.
   channel is representable and a discovered or promoted, never-accessed one
   is not. Promotion keeps the channel's id, resources, policy and detection;
   its pattern matches its seed and overlaps no other declared pattern.
-- Only a suspected transmission can be discarded, by expiry or by an
-  operator's dismissal; a dismissal and a late match on it are ordered in
-  the correlator shard, so exactly one applies.
+- Only a suspected transmission can be discarded, and only by expiry.
 - Confirmed traffic on a channel raises an alert unless its policy is
   sanctioned (`Policy::on_traffic`).
 - Every policy decision, config or operator, is kept in the channel's
@@ -403,14 +430,18 @@ exactly `min(matching, limit)` points, none twice, all finite.
   empty, `FeedWindow`'s floor never exceeds its head, and `LiveConfig`'s
   retention outlasts its heartbeat.
 - Deduplication is a triage outcome, not an alert state.
-- Only watched-topic rules can be stale, and staleness is separate from
-  the operator's enabled or disabled status. A rule evaluates only when
-  enabled and current; updating is the only way out of stale; a rule keeps
-  its kind; operators create and edit content rules only. Once a disable
-  returns, the rule has no active alerts and triage opens none for it.
+- Each built-in rule exists exactly once, under its fixed reserved id, and
+  can only be enabled or disabled; user rules never take a reserved id.
+  Rules are never deleted and keep their kind.
+- Only user rules can be stale, and staleness is separate from the
+  operator's enabled or disabled status: a re-fit or an embedding model
+  change makes a rule stale, and only an update makes it current again,
+  which also enables it. A rule evaluates only when enabled and current.
+  Once a disable returns, the rule has no active alerts and triage opens
+  none for it.
 - Every operator action names one permission
   (`OperatorAction::required_permission`, one exhaustive match): Govern for
-  identity, policy and alert rules; Triage for alerts and dismissals;
+  identity, policy and alert rules; Triage for alerts;
   Operate for the pipeline. View, Content and Audit are read permissions
   that no action needs. The surface stamps author and time from the
   caller, and `ActionKind` and the audit log cover every action.

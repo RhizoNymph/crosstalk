@@ -4,8 +4,7 @@
 //! Triggered by `ConversationDelta` (tool calls and results become
 //! accesses), `ContentMatched` (confirms transmissions), the clock (evidence
 //! windows and idle windows close) and `PolicyChanged`. The surface calls
-//! it directly to promote a discovered channel (`ChannelRegistry::promote`)
-//! and to dismiss a suspected transmission (`TransmissionReview::dismiss`).
+//! it directly to promote a discovered channel (`ChannelRegistry::promote`).
 //!
 //! Policy: the flow consumer turns each `PolicyChanged` into a
 //! [`PolicyDecision`] and records it with [`ChannelRegistry::set_policy`].
@@ -35,7 +34,7 @@ use crate::derived::flow::channel::policy::{
 };
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
-use crate::derived::flow::transmission::{Confirmed, Dismissal, NonChannelRoute};
+use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AgentId, ChannelId, OperatorId, TransmissionId};
 use crate::observed::message::{ToolCall, ToolResult};
@@ -149,14 +148,8 @@ pub enum TransmissionUpdate {
         transmission: TransmissionId,
         co_access: NonEmpty<CoAccess>,
     },
-    /// A suspected transmission's window expired: Discarded, `Expired`.
+    /// A suspected transmission's window expired: Discarded.
     Discard { transmission: TransmissionId },
-    /// An operator dismissed a suspected transmission: Discarded,
-    /// `Dismissed`.
-    Dismiss {
-        transmission: TransmissionId,
-        dismissal: Dismissal,
-    },
 }
 
 /// Owns the open-evidence windows. Runs in one task per flow shard and is
@@ -172,32 +165,6 @@ pub trait Correlator {
 
     /// Close evidence windows and expire suspected transmissions up to `now`.
     fn on_tick(&mut self, now: Timestamp) -> Vec<TransmissionUpdate>;
-
-    /// An operator dismissed `transmission`. Returns `Dismiss` and releases
-    /// its state if it is suspected in this shard; otherwise `NotSuspected`
-    /// (it was confirmed, discarded or is still awaiting content) or
-    /// `UnknownTransmission`. Fed through the shard's input channel like
-    /// every other input, so a dismissal and a late content match for the
-    /// same transmission are applied in one order and exactly one wins.
-    fn on_dismiss(
-        &mut self,
-        transmission: TransmissionId,
-        dismissal: Dismissal,
-    ) -> Result<TransmissionUpdate, DismissError>;
-}
-
-/// Operator review of transmissions, called by the surface. The
-/// implementation routes each request to the correlator shard that owns the
-/// transmission and waits for its answer.
-pub trait TransmissionReview {
-    /// Dismiss a suspected transmission. On success the flow consumer has
-    /// stored it as Discarded with reason `Dismissed` and published one
-    /// `TransmissionDismissed`.
-    async fn dismiss(
-        &self,
-        transmission: TransmissionId,
-        dismissal: Dismissal,
-    ) -> Result<(), DismissError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,14 +189,4 @@ pub enum RegistryError {
     NotDiscovered(ChannelId),
     /// A promotion pattern that does not match the channel's own seed.
     PatternMissesSeed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DismissError {
-    Store {
-        reason: String,
-    },
-    UnknownTransmission(TransmissionId),
-    /// Only suspected transmissions can be dismissed.
-    NotSuspected(TransmissionId),
 }
