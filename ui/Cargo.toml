@@ -7,6 +7,7 @@ description = "Operator web UI for crosstalk."
 
 [dependencies]
 anyhow = "=1.0.104"
+crosstalk-fixture = { path = "../fixture" }
 crosstalk-spec = { path = "../spec" }
 futures-core = { version = "=0.3.34", default-features = false }
 jiff = "=0.2.37"
@@ -17,6 +18,9 @@ tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "sync", 
 topcoat = { version = "=0.9.0", default-features = false, features = ["router", "runtime", "serve", "view", "discover", "asset", "sse", "tailwind"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+crosstalk-fixture = { path = "../fixture", features = ["testing"] }
 
 [build-dependencies]
 topcoat = { version = "=0.9.0", default-features = false, features = ["tailwind"] }

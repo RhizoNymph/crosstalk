@@ -4,8 +4,9 @@
 //! `crosstalk_spec::interfaces::l8_surface::{QueryApi, OperatorActions}`,
 //! plus the two gaps in `crate::contract` (`present::Present`: the bucket
 //! width and the present; `formats::ExportFormats`: the export formats the
-//! backend writes). [`fixture::FixtureBackend`] implements all four with
-//! native `async fn`s. `app::AppBackend` names it, so every future a page
+//! backend writes). [`fixture::FixtureBackend`] (the `crosstalk-fixture`
+//! crate) implements the spec's three with native `async fn`s, and
+//! [`fixture`] implements the two gaps over its inherent methods. `app::AppBackend` names it, so every future a page
 //! awaits has a concrete type and its `Send`-ness, which Topcoat's
 //! multi-threaded runtime needs, is inferred where each `#[page]`, shard
 //! and `#[route]` is registered.

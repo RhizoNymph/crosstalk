@@ -196,6 +196,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crosstalk-fixture"
+version = "0.1.0"
+dependencies = [
+ "crosstalk-spec",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "crosstalk-spec"
 version = "0.1.0"
 
@@ -204,6 +214,7 @@ name = "crosstalk-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crosstalk-fixture",
  "crosstalk-spec",
  "futures-core",
  "jiff",
