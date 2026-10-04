@@ -28,9 +28,11 @@ It is part of the [query surface](query_surface.md). The types are in
 
 ## Non-scope
 
-- The wire bytes of JSONL lines and Parquet pages, beyond what the manifest
-  needs (where the header and trailer go, and the canonical encoding the
-  digest is defined over).
+- The wire bytes of Parquet pages, beyond what the manifest needs (where
+  the header and trailer go, and the canonical encoding the digest is
+  defined over). A JSONL line is a value's JSON under the
+  [wire contract](wire_contract.md), as is the `ExportRequest` a client
+  sends.
 - Resuming an interrupted export; a client runs it again.
 - Listing past exports: the audit log lists them, filtered by
   `AuditSubject::Export`.

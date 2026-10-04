@@ -1,0 +1,30 @@
+[invariant]
+id = "canonical.wire.round-trip"
+statement = "For every value v of a wire type, decoding the JSON that encoding v produces gives a value equal to v."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The spec types are the wire format between the gateway, the operator UI
+and other gateway nodes, so whatever one side sends the other must read
+back unchanged: a lossy encoding (a timestamp truncated to milliseconds, a
+digest re-cased, a cursor re-encoded) would make the UI show, or a node
+apply, something other than what was stored. Every golden test checks both
+directions, and timestamps are also checked across their whole range.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::alerts::alerts_golden_in_every_state",
+    "crosstalk_spec::tests::wire::alerts::alert_list_request_and_response_golden",
+    "crosstalk_spec::tests::wire::alerts::single_alert_response_golden",
+    "crosstalk_spec::tests::wire::errors::errors_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::paging::paging_goldens",
+    "crosstalk_spec::tests::wire::paging::pages_round_trip_through_goldens",
+    "crosstalk_spec::tests::wire::support::support_goldens",
+    "crosstalk_spec::tests::wire::ids::ids_key_maps_by_their_text",
+    "crosstalk_spec::tests::wire::time::timestamps_round_trip_across_the_range",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

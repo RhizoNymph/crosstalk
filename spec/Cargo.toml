@@ -9,3 +9,5 @@ description = "Type-checks the crosstalk type specification. Not part of the bui
 path = "types/mod.rs"
 
 [dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"

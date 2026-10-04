@@ -2,11 +2,15 @@
 
 The data model of the gateway, written as Rust so it type-checks. The crate
 in `spec/Cargo.toml` builds these modules as a library and runs their tests;
-it is not part of the gateway's build.
+it is not part of the gateway's build. The types are also the JSON wire
+format between the gateway, the operator UI and other gateway nodes
+(`wire/`, and `docs/features/wire_contract.md`).
 
 ```sh
 cargo check --manifest-path spec/Cargo.toml
 cargo test  --manifest-path spec/Cargo.toml
+# after an intended change to a type's JSON: rewrite its golden files, then review the diff
+CROSSTALK_BLESS=1 cargo test --manifest-path spec/Cargo.toml wire
 ```
 
 ## Layout
@@ -15,10 +19,14 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000), TooManyIds: the one id batch of every name lookup (agents, channels)
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text), BLAKE3 content ids (incl. ConfigHash)
-├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
+├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests), BLAKE3 content ids (incl. ConfigHash), secret digests
+├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow (a WireRequest), ByteRange, Blake3 (hex), Similarity, Share, Watermark; each with its wire form
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
+├── wire/                  the JSON wire contract: conventions, requests and authority
+│   ├── mod.rs             conventions, WireRequest, decode_request, DecodeError, DecodeErrorKind, Rejected (checked constructors' refusals as decode errors)
+│   ├── time.rs            Timestamp as RFC 3339 UTC at microsecond precision (rfc3339, parse_rfc3339), InvalidTimestamp, TooLateForText, MAX
+│   └── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
@@ -84,13 +92,13 @@ spec/types/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter; re-exports the action, error, permission and sink types
+│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/
-│       ├── permissions.rs Caller (built only by the directory), Permission, PermissionSet
+│       ├── permissions.rs Caller (built only by the directory; never serialized), Permission, PermissionSet
 │       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
 │       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
-│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds)
-│       ├── query_errors.rs the From impls: each store error and refused request value to one QueryError or ActionError
+│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, MalformedRequest); adjacently tagged on the wire
+│       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError
 │       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
 │       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
 │       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
@@ -110,6 +118,8 @@ spec/types/
 │           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
 │           └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
+    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), one module per area
+    └── golden/            one JSON file per wire shape, <area>/<name>.json
 ```
 
 ## Conventions
@@ -146,8 +156,20 @@ spec/types/
   unknown until content evidence arrives, so it lives in `Confirmed`.
 - **Ids never cross types.** Entity ids are ULIDs and content ids are BLAKE3
   digests, each its own newtype.
-- **No dependencies.** Error enums are plain; implementations derive
-  `thiserror::Error`, and serde and sqlx derives, on their copies.
+- **The types are the wire format.** The only dependencies are `serde`
+  and `serde_json`, pinned exactly (the UI's pins; `spec/Cargo.lock` is
+  committed). Structs are objects with snake_case keys; enums with data
+  are adjacently tagged (`{"type": "snake_case", "data": ..}`) and
+  all-unit enums are snake_case strings; entity ids are ULID text, digests
+  lower-case hex, timestamps RFC 3339 UTC at microsecond precision.
+  Decoding is strict (`deny_unknown_fields`) and a checked type decodes
+  only through its constructor (a private raw mirror and `TryFrom`, with
+  `wire::Rejected` as the error). What a client may send is a
+  `wire::WireRequest`; a `Caller` never serializes and nothing the server
+  stamps is a request. A golden file in `tests/golden/` pins every shape.
+  See `wire/mod.rs` and `docs/features/wire_contract.md`.
+- **Error enums are plain.** Implementations derive `thiserror::Error` on
+  their copies; serde's `Display` requirement is met by `wire::Rejected`.
 
 ## Harnesses, upstreams and credentials
 

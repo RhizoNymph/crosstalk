@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::OperatorId;
 
 /// The authenticated caller of one request: an operator and the
@@ -12,6 +14,10 @@ use crate::ids::OperatorId;
 /// Built only by [`OperatorDirectory::caller`](super::operators::OperatorDirectory::caller),
 /// so its permissions are always those config gives its operator, and it
 /// always holds at least one.
+///
+/// Authority: it implements neither `Serialize` nor `Deserialize`
+/// ([`crate::wire::authority`]), so no request can carry one and no
+/// response leaks one; responses name its `OperatorId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     pub(super) operator: OperatorId,
@@ -32,7 +38,9 @@ impl Caller {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// On the wire, a string: `"content"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Permission {
     /// Topology (agent-centred and channel-centred, with node metadata and

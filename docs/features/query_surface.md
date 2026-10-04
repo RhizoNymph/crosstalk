@@ -43,10 +43,11 @@ for agents, channels, transmissions and the overview are in
   and aggregation ([type_spec.md](type_spec.md)).
 - The UI itself, HTTP routing and framing, and session verification: a
   verified session arrives as a `RequestIdentity`.
-- Serialization formats, except the projection frame's binary layout,
-  which is part of the type (`ProjectionFrame::encode` and `decode`), and
-  the canonical row encoding an export's digest is defined over
-  (`ExportRow::encode`).
+- The JSON encoding of the surface's types and which of them a client may
+  send: the [wire contract](wire_contract.md). The projection frame's
+  binary layout is part of its type (`ProjectionFrame::encode` and
+  `decode`), and so is the canonical row encoding an export's digest is
+  defined over (`ExportRow::encode`).
 - Undoing a promotion or a supersession.
 
 ## Data and control flow
@@ -625,7 +626,11 @@ actions `PromotionRefusal`,
 `ResolveError` (merges, unmerges and renames: `UnknownAgent` and
 `UnknownMerge` to `NotFound`, `AgentMerged`, `MergeIntoSelf` and
 `MergeAlreadyReverted` to the same-named conflicts, a resolver-only
-`Vetoed` to `Store`) and `SelfMerge` (`InvalidInput(SelfMerge)`). The
+`Vetoed` to `Store`) and `SelfMerge` (`InvalidInput(SelfMerge)`); for
+both, `DecodeError`: client input the HTTP layer cannot decode as the
+route's request type (`wire::decode_request`) is
+`InvalidInput(MalformedRequest { kind, reason })`, and never reaches a
+store or the audit log ([wire_contract.md](wire_contract.md)). The
 promotion preview reads `PromoteError` through that same action mapping
 (`PromotionPreview::from_registry`), keeping conflicts as its answer and
 converting the rest with `QueryError::from`, so it adds no mapping of its
@@ -667,12 +672,12 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` (`promotion`) |
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
 | `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (every read, including the read models and `export`), `OperatorActions`, `AlertFilter`, `AlertStateKind`; re-exports the action, error, permission and sink types |
-| `spec/types/interfaces/l8_surface/permissions.rs` | Who is asking and what they may do | `Caller` (built only by the directory), `Permission`, `PermissionSet` |
+| `spec/types/interfaces/l8_surface/permissions.rs` | Who is asking and what they may do | `Caller` (built only by the directory; never serialized), `Permission`, `PermissionSet` |
 | `spec/types/interfaces/l8_surface/sinks.rs` | Alert delivery | `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError` |
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind` (incl. `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`) |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `MalformedRequest`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow` (to `QueryError`), `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
@@ -812,3 +817,8 @@ free-text classification: `Store`'s reason is diagnostic only.
 - The read models' invariants (agent and channel rows, names, the
   promotion preview, transmission rows, evidence, the overview) are in
   [read_models.md](read_models.md); export's are in [export.md](export.md).
+- Client input is decoded only as a `WireRequest` type
+  (`wire::decode_request`); a `Caller` never serializes, and no record the
+  surface stamps with an author or time is a request. Input that does not
+  decode is `InvalidInput(MalformedRequest)`. The JSON of every type is in
+  [wire_contract.md](wire_contract.md).

@@ -68,6 +68,8 @@
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crate::aggregates::topic_history::{RemapError, TopicLineage};
 use crate::aliases::Aliases;
@@ -782,7 +784,15 @@ impl RuleRevision {
 /// Readers that match subjects against a channel or agent (the alert inbox's
 /// channel filter, the live feed, sanction suppression) compare
 /// [`AlertSubject::resolved`] subjects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// On the wire, `{"type": "channel", "data": "<ChannelId>"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AlertSubject {
     Channel(ChannelId),
     Transmission(TransmissionId),
@@ -830,7 +840,11 @@ pub enum TriageOutcome {
     OperatorRejected,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A response: `QueryApi::alerts` lists it and `QueryApi::alert` returns
+/// it. Never a request: its state names who acknowledged or resolved it,
+/// which the surface stamps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Alert {
     pub id: AlertId,
     pub rule: AlertRuleId,
@@ -840,7 +854,15 @@ pub struct Alert {
     pub state: AlertState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// On the wire, `{"type": "open"}` or
+/// `{"type": "acknowledged", "data": {"by": .., "at": ..}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AlertState {
     Open,
     Acknowledged {
@@ -884,7 +906,9 @@ impl AlertRevision {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// On the wire, a string: `"channel_sanctioned"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SuppressReason {
     ChannelSanctioned,
     RuleDisabled,

@@ -20,7 +20,8 @@ Overview:
     HTTP, SSE and WebSocket.
 
     Status: design. The data model is specified in spec/types; there is no
-    implementation yet.
+    implementation yet. The spec types are also the JSON wire format
+    between the gateway, the operator UI and other gateway nodes.
 
   subsystems:
     ingest: >
@@ -123,6 +124,13 @@ Overview:
     topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes and
     every export (refused, or started and then ended or abandoned).
+    Across process boundaries every value travels as the JSON of its spec
+    type (the wire contract): the UI's requests are decoded only as
+    WireRequest types, with the Caller taken from the verified session and
+    never from the body, and authors and acceptance times stamped by the
+    surface; responses, errors, live-feed items and bus events between
+    nodes are decoded strictly, so a node that does not know a field or
+    variant refuses the delivery rather than dropping data.
 
 Features Index:
   type_spec:
@@ -133,7 +141,8 @@ Features Index:
       supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
-      bus events and per-layer interfaces, with tests for the invariants
+      bus events and per-layer interfaces (the types are also the JSON
+      wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
       in docs/research/harness-wire-protocols.md.
@@ -202,4 +211,25 @@ Features Index:
       - spec/types/interfaces/l8_surface/export/stream.rs
     depends_on: [query_surface, read_models, type_spec]
     doc: docs/features/export.md
+  wire_contract:
+    description: >
+      The JSON wire format, which is the spec types themselves: snake_case
+      objects, adjacently tagged enums ({"type", "data"}) and all-unit
+      enums as strings, entity ids as ULID text, digests as lower-case hex,
+      timestamps as RFC 3339 UTC at microsecond precision; strict decoding
+      (unknown fields and variants refused); checked types decoded only
+      through their constructors; WireRequest and decode_request for what a
+      client may send, with Caller never serialized and server-stamped
+      records never requests; an undecodable request as
+      InvalidInput(MalformedRequest); golden files pinning every shape,
+      rewritten with CROSSTALK_BLESS=1. Converted so far: ids, support
+      types, paging, the alert inbox and the query and action errors.
+    entry_points:
+      - spec/types/wire/mod.rs
+      - spec/types/wire/time.rs
+      - spec/types/wire/authority.rs
+      - spec/types/tests/wire/harness.rs
+      - spec/types/tests/golden/
+    depends_on: [type_spec, query_surface]
+    doc: docs/features/wire_contract.md
 ```

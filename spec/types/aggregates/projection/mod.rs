@@ -61,6 +61,8 @@ pub mod frame;
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::{RouteKind, TopicSlot};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -236,7 +238,13 @@ impl ProjectionSpec {
 /// Why a fit failed. Only deterministic outcomes: fitting the same spec
 /// again before anything changes fails the same way. Store and worker
 /// failures are retried, never recorded here.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FitFailure {
     /// Fewer sampled points than UMAP needs (more than `neighbors`).
     TooFewPoints { needed: u32, got: u64 },
@@ -285,7 +293,9 @@ pub enum ProjectionStatus {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// On the wire, a string: `"fitting"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectionStatusKind {
     Queued,
     Fitting,

@@ -1,0 +1,33 @@
+[invariant]
+id = "canonical.wire.goldens-pin-format"
+statement = "Every value with a golden file encodes to exactly that file's bytes, pretty-printed JSON with one trailing newline, so any change to a wire type's JSON fails its golden test until the golden is rewritten."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Gateway nodes of different versions talk over NATS and the UI decodes the
+gateway's JSON with its own build of the types, so a format change is a
+coordinated upgrade. Pinning each shape in a golden file makes every such
+change a reviewable diff (rewritten with CROSSTALK_BLESS=1) instead of a
+silent side effect of renaming a field or reordering a variant. Golden
+files are kept in the encoder's layout so a hand edit cannot drift from it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::every_golden_is_pretty_json_with_one_trailing_newline",
+    "crosstalk_spec::tests::wire::alerts::alerts_golden_in_every_state",
+    "crosstalk_spec::tests::wire::alerts::alert_subjects_and_reasons_golden",
+    "crosstalk_spec::tests::wire::alerts::alert_list_request_and_response_golden",
+    "crosstalk_spec::tests::wire::alerts::single_alert_response_golden",
+    "crosstalk_spec::tests::wire::errors::errors_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::ids::entity_ids_golden",
+    "crosstalk_spec::tests::wire::ids::content_ids_golden",
+    "crosstalk_spec::tests::wire::ids::secret_digests_golden",
+    "crosstalk_spec::tests::wire::paging::paging_goldens",
+    "crosstalk_spec::tests::wire::support::support_goldens",
+    "crosstalk_spec::tests::wire::time::timestamp_golden",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

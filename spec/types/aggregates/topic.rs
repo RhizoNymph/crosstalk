@@ -2,10 +2,13 @@
 
 use std::num::NonZeroU16;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{TopicId, TransmissionId};
 use crate::support::{Similarity, Timestamp};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EmbeddingModel {
     pub name: String,
     pub dimension: NonZeroU16,
@@ -57,8 +60,9 @@ impl Embedding {
 /// One fit of the topic model. Topic ids are only meaningful within the fit
 /// that produced them; a re-cluster produces a new version. Version 0 is the
 /// unfitted model: active from the start, it classifies every transmission
-/// as an outlier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// as an outlier. On the wire, the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct TopicModelVersion(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]

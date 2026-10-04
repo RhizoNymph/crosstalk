@@ -1,6 +1,16 @@
 //! Small building blocks shared by every type module.
+//!
+//! Their wire forms ([`crate::wire`]): a [`Timestamp`] is RFC 3339 text
+//! (`crate::wire::time`), a [`Blake3`] lower-case hex, a [`NonEmpty`] a
+//! non-empty array, checked text a string, and each checked value the shape
+//! of its fields, decoded through its constructor.
 
 use std::num::NonZeroU32;
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::wire::{Rejected, WireRequest, decode_text};
 
 /// A list with at least one element.
 ///
@@ -57,7 +67,28 @@ impl<T> NonEmpty<T> {
     }
 }
 
-/// Microseconds since the Unix epoch, UTC.
+/// An empty array where a [`NonEmpty`] belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyList;
+
+/// A JSON array of the elements in order.
+impl<T: Serialize> Serialize for NonEmpty<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+/// A JSON array with at least one element; `[]` is a decode error.
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for NonEmpty<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let items = Vec::<T>::deserialize(deserializer)?;
+        Self::from_vec(items)
+            .ok_or_else(|| D::Error::custom(Rejected::new("non-empty list", EmptyList)))
+    }
+}
+
+/// Microseconds since the Unix epoch, UTC. On the wire, RFC 3339 text at
+/// microsecond precision (`crate::wire::time`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(u64);
 
@@ -72,7 +103,13 @@ impl Timestamp {
 }
 
 /// A half-open time interval `[start, end)` with `start < end`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// The reference instance of the validating-deserialization pattern
+/// ([`crate::wire`]): `Serialize` is derived on the checked type, and
+/// `Deserialize` goes through the private `RawTimeWindow` mirror and
+/// [`TimeWindow::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTimeWindow")]
 pub struct TimeWindow {
     start: Timestamp,
     end: Timestamp,
@@ -80,6 +117,25 @@ pub struct TimeWindow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmptyWindow;
+
+/// [`TimeWindow`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTimeWindow {
+    start: Timestamp,
+    end: Timestamp,
+}
+
+impl TryFrom<RawTimeWindow> for TimeWindow {
+    type Error = Rejected<EmptyWindow>;
+
+    fn try_from(raw: RawTimeWindow) -> Result<Self, Self::Error> {
+        Self::new(raw.start, raw.end).map_err(|error| Rejected::new("time window", error))
+    }
+}
+
+/// A client picks the window of every windowed query.
+impl WireRequest for TimeWindow {}
 
 impl TimeWindow {
     pub fn new(start: Timestamp, end: Timestamp) -> Result<Self, EmptyWindow> {
@@ -105,7 +161,8 @@ impl TimeWindow {
 
 /// A half-open byte range `[start, end)` into UTF-8 text, with
 /// `start < end`. Both ends fall on char boundaries of the text it indexes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawByteRange")]
 pub struct ByteRange {
     start: u32,
     end: u32,
@@ -113,6 +170,21 @@ pub struct ByteRange {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmptyRange;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawByteRange {
+    start: u32,
+    end: u32,
+}
+
+impl TryFrom<RawByteRange> for ByteRange {
+    type Error = Rejected<EmptyRange>;
+
+    fn try_from(raw: RawByteRange) -> Result<Self, Self::Error> {
+        Self::new(raw.start, raw.end).map_err(|error| Rejected::new("byte range", error))
+    }
+}
 
 impl ByteRange {
     pub fn new(start: u32, end: u32) -> Result<Self, EmptyRange> {
@@ -148,11 +220,63 @@ impl Blake3 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// 64 lower-case hex digits, most significant byte first.
+    pub fn to_hex(&self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        self.0
+            .iter()
+            .flat_map(|byte| [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]])
+            .map(char::from)
+            .collect()
+    }
+
+    /// The digest `text` names, accepting exactly the text
+    /// [`Blake3::to_hex`] writes.
+    pub fn from_hex(text: &str) -> Result<Self, InvalidHex> {
+        let bytes = text.as_bytes();
+        if bytes.len() != 64 {
+            return Err(InvalidHex::Length { got: bytes.len() });
+        }
+        let nibble = |index: usize| match bytes[index] {
+            digit @ b'0'..=b'9' => Ok(digit - b'0'),
+            letter @ b'a'..=b'f' => Ok(letter - b'a' + 10),
+            _ => Err(InvalidHex::Character { index }),
+        };
+        let mut digest = [0u8; 32];
+        for (index, byte) in digest.iter_mut().enumerate() {
+            *byte = (nibble(2 * index)? << 4) | nibble(2 * index + 1)?;
+        }
+        Ok(Self(digest))
+    }
+}
+
+/// Why text is not a digest's hex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidHex {
+    /// Not 64 bytes.
+    Length { got: usize },
+    /// The byte at `index` is not a lower-case hex digit. Upper case is
+    /// refused, so every digest has one text.
+    Character { index: usize },
+}
+
+impl Serialize for Blake3 {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Blake3 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "BLAKE3 hex", |text| Self::from_hex(&text))
+    }
 }
 
 /// A similarity score in `0.0..=1.0` (cosine similarity mapped to that range,
-/// or a model's confidence). Never NaN.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+/// or a model's confidence). Never NaN. A JSON number.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f32", into = "f32")]
 pub struct Similarity(f32);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,9 +296,29 @@ impl Similarity {
     }
 }
 
-/// A fraction of a total in `0.0..=1.0`. Used for edge weights.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+impl TryFrom<f32> for Similarity {
+    type Error = Rejected<OutOfRange>;
+
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value).map_err(|error| Rejected::new("similarity", error))
+    }
+}
+
+impl From<Similarity> for f32 {
+    fn from(similarity: Similarity) -> Self {
+        similarity.0
+    }
+}
+
+/// A fraction of a total in `0.0..=1.0`. Used for edge weights. A JSON
+/// number.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct Share(f64);
+
+/// A share outside `0.0..=1.0`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShareOutOfRange(pub f64);
 
 impl Share {
     pub fn new(value: f64) -> Option<Self> {
@@ -183,6 +327,20 @@ impl Share {
 
     pub fn get(self) -> f64 {
         self.0
+    }
+}
+
+impl TryFrom<f64> for Share {
+    type Error = Rejected<ShareOutOfRange>;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(Rejected::new("share", ShareOutOfRange(value)))
+    }
+}
+
+impl From<Share> for f64 {
+    fn from(share: Share) -> Self {
+        share.0
     }
 }
 
@@ -208,6 +366,21 @@ impl NonBlank {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// A JSON string.
+impl Serialize for NonBlank {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+/// A JSON string with a non-whitespace character, trimmed as
+/// [`NonBlank::new`] trims it.
+impl<'de> Deserialize<'de> for NonBlank {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "non-blank text", |text| Self::new(&text))
     }
 }
 
@@ -253,6 +426,20 @@ impl<const MAX: usize> DisplayText<MAX> {
     }
 }
 
+/// A JSON string.
+impl<const MAX: usize> Serialize for DisplayText<MAX> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+/// A JSON string that [`DisplayText::new`] accepts, trimmed as it trims.
+impl<'de, const MAX: usize> Deserialize<'de> for DisplayText<MAX> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "display text", |text| Self::new(&text))
+    }
+}
+
 /// At most `MAX` items of a longer list, and how long the whole list is.
 ///
 /// A capped list that looks complete invites a wrong decision ("these are all
@@ -261,10 +448,30 @@ impl<const MAX: usize> DisplayText<MAX> {
 /// Built only through [`Capped::new`] (`shown.len() <= MAX`, `total >=
 /// shown.len()`) and [`Capped::first`]. The order of `shown` is the
 /// producer's, stated where the sample is returned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    try_from = "RawCapped<T>",
+    bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>")
+)]
 pub struct Capped<T, const MAX: usize> {
     shown: Vec<T>,
     total: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawCapped<T> {
+    shown: Vec<T>,
+    total: u64,
+}
+
+impl<T, const MAX: usize> TryFrom<RawCapped<T>> for Capped<T, MAX> {
+    type Error = Rejected<InvalidCapped>;
+
+    fn try_from(raw: RawCapped<T>) -> Result<Self, Self::Error> {
+        Self::new(raw.shown, raw.total).map_err(|error| Rejected::new("capped list", error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,7 +535,8 @@ fn len(n: usize) -> u64 {
 /// Whether an accepted request changed stored state. The surface reports
 /// `Applied` as `ActionOutcome::Applied` and `Unchanged` as
 /// `ActionOutcome::Unchanged`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Change {
     Applied,
     /// The state already matched the request.
@@ -339,5 +547,7 @@ pub enum Change {
 /// matches and suspected-to-confirmed upgrades can still change buckets at or
 /// after it; nothing changes a bucket before it. Every aggregate response
 /// reports one, so a cited view can say what was settled when it was taken.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// On the wire, its timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Watermark(pub Timestamp);

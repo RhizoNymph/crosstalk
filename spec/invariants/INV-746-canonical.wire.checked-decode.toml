@@ -1,0 +1,38 @@
+[invariant]
+id = "canonical.wire.checked-decode"
+statement = "Decoding JSON into a checked type runs its checked constructor, so JSON the constructor refuses is a decode error and never yields a value."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A checked type's invariants (a window that is not empty, a page size in
+1..=500, a non-empty list, a cursor token in the URL-safe alphabet, a page
+with a next cursor holding items) hold only if every value goes through its
+constructor. A derived Deserialize would build one from any JSON with the
+right fields, so checked types deserialize through a private raw mirror and
+TryFrom into the constructor (#[serde(try_from = ...)]), and decoding
+accepts exactly what the constructor accepts, including its normalization
+(NonBlank trims, IdBatch sorts and drops repeats).
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::support::TimeWindow",
+    "crosstalk_spec::wire::Rejected",
+]
+unit = [
+    "crosstalk_spec::tests::wire::support::time_windows_refuse_empty_and_unknown_shapes",
+    "crosstalk_spec::tests::wire::support::byte_ranges_refuse_empty",
+    "crosstalk_spec::tests::wire::support::similarities_and_shares_refuse_out_of_range",
+    "crosstalk_spec::tests::wire::support::non_empty_refuses_an_empty_array",
+    "crosstalk_spec::tests::wire::support::checked_text_refuses_what_its_constructor_refuses",
+    "crosstalk_spec::tests::wire::support::capped_lists_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::support::non_zero_numbers_refuse_zero",
+    "crosstalk_spec::tests::wire::paging::page_sizes_refuse_zero_and_above_max",
+    "crosstalk_spec::tests::wire::paging::cursors_refuse_tokens_the_constructor_refuses",
+    "crosstalk_spec::tests::wire::paging::pages_refuse_what_the_surface_never_serves",
+    "crosstalk_spec::tests::wire::paging::id_batches_normalize_and_refuse_too_many",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

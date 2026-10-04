@@ -1,0 +1,7 @@
+[
+  "queued",
+  "fitting",
+  "ready",
+  "failed",
+  "expired"
+]

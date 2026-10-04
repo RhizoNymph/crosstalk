@@ -141,6 +141,8 @@ pub mod summary;
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crate::aggregates::agents::{AgentDetail, AgentName, AgentRow};
 use crate::aggregates::alert::{Alert, AlertRuleDef};
@@ -168,6 +170,7 @@ use crate::paging::{
     TopicList, TransmissionList,
 };
 use crate::support::TimeWindow;
+use crate::wire::WireRequest;
 
 use audit::{AuditEntry, AuditFilter};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
@@ -192,14 +195,20 @@ pub use crate::derived::flow::channel::policy::PolicyKind;
 /// that channel or a transmission routed through it, with the listed
 /// channel, the subject's channel and the transmission's route all resolved
 /// through supersession: filtering on a promoted channel shows the alerts
-/// still stored under the channels it superseded.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// still stored under the channels it superseded. A request:
+/// `{"states": ["open"], "channel": null}`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AlertFilter {
     pub states: Vec<AlertStateKind>,
     pub channel: Option<ChannelId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl WireRequest for AlertFilter {}
+
+/// On the wire, a string: `"acknowledged"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AlertStateKind {
     Open,
     Acknowledged,

@@ -31,6 +31,8 @@ is in [query_surface.md](query_surface.md).
   feed: [query_surface.md](query_surface.md).
 - Bulk export of transmissions and other datasets, which reuses the
   transmission row and the evidence's quotes: [export.md](export.md).
+- The JSON these rows and pages travel as, and which arguments are client
+  requests (`IdBatch`, the list filters): [wire_contract.md](wire_contract.md).
 
 ## Data and control flow
 
@@ -413,7 +415,10 @@ filter.
 `alert(id)` returns the `Alert` that `alerts` lists under `id` (its
 subject as raised; matching against channels and agents resolves it with
 `AlertSubject::resolved`), or `None`. Alert pages and audit links resolve
-through it. Alert ids are never aliased.
+through it. Alert ids are never aliased. On the wire it is the alert's
+JSON or `null` (`tests/golden/alerts/alert_found.json`,
+`alert_unknown.json`); the alert inbox is the wire contract's reference
+area ([wire_contract.md](wire_contract.md)).
 
 ## Files
 

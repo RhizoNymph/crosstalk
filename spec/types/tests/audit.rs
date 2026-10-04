@@ -23,6 +23,7 @@ use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor, MergeReq
 use crate::support::{Blake3, NonEmpty, TimeWindow};
 use crate::tests::fixtures::{agent, at, channel, transmission};
 use crate::tests::operators::{caller, operator};
+use crate::wire::DecodeErrorKind;
 
 fn set_policy() -> OperatorAction {
     OperatorAction::SetPolicy {
@@ -644,7 +645,8 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::SelfMerge
             | InputError::EmptySelection
             | InputError::ExcerptContextTooLong { .. }
-            | InputError::TooManyIds { .. } => input,
+            | InputError::TooManyIds { .. }
+            | InputError::MalformedRequest { .. } => input,
         }
     }
     [
@@ -665,6 +667,10 @@ fn every_input_error() -> Vec<InputError> {
         InputError::TooManyIds {
             max: 1000,
             got: 1001,
+        },
+        InputError::MalformedRequest {
+            kind: DecodeErrorKind::Data,
+            reason: "unknown field `stats`, expected `states` at line 1 column 8".into(),
         },
     ]
     .into_iter()

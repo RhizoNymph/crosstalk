@@ -1,0 +1,27 @@
+[invariant]
+id = "canonical.wire.id-encoding"
+statement = "An entity id encodes as its 26-character upper-case Crockford base32 ULID text and a content id or BLAKE3 digest as 64 lower-case hex digits, and decoding accepts exactly those texts."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Ids appear in URLs, JSON bodies, SSE events and map keys, and a 128-bit id
+does not fit a JSON number a JavaScript tool reads exactly. One canonical
+text per id (no lower case, no Crockford letter folding, no upper-case hex)
+means two texts never name one entity, so ids compare as strings in the UI,
+in caches and in logs. The text is the same ulid_text an agent filter
+matches against.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::ids::ulid_text_matches_reference_values",
+    "crosstalk_spec::tests::wire::ids::ulid_text_accepts_only_the_canonical_form",
+    "crosstalk_spec::tests::wire::ids::entity_ids_reject_anything_but_ulid_text",
+    "crosstalk_spec::tests::wire::ids::blake3_hex_matches_reference_value",
+    "crosstalk_spec::tests::wire::ids::content_ids_reject_anything_but_lower_case_hex",
+    "crosstalk_spec::tests::wire::ids::ids_key_maps_by_their_text",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

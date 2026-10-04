@@ -46,6 +46,8 @@
 //!
 //! [`CorrelationTiming::settle_after`]: crate::derived::flow::timing::CorrelationTiming::settle_after
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::series::BucketWidth;
 use crate::derived::flow::timing::{CorrelationTiming, sub};
 use crate::support::{TimeWindow, Timestamp};
@@ -99,8 +101,9 @@ impl Watermark {
 
 /// An aggregate response and the watermark in effect when its read began.
 /// Every part of `value` before `watermark` is final in the sense of the
-/// module docs.
-#[derive(Debug, Clone, PartialEq)]
+/// module docs. On the wire, `{"watermark": "<timestamp>", "value": ..}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Watermarked<T> {
     pub watermark: Watermark,
     pub value: T,

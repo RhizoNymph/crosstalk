@@ -1,0 +1,32 @@
+[invariant]
+id = "surface.wire.authority-not-decoded"
+statement = "The gateway decodes client input only as a WireRequest type; Caller implements neither Serialize nor Deserialize, and no type holding a value the server stamps (Promotion, MergeRequest, verdict records, pins, policy decisions, audit, export and projection records, alerts, bus envelopes) is a WireRequest."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Who is asking and when the gateway accepted the request are the server's
+to decide: a Caller comes from the verified session through the operator
+directory, and an author or acceptance time is stamped from it. If a
+client could send a Caller, or a record with its own author or time, it
+could act as another operator or backdate a decision. The HTTP layer's
+only decoder is bounded on WireRequest, the compile-time assertions in
+wire::authority fail to build if Caller gains a serde trait or a stamped
+type becomes a request, every request golden is checked for stamp keys,
+and strict decoding turns a smuggled author field into a decode error.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::wire::decode_request",
+    "crosstalk_spec::wire::authority",
+]
+unit = [
+    "crosstalk_spec::tests::wire::requests::a_smuggled_author_is_a_decode_error",
+    "crosstalk_spec::tests::wire::requests::authority_keys_are_found_at_any_depth",
+    "crosstalk_spec::tests::wire::alerts::alert_list_request_and_response_golden",
+    "crosstalk_spec::tests::wire::paging::paging_goldens",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
