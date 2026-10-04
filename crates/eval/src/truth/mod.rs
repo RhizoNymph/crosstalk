@@ -1,0 +1,266 @@
+//! Ground truth: eval-owned, serialisable labels.
+//!
+//! An [`Expectation`] is one of:
+//!
+//! - a [`ExpectedTransmission`]: one agent's text must be found in another
+//!   agent's input at a given reader exchange and location;
+//! - a [`NegativeControl`]: a pair, exchange or location where a detector
+//!   must **not** report a transmission (a rejected send, text both agents
+//!   got from a shared source, harness boilerplate, a scripted sender);
+//! - an [`AgentCluster`]: agent keys that name one agent, for identity tests.
+//!
+//! Labels are built through checked constructors (and deserialised through
+//! the same checks), and written as JSONL ([`jsonl`]) so reports can cite
+//! them.
+
+pub mod jsonl;
+pub mod kinds;
+
+use serde::{Deserialize, Serialize};
+
+pub use kinds::{CarrierKind, MatchNeed, Tier};
+
+use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::derived::flow::resource::Locator;
+use crosstalk_spec::derived::flow::transmission::DelegationDirection;
+use crosstalk_spec::derived::provenance::span::SpanLocation;
+use crosstalk_spec::ids::ExchangeId;
+
+use crate::keys::{AgentKey, SourceRef};
+use crate::location::SpanLocationExt;
+
+/// How the content is expected to travel: the spec's `Route`, with a channel
+/// named by the canonical resource it was read through.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RouteExpectation {
+    Channel { resource: Locator },
+    Delegation { direction: DelegationDirection },
+    Direct,
+    Unobserved,
+}
+
+impl RouteExpectation {
+    pub fn kind(&self) -> RouteKind {
+        match self {
+            Self::Channel { .. } => RouteKind::Channel,
+            Self::Delegation { .. } => RouteKind::Delegation,
+            Self::Direct => RouteKind::Direct,
+            Self::Unobserved => RouteKind::Unobserved,
+        }
+    }
+}
+
+/// Text and where it sits in the reader's message: `text` is exactly the
+/// bytes `at` cuts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedContent {
+    pub text: String,
+    pub at: SpanLocation,
+}
+
+/// The fields of an expected transmission, before checking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransmissionLabel {
+    pub from: AgentKey,
+    pub to: AgentKey,
+    /// The sender's exchange whose response holds the text, when the sender
+    /// made one (a scripted sender makes none).
+    pub sender_exchange: Option<ExchangeId>,
+    /// The first exchange of the reader whose input carries the text.
+    pub reader_exchange: ExchangeId,
+    pub route: RouteExpectation,
+    pub carrier: CarrierKind,
+    pub content: ExpectedContent,
+    pub needs: MatchNeed,
+    pub tier: Tier,
+    pub source: SourceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidLabel {
+    #[error("sender and reader are the same agent ({0})")]
+    SelfTransmission(AgentKey),
+    #[error("{from} and {to} are in different worlds")]
+    CrossWorld { from: AgentKey, to: AgentKey },
+    #[error("content text is {text} bytes but its location covers {location}")]
+    ContentLength { text: usize, location: u32 },
+    #[error("a negative control needs a reader exchange, a location or an origin")]
+    Unbounded,
+    #[error("an agent cluster needs at least two agents")]
+    SmallCluster,
+}
+
+fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
+    if from == to {
+        return Err(InvalidLabel::SelfTransmission(from.clone()));
+    }
+    if from.world != to.world {
+        return Err(InvalidLabel::CrossWorld {
+            from: from.clone(),
+            to: to.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// One transmission a detector should report. Built only through
+/// [`ExpectedTransmission::new`]: sender and reader differ and share a world,
+/// and the content text is as long as its location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "TransmissionLabel", into = "TransmissionLabel")]
+pub struct ExpectedTransmission(TransmissionLabel);
+
+impl ExpectedTransmission {
+    pub fn new(label: TransmissionLabel) -> Result<Self, InvalidLabel> {
+        check_pair(&label.from, &label.to)?;
+        let text = label.content.text.len();
+        if u32::try_from(text).ok() != Some(label.content.at.len()) {
+            return Err(InvalidLabel::ContentLength {
+                text,
+                location: label.content.at.len(),
+            });
+        }
+        Ok(Self(label))
+    }
+
+    pub fn label(&self) -> &TransmissionLabel {
+        &self.0
+    }
+}
+
+impl TryFrom<TransmissionLabel> for ExpectedTransmission {
+    type Error = InvalidLabel;
+
+    fn try_from(label: TransmissionLabel) -> Result<Self, Self::Error> {
+        Self::new(label)
+    }
+}
+
+impl From<ExpectedTransmission> for TransmissionLabel {
+    fn from(expected: ExpectedTransmission) -> Self {
+        expected.0
+    }
+}
+
+/// Why a negative control must not yield an edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NegativeReason {
+    /// The sender tried to send it and the send failed: never delivered.
+    RejectedSend,
+    /// Both agents got the text from one source (a shared system prompt
+    /// template, a shared database), not from each other.
+    SharedSource,
+    /// Harness text addressed to the reader, not written by the sender.
+    Boilerplate,
+    /// The sender is scripted and made no exchange, so nothing it "said"
+    /// originated in an exchange the gateway could see.
+    NoSenderExchange,
+}
+
+/// The fields of a negative control, before checking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NegativeLabel {
+    pub from: AgentKey,
+    pub to: AgentKey,
+    /// The reader exchange the control covers; `None` covers every exchange
+    /// of `to` (then `at` bounds it).
+    pub reader_exchange: Option<ExchangeId>,
+    /// The reader-side location the control covers; `None` covers the whole
+    /// exchange.
+    pub at: Option<SpanLocation>,
+    /// The sender-side location the control covers: a prediction falls
+    /// under it only when its matched span overlaps this (a rejected
+    /// message's text). `None` puts no condition on the span.
+    pub origin: Option<SpanLocation>,
+    /// The text concerned, for reports (the rejected message, the shared
+    /// passage).
+    pub text: Option<String>,
+    pub reason: NegativeReason,
+    pub tier: Tier,
+    pub source: SourceRef,
+}
+
+/// A place where a prediction from `from` to `to` is wrong. Built only
+/// through [`NegativeControl::new`]: the pair is valid and it names a reader
+/// exchange, a location or an origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "NegativeLabel", into = "NegativeLabel")]
+pub struct NegativeControl(NegativeLabel);
+
+impl NegativeControl {
+    pub fn new(label: NegativeLabel) -> Result<Self, InvalidLabel> {
+        check_pair(&label.from, &label.to)?;
+        if label.reader_exchange.is_none() && label.at.is_none() && label.origin.is_none() {
+            return Err(InvalidLabel::Unbounded);
+        }
+        Ok(Self(label))
+    }
+
+    pub fn label(&self) -> &NegativeLabel {
+        &self.0
+    }
+}
+
+impl TryFrom<NegativeLabel> for NegativeControl {
+    type Error = InvalidLabel;
+
+    fn try_from(label: NegativeLabel) -> Result<Self, Self::Error> {
+        Self::new(label)
+    }
+}
+
+impl From<NegativeControl> for NegativeLabel {
+    fn from(control: NegativeControl) -> Self {
+        control.0
+    }
+}
+
+/// Agent keys that are one agent, for identity tests. At least two keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ClusterLabel", into = "ClusterLabel")]
+pub struct AgentCluster(ClusterLabel);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterLabel {
+    pub agents: Vec<AgentKey>,
+    pub tier: Tier,
+    pub source: SourceRef,
+}
+
+impl AgentCluster {
+    pub fn new(label: ClusterLabel) -> Result<Self, InvalidLabel> {
+        if label.agents.len() < 2 {
+            return Err(InvalidLabel::SmallCluster);
+        }
+        Ok(Self(label))
+    }
+
+    pub fn label(&self) -> &ClusterLabel {
+        &self.0
+    }
+}
+
+impl TryFrom<ClusterLabel> for AgentCluster {
+    type Error = InvalidLabel;
+
+    fn try_from(label: ClusterLabel) -> Result<Self, Self::Error> {
+        Self::new(label)
+    }
+}
+
+impl From<AgentCluster> for ClusterLabel {
+    fn from(cluster: AgentCluster) -> Self {
+        cluster.0
+    }
+}
+
+/// One label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "expect", content = "label", rename_all = "snake_case")]
+pub enum Expectation {
+    Transmission(ExpectedTransmission),
+    NoTransmission(NegativeControl),
+    AgentCluster(AgentCluster),
+}

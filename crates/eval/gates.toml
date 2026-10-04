@@ -1,0 +1,50 @@
+# Regression gates for `ct-eval run`. A run fails (exit 2) when a gated
+# metric falls below its `min` (or above its `max`). A gate whose rows hold
+# no data in a run is skipped, so small `--limit` runs only check what they
+# reach.
+#
+# These are gates on the eval and its reference matcher, not invariants of
+# the gateway. They sit a little below the reference baseline on five traces
+# per SALT condition (`--limit 265`: exact 0.962, escaped 0.754, all 0.904,
+# user-turn precision 0.987). Raise them when the baseline improves.
+
+[[gate]]
+name = "salt: delivered messages that arrive verbatim are found"
+dataset = "salt"
+route = "direct"
+carrier = "user_turn"
+class = "exact"
+tier = "construction"
+metric = "recall"
+min = 0.94
+
+[[gate]]
+name = "salt: delivered messages that arrive escaped are found"
+dataset = "salt"
+route = "direct"
+carrier = "user_turn"
+class = "normalized"
+tier = "construction"
+metric = "recall"
+min = 0.72
+
+[[gate]]
+name = "salt: every construction label"
+dataset = "salt"
+tier = "construction"
+metric = "recall"
+min = 0.88
+
+[[gate]]
+name = "salt: matches in user turns are deliveries"
+dataset = "salt"
+carrier = "user_turn"
+metric = "precision"
+min = 0.97
+
+[[gate]]
+name = "salt: nothing is attributed to a scripted sender"
+dataset = "salt"
+metric = "violations"
+reason = "no_sender_exchange"
+max = 0
