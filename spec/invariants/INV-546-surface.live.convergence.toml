@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.live.convergence"
+statement = "A client that re-runs the query each delivered UiEvent names and re-queries everything it shows on Resync, and that stays subscribed or resumes from its last cursor, shows the stored state of every entity it shows once changes stop and the last notifications are delivered."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+This is the guarantee the id-only design buys: events may arrive in any
+order, twice, interleaved across producers, or be passed over on a lagging
+stream, and the UI still ends correct. It holds because every committed
+change is announced only after it is visible (the change-announced
+invariants of each store), every notification reaches the feed
+(surface.live.feed-appends-every-change), and resumption never skips an
+entry without a Resync.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::ui_model_converges_under_reordered_notifications"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.live.subscribe-requires-view"
+statement = "LiveFeed::subscribe returns Forbidden naming View and opens no stream when the Caller lacks View."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Every event names something a View query lists, so View is the one gate
+for the feed. A caller holding only Audit or Operate would otherwise learn
+which alerts, channels and agents are changing without being allowed to
+look at them.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::subscribe_without_view_forbidden"
+integration = "crosstalk::surface::integration::sse_route_requires_view"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

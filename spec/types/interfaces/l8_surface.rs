@@ -10,15 +10,23 @@
 //! effect. Wherever an action records an author or time, the surface stamps
 //! them from the authenticated caller and the time it accepted the action;
 //! callers cannot supply them. Every action call, whatever its outcome,
-//! leaves one [`audit::AuditRecord`].
+//! leaves one [`audit::AuditEntry`], and so does every change config makes.
+//! Acknowledging or resolving an alert changes the alert store, so the
+//! surface publishes `AlertChanged` and `Changed::Alert` for it; every other
+//! action's store publishes its own `Changed`.
+//!
+//! **Callers.** A [`Caller`] is built only by the [`operators::OperatorDirectory`]
+//! for one request, from the operator config defines: in trusted mode the
+//! one configured operator with every permission, otherwise the operator
+//! the request's verified session names, with that operator's permissions.
 //!
 //! Implementations:
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
 //!   share, the time brush and trend lines), `TopicHistory` (versions, sizes,
 //!   lineage), `ContentExplorer` (search, topics, UMAP), the channel policy
-//!   history and the audit log.
-//! - `LiveFeed` ([`live`]): the SSE endpoint the UI subscribes to for new
-//!   alerts and changed edges, channels and policies.
+//!   history, the operator directory and the audit log.
+//! - `LiveFeed` ([`live`]): the SSE endpoint that tells the UI, by id, what
+//!   to re-query.
 //! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
 //!
@@ -37,6 +45,9 @@
 pub mod audit;
 pub mod lists;
 pub mod live;
+pub mod operators;
+
+use std::fmt;
 
 use crate::aggregates::alert::{Alert, AlertRuleDef, RuleStatus};
 use crate::aggregates::edge::{
@@ -62,27 +73,42 @@ use crate::paging::{
 };
 use crate::support::TimeWindow;
 
-use audit::{AuditFilter, AuditRecord};
+use audit::{AuditEntry, AuditFilter, AuditSubject};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
+use operators::Operator;
 
 /// The policy an operator asks for. The surface stamps the author and time
 /// from the authenticated caller; callers cannot supply them.
 pub use crate::derived::flow::channel::policy::PolicyKind;
 
-/// The authenticated caller of a query or action.
+/// The authenticated caller of one request: an operator and the
+/// permissions it holds.
+///
+/// Built only by [`OperatorDirectory::caller`](operators::OperatorDirectory::caller),
+/// so its permissions are always those config gives its operator, and it
+/// always holds at least one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
-    pub operator: OperatorId,
-    pub permissions: Vec<Permission>,
+    operator: OperatorId,
+    permissions: PermissionSet,
 }
 
 impl Caller {
+    pub fn operator(&self) -> OperatorId {
+        self.operator
+    }
+
+    pub fn permissions(&self) -> PermissionSet {
+        self.permissions
+    }
+
     pub fn has(&self, permission: Permission) -> bool {
-        self.permissions.contains(&permission)
+        self.permissions.contains(permission)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Permission {
     /// Topology, series, the transmissions behind an edge (ids, times, byte
     /// counts and topic ids), channels, channel policy history, agents, alert
@@ -104,8 +130,72 @@ pub enum Permission {
     /// re-apply stale decisions.
     Operate,
     /// Read the audit log: every operator action, who asked for it and
-    /// what came of it, including refused ones.
+    /// what came of it, including refused ones, and every change config
+    /// made.
     Audit,
+}
+
+impl Permission {
+    pub const ALL: [Self; 6] = [
+        Self::View,
+        Self::Content,
+        Self::Govern,
+        Self::Triage,
+        Self::Operate,
+        Self::Audit,
+    ];
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// A set of permissions.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct PermissionSet(u8);
+
+impl PermissionSet {
+    pub const EMPTY: Self = Self(0);
+
+    /// Every permission: what the trusted operator holds.
+    pub const ALL: Self = {
+        let mut bits = 0;
+        let mut i = 0;
+        while i < Permission::ALL.len() {
+            bits |= Permission::ALL[i].bit();
+            i += 1;
+        }
+        Self(bits)
+    };
+
+    pub fn of(permissions: impl IntoIterator<Item = Permission>) -> Self {
+        Self(
+            permissions
+                .into_iter()
+                .fold(0, |bits, permission| bits | permission.bit()),
+        )
+    }
+
+    pub fn contains(self, permission: Permission) -> bool {
+        self.0 & permission.bit() != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// In `Permission::ALL` order.
+    pub fn iter(self) -> impl Iterator<Item = Permission> {
+        Permission::ALL
+            .into_iter()
+            .filter(move |permission| self.contains(*permission))
+    }
+}
+
+impl fmt::Debug for PermissionSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
+    }
 }
 
 /// Empty `states` means every state. `channel` keeps alerts whose subject is
@@ -266,14 +356,20 @@ pub trait QueryApi {
         request: &ProjectionRequest,
     ) -> Result<Projection, QueryError>;
 
-    /// Audit. The audit records `filter` matches, newest first by time and
-    /// id (`AuditLog::query`).
+    /// Audit. The audit entries `filter` matches, operator and config
+    /// alike, newest first by time and id (`AuditLog::query`).
     async fn audit(
         &self,
         caller: &Caller,
         filter: &AuditFilter,
         page: &PageRequest<AuditList>,
-    ) -> Result<Page<AuditRecord, AuditList>, QueryError>;
+    ) -> Result<Page<AuditEntry, AuditList>, QueryError>;
+
+    /// View. Every operator the directory holds, by id: the ones config
+    /// defines now, and every one it defined before, listed with no
+    /// permissions, so past decisions and audit entries can still show a
+    /// name (`OperatorDirectory::operators`).
+    async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>, QueryError>;
 }
 
 /// `OperatorAction` is `PartialEq` but not `Eq`: rule requests hold
@@ -393,17 +489,45 @@ impl OperatorAction {
             Self::ReplayDeadLetter { .. } => Permission::Operate,
         }
     }
+
+    /// The entities the action names, as requested (not resolved through
+    /// merges). The audit log's subject filter matches these, together with
+    /// any id the outcome created ([`ActionOutcome::subject`]). A dead-letter
+    /// replay names no entity.
+    pub fn subjects(&self) -> Vec<AuditSubject> {
+        match self {
+            Self::SetPolicy { channel, .. } | Self::PromoteChannel { channel, .. } => {
+                vec![AuditSubject::Channel(*channel)]
+            }
+            Self::MergeAgents(request) => vec![
+                AuditSubject::Agent(request.source()),
+                AuditSubject::Agent(request.target()),
+            ],
+            Self::UnmergeAgent { agent } | Self::LabelAgent { agent, .. } => {
+                vec![AuditSubject::Agent(*agent)]
+            }
+            Self::Acknowledge { alert } | Self::Resolve { alert, .. } => {
+                vec![AuditSubject::Alert(*alert)]
+            }
+            Self::DismissTransmission { transmission, .. } => {
+                vec![AuditSubject::Transmission(*transmission)]
+            }
+            Self::CreateAlertRule { id: rule, .. }
+            | Self::UpdateAlertRule { rule, .. }
+            | Self::SetAlertRuleStatus { rule, .. } => vec![AuditSubject::Rule(*rule)],
+            Self::ReplayDeadLetter { .. } => Vec::new(),
+        }
+    }
 }
 
 pub trait OperatorActions {
     /// Check the permission, apply the action and record it. A call that
-    /// returns, `Ok` or any `ActionError`, leaves exactly
-    /// one audit record, whose outcome is what it returns
-    /// (`AuditOutcome::of`): an `Applied` or `Unchanged` record is written in
-    /// the same transaction as the action's effect, and a `Forbidden` or
-    /// `Rejected` one with no effect. A `Store` error had no effect and
-    /// leaves at most one record, written when the audit log is still
-    /// reachable.
+    /// returns `Ok` or an `ActionError` other than `Store` leaves exactly one
+    /// operator audit entry, whose outcome is what it returns
+    /// (`AuditOutcome::of`): a `Succeeded` entry is written in the same
+    /// transaction as the action's effect, and a `Forbidden` or `Rejected`
+    /// one with no effect. A `Store` error had no effect and leaves at most
+    /// one entry, written when the audit log is still reachable.
     async fn act(
         &self,
         caller: &Caller,
@@ -518,6 +642,20 @@ pub enum ActionOutcome {
     RuleCreated(AlertRuleId),
     ChannelPromoted(ChannelId),
     Merged(MergeId),
+}
+
+impl ActionOutcome {
+    /// The entity the outcome names, when it names one. A merge's id exists
+    /// only once the merge is recorded, so this is the only place an audit
+    /// entry can take it from.
+    pub fn subject(self) -> Option<AuditSubject> {
+        match self {
+            Self::Applied | Self::Unchanged => None,
+            Self::RuleCreated(rule) => Some(AuditSubject::Rule(rule)),
+            Self::ChannelPromoted(channel) => Some(AuditSubject::Channel(channel)),
+            Self::Merged(merge) => Some(AuditSubject::Merge(merge)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

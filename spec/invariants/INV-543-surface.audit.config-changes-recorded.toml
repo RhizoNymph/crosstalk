@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.audit.config-changes-recorded"
+statement = "Every change a config load makes (declaring a channel, a config policy decision, registering an agent, provisioning a rule, setting the access mode, defining or removing an operator) is recorded by exactly one Config audit entry naming the loaded config's ConfigHash, committed in the same transaction as the change, a change config attempts but cannot make is recorded as Rejected, and a load that changes nothing records nothing."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Config can do what operators do, and more: sanction a channel, grant a
+permission, turn off login. Without config entries the audit log would
+show a channel becoming sanctioned with no one responsible. Recording only
+real changes keeps a restart from flooding the log, and the same
+transaction keeps a crash from leaving a change without its entry, which a
+re-run would then see as no change and never record.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::config_reload_records_each_change_once"
+integration = "crosstalk::surface::integration::config_entry_committed_with_change"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

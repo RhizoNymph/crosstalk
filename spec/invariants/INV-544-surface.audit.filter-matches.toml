@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.audit.filter-matches"
+statement = "AuditFilter::matches admits an entry exactly when by is empty or holds the entry's author, subject is None or among the entry's subjects, and window is None or contains the entry's time."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the definition QueryApi::audit pages with (surface.query.lists-match-filter). Selecting AuditAuthor::Config is how the UI shows what
+config changed.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::audit::empty_audit_filter_matches_everything", "crosstalk_spec::tests::audit::audit_filter_selects_by_author", "crosstalk_spec::tests::audit::audit_filter_selects_by_subject", "crosstalk_spec::tests::audit::audit_filter_combines_fields_with_and"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

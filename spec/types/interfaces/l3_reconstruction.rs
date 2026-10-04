@@ -16,6 +16,12 @@
 //! display labels. An unmerge changes only the merge table, so graphs and
 //! edges split again on their next read.
 //!
+//! After every committed change to a stored agent (creation, a registered
+//! agent from config, a state change, a merge, an unmerge, a label), L3
+//! publishes `Changed::Agent` for each agent whose `QueryApi::agents` entry
+//! changed: both agents of a merge; the agent, its former target and every
+//! restored agent of an unmerge.
+//!
 //! Identity resolution uses the most specific evidence present
 //! (`IdentityEvidence::specificity`). Harness ids count only within their
 //! `IdentityScope`. Rotating credentials and prompt fingerprints are weak:

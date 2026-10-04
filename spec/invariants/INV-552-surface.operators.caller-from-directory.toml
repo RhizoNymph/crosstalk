@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.operators.caller-from-directory"
+statement = "Every Caller is built by an OperatorDirectory and holds exactly the non-empty permissions its operator has there; in authenticated mode an anonymous request, an unknown operator and a former operator get no Caller."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Caller's fields are private and only the directory builds one, so no code
+path can grant a permission config did not, and a request cannot name its
+own permissions. A former operator's session that outlived its removal is
+refused rather than acting with no permissions.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::Caller"
+unit = ["crosstalk_spec::tests::operators::authenticated_caller_has_its_configured_permissions", "crosstalk_spec::tests::operators::authenticated_mode_refuses_unknown_requests", "crosstalk_spec::tests::operators::removed_operator_keeps_its_name_and_loses_its_caller"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

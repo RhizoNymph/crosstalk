@@ -12,7 +12,10 @@
 //! - [`ingest`]: L1 and L3 (capture, reconstruction).
 //! - [`detect`]: L4 and L5 (provenance, flow detection).
 //! - [`insight`]: L6 to L8 (analysis, topology, surface).
+//! - [`changed`]: any store: which entity a surface query returns changed,
+//!   for the live feed.
 
+pub mod changed;
 pub mod detect;
 pub mod ingest;
 pub mod insight;
@@ -32,6 +35,7 @@ pub enum BusEvent {
     Ingest(ingest::IngestEvent),
     Detect(detect::DetectEvent),
     Insight(insight::InsightEvent),
+    Changed(changed::Changed),
 }
 
 /// What a consumer subscribes to. One subject per event variant.
@@ -59,6 +63,7 @@ pub enum Subject {
     AlertOpened,
     AlertChanged,
     PolicyChanged,
+    Changed,
 }
 
 impl BusEvent {
@@ -67,6 +72,7 @@ impl BusEvent {
             Self::Ingest(e) => e.subject(),
             Self::Detect(e) => e.subject(),
             Self::Insight(e) => e.subject(),
+            Self::Changed(e) => e.subject(),
         }
     }
 }

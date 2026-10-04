@@ -7,6 +7,9 @@
 //! contribution rejected as a self-edge is a permanent outcome: its delivery
 //! is acked, not retried.
 //!
+//! When the store's watermark advances, L7 publishes `Changed::Watermark`
+//! with the new value, once it is what graph and series queries report.
+//!
 //! A series query is a graph query cut into steps: for the same window,
 //! weighting, filter and topic version, the sum of every series value is the
 //! graph's [`TopologyGraph::total`], and grouped by edge each series sums to

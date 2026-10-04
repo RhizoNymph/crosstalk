@@ -14,6 +14,7 @@ mod flow;
 mod infrastructure;
 mod live;
 mod observed;
+mod operators;
 mod paging;
 mod policy;
 mod projection;

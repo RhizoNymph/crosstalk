@@ -80,7 +80,7 @@ entity_id! {
     OperatorId;
     /// One event on the bus. Consumers deduplicate on it.
     EventId;
-    /// One recorded operator action call, in the audit log.
+    /// One audit log entry: an operator action call or a change config made.
     AuditId;
 }
 
@@ -91,6 +91,9 @@ content_id! {
     /// A system prompt plus the first user turn: a weak identity signal for
     /// agents that share a credential.
     PromptHash;
+    /// The canonical encoding of one loaded config document. Audit entries
+    /// for changes config made name the document that made them.
+    ConfigHash;
 }
 
 macro_rules! secret_digest {

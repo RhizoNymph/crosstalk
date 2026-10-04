@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.audit.subjects-cover-touched"
+statement = "AuditEntry::subjects returns, without duplicates, the ids the operator action or config change names as requested (OperatorAction::subjects, ConfigChange::subjects), followed for a succeeded operator call by the id its outcome created (ActionOutcome::subject)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The audit view filters by the entity an operator is looking at. A merge's
+id exists only in the outcome, so without it "what happened to this merge"
+finds nothing; a rejected call created nothing, so it adds nothing. Ids
+are kept as requested, not resolved through merges, because the log
+records what was asked.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::audit::every_action_reports_its_kind_permission_and_subjects", "crosstalk_spec::tests::audit::outcomes_name_the_ids_they_created", "crosstalk_spec::tests::audit::operator_entry_subjects_include_created_ids", "crosstalk_spec::tests::audit::every_config_change_names_its_subjects"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

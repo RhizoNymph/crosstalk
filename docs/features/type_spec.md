@@ -11,7 +11,12 @@
   included), the one filter that links the graph, search, projection and
   edge drill-down, the projection's points, time series, the topic-model
   version history and the channel policy history.
-- The live update feed (SSE) and the append-only audit log.
+- The live update feed (SSE): id-only `UiEvent`s telling the UI what to
+  re-query, fed by `Changed` notifications from the stores.
+- The append-only audit log of operator action calls and config changes,
+  filtered by author, subject and time.
+- The operator directory and how a request becomes a `Caller`, including
+  trusted (single-user, no login) mode.
 - Operator actions, each with one required permission: policy, channel
   promotion, agent merges, unmerges and labels, alert triage, transmission
   dismissal, alert rule management and dead-letter replay.
@@ -170,28 +175,58 @@ The types follow data through the stack:
    `PolicyChanged` or forwards the action down the stack: merges, unmerges
    and labels to L3, channel promotion and transmission dismissal to L5,
    alert rule management to L6; acknowledging and resolving an alert
-   publishes `AlertChanged`. It stamps every author and time from the
-   caller and returns an `ActionEffect`. `AlertSink`s deliver alerts.
-   - **Audit log.** Every `act` call leaves one `AuditRecord` (the caller,
-     the `OperatorAction` value, the time and an `AuditOutcome`: `Applied`,
-     `Unchanged`, `Rejected(Rejection)` or `Forbidden`). `Applied` and
-     `Unchanged` records are written in the action's transaction. The
-     `AuditLog` is append-only; `QueryApi::audit` reads it as a list (below)
-     with an `AuditFilter` and needs `Permission::Audit`.
-   - **Live feed.** A feed writer (consumer group `live`) turns `AlertOpened`,
-     `AlertChanged`, `EdgeUpdated`, `ChannelDiscovered`,
-     `ChannelCrossAccessed`, `DeclaredChannelUnused`, `PolicyChanged`,
-     `TransmissionConfirmed` and `TopicVersionActivated` into `LiveUpdate`s,
-     computes each one's `LiveScope`, and appends it to the feed log, which
-     numbers entries per `FeedEpoch`. `LiveFeed::subscribe` takes the
-     caller, an `UpdateKinds` set, a `TopologyFilter` and a `Resume` point
-     (from `Last-Event-ID`); it refuses kinds whose permission the caller
-     lacks (`Content` for `TransmissionConfirmed`, `View` otherwise).
-     `FeedWindow::resume` decides between replaying from the cursor and a
-     `LiveItem::Resync` (refetch everything). Each stream filters entries by
-     kind and `LiveScope::admitted_by`, sends heartbeats carrying its newest
-     cursor, and ends with `LiveEnd::Lagged` when its bounded buffer fills,
-     so a slow client never blocks the feed or other clients.
+   publishes `AlertChanged` and `Changed::Alert`. It stamps every author and
+   time from the caller and returns an `ActionOutcome`. `AlertSink`s
+   deliver alerts.
+   - **Callers and the operator directory.** Config's `AccessConfig` is
+     either `Trusted(TrustedOperator)` (one operator, every permission, no
+     login) or `Authenticated(operators)`. On each load
+     `OperatorDirectory::load(previous, config)` returns the new directory
+     and the `ConfigChange`s that produced it (`SetAccessMode` first when the
+     mode changed, then `SetOperator`/`RemoveOperator` by id; nothing for an
+     unchanged config). An operator config drops stays listed with no
+     permissions, so its name still labels history. Each request's verified
+     session becomes a `RequestIdentity`, and `OperatorDirectory::caller`
+     builds its `Caller`: always the trusted operator with
+     `PermissionSet::ALL` in trusted mode; otherwise the named operator with
+     its configured permissions, or `Unauthenticated`. `Caller`'s fields are
+     private, so nothing else can build one. `QueryApi::operators` (View)
+     returns the directory, former operators included.
+   - **Audit log.** An `AuditEntry { id, at, body }` is either
+     `AuditBody::Operator(OperatorRecord)` (the `Caller`, the
+     `OperatorAction` and an `AuditOutcome`: `Succeeded(ActionOutcome)`,
+     `Rejected(Rejection)` or `Forbidden { missing }`, the exact inverse of
+     `act`'s result) or `AuditBody::Config(ConfigRecord)` (the loaded
+     config's `ConfigHash`, a typed `ConfigChange` and a `ConfigOutcome`).
+     `AuditEntry::by` derives the author (`Config` or `Operator(id)`) from
+     the body, so a config change never poses as an operator action.
+     `AuditEntry::subjects` lists the entities touched: the ids the action or
+     change names (`OperatorAction::subjects`, `ConfigChange::subjects`) and
+     any id the outcome created (`ActionOutcome::subject`, e.g. a
+     `MergeId`). Operator entries are written in the action's transaction;
+     config entries in the change's transaction, and only for real changes.
+     The `AuditLog` is append-only; `QueryApi::audit(caller,
+     AuditFilter { by, subject, window }, page)` reads it as a list (below)
+     and needs `Permission::Audit`.
+   - **Live feed.** Every store whose entities a query returns publishes
+     `BusEvent::Changed` after each committed change: `Agent` (L3), `Channel`
+     (L5, including recorded policy decisions, new resources, dormancy and
+     config declarations), `Alert`, `Rule`, `TopicVersion` and `Projection`
+     (L6, and L8 for acknowledge and resolve), `Watermark` (L7). The feed
+     writer (consumer group `live`) appends `UiEvent::from` each one to the
+     feed log, numbered per `FeedEpoch`, before acking. A `UiEvent`
+     (`AlertChanged`, `ChannelChanged`, `AgentChanged`, `RuleChanged`,
+     `Watermark`, `TopicVersionReady`, `ProjectionReady`) carries an id only;
+     the UI re-queries. `LiveFeed::subscribe(caller, resume)` needs View;
+     each stream passes over events the caller may not receive
+     (`UiEvent::visible_to`: `ProjectionReady` needs Content). There is no
+     server-side filter: the UI drops ids it is not showing.
+     `FeedWindow::resume` decides between replaying from the `Last-Event-ID`
+     cursor and a `LiveItem::Resync` (re-query everything). Streams send
+     heartbeats carrying their newest cursor, end with `LiveEnd::Lagged`
+     when their bounded buffer fills, so a slow client never blocks the feed
+     or other clients, and end with `SessionEnded` when the session ends or
+     a config load changes the operator.
 
 ### Lists and pagination
 
@@ -202,7 +237,7 @@ previous page. `L` is a marker per list (`ChannelList`, `AgentList`,
 `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList`),
 so a cursor only fits its own list. Each list is ordered newest first by a
 unique sort key that never changes (ids, `(Confirmed::at, TransmissionId)`
-for an edge, `(AuditRecord::at, AuditId)` for the audit log), and the
+for an edge, `(AuditEntry::at, AuditId)` for the audit log), and the
 cursor holds the last key served (keyset pagination), so concurrent inserts
 and removals never make a traversal skip or repeat an item. The cursor also
 holds a digest of the request and a MAC; one presented with another request
@@ -286,12 +321,14 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo`, `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
+| `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller` (checked: built only by the directory), `Permission`, `PermissionSet`, `OperatorAction` (`required_permission`, `kind`, `subjects`), `ActionKind`, `ActionOutcome` (`subject`), `QueryApi::operators` (L8) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
-| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
-| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
+| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
+| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
+| `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `operators.rs`, `policy.rs` for the live feed, audit log, operator directory and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -388,20 +425,31 @@ exactly `min(matching, limit)` points, none twice, all finite.
   policy is always `PolicyHistory::current`, so the latest decision by time
   wins whatever order events arrive in. A history entry is a
   `PolicyDecision`, which cannot be `Unreviewed(None)`.
-- Every operator action call that returns `Ok`, `Forbidden`, `NotFound` or
-  `BadRequest` leaves exactly one `AuditRecord` whose outcome maps back to
-  that result (`AuditOutcome::of`, `AuditOutcome::result`). A record is
-  `Forbidden` exactly when its caller lacks the action's required
-  permission (`AuditRecord::new`). The audit log is append-only.
+- Every operator action call that returns `Ok` or an `ActionError` other
+  than `Store` leaves exactly one operator `AuditEntry` whose outcome maps
+  back to that result (`AuditOutcome::of`, `AuditOutcome::result`). An
+  `OperatorRecord` is `Forbidden` exactly when its caller lacks the action's
+  required permission, and then names it (`OperatorRecord::new`). Every
+  change a config load makes is one config entry, committed with the
+  change; an unchanged load records nothing. An entry's author is derived
+  from its body. The audit log is append-only.
+- A `Caller` is built only by `OperatorDirectory::caller` and holds exactly
+  its operator's configured, non-empty permissions. In trusted mode every
+  request gets the trusted operator with every permission, and it is the
+  only operator with any. Former operators stay listed with no permissions
+  and get no `Caller`.
 - Alert revisions are consecutive per alert, starting at 1 for
   `AlertOpened`.
-- A live stream delivers only kinds the caller may query (checked at
-  subscribe) and entries its `TopologyFilter` admits. A resume cursor is
-  replayed only when every later entry is retained and from the same epoch;
-  otherwise the stream starts with `Resync`. A slow stream ends with
-  `Lagged`; it never drops items or blocks others. `UpdateKinds` is never
-  empty, `FeedWindow`'s floor never exceeds its head, and `LiveConfig`'s
-  retention outlasts its heartbeat.
+- A live event carries only an id, and is published by the owning store
+  only after the change is visible to the query it names, at least once per
+  committed change; so a client that re-queries on each event converges on
+  the stored state whatever the order or duplication. Subscribing needs
+  View; `ProjectionReady` reaches only callers with Content. A resume cursor
+  is replayed only when every later entry is retained and from the same
+  epoch; otherwise the stream starts with `Resync`. A slow stream ends with
+  `Lagged`; it never drops items or blocks others. `FeedWindow`'s floor
+  never exceeds its head, and `LiveConfig`'s retention outlasts its
+  heartbeat.
 - Deduplication is a triage outcome, not an alert state.
 - Only watched-topic rules can be stale, and staleness is separate from
   the operator's enabled or disabled status. A rule evaluates only when
