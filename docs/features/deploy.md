@@ -62,8 +62,37 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
 
-The bus is in-process for `--role all` and takes `BusConfig::default()`;
-a `bus` key can be added when it needs tuning.
+Optional keys the gateway also accepts, all defaulted when absent: `bus`,
+`pipeline` (blob put retries) and `shutdown` (`drain_timeout_ms` 45 000 +
+`flush_timeout_ms` 10 000, chosen to fit compose's 60 s
+`stop_grace_period`). `docs/features/gateway.md` is the authoritative
+description of the binary's side of this contract; keep the two in step.
+
+### Rotating the deployment secret
+
+`CROSSTALK_SECRET_V1` keys the credential and account digests. To rotate
+without breaking the linking of exchanges across the change:
+
+1. Add `CROSSTALK_SECRET_V2=$(openssl rand -hex 32)` to `deploy/.env` and
+   pass it to the gateway (`x-crosstalk-env` in `compose.yaml`).
+2. In `deploy/config/crosstalk.json`, make version 2 current and keep
+   version 1 as `previous` until a chosen instant (RFC 3339, UTC,
+   microseconds):
+
+   ```json
+   "secrets": {
+     "current": {"version": 2, "env": "CROSSTALK_SECRET_V2"},
+     "previous": {"version": 1, "env": "CROSSTALK_SECRET_V1",
+                  "overlap_ends": "2026-11-01T00:00:00.000000Z"}
+   }
+   ```
+
+   `previous.version` must be strictly older than `current.version`, or
+   the gateway refuses to start.
+3. `bash deploy/run.sh up`. Until `overlap_ends`, exchanges also record
+   version-1 digests; from then on only version 2 is used.
+4. After `overlap_ends`, remove `previous`, drop `CROSSTALK_SECRET_V1`
+   from `deploy/.env` and `compose.yaml`, and restart.
 
 ## Data and control flow
 
