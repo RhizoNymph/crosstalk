@@ -1,0 +1,441 @@
+/**
+ * `<ct-topology>`: the communication graph, drawn with sigma (WebGL).
+ *
+ * Inputs: `data-src` (a `/data/topology?…` URL), `data-highlight` (a
+ * selection value to light up), `data-collapse` (`"true"` draws sub-agents
+ * as their parent). Output: `value` in the topology selection grammar
+ * (`shared/selection.ts`), announced with `change`.
+ */
+
+import Graph from 'graphology';
+import Sigma from 'sigma';
+import { EdgeArrowProgram, NodeCircleProgram } from 'sigma/rendering';
+import type { Settings } from 'sigma/settings';
+import type { EdgeDisplayData, NodeDisplayData, PartialButFor } from 'sigma/types';
+import { type TopologyPayload, topologyPayload } from '../payloads/topology.ts';
+import { toCss, withAlpha } from '../shared/color.ts';
+import { PayloadElement } from '../shared/element.ts';
+import { type LoadError, loadJson } from '../shared/fetch.ts';
+import { formatUtc } from '../shared/format.ts';
+import type { Result } from '../shared/result.ts';
+import { ROUTE_KINDS } from '../shared/route.ts';
+import {
+  decodeTopologySelection,
+  encodeTopologySelection,
+  type TopologySelection,
+} from '../shared/selection.ts';
+import type { Ulid } from '../shared/ulid.ts';
+import { releaseWebGL } from '../shared/webgl.ts';
+import { NodeDiamondProgram } from './diamond-program.ts';
+import { layout } from './layout.ts';
+import {
+  buildModel,
+  edgeSelection,
+  type GraphEdge,
+  type GraphModel,
+  type GraphNode,
+  type Highlight,
+  highlightOf,
+  nodeSelection,
+} from './model.ts';
+import {
+  DIAMOND_SCALE,
+  dimmedEdge,
+  dimmedNode,
+  edgeColor,
+  nodeColor,
+  shortLabel,
+} from './style.ts';
+import { edgeTooltip, nodeTooltip, type TooltipLine } from './tooltip.ts';
+
+const STYLES = `
+:host { height: 480px; }
+.stage { cursor: default; }
+.legend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding: 3px 8px 5px;
+  color: var(--ct-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+.legend b { font-weight: 500; color: var(--ct-text); }
+.legend b:not(:first-child) { margin-left: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+.legend i.disc { width: 8px; height: 8px; border-radius: 50%; }
+.legend i.diamond { width: 7px; height: 7px; border-radius: 1px; transform: rotate(45deg); }
+.meta {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  color: var(--ct-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+`;
+
+type NodeAttributes = {
+  x: number;
+  y: number;
+  size: number;
+  label: string;
+  color: string;
+  type: 'circle' | 'diamond';
+  zIndex: number;
+};
+type EdgeAttributes = { size: number; color: string; type: 'arrow'; zIndex: number };
+
+export class TopologyElement extends PayloadElement<TopologyPayload> {
+  static observedAttributes = ['data-src', 'data-highlight', 'data-collapse'];
+
+  #payload: TopologyPayload | null = null;
+  #model: GraphModel | null = null;
+  #renderer: Sigma<NodeAttributes, EdgeAttributes> | null = null;
+  #resize: ResizeObserver | null = null;
+  #nodes = new Map<string, GraphNode>();
+  #edges = new Map<string, GraphEdge>();
+  #names = new Map<Ulid, string>();
+  #highlight: Highlight | null = null;
+  #hoveredNode: string | null = null;
+  readonly #tooltip: HTMLDivElement;
+  readonly #legend: HTMLDivElement;
+  readonly #meta: HTMLDivElement;
+
+  constructor() {
+    super(STYLES);
+    this.#tooltip = document.createElement('div');
+    this.#tooltip.className = 'tooltip';
+    this.#tooltip.hidden = true;
+    this.#legend = document.createElement('div');
+    this.#legend.className = 'legend';
+    this.#meta = document.createElement('div');
+    this.#meta.className = 'meta';
+    this.frame.append(this.#legend, this.#meta, this.#tooltip);
+  }
+
+  protected load(url: string, signal: AbortSignal): Promise<Result<TopologyPayload, LoadError>> {
+    return loadJson(url, signal, topologyPayload);
+  }
+
+  protected emptyMessage(payload: TopologyPayload): string | null {
+    if (payload.nodes.length > 0) return null;
+    return `No ${payload.mode === 'agents' ? 'transmissions' : 'agents or channels'} in this window and filter.`;
+  }
+
+  protected mount(payload: TopologyPayload): void {
+    this.#payload = payload;
+    this.#draw();
+  }
+
+  protected unmount(): void {
+    this.#kill();
+    this.#payload = null;
+    this.#model = null;
+    this.#legend.replaceChildren();
+    this.stage.style.bottom = '0';
+    this.#meta.textContent = '';
+  }
+
+  protected inputChanged(name: string): void {
+    if (name === 'data-highlight') {
+      this.#applySelection(this.#selectionFromAttribute());
+    } else if (name === 'data-collapse' && this.#payload !== null) {
+      this.#draw();
+    }
+  }
+
+  protected override valueChanged(value: string): void {
+    const parsed = decodeTopologySelection(value);
+    if (parsed.ok) this.#applySelection(parsed.value);
+  }
+
+  protected themeChanged(): void {
+    if (this.#renderer === null) return;
+    this.#renderer.setSetting('labelColor', { color: toCss(this.theme.text) });
+    this.#renderer.setSetting('labelFont', this.theme.font);
+    this.#renderLegend();
+    this.#renderer.refresh();
+  }
+
+  #selectionFromAttribute(): TopologySelection {
+    const parsed = decodeTopologySelection(this.dataset.highlight ?? '');
+    return parsed.ok ? parsed.value : { kind: 'none' };
+  }
+
+  #applySelection(selection: TopologySelection): void {
+    this.#highlight = this.#model === null ? null : highlightOf(this.#model, selection);
+    this.#renderer?.refresh({ skipIndexation: true });
+  }
+
+  #kill(): void {
+    this.#resize?.disconnect();
+    this.#resize = null;
+    if (this.#renderer === null) return;
+    const canvases = Object.values(this.#renderer.getCanvases());
+    this.#renderer.kill();
+    for (const canvas of canvases) releaseWebGL(canvas);
+    this.#renderer = null;
+    this.#tooltip.hidden = true;
+  }
+
+  #draw(): void {
+    const payload = this.#payload;
+    if (payload === null) return;
+    this.#kill();
+    const model = buildModel(payload, this.dataset.collapse === 'true');
+    this.#model = model;
+    const positions = layout(model);
+    // Before sigma measures the stage, which the legend strip shortens.
+    this.#renderLegend();
+
+    const graph = new Graph<NodeAttributes, EdgeAttributes>({ type: 'directed', multi: true });
+    this.#nodes.clear();
+    this.#edges.clear();
+    this.#names.clear();
+    for (const node of model.nodes) {
+      const position = positions.get(node.id) ?? { x: 0, y: 0 };
+      this.#nodes.set(node.id, node);
+      this.#names.set(
+        node.id,
+        node.kind === 'agent' ? (node.members[0]?.name ?? node.label) : node.label,
+      );
+      graph.addNode(node.id, {
+        x: position.x,
+        y: position.y,
+        size: node.kind === 'channel' ? node.size * DIAMOND_SCALE : node.size,
+        label: shortLabel(node.label),
+        color: toCss(nodeColor(node, this.theme)),
+        type: node.kind === 'channel' ? 'diamond' : 'circle',
+        zIndex: 1,
+      });
+    }
+    for (const edge of model.edges) {
+      if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
+      this.#edges.set(edge.key, edge);
+      graph.addDirectedEdgeWithKey(edge.key, edge.source, edge.target, {
+        size: edge.width,
+        color: toCss(edgeColor(edge, this.theme)),
+        type: 'arrow',
+        zIndex: 0,
+      });
+    }
+
+    const settings: Partial<Settings<NodeAttributes, EdgeAttributes>> = {
+      allowInvalidContainer: true,
+      enableEdgeEvents: true,
+      renderEdgeLabels: false,
+      defaultEdgeType: 'arrow',
+      nodeProgramClasses: { circle: NodeCircleProgram, diamond: NodeDiamondProgram },
+      edgeProgramClasses: { arrow: EdgeArrowProgram },
+      labelFont: this.theme.font,
+      labelSize: 11,
+      labelWeight: '500',
+      labelColor: { color: toCss(this.theme.text) },
+      labelDensity: 1.2,
+      labelGridCellSize: 60,
+      labelRenderedSizeThreshold: 4,
+      stagePadding: 36,
+      zIndex: true,
+      minCameraRatio: 0.08,
+      maxCameraRatio: 4,
+      defaultDrawNodeLabel: (context, data, s) => this.#drawLabel(context, data, s.labelSize),
+      defaultDrawNodeHover: (context, data, s) => this.#drawHover(context, data, s.labelSize),
+      nodeReducer: (key, data) => this.#reduceNode(key, data),
+      edgeReducer: (key, data) => this.#reduceEdge(key, data),
+    };
+    const renderer = new Sigma<NodeAttributes, EdgeAttributes>(graph, this.stage, settings);
+    this.#renderer = renderer;
+    // Sigma only watches the window; the stage also changes with the legend
+    // strip and the page layout.
+    this.#resize = new ResizeObserver(() => this.#renderer?.refresh());
+    this.#resize.observe(this.stage);
+    this.#highlight = highlightOf(model, this.#currentSelection());
+
+    renderer.on('clickNode', ({ node }) => {
+      const drawn = this.#nodes.get(node);
+      if (drawn !== undefined) this.#choose(nodeSelection(drawn));
+    });
+    renderer.on('clickEdge', ({ edge }) => {
+      const drawn = this.#edges.get(edge);
+      if (drawn !== undefined) this.#choose(edgeSelection(drawn));
+    });
+    renderer.on('clickStage', () => this.#choose({ kind: 'none' }));
+    renderer.on('enterNode', ({ node, event }) => {
+      this.#hoveredNode = node;
+      const drawn = this.#nodes.get(node);
+      if (drawn !== undefined) this.#showTooltip(nodeTooltip(drawn), event.x, event.y);
+      this.stage.style.cursor = 'pointer';
+    });
+    renderer.on('leaveNode', () => {
+      this.#hoveredNode = null;
+      this.#hideTooltip();
+    });
+    renderer.on('enterEdge', ({ edge, event }) => {
+      const drawn = this.#edges.get(edge);
+      if (drawn !== undefined) this.#showTooltip(edgeTooltip(drawn, this.#names), event.x, event.y);
+      this.stage.style.cursor = 'pointer';
+    });
+    renderer.on('leaveEdge', () => this.#hideTooltip());
+
+    this.#meta.textContent = `${payload.mode === 'agents' ? 'agents' : 'channels'} · final up to ${formatUtc(payload.watermark)} UTC`;
+  }
+
+  /** The highlight source: the page's `data-highlight`, else our own value. */
+  #currentSelection(): TopologySelection {
+    const fromAttribute = this.#selectionFromAttribute();
+    if (fromAttribute.kind !== 'none') return fromAttribute;
+    const own = decodeTopologySelection(this.value);
+    return own.ok ? own.value : { kind: 'none' };
+  }
+
+  #choose(selection: TopologySelection): void {
+    this.select(encodeTopologySelection(selection));
+    this.#applySelection(selection);
+  }
+
+  // Colours are computed here, from the current theme, rather than stored on
+  // the graph, so a colour-scheme change only needs a refresh.
+  #reduceNode(key: string, data: NodeAttributes): Partial<NodeDisplayData> {
+    const node = this.#nodes.get(key);
+    const color = node === undefined ? this.theme.faint : nodeColor(node, this.theme);
+    const highlight = this.#highlight;
+    if (highlight === null || highlight.nodes.has(key as Ulid)) {
+      return {
+        ...data,
+        color: toCss(color),
+        zIndex: highlight === null ? 1 : 2,
+        forceLabel: highlight !== null,
+      };
+    }
+    return { ...data, color: toCss(dimmedNode(color, this.theme)), label: null, zIndex: 0 };
+  }
+
+  #reduceEdge(key: string, data: EdgeAttributes): Partial<EdgeDisplayData> {
+    const edge = this.#edges.get(key);
+    if (edge === undefined) return data;
+    const color = edgeColor(edge, this.theme);
+    const highlight = this.#highlight;
+    const hovered = this.#hoveredNode;
+    const touchesHover = hovered !== null && (edge.source === hovered || edge.target === hovered);
+    if (highlight === null) return { ...data, color: toCss(color), zIndex: touchesHover ? 1 : 0 };
+    if (highlight.edges.has(key)) return { ...data, color: toCss(color), zIndex: 2 };
+    return { ...data, color: toCss(dimmedEdge(color, this.theme)), zIndex: 0 };
+  }
+
+  #drawLabel(
+    context: CanvasRenderingContext2D,
+    data: PartialButFor<NodeDisplayData, 'x' | 'y' | 'size' | 'label' | 'color'>,
+    size: number,
+  ): void {
+    if (!data.label) return;
+    context.font = `500 ${size}px ${this.theme.font}`;
+    const x = data.x + data.size + 4;
+    const y = data.y + size / 3;
+    context.lineJoin = 'round';
+    context.lineWidth = 3;
+    context.strokeStyle = toCss(withAlpha(this.theme.surface, 0.85));
+    context.strokeText(data.label, x, y);
+    context.fillStyle = toCss(this.theme.text);
+    context.fillText(data.label, x, y);
+  }
+
+  #drawHover(
+    context: CanvasRenderingContext2D,
+    data: PartialButFor<NodeDisplayData, 'x' | 'y' | 'size' | 'label' | 'color'>,
+    size: number,
+  ): void {
+    const label = data.label ?? '';
+    context.font = `600 ${size}px ${this.theme.font}`;
+    const width = context.measureText(label).width;
+    const pad = 3;
+    const x = data.x + data.size + 2;
+    context.fillStyle = toCss(this.theme.surface);
+    context.strokeStyle = toCss(this.theme.faint);
+    context.lineWidth = 1;
+    context.beginPath();
+    context.roundRect(x, data.y - size / 2 - pad, width + 2 * pad + 2, size + 2 * pad, 3);
+    context.fill();
+    context.stroke();
+    context.beginPath();
+    context.arc(data.x, data.y, data.size + 2, 0, 2 * Math.PI);
+    context.strokeStyle = toCss(this.theme.text);
+    context.lineWidth = 1.5;
+    context.stroke();
+    context.fillStyle = toCss(this.theme.text);
+    context.fillText(label, x + pad + 1, data.y + size / 3);
+  }
+
+  #showTooltip(lines: readonly TooltipLine[], x: number, y: number): void {
+    const rows = lines.map((l) => {
+      const row = document.createElement('div');
+      if (l.style === 'claim') {
+        const badge = document.createElement('span');
+        badge.className = 'claim';
+        badge.textContent = l.text;
+        row.append(badge);
+      } else {
+        row.textContent = l.text;
+        if (l.style !== 'plain') row.className = l.style === 'title' ? 'title' : 'dim';
+      }
+      if (l.detail !== undefined) row.title = l.detail;
+      return row;
+    });
+    this.#tooltip.replaceChildren(...rows);
+    this.#tooltip.hidden = false;
+    const bounds = this.getBoundingClientRect();
+    const tip = this.#tooltip.getBoundingClientRect();
+    const left = x + 14 + tip.width > bounds.width ? x - 14 - tip.width : x + 14;
+    const top = Math.min(Math.max(4, y + 12), Math.max(4, bounds.height - tip.height - 4));
+    this.#tooltip.style.left = `${Math.max(4, left)}px`;
+    this.#tooltip.style.top = `${top}px`;
+  }
+
+  #hideTooltip(): void {
+    this.#tooltip.hidden = true;
+    this.stage.style.cursor = 'default';
+  }
+
+  #renderLegend(): void {
+    const payload = this.#payload;
+    if (payload === null) return;
+    const present = new Set(this.#model?.edges.map((e) => e.routeKind) ?? []);
+    const items: HTMLElement[] = [];
+    const swatch = (color: string, shape: '' | 'disc' | 'diamond', text: string) => {
+      const item = document.createElement('span');
+      const mark = document.createElement('i');
+      if (shape !== '') mark.className = shape;
+      mark.style.background = color;
+      item.append(mark, text);
+      items.push(item);
+    };
+    const group = (text: string) => {
+      const label = document.createElement('b');
+      label.textContent = text;
+      items.push(label);
+    };
+    group('route');
+    for (const kind of ROUTE_KINDS) {
+      if (present.has(kind)) swatch(toCss(this.theme.route[kind]), '', kind);
+    }
+    group('node');
+    swatch(toCss(this.theme.agent), 'disc', 'agent');
+    if (payload.mode === 'channels') {
+      const policies = new Set(
+        payload.nodes.flatMap((n) => (n.kind === 'channel' ? [n.policy] : [])),
+      );
+      group('channel policy');
+      for (const policy of ['unreviewed', 'sanctioned', 'unsanctioned'] as const) {
+        if (policies.has(policy)) swatch(toCss(this.theme.policy[policy]), 'diamond', policy);
+      }
+    }
+    this.#legend.replaceChildren(...items);
+    // The legend is a strip below the graph, never over it.
+    this.stage.style.bottom = `${this.#legend.offsetHeight}px`;
+  }
+}

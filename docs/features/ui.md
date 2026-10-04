@@ -267,6 +267,91 @@ validates and then reports that.
 7. Live updates: an SSE stream of `UiEvent`s (ids only) tells open pages
    which regions to re-query.
 
+## Element payloads
+
+Each element reads one route under `/data/`. The Rust types in
+`ui/src/data/` define the payloads (each documented in its doc comment);
+`ui/elements/src/payloads/` mirrors them with zod schemas and a binary
+decoder. `ui/src/data/fixtures.rs` writes the payloads of hand-built
+contract values to `ui/elements/test/fixtures/` and fails when they drift
+(`CT_UPDATE_FIXTURES=1 cargo test element_fixtures` regenerates them), so
+the TypeScript tests parse exactly what Rust emits.
+
+| Route | Payload | Needs | Backend call |
+| --- | --- | --- | --- |
+| `GET /data/topology?<view state>` | JSON `TopologyPayload` | `View` | `topology` (`g=agents`) or `channel_topology` (`g=channels`) |
+| `GET /data/timeline?<view state>&buckets=<n>` | JSON `TimelinePayload` | `View` | `timeline`, `n` in 1..=1000, default 96 |
+| `GET /data/projection/{id}` | binary, `application/octet-stream` | `Content` | `projection`, plus `agent`, `channel`, `topics` for names |
+
+- **No redirects.** A view-state route needs every canonical key (`from`,
+  `to`, `v`, `w`, `g`); a missing or invalid one is a 400 naming it.
+  Backend errors: Forbidden 403, NotFound 404, VersionNotRetained and
+  InvalidInput 400 (with the message), anything else 500.
+- **Topology** (JSON, camelCase): `mode` (`agents` | `channels`), `window`
+  `{from, to}`, `weighting` (`tx` | `bytes`), `topicVersion`, `watermark`,
+  `nodes`, `edges`. Nodes are tagged by `kind`:
+  `agent {id, name, state, parent, volume, transmissionsIn,
+  transmissionsOut, claims[{harness, version, userAgent, lastSeen}]}` and
+  (channels mode) `channel {id, name, origin, detection, policy, volume}`.
+  `name` is `components::agent_name` or the channel's pattern / seed
+  locator; `volume` is transmissions in + out, or accesses. Edges:
+  `transmission {from, to, route, routeKind, share, transmissions,
+  matchedBytes}` (`route` is the `url::route` code) and (channels mode)
+  `access {agent, channel, op: read | write, accesses, share}`; access
+  shares are normalised separately. Channels-mode transmission edges are
+  the ones not routed through a channel.
+- **Timeline** (JSON): `window`, `bucketMs`, `watermark`,
+  `buckets[{from, to, transmissions, matchedBytes, final}]`; `final` is
+  `to <= watermark`.
+- **Projection** (binary, little-endian, columns 4-byte aligned; `n`
+  points, header of `h` bytes):
+
+  | Bytes | Content |
+  | --- | --- |
+  | 4 | magic `CTPJ` |
+  | 4 | `u32` version (1) |
+  | 4 | `u32` `h`, a multiple of 4 |
+  | `h` | header JSON, space-padded: `id`, `count`, `window`, `topicVersion`, `fittedAt`, `embeddingModel {name, dimension}`, `params {neighbors, minDist, seed (string), sampleLimit}`, `routeKinds` (`["channel","delegation","direct","unobserved"]`), `agents[{id, name}]`, `channels[{id, name}]`, `topics[{id, label}]` (`label` null when hidden or the version is gone) |
+  | `4n` each | `f32` xs, `f32` ys, `u32` sender, `u32` reader (into `agents`) |
+  | `n` + pad to 4 | `u8` route kind (into `routeKinds`) |
+  | `4n` each | `u32` channel (into `channels`), `u32` topic (into `topics`); `0xFFFFFFFF` = none |
+  | `16n` | transmission ids, 128-bit big-endian |
+
+  The total is exactly `12 + h + 41n + pad(n)`; decoders reject anything
+  else, and any index outside its table.
+
+Element inputs and outputs (`value`, announced with `change`):
+
+| Element | Inputs | `value` |
+| --- | --- | --- |
+| `<ct-topology>` | `data-src`, `data-highlight` (a topology value), `data-collapse` (`"true"`) | `edge:<fromUlid>:<toUlid>:<routeCode>` \| `agent:<ulid>` \| `channel:<ulid>` \| `` |
+| `<ct-projection>` | `data-src`, `data-color-by` (`topic` \| `sender` \| `reader` \| `route` \| `channel`), `data-highlight` (comma-separated transmission ULIDs) | `lasso:<x>,<y>;<x>,<y>;…` \| `point:<ulid>` \| `` |
+| `<ct-timebrush>` | `data-src`, `data-from`, `data-to` (RFC 3339) | `<fromRfc3339>/<toRfc3339>` |
+
+- The edge route code is everything after the third colon (tool names may
+  contain colons). Clicking empty space clears (`""`). Clicking an access
+  edge selects its channel. With `data-collapse`, an edge that merges
+  several payload edges selects the heaviest of them.
+- A lasso has 3 to 48 vertices in projection (data) coordinates, rounded
+  to 4 decimals (trailing zeros dropped); longer lassos are simplified
+  (Ramer–Douglas–Peucker) first. The element selects exactly the points
+  inside that rounded polygon (even-odd rule), which is what the server
+  must resolve.
+- The brush snaps to bucket edges and emits on pointer-up; the times are
+  the payload's own bucket edge strings. A click selects one bucket.
+- Every element validates its payload: a failure shows an error panel,
+  never a blank canvas. Empty payloads and HTTP errors show their own
+  panels. Changing `data-src` aborts the in-flight request; detaching an
+  element releases its WebGL context.
+- Colours: route kinds from `--color-route-*`, channel policies from
+  `--color-policy-{unreviewed,sanctioned,unsanctioned}` (with built-in
+  fallbacks), categories from the eight-slot reference palette (the eight
+  most frequent categories keep a slot in table order; the rest are
+  "other"). Text and surface colours follow the page, light or dark.
+- Layout is deterministic: node ids hash to initial positions, nodes and
+  edges are added in sorted order and ForceAtlas2 runs a fixed number of
+  iterations for the node count.
+
 ## Files
 
 | Path | Role |
@@ -290,8 +375,26 @@ validates and then reports that.
 | `ui/src/pages/pipeline/` | `/pipeline` GET and POST `replay`. |
 | `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting, `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state and evidence strength; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`), `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
 | `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body, and `cx`/`render` for rendering components. |
-| `ui/src/data/` | `#[route]` endpoints feeding the custom elements, and their payload types. |
-| `ui/elements/` | TypeScript custom elements (pnpm, strict TS, esbuild, vitest, biome). |
+| `ui/src/data/mod.rs` | The data routes' module: route table, `require(caller, permission)` (403). |
+| `ui/src/data/query.rs` | `view_state(cx)`: the strict view-state parse (every required key or 400, never a redirect; same `ViewState::parse` and defaults as `pages::view`). `buckets(cx)`: `buckets=` in 1..=1000, default 96. |
+| `ui/src/data/errors.rs` | `query_error(QueryError)`: Forbidden → 403, NotFound → 404, VersionNotRetained / InvalidInput → 400 with the message, others → 500 (logged). |
+| `ui/src/data/names.rs` | Channel display names from a pattern or seed locator (`locator_name`, `pattern_name`, `channel_node_name`, `channel_summary_name`). |
+| `ui/src/data/topology.rs` | `GET /data/topology`: `TopologyPayload::{agents, channels}` and its node, edge and code types. |
+| `ui/src/data/timeline.rs` | `GET /data/timeline`: `TimelinePayload` (buckets with `final`). |
+| `ui/src/data/projection/` | `GET /data/projection/{id}`: `format.rs` (binary layout, `ProjectionHeader`, `ProjectionTables`, `encode`), `mod.rs` (route, `tables` name lookup), `decode.rs` (test-only strict decoder). |
+| `ui/src/data/elements.rs` | `TOPOLOGY_JS`, `PROJECTION_JS`, `TIMEBRUSH_JS`: the bundled elements as Topcoat assets. |
+| `ui/src/data/fixtures.rs`, `route_tests.rs` | Tests: hand-built contract values, the element fixture files written from them, and the routes through the router. |
+| `ui/elements/package.json`, `pnpm-workspace.yaml` | pnpm package; exact pins; `minimumReleaseAge` of a week for every transitive dependency. Scripts: `build`, `demo`, `smoke`, `test`, `typecheck`, `lint`. |
+| `ui/elements/scripts/build.mjs` | esbuild: `src/ct-*.ts` → `dist/<name>.js` (ESM, minified, external source map); `--serve` rebuilds and serves the package for the demo. |
+| `ui/elements/scripts/smoke.mjs` | Headless-Chrome smoke test of the demo over CDP, with screenshots in both colour schemes. |
+| `ui/elements/src/ct-*.ts` | Entry points: define `ct-topology`, `ct-projection`, `ct-timebrush` (once). |
+| `ui/elements/src/shared/` | `element.ts` (`PayloadElement`: the element contract, fetch/abort, status panels), `fetch.ts` (typed `LoadError`), `selection.ts` (value grammar), `theme.ts` and `color.ts` (tokens, light/dark), `ulid.ts`, `route.ts`, `format.ts`, `hash.ts`, `webgl.ts`, `result.ts`. |
+| `ui/elements/src/payloads/` | zod schemas mirroring `ui/src/data/` (`topology.ts`, `timeline.ts`), and the binary projection decoder (`projection.ts`). |
+| `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `element.ts`. |
+| `ui/elements/src/projection/` | `transform.ts` (data ↔ normalised), `lasso.ts` (point-in-polygon, simplification, rounding), `colors.ts` (colour-by and legend), `element.ts`. |
+| `ui/elements/src/timebrush/` | `model.ts` (axis, snapping, bars, ticks), `element.ts` (SVG). |
+| `ui/elements/test/` | vitest suites, and `fixtures/` (written by the Rust tests). |
+| `ui/elements/demo/index.html` | Static harness showing all three elements and their states on the fixtures (`pnpm demo`). |
 
 ## Invariants and constraints
 
@@ -310,6 +413,9 @@ validates and then reports that.
 - Every graph, timeline and projection a page shows is fully determined by
   its URL and the data's watermark.
 - Elements never call L8 and never hold authorization logic.
+- Data routes never redirect, and answer only with payloads the caller's
+  permissions allow; payload shapes change in Rust, the zod schemas and
+  the fixtures together.
 - Harness claims are always presented as claims.
 - Topcoat is a dependency of `crosstalk-ui` only.
 
@@ -318,10 +424,16 @@ validates and then reports that.
 - Rust: the repository toolchain (`nightly-2026-10-02`); Topcoat 0.9.0
   needs rustc 1.98 or newer. The build script downloads the Tailwind CLI
   from GitHub on first build.
-- Assets: `topcoat asset bundle` (from `topcoat-cli` 0.9.0) after
-  `pnpm --dir ui/elements build`, so the bundle includes the elements and
-  the Tailwind stylesheet. The bundle is written next to the binary and
-  must come from the same build.
+- Assets: `pnpm --dir ui/elements install && pnpm --dir ui/elements build`
+  first, then `topcoat asset bundle` (from `topcoat-cli` 0.9.0, run in
+  `ui/`), so the bundle includes the elements and the Tailwind stylesheet.
+  The bundle is written next to the binary and must come from the same
+  build. Only asset constants a page renders are bundled: an element
+  appears in the bundle once a page uses its `data::elements` constant.
+- Elements: Node 24, pnpm 11. `pnpm test` (vitest), `pnpm typecheck`,
+  `pnpm lint` (biome), `pnpm demo` (serves `demo/` on 127.0.0.1:8737 with
+  the fixtures), `pnpm smoke [dir]` (after `pnpm build`; needs
+  `google-chrome`).
 - Run: `cargo run` from `ui/` serves on the configured address.
 - Topcoat releases roughly weekly and expects breaking changes. Upgrades
   are deliberate, one version at a time, and only to releases at least a

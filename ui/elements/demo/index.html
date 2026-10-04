@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crosstalk elements</title>
+    <style>
+      /* The page side of the contract: theme tokens as ui/styles/app.css defines them. */
+      :root {
+        color-scheme: light dark;
+        --color-route-channel: #2563eb;
+        --color-route-delegation: #7c3aed;
+        --color-route-direct: #059669;
+        --color-route-unobserved: #dc2626;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        font-size: 14px;
+        background: #ffffff;
+        color: #18181b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #09090b;
+          color: #f4f4f5;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 20px 24px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+      }
+      h2 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      p.sub {
+        margin: 0 0 16px;
+        color: #71717a;
+        font-size: 12px;
+      }
+      section {
+        margin-bottom: 18px;
+      }
+      .card {
+        border: 1px solid #e4e4e7;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      @media (prefers-color-scheme: dark) {
+        .card {
+          border-color: #27272a;
+        }
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 10px;
+        border-bottom: 1px solid #e4e4e7;
+        font-size: 12px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .bar {
+          border-color: #27272a;
+        }
+      }
+      .bar .spacer {
+        flex: 1;
+      }
+      .value {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: #71717a;
+        max-width: 60%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+      .states {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+      }
+      ct-topology {
+        height: 460px;
+      }
+      ct-projection {
+        height: 460px;
+      }
+      ct-timebrush {
+        height: 96px;
+      }
+      .states ct-topology,
+      .states ct-projection {
+        height: 140px;
+      }
+      select,
+      button,
+      label {
+        font: inherit;
+      }
+    </style>
+    <script type="module" src="../dist/ct-topology.js"></script>
+    <script type="module" src="../dist/ct-projection.js"></script>
+    <script type="module" src="../dist/ct-timebrush.js"></script>
+  </head>
+  <body>
+    <h1>crosstalk elements</h1>
+    <p class="sub">Fixture payloads from <code>test/fixtures/</code>, written by the Rust data module's tests.</p>
+
+    <section class="card">
+      <div class="bar">
+        <h2>Time window</h2>
+        <span class="spacer"></span>
+        <span class="value" id="brush-value"></span>
+      </div>
+      <ct-timebrush
+        id="brush"
+        data-src="../test/fixtures/timeline.json"
+        data-from="2026-10-02T09:00:00Z"
+        data-to="2026-10-02T17:00:00Z"
+      ></ct-timebrush>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <div class="bar">
+          <h2>Topology</h2>
+          <label><input type="radio" name="mode" value="agents" checked /> agents</label>
+          <label><input type="radio" name="mode" value="channels" /> channels</label>
+          <label><input type="checkbox" id="collapse" /> collapse sub-agents</label>
+          <span class="spacer"></span>
+          <span class="value" id="topology-value"></span>
+        </div>
+        <ct-topology id="topology" data-src="../test/fixtures/topology-agents.json"></ct-topology>
+      </section>
+
+      <section class="card">
+        <div class="bar">
+          <h2>Projection</h2>
+          <label
+            >colour
+            <select id="color-by">
+              <option>topic</option>
+              <option>sender</option>
+              <option>reader</option>
+              <option>route</option>
+              <option>channel</option>
+            </select></label
+          >
+          <label><input type="checkbox" id="hits" /> highlight hits</label>
+          <span class="spacer"></span>
+          <span class="value" id="projection-value"></span>
+        </div>
+        <ct-projection id="projection" data-src="../test/fixtures/projection.bin" data-color-by="topic"></ct-projection>
+      </section>
+    </div>
+
+    <div class="states">
+      <section class="card">
+        <div class="bar"><h2>Empty</h2></div>
+        <ct-topology id="empty" data-src="../test/fixtures/topology-empty.json"></ct-topology>
+      </section>
+      <section class="card">
+        <div class="bar"><h2>HTTP error</h2></div>
+        <ct-topology id="missing" data-src="../test/fixtures/missing.json"></ct-topology>
+      </section>
+      <section class="card">
+        <div class="bar"><h2>Invalid payload</h2></div>
+        <ct-projection id="invalid" data-src="../test/fixtures/timeline.json"></ct-projection>
+      </section>
+    </div>
+
+    <script type="module">
+      // What a Topcoat page does: read e.target.value on change, set data-* inputs.
+      const log = [];
+      window.ctChanges = log;
+      for (const [id, out] of [
+        ['brush', 'brush-value'],
+        ['topology', 'topology-value'],
+        ['projection', 'projection-value'],
+      ]) {
+        const element = document.getElementById(id);
+        element.addEventListener('change', (e) => {
+          log.push({ id, value: e.target.value });
+          document.getElementById(out).textContent = e.target.value || '(cleared)';
+          if (id === 'topology') element.dataset.highlight = e.target.value;
+          if (id === 'brush') {
+            const [from, to] = e.target.value.split('/');
+            element.dataset.from = from;
+            element.dataset.to = to;
+          }
+        });
+      }
+      const topology = document.getElementById('topology');
+      for (const radio of document.querySelectorAll('input[name=mode]')) {
+        radio.addEventListener('change', () => {
+          topology.dataset.src = `../test/fixtures/topology-${radio.value}.json`;
+        });
+      }
+      document.getElementById('collapse').addEventListener('change', (e) => {
+        topology.dataset.collapse = String(e.target.checked);
+      });
+      const projection = document.getElementById('projection');
+      document.getElementById('color-by').addEventListener('change', (e) => {
+        projection.dataset.colorBy = e.target.value;
+      });
+      document.getElementById('hits').addEventListener('change', (e) => {
+        // Pretend search hits: every seventh point.
+        const ids = projection.transmissionIds.filter((_, i) => i % 7 === 0);
+        projection.dataset.highlight = e.target.checked ? ids.join(',') : '';
+      });
+    </script>
+  </body>
+</html>
