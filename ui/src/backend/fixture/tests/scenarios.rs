@@ -5,9 +5,9 @@ use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::topic::{Assignment, TopicModelVersion};
-use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::Policy;
+use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::observed::agent::MergeAuthor;
 use crosstalk_spec::observed::client::HarnessFamily;
@@ -140,7 +140,7 @@ fn channels_cover_every_origin_detection_and_policy() {
         assert!(matches!(
             r.channel.origin,
             ChannelOrigin::Declared {
-                detection: DeclaredDetection::InUse(_),
+                history: DeclaredHistory::BeforeTraffic(DeclaredDetection::InUse(_)),
                 ..
             }
         ));
@@ -148,7 +148,7 @@ fn channels_cover_every_origin_detection_and_policy() {
     assert!(matches!(
         ch(K::DesignDocs).channel.origin,
         ChannelOrigin::Declared {
-            detection: DeclaredDetection::AwaitingTraffic,
+            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
             ..
         }
     ));
@@ -156,14 +156,16 @@ fn channels_cover_every_origin_detection_and_policy() {
     assert!(matches!(
         unused.channel.origin,
         ChannelOrigin::Declared {
-            detection: DeclaredDetection::Unused { .. },
+            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::Unused { .. }),
             ..
         }
     ));
     assert!(matches!(unused.channel.policy, Policy::Sanctioned(_)));
     let discovered = |key| match ch(key).channel.origin {
         ChannelOrigin::Discovered { detection, .. } => detection,
-        ChannelOrigin::Declared { .. } => panic!("{key:?} is declared"),
+        ChannelOrigin::Declared { .. } | ChannelOrigin::Superseded { .. } => {
+            panic!("{key:?} is not discovered")
+        }
     };
     assert!(matches!(
         discovered(K::HijackedWiki),
@@ -225,8 +227,8 @@ fn channels_cover_every_origin_detection_and_policy() {
     );
     // The hijacked wiki's seed is on wiki.example.org.
     let seed = match ch(K::HijackedWiki).channel.origin {
-        ChannelOrigin::Discovered { seed, .. } => seed,
-        ChannelOrigin::Declared { .. } => unreachable!(),
+        ChannelOrigin::Discovered { seed, .. } => seed.resource,
+        ChannelOrigin::Declared { .. } | ChannelOrigin::Superseded { .. } => unreachable!(),
     };
     assert!(matches!(
         &w.resource(seed).expect("seed").locator,

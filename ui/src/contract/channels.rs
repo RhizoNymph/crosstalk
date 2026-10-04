@@ -2,7 +2,7 @@
 
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::Policy;
-use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
+use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
@@ -32,12 +32,20 @@ pub enum DetectionKind {
 impl DetectionKind {
     pub fn of(origin: &ChannelOrigin) -> Self {
         match origin {
-            ChannelOrigin::Declared { detection, .. } => match detection {
+            ChannelOrigin::Declared {
+                history: DeclaredHistory::BeforeTraffic(detection),
+                ..
+            } => match detection {
                 DeclaredDetection::AwaitingTraffic => Self::AwaitingTraffic,
                 DeclaredDetection::Unused { .. } => Self::Unused,
                 DeclaredDetection::InUse(traffic) => Self::of_traffic(traffic),
             },
-            ChannelOrigin::Discovered { detection, .. } => Self::of_traffic(detection),
+            ChannelOrigin::Declared {
+                history: DeclaredHistory::Promoted { detection, .. },
+                ..
+            }
+            | ChannelOrigin::Discovered { detection, .. }
+            | ChannelOrigin::Superseded { detection, .. } => Self::of_traffic(detection),
         }
     }
 
@@ -55,7 +63,7 @@ impl OriginKind {
     pub fn of(origin: &ChannelOrigin) -> Self {
         match origin {
             ChannelOrigin::Declared { .. } => Self::Declared,
-            ChannelOrigin::Discovered { .. } => Self::Discovered,
+            ChannelOrigin::Discovered { .. } | ChannelOrigin::Superseded { .. } => Self::Discovered,
         }
     }
 }

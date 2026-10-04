@@ -386,10 +386,7 @@ mod tests {
     use crate::testing::{get, post};
 
     fn caller(permissions: Vec<Permission>) -> Caller {
-        Caller {
-            operator: OperatorId::from_ulid(1),
-            permissions,
-        }
+        crate::testing::caller_of(OperatorId::from_ulid(1), &permissions)
     }
 
     #[test]

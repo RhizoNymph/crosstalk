@@ -211,10 +211,7 @@ async fn drawer_arguments_are_validated() {
     ));
     let bad_cursor = load(&cx, &caller, &state, "", "a b").await;
     assert!(bad_cursor.is_err());
-    let viewer = Caller {
-        operator: OperatorId::from_ulid(1),
-        permissions: vec![Permission::Content],
-    };
+    let viewer = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::Content]);
     assert_eq!(
         load(&cx, &viewer, &state, "", "").await.map(|_| ()),
         Err(QueryError::Forbidden {

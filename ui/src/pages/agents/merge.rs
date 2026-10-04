@@ -154,7 +154,7 @@ async fn merge_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View
     let from = agent_id(cx)?;
     let caller = caller(cx);
     let result = match id::<AgentId>(&fields, "into") {
-        Ok(into) => match merge_action(from, into, caller.operator) {
+        Ok(into) => match merge_action(from, into, caller.operator()) {
             Ok(action) => perform(cx, action).await.map(|_| into),
             Err(error) => Err(error),
         },

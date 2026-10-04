@@ -9,7 +9,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crosstalk_spec::ids::OperatorId;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::operators::{
+    AccessConfig, InvalidAccessConfig, InvalidOperatorName, OperatorDirectory, OperatorName,
+    RequestIdentity, TrustedOperator, Unauthenticated,
+};
 
 use crate::url::ulid::{InvalidUlid, UlidId};
 
@@ -38,32 +42,61 @@ pub enum BackendConfig {
     Fixture { seed: u64 },
 }
 
-/// The single operator of trusted mode. It holds every permission.
+/// Who uses the UI: the spec's operator directory loaded from the trusted
+/// operator config names, and the caller it gives every request.
+///
+/// Built only by [`Access::trusted`], which loads the directory and asks it
+/// for the request caller once: in trusted mode the directory answers every
+/// request with the same caller (the configured operator with every
+/// permission), so it is kept rather than asked again per request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrustedOperator {
-    pub id: OperatorId,
-    pub name: String,
+pub struct Access {
+    /// The directory every caller comes from; kept with the caller it gave.
+    #[allow(dead_code)]
+    directory: OperatorDirectory,
+    caller: Caller,
+    name: OperatorName,
 }
 
-impl TrustedOperator {
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AccessError {
+    #[error("access config: {0:?}")]
+    Config(InvalidAccessConfig),
+    #[error("no caller for the trusted operator: {0:?}")]
+    Unauthenticated(Unauthenticated),
+}
+
+impl Access {
+    /// The directory of a trusted deployment of `operator`.
+    pub fn trusted(operator: TrustedOperator) -> Result<Self, AccessError> {
+        let name = operator.name.clone();
+        let (directory, _changes) = OperatorDirectory::load(None, &AccessConfig::Trusted(operator))
+            .map_err(AccessError::Config)?;
+        let caller = directory
+            .caller(RequestIdentity::Anonymous)
+            .map_err(AccessError::Unauthenticated)?;
+        Ok(Self {
+            directory,
+            caller,
+            name,
+        })
+    }
+
+    /// The caller of a request.
     pub fn caller(&self) -> Caller {
-        Caller {
-            operator: self.id,
-            permissions: vec![
-                Permission::View,
-                Permission::Content,
-                Permission::Govern,
-                Permission::Triage,
-                Permission::Operate,
-            ],
-        }
+        self.caller.clone()
+    }
+
+    /// The signed-in operator's display name.
+    pub fn name(&self) -> &str {
+        self.name.as_str()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub listen: SocketAddr,
-    pub operator: TrustedOperator,
+    pub access: Access,
     pub backend: BackendConfig,
 }
 
@@ -81,8 +114,10 @@ pub enum ConfigError {
     },
     #[error("operator.id: {0}")]
     OperatorId(InvalidUlid),
-    #[error("operator.name is empty")]
-    OperatorName,
+    #[error("operator.name: {0:?}")]
+    OperatorName(InvalidOperatorName),
+    #[error(transparent)]
+    Access(#[from] AccessError),
 }
 
 impl Config {
@@ -110,16 +145,13 @@ impl Config {
         let raw: RawConfig = serde_json::from_str(text).map_err(ParseError::Json)?;
         let id = OperatorId::parse_ulid(&raw.operator.id)
             .map_err(|e| ParseError::Config(ConfigError::OperatorId(e)))?;
-        let name = raw.operator.name.trim();
-        if name.is_empty() {
-            return Err(ParseError::Config(ConfigError::OperatorName));
-        }
+        let name = OperatorName::new(&raw.operator.name)
+            .map_err(|e| ParseError::Config(ConfigError::OperatorName(e)))?;
+        let access = Access::trusted(TrustedOperator { id, name })
+            .map_err(|e| ParseError::Config(ConfigError::Access(e)))?;
         Ok(Self {
             listen: raw.listen,
-            operator: TrustedOperator {
-                id,
-                name: name.to_owned(),
-            },
+            access,
             backend: raw.backend,
         })
     }
@@ -138,9 +170,12 @@ mod tests {
     fn parses_the_shipped_config() {
         let text = include_str!("../config.json");
         let config = Config::parse(text).ok().expect("shipped config parses");
-        assert_eq!(config.operator.name, "researcher");
+        assert_eq!(config.access.name(), "researcher");
         assert_eq!(config.backend, BackendConfig::Fixture { seed: 7 });
-        assert_eq!(config.operator.caller().permissions.len(), 5);
+        assert_eq!(
+            config.access.caller().permissions(),
+            crosstalk_spec::interfaces::l8_surface::PermissionSet::ALL
+        );
     }
 
     #[test]
@@ -150,7 +185,9 @@ mod tests {
         let blank = r#"{"listen":"127.0.0.1:1","operator":{"id":"00000000000000000000000001","name":"  "},"backend":{"fixture":{"seed":1}}}"#;
         assert!(matches!(
             Config::parse(blank),
-            Err(ParseError::Config(ConfigError::OperatorName))
+            Err(ParseError::Config(ConfigError::OperatorName(
+                InvalidOperatorName::Blank
+            )))
         ));
     }
 }

@@ -257,7 +257,7 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
     assert_eq!(
         alert_state(&b, open).await,
         AlertState::Acknowledged {
-            by: c.operator,
+            by: c.operator(),
             at: NOW
         }
     );
@@ -279,7 +279,7 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
     assert_eq!(
         alert_state(&b, open).await,
         AlertState::Resolved {
-            by: c.operator,
+            by: c.operator(),
             at: NOW,
             note: Some("done".into())
         }

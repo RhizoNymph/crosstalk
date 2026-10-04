@@ -63,17 +63,18 @@ pub fn plan(
         ChannelOrigin::Discovered { .. } if record.superseded.is_some() => {
             Some(ConflictKind::ChannelSuperseded)
         }
-        ChannelOrigin::Discovered { seed, .. } if !covers(seed) => {
+        ChannelOrigin::Discovered { seed, .. } if !covers(&seed.resource) => {
             Some(ConflictKind::PatternMissesSeed)
         }
         ChannelOrigin::Discovered { .. } => None,
+        ChannelOrigin::Superseded { .. } => Some(ConflictKind::ChannelSuperseded),
     };
     let mut covered_records: Vec<_> = state
         .channels
         .values()
         .filter(|r| r.superseded.is_none())
         .filter(
-            |r| matches!(&r.channel.origin, ChannelOrigin::Discovered { seed, .. } if covers(seed)),
+            |r| matches!(&r.channel.origin, ChannelOrigin::Discovered { seed, .. } if covers(&seed.resource)),
         )
         .collect();
     covered_records.sort_by_key(|r| (r.created, r.channel.id));
@@ -101,7 +102,7 @@ pub fn plan(
             .iter()
             .filter(|(_, c)| **c == r.channel.id)
             .map(|(id, _)| *id);
-        let mut own_resources: Vec<ResourceId> = std::iter::once(*seed)
+        let mut own_resources: Vec<ResourceId> = std::iter::once(seed.resource)
             .chain(r.channel.resources.iter().copied())
             .chain(grouped)
             .collect();

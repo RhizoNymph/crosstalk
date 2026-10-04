@@ -215,10 +215,7 @@ mod tests {
     use crate::contract::errors::InputError;
 
     fn caller(permissions: Vec<Permission>) -> Caller {
-        Caller {
-            operator: OperatorId::from_ulid(1),
-            permissions,
-        }
+        crate::testing::caller_of(OperatorId::from_ulid(1), &permissions)
     }
 
     #[test]

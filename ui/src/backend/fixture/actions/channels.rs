@@ -2,7 +2,9 @@
 
 use crosstalk_spec::derived::flow::channel::detection::DeclaredDetection;
 use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
-use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
+use crosstalk_spec::derived::flow::channel::{
+    Channel, ChannelOrigin, Declaration, DeclaredHistory,
+};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
@@ -82,10 +84,12 @@ pub fn promote(
             channel: Channel {
                 id,
                 origin: ChannelOrigin::Declared {
-                    pattern: pattern.clone(),
-                    by: PolicyAuthor::Operator(by),
-                    at: NOW,
-                    detection: DeclaredDetection::InUse(detection),
+                    declaration: Declaration {
+                        pattern: pattern.clone(),
+                        by: PolicyAuthor::Operator(by),
+                        at: NOW,
+                    },
+                    history: DeclaredHistory::BeforeTraffic(DeclaredDetection::InUse(detection)),
                 },
                 resources: plan.resources,
                 policy: policy(kind, by, note),

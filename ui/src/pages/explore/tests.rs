@@ -224,10 +224,7 @@ async fn results_validate_their_arguments_and_permissions() {
         .await
         .is_err()
     );
-    let viewer = Caller {
-        operator: OperatorId::from_ulid(1),
-        permissions: vec![Permission::View],
-    };
+    let viewer = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::View]);
     assert_eq!(
         load(&cx, &viewer, &state, &projection, "", "").await,
         Err(QueryError::Forbidden {

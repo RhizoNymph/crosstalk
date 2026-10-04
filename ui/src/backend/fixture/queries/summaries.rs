@@ -133,15 +133,23 @@ pub fn agents_with_parents(
 
 pub fn node(ctx: &Ctx, record: &ChannelRecord) -> ChannelNode {
     let channel = &record.channel;
-    let shape = match &channel.origin {
-        ChannelOrigin::Declared { pattern, .. } => ChannelShape::Pattern(pattern.clone()),
-        ChannelOrigin::Discovered { seed, .. } => match ctx.world.resource(*seed) {
-            Some(resource) => ChannelShape::Seed(resource.locator.clone()),
-            None => ChannelShape::Seed(crosstalk_spec::derived::flow::resource::Locator::Opaque {
-                tool: crosstalk_spec::observed::message::ToolName("unknown".to_owned()),
-                key: format!("{:032x}", seed.as_ulid()),
-            }),
-        },
+    let shape = match (channel.origin.pattern(), channel.origin.seed()) {
+        (Some(pattern), _) => ChannelShape::Pattern(pattern.clone()),
+        (None, seed) => {
+            let seed = seed.map_or(channel.id.as_ulid(), |seed| seed.resource.as_ulid());
+            match ctx
+                .world
+                .resource(crosstalk_spec::ids::ResourceId::from_ulid(seed))
+            {
+                Some(resource) => ChannelShape::Seed(resource.locator.clone()),
+                None => {
+                    ChannelShape::Seed(crosstalk_spec::derived::flow::resource::Locator::Opaque {
+                        tool: crosstalk_spec::observed::message::ToolName("unknown".to_owned()),
+                        key: format!("{seed:032x}"),
+                    })
+                }
+            }
+        }
     };
     ChannelNode {
         id: channel.id,
@@ -188,7 +196,9 @@ pub fn channel(ctx: &Ctx, record: &ChannelRecord, window: Option<TimeWindow>) ->
         .filter(|t| counted(t.transmission.opened_at))
         .count();
     let seed = match &record.channel.origin {
-        ChannelOrigin::Discovered { seed, .. } => ctx.world.resource(*seed).cloned(),
+        ChannelOrigin::Discovered { seed, .. } | ChannelOrigin::Superseded { seed, .. } => {
+            ctx.world.resource(seed.resource).cloned()
+        }
         ChannelOrigin::Declared { .. } => None,
     };
     ChannelSummary {

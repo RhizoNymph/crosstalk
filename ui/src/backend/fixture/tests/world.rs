@@ -78,7 +78,7 @@ async fn now_and_versions() {
     assert_eq!(b.now(&c).await, Ok(NOW));
     assert_eq!(b.current_topic_version(&c).await, Ok(TopicModelVersion(2)));
     assert_eq!(b.seed(), SEED);
-    let nobody = super::caller(&[]);
+    let nobody = super::caller(&[Permission::Audit]);
     assert_eq!(
         b.now(&nobody).await,
         Err(QueryError::Forbidden {

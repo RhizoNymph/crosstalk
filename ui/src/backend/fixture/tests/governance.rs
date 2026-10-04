@@ -3,9 +3,9 @@
 use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::detection::DeclaredDetection;
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
+use crosstalk_spec::derived::flow::channel::{ChannelOrigin, Declaration, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
@@ -76,7 +76,7 @@ async fn sanctioning_suppresses_the_channels_own_alerts() {
     let summary = b.channel(&c, wiki).await.expect("ok").expect("channel");
     assert!(matches!(
         &summary.channel.policy,
-        Policy::Sanctioned(d) if d.by == PolicyAuthor::Operator(c.operator) && d.at == NOW
+        Policy::Sanctioned(d) if d.by == PolicyAuthor::Operator(c.operator()) && d.at == NOW
     ));
     // Back to unreviewed is a reset: Unreviewed(Some).
     b.act(
@@ -445,9 +445,11 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
     assert!(matches!(
         &summary.channel.origin,
         ChannelOrigin::Declared {
-            detection: DeclaredDetection::InUse(_),
-            by: PolicyAuthor::Operator(_),
-            ..
+            declaration: Declaration {
+                by: PolicyAuthor::Operator(_),
+                ..
+            },
+            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::InUse(_)),
         }
     ));
     assert!(matches!(summary.channel.policy, Policy::Sanctioned(_)));

@@ -30,7 +30,7 @@ use super::world::World;
 
 /// Fails with `Forbidden` unless the caller holds `permission`.
 pub fn require(caller: &Caller, permission: Permission) -> Result<()> {
-    if caller.permissions.contains(&permission) {
+    if caller.has(permission) {
         Ok(())
     } else {
         Err(QueryError::Forbidden {

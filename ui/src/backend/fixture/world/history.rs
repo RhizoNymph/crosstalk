@@ -225,12 +225,10 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     let pattern = match state
         .channels
         .get(&plan.id(K::TeamNotes)?)
-        .map(|r| &r.channel.origin)
+        .and_then(|r| r.channel.origin.pattern())
     {
-        Some(crosstalk_spec::derived::flow::channel::ChannelOrigin::Declared {
-            pattern, ..
-        }) => pattern.clone(),
-        _ => return Err(GenError::Missing("team notes pattern".to_owned())),
+        Some(pattern) => pattern.clone(),
+        None => return Err(GenError::Missing("team notes pattern".to_owned())),
     };
     let promote = OperatorAction::PromoteChannel {
         channel: old,
@@ -497,13 +495,20 @@ fn dead_letters(world: &World, state: &mut State) -> Result<(), GenError> {
             last_error: "sink soc-webhook rejected the delivery: HTTP 503".to_owned(),
         });
     }
-    if let Some(access) = world.accesses.iter().rev().nth(3) {
+    let recorded = world.accesses.iter().rev().nth(3).and_then(|access| {
+        let channel = *world.resource_channel.get(&access.resource)?;
+        Some((access, channel))
+    });
+    if let Some((access, channel)) = recorded {
         letters.push(DeadLetter {
             group: ConsumerGroup("flow".to_owned()),
             envelope: envelope(
                 state,
                 access.at,
-                BusEvent::Detect(DetectEvent::AccessRecorded(access.clone())),
+                BusEvent::Detect(DetectEvent::AccessRecorded {
+                    access: access.clone(),
+                    channel,
+                }),
             ),
             attempts: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
             last_error: "resource extractor: unparseable bash command".to_owned(),

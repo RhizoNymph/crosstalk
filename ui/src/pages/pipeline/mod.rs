@@ -53,6 +53,7 @@ pub fn event_kind(event: &BusEvent) -> &'static str {
         BusEvent::Ingest(_) => "ingest",
         BusEvent::Detect(_) => "detect",
         BusEvent::Insight(_) => "insight",
+        BusEvent::Changed(_) => "changed",
     }
 }
 

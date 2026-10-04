@@ -2,14 +2,13 @@
 //! strict query, against the fixture backend.
 
 use crosstalk_spec::ids::OperatorId;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::Permission;
 use topcoat::router::header::CONTENT_TYPE;
 use topcoat::router::request::Request;
 use topcoat::router::{Body, Router, RouterBuilderDiscoverExt, StatusCode, to_bytes};
 
 use super::require;
 use crate::backend::fixture::FixtureBackend;
-use crate::config::TrustedOperator;
 
 const VIEW: &str = "from=2026-10-02T00:00:00Z&to=2026-10-03T00:00:00Z&v=0&w=tx";
 
@@ -22,10 +21,7 @@ struct Reply {
 async fn get(uri: &str) -> Reply {
     let router = Router::builder()
         .discover()
-        .app_context(TrustedOperator {
-            id: OperatorId::from_ulid(1),
-            name: "test".to_owned(),
-        })
+        .app_context(crate::testing::operator())
         .app_context(FixtureBackend::new(7))
         .build();
     let request = Request::<()>::builder()
@@ -109,10 +105,7 @@ async fn projection_validates_its_id() {
 
 #[test]
 fn require_checks_the_permission() {
-    let caller = Caller {
-        operator: OperatorId::from_ulid(2),
-        permissions: vec![Permission::View],
-    };
+    let caller = crate::testing::caller_of(OperatorId::from_ulid(2), &[Permission::View]);
     assert!(require(&caller, Permission::View).is_ok());
     assert!(require(&caller, Permission::Content).is_err());
 }

@@ -31,11 +31,10 @@ use crate::url::view_state::ViewState;
 /// resource, else the id's tail. Names follow `data::names`, as the graph
 /// shows them.
 pub fn summary_name(summary: &ChannelSummary) -> String {
-    use crosstalk_spec::derived::flow::channel::ChannelOrigin;
-    match (&summary.channel.origin, &summary.seed) {
-        (ChannelOrigin::Declared { pattern, .. }, _) => pattern_name(pattern),
-        (ChannelOrigin::Discovered { .. }, Some(seed)) => locator_name(&seed.locator),
-        (ChannelOrigin::Discovered { .. }, None) => short_id(summary.channel.id.to_ulid()),
+    match (summary.channel.origin.pattern(), &summary.seed) {
+        (Some(pattern), _) => pattern_name(pattern),
+        (None, Some(seed)) => locator_name(&seed.locator),
+        (None, None) => short_id(summary.channel.id.to_ulid()),
     }
 }
 

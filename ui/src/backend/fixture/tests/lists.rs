@@ -573,7 +573,7 @@ async fn names_resolve_aliases_and_supersession_in_one_call() {
     assert_eq!(names[&old].id, declared);
     assert!(matches!(names[&old].shape, ChannelShape::Pattern(_)));
 
-    let nobody = caller(&[]);
+    let nobody = caller(&[Permission::Audit]);
     assert_eq!(
         b.agent_names(&nobody, &[plain]).await.err(),
         Some(QueryError::Forbidden {
@@ -600,7 +600,9 @@ async fn one_alert_reads_by_id() {
     );
     assert_eq!(b.alert(&c, AlertId::from_ulid(1)).await, Ok(None));
     assert_eq!(
-        b.alert(&caller(&[]), listed.id).await.err(),
+        b.alert(&caller(&[Permission::Audit]), listed.id)
+            .await
+            .err(),
         Some(QueryError::Forbidden {
             missing: Permission::View
         })

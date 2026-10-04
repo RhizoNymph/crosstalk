@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
-use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy};
+use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::TransmissionId;
 
@@ -24,10 +24,10 @@ pub enum Shape<'a> {
 }
 
 pub fn shape(summary: &ChannelSummary) -> Shape<'_> {
-    match (&summary.channel.origin, &summary.seed) {
-        (ChannelOrigin::Declared { pattern, .. }, _) => Shape::Pattern(pattern),
-        (ChannelOrigin::Discovered { .. }, Some(seed)) => Shape::Seed(&seed.locator),
-        (ChannelOrigin::Discovered { .. }, None) => Shape::UnknownSeed,
+    match (summary.channel.origin.pattern(), &summary.seed) {
+        (Some(pattern), _) => Shape::Pattern(pattern),
+        (None, Some(seed)) => Shape::Seed(&seed.locator),
+        (None, None) => Shape::UnknownSeed,
     }
 }
 
@@ -49,7 +49,10 @@ pub struct DetectionDetail {
 
 pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
     let traffic = match origin {
-        ChannelOrigin::Declared { detection, .. } => match detection {
+        ChannelOrigin::Declared {
+            history: DeclaredHistory::BeforeTraffic(detection),
+            ..
+        } => match detection {
             DeclaredDetection::AwaitingTraffic => {
                 return plain("Declared; no traffic yet.".to_owned());
             }
@@ -61,7 +64,12 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
             }
             DeclaredDetection::InUse(traffic) => traffic,
         },
-        ChannelOrigin::Discovered { detection, .. } => detection,
+        ChannelOrigin::Declared {
+            history: DeclaredHistory::Promoted { detection, .. },
+            ..
+        }
+        | ChannelOrigin::Discovered { detection, .. }
+        | ChannelOrigin::Superseded { detection, .. } => detection,
     };
     match traffic {
         TrafficDetection::Observed { .. } => {
@@ -145,8 +153,10 @@ pub(crate) mod tests {
             channel: Channel {
                 id: ChannelId::from_ulid(id),
                 origin: ChannelOrigin::Discovered {
-                    seed: ResourceId::from_ulid(id),
-                    first_access: AccessId::from_ulid(1),
+                    seed: crosstalk_spec::derived::flow::channel::Seed {
+                        resource: ResourceId::from_ulid(id),
+                        first_access: AccessId::from_ulid(1),
+                    },
                     detection: TrafficDetection::Active {
                         since: Timestamp::from_micros(1_790_985_600_000_000),
                         last_transmission: TransmissionId::from_ulid(9),
@@ -185,10 +195,12 @@ pub(crate) mod tests {
     fn declared_channels_are_named_by_their_pattern() {
         let mut summary = discovered(1);
         summary.channel.origin = ChannelOrigin::Declared {
-            pattern: ResourcePattern::Host(Host("wiki.example.org".into())),
-            by: PolicyAuthor::Config,
-            at: Timestamp::from_micros(0),
-            detection: DeclaredDetection::AwaitingTraffic,
+            declaration: crosstalk_spec::derived::flow::channel::Declaration {
+                pattern: ResourcePattern::Host(Host("wiki.example.org".into())),
+                by: PolicyAuthor::Config,
+                at: Timestamp::from_micros(0),
+            },
+            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
         };
         assert_eq!(title(&summary), "wiki.example.org/…");
         assert_eq!(

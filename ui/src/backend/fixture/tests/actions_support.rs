@@ -22,7 +22,7 @@ pub fn merge(b: &FixtureBackend, from: &str, into: &str) -> OperatorAction {
     let request = MergeRequest::new(
         agent(b, from),
         agent(b, into),
-        MergeAuthor::Operator(researcher().operator),
+        MergeAuthor::Operator(researcher().operator()),
     )
     .expect("request");
     OperatorAction::MergeAgents(request)

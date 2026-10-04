@@ -21,7 +21,7 @@ use topcoat::router::{Slot, layout};
 use topcoat::tailwind;
 use topcoat::view::{View, view};
 
-use crate::app::operator;
+use crate::app::access;
 use crate::pages::view::current_state;
 
 /// Navigation sections: path prefix and label.
@@ -48,7 +48,7 @@ fn nav_classes(active: bool) -> &'static str {
 #[layout("/")]
 async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let path = uri(cx).path().to_owned();
-    let operator_name = operator(cx).name.clone();
+    let operator_name = access(cx).name().to_owned();
     // Navigation carries the current view state, so the filter follows the
     // user between sections.
     let query = current_state(cx).await.map(|state| state.to_query());

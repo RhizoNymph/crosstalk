@@ -128,6 +128,7 @@ pub fn topology(ctx: &Ctx, scope: &Scope, weighting: Weighting) -> Result<Topolo
         window: scope.window,
         weighting,
         topic_version: scope.topic_version,
+        nodes: Vec::new(),
         edges,
     };
     TopologyView::new(graph, nodes, WATERMARK).map_err(store_error)

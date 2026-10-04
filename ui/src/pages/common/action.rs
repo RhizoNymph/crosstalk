@@ -165,10 +165,7 @@ mod tests {
 
     #[test]
     fn require_names_the_missing_permission() {
-        let caller = Caller {
-            operator: OperatorId::from_ulid(1),
-            permissions: vec![Permission::View],
-        };
+        let caller = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::View]);
         assert_eq!(require(&caller, Permission::View), Ok(()));
         assert_eq!(
             require(&caller, Permission::Triage),

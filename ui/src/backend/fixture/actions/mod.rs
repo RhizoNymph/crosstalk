@@ -33,7 +33,7 @@ fn apply(
     caller: &Caller,
     action: &OperatorAction,
 ) -> Result<ActionOutcome> {
-    let by = caller.operator;
+    let by = caller.operator();
     match action {
         OperatorAction::SetPolicy {
             channel,
@@ -86,7 +86,7 @@ pub fn act(
     effects::audit(
         state,
         NOW,
-        Actor::Operator(caller.operator),
+        Actor::Operator(caller.operator()),
         AuditedAction::Operator(action),
         subject,
         outcome,

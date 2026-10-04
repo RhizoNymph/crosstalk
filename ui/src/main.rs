@@ -36,14 +36,14 @@ async fn main() -> anyhow::Result<()> {
     };
     let router = Router::builder()
         .discover()
-        .app_context(config.operator.clone())
+        .app_context(config.access.clone())
         .app_context(backend)
         .assets(AssetBundle::load()?)
         .runtime()
         .build();
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
-    tracing::info!(listen = %config.listen, operator = %config.operator.name, "serving");
+    tracing::info!(listen = %config.listen, operator = config.access.name(), "serving");
     topcoat::serve(listener, router).await?;
     Ok(())
 }

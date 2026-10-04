@@ -157,10 +157,10 @@ async fn verdict_posts_validate_then_redirect() {
 #[tokio::test]
 async fn without_content_only_structure_shows() {
     let id = decoded_twice().await;
-    let viewer = Caller {
-        operator: OperatorId::from_ulid(1),
-        permissions: vec![Permission::View, Permission::Triage],
-    };
+    let viewer = crate::testing::caller_of(
+        OperatorId::from_ulid(1),
+        &[Permission::View, Permission::Triage],
+    );
     let cx = cx();
     let state = crate::pages::topology::tests::fixture_state();
     let loaded = load(&cx, &viewer, id, &state)
@@ -178,10 +178,7 @@ async fn without_content_only_structure_shows() {
         kind_text(TransmissionStateKind::Aggregated)
     );
 
-    let nobody = Caller {
-        operator: OperatorId::from_ulid(1),
-        permissions: Vec::new(),
-    };
+    let nobody = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::Audit]);
     assert!(matches!(
         load(&cx, &nobody, id, &state).await,
         Err(QueryError::Forbidden { .. })

@@ -333,6 +333,7 @@ pub fn topology_view() -> TopologyView {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
+        nodes: Vec::new(),
         edges: edges(),
     };
     TopologyView::new(graph, agents(), watermark()).expect("every endpoint has a node")
@@ -343,6 +344,7 @@ pub fn empty_topology_view() -> TopologyView {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
+        nodes: Vec::new(),
         edges: Vec::new(),
     };
     TopologyView::new(graph, Vec::new(), watermark()).expect("no endpoints")

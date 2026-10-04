@@ -12,10 +12,14 @@ use topcoat::asset::{
 use topcoat::runtime::RouterBuilderRuntimeExt;
 use topcoat::view::{View, ViewExt};
 
-use crosstalk_spec::ids::{AgentId, ChannelId};
+use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
+use crosstalk_spec::interfaces::l8_surface::operators::{
+    AccessConfig, OperatorConfig, OperatorDirectory, OperatorName, RequestIdentity, TrustedOperator,
+};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PermissionSet};
 
 use crate::backend::fixture::{ChannelKey, FixtureBackend};
-use crate::config::TrustedOperator;
+use crate::config::Access;
 use crate::url::ulid::UlidId;
 
 /// The seed every harness backend is generated from.
@@ -28,11 +32,34 @@ pub struct Reply {
     pub body: String,
 }
 
-pub fn operator() -> TrustedOperator {
-    TrustedOperator {
-        id: crosstalk_spec::ids::OperatorId::from_raw(1),
-        name: "tester".to_owned(),
-    }
+pub fn operator() -> Access {
+    let name = OperatorName::new("tester").expect("name");
+    Access::trusted(TrustedOperator {
+        id: OperatorId::from_raw(1),
+        name,
+    })
+    .expect("trusted access")
+}
+
+/// A caller holding exactly `permissions` (at least one), as an
+/// authenticated directory gives it to operator 1.
+#[allow(dead_code)]
+pub fn caller_with(permissions: &[Permission]) -> Caller {
+    caller_of(OperatorId::from_raw(1), permissions)
+}
+
+/// A caller for `operator` holding exactly `permissions` (at least one).
+pub fn caller_of(operator: OperatorId, permissions: &[Permission]) -> Caller {
+    let config = OperatorConfig {
+        id: operator,
+        name: OperatorName::new("test operator").expect("name"),
+        permissions: PermissionSet::of(permissions.iter().copied()),
+    };
+    let (directory, _) = OperatorDirectory::load(None, &AccessConfig::Authenticated(vec![config]))
+        .expect("directory");
+    directory
+        .caller(RequestIdentity::Verified(operator))
+        .expect("caller")
 }
 
 pub fn router() -> Router {

@@ -46,17 +46,11 @@ pub const ALL: [Permission; 5] = [
 ];
 
 pub fn researcher() -> Caller {
-    Caller {
-        operator: OPERATOR_RESEARCHER,
-        permissions: ALL.to_vec(),
-    }
+    crate::testing::caller_of(OPERATOR_RESEARCHER, &ALL)
 }
 
 pub fn caller(permissions: &[Permission]) -> Caller {
-    Caller {
-        operator: OPERATOR_ONCALL,
-        permissions: permissions.to_vec(),
-    }
+    crate::testing::caller_of(OPERATOR_ONCALL, permissions)
 }
 
 pub fn window(start: crosstalk_spec::support::Timestamp) -> TimeWindow {

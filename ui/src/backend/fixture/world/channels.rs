@@ -8,7 +8,9 @@ use std::collections::HashMap;
 
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
-use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
+use crosstalk_spec::derived::flow::channel::{
+    Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed,
+};
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::{AgentId, ChannelId, ResourceId};
 use crosstalk_spec::support::Timestamp;
@@ -182,10 +184,12 @@ pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord
                     _ => DeclaredDetection::InUse(detection()?),
                 };
                 let origin = ChannelOrigin::Declared {
-                    pattern: pattern.clone(),
-                    by: *by,
-                    at: *at,
-                    detection,
+                    declaration: Declaration {
+                        pattern: pattern.clone(),
+                        by: *by,
+                        at: *at,
+                    },
+                    history: DeclaredHistory::BeforeTraffic(detection),
                 };
                 (origin, resource_ids, *at)
             }
@@ -197,8 +201,10 @@ pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord
                     .first()
                     .ok_or_else(|| GenError::Missing(format!("seed of {:?}", spec.key)))?;
                 let origin = ChannelOrigin::Discovered {
-                    seed,
-                    first_access,
+                    seed: Seed {
+                        resource: seed,
+                        first_access,
+                    },
                     detection: detection()?,
                 };
                 (origin, resource_ids[1..].to_vec(), first_at)
@@ -227,7 +233,7 @@ pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord
             let into = r.superseded?.into;
             let mut ids = Vec::new();
             if let ChannelOrigin::Discovered { seed, .. } = &r.channel.origin {
-                ids.push(*seed);
+                ids.push(seed.resource);
             }
             ids.extend(r.channel.resources.iter().copied());
             Some((into, ids))

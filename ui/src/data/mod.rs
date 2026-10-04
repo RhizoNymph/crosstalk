@@ -44,7 +44,7 @@ pub fn require(caller: &Caller, permission: Permission) -> topcoat::Result<()> {
     if can(caller, permission) {
         Ok(())
     } else {
-        tracing::info!(operator = ?caller.operator, missing = ?permission, "data route forbidden");
+        tracing::info!(operator = ?caller.operator(), missing = ?permission, "data route forbidden");
         Err(forbidden().into())
     }
 }
