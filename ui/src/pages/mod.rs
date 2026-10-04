@@ -6,6 +6,7 @@ pub mod audit;
 pub mod channels;
 pub mod common;
 pub mod explore;
+pub mod export;
 pub mod overview;
 pub mod pipeline;
 pub mod topics;
