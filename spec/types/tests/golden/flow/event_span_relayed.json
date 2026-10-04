@@ -1,0 +1,17 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "at": "2026-10-04T12:34:56.789012Z",
+  "event": {
+    "type": "detect",
+    "data": {
+      "type": "span_relayed",
+      "data": {
+        "span": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "source": {
+          "type": "span",
+          "data": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+        }
+      }
+    }
+  }
+}

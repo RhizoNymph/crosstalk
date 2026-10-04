@@ -31,15 +31,20 @@
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::MessageHash;
 use crate::observed::message::Message;
 use crate::observed::message::text::NoPartText;
 use crate::support::ByteRange;
+use crate::wire::{Rejected, WireRequest};
 
 /// How many bytes of context an excerpt shows on each side of the matched
-/// range: `0..=MAX_CONTEXT`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// range: `0..=MAX_CONTEXT`. A request: `{"context": 256}`, decoded through
+/// [`ExcerptWindow::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawExcerptWindow")]
 pub struct ExcerptWindow {
     context: u16,
 }
@@ -49,6 +54,24 @@ pub struct InvalidWindow {
     pub max: u16,
     pub got: u16,
 }
+
+/// [`ExcerptWindow`]'s field, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExcerptWindow {
+    context: u16,
+}
+
+impl TryFrom<RawExcerptWindow> for ExcerptWindow {
+    type Error = Rejected<InvalidWindow>;
+
+    fn try_from(raw: RawExcerptWindow) -> Result<Self, Self::Error> {
+        Self::new(raw.context).map_err(|error| Rejected::new("excerpt window", error))
+    }
+}
+
+/// A client picks how much context the evidence page shows.
+impl WireRequest for ExcerptWindow {}
 
 impl ExcerptWindow {
     pub const MAX_CONTEXT: u16 = 2048;
@@ -90,8 +113,15 @@ impl Default for ExcerptWindow {
 ///   UTF-8;
 /// - at most [`ExcerptWindow::MAX_CONTEXT`] bytes of context on each side,
 ///   and at most [`Excerpt::MAX_HIGHLIGHT`] bytes highlighted;
-/// - when the matched range was cut, the highlight ends the text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// - when the matched range was cut, the highlight ends the text;
+/// - the byte counts add up to a part: the matched range ends within
+///   `u32::MAX` bytes of the part's start (where a [`ByteRange`] can name
+///   it), and the part's length fits a `u64`.
+///
+/// On the wire, its fields, the highlight as `{"start": .., "end": ..}`
+/// (serde's form of a `Range`); decoding goes through [`Excerpt::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawExcerpt")]
 pub struct Excerpt {
     text: String,
     highlight: Range<u32>,
@@ -127,6 +157,36 @@ pub enum InvalidExcerpt {
     },
     /// The highlight was cut, but text follows it.
     ContextAfterCut,
+    /// The byte counts do not add up to a part: the matched range would
+    /// end past `u32::MAX` (`elided_before + highlight.end + highlight_cut`),
+    /// or the part's length overflows a `u64`.
+    CountsOverflow,
+}
+
+/// [`Excerpt`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExcerpt {
+    text: String,
+    highlight: Range<u32>,
+    elided_before: u64,
+    elided_after: u64,
+    highlight_cut: u64,
+}
+
+impl TryFrom<RawExcerpt> for Excerpt {
+    type Error = Rejected<InvalidExcerpt>;
+
+    fn try_from(raw: RawExcerpt) -> Result<Self, Self::Error> {
+        Self::new(
+            raw.text,
+            raw.highlight,
+            raw.elided_before,
+            raw.elided_after,
+            raw.highlight_cut,
+        )
+        .map_err(|error| Rejected::new("excerpt", error))
+    }
 }
 
 /// Why a range cannot be cut from a part's text: the stored location does
@@ -180,6 +240,15 @@ impl Excerpt {
         }
         if highlight_cut > 0 && end_at != len {
             return Err(InvalidExcerpt::ContextAfterCut);
+        }
+        let range_end = elided_before
+            .checked_add(u64::from(end))
+            .and_then(|at| at.checked_add(highlight_cut));
+        let part_len = range_end
+            .and_then(|at| at.checked_add(count(len - end_at)))
+            .and_then(|at| at.checked_add(elided_after));
+        if range_end.is_none_or(|at| at > u64::from(u32::MAX)) || part_len.is_none() {
+            return Err(InvalidExcerpt::CountsOverflow);
         }
         Ok(Self {
             text,
@@ -279,7 +348,13 @@ impl Excerpt {
 
 /// One side of a match on the evidence page: its excerpt, or why there is
 /// none to show.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Excerpted {
     Shown(Excerpt),
     /// The blob store no longer holds `message`'s body: content retention

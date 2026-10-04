@@ -10,14 +10,18 @@
 - The query surface the UI reads and acts through (L8) is its own feature:
   [query_surface.md](query_surface.md), with its read models in
   [read_models.md](read_models.md) and export in [export.md](export.md).
+- Serialization: the types are the JSON wire format between the gateway,
+  the operator UI and other gateway nodes, by the conventions of
+  `spec/types/wire/`, with a golden file per shape. Its own feature:
+  [wire_contract.md](wire_contract.md).
 
 ## Non-scope
 
 - Implementations of any trait.
-- Serialization formats, database schemas, wire encodings. Implementation
-  crates add serde and sqlx on their copies of these types. The one
-  exception is the projection frame, whose binary layout is part of the
-  type (`ProjectionFrame::encode` and `decode`); its HTTP framing is not.
+- Database schemas: implementation crates add sqlx. Binary encodings
+  other than the projection frame's layout, which is part of the type
+  (`ProjectionFrame::encode` and `decode`; its HTTP framing is not), and
+  the export digest's canonical row encoding ([export.md](export.md)).
 - Lifecycle simulation: `design/lifecycles/cascade.yaml`, outside the
   repository, models the same lifecycles for the stateviz simulator.
 
@@ -34,14 +38,14 @@ The types follow data through the stack:
    (`EndpointKind`): only `Generation` is captured. All of this reads only
    the request head, and the request is forwarded upstream as soon as it is
    routed. `decode_request` (gzip and zstd included) runs concurrently on a
-   tee of the body, off the hot path, and yields a `WireRequest`. When the
-   response head arrives, the adapter builds a `ResponseFramer` from the
-   `ResponseHead` (its content type gives the `ResponseFraming`: SSE or a
-   whole body) and its own protocol; a WebSocket connection gets a
-   `WebSocketTap` instead (one exchange per turn). `FrameEvent`s drive the
-   in-flight `ExchangeStage`. The `DecodedRequest` attaches to the exchange
-   when it is ready, and the finished exchange becomes a `RawExchange` on an
-   in-process channel. If decoding fails, the exchange was still forwarded
+   tee of the body, off the hot path, and yields a `HarnessRequest` (or a
+   `BodyDecodeError`). When the response head arrives, the adapter builds
+   a `ResponseFramer` from the `ResponseHead` (its content type gives the
+   `ResponseFraming`: SSE or a whole body) and its own protocol; a
+   WebSocket connection gets a `WebSocketTap` instead (one exchange per
+   turn). `FrameEvent`s drive the in-flight `ExchangeStage`. The
+   `DecodedRequest` attaches to the exchange when it is ready, and the
+   finished exchange becomes a `RawExchange` on an in-process channel. If decoding fails, the exchange was still forwarded
    and relayed, and is counted as uncaptured.
 2. **L1 canonicalization.** A `Normalizer` for the exchange's
    `WireProtocol`, handling its `Dialect`, turns a `RawExchange` into a
@@ -73,7 +77,9 @@ The types follow data through the stack:
    that record: the source returns to its prior state, each repointed agent
    that nothing moved since points at the source again (`Agent::restore`,
    which forgets the repoints after it), the record is marked reverted
-   (a second revert is refused), a `MergeVeto` between source and target is
+   (`MergeRecord::revert` refuses a second revert, a reversal dated before
+   the merge, and a `restored` list that is not a subsequence of the
+   record's `repointed`: `InvalidReversal`), a `MergeVeto` between source and target is
    recorded, and `AgentUnmerged` lists the restored agents. Records can be
    reverted in any order. The resolver refuses to merge clusters a veto
    separates; an operator merge between them clears those vetoes. Stored
@@ -266,16 +272,17 @@ The types follow data through the stack:
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run | crate `crosstalk-spec` |
+| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run; its only dependencies are `serde` and `serde_json`, pinned exactly (`spec/Cargo.lock` is committed) | crate `crosstalk-spec` |
+| `spec/types/wire/` | The JSON wire contract: conventions, `WireRequest`, `decode_request`, `Rejected`, timestamps' RFC 3339 text, the authority assertions ([wire_contract.md](wire_contract.md)) | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `time`, `authority` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
-| `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) |
-| `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `DisplayText` (checked), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share`, `Watermark` |
+| `spec/types/ids.rs` | Typed ids, and their wire text | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) and `from_ulid_text`, `InvalidUlidText` |
+| `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3` (`to_hex`, `from_hex`, `InvalidHex`), `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
 | `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
-| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
+| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`; `InvalidReversal`, `InvalidMergeRecord`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
 | `spec/types/observed/agent/claims.rs` | Harness claims seen per agent | `SeenClaim`, `ClaimSet` (checked; `observe`, `union`), `DuplicateClaim` |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
@@ -291,13 +298,14 @@ The types follow data through the stack:
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
 | `spec/types/aggregates/edge.rs` | Topology edges, their totals and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph` (with `nodes`), `EdgeTotals` (`of`), `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
-| `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
+| `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic` (term weights `Finite`), `TopicModelVersion` (a wire request), `TopicAssignment`, `Assignment` (neither on the wire) |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo` (`with_retention`), `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
-| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled` refusing a stale rule with `StaleRule`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
+| `spec/types/aggregates/alert/rules.rs` | Alert rules (re-exported from `aggregates::alert`) | `BuiltinRule`, `UserRule` (a wire request), `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked, decoded through `builtin` or `load`; `evaluates`, `set_enabled` refusing a stale rule with `StaleRule`, `update`, `remap`, `embedding_model_changed`), `InvalidRuleDef`, `AlertRuleSet`, `RuleStatus`, `RuleRevision` |
+| `spec/types/aggregates/alert/mod.rs` | Alerts | `AlertSubject`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
 | `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
-| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md) | — |
+| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -345,6 +353,10 @@ The types follow data through the stack:
   `MergeVeto` keeps the pair apart from the resolver, and one
   `AgentUnmerged` lists the restored agents. Reverting the latest record is
   the identity on the merge table and on every topology graph.
+- A record's reversal is dated no earlier than its merge and restores only
+  agents the merge repointed, in the record's order, each at most once
+  (`reconstruct.merge-record.reversal-within-merge`); decoding a stored
+  record checks the same, through `revert`.
 - Labels are display only: never identity evidence, untouched by merges
   and unmerges, and only an active agent can be renamed. An `AgentLabel` is
   trimmed, non-empty, at most 64 characters and free of control
@@ -476,5 +488,10 @@ The types follow data through the stack:
   never NaN or outside `0..=1`.
 - Bus delivery is at least once. Consumers are idempotent on the envelope id
   and on entity ids.
-- The spec has no dependencies; `cargo check` and `cargo test` on
-  `spec/Cargo.toml` must stay clean.
+- The spec's only dependencies are `serde` and `serde_json`, pinned
+  exactly to the UI's versions with the lockfile committed; `cargo check`
+  and `cargo test` on `spec/Cargo.toml` must stay clean. Every type that
+  crosses a process boundary follows the wire contract
+  ([wire_contract.md](wire_contract.md)): it round-trips, a checked type
+  decodes only through its constructor, decoding is strict, and a golden
+  file pins its JSON.

@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.export.jsonl-framing"
+statement = "read_jsonl accepts a body exactly when its first complete line is a header line, every later line up to an optional trailer line is a row line, and no line follows the trailer; a final fragment without a newline is dropped, so a body cut off at any byte reads as the lines before the cut with no trailer, which verify_export refuses."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A JSONL export is a stream of tagged lines (ExportLine: header, row,
+trailer), each compact JSON ended by a newline. Fixing the order and
+dropping a line the writer never finished makes every truncation look the
+same to a reader, a missing trailer, instead of a malformed body or, worse,
+a shorter export that looks complete. A second header or a line after the
+trailer is a framing error, never part of the export.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::surface_reads::export::a_complete_jsonl_export_golden",
+    "crosstalk_spec::tests::wire::surface_reads::export::a_cut_off_jsonl_export_has_no_trailer",
+    "crosstalk_spec::tests::wire::surface_reads::export::jsonl_framing_errors",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,21 @@
+{
+  "type": "create_rule",
+  "data": {
+    "name": "Deploy keys leaving the wiki",
+    "rule": {
+      "type": "watched_topic",
+      "data": {
+        "topics": {
+          "version": 4,
+          "topics": [
+            "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+          ]
+        },
+        "remap_threshold": 0.75
+      }
+    },
+    "sinks": [
+      "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    ]
+  }
+}

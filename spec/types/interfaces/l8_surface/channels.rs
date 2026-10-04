@@ -46,7 +46,9 @@
 //!
 //! [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::access::ResourceUse;
 use crate::aggregates::edge::TopologyGraph;
@@ -59,6 +61,7 @@ use crate::derived::flow::transmission::Route;
 use crate::ids::{ChannelId, OperatorId};
 use crate::interfaces::l5_flow::PromoteError;
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 use super::actions::SupersededChannels;
 use super::{ActionError, ConflictKind, QueryError};
@@ -72,7 +75,8 @@ use super::{ActionError, ConflictKind, QueryError};
 ///   channel's own supersession (`into` its superseding channel, `at` its
 ///   time);
 /// - a channel whose detection shows traffic is not listed as never active.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawChannelRow")]
 pub struct ChannelRow {
     channel: Channel,
     seed: Option<Resource>,
@@ -81,7 +85,13 @@ pub struct ChannelRow {
 
 /// Whether a channel is in force, with its activity, or superseded, with
 /// no activity of its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelStanding {
     InForce(ChannelActivity),
     Superseded(SupersededInto),
@@ -89,7 +99,13 @@ pub enum ChannelStanding {
 
 /// The activity of a channel in force: its own and that of every channel it
 /// superseded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelActivity {
     /// No access to any of its resources and no transmission routed
     /// through it, ever: a channel declared before traffic that has seen
@@ -106,7 +122,8 @@ pub enum ChannelActivity {
 }
 
 /// What a channel in force carried within a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelCounts {
     /// Distinct canonical agents that wrote any of its resources.
     pub writers: u64,
@@ -172,7 +189,13 @@ fn count(n: usize) -> u64 {
 /// Built only through [`SupersededInto::of`], which takes the operator from
 /// the superseding channel's declaration, so it cannot name anyone but the
 /// promoting operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A response, never a request: `by` and `at` are the promotion's stamps.
+/// Decoding cannot rerun [`SupersededInto::of`], which reads the
+/// superseding channel; `ChannelRow::new` checks `into` and `at` against
+/// the row's own channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SupersededInto {
     into: ChannelId,
     by: OperatorId,
@@ -250,6 +273,25 @@ pub enum InvalidChannelRow {
     TrafficWithoutActivity,
 }
 
+/// [`ChannelRow`]'s fields, decoded without the checks. Decoding goes
+/// through [`ChannelRow::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawChannelRow {
+    channel: Channel,
+    seed: Option<Resource>,
+    standing: ChannelStanding,
+}
+
+impl TryFrom<RawChannelRow> for ChannelRow {
+    type Error = Rejected<InvalidChannelRow>;
+
+    fn try_from(raw: RawChannelRow) -> Result<Self, Self::Error> {
+        Self::new(raw.channel, raw.seed, raw.standing)
+            .map_err(|error| Rejected::new("channel row", error))
+    }
+}
+
 impl ChannelRow {
     pub fn new(
         channel: Channel,
@@ -325,7 +367,13 @@ impl ChannelRow {
 }
 
 /// What a channel looks like where it is named.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelShape {
     /// A declared channel's pattern (declared before traffic, or promoted).
     Pattern(ResourcePattern),
@@ -337,8 +385,10 @@ pub enum ChannelShape {
 /// returns for each id it knows.
 ///
 /// Built only through [`ChannelName::of`], from a channel in force, so `id`
-/// is never superseded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// is never superseded. Decoding cannot rerun [`ChannelName::of`], which
+/// reads the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelName {
     id: ChannelId,
     shape: ChannelShape,
@@ -391,15 +441,16 @@ impl ChannelName {
 /// channels: for each id of the batch that the registry knows, keyed by
 /// that id, the [`ChannelName`] of the channel it resolves to
 /// (`Channel::canonical`, what `ChannelDirectory::canonical` returns).
-/// Unknown ids are left out. The batch holds each id once and at most
+/// Unknown ids are left out. The map is ordered by id, so it has one
+/// JSON encoding. The batch holds each id once and at most
 /// [`IdBatch::MAX`] of them, so no batch is refused here. A known id whose
 /// channel in force is missing or unnamable is a store fault.
 pub fn resolve_names(
     ids: &IdBatch<ChannelId>,
     registry: &[Registered<'_>],
-) -> Result<HashMap<ChannelId, ChannelName>, QueryError> {
+) -> Result<BTreeMap<ChannelId, ChannelName>, QueryError> {
     let entry = |id: ChannelId| registry.iter().find(|entry| entry.channel.id == id);
-    let mut names = HashMap::new();
+    let mut names = BTreeMap::new();
     for &id in ids.ids() {
         let Some(asked) = entry(id) else { continue };
         let in_force = asked.channel.canonical();
@@ -419,10 +470,54 @@ pub fn resolve_names(
 /// Built only through [`PromotionPreview::from_registry`], so it either
 /// carries the registry's [`PromotionCoverage`] or the conflict a promotion
 /// in the same state would be refused with, never both.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// On the wire, `{"type": "promotes", "data": <PromotionCoverage>}` or
+/// `{"type": "refused", "data": <ConflictKind>}`. A response, never a
+/// request. Decoding cannot rerun [`PromotionPreview::from_registry`], which
+/// takes the registry's answer, but it refuses a conflict that no refused
+/// promotion maps to ([`NotAPromotionConflict`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Outcome", into = "Outcome")]
 pub struct PromotionPreview(Outcome);
 
+/// A refused preview whose conflict is not one `PromoteChannel` is refused
+/// with: only `ChannelSuperseded`, `ChannelNotDiscovered` and
+/// `PatternOverlaps` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotAPromotionConflict(pub ConflictKind);
+
+impl TryFrom<Outcome> for PromotionPreview {
+    type Error = Rejected<NotAPromotionConflict>;
+
+    fn try_from(outcome: Outcome) -> Result<Self, Self::Error> {
+        match outcome {
+            Outcome::Refused(
+                ConflictKind::ChannelSuperseded { .. }
+                | ConflictKind::ChannelNotDiscovered { .. }
+                | ConflictKind::PatternOverlaps { .. },
+            )
+            | Outcome::Promotes(_) => Ok(Self(outcome)),
+            Outcome::Refused(other) => Err(Rejected::new(
+                "promotion preview",
+                NotAPromotionConflict(other),
+            )),
+        }
+    }
+}
+
+impl From<PromotionPreview> for Outcome {
+    fn from(preview: PromotionPreview) -> Self {
+        preview.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 enum Outcome {
     Promotes(PromotionCoverage),
     Refused(ConflictKind),

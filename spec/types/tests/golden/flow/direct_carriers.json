@@ -1,0 +1,12 @@
+[
+  {
+    "type": "user_turn"
+  },
+  {
+    "type": "system_prompt"
+  },
+  {
+    "type": "tool_result",
+    "data": "web_fetch"
+  }
+]

@@ -15,6 +15,7 @@ because only the merge table knows they are one.
 [evidence]
 unit = [
     "crosstalk_spec::tests::agent_reads::a_self_merge_is_invalid_input_before_act",
+    "crosstalk_spec::tests::wire::surface_actions::actions::stamping_a_self_merge_is_refused",
     "crosstalk::surface::tests::self_merge_never_reaches_act",
 ]
 

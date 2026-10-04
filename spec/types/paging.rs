@@ -44,12 +44,21 @@
 //! A valid cursor whose pinned topic-model version or embedding model is no
 //! longer available is not an invalid cursor: the next page fails with the
 //! typed reason (`VersionNotRetained`, `Conflict(EmbeddingModelChanged)`).
+//!
+//! On the wire ([`crate::wire`]) a [`PageSize`] is a number, a [`Cursor`]
+//! its token string (the list marker is not on the wire: the server's MAC
+//! binds the token to its list and request), a [`PageRequest`]
+//! `{"size": 50, "after": null}` and a [`Page`] `{"items": [..], "next":
+//! null}`. A page request is a [`WireRequest`].
 
 use std::fmt;
 use std::marker::PhantomData;
 use std::num::NonZeroU16;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::support::NonEmpty;
+use crate::wire::{Rejected, WireRequest, decode_text};
 
 macro_rules! list_marker {
     ($($(#[$doc:meta])* $name:ident;)*) => {$(
@@ -87,7 +96,8 @@ list_marker! {
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
 pub struct PageSize(NonZeroU16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +122,20 @@ impl PageSize {
 
     pub fn get(self) -> NonZeroU16 {
         self.0
+    }
+}
+
+impl TryFrom<u16> for PageSize {
+    type Error = Rejected<InvalidPageSize>;
+
+    fn try_from(size: u16) -> Result<Self, Self::Error> {
+        Self::new(size).map_err(|error| Rejected::new("page size", error))
+    }
+}
+
+impl From<PageSize> for u16 {
+    fn from(size: PageSize) -> Self {
+        size.0.get()
     }
 }
 
@@ -193,13 +217,37 @@ impl<L> PartialEq for Cursor<L> {
 
 impl<L> Eq for Cursor<L> {}
 
+// Manual impls: a derive would require `L: Serialize`, and the marker is not
+// part of the wire form.
+impl<L> Serialize for Cursor<L> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.token)
+    }
+}
+
+/// A token [`Cursor::from_token`] accepts. Whether the server issued it,
+/// for this list and request, is checked when the page is read
+/// (`QueryError::InvalidCursor`), not when it is decoded.
+impl<'de, L> Deserialize<'de> for Cursor<L> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "cursor token", Self::from_token)
+    }
+}
+
 /// One page of list `L`: the first page when `after` is `None`, otherwise
 /// the page after the cursor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    deny_unknown_fields,
+    bound(serialize = "", deserialize = "")
+)]
 pub struct PageRequest<L> {
     pub size: PageSize,
     pub after: Option<Cursor<L>>,
 }
+
+impl<L> WireRequest for PageRequest<L> {}
 
 /// One page of list `L`, in the list's order.
 ///
@@ -207,7 +255,16 @@ pub struct PageRequest<L> {
 /// the requested size, and a page with a next cursor is non-empty, so a
 /// client following cursors always makes progress. `next` is `None` exactly
 /// on the last page.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Decoding checks what a page knows about itself: at most
+/// [`PageSize::MAX`] items, and items whenever there is a next cursor
+/// ([`InvalidPage`]). The size it was requested with is not on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    try_from = "RawPage<T, L>",
+    bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>")
+)]
 pub struct Page<T, L> {
     items: Vec<T>,
     next: Option<Cursor<L>>,
@@ -217,6 +274,48 @@ pub struct Page<T, L> {
 pub struct PageOverflow {
     pub size: PageSize,
     pub got: usize,
+}
+
+/// Why a decoded page cannot be one the surface served.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidPage {
+    /// More items than the largest page.
+    TooManyItems { max: u16, got: usize },
+    /// A next cursor on an empty page: a client following it would make no
+    /// progress.
+    EmptyWithNext,
+}
+
+#[derive(Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    deny_unknown_fields,
+    bound(deserialize = "T: Deserialize<'de>")
+)]
+struct RawPage<T, L> {
+    items: Vec<T>,
+    next: Option<Cursor<L>>,
+}
+
+impl<T, L> TryFrom<RawPage<T, L>> for Page<T, L> {
+    type Error = Rejected<InvalidPage>;
+
+    fn try_from(raw: RawPage<T, L>) -> Result<Self, Self::Error> {
+        let rejected = |error| Rejected::new("page", error);
+        if raw.items.len() > usize::from(PageSize::MAX) {
+            return Err(rejected(InvalidPage::TooManyItems {
+                max: PageSize::MAX,
+                got: raw.items.len(),
+            }));
+        }
+        if raw.next.is_some() && raw.items.is_empty() {
+            return Err(rejected(InvalidPage::EmptyWithNext));
+        }
+        Ok(Self {
+            items: raw.items,
+            next: raw.next,
+        })
+    }
 }
 
 impl<T, L> Page<T, L> {

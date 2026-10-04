@@ -20,7 +20,8 @@ Overview:
     HTTP, SSE and WebSocket.
 
     Status: design. The data model is specified in spec/types; there is no
-    implementation yet.
+    implementation yet. The spec types are also the JSON wire format
+    between the gateway, the operator UI and other gateway nodes.
 
   subsystems:
     ingest: >
@@ -123,6 +124,16 @@ Overview:
     topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes and
     every export (refused, or started and then ended or abandoned).
+    Across process boundaries every value travels as the JSON of its spec
+    type (the wire contract): the UI's requests are decoded only as
+    WireRequest types (an action as an ActionRequest, which the surface
+    stamps with the Caller into an OperatorAction), with the Caller taken
+    from the verified session and never from the body, and authors and
+    acceptance times stamped by the surface; audit and export records keep
+    a CallerSnapshot of the caller, which never becomes a Caller again;
+    responses, errors, live-feed items and bus events between
+    nodes are decoded strictly, so a node that does not know a field or
+    variant refuses the delivery rather than dropping data.
 
 Features Index:
   type_spec:
@@ -133,7 +144,8 @@ Features Index:
       supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
-      bus events and per-layer interfaces, with tests for the invariants
+      bus events and per-layer interfaces (the types are also the JSON
+      wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
       in docs/research/harness-wire-protocols.md.
@@ -196,10 +208,53 @@ Features Index:
       reproduces it; transmission rows are the surface's transmission
       summaries and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
-      is audited.
+      is audited. In JSONL each line is a tagged header, row or trailer
+      (ExportLine, read_jsonl), so any truncation reads as a missing
+      trailer; Parquet keeps the header and trailer JSON in its footer.
     entry_points:
       - spec/types/interfaces/l8_surface/export/mod.rs
       - spec/types/interfaces/l8_surface/export/stream.rs
+      - spec/types/interfaces/l8_surface/export/framing.rs
     depends_on: [query_surface, read_models, type_spec]
     doc: docs/features/export.md
+  wire_contract:
+    description: >
+      The JSON wire format, which is the spec types themselves: snake_case
+      objects, adjacently tagged enums ({"type", "data"}) and all-unit
+      enums as strings, entity ids (and ConnectionId) as ULID text, digests
+      as lower-case hex, timestamps as RFC 3339 UTC at microsecond
+      precision, durations as whole microseconds in _micros fields, floats
+      only behind checked finite types, id-keyed maps as BTreeMaps in id
+      order; strict decoding (unknown fields and variants refused, three
+      documented leniencies that change no data); checked types decoded
+      only through their constructors; WireRequest and decode_request for
+      what a client may send (ActionRequest for actions, stamped with the
+      Caller into an OperatorAction), with Caller never serialized, audit
+      and export records keeping a CallerSnapshot, and server-stamped
+      records never requests; an undecodable request as
+      InvalidInput(MalformedRequest); the live feed's SSE framing; the
+      projection as ProjectionInfo JSON plus octet-stream frame bytes; an
+      export as JSONL lines; golden files pinning every shape of every
+      area (observed, provenance, flow, topology, agents, bus, analysis,
+      surface actions, surface reads), rewritten with CROSSTALK_BLESS=1.
+      One page for the conventions and harness, one per area under
+      docs/features/wire/.
+    entry_points:
+      - spec/types/wire/mod.rs
+      - spec/types/wire/time.rs
+      - spec/types/wire/duration.rs
+      - spec/types/wire/authority.rs
+      - spec/types/interfaces/l8_surface/actions/request.rs
+      - spec/types/interfaces/l8_surface/export/framing.rs
+      - spec/types/tests/wire/harness.rs
+      - spec/types/tests/golden/
+    depends_on: [type_spec, query_surface, read_models, export]
+    doc: docs/features/wire_contract.md
+    area_docs:
+      - docs/features/wire/observed.md
+      - docs/features/wire/flow.md
+      - docs/features/wire/topology.md
+      - docs/features/wire/analysis.md
+      - docs/features/wire/surface_actions.md
+      - docs/features/wire/surface_reads.md
 ```

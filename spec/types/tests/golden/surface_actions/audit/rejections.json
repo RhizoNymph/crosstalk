@@ -1,0 +1,26 @@
+[
+  {
+    "type": "not_found"
+  },
+  {
+    "type": "conflict",
+    "data": {
+      "type": "alert_not_active",
+      "data": {
+        "alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+      }
+    }
+  },
+  {
+    "type": "invalid_input",
+    "data": {
+      "type": "self_merge"
+    }
+  },
+  {
+    "type": "failed",
+    "data": {
+      "reason": "audit store unreachable"
+    }
+  }
+]

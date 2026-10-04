@@ -1,0 +1,20 @@
+[
+  {
+    "type": "account",
+    "data": {
+      "key": 2,
+      "digest": "9af211329b2fc82e5efe906062c730082819b23fe8394bc435e0b1bf0458eb54"
+    }
+  },
+  {
+    "type": "credential",
+    "data": {
+      "key": 2,
+      "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+    }
+  },
+  {
+    "type": "upstream",
+    "data": "vllm"
+  }
+]

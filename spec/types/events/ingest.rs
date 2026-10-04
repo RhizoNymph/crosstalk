@@ -1,11 +1,19 @@
 //! Events from capture (L1) and reconstruction (L3).
 
+use serde::{Deserialize, Serialize};
+
 use crate::events::Subject;
 use crate::ids::{AgentId, ConversationId, ExchangeId, MergeId, MessageHash, OperatorId};
 use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor};
 use crate::observed::exchange::Exchange;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum IngestEvent {
     /// A normalized exchange. Every message it references is already in the
     /// blob store when this is published.
@@ -59,7 +67,8 @@ impl IngestEvent {
 }
 
 /// The part of one exchange that is new to its conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ConversationDelta {
     pub exchange: ExchangeId,
     pub agent: AgentId,

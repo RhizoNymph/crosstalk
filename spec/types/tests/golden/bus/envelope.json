@@ -1,0 +1,11 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "at": "2026-10-04T12:34:56.789012Z",
+  "event": {
+    "type": "insight",
+    "data": {
+      "type": "watermark_advanced",
+      "data": "2026-10-04T12:30:00.000000Z"
+    }
+  }
+}

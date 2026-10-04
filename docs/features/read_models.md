@@ -31,6 +31,8 @@ is in [query_surface.md](query_surface.md).
   feed: [query_surface.md](query_surface.md).
 - Bulk export of transmissions and other datasets, which reuses the
   transmission row and the evidence's quotes: [export.md](export.md).
+- The JSON these rows and pages travel as, and which arguments are client
+  requests (`IdBatch`, the list filters): [wire_contract.md](wire_contract.md).
 
 ## Data and control flow
 
@@ -45,10 +47,10 @@ whose data comes from settled buckets are `Watermarked`.
 | --- | --- | --- | --- |
 | `agents(filter, window, page)` | View | `Watermarked<Page<AgentRow, AgentList>>` | from `EdgeStore::agent_traffic` |
 | `agent(id, window)` | View | `Option<Watermarked<AgentDetail>>` | from `EdgeStore::agent_traffic` |
-| `agent_names(ids)` | View | `HashMap<AgentId, AgentName>` | none (labels change only with `Changed::Agent`) |
+| `agent_names(ids)` | View | `BTreeMap<AgentId, AgentName>` | none (labels change only with `Changed::Agent`) |
 | `channels(filter, page)` | View | `Watermarked<Page<ChannelRow, ChannelList>>` | `EdgeStore::watermark`, read first |
 | `channel(id, window)` | View | `Option<Watermarked<ChannelRow>>` | `EdgeStore::watermark`, read first |
-| `channel_names(ids)` | View | `HashMap<ChannelId, ChannelName>` | none |
+| `channel_names(ids)` | View | `BTreeMap<ChannelId, ChannelName>` | none |
 | `promotion_preview(channel, pattern)` | View | `PromotionPreview` | none (all time, changes nothing) |
 | `transmissions_by_id(selection, version, page)` | View | `TransmissionPage` | none (current state, not buckets) |
 | `transmission_evidence(id, window)` | Content | `Option<TransmissionEvidence>` | none |
@@ -248,10 +250,12 @@ channel it superseded) splits its lookup. One cap and one counting rule
 `TooManyIds` from a name lookup always means the same bound.
 
 - `agent_names(ids: &IdBatch<AgentId>)` returns `AgentName { id, label }`
-  keyed by the id asked for: the canonical agent and its current label, so
+  keyed by the id asked for, in a `BTreeMap`, so the JSON object's keys
+  are in ascending id order and one answer has one encoding
+  (`surface.query.name-maps-ordered`): the canonical agent and its current label, so
   an alias is named by the agent it was merged into.
 - `channel_names(ids: &IdBatch<ChannelId>)` returns `ChannelName { id,
-  shape }` keyed by the id asked for: `id` is the channel in force
+  shape }` keyed by the id asked for, ordered the same way: `id` is the channel in force
   (`ChannelDirectory::canonical`) and `shape` is `ChannelShape::Pattern`
   (declared, before traffic or promoted) or `Seed(Locator)` (discovered).
   `channels::resolve_names` is the reference.
@@ -413,7 +417,10 @@ filter.
 `alert(id)` returns the `Alert` that `alerts` lists under `id` (its
 subject as raised; matching against channels and agents resolves it with
 `AlertSubject::resolved`), or `None`. Alert pages and audit links resolve
-through it. Alert ids are never aliased.
+through it. Alert ids are never aliased. On the wire it is the alert's
+JSON or `null` (`tests/golden/alerts/alert_found.json`,
+`alert_unknown.json`); the alert inbox is the wire contract's reference
+area ([wire_contract.md](wire_contract.md)).
 
 ## Files
 
@@ -427,13 +434,13 @@ through it. Alert ids are never aliased.
 | `spec/types/derived/flow/channel/promotion.rs` (part) | What a promotion would cover | `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/support.rs` (part) | A capped list with its exact total | `Capped` (checked: `new`, `first`, `hidden`, `is_complete`), `InvalidCapped` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
-| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
+| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`), `NotAPromotionConflict`. Wire: responses only; `ChannelRow` decodes through `new`, a `PromotionPreview` refuses a conflict no promotion is refused with, `SupersededInto` and `ChannelName` decode field by field ([wire/surface_reads.md](wire/surface_reads.md)) |
 | `spec/types/interfaces/l8_surface/lists.rs` (part) | The channel list filter | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`; re-exports `AgentFilter` and `AgentText` |
-| `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage` |
-| `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `EvidenceError`, `EvidenceRecord` |
-| `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked; `DEFAULT`, `MATCH_ONLY`), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError` |
+| `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage`. Wire: `TransmissionSelection` is a `WireRequest` (an array of ids, decoded through `new`); the rest are responses |
+| `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `InvalidTransmissionEvidence`, `EvidenceError`, `EvidenceRecord`. Wire: responses; `TransmissionEvidence` decodes through `assemble`, `AccessDetail` through `new`; the error types are not wire data |
+| `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked; `DEFAULT`, `MATCH_ONLY`), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError`. Wire: `ExcerptWindow` is a `WireRequest` (`{"context": 256}`); `Excerpt` decodes through `new` |
 | `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally`) |
-| `spec/types/tests/` | `agent_reads.rs` (profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings); `channel_reads.rs` (channel rows and counts, the channel filter, names, the preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs` (transmission rows, evidence, excerpts, part text, export content from evidence); `overview.rs` (totals, queues, and their agreement with channel rows) | — |
+| `spec/types/tests/` | `agent_reads.rs` (profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings); `channel_reads.rs` (channel rows and counts, the channel filter, names, the preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs` (transmission rows, evidence, excerpts, part text, export content from evidence); `overview.rs` (totals, queues, and their agreement with channel rows); `wire/surface_reads/` (the goldens and decode refusals of channel rows, names, previews, transmission rows, selections, evidence and excerpts) | — |
 
 ## Invariants and constraints
 
@@ -471,7 +478,9 @@ through it. Alert ids are never aliased.
   resource the channel and the channels it would supersede hold by the
   pattern, each once; each side shows at most `COVERAGE_CAP` (200) of its
   newest resources with its exact total (`Capped`), while superseded
-  channels are always complete. The preview changes nothing.
+  channels are always complete. The preview changes nothing. A refused
+  preview's conflict is `ChannelSuperseded`, `ChannelNotDiscovered` or
+  `PatternOverlaps`, the only ones a promotion is refused with.
 - `agent_names` and `channel_names` each take an `IdBatch` of at most
   1,000 distinct ids; they key each known id asked for to the name of what
   it resolves to (never a merged agent or a superseded channel) and leave
@@ -483,9 +492,12 @@ through it. Alert ids are never aliased.
   row per stored id, none for others, under one resolved version.
 - A `TransmissionEvidence` lists exactly its transmission's content matches
   and the distinct accesses its co-access records name, each with its own
-  resource. An `Excerpt` has a non-empty highlight inside its text on
+  resource; decoded evidence is reassembled from its transmission, so it
+  holds the same. An `Excerpt` has a non-empty highlight inside its text on
   character boundaries, at most 2,048 bytes of context per side and 8,192
-  highlighted, and accounts for every byte of the part. A body retention
+  highlighted, and accounts for every byte of the part, with counts that
+  place the matched range within `u32::MAX` bytes of the part's start and
+  sum without overflow. A body retention
   dropped is `BodyDropped`, never an error; a location that does not fit
   its body is an `ExcerptError`, never a panic.
 - A selection or an excerpt window the surface cannot build is

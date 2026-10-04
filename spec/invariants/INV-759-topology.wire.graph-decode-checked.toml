@@ -1,0 +1,25 @@
+[invariant]
+id = "topology.wire.graph-decode-checked"
+statement = "Decoding JSON into a TopologyGraph yields a value only when TopologyGraph::check passes: no self-edge, no (from, to, route) twice, every share its stat under the weighting over the total of that stat, and nodes as TopologyGraph::check_nodes requires; any other graph JSON is a decode error."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+TopologyGraph keeps public fields (code and tests build graphs that break
+one rule at a time), so unlike BipartiteGraph its rules are not enforced
+at construction. EdgeStore::graph promises them, and the UI and other
+nodes render and sum a graph from the response alone: a graph with a
+missing node, a repeated edge or shares that do not add up would draw
+wrongly without any error. Decoding through TopologyGraph::check means
+the JSON cannot carry a graph the server would never return, so the
+decoding side can rely on the same rules as the producing side.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::topology::graph::topology_graphs_refuse_what_check_refuses",
+    "crosstalk_spec::tests::wire::topology::graph::topology_graph_goldens",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

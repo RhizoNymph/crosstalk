@@ -43,6 +43,8 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{
     TopicVersionHistory, TopicVersionStatus, TopicVersionStatusKind,
@@ -126,14 +128,22 @@ impl RetentionPolicy {
 
 /// An operator's pin. The surface stamps `by` and `at` from the
 /// authenticated caller and the time it accepted the action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Pin {
     pub by: OperatorId,
     pub at: Timestamp,
 }
 
-/// Whether a version's data is still kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Whether a version's data is still kept. A response (inside
+/// `TopicVersionInfo`); never a request, since a pin is stamped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Retention {
     Retained {
         pin: Option<Pin>,

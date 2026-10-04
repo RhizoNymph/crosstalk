@@ -1,0 +1,26 @@
+[
+  {
+    "type": "applied"
+  },
+  {
+    "type": "unchanged"
+  },
+  {
+    "type": "rule_created",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+  },
+  {
+    "type": "channel_promoted",
+    "data": {
+      "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "superseded": [
+        "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      ]
+    }
+  },
+  {
+    "type": "merged",
+    "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  }
+]

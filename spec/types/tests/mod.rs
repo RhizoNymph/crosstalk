@@ -43,3 +43,4 @@ mod topic_history;
 mod topic_version;
 mod verdicts;
 mod watermark;
+mod wire;

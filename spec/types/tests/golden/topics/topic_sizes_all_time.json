@@ -1,0 +1,24 @@
+{
+  "watermark": "2026-10-04T11:00:00.000000Z",
+  "value": {
+    "version": 2,
+    "window": null,
+    "topics": [
+      {
+        "topic": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "stats": {
+          "transmissions": 14,
+          "matched_bytes": 5120
+        }
+      },
+      {
+        "topic": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "stats": null
+      }
+    ],
+    "outliers": {
+      "transmissions": 3,
+      "matched_bytes": 640
+    }
+  }
+}

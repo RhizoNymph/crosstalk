@@ -4,16 +4,20 @@
 
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::filter::TopologyFilter;
 use crate::ids::ProjectionId;
 use crate::interfaces::l8_surface::{ConflictKind, Permission};
 use crate::support::TimeWindow;
+use crate::wire::{Rejected, WireRequest};
 
 /// The window and the shared filter of a scoped dataset. The filter's
 /// [`TopicVersionSelector`](crate::aggregates::filter::TopicVersionSelector)
 /// is resolved once, when the export starts, and the header records the
 /// filter pinned to that version for the whole export.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExportScope {
     pub window: TimeWindow,
     pub filter: TopologyFilter,
@@ -27,7 +31,13 @@ pub struct ExportScope {
 /// discarded transmissions, which have no sender or topic for a
 /// [`TopologyFilter`] to test, so they are selected by window alone (by
 /// `Transmission::opened_at`, as `detection_quality` does).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportDataset {
     /// Confirmed transmissions whose `Confirmed::at` lies in the settled
     /// window and that the filter admits.
@@ -52,7 +62,8 @@ pub enum ExportDataset {
 
 /// Which dataset, without its selection. Rows and headers are checked
 /// against it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportDatasetKind {
     Transmissions,
     Edges,
@@ -137,7 +148,8 @@ impl ExportDataset {
 /// How rows are encoded on the wire. The logical rows, their order, the
 /// row count and the digest are the same in either
 /// ([`super::digest`]); only the bytes differ.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportFormat {
     /// One JSON object per line: the header first, then one per row, then
     /// the trailer.
@@ -151,8 +163,10 @@ pub enum ExportFormat {
 ///
 /// Built only through [`ExportRequest::new`], which refuses
 /// `include_content` for a dataset with no content columns, so a request
-/// never asks for columns that cannot be delivered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// never asks for columns that cannot be delivered. A request, decoded
+/// through it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawExportRequest")]
 pub struct ExportRequest {
     dataset: ExportDataset,
     format: ExportFormat,
@@ -164,6 +178,27 @@ pub enum InvalidExportRequest {
     /// `include_content` for accesses or verdicts.
     NoContentColumns { dataset: ExportDatasetKind },
 }
+
+/// [`ExportRequest`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExportRequest {
+    dataset: ExportDataset,
+    format: ExportFormat,
+    include_content: bool,
+}
+
+impl TryFrom<RawExportRequest> for ExportRequest {
+    type Error = Rejected<InvalidExportRequest>;
+
+    fn try_from(raw: RawExportRequest) -> Result<Self, Self::Error> {
+        Self::new(raw.dataset, raw.format, raw.include_content)
+            .map_err(|error| Rejected::new("export request", error))
+    }
+}
+
+/// A client chooses every field of an export request.
+impl WireRequest for ExportRequest {}
 
 impl ExportRequest {
     pub fn new(

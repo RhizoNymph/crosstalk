@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "id": "00000000000000000000000001",
+      "rule": {
+        "type": "builtin",
+        "data": "new_channel"
+      },
+      "status": "disabled",
+      "sinks": []
+    },
+    {
+      "id": "00000000000000000000000002",
+      "rule": {
+        "type": "builtin",
+        "data": "unreviewed_traffic"
+      },
+      "status": "enabled",
+      "sinks": [
+        "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      ]
+    }
+  ],
+  "next": "cnVsZXMtYWZ0ZXItMg"
+}

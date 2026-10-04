@@ -1,5 +1,7 @@
 //! Events from provenance (L4) and flow detection (L5).
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::access::Access;
 use crate::derived::flow::channel::Declaration;
 use crate::derived::flow::channel::policy::PolicyDecision;
@@ -14,7 +16,13 @@ use std::num::NonZeroU64;
 
 use crate::support::{NonEmpty, Timestamp};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DetectEvent {
     SpanOriginated {
         span: SpanId,

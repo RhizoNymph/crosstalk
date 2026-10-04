@@ -1,0 +1,48 @@
+{
+  "id": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+  "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "route": {
+    "type": "channel",
+    "data": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4"
+  },
+  "opened_at": "2026-10-04T12:00:30.250000Z",
+  "state": {
+    "type": "confirmed",
+    "data": {
+      "content": [
+        {
+          "origin": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+          "origin_agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "reader": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "reader_exchange": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+          "read_at": {
+            "part": {
+              "message": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+              "index": 2
+            },
+            "range": {
+              "start": 0,
+              "end": 512
+            }
+          },
+          "carrier": {
+            "type": "tool_result",
+            "data": "toolu_01wiki"
+          },
+          "kind": {
+            "type": "exact"
+          },
+          "matched_bytes": 384
+        }
+      ],
+      "co_access": [
+        {
+          "write": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "read": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "lag_micros": 30250000
+        }
+      ],
+      "at": "2026-10-04T12:00:30.250000Z"
+    }
+  }
+}

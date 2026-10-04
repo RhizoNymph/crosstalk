@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.wire.confirmed-sender-derived"
+statement = "A Confirmed's JSON carries no sender; decoding rebuilds it through Confirmed::new as the origin agent of its content, and refuses content with more than one origin agent or more than one reader."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The sender of a confirmed transmission is defined as the origin agent its
+content matches share. Writing it separately would let a decoded value name
+a sender its own content contradicts; leaving it out and deriving it on
+decode makes that unrepresentable, and a `from` key is an unknown field.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::transmission::Confirmed::new"
+unit = [
+    "crosstalk_spec::tests::wire::flow::transmissions::confirmed_golden_rebuilds_its_sender_on_decode",
+    "crosstalk_spec::tests::wire::flow::transmissions::confirmed_refuses_mixed_matches",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

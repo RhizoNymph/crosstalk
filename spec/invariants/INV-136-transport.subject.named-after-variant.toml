@@ -18,7 +18,7 @@ samples_cover_every_subject checks that together they are every Subject.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::events::subjects_name_their_variant", "crosstalk_spec::tests::events::each_variant_has_its_own_subject", "crosstalk_spec::tests::events::samples_cover_every_subject"]
+unit = ["crosstalk_spec::tests::events::subjects_name_their_variant", "crosstalk_spec::tests::events::each_variant_has_its_own_subject", "crosstalk_spec::tests::events::samples_cover_every_subject", "crosstalk_spec::tests::wire::bus::every_bus_event_golden"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

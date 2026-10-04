@@ -1,0 +1,40 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "grid": {
+      "window": {
+        "start": "2026-10-04T12:00:00.000000Z",
+        "end": "2026-10-04T13:00:00.000000Z"
+      },
+      "step": {
+        "bucket": 60000000,
+        "micros": 900000000
+      }
+    },
+    "weighting": "transmissions",
+    "topic_version": 3,
+    "groups": {
+      "type": "by_route_kind",
+      "data": [
+        {
+          "key": "channel",
+          "values": [
+            1,
+            0,
+            2,
+            0
+          ]
+        },
+        {
+          "key": "direct",
+          "values": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  }
+}

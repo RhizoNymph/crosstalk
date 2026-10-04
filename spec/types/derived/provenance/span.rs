@@ -11,12 +11,15 @@
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{AgentId, ExchangeId, MessageHash, SpanId};
 use crate::observed::message::PartRef;
 use crate::support::{ByteRange, Timestamp};
 
 /// Where a span's text sits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SpanLocation {
     pub part: PartRef,
     pub range: ByteRange,
@@ -48,7 +51,13 @@ pub enum Origin {
     Common,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum RelaySource {
     /// The copied text is itself an indexed span (another agent's, or this
     /// agent's from earlier).

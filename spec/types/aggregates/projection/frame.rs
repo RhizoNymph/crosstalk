@@ -65,7 +65,7 @@ use super::{InvalidProjectionLimit, ProjectedPoint, ProjectionLimit};
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ProjectionId, TopicId, TransmissionId};
-use crate::support::{Timestamp, Watermark};
+use crate::support::{Finite, Timestamp, Watermark};
 
 pub const MAGIC: [u8; 4] = *b"XTPF";
 pub const FORMAT: u16 = 1;
@@ -271,7 +271,7 @@ impl ProjectionFrame {
         for point in points {
             columns.transmissions.push(point.transmission);
             columns.confirmed_at.push(point.confirmed_at);
-            columns.xy.push([point.x, point.y]);
+            columns.xy.push([point.x.get(), point.y.get()]);
             columns
                 .sender
                 .push(senders.index(point.from, &mut tables.senders));
@@ -317,6 +317,7 @@ impl ProjectionFrame {
             index => Some(*self.tables.topics.get(usize::try_from(index).ok()?)?),
         };
         let route_index = usize::try_from(*columns.route.get(row)?).ok()?;
+        // Every coordinate of a frame is finite (`InvalidFrame::NonFinite`).
         let [x, y] = *columns.xy.get(row)?;
         Some(ProjectedPoint {
             transmission: *columns.transmissions.get(row)?,
@@ -325,8 +326,8 @@ impl ProjectionFrame {
             route: *self.tables.route_kinds.get(route_index)?,
             topic,
             confirmed_at: *columns.confirmed_at.get(row)?,
-            x,
-            y,
+            x: Finite::new(x).ok()?,
+            y: Finite::new(y).ok()?,
         })
     }
 

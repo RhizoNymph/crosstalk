@@ -17,6 +17,8 @@
 
 pub mod text;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::MessageHash;
 use crate::support::NonEmpty;
 
@@ -116,10 +118,12 @@ pub enum MediaKind {
 }
 
 /// The id a provider assigned to a tool call. Unique within one conversation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ToolCallId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ToolName(pub String);
 
 /// JSON text in canonical form: RFC 8785 (sorted keys, no insignificant
@@ -182,7 +186,8 @@ pub enum ToolOutcome {
 }
 
 /// Points at one part of one message, by position in its part list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PartRef {
     pub message: MessageHash,
     pub index: u16,

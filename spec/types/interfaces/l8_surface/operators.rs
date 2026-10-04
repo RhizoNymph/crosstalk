@@ -29,12 +29,16 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::ids::OperatorId;
 use crate::interfaces::l8_surface::audit::ConfigChange;
 use crate::interfaces::l8_surface::{Caller, PermissionSet};
+use crate::wire::decode_text;
 
 /// An operator's display name: trimmed, non-empty, at most
 /// [`OperatorName::MAX_CHARS`] characters, and free of control characters.
+/// On the wire, a string; decoding goes through [`OperatorName::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OperatorName(String);
 
@@ -71,16 +75,32 @@ impl OperatorName {
     }
 }
 
+/// A JSON string.
+impl Serialize for OperatorName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+/// A JSON string that [`OperatorName::new`] accepts, trimmed as it trims.
+impl<'de> Deserialize<'de> for OperatorName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "operator name", |text| Self::new(&text))
+    }
+}
+
 /// One directory entry, as `QueryApi::operators` returns it. A former
 /// operator has no permissions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Operator {
     pub id: OperatorId,
     pub name: OperatorName,
     pub permissions: PermissionSet,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccessMode {
     Trusted,
     Authenticated,

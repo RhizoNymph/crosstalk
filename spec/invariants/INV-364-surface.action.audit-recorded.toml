@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.audit-recorded"
-statement = "After an operator action returns Ok, the audit log holds an AuditEntry for it whose body is an OperatorRecord with the Caller, the action and AuditOutcome::Succeeded of the returned ActionOutcome, at the time the action was accepted."
+statement = "After an operator action returns Ok, the audit log holds an AuditEntry for it whose body is an OperatorRecord with a CallerSnapshot of the Caller, the action and AuditOutcome::Succeeded of the returned ActionOutcome, at the time the action was accepted."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

@@ -36,18 +36,22 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::RouteKind;
 use crate::derived::flow::transmission::{Confirmed, Transmission};
 use crate::derived::flow::verdict::{Judgeable, Verdict};
 use crate::derived::provenance::matching::MatchKind;
 use crate::support::TimeWindow;
+use crate::wire::Rejected;
 
 #[cfg(doc)]
 use crate::derived::flow::transmission::TransmissionState;
 
 /// A content match's kind without its parameters, ordered strongest first:
 /// the less the reader's text had to be transformed, the stronger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MatchClass {
     Exact,
     Normalized,
@@ -79,7 +83,13 @@ impl MatchClass {
 }
 
 /// The detector's call on a transmission, as a quality row sees it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum QualityMatch {
     /// Confirmed (or classified, or aggregated), by its strongest match.
     Content(MatchClass),
@@ -100,7 +110,8 @@ impl From<Judgeable<'_>> for QualityMatch {
 }
 
 /// The transmissions of one route kind and detector call, by current verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct QualityRow {
     pub route_kind: RouteKind,
     pub match_kind: QualityMatch,
@@ -121,7 +132,8 @@ impl QualityRow {
 /// Built only through [`DetectionQuality::new`] or
 /// [`DetectionQuality::tally`]: at most one row per (`route_kind`,
 /// `match_kind`), none all zero, ordered by route kind and then match kind.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawDetectionQuality")]
 pub struct DetectionQuality {
     window: TimeWindow,
     rows: Vec<QualityRow>,
@@ -137,6 +149,23 @@ pub enum InvalidQuality {
         route_kind: RouteKind,
         match_kind: QualityMatch,
     },
+}
+
+/// [`DetectionQuality`]'s fields, decoded without the checks. Decoding goes
+/// through [`DetectionQuality::new`], which orders the rows.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawDetectionQuality {
+    window: TimeWindow,
+    rows: Vec<QualityRow>,
+}
+
+impl TryFrom<RawDetectionQuality> for DetectionQuality {
+    type Error = Rejected<InvalidQuality>;
+
+    fn try_from(raw: RawDetectionQuality) -> Result<Self, Self::Error> {
+        Self::new(raw.window, raw.rows).map_err(|error| Rejected::new("detection quality", error))
+    }
 }
 
 fn route_order(kind: RouteKind) -> u8 {

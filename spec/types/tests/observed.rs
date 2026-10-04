@@ -76,7 +76,7 @@ fn merge_request_rejects_self_merge() {
 fn credential_stability_follows_scheme() {
     assert_eq!(CredentialScheme::ApiKey.stability(), Stability::Stable);
     assert_eq!(
-        CredentialScheme::OAuthAccessToken.stability(),
+        CredentialScheme::OauthAccessToken.stability(),
         Stability::Rotating
     );
     assert_eq!(

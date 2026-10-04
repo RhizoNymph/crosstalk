@@ -16,13 +16,14 @@ use crate::interfaces::l8_surface::audit::{
 };
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
 use crate::interfaces::l8_surface::{
-    ActionError, ActionKind, ActionOutcome, ConflictKind, InputError, OperatorAction, Permission,
-    PermissionSet, QueryError,
+    ActionError, ActionKind, ActionOutcome, CallerSnapshot, ConflictKind, InputError,
+    OperatorAction, Permission, PermissionSet, QueryError,
 };
 use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor, MergeRequest};
 use crate::support::{Blake3, NonEmpty, TimeWindow};
 use crate::tests::fixtures::{agent, at, channel, transmission};
 use crate::tests::operators::{caller, operator};
+use crate::wire::DecodeErrorKind;
 
 fn set_policy() -> OperatorAction {
     OperatorAction::SetPolicy {
@@ -191,7 +192,7 @@ fn forbidden_record_requires_missing_permission() {
             AuditOutcome::Forbidden { missing: required },
         )
         .expect("an auditor holds no action permission");
-        assert_eq!(record.caller(), &auditor);
+        assert_eq!(record.caller(), &CallerSnapshot::of(&auditor));
         assert_eq!(record.action(), &action);
         let other = if required == Permission::Govern {
             Permission::Triage
@@ -644,7 +645,8 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::SelfMerge
             | InputError::EmptySelection
             | InputError::ExcerptContextTooLong { .. }
-            | InputError::TooManyIds { .. } => input,
+            | InputError::TooManyIds { .. }
+            | InputError::MalformedRequest { .. } => input,
         }
     }
     [
@@ -665,6 +667,10 @@ fn every_input_error() -> Vec<InputError> {
         InputError::TooManyIds {
             max: 1000,
             got: 1001,
+        },
+        InputError::MalformedRequest {
+            kind: DecodeErrorKind::Data,
+            reason: "unknown field `stats`, expected `states` at line 1 column 8".into(),
         },
     ]
     .into_iter()

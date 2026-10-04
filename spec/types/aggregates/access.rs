@@ -27,7 +27,9 @@
 use std::collections::HashSet;
 use std::num::NonZeroU64;
 
-use crate::aggregates::edge::{WeightedEdge, Weighting};
+use serde::{Deserialize, Serialize};
+
+use crate::aggregates::edge::{TopologyGraph, WeightedEdge, Weighting, share_is, stat_total};
 use crate::aggregates::node::{GraphNode, InvalidNodes, check_nodes};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::access::AccessKind;
@@ -36,6 +38,7 @@ use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId};
 use crate::paging::{Page, ResourceUseList};
 use crate::support::{Share, TimeWindow};
+use crate::wire::Rejected;
 
 /// One bucket of the access table: how often `agent` read or wrote
 /// `channel` within `bucket`. A bucket exists only once an access has been
@@ -53,7 +56,8 @@ pub struct AccessEdge {
 
 /// One access edge of a channel-centred graph, over a canonical agent and a
 /// canonical channel.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WeightedAccess {
     pub agent: AgentId,
     pub channel: ChannelId,
@@ -66,7 +70,8 @@ pub struct WeightedAccess {
 }
 
 /// The fields of a [`BipartiteGraph`], before checking.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct BipartiteParts {
     pub window: TimeWindow,
     /// The weighting of `transmissions`' shares.
@@ -83,6 +88,9 @@ pub struct BipartiteParts {
 /// as nodes, access edges between them, and agent-to-agent transmission
 /// edges.
 ///
+/// On the wire, its [`BipartiteParts`], decoded through
+/// [`BipartiteGraph::new`].
+///
 /// Built only through [`BipartiteGraph::new`], which checks that:
 /// - no access edge (agent, channel, op) and no transmission edge (from, to,
 ///   route) appears twice, and no transmission edge is a self-edge;
@@ -93,7 +101,8 @@ pub struct BipartiteParts {
 ///   access agent, access channel, transmission endpoint and transmission
 ///   route channel, plus agent ancestors, with counts that agree with the
 ///   transmission edges.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "BipartiteParts", into = "BipartiteParts")]
 pub struct BipartiteGraph {
     parts: BipartiteParts,
 }
@@ -108,9 +117,24 @@ pub enum InvalidBipartite {
     Nodes(InvalidNodes),
 }
 
+impl TryFrom<BipartiteParts> for BipartiteGraph {
+    type Error = Rejected<InvalidBipartite>;
+
+    fn try_from(parts: BipartiteParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("bipartite graph", error))
+    }
+}
+
+impl From<BipartiteGraph> for BipartiteParts {
+    fn from(graph: BipartiteGraph) -> Self {
+        graph.into_parts()
+    }
+}
+
 impl BipartiteGraph {
-    /// How far a share may sit from its exact ratio (float error).
-    pub const SHARE_TOLERANCE: f64 = 1e-9;
+    /// How far a share may sit from its exact ratio (float error): the
+    /// same as the agent-centred graph's.
+    pub const SHARE_TOLERANCE: f64 = TopologyGraph::SHARE_TOLERANCE;
 
     pub fn new(parts: BipartiteParts) -> Result<Self, InvalidBipartite> {
         let mut edges = HashSet::new();
@@ -128,21 +152,21 @@ impl BipartiteGraph {
                 return Err(InvalidBipartite::DuplicateAccess { index });
             }
         }
-        let access_total = total(parts.accesses.iter().map(|access| access.accesses));
+        let access_total = stat_total(parts.accesses.iter().map(|access| access.accesses));
         for (index, access) in parts.accesses.iter().enumerate() {
             if !share_is(access.share, access.accesses, access_total) {
                 return Err(InvalidBipartite::AccessShare { index });
             }
         }
         let weighting = parts.weighting;
-        let stat_total = total(
+        let transmission_total = stat_total(
             parts
                 .transmissions
                 .iter()
                 .map(|edge| weighting.stat(edge.stats)),
         );
         for (index, edge) in parts.transmissions.iter().enumerate() {
-            if !share_is(edge.share, weighting.stat(edge.stats), stat_total) {
+            if !share_is(edge.share, weighting.stat(edge.stats), transmission_total) {
                 return Err(InvalidBipartite::TransmissionShare { index });
             }
         }
@@ -195,20 +219,9 @@ impl BipartiteGraph {
     }
 }
 
-fn total(values: impl Iterator<Item = NonZeroU64>) -> u64 {
-    values.fold(0, |sum, value| sum.saturating_add(value.get()))
-}
-
-/// Whether `share` is `value / total`. Precision loss in the casts is
-/// within the tolerance for any realistic count.
-#[allow(clippy::cast_precision_loss)]
-fn share_is(share: Share, value: NonZeroU64, total: u64) -> bool {
-    let exact = value.get() as f64 / total as f64;
-    (share.get() - exact).abs() <= BipartiteGraph::SHARE_TOLERANCE
-}
-
 /// How often one canonical agent read or wrote a resource in a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentAccesses {
     pub agent: AgentId,
     pub accesses: NonZeroU64,
@@ -220,7 +233,8 @@ pub struct AgentAccesses {
 /// no agent twice among the writers or among the readers, each list ordered
 /// by accesses descending, ties by agent id. Agents are canonical, with the
 /// accesses of merged aliases summed into them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawResourceUse")]
 pub struct ResourceUse {
     resource: Resource,
     writers: Vec<AgentAccesses>,
@@ -234,6 +248,25 @@ pub enum InvalidResourceUse {
     Unused,
     DuplicateWriter(AgentId),
     DuplicateReader(AgentId),
+}
+
+/// [`ResourceUse`]'s fields, decoded without the checks. Decoding goes
+/// through [`ResourceUse::new`], which orders the writers and readers.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawResourceUse {
+    resource: Resource,
+    writers: Vec<AgentAccesses>,
+    readers: Vec<AgentAccesses>,
+}
+
+impl TryFrom<RawResourceUse> for ResourceUse {
+    type Error = Rejected<InvalidResourceUse>;
+
+    fn try_from(raw: RawResourceUse) -> Result<Self, Self::Error> {
+        Self::new(raw.resource, raw.writers, raw.readers)
+            .map_err(|error| Rejected::new("resource use", error))
+    }
 }
 
 impl ResourceUse {
@@ -294,7 +327,8 @@ fn repeated(entries: &[AgentAccesses]) -> Option<AgentId> {
 /// superseded channel answers for the channel that superseded it, whose
 /// resources include the superseded channels' resources. A resource is
 /// listed when it was accessed within `window` (by `Access::at`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ResourceUsePage {
     pub channel: ChannelId,
     pub window: TimeWindow,

@@ -6,7 +6,7 @@ use crate::aggregates::projection::frame::{
 use crate::aggregates::projection::{InvalidProjectionLimit, ProjectedPoint, ProjectionLimit};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{ProjectionId, TopicId};
-use crate::support::Watermark;
+use crate::support::{Finite, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 
 fn header(limit: u32, matching: u64) -> FrameHeader {
@@ -38,8 +38,8 @@ fn point(
         route,
         topic,
         confirmed_at: at(u64::try_from(n).unwrap_or(0) * 10),
-        x: coordinate,
-        y: -coordinate / 2.0,
+        x: Finite::new(coordinate).expect("a small integer is finite"),
+        y: Finite::new(-coordinate / 2.0).expect("a small integer is finite"),
     }
 }
 

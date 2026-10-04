@@ -2,11 +2,15 @@
 
 The data model of the gateway, written as Rust so it type-checks. The crate
 in `spec/Cargo.toml` builds these modules as a library and runs their tests;
-it is not part of the gateway's build.
+it is not part of the gateway's build. The types are also the JSON wire
+format between the gateway, the operator UI and other gateway nodes
+(`wire/`, and `docs/features/wire_contract.md` with its area pages under `docs/features/wire/`).
 
 ```sh
 cargo check --manifest-path spec/Cargo.toml
 cargo test  --manifest-path spec/Cargo.toml
+# after an intended change to a type's JSON: rewrite its golden files, then review the diff
+CROSSTALK_BLESS=1 cargo test --manifest-path spec/Cargo.toml wire
 ```
 
 ## Layout
@@ -15,66 +19,73 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000), TooManyIds: the one id batch of every name lookup (agents, channels)
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text), BLAKE3 content ids (incl. ConfigHash)
-├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
+├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests), BLAKE3 content ids (incl. ConfigHash), secret digests
+├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow (a WireRequest), ByteRange, Blake3 (hex), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
+├── wire/                  the JSON wire contract: conventions, requests and authority
+│   ├── mod.rs             conventions, WireRequest, decode_request, DecodeError, DecodeErrorKind, Rejected (checked constructors' refusals as decode errors)
+│   ├── time.rs            Timestamp as RFC 3339 UTC at microsecond precision (rfc3339, parse_rfc3339), InvalidTimestamp, TooLateForText, MAX
+│   ├── duration.rs        Duration as whole microseconds in a `<what>_micros` field (serde `with` module; micros, UnfitDuration)
+│   └── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
 ├── observed/              facts from the wire
-│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
-│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
+│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
+│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store)
 │   ├── message/
 │   │   └── text.rs        Message::part_text (what a span location indexes), part_count, NoPartText, TOOL_RESULT_SEPARATOR
-│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
-│   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest
+│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ConnectionId (ULID text on the wire), ExchangeStage (in memory, no serde)
+│   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest (checked, stamped: never a WireRequest)
 │   ├── agent/
-│   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases)
-│   │   └── merge.rs       MergeRecord (checked), MergedInto, Reversal, MergeVeto (checked), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
+│   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases; decoding orders the entries and refuses a repeated claim)
+│   │   └── merge.rs       MergeRecord (checked; revert refuses a reversal before the merge or restoring an agent it did not repoint, InvalidReversal; decodes through new and revert, InvalidMergeRecord), MergedInto, Reversal, MergeVeto (checked; decoding orders the pair), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
-│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan
+│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan; on the wire only SpanLocation, RelaySource
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
-│   │   └── matching.rs    ContentMatch, MatchKind, Codec, Carrier
+│   │   └── matching.rs    ContentMatch (checked, also when decoded), MatchKind, Codec, Carrier
 │   └── flow/
-│       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps)
+│       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps; a WireRequest)
 │       ├── access.rs      Access, AccessOp, Extraction
-│       ├── evidence.rs    Evidence, CoAccess (checked)
-│       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
-│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed
-│       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
+│       ├── evidence.rs    Evidence, CoAccess (checked; `lag_micros` on the wire, decode checks two accesses and a positive lag)
+│       ├── timing.rs      CorrelationTiming (checked; config, not wire data): evidence window, suspected TTL, settle_after
+│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed (no sender on the wire; rebuilt on decode)
+│       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked; never a request), VerdictLog (from_records, InvalidVerdictLog; records carry revisions on the wire; never a request), CurrentVerdict
 │       └── channel/
-│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
-│           ├── promotion.rs Promotion (checked), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples), COVERAGE_CAP
+│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration (never a request), DeclaredHistory, Seed
+│           ├── promotion.rs Promotion (checked; never serialized), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples; decode checks InvalidCoverage), COVERAGE_CAP
 │           ├── detection.rs DeclaredDetection, TrafficDetection (a superseded channel's is frozen), DetectionKind
-│           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
+│           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked; never a request), TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── access.rs          AccessEdge (not wire), WeightedAccess, BipartiteGraph (checked; wire form BipartiteParts), ResourceUse (checked), ResourceUsePage
 │   ├── agents/
-│   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details
-│   │   └── filter.rs      AgentFilter (matches, text_matches), AgentText
-│   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
-│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTotals (of), EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
+│   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details (responses)
+│   │   └── filter.rs      AgentFilter (a WireRequest; matches, text_matches), AgentText
+│   ├── alert/
+│   │   ├── mod.rs         AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision, SuppressReason; re-exports every rule type
+│   │   └── rules.rs       BuiltinRule, UserRule (a WireRequest), RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked, decoded through builtin or load; set_enabled refuses a stale rule: StaleRule), AlertRuleSet (not serialized), RuleRevision
+│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked; a WireRequest), Weighting (a WireRequest), TopicSlot, EdgeStats, TopologyGraph (with nodes; check, decoded through it), EdgeTotals (of), EdgeTransmissionPage
+│   ├── filter.rs          TopologyFilter (shared by every linked view; a WireRequest): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve; a WireRequest), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
-│   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
-│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
+│   │   ├── mod.rs         ProjectionParams (checked; a WireRequest), ProjectionSpec (decoded pinned), ProjectionInfo (checked, transitions), Fitted, FitFailure, ProjectedPoint (Finite coordinates), Projection (checked; not serialized: its info is JSON, its frame binary)
+│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode; served as application/octet-stream, no serde)
 │   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
-│   ├── retention.rs       RetentionPolicy (checked, to_drop), Pin, Retention, pin/unpin/mark_dropped on TopicVersionHistory
-│   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
-│   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
-│   └── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
+│   ├── retention.rs       RetentionPolicy (checked, to_drop; config, not serialized), Pin (stamped), Retention, pin/unpin/mark_dropped on TopicVersionHistory
+│   ├── series.rs          BucketWidth, SeriesStep (checked), SeriesGrid (checked; a WireRequest), SeriesGrouping (a WireRequest), TopologySeries (checked), SeriesGroups
+│   ├── topic.rs           Embedding (checked), EmbeddingModel, TopicModelVersion (a WireRequest), Topic (Finite term weights), TopicAssignment (not serialized)
+│   ├── topic_history.rs   TopicVersionHistory (on the wire without its active index), TopicVersionInfo (checked, with retention), TopicSizes (checked), TopicLineage (checked, remap); responses
+│   └── watermark.rs       PipelineFrontier (not wire), Watermark::settled, Watermarked
 ├── events/                what crosses the bus
-│   ├── mod.rs             Envelope, BusEvent, Subject
+│   ├── mod.rs             Envelope, BusEvent (never requests: the node stamps them), Subject (a string, the event tag)
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
-│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
-│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
-│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
+│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed (bus payloads; a golden per variant inside an Envelope)
+│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet); bus payloads inside an Envelope, never requests
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged; golden inside a full Envelope each
 ├── interfaces/            one module per layer: traits and their errors
-│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
+│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
-│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
+│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
 │   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
@@ -82,34 +93,38 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter; re-exports the action, error, permission and sink types
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore; SearchHit and SearchResults are its only wire types
+│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic as a BTreeMap, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export; agent_names and channel_names as BTreeMaps in id order), OperatorActions (act on a stamped ActionRequest), AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/
-│       ├── permissions.rs Caller (built only by the directory), Permission, PermissionSet
-│       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
-│       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
-│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds)
-│       ├── query_errors.rs the From impls: each store error and refused request value to one QueryError or ActionError
-│       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
-│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
-│       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
-│       ├── evidence.rs    TransmissionEvidence (assemble), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, EvidenceError
-│       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
+│       ├── permissions.rs Caller (built only by the directory; never serialized), CallerSnapshot (checked; an audit record's plain copy of a caller, never a WireRequest), Permission, PermissionSet (an array in Permission::ALL order)
+│       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName (checked text); the directory and config never serialized
+│       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects; stamped, never a WireRequest), ActionKind, ActionOutcome (subjects), SupersededChannels
+│       ├── actions/request.rs ActionRequest (a WireRequest: one variant per action, no author; into_action stamps the caller, of, kind)
+│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, MalformedRequest); adjacently tagged on the wire
+│       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError
+│       ├── lists.rs       ChannelFilter (a WireRequest, with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter (a WireRequest), SearchRequest (a WireRequest), TopicPage
+│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry; decode refuses a non-promotion conflict); responses only
+│       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked; a WireRequest), TransmissionPage
+│       ├── evidence.rs    TransmissionEvidence (assemble; decoded through it), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, InvalidTransmissionEvidence, EvidenceError
+│       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY; a WireRequest), Excerpt (checked: boundaries, bounds, counts that fit a part; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
 │       ├── overview.rs    OverviewCounts, QueueCounts (tally)
-│       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
-│       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
-│       ├── sinks.rs       AlertSink, SinkInfo, SinkKind, SinkError
+│       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveItem (event_name: the SSE event; its cursor is the SSE id), LiveCursor (its text on the wire), LiveEnd (EVENT_NAME), FeedWindow (checked), LiveConfig (checked; neither serialized)
+│       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome, ConfigChange, AuditSubject, AuditFilter (a WireRequest)
+│       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError
 │       └── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │           ├── mod.rs     module docs and re-exports
-│           ├── request.rs ExportRequest (checked; required_permission), ExportDataset, ExportScope, ExportFormat, ExportLimits
-│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence), RowKey (row order), projection_rows, verdict_rows
-│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer, ExportEnd, ExportFailure
+│           ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportLimits
+│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows
+│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
+│           ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
 │           ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
 │           ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
 │           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
-│           └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
+│           └── record.rs  ExportRecord (checked; keeps a CallerSnapshot), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
+    ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area
+    └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
 
 ## Conventions
@@ -146,8 +161,22 @@ spec/types/
   unknown until content evidence arrives, so it lives in `Confirmed`.
 - **Ids never cross types.** Entity ids are ULIDs and content ids are BLAKE3
   digests, each its own newtype.
-- **No dependencies.** Error enums are plain; implementations derive
-  `thiserror::Error`, and serde and sqlx derives, on their copies.
+- **The types are the wire format.** The only dependencies are `serde`
+  and `serde_json`, pinned exactly (the UI's pins; `spec/Cargo.lock` is
+  committed). Structs are objects with snake_case keys; enums with data
+  are adjacently tagged (`{"type": "snake_case", "data": ..}`) and
+  all-unit enums are snake_case strings; entity ids are ULID text, digests
+  lower-case hex, timestamps RFC 3339 UTC at microsecond precision,
+  durations whole microseconds in `_micros` fields; floats are always
+  behind a checked finite type and id-keyed maps are `BTreeMap`s.
+  Decoding is strict (`deny_unknown_fields`) and a checked type decodes
+  only through its constructor (a private raw mirror and `TryFrom`, with
+  `wire::Rejected` as the error). What a client may send is a
+  `wire::WireRequest`; a `Caller` never serializes and nothing the server
+  stamps is a request. A golden file in `tests/golden/` pins every shape.
+  See `wire/mod.rs` and `docs/features/wire_contract.md`.
+- **Error enums are plain.** Implementations derive `thiserror::Error` on
+  their copies; serde's `Display` requirement is met by `wire::Rejected`.
 
 ## Harnesses, upstreams and credentials
 

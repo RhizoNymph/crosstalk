@@ -24,6 +24,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::{TopologyGraph, WeightedEdge};
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::derived::flow::channel::policy::PolicyKind;
@@ -32,7 +34,13 @@ use crate::ids::{AgentId, ChannelId};
 use crate::observed::agent::{AgentLabel, AgentState, ClaimSet};
 use crate::support::NonBlank;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum GraphNode {
     Agent(AgentNode),
     /// Only in the channel-centred view.
@@ -56,7 +64,8 @@ impl GraphNode {
 }
 
 /// A canonical agent as a graph draws it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentNode {
     pub id: AgentId,
     /// The canonical agent's current operator-set display label
@@ -80,7 +89,8 @@ pub struct AgentNode {
 }
 
 /// A canonical channel as the channel-centred view draws it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelNode {
     pub id: ChannelId,
     /// An operator display label. Channels carry none yet, so this is `None`
@@ -96,7 +106,8 @@ pub struct ChannelNode {
 }
 
 /// An agent state a canonical agent can be in: every state but `Merged`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CanonicalStateKind {
     Registered,
     Provisional,
@@ -117,7 +128,8 @@ impl CanonicalStateKind {
 
 /// A channel origin a canonical channel can have: every origin but
 /// superseded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CanonicalOriginKind {
     /// Declared in config or by an operator before any traffic.
     DeclaredBeforeTraffic,

@@ -40,6 +40,9 @@
 //!   `Conflict(ExportTooLarge)`, from `ExportLimits::check` (not a store
 //!   error). A failure after an export has started is not a `QueryError`:
 //!   the stream's trailer records it (`ExportFailure`).
+//! - Client input the HTTP layer cannot decode as the route's request type
+//!   (`crate::wire::DecodeError`) is `InvalidInput(MalformedRequest)`, for
+//!   a query and for an action alike.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
@@ -61,6 +64,7 @@ use crate::interfaces::l8_surface::export::ExportPlanError;
 use crate::interfaces::l8_surface::summary::InvalidSelection;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
+use crate::wire::DecodeError;
 
 impl From<VersionUnavailable> for QueryError {
     fn from(error: VersionUnavailable) -> Self {
@@ -430,5 +434,24 @@ impl From<InvalidWindow> for QueryError {
             max: error.max,
             got: error.got,
         })
+    }
+}
+
+impl From<DecodeError> for QueryError {
+    fn from(error: DecodeError) -> Self {
+        Self::InvalidInput(malformed(error))
+    }
+}
+
+impl From<DecodeError> for ActionError {
+    fn from(error: DecodeError) -> Self {
+        Self::InvalidInput(malformed(error))
+    }
+}
+
+fn malformed(error: DecodeError) -> InputError {
+    InputError::MalformedRequest {
+        kind: error.kind,
+        reason: error.reason,
     }
 }

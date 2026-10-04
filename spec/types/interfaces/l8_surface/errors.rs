@@ -4,6 +4,12 @@
 //! [`ActionError`], a strict subset of [`QueryError`] (`From` converts it
 //! unchanged); how each store's error becomes one or the other is defined
 //! once, in [`super::query_errors`].
+//!
+//! All four enums are responses, adjacently tagged on the wire
+//! ([`crate::wire`]): `{"type": "not_found"}`,
+//! `{"type": "conflict", "data": {"type": "rule_stale", "data": {"rule": ..}}}`.
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
 use crate::aggregates::topic::TopicModelVersion;
@@ -12,10 +18,18 @@ use crate::ids::{
     TransmissionId,
 };
 
+use crate::wire::DecodeErrorKind;
+
 use super::Permission;
 
 /// Why a query failed. Every variant is something the UI can act on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum QueryError {
     /// A store or bus failure; retrying may succeed.
     Store {
@@ -48,7 +62,13 @@ pub enum QueryError {
 /// version's buckets, so those variants cannot be returned (or recorded in
 /// the audit log) for one. Pinning a dropped version is
 /// `Conflict(TopicVersionDropped)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ActionError {
     Store { reason: String },
     NotFound,
@@ -58,7 +78,13 @@ pub enum ActionError {
 }
 
 /// A request that is valid on its own but not in the current state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ConflictKind {
     /// Acknowledging or resolving an alert that is no longer active.
     AlertNotActive { alert: AlertId },
@@ -133,7 +159,13 @@ pub enum ConflictKind {
 }
 
 /// A request that is invalid whatever the state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum InputError {
     /// A window that does not start and end on bucket boundaries.
     UnalignedWindow,
@@ -163,6 +195,17 @@ pub enum InputError {
     /// transmission selection over `TransmissionSelection::MAX`. `max` is
     /// the bound that applied and `got` the distinct ids asked for.
     TooManyIds { max: usize, got: usize },
+    /// Client input the HTTP layer could not decode as the route's request
+    /// type (`crate::wire::decode_request`): not JSON, cut short, or JSON of
+    /// the wrong shape, including an unknown field or variant and a value a
+    /// checked constructor refuses. `reason` is the decoder's description,
+    /// with the line and column. Such a request never reaches a store, and
+    /// an action request that fails to decode never becomes an action, so
+    /// it is not audited.
+    MalformedRequest {
+        kind: DecodeErrorKind,
+        reason: String,
+    },
 }
 
 impl From<ActionError> for QueryError {

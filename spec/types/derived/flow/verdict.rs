@@ -36,13 +36,17 @@
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::{Confirmed, Transmission, TransmissionState};
 use crate::ids::{OperatorId, TransmissionId};
 use crate::support::{NonEmpty, Timestamp};
+use crate::wire::Rejected;
 
 /// What an operator judged a transmission to be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// A real agent-to-agent communication.
     Genuine,
@@ -83,8 +87,9 @@ impl TransmissionState {
 }
 
 /// The position of a record in its transmission's [`VerdictLog`]: 1 for the
-/// first record, one more for each after it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// first record, one more for each after it. On the wire, the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct VerdictRevision(NonZeroU32);
 
 impl VerdictRevision {
@@ -111,7 +116,12 @@ impl VerdictRevision {
 /// transmission and rejects one in a state that takes no verdict. The
 /// surface stamps `by` and `at` from the authenticated caller and the time
 /// it accepted the action; callers supply only the verdict and the note.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A response, never a request. Decoding cannot rerun
+/// [`TransmissionVerdict::new`]: its check reads the transmission's state,
+/// which the record names only by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionVerdict {
     transmission: TransmissionId,
     verdict: Option<Verdict>,
@@ -182,10 +192,84 @@ pub enum InvalidVerdictRecord {
 /// Every verdict record of one transmission, in append order. The record at
 /// index `i` has revision `i + 1`, so revisions are consecutive by
 /// construction, and the last record is the current verdict.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// On the wire, `{"transmission": .., "records": [{"revision": 1, "record":
+/// {..}}, ..]}`: each record with its revision, so a reader can line the log
+/// up with the `VerdictSet` events and `VerdictRow`s that carry the same
+/// numbers. Decoding goes through [`VerdictLog::from_records`], so a decoded
+/// log is one [`VerdictLog::record`] could have built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    try_from = "RawVerdictLog",
+    into = "RawVerdictLog"
+)]
 pub struct VerdictLog {
     transmission: TransmissionId,
     records: Vec<TransmissionVerdict>,
+}
+
+/// [`VerdictLog`]'s wire form: its records, each with its revision.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawVerdictLog {
+    transmission: TransmissionId,
+    records: Vec<RawLoggedVerdict>,
+}
+
+/// One record of a [`VerdictLog`] on the wire, with its revision.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawLoggedVerdict {
+    revision: VerdictRevision,
+    record: TransmissionVerdict,
+}
+
+impl From<VerdictLog> for RawVerdictLog {
+    fn from(log: VerdictLog) -> Self {
+        let revisions = std::iter::successors(Some(VerdictRevision::FIRST), |r| r.next());
+        Self {
+            transmission: log.transmission,
+            records: revisions
+                .zip(log.records)
+                .map(|(revision, record)| RawLoggedVerdict { revision, record })
+                .collect(),
+        }
+    }
+}
+
+/// Why records are not a log [`VerdictLog::record`] could have built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidVerdictLog {
+    /// Record `index` carries `found` where its position gives `expected`
+    /// (`index + 1`): a gap, a repeat or a reordering of revisions.
+    UnexpectedRevision {
+        index: usize,
+        expected: VerdictRevision,
+        found: VerdictRevision,
+    },
+    /// Record `index` was refused.
+    Record {
+        index: usize,
+        error: InvalidVerdictRecord,
+    },
+    /// Record `index` repeats the verdict current before it, so it would
+    /// not have been appended.
+    Unchanged { index: usize },
+}
+
+impl TryFrom<RawVerdictLog> for VerdictLog {
+    type Error = Rejected<InvalidVerdictLog>;
+
+    fn try_from(raw: RawVerdictLog) -> Result<Self, Self::Error> {
+        let records = raw
+            .records
+            .into_iter()
+            .map(|logged| (logged.revision, logged.record))
+            .collect();
+        Self::from_records(raw.transmission, records)
+            .map_err(|error| Rejected::new("verdict log", error))
+    }
 }
 
 impl VerdictLog {
@@ -195,6 +279,41 @@ impl VerdictLog {
             transmission,
             records: Vec::new(),
         }
+    }
+
+    /// Rebuild a stored log from its records, oldest first, each with its
+    /// revision: starting from [`VerdictLog::new`], each record must carry
+    /// the next revision and is appended with [`VerdictLog::record`], which
+    /// must append it. The first refusal is the error.
+    pub fn from_records(
+        transmission: TransmissionId,
+        records: Vec<(VerdictRevision, TransmissionVerdict)>,
+    ) -> Result<Self, InvalidVerdictLog> {
+        let mut log = Self::new(transmission);
+        for (index, (found, record)) in records.into_iter().enumerate() {
+            let expected = match log.revision() {
+                None => VerdictRevision::FIRST,
+                Some(last) => last.next().ok_or(InvalidVerdictLog::Record {
+                    index,
+                    error: InvalidVerdictRecord::RevisionsExhausted,
+                })?,
+            };
+            if found != expected {
+                return Err(InvalidVerdictLog::UnexpectedRevision {
+                    index,
+                    expected,
+                    found,
+                });
+            }
+            match log.record(record) {
+                Ok(VerdictRecorded::Appended(_)) => {}
+                Ok(VerdictRecorded::Unchanged) => {
+                    return Err(InvalidVerdictLog::Unchanged { index });
+                }
+                Err(error) => return Err(InvalidVerdictLog::Record { index, error }),
+            }
+        }
+        Ok(log)
     }
 
     /// Append `record` unless its verdict is already current. Rejects,

@@ -1,0 +1,17 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA": {
+      "transmissions_in": 2,
+      "transmissions_out": 3
+    },
+    "01J9Z3N4P5Q6R7S8T9V0W1X2Y3": {
+      "transmissions_in": 1,
+      "transmissions_out": 0
+    },
+    "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4": {
+      "transmissions_in": 0,
+      "transmissions_out": 0
+    }
+  }
+}

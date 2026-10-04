@@ -1,0 +1,16 @@
+{
+  "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "route": {
+    "type": "channel",
+    "data": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+  },
+  "topic": {
+    "version": 3,
+    "topic": null
+  },
+  "bucket": {
+    "start": "2026-10-04T12:41:00.000000Z",
+    "end": "2026-10-04T12:42:00.000000Z"
+  }
+}
