@@ -47,20 +47,19 @@ Overview:
       their sinks, triage), L7 topology (edge and access buckets per time
       window, graphs with node metadata, the channel-centred graph, time
       series, and the watermark before which every bucket is final), L8
-      surface (the query API with cursor-paginated lists, canonical agent
-      rows with windowed traffic, agent details that follow merges, batch
-      agent names, channel rows carrying activity or their supersession,
-      batch channel names, a promotion preview computed by the promotion's
-      own plan, linked views sharing one filter and one resolved
-      topic-model version, transmission rows by id with a per-state shape,
-      the evidence behind a transmission with excerpts cut from stored
-      bodies, one alert by id, the overview's counts in one watermarked
-      query, typed query
-      and action errors, the operator directory with a trusted single-user
-      mode, operator actions with one permission each, the append-only
-      audit log of operator actions, config changes and exports, the
-      id-only SSE live feed, streamed exports with a header and trailer
-      manifest, alert sinks).
+      surface (the query API with cursor-paginated lists and linked views
+      sharing one filter and one resolved topic-model version; read models
+      for agents, channels and transmissions: canonical agent rows and
+      details that follow merges, channel rows carrying activity or their
+      supersession, a promotion preview computed by the promotion's own
+      plan, batch names over one bounded id batch, transmission rows by id
+      with a per-state shape, the evidence behind a transmission with
+      excerpts cut from stored bodies, the overview's counts and one alert
+      by id; typed query and action errors; the operator directory with a
+      trusted single-user mode; operator actions with one permission each;
+      the append-only audit log of operator actions, config changes and
+      exports; the id-only SSE live feed; streamed exports with a header
+      and trailer manifest; alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -81,26 +80,31 @@ Overview:
     oldest unprocessed input, and announces topic-version activation back
     to L6, which then drops the versions its retention policy no longer
     keeps (TopicVersionDropped; L7 deletes their buckets) → L8 serves
-    topology, the channel-centred graph, a channel's resources, channel
-    rows (activity counted over the channel and every channel it superseded,
-    in an optional window that never changes which rows are listed), channel
-    names, promotion previews (the registry's promotion plan run without
-    effect, so a preview and the promotion agree), series,
-    topic history, search, projections, verdicts, detection quality, lists,
-    agents (canonical rows joining L3's profiles with L7's traffic in the
-    window, details following merged ids, batch names), alerts and exports
-    (one dataset streamed between a header naming the request, resolved
-    version, watermark, embedding model and gateway version and a trailer
-    with the row count, a digest and whether it completed, reading only
-    data settled before the watermark). Every
-    aggregate comes back with the watermark read before it; every linked
-    view applies one TopologyFilter under one resolved (or pinned)
-    topic-model version, with merged agents and superseded
-    channels resolved at read time; the evidence page cuts excerpts of
-    both sides of each content match from the blob store's bodies through
-    the spans' and matches' locations (a body content retention dropped is
-    reported, not an error); projection fits run as background jobs
-    whose stored frames read back exactly. Every store publishes an id-only
+    topology, the channel-centred graph, a channel's resources, series,
+    topic history, search, projections, verdicts, detection quality,
+    lists, alerts, and the read models: agent rows (L3's profiles joined
+    with L7's traffic in the window) and details following merged ids;
+    channel rows (writers and readers from L5's resource use, transmissions
+    from the same graph the overview counts, over the channel and every
+    channel it superseded, in an optional window that never changes which
+    rows are listed); promotion previews (the registry's promotion plan run
+    without effect, so a preview and the promotion agree); agent and
+    channel names; transmission rows by id; the evidence page, which cuts
+    excerpts of both sides of each content match from the blob store's
+    bodies through the spans' and matches' locations (a body content
+    retention dropped is reported, not an error); and the overview's
+    counts. Exports stream one dataset between a header naming the
+    request, resolved version, watermark, embedding model and gateway
+    version and a trailer with the row count, a digest and whether it
+    completed, reading only data settled before the watermark; a
+    transmissions export's rows are the surface's transmission rows and
+    its quoted text the evidence page's. Every aggregate comes back with
+    the watermark read before it; every linked view applies one
+    TopologyFilter under one resolved (or pinned) topic-model version,
+    with merged agents and superseded channels resolved at read time (a
+    late confirmation on a superseded channel advances the superseding
+    channel's detection); projection fits run as background jobs whose
+    stored frames read back exactly. Every store publishes an id-only
     Changed after each committed change (agents, channels, verdicts,
     alerts, rules, topic versions, projection jobs, the watermark), which
     the live feed streams to the UI over SSE so it re-queries (resumable by
@@ -140,32 +144,46 @@ Features Index:
     description: >
       The L8 contract the UI reads and acts through: callers from the
       operator directory (with a trusted single-user mode) and one
-      permission per query and action; paginated lists; agent read models
-      (canonical rows with claims, last seen and windowed traffic, a
-      detail with aliases, children, merges and vetoes that follows merged
-      ids, batch names, a precise list filter); transmission rows by id,
-      transmission evidence with bounded excerpts, one alert by id and the
-      overview's counts; linked views
+      permission per query and action; paginated lists; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
-      merged agents and superseded channels resolved at read time; channel
-      list rows, the channel list filter, batch channel names and the
-      promotion preview; the channel-centred graph and graph nodes; stored
-      projections and their columnar frame; verdicts and detection quality; watermarked
-      aggregates and retention; typed query and action errors with one
-      From impl per store error; operator actions; the append-only audit
-      log of actions, config changes and exports; the id-only SSE live
-      feed fed by every store's Changed; and streamed exports.
+      merged agents and superseded channels resolved at read time; the
+      channel-centred graph and graph nodes; promotion with supersession;
+      stored projections and their columnar frame; verdicts and detection
+      quality; watermarked aggregates and retention; typed query and action
+      errors with one From impl per store error; operator actions; the
+      append-only audit log of actions, config changes and exports; and the
+      id-only SSE live feed fed by every store's Changed.
     entry_points:
       - spec/types/interfaces/l8_surface.rs
+      - spec/types/interfaces/l8_surface/permissions.rs
       - spec/types/interfaces/l8_surface/actions.rs
-      - spec/types/interfaces/l8_surface/channels.rs
+      - spec/types/interfaces/l8_surface/errors.rs
+      - spec/types/interfaces/l8_surface/query_errors.rs
+      - spec/types/interfaces/l8_surface/audit.rs
       - spec/types/interfaces/l8_surface/live.rs
+    depends_on: [type_spec]
+    doc: docs/features/query_surface.md
+  read_models:
+    description: >
+      The rows and pages the UI shows on the query surface: canonical agent
+      rows with claims, last seen and windowed traffic, and a detail with
+      aliases, children, merges and vetoes that follows merged ids; channel
+      rows with activity or their supersession, the channel list filter,
+      and the promotion preview computed by the promotion's own plan; agent
+      and channel names over one bounded IdBatch; transmission rows by id
+      with a per-state shape; the evidence behind a transmission with
+      bounded excerpts; the overview's counts, which agree with the channel
+      and agent rows; and one alert by id.
+    entry_points:
+      - spec/types/aggregates/agents/mod.rs
+      - spec/types/interfaces/l8_surface/channels.rs
+      - spec/types/batch.rs
       - spec/types/interfaces/l8_surface/summary.rs
       - spec/types/interfaces/l8_surface/evidence.rs
       - spec/types/interfaces/l8_surface/excerpt.rs
       - spec/types/interfaces/l8_surface/overview.rs
-    depends_on: [type_spec]
-    doc: docs/features/query_surface.md
+    depends_on: [query_surface, type_spec]
+    doc: docs/features/read_models.md
   export:
     description: >
       QueryApi::export: one dataset (transmissions, edge or access buckets,
@@ -175,11 +193,13 @@ Features Index:
       sent, a format-independent digest over a canonical row encoding,
       Complete or the failure). Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
-      reproduces it; content needs Content; oversized exports are refused
-      before streaming; every export is audited.
+      reproduces it; transmission rows are the surface's transmission
+      summaries and their quoted text the evidence page's; content needs
+      Content; oversized exports are refused before streaming; every export
+      is audited.
     entry_points:
       - spec/types/interfaces/l8_surface/export/mod.rs
       - spec/types/interfaces/l8_surface/export/stream.rs
-    depends_on: [query_surface, type_spec]
+    depends_on: [query_surface, read_models, type_spec]
     doc: docs/features/export.md
 ```

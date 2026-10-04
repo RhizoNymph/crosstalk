@@ -642,6 +642,8 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::UnknownSink { .. }
             | InputError::QueryTooLong
             | InputError::SelfMerge
+            | InputError::EmptySelection
+            | InputError::ExcerptContextTooLong { .. }
             | InputError::TooManyIds { .. } => input,
         }
     }
@@ -655,7 +657,15 @@ fn every_input_error() -> Vec<InputError> {
         },
         InputError::QueryTooLong,
         InputError::SelfMerge,
-        InputError::TooManyIds { max: 500, got: 501 },
+        InputError::EmptySelection,
+        InputError::ExcerptContextTooLong {
+            max: 2048,
+            got: 4096,
+        },
+        InputError::TooManyIds {
+            max: 1000,
+            got: 1001,
+        },
     ]
     .into_iter()
     .map(declared)

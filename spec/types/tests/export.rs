@@ -14,13 +14,15 @@ use crate::aggregates::projection::{
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
+use crate::aliases::NoAliases;
 use crate::derived::flow::transmission::{Route, Transmission, TransmissionState};
 use crate::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictLog, VerdictRevision};
 use crate::ids::{AuditId, ExportId, OperatorId, ProjectionId, TopicId};
 use crate::interfaces::l6_analysis::ProjectionStoreError;
 use crate::interfaces::l8_surface::audit::{AuditAuthor, AuditBody, AuditEntry, AuditSubject};
 use crate::interfaces::l8_surface::export::rows::{
-    PointRow, VerdictRow, VerdictRowsError, projection_rows, verdict_rows,
+    InvalidTransmissionRow, PointRow, TransmissionRow, VerdictRow, VerdictRowsError,
+    projection_rows, verdict_rows,
 };
 use crate::interfaces::l8_surface::export::{
     ExportBasis, ExportDataset, ExportDatasetKind, ExportEvent, ExportFormat, ExportHeader,
@@ -28,6 +30,7 @@ use crate::interfaces::l8_surface::export::{
     ExportScope, GatewayVersion, InvalidExportRecord, InvalidExportRequest, InvalidHeader,
     settled_window,
 };
+use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionSummary};
 use crate::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
 use crate::support::{TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
@@ -700,6 +703,29 @@ fn verdict_rows_refuse_another_transmissions_log() {
         verdict_rows(&transmission, &other),
         Err(VerdictRowsError::OtherTransmission)
     );
+}
+
+#[test]
+fn transmission_rows_are_the_listed_summary_of_a_confirmed_transmission() {
+    for (state, _) in every_state() {
+        let (transmission, _) = judged(state);
+        let verdict = |_| Some(Verdict::Genuine);
+        let topic = |_| TopicUnder::Outlier;
+        let summary = TransmissionSummary::of(&transmission, NoAliases, verdict, topic);
+        let row = TransmissionRow::of(&transmission, NoAliases, verdict, topic, None);
+        match transmission.state.confirmed() {
+            Some(confirmed) => {
+                let row = row.expect("a confirmed transmission");
+                assert_eq!(row.summary(), &summary);
+                assert_eq!(row.strongest(), MatchClass::strongest(confirmed));
+                assert_eq!(Some(row.delivery()), summary.state.delivery());
+            }
+            None => assert_eq!(
+                row,
+                Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()))
+            ),
+        }
+    }
 }
 
 // ── Audit records ──────────────────────────────────────────────────────────

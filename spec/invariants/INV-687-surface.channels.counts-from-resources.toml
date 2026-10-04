@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.channels.counts-from-resources"
-statement = "For every row in force that QueryApi::channels or channel returns, writers and readers equal ChannelCounts::tally of a full channel_resources traversal of the same channel and window (all time when the window is None), transmissions equal the confirmed transmissions with Confirmed::at in that window whose route resolves to the channel, and the last activity is the latest access to, or confirmation on, the channel or any channel it superseded over all time."
+statement = "For every row in force that QueryApi::channels or channel returns, writers and readers equal ChannelCounts::tally of a full channel_resources traversal of the same channel and window (all time when the window is None), transmissions equal the channel's entry of ChannelCounts::routed of EdgeStore::graph for that window under TopologyFilter::default() (zero when it has none), and the last activity is the latest access to, or confirmation on, the channel or any channel it superseded over all time."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
@@ -10,12 +10,19 @@ must not disagree on who uses a channel. Defining the row counts as a fold
 over channel_resources ties them to the per-resource view the page shows
 under them, with the same alias and supersession resolution: merged agents
 counted once, a promoted channel counting the resources of every channel it
-absorbed. Last activity ignores the window so a channel quiet in the window
-still shows when it was last used.
+absorbed. Transmissions are what the topology graph counts on the channel
+under the default filter, as an agent row's traffic is its node's counts,
+so a row agrees with the graph, the agent rows and the overview's active
+channels (surface.overview.active-channels-match-rows). Last activity
+ignores the window so a channel quiet in the window still shows when it
+was last used.
 """
 
 [evidence]
-unit = "crosstalk_spec::tests::channel_reads::counts_tally_distinct_agents_across_the_channels_resources"
+unit = [
+    "crosstalk_spec::tests::channel_reads::counts_tally_distinct_agents_across_the_channels_resources",
+    "crosstalk_spec::tests::overview::rows_count_the_transmissions_the_graph_routes_through_each_channel",
+]
 property = "crosstalk::surface::tests::prop_channel_rows_agree_with_resources"
 
 [evidence-review]

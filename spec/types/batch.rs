@@ -1,6 +1,13 @@
-//! Batches of ids for lookups that answer many ids in one call, such as
-//! `QueryApi::agent_names`, so a page of rows resolves its names at once
-//! instead of one id at a time.
+//! Batches of ids for lookups that answer many ids in one call
+//! (`QueryApi::agent_names` and `channel_names`), so a page of rows resolves
+//! its names at once instead of one id at a time.
+//!
+//! Every batch lookup takes an [`IdBatch`], so there is one bound and one
+//! refusal for all of them: more than [`IdBatch::MAX`] distinct ids is
+//! [`TooManyIds`], which the surface returns as `InvalidInput(TooManyIds)`
+//! before calling the lookup. A selection of transmissions to list
+//! (`TransmissionSelection`) is not a name lookup and has its own, larger
+//! bound, but reports going over it with the same `InvalidInput(TooManyIds)`.
 
 /// Distinct ids, ascending, at most [`IdBatch::MAX`] of them.
 ///
@@ -20,9 +27,14 @@ pub struct TooManyIds {
 }
 
 impl<T: Ord + Copy> IdBatch<T> {
-    /// Twice the largest page (`PageSize::MAX`): a page row names at most
-    /// two agents (a sender and a reader), so the names of any one page fit
-    /// in one batch.
+    /// One cap for every name lookup, agents and channels alike: twice the
+    /// largest page (`PageSize::MAX`). A list row names at most two agents
+    /// (a sender and a reader) and at most one channel (its route or its
+    /// subject), so the names of any one page fit in one call of each
+    /// lookup; the rare page that names more (an audit page of promotions,
+    /// each naming every channel it superseded) splits its lookup. One cap
+    /// rather than one per lookup, so a client sizes every batch the same
+    /// way and `TooManyIds` from a name lookup always means the same bound.
     pub const MAX: usize = 1000;
 
     pub fn new(ids: impl IntoIterator<Item = T>) -> Result<Self, TooManyIds> {

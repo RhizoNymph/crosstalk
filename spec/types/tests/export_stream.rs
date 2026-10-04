@@ -11,19 +11,24 @@ use crate::aggregates::quality::MatchClass;
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::derived::flow::verdict::Verdict;
-use crate::ids::{ExportId, TopicId};
+use crate::ids::{ExportId, MessageHash, TopicId};
+use crate::interfaces::l8_surface::evidence::MatchQuotes;
+use crate::interfaces::l8_surface::excerpt::{Excerpt, ExcerptWindow, Excerpted};
 use crate::interfaces::l8_surface::export::digest::{encode_route, hash_row};
 use crate::interfaces::l8_surface::export::rows::{
-    AccessRow, EdgeRow, LabelContent, MatchText, TopicContent, TopicRow, TransmissionContent,
-    TransmissionRow,
+    AccessRow, EdgeRow, InvalidTransmissionRow, LabelContent, MatchText, TopicContent, TopicRow,
+    TransmissionContent, TransmissionRow,
 };
 use crate::interfaces::l8_surface::export::{
     ExportDataset, ExportDatasetKind, ExportEnd, ExportFailure, ExportFormat, ExportHeader,
     ExportRequest, ExportRow, ExportSealer, ExportStep, ExportStream, ExportTrailer, Incomplete,
     RowHasher, RowRefused, RowSource, SealedRows, SourceFailure, verify_export,
 };
+use crate::interfaces::l8_surface::summary::{
+    Delivery, SummaryState, TopicUnder, TransmissionStateKind, TransmissionSummary,
+};
 use crate::observed::message::ToolName;
-use crate::support::{Blake3, NonEmpty};
+use crate::support::{Blake3, ByteRange, NonEmpty};
 use crate::tests::export::{V, header, parts, scope, scoped_basis, window};
 use crate::tests::fixtures::{agent, at, channel, transmission};
 
@@ -73,27 +78,65 @@ fn nz(n: u64) -> NonZeroU64 {
     NonZeroU64::new(n).expect("non-zero fixture count")
 }
 
-fn tx_row(n: u128, confirmed_at: u64, content: bool) -> ExportRow {
-    ExportRow::Transmission(TransmissionRow {
+/// The whole of `text`, quoted as an export quotes a match: no context.
+fn quoted(text: &str) -> Excerpted {
+    let end = u32::try_from(text.len()).expect("short fixture text");
+    let range = ByteRange::new(0, end).expect("non-empty fixture text");
+    Excerpted::Shown(Excerpt::cut(text, range, ExcerptWindow::MATCH_ONLY).expect("fits its text"))
+}
+
+fn invoice_text() -> TransmissionContent {
+    TransmissionContent {
+        topic_label: Some("billing".into()),
+        matches: NonEmpty::new(MatchText {
+            class: MatchClass::Exact,
+            quotes: MatchQuotes {
+                origin: quoted("the invoice total is 42"),
+                read: quoted("the invoice total is 42"),
+            },
+        }),
+    }
+}
+
+/// A classified transmission's summary, as `transmissions_by_id` lists it.
+fn tx_summary(
+    n: u128,
+    confirmed_at: u64,
+    topic: TopicUnder,
+    verdict: Option<Verdict>,
+) -> TransmissionSummary {
+    TransmissionSummary {
         id: transmission(n),
-        from: agent(1),
         to: agent(2),
         route: Route::Channel(channel(3)),
         opened_at: at(confirmed_at - 1),
-        confirmed_at: at(confirmed_at),
-        matched_bytes: nz(40),
-        strongest: MatchClass::Exact,
-        topic: Some(TopicId::from_ulid(5)),
-        verdict: Some(Verdict::Genuine),
-        content: content.then(|| TransmissionContent {
-            topic_label: Some("billing".into()),
-            matches: NonEmpty::new(MatchText {
-                class: MatchClass::Exact,
-                origin: "the invoice total is 42".into(),
-                read: "the invoice total is 42".into(),
-            }),
-        }),
-    })
+        state: SummaryState::Classified {
+            delivery: Delivery {
+                from: agent(1),
+                confirmed_at: at(confirmed_at),
+                matched_bytes: nz(40),
+            },
+            topic,
+            verdict,
+        },
+    }
+}
+
+fn tx_row_judged(n: u128, confirmed_at: u64, content: bool, verdict: Option<Verdict>) -> ExportRow {
+    let summary = tx_summary(
+        n,
+        confirmed_at,
+        TopicUnder::Topic(TopicId::from_ulid(5)),
+        verdict,
+    );
+    let content = content.then(invoice_text);
+    ExportRow::Transmission(Box::new(
+        TransmissionRow::new(summary, MatchClass::Exact, content).expect("a confirmed summary"),
+    ))
+}
+
+fn tx_row(n: u128, confirmed_at: u64, content: bool) -> ExportRow {
+    tx_row_judged(n, confirmed_at, content, Some(Verdict::Genuine))
 }
 
 fn access_row(agent_n: u128) -> ExportRow {
@@ -154,45 +197,99 @@ fn encoding_starts_with_the_dataset_tag_and_is_deterministic() {
 #[test]
 fn rows_differing_in_one_field_encode_differently() {
     let base = tx_row(1, 100, true);
-    let ExportRow::Transmission(row) = base.clone() else {
-        panic!("a transmission row");
+    let topic = TopicUnder::Topic(TopicId::from_ulid(5));
+    let genuine = Some(Verdict::Genuine);
+    let row = |summary: TransmissionSummary, strongest, content| {
+        TransmissionRow::new(summary, strongest, content).expect("a confirmed summary")
+    };
+    let mut aggregated = tx_summary(1, 100, topic, genuine);
+    if let SummaryState::Classified {
+        delivery,
+        topic,
+        verdict,
+    } = aggregated.state
+    {
+        aggregated.state = SummaryState::Aggregated {
+            delivery,
+            topic,
+            verdict,
+        };
+    }
+    let dropped = TransmissionContent {
+        matches: NonEmpty::new(MatchText {
+            class: MatchClass::Exact,
+            quotes: MatchQuotes {
+                origin: quoted("the invoice total is 42"),
+                read: Excerpted::BodyDropped {
+                    message: MessageHash::from_digest(Blake3::from_bytes([7; 32])),
+                },
+            },
+        }),
+        ..invoice_text()
     };
     let variants = [
-        TransmissionRow {
-            verdict: None,
-            ..row.clone()
-        },
-        TransmissionRow {
-            topic: None,
-            ..row.clone()
-        },
-        TransmissionRow {
-            strongest: MatchClass::Semantic,
-            ..row.clone()
-        },
-        TransmissionRow {
-            content: None,
-            ..row.clone()
-        },
-        TransmissionRow {
-            content: Some(TransmissionContent {
+        row(
+            tx_summary(1, 100, topic, None),
+            MatchClass::Exact,
+            Some(invoice_text()),
+        ),
+        row(
+            tx_summary(1, 100, TopicUnder::Outlier, genuine),
+            MatchClass::Exact,
+            Some(invoice_text()),
+        ),
+        row(
+            tx_summary(1, 100, TopicUnder::Unassigned, genuine),
+            MatchClass::Exact,
+            Some(invoice_text()),
+        ),
+        row(aggregated, MatchClass::Exact, Some(invoice_text())),
+        row(
+            tx_summary(1, 100, topic, genuine),
+            MatchClass::Semantic,
+            Some(invoice_text()),
+        ),
+        row(tx_summary(1, 100, topic, genuine), MatchClass::Exact, None),
+        row(
+            tx_summary(1, 100, topic, genuine),
+            MatchClass::Exact,
+            Some(TransmissionContent {
                 topic_label: None,
-                matches: NonEmpty::new(MatchText {
-                    class: MatchClass::Exact,
-                    origin: "the invoice total is 42".into(),
-                    read: "the invoice total is 42".into(),
-                }),
+                ..invoice_text()
             }),
-            ..row.clone()
-        },
+        ),
+        row(
+            tx_summary(1, 100, topic, genuine),
+            MatchClass::Exact,
+            Some(dropped),
+        ),
     ];
     let mut encoded = Vec::new();
     base.encode(&mut encoded);
     for variant in variants {
         let mut other = Vec::new();
-        ExportRow::Transmission(variant.clone()).encode(&mut other);
+        ExportRow::Transmission(Box::new(variant.clone())).encode(&mut other);
         assert_ne!(encoded, other, "{variant:?}");
     }
+}
+
+#[test]
+fn a_transmission_row_is_a_confirmed_summary() {
+    let unconfirmed = TransmissionSummary {
+        state: SummaryState::Suspected { verdict: None },
+        ..tx_summary(1, 100, TopicUnder::Outlier, None)
+    };
+    assert_eq!(
+        TransmissionRow::new(unconfirmed, MatchClass::Exact, None),
+        Err(InvalidTransmissionRow::NotConfirmed(
+            TransmissionStateKind::Suspected
+        ))
+    );
+    let ExportRow::Transmission(row) = tx_row(1, 100, false) else {
+        panic!("a transmission row");
+    };
+    assert_eq!(row.delivery().confirmed_at, at(100));
+    assert_eq!(row.summary().state.delivery(), Some(row.delivery()));
 }
 
 #[test]
@@ -594,10 +691,7 @@ fn verify_rejects_altered_extra_and_misplaced_rows() {
     let trailer = seal(&header, &rows);
 
     let mut altered = rows.clone();
-    altered[1] = tx_row(2, 102, false);
-    if let ExportRow::Transmission(row) = &mut altered[1] {
-        row.verdict = Some(Verdict::FalseDetection);
-    }
+    altered[1] = tx_row_judged(2, 102, false, Some(Verdict::FalseDetection));
     assert_eq!(
         verify_export(&header, &altered, Some(&trailer), hasher()),
         Err(Incomplete::DigestMismatch)

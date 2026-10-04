@@ -15,7 +15,8 @@
 //! therefore carry the same digest.
 //!
 //! **Encoding.** Fields are written in the order the row type declares
-//! them, with no field names:
+//! them, with no field names; a transmission row writes its summary's
+//! fields, then its own (see [`ExportRow::encode`] for the order):
 //!
 //! | Value | Bytes |
 //! | --- | --- |
@@ -35,6 +36,10 @@
 //! | `Verdict` | `u8`: genuine 0, false detection 1 |
 //! | `MatchClass` | `u8`: exact 0, normalized 1, decoded 2, semantic 3 |
 //! | `QualityMatch` | `u8`: content 0 then its class, suspected 1, discarded 2 |
+//! | `TransmissionStateKind` | `u8`: confirmed 0, classified 1, aggregated 2 (a row is never in another state) |
+//! | `TopicUnder` | `u8`: topic 0 then its id, outlier 1, unassigned 2 |
+//! | `MessageHash` | its 32 digest bytes |
+//! | `Excerpted` | `u8` 0 then the excerpt's text (string), highlight start and end (`u32`), bytes elided before and after and bytes of highlight cut (`u64`); or `u8` 1 then the dropped body's `MessageHash` |
 //!
 //! [`ExportDatasetKind::code`]: super::request::ExportDatasetKind::code
 
@@ -44,6 +49,8 @@ use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::derived::flow::verdict::Verdict;
+use crate::interfaces::l8_surface::excerpt::Excerpted;
+use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crate::support::{Blake3, TimeWindow, Timestamp};
 
 use super::rows::{
@@ -124,28 +131,73 @@ pub fn encode_route(route: &Route, out: &mut Vec<u8>) {
     }
 }
 
+/// A transmission row: its summary's id, reader, route, opened time and
+/// state kind, its delivery (sender, `Confirmed::at`, matched bytes), its
+/// topic when classified, its verdict, then the row's strongest class and
+/// content.
 fn transmission(row: &TransmissionRow, out: &mut Vec<u8>) {
-    id(row.id.as_ulid(), out);
-    id(row.from.as_ulid(), out);
-    id(row.to.as_ulid(), out);
-    encode_route(&row.route, out);
-    time(row.opened_at, out);
-    time(row.confirmed_at, out);
-    u64_le(row.matched_bytes.get(), out);
-    out.push(class(row.strongest));
-    option(row.topic, out, |topic, out| id(topic.as_ulid(), out));
-    option(row.verdict, out, |verdict, out| {
+    let summary = row.summary();
+    let delivery = row.delivery();
+    id(summary.id.as_ulid(), out);
+    id(summary.to.as_ulid(), out);
+    encode_route(&summary.route, out);
+    time(summary.opened_at, out);
+    out.push(match summary.state.kind() {
+        TransmissionStateKind::Classified => 1,
+        TransmissionStateKind::Aggregated => 2,
+        TransmissionStateKind::Confirmed
+        | TransmissionStateKind::Detected
+        | TransmissionStateKind::AwaitingContent
+        | TransmissionStateKind::Suspected
+        | TransmissionStateKind::Discarded => 0,
+    });
+    id(delivery.from.as_ulid(), out);
+    time(delivery.confirmed_at, out);
+    u64_le(delivery.matched_bytes.get(), out);
+    option(summary.state.topic(), out, topic_under);
+    option(summary.state.verdict(), out, |verdict, out| {
         out.push(verdict_code(verdict))
     });
-    option(row.content.as_ref(), out, |content, out| {
+    out.push(class(row.strongest()));
+    option(row.content(), out, |content, out| {
         option(content.topic_label.as_deref(), out, string);
         len(content.matches.iter().count(), out);
         for text in content.matches.iter() {
             out.push(class(text.class));
-            string(&text.origin, out);
-            string(&text.read, out);
+            excerpted(&text.quotes.origin, out);
+            excerpted(&text.quotes.read, out);
         }
     });
+}
+
+fn topic_under(topic: TopicUnder, out: &mut Vec<u8>) {
+    match topic {
+        TopicUnder::Topic(topic) => {
+            out.push(0);
+            id(topic.as_ulid(), out);
+        }
+        TopicUnder::Outlier => out.push(1),
+        TopicUnder::Unassigned => out.push(2),
+    }
+}
+
+fn excerpted(quote: &Excerpted, out: &mut Vec<u8>) {
+    match quote {
+        Excerpted::Shown(excerpt) => {
+            out.push(0);
+            string(excerpt.text(), out);
+            let highlight = excerpt.highlight();
+            out.extend_from_slice(&highlight.start.to_le_bytes());
+            out.extend_from_slice(&highlight.end.to_le_bytes());
+            u64_le(excerpt.elided_before(), out);
+            u64_le(excerpt.elided_after(), out);
+            u64_le(excerpt.highlight_cut(), out);
+        }
+        Excerpted::BodyDropped { message } => {
+            out.push(1);
+            out.extend_from_slice(message.digest().as_bytes());
+        }
+    }
 }
 
 fn edge(row: &EdgeRow, out: &mut Vec<u8>) {

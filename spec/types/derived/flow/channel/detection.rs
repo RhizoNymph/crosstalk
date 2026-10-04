@@ -13,7 +13,10 @@
 //! A cross access is a read by an agent other than an earlier writer.
 //!
 //! A promoted channel keeps the `TrafficDetection` it had when it was
-//! discovered and continues on the traffic machine.
+//! discovered and continues on the traffic machine. A superseded channel's
+//! detection is frozen: a confirmation of a transmission whose stored route
+//! names it is a confirmation on the channel that superseded it, and moves
+//! that channel's detection (`confirm` above) instead.
 
 use crate::derived::flow::evidence::CoAccess;
 use crate::ids::{AccessId, TransmissionId};

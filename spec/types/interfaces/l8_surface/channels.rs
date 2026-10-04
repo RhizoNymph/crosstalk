@@ -14,13 +14,27 @@
 //!
 //! ```text
 //! in force:   ChannelActivity::Seen { last, counts } over the channel and every channel it superseded
-//!             counts = ChannelCounts::tally(full channel_resources(channel, window), transmissions)
+//!             counts = ChannelCounts::tally(full channel_resources(channel, window),
+//!                                           ChannelCounts::routed(graph(window, default filter))[channel])
 //! superseded: SupersededInto { into, by, at }, no counts
 //! ```
 //!
+//! **Rows and the overview.** A row's `transmissions` is what the topology
+//! graph counts on the channel for the same window under
+//! `TopologyFilter::default()` ([`ChannelCounts::routed`]), as an agent
+//! row's traffic is its node's counts in that graph. The overview's
+//! `active_channels` (`EdgeTotals::of` the graph for its window and
+//! filter) counts the channels with a non-zero entry there, so under the
+//! default filter and the same window it is the number of rows in force
+//! whose `transmissions` is non-zero. "Active" in the overview is that
+//! count; a row's [`ChannelActivity::Seen`] is wider: any access or
+//! confirmation ever, so a channel written to and never read is `Seen` but
+//! not active.
+//!
 //! **Names.** [`ChannelName`] is what the UI shows for a channel id: the
 //! channel in force and its pattern (declared) or seed locator (discovered).
-//! [`resolve_names`] is the reference for `channel_names`.
+//! [`resolve_names`] is the reference for `channel_names`, which takes an
+//! [`IdBatch`] like `agent_names`, so the batch's bound is the type's.
 //!
 //! **Promotion preview.** [`PromotionPreview::from_registry`] turns the
 //! registry's [`promotion::coverage`] into what the operator sees, mapping a
@@ -35,16 +49,19 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::aggregates::access::ResourceUse;
+use crate::aggregates::edge::TopologyGraph;
+use crate::batch::IdBatch;
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::channel::promotion::{CappedResources, PromotionCoverage, Registered};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, DeclaredHistory, Supersession};
 use crate::derived::flow::resource::{Locator, Resource, ResourcePattern};
+use crate::derived::flow::transmission::Route;
 use crate::ids::{ChannelId, OperatorId};
 use crate::interfaces::l5_flow::PromoteError;
 use crate::support::Timestamp;
 
 use super::actions::SupersededChannels;
-use super::{ActionError, ConflictKind, InputError, QueryError};
+use super::{ActionError, ConflictKind, QueryError};
 
 /// One channel as the channel list and the channel page show it.
 ///
@@ -95,9 +112,12 @@ pub struct ChannelCounts {
     pub writers: u64,
     /// Distinct canonical agents that read any of its resources.
     pub readers: u64,
-    /// Confirmed transmissions whose route resolves to the channel, by
-    /// `Confirmed::at`, as the edge store counts them (false detections
-    /// included: the list has no verdict choice).
+    /// The transmissions the topology graph counts on the channel in the
+    /// window under `TopologyFilter::default()`: confirmed, routed through
+    /// it or a channel it superseded, by `Confirmed::at`, under the active
+    /// topic version, false detections included (the list has no verdict
+    /// choice), and none whose sender and reader resolve to one agent
+    /// ([`ChannelCounts::routed`]).
     pub transmissions: u64,
 }
 
@@ -105,7 +125,8 @@ impl ChannelCounts {
     /// The reference definition: writers and readers are the distinct
     /// agents across every [`ResourceUse`] of a full `channel_resources`
     /// traversal of the channel and window (whose agents are already
-    /// canonical, aliases summed); `transmissions` is passed through.
+    /// canonical, aliases summed); `transmissions` is passed through, and is
+    /// the channel's entry of [`ChannelCounts::routed`] (zero when absent).
     pub fn tally<'a>(uses: impl IntoIterator<Item = &'a ResourceUse>, transmissions: u64) -> Self {
         let mut writers = HashSet::new();
         let mut readers = HashSet::new();
@@ -118,6 +139,25 @@ impl ChannelCounts {
             readers: count(readers.len()),
             transmissions,
         }
+    }
+
+    /// The transmissions each channel carried in `graph`: for every
+    /// channel some edge's route names (`Route::Channel`, already
+    /// canonical), the sum of those edges' transmissions. Rows read it from
+    /// `EdgeStore::graph` for their window under `TopologyFilter::default()`.
+    /// Its keys are exactly the channels [`EdgeTotals::of`] counts as active
+    /// in the same graph, so the overview and the rows agree.
+    ///
+    /// [`EdgeTotals::of`]: crate::aggregates::edge::EdgeTotals::of
+    pub fn routed(graph: &TopologyGraph) -> HashMap<ChannelId, u64> {
+        let mut routed: HashMap<ChannelId, u64> = HashMap::new();
+        for edge in &graph.edges {
+            if let Route::Channel(channel) = edge.route {
+                let sum = routed.entry(channel).or_default();
+                *sum = sum.saturating_add(edge.stats.transmissions.get());
+            }
+        }
+        routed
     }
 }
 
@@ -313,10 +353,6 @@ pub enum InvalidChannelName {
 }
 
 impl ChannelName {
-    /// The most ids one `channel_names` call takes: a full page of any
-    /// list.
-    pub const MAX_BATCH: usize = crate::paging::PageSize::MAX as usize;
-
     /// The name of a channel in force: its pattern when declared, its seed
     /// locator when discovered.
     pub fn of(entry: &Registered<'_>) -> Result<Self, InvalidChannelName> {
@@ -352,26 +388,19 @@ impl ChannelName {
 }
 
 /// The reference for `QueryApi::channel_names` over the registered
-/// channels: for each id asked for that the registry knows, keyed by that
-/// id, the [`ChannelName`] of the channel it resolves to
+/// channels: for each id of the batch that the registry knows, keyed by
+/// that id, the [`ChannelName`] of the channel it resolves to
 /// (`Channel::canonical`, what `ChannelDirectory::canonical` returns).
-/// Unknown ids are left out; repeats are answered once. More than
-/// [`ChannelName::MAX_BATCH`] ids is `InvalidInput(TooManyIds)`, whatever
-/// they are. A known id whose channel in force is missing or unnamable is a
-/// store fault.
+/// Unknown ids are left out. The batch holds each id once and at most
+/// [`IdBatch::MAX`] of them, so no batch is refused here. A known id whose
+/// channel in force is missing or unnamable is a store fault.
 pub fn resolve_names(
-    ids: &[ChannelId],
+    ids: &IdBatch<ChannelId>,
     registry: &[Registered<'_>],
 ) -> Result<HashMap<ChannelId, ChannelName>, QueryError> {
-    if ids.len() > ChannelName::MAX_BATCH {
-        return Err(QueryError::InvalidInput(InputError::TooManyIds {
-            max: ChannelName::MAX_BATCH,
-            got: ids.len(),
-        }));
-    }
     let entry = |id: ChannelId| registry.iter().find(|entry| entry.channel.id == id);
     let mut names = HashMap::new();
-    for &id in ids {
+    for &id in ids.ids() {
         let Some(asked) = entry(id) else { continue };
         let in_force = asked.channel.canonical();
         let current = entry(in_force).ok_or_else(|| QueryError::Store {

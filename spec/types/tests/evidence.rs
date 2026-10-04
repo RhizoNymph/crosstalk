@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
+use crate::aggregates::quality::MatchClass;
 use crate::derived::flow::access::Access;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, Resource};
@@ -13,6 +14,7 @@ use crate::interfaces::l8_surface::evidence::{
     AccessDetail, EvidenceError, InvalidEvidence, MatchQuotes, TransmissionEvidence,
 };
 use crate::interfaces::l8_surface::excerpt::Excerpted;
+use crate::interfaces::l8_surface::export::rows::TransmissionContent;
 use crate::observed::message::ToolName;
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
@@ -213,4 +215,44 @@ fn evidence_keeps_the_stored_transmission() {
     let evidence = TransmissionEvidence::assemble(transmission.clone(), |_| Ok(dropped()), detail)
         .expect("assembles");
     assert_eq!(evidence.transmission(), &transmission);
+}
+
+#[test]
+fn export_content_quotes_the_evidence_in_order() {
+    let first = content_match(agent(1), agent(2), 8);
+    let second = content_match(agent(1), agent(2), 3);
+    let mut confirmed = Confirmed::new(NonEmpty::new(first.clone()), Vec::new(), at(4))
+        .expect("one sender, one reader");
+    confirmed.extend(second.clone()).expect("same sender");
+    let transmission = transmission_in(1, TransmissionState::Confirmed(confirmed));
+    let evidence =
+        TransmissionEvidence::assemble(transmission, |_| Ok(dropped()), detail).expect("assembles");
+    let content = TransmissionContent::of(&evidence, Some("billing".into()))
+        .expect("a confirmed transmission has content");
+    assert_eq!(content.topic_label.as_deref(), Some("billing"));
+    let texts: Vec<_> = content.matches.iter().collect();
+    assert_eq!(texts.len(), evidence.matches().len());
+    for (text, evidence) in texts.into_iter().zip(evidence.matches()) {
+        assert_eq!(
+            text.class,
+            MatchClass::from(evidence.content_match().kind())
+        );
+        assert_eq!(&text.quotes.origin, evidence.origin());
+        assert_eq!(&text.quotes.read, evidence.read());
+    }
+}
+
+#[test]
+fn export_content_needs_a_match() {
+    for (state, _) in every_state() {
+        let confirmed = state.confirmed().is_some();
+        let transmission = transmission_in(1, state);
+        let evidence = TransmissionEvidence::assemble(transmission, |_| Ok(dropped()), detail)
+            .expect("assembles");
+        assert_eq!(
+            TransmissionContent::of(&evidence, None).is_some(),
+            confirmed,
+            "content exactly for a confirmed transmission"
+        );
+    }
 }

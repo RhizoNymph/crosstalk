@@ -16,7 +16,10 @@ use crate::interfaces::l6_analysis::{
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
-use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
+use crate::interfaces::l8_surface::excerpt::{
+    CutError, ExcerptError, ExcerptWindow, InvalidWindow,
+};
+use crate::interfaces::l8_surface::summary::{InvalidSelection, TransmissionSelection};
 use crate::interfaces::l8_surface::{ActionError, ConflictKind, InputError, QueryError};
 use crate::observed::message::text::NoPartText;
 use crate::support::NonEmpty;
@@ -419,5 +422,34 @@ fn evidence_blob_errors_map_as_blob_errors_do() {
     assert_eq!(
         QueryError::from(EvidenceError::Store { reason: store() }),
         QueryError::Store { reason: store() }
+    );
+}
+
+#[test]
+fn selections_the_surface_cannot_build_are_invalid_input() {
+    assert_eq!(
+        TransmissionSelection::new(Vec::new()).map_err(QueryError::from),
+        Err(QueryError::InvalidInput(InputError::EmptySelection))
+    );
+    let max = TransmissionSelection::MAX;
+    assert_eq!(
+        QueryError::from(InvalidSelection::TooMany { max, got: max + 7 }),
+        QueryError::InvalidInput(InputError::TooManyIds { max, got: max + 7 }),
+        "the same TooManyIds a name lookup reports, with the selection's bound"
+    );
+}
+
+#[test]
+fn windows_the_surface_cannot_build_are_invalid_input() {
+    let max = ExcerptWindow::MAX_CONTEXT;
+    assert_eq!(
+        ExcerptWindow::new(max + 1).map_err(QueryError::from),
+        Err(QueryError::InvalidInput(
+            InputError::ExcerptContextTooLong { max, got: max + 1 }
+        ))
+    );
+    assert_eq!(
+        QueryError::from(InvalidWindow { max, got: u16::MAX }),
+        QueryError::InvalidInput(InputError::ExcerptContextTooLong { max, got: u16::MAX })
     );
 }

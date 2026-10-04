@@ -8,7 +8,8 @@
 - The trait each layer of the abstraction stack exposes, and its errors.
 - Tests for invariants enforced by checked constructors.
 - The query surface the UI reads and acts through (L8) is its own feature:
-  [query_surface.md](query_surface.md).
+  [query_surface.md](query_surface.md), with its read models in
+  [read_models.md](read_models.md) and export in [export.md](export.md).
 
 ## Non-scope
 
@@ -143,7 +144,11 @@ The types follow data through the stack:
    decision is recorded in its history, and every other discovered channel
    whose seed the pattern matches becomes `Superseded` by it. Lookups never
    return a superseded channel, so each `AccessRecorded { access, channel }`
-   names a canonical channel. `ChannelRegistry::promotion_coverage` answers
+   names a canonical channel. A superseded channel's detection is frozen: a
+   confirmation of a transmission whose stored route names it, late or
+   not, advances the detection of the channel it resolves to
+   (`TrafficDetection::Active::last_transmission` on the superseding
+   channel), as read-time resolution counts the route there. `ChannelRegistry::promotion_coverage` answers
    the surface's promotion preview without changing anything: it runs the
    same `promotion::plan` over the same stored channels (`promotion::coverage`)
    and splits every resource the channel and the channels it would supersede
@@ -250,10 +255,12 @@ The types follow data through the stack:
    `OperatorActions::act` takes every operator action and forwards it to
    the layer that owns its effect, `LiveFeed` streams id-only change
    events built from every store's `Changed`, and `AuditLog` records every
-   action call and config change, each for a `Caller` the
+   action call, config change and export, each for a `Caller` the
    `OperatorDirectory` built. `AlertSink`s deliver each alert to the sinks
    its rule lists. The surface is its own feature:
-   [query_surface.md](query_surface.md).
+   [query_surface.md](query_surface.md), with the read models it serves
+   in [read_models.md](read_models.md) and export in
+   [export.md](export.md).
 
 ## Files
 
@@ -290,7 +297,7 @@ The types follow data through the stack:
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
 | `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
-| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md) | — |
+| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -394,6 +401,9 @@ The types follow data through the stack:
 - A `Capped<T, MAX>` shows at most `MAX` items and a total no smaller than
   what it shows (`Capped::new`), so a capped list is never mistaken for a
   complete one.
+- A superseded channel's detection never changes after the promotion: a
+  confirmation routed through it advances the superseding channel's
+  detection instead.
 - Only a suspected transmission can be discarded, and only by expiry.
 - Confirmed traffic on a channel raises an alert unless its policy is
   sanctioned (`Policy::on_traffic`).

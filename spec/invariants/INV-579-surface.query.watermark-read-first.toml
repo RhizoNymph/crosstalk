@@ -1,19 +1,31 @@
 [invariant]
 id = "surface.query.watermark-read-first"
-statement = "Every Watermarked response of QueryApi topology, channel_topology, series, edge_transmissions, channel_resources, channel, channels and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read."
+statement = "Every Watermarked response of QueryApi topology, channel_topology, series, overview, edge_transmissions, channel_resources, channel, channels and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read, and every page of QueryApi::agents and every QueryApi::agent detail carries the watermark EdgeStore::agent_traffic returned with the counts it holds."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
-Topic sizes come from L6, not L7, so the surface reads L7's watermark
-before calling the catalog. Classifications under a version are written
-before the deliveries that carry them are acked, so the frontier covers
-them and the same watermark is sound for sizes. Channel rows count
-accesses and confirmations by event time from L5, like channel_resources,
-so the watermark read first is sound for their counts too.
+A client treats everything before a response's watermark as final, which
+holds only if the watermark was read before the data. Topic sizes come
+from L6, not L7, so the surface reads L7's watermark before calling the
+catalog. Classifications under a version are written before the
+deliveries that carry them are acked, so the frontier covers them and the
+same watermark is sound for sizes. Channel rows count accesses by event
+time from L5, like channel_resources, and transmissions from the edge
+buckets, so the watermark read first is sound for their counts too. The
+overview reads it before the totals, the alerts and the channels; it
+governs only the totals, since the queues have no settling point. Agent
+rows and details take theirs from agent_traffic, which reads it before the
+buckets its counts come from (topology.watermark.read-before-data); their
+labels, states, aliases, claims and last-seen times come from L3, and the
+watermark claims nothing about them.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::responses_carry_watermark_read_first"
+dst = [
+    "crosstalk::surface::dst::responses_carry_watermark_read_first",
+    "crosstalk::surface::dst::overview_reads_watermark_first",
+    "crosstalk::surface::dst::agent_reads_watermark_read_first",
+]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -1,0 +1,30 @@
+[invariant]
+id = "surface.query.names-batch-bounded"
+statement = "An IdBatch holds distinct ids in ascending order and at most IdBatch::MAX (1000) of them, IdBatch::new refuses more distinct ids with TooManyIds, which QueryError::from maps to InvalidInput(TooManyIds) with the same counts, and QueryApi::agent_names and channel_names each take an IdBatch."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An unbounded batch is an unbounded query. One type for every name lookup
+gives one bound and one refusal: the cap is twice the largest page, so the
+names of any one page (a sender and a reader per row, or one channel) fit
+in one call of each lookup, and repeats do not count against it. A typed
+InputError lets the client split the batch instead of guessing from a
+string.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::batch::IdBatch::new",
+    "crosstalk_spec::interfaces::l8_surface::QueryApi::channel_names",
+    "crosstalk_spec::interfaces::l8_surface::QueryApi::agent_names",
+]
+unit = [
+    "crosstalk_spec::tests::agent_reads::id_batches_are_distinct_and_ascending",
+    "crosstalk_spec::tests::agent_reads::id_batches_cap_distinct_ids",
+    "crosstalk_spec::tests::agent_reads::too_many_ids_is_invalid_input",
+    "crosstalk_spec::tests::channel_reads::names_refuse_a_batch_over_the_cap",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

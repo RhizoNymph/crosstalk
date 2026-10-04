@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 
 use crate::aggregates::access::{AgentAccesses, ResourceUse};
 use crate::aggregates::node::CanonicalOriginKind;
+use crate::batch::{IdBatch, TooManyIds};
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -469,7 +470,8 @@ fn names_resolve_each_known_id_to_the_channel_in_force() {
         channel(9),
         channel(2),
     ];
-    let names = resolve_names(&asked, &registry).expect("a small batch");
+    let batch = IdBatch::new(asked).expect("a small batch");
+    let names = resolve_names(&batch, &registry).expect("every known id is named");
     assert_eq!(names.len(), 4, "unknown ids are left out, repeats once");
     let absorbed = &names[&channel(2)];
     assert_eq!(absorbed.id(), channel(1));
@@ -491,16 +493,16 @@ fn names_resolve_each_known_id_to_the_channel_in_force() {
 fn names_refuse_a_batch_over_the_cap() {
     let world = World::new();
     let registry = world.registry();
-    let full: Vec<ChannelId> = (1..=ChannelName::MAX_BATCH as u128).map(channel).collect();
+    let max = IdBatch::<ChannelId>::MAX;
+    let full = IdBatch::new((1..=max as u128).map(channel)).expect("exactly the cap");
     assert!(resolve_names(&full, &registry).is_ok());
-    let over: Vec<ChannelId> = (1..=ChannelName::MAX_BATCH as u128 + 1)
-        .map(channel)
-        .collect();
+    let over = IdBatch::new((1..=max as u128 + 1).map(channel));
+    assert_eq!(over, Err(TooManyIds { max, got: max + 1 }));
     assert_eq!(
-        resolve_names(&over, &registry),
+        over.map_err(QueryError::from),
         Err(QueryError::InvalidInput(InputError::TooManyIds {
-            max: ChannelName::MAX_BATCH,
-            got: ChannelName::MAX_BATCH + 1,
+            max,
+            got: max + 1,
         }))
     );
 }

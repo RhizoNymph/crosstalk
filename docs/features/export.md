@@ -64,7 +64,7 @@ selection:
 
 | Dataset | Selection | Rows | Content columns |
 | --- | --- | --- | --- |
-| `Transmissions(ExportScope)` | window over `Confirmed::at`, filter as `admits` | one per confirmed transmission (`TransmissionRow`) | topic label and the text of each match (`MatchText`: origin and read) |
+| `Transmissions(ExportScope)` | window over `Confirmed::at`, filter as `admits` | one per confirmed transmission (`TransmissionRow`: its `TransmissionSummary` and strongest match class) | topic label and the quoted text of each match (`MatchText`: the evidence's `MatchQuotes`, origin and read) |
 | `Edges(ExportScope)` | aligned window, filter as `topology` | one per resolved edge bucket (`EdgeRow`) | topic label |
 | `Accesses(ExportScope)` | aligned window, `admits_access` | one per resolved access bucket (`AccessRow`) | none |
 | `Topics(ExportScope)` | window and filter count transmissions; `topics` selects rows | one per topic of the version, zero counts included (`TopicRow`) | label and terms |
@@ -88,19 +88,20 @@ wholly after `W`, and the export holds no rows). The watermark is a bucket
 boundary, so an aligned window stays aligned. The topic version is
 resolved once and pinned in the header's filter. Agent and channel
 resolution and the copy of current verdicts (for `FalseDetections::Exclude`
-and the transmission row's `verdict`) are captured once at the start and
+and the transmission row's verdict) are captured once at the start and
 held for the whole export, so a merge committed mid-stream cannot split
 one export's rows across two resolutions. So the rows are a function of
 the request, the watermark and that captured state: a re-run at the same
-watermark with no merge, unmerge, promotion or verdict in between sends
-the same rows, count and digest. A projection export reads the stored
+watermark with no merge, unmerge, promotion or verdict in between (and,
+with content, no quoted body dropped by content retention) sends the same
+rows, count and digest. A projection export reads the stored
 frame (`projection_rows`), the same on every export until the frame
 expires; its header's basis carries the fit's own spec and watermark.
 
 ### Rows
 
 Each dataset's rows are sent in ascending `RowKey` order, unique per
-export: transmissions by (`confirmed_at`, id); edges by (bucket start,
+export: transmissions by (`Confirmed::at`, id); edges by (bucket start,
 sender, reader, route encoding, topic); accesses by (bucket start, agent,
 channel, write before read); topics by id; points by frame index; verdicts
 by (transmission, revision). Every agent and channel a row names is
@@ -109,6 +110,31 @@ transmission row keeps a transmission whose two agents have since merged,
 with equal ends. `verdict_rows(transmission, log)` builds one row per
 record with the transmission's route kind and detector call
 (`QualityMatch`), so the export reproduces `DetectionQuality::tally`.
+
+**Transmission rows are the surface's.** A `TransmissionRow` is the
+`TransmissionSummary` that `transmissions_by_id` lists for the
+transmission ([read_models.md](read_models.md#transmission-rows)), built by
+the same `TransmissionSummary::of` under the export's captured aliases,
+verdict copy and header version, plus `MatchClass::strongest` of its
+matches. `TransmissionRow::new` and `TransmissionRow::of` (checked) take
+only a confirmed summary (`Confirmed`, `Classified` or `Aggregated`), since
+the dataset is windowed and keyed by `Confirmed::at`; the row keeps the
+summary's `Delivery`. Its topic is a `TopicUnder` (`Topic`, `Outlier`, or
+`Unassigned` under the header's version), its state kind says whether it
+has been classified, and its verdict exists because every confirmed state
+is judgeable. With content, `TransmissionContent::of(evidence,
+topic_label)` takes the transmission's `TransmissionEvidence` assembled
+with `ExcerptWindow::MATCH_ONLY`: one `MatchText { class, quotes }` per
+match in stored order, where `quotes` is the evidence page's `MatchQuotes`
+(origin and read `Excerpted`), so each side is the matched range alone, at
+most `Excerpt::MAX_HIGHLIGHT` (8 KiB) with the bytes cut counted, or
+`BodyDropped` when content retention dropped the body. An export with
+content therefore completes after retention, marking what is gone, and
+quotes exactly what the evidence page shows. The rows keep their own shape
+only where the surface has none (edge and access buckets, topic counts,
+frame points, verdict records), and the digest's canonical encoding is the
+export's own because the surface's types have no byte form
+([Digest](#digest-and-verification)).
 
 ### Manifest
 
@@ -154,7 +180,11 @@ for each row in order, its encoded length as `u64` LE followed by
 `ExportRow::encode`, a canonical binary encoding (row tag, then the row's
 fields in declaration order: ids as `u128` LE, times and counts as `u64`
 LE, options and strings tagged and length-prefixed, floats as their bits;
-`export/digest.rs` has the table). The wire bytes are the encoder's; the
+a transmission row writes its summary's fields, then its class and
+content, with each excerpt's text, highlight and elided counts or the
+dropped body's hash; `export/digest.rs` has the table). The surface's
+row types have no canonical byte form of their own (their serde form is
+the implementation's), so the encoding lives here. The wire bytes are the encoder's; the
 digest does not depend on them, so a JSONL and a Parquet export of the
 same rows carry the same digest. `verify_export(header, rows, trailer,
 hasher)` is the reader's check: it accepts only a present, `Complete`
@@ -207,7 +237,7 @@ can end after it started, so it has its own record rather than a place in
 | --- | --- | --- |
 | `spec/types/interfaces/l8_surface/export/mod.rs` | Module docs and re-exports | — |
 | `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked), `InvalidExportRequest`, `ExportDataset`, `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `ExportFormat`, `ExportLimits` (`check`) |
-| `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow`, `TransmissionContent`, `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
+| `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow` (checked: `new`, `of`), `InvalidTransmissionRow`, `TransmissionContent` (`of`), `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
 | `spec/types/interfaces/l8_surface/export/manifest.rs` | Header and trailer | `ExportHeader` (checked), `ExportHeaderParts`, `InvalidHeader`, `ExportBasis`, `GatewayVersion`, `settled_window`, `ExportTrailer`, `ExportEnd`, `ExportFailure`, `SourceFailure` |
 | `spec/types/interfaces/l8_surface/export/digest.rs` | Canonical row encoding and the digest | `ExportRow::encode`, `encode_route`, `hash_row`, `RowHasher`, `ExportDigest`, `ROW_DIGEST_CONTEXT` |
 | `spec/types/interfaces/l8_surface/export/seal.rs` | Row checks, the trailer, verification | `ExportSealer` (`push`, `finish`, `fail`), `RowRefused`, `verify_export`, `Incomplete` |
@@ -216,10 +246,12 @@ can end after it started, so it has its own record rather than a place in
 | `spec/types/interfaces/l8_surface.rs` | `QueryApi::export` and `QueryApi::ExportRows` | — |
 | `spec/types/interfaces/l8_surface/audit.rs` | `AuditBody::Export`, `AuditSubject::Export`, `AuditSubject::Projection` | — |
 | `spec/types/interfaces/l8_surface/errors.rs` | `ConflictKind::ExportTooLarge` | — |
+| `spec/types/interfaces/l8_surface/summary.rs`, `evidence.rs`, `excerpt.rs` | The transmission row, the match quotes and `ExcerptWindow::MATCH_ONLY` a transmissions export reuses ([read_models.md](read_models.md)) | — |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | `From<ExportPlanError> for QueryError` | — |
 | `spec/types/ids.rs` | `ExportId` | — |
-| `spec/types/tests/export.rs` | Requests, headers, limits, plan errors, projection and verdict rows, audit records | — |
-| `spec/types/tests/export_stream.rs` | Encoding, digest, sealer, sealed stream, verification | — |
+| `spec/types/tests/export.rs` | Requests, headers, limits, plan errors, transmission, projection and verdict rows, audit records | — |
+| `spec/types/tests/export_stream.rs` | Encoding, digest, sealer, sealed stream, verification, a transmission row is a confirmed summary | — |
+| `spec/types/tests/evidence.rs` (part) | Export content quotes the evidence | — |
 
 ## Invariants and constraints
 
@@ -234,8 +266,12 @@ can end after it started, so it has its own record rather than a place in
   their start; agent and channel resolution and verdicts are captured once
   at the start; every topic in the rows belongs to the header's version. A
   re-run with the same request at the same watermark, with no merge,
-  unmerge, promotion or verdict in between, sends the same rows, count and
-  digest. A projection export sends its stored frame.
+  unmerge, promotion or verdict in between (and, with content, no quoted
+  body dropped), sends the same rows, count and digest. A projection export sends its stored frame.
+- A transmission row is the `TransmissionSummary` of a confirmed
+  transmission under the export's captured resolution and header version,
+  with the strongest match class; its content quotes are the evidence's,
+  cut with no context.
 - Rows are of the header's dataset, carry content exactly when requested,
   are in strictly increasing key order and no more than planned; after one
   refusal every later row is refused.

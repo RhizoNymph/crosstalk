@@ -24,12 +24,12 @@
 //!
 //! | `UiEvent` | From `Changed` | Published by, after | Re-query |
 //! | --- | --- | --- | --- |
-//! | `AlertChanged { id }` | `Alert` | L6 triage (open, dedup, suppress), L8 acknowledge and resolve | `alerts` |
-//! | `ChannelChanged { id }` | `Channel` | L5: discovery, config declaration, new resource, detection change (incl. dormant and unused), recorded policy decision (config or `PolicyChanged`, once applied), promotion (the promoted channel and each channel it superseded) | `channel`, `policy_history`, `channel_resources` |
-//! | `AgentChanged { id }` | `Agent` | L3: new or registered agent, state change, merge (source, target, repointed agents), unmerge (the source, its former target, restored agents), rename | `agents` |
+//! | `AlertChanged { id }` | `Alert` | L6 triage (open, dedup, suppress), L8 acknowledge and resolve | `alerts`, `alert`, `overview` |
+//! | `ChannelChanged { id }` | `Channel` | L5: discovery, config declaration, new resource, detection change (incl. dormant and unused), recorded policy decision (config or `PolicyChanged`, once applied), promotion (the promoted channel and each channel it superseded) | `channel`, `channels`, `channel_names`, `policy_history`, `channel_resources`, an open `promotion_preview`, `overview` |
+//! | `AgentChanged { id }` | `Agent` | L3: new or registered agent, state change, merge (source, target, repointed agents), unmerge (the source, its former target, restored agents), rename | `agents`, `agent`, `agent_names` |
 //! | `RuleChanged { id }` | `Rule` | L6 rule store: create (operator or config), update, enable or disable, turning stale | `alert_rules` |
-//! | `VerdictChanged { id }` | `Verdict` | L5 verdict store: a verdict set or withdrawn | `verdicts`, `detection_quality`, and views filtered with `FalseDetections::Exclude` |
-//! | `Watermark { at }` | `Watermark` | L7 edge store: watermark advance | `topology`, `channel_topology`, `series`, `edge_transmissions`, `channel_resources`, `topic_sizes` |
+//! | `VerdictChanged { id }` | `Verdict` | L5 verdict store: a verdict set or withdrawn | `verdicts`, `detection_quality`, `transmissions_by_id`, and views filtered with `FalseDetections::Exclude` |
+//! | `Watermark { at }` | `Watermark` | L7 edge store: watermark advance | every `Watermarked` query: `topology`, `channel_topology`, `series`, `overview`, `edge_transmissions`, `channel_resources`, `channel`, `channels`, `agents`, `agent`, `topic_sizes` |
 //! | `TopicVersionReady { version }` | `TopicVersion` | L6 catalog: version ready, active or superseded; pinned, unpinned or dropped | `topic_versions`, then topic-scoped queries if the active version changed |
 //! | `ProjectionReady { id }` | `Projection` | L6 projection store: job ready or failed, frame expired | `projection_status`, then `projection` |
 //!

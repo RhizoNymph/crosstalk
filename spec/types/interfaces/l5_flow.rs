@@ -61,6 +61,21 @@
 //! promotion committed) is a permanent failure: logged at warn with the
 //! channel and its superseding channel, and acked.
 //!
+//! **Detection follows resolution.** A confirmation advances the detection
+//! of the channel its route resolves to (`ChannelDirectory::canonical`),
+//! never of a superseded one. A transmission opened on a channel before a
+//! promotion superseded it keeps that channel id in its stored route, and
+//! its content can arrive after the promotion (the `provenance` and `flow`
+//! groups lag independently); when it is confirmed, the flow consumer
+//! updates the superseding channel's `TrafficDetection` exactly as for a
+//! confirmation routed to that channel (it becomes or stays `Active`, with
+//! `last_transmission` naming the transmission) and publishes
+//! `Changed::Channel` for it. The superseded channel's own detection stays
+//! frozen as it was at the promotion. This is the read-time resolution
+//! every reader applies: the route counts on the canonical channel in edges
+//! and channel rows, and the canonical channel's policy judges the traffic,
+//! so its detection is the one that records it.
+//!
 //! **Timing.** The correlator is configured with a [`CorrelationTiming`]: it
 //! pairs a write and a read within `correlation_window`, opens a channel
 //! transmission `AwaitingContent` until `window_closes_at(read.at)`, keeps it
@@ -250,6 +265,10 @@ pub enum TransmissionUpdate {
         transmission: TransmissionId,
         content: ContentMatch,
     },
+    /// Content evidence for an open channel transmission. Its channel's
+    /// detection is advanced on the channel the stored route resolves to,
+    /// even when the route names a channel superseded since it opened
+    /// (module docs, "Detection follows resolution").
     Confirm {
         transmission: TransmissionId,
         confirmed: Confirmed,

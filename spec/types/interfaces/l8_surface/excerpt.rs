@@ -56,6 +56,10 @@ impl ExcerptWindow {
     /// 256 bytes either side: a few lines of prose.
     pub const DEFAULT: Self = Self { context: 256 };
 
+    /// No context: the matched range alone. An export quotes matches with
+    /// it (`export::rows::MatchText`).
+    pub const MATCH_ONLY: Self = Self { context: 0 };
+
     pub fn new(context: u16) -> Result<Self, InvalidWindow> {
         if context > Self::MAX_CONTEXT {
             return Err(InvalidWindow {

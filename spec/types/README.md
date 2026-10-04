@@ -15,7 +15,7 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000), TooManyIds: batch lookups such as agent names
+├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000), TooManyIds: the one id batch of every name lookup (agents, channels)
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
@@ -45,7 +45,7 @@ spec/types/
 │       └── channel/
 │           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
 │           ├── promotion.rs Promotion (checked), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples), COVERAGE_CAP
-│           ├── detection.rs DeclaredDetection, TrafficDetection, DetectionKind
+│           ├── detection.rs DeclaredDetection, TrafficDetection (a superseded channel's is frozen), DetectionKind
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
@@ -79,34 +79,36 @@ spec/types/
 │   ├── l3_reconstruction/
 │   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator
+│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi (incl. agents, agent, agent_names, export), OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
+│   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter; re-exports the action, error, permission and sink types
 │   └── l8_surface/
+│       ├── permissions.rs Caller (built only by the directory), Permission, PermissionSet
+│       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
 │       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
-│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. MergeIntoSelf), InputError (incl. SelfMerge, TooManyIds)
-│       ├── query_errors.rs the From impls: each store error to one QueryError or ActionError
+│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds)
+│       ├── query_errors.rs the From impls: each store error and refused request value to one QueryError or ActionError
+│       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
+│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
 │       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
 │       ├── evidence.rs    TransmissionEvidence (assemble), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, EvidenceError
-│       ├── excerpt.rs     ExcerptWindow (checked), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
+│       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
 │       ├── overview.rs    OverviewCounts, QueueCounts (tally)
-│       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
-│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
 │       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
-│       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
-│       │   ├── mod.rs     module docs and re-exports
-│       │   ├── request.rs ExportRequest (checked; required_permission), ExportDataset, ExportScope, ExportFormat, ExportLimits
-│       │   ├── rows.rs    ExportRow and the row of each dataset, RowKey (row order), projection_rows, verdict_rows
-│       │   ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer, ExportEnd, ExportFailure
-│       │   ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
-│       │   ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
-│       │   ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
-│       │   └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
-│       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
+│       ├── sinks.rs       AlertSink, SinkInfo, SinkKind, SinkError
+│       └── export/        QueryApi::export: one dataset streamed between a header and a trailer
+│           ├── mod.rs     module docs and re-exports
+│           ├── request.rs ExportRequest (checked; required_permission), ExportDataset, ExportScope, ExportFormat, ExportLimits
+│           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence), RowKey (row order), projection_rows, verdict_rows
+│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer, ExportEnd, ExportFailure
+│           ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
+│           ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
+│           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
+│           └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
 ```
 
@@ -126,8 +128,9 @@ spec/types/
   parameter, so one list's cursor does not fit another.
 - **Errors are typed end to end.** Each store's error enum maps to
   `QueryError` (or, behind an action, `ActionError`) through one `From` impl
-  in `l8_surface/query_errors.rs`, so adding a variant forces a decision
-  about what the UI sees. Reads and writes of the edge store fail with
+  in `l8_surface/query_errors.rs`, and so does each checked request value
+  the surface builds before reading (an id batch, a selection, an excerpt
+  window), so adding a variant forces a decision about what the UI sees. Reads and writes of the edge store fail with
   different enums (`EdgeQueryError`, `EdgeError`).
 - **Exhaustive matches, no wildcards.** `OperatorAction::kind`,
   `required_permission` and `subjects`, `UiEvent::from` and the error
@@ -179,7 +182,9 @@ Code Assist) and self-hosted vLLM or SGLang. See
   `ChannelDirectory` (`aliases.rs`), whose caches must apply every merge and
   unmerge. Merges are a log of `MergeRecord`s; an operator unmerge reverts
   one record exactly and records a `MergeVeto`. A promotion supersedes the
-  discovered channels its pattern covers; nothing undoes a supersession.
+  discovered channels its pattern covers; nothing undoes a supersession. A
+  superseded channel's detection is frozen, and a confirmation routed
+  through it advances its superseding channel's.
 - **Harness claims are aggregated for display.** L3 keeps the distinct
   claims seen per attributed agent; a canonical agent shows the union over
   its aliases. Claims are never identity evidence.
@@ -232,7 +237,7 @@ and the `Changed` notifications and the live feed are not modelled.
 | `Channel.supersededBy` stand-in; `ChannelPromoted` supersedes every channel naming the promoted one | `promotion::plan`: every other discovered channel whose seed the pattern matches |
 | the promotion's policy decision, chosen by the `ChannelPolicy.promotion` stand-in through literal selectors (`allow`, `disallow`, `reset`) | the `PolicyDecision` in the `Promotion`, recorded in the promoted channel's `PolicyHistory` in the promotion's transaction |
 | an `Exchange.resource` after a promotion names the promoted channel | `ChannelRegistry::lookup` returns `Known(canonical)` for a superseded channel's resources, so new accesses land on the superseding channel |
-| a late `Channel.confirm` on a superseded channel is dropped and not forwarded | the superseded channel's detection stays as it was; the types do not say whether such a confirmation advances the superseding channel's `TrafficDetection::Active::last_transmission` |
+| a late `Channel.confirm` on a superseded channel is dropped and not forwarded | differs: the superseded channel's detection stays frozen, but the confirmation advances the superseding channel's detection (`TrafficDetection::Active::last_transmission`), as read-time resolution counts the route and applies the policy there (`l5_flow`, "Detection follows resolution"). `cascade.yaml` still drops it |
 | `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic`; `unreviewed.never_reviewed` / `unreviewed.reset` are `Unreviewed(None)` / `Unreviewed(Some(_))`; its `unused` trigger is the `SanctionedUnused` rule's policy check |
 | `ChannelPolicy.superseded.*`: the policy frozen where it was, taking no `allow`, `disallow` or `reset` | the superseded channel keeps its `Policy` and `PolicyHistory`; `ChannelRegistry::set_policy` refuses (`Superseded { channel, by }`) and the surface returns `Conflict(ChannelSuperseded)` |
 | `SupersededTraffic`, forwarded to the superseding channel's policy (a one-step cycle marked `bounded`) | in-process: confirmed traffic on a superseded channel is judged by the policy of `ChannelDirectory::canonical`; the alert keeps the superseded channel as its stored subject |
@@ -259,7 +264,7 @@ and the `Changed` notifications and the live feed are not modelled.
 | `Alert.fired` / `deduplicated` / `rejected` / `inactive` | `AlertDraft` / `TriageOutcome::Deduplicated` / `OperatorRejected` / `RuleInactive`; the simulator always takes the first guard (`open`), so the other three are never reached |
 | `Alert.subjectKind` / `subject` | `AlertSubject`: the channel for new-channel, traffic and sanctioned-unused alerts, the transmission for suspected-transmission and content alerts |
 | `ContentRule` machine: `unsaved`, then `current.{enabled,disabled}` and `stale.{enabled,disabled}` | a user `AlertRuleDef` (`ContentRule::WatchedTopic` / `SemanticQuery`): `current` / `stale` is `TopicWatch` or `QueryWatch` `Current` / `Stale`, the children are `RuleStatus`; `unsaved` is no record before `AlertRuleStore::create` |
-| `ContentRule.enable` drops in either `stale` leaf | `Conflict(RuleStale)`, added to `ConflictKind` by a sibling change; until it lands, `AlertRuleDef::set_enabled` and `AlertRuleStore::set_enabled` document that enabling a stale rule leaves it stale |
+| `ContentRule.enable` drops in either `stale` leaf | `AlertRuleDef::set_enabled` refuses with `StaleRule`, `AlertRuleStore::set_enabled` with `RuleError::Stale`, and the surface returns `Conflict(RuleStale)`; the rule is unchanged |
 | `ContentRule.update` from `stale` to `current.enabled`, and from `current` back to the status it had | `AlertRuleStore::update` / `AlertRuleDef::update`: a stale rule is retargeted and enabled, a current one keeps its status |
 | `ContentRule.unmappedIn` stand-in: on `TopicVersionReady` the rules naming the version take `remap_stale` before the others take `remap` | `AlertRuleDef::remap` with `TopicLineage::remap` over the stored lineage and the rule's threshold |
 | `ContentRule.embedding_model_changed`, fired by `Config` | `AlertRuleDef::embedding_model_changed` when alerts starts with an embedder of another model |

@@ -152,8 +152,16 @@ pub enum InputError {
     /// (`MergeRequest::new` refuses it): invalid whatever the merge table
     /// holds.
     SelfMerge,
-    /// A batch lookup naming more distinct ids than it takes
-    /// (`IdBatch::MAX`).
+    /// A transmission selection naming no transmission
+    /// (`TransmissionSelection::new` refuses it).
+    EmptySelection,
+    /// An excerpt window wider than `ExcerptWindow::MAX_CONTEXT` bytes of
+    /// context a side (`ExcerptWindow::new` refuses it).
+    ExcerptContextTooLong { max: u16, got: u16 },
+    /// More distinct ids than a request takes: a name lookup
+    /// (`agent_names`, `channel_names`) over `IdBatch::MAX`, or a
+    /// transmission selection over `TransmissionSelection::MAX`. `max` is
+    /// the bound that applied and `got` the distinct ids asked for.
     TooManyIds { max: usize, got: usize },
 }
 

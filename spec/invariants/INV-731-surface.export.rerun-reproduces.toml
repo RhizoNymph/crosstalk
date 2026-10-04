@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.export.rerun-reproduces"
-statement = "Two exports of the same dataset, scope and content choice whose headers carry the same watermark and basis, with no merge, unmerge, promotion or verdict committed between their starts, send the same rows in the same order and end with the same trailer row count and digest, and a projection export sends the same rows on every call until its frame expires."
+statement = "Two exports of the same dataset, scope and content choice whose headers carry the same watermark and basis, with no merge, unmerge, promotion or verdict committed between their starts and, when they include content, no message body they quote dropped by content retention in between, send the same rows in the same order and end with the same trailer row count and digest, and a projection export sends the same rows on every call until its frame expires."
 kind = "coordination"
 requires = ["unit", "integration"]
 rationale = """
@@ -8,7 +8,9 @@ A cited export is checked by running it again. The data is settled before
 the watermark, the topic version is pinned, and agent and channel
 resolution and the verdict copy are captured once at the start, so the
 only inputs that can differ between two runs are those operator actions,
-which the condition names. Rows sorted by a unique key make the order a
+which the condition names, and, for content, the stored bodies: a body
+content retention drops is quoted as BodyDropped from then on, as the
+evidence page shows it. Rows sorted by a unique key make the order a
 function of the data, not of the store's plan.
 """
 

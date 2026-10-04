@@ -16,16 +16,36 @@
 //!
 //! | Dataset | Row | Key |
 //! | --- | --- | --- |
-//! | transmissions | [`TransmissionRow`] | (`confirmed_at`, `id`) |
+//! | transmissions | [`TransmissionRow`] | (`Confirmed::at`, `id`) |
 //! | edges | [`EdgeRow`] | (bucket start, sender, reader, route, topic) |
 //! | accesses | [`AccessRow`] | (bucket start, agent, channel, op) |
 //! | topics | [`TopicRow`] | `topic` |
 //! | projection | [`PointRow`] | `index`, the point's position in the frame |
 //! | verdicts | [`VerdictRow`] | (`transmission`, `revision`) |
 //!
-//! These rows are the export's own. `TransmissionRow` overlaps the
-//! surface's transmission summary row and `MatchText` the evidence
-//! excerpt; where those exist, the export's rows should be built from them.
+//! **Shared with the surface's reads.** A transmission row is the
+//! [`TransmissionSummary`] `transmissions_by_id` lists for it (the same
+//! canonical parties, resolved route, per-state shape, topic under the
+//! header's version and current verdict), plus the strongest match class;
+//! its content's quotes are the evidence page's [`MatchQuotes`], cut with
+//! [`ExcerptWindow::MATCH_ONLY`]: the matched range of each side and no
+//! context, at most `Excerpt::MAX_HIGHLIGHT` bytes of it with the rest
+//! counted, or [`Excerpted::BodyDropped`] when content retention dropped
+//! the body. So an export and the UI never disagree about a transmission's
+//! row or its quoted text. Only the encoding is the export's own: the
+//! digest is defined over [`ExportRow::encode`], a canonical binary form
+//! of these same values ([`super::digest`]).
+//!
+//! The other rows have no counterpart among the surface's reads: an edge
+//! or access row is one bucket, where the graphs return sums over a
+//! window; a topic row counts one version's assignments in the settled
+//! window; a point row is a stored frame's point with its index; a verdict
+//! row joins one log record with the detector's call.
+//!
+//! [`TransmissionSummary`]: crate::interfaces::l8_surface::summary::TransmissionSummary
+//! [`MatchQuotes`]: crate::interfaces::l8_surface::evidence::MatchQuotes
+//! [`ExcerptWindow::MATCH_ONLY`]: crate::interfaces::l8_surface::excerpt::ExcerptWindow::MATCH_ONLY
+//! [`Excerpted::BodyDropped`]: crate::interfaces::l8_surface::excerpt::Excerpted::BodyDropped
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -33,56 +53,152 @@ use std::num::NonZeroU64;
 use crate::aggregates::edge::{EdgeSelector, RouteKind};
 use crate::aggregates::projection::{ProjectedPoint, Projection};
 use crate::aggregates::quality::{MatchClass, QualityMatch};
+use crate::aliases::Aliases;
 use crate::derived::flow::access::AccessKind;
-use crate::derived::flow::transmission::{Route, Transmission};
+use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::{Verdict, VerdictLog, VerdictRevision};
 use crate::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionId};
+use crate::interfaces::l8_surface::evidence::{MatchQuotes, TransmissionEvidence};
+use crate::interfaces::l8_surface::summary::{
+    Delivery, TopicUnder, TransmissionStateKind, TransmissionSummary,
+};
 use crate::support::{NonEmpty, TimeWindow, Timestamp};
 
 use super::digest::encode_route;
 use super::request::ExportDatasetKind;
 
-/// One confirmed transmission. Its sender and reader are canonical as of
-/// the export's start; when the two have since been merged they are equal
-/// (the topology graph drops such a transmission; the export lists it).
+/// One confirmed transmission: the [`TransmissionSummary`] the surface
+/// lists for it, resolved with the aliases captured when the export started
+/// and with its topic under the header's version, the strongest class of
+/// its content matches and, when the request includes content, its topic
+/// label and quoted text. When its sender and reader have since been merged
+/// they are equal (the topology graph drops such a transmission; the export
+/// lists it).
+///
+/// Built only through [`TransmissionRow::new`] and [`TransmissionRow::of`],
+/// which take a confirmed summary (`Confirmed`, `Classified` or
+/// `Aggregated`): the dataset holds confirmed transmissions, ordered and
+/// windowed by `Confirmed::at`, so every row has a [`Delivery`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransmissionRow {
-    pub id: TransmissionId,
-    pub from: AgentId,
-    pub to: AgentId,
-    /// With its channel resolved through supersession.
-    pub route: Route,
-    pub opened_at: Timestamp,
-    /// `Confirmed::at`: what the window is tested against.
-    pub confirmed_at: Timestamp,
-    pub matched_bytes: NonZeroU64,
+    summary: TransmissionSummary,
+    delivery: Delivery,
+    strongest: MatchClass,
+    content: Option<TransmissionContent>,
+}
+
+/// A summary that cannot head a transmission row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidTransmissionRow {
+    /// The transmission is not confirmed, so it has no `Confirmed::at` to
+    /// order and window it by.
+    NotConfirmed(TransmissionStateKind),
+}
+
+impl TransmissionRow {
+    pub fn new(
+        summary: TransmissionSummary,
+        strongest: MatchClass,
+        content: Option<TransmissionContent>,
+    ) -> Result<Self, InvalidTransmissionRow> {
+        let Some(&delivery) = summary.state.delivery() else {
+            return Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()));
+        };
+        Ok(Self {
+            summary,
+            delivery,
+            strongest,
+            content,
+        })
+    }
+
+    /// The reference row of `transmission`: its [`TransmissionSummary::of`]
+    /// under `aliases`, `verdict` and `topic` (the export's captured
+    /// resolution, verdict copy and header version), and
     /// [`MatchClass::strongest`] of its content matches.
-    pub strongest: MatchClass,
-    /// Under the header's topic version; `None` for an outlier.
-    pub topic: Option<TopicId>,
-    /// The current verdict as of the export's start.
-    pub verdict: Option<Verdict>,
+    pub fn of(
+        transmission: &Transmission,
+        aliases: impl Aliases,
+        verdict: impl FnOnce(TransmissionId) -> Option<Verdict>,
+        topic: impl FnOnce(TransmissionId) -> TopicUnder,
+        content: Option<TransmissionContent>,
+    ) -> Result<Self, InvalidTransmissionRow> {
+        let Some(confirmed) = transmission.state.confirmed() else {
+            return Err(InvalidTransmissionRow::NotConfirmed(
+                TransmissionStateKind::of(&transmission.state),
+            ));
+        };
+        let strongest = MatchClass::strongest(confirmed);
+        let summary = TransmissionSummary::of(transmission, aliases, verdict, topic);
+        Self::new(summary, strongest, content)
+    }
+
+    /// The row `transmissions_by_id` lists for the transmission.
+    pub fn summary(&self) -> &TransmissionSummary {
+        &self.summary
+    }
+
+    /// The summary's delivery: canonical sender, `Confirmed::at`, matched
+    /// bytes.
+    pub fn delivery(&self) -> &Delivery {
+        &self.delivery
+    }
+
+    /// [`MatchClass::strongest`] of its content matches.
+    pub fn strongest(&self) -> MatchClass {
+        self.strongest
+    }
+
     /// Present exactly when the request includes content.
-    pub content: Option<TransmissionContent>,
+    pub fn content(&self) -> Option<&TransmissionContent> {
+        self.content.as_ref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransmissionContent {
-    /// The topic's label; `None` for an outlier.
+    /// The label of the row's topic; `None` unless the summary's topic is
+    /// [`TopicUnder::Topic`].
     pub topic_label: Option<String>,
     /// One per content match, in `Confirmed::content` order.
     pub matches: NonEmpty<MatchText>,
 }
 
-/// The text of one content match.
+impl TransmissionContent {
+    /// The content of a transmission whose evidence was assembled with
+    /// [`ExcerptWindow::MATCH_ONLY`]: one [`MatchText`] per match of the
+    /// evidence, in its order. `None` when the evidence has no match (the
+    /// transmission is not confirmed).
+    ///
+    /// [`ExcerptWindow::MATCH_ONLY`]: crate::interfaces::l8_surface::excerpt::ExcerptWindow::MATCH_ONLY
+    pub fn of(evidence: &TransmissionEvidence, topic_label: Option<String>) -> Option<Self> {
+        let matches = evidence
+            .matches()
+            .iter()
+            .map(|evidence| MatchText {
+                class: MatchClass::from(evidence.content_match().kind()),
+                quotes: MatchQuotes {
+                    origin: evidence.origin().clone(),
+                    read: evidence.read().clone(),
+                },
+            })
+            .collect();
+        NonEmpty::from_vec(matches).map(|matches| Self {
+            topic_label,
+            matches,
+        })
+    }
+}
+
+/// The text of one content match: the evidence page's two excerpts of it,
+/// cut with no context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchText {
     pub class: MatchClass,
-    /// The sender's originated text the match covers.
-    pub origin: String,
-    /// The reader's input text the match was found in, as received (before
-    /// any decoding).
-    pub read: String,
+    /// The sender's originated text the match covers and the reader's input
+    /// text it was found in, as received (before any decoding); each is the
+    /// matched range alone, or `BodyDropped`.
+    pub quotes: MatchQuotes,
 }
 
 /// The topic label column of edges and projection points.
@@ -165,7 +281,8 @@ pub struct VerdictRow {
 /// One row of an export. An export's rows are all of its dataset's kind.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExportRow {
-    Transmission(TransmissionRow),
+    /// Boxed: a summary with its quoted content is the largest row.
+    Transmission(Box<TransmissionRow>),
     Edge(EdgeRow),
     Access(AccessRow),
     Topic(TopicRow),
@@ -231,8 +348,8 @@ impl ExportRow {
     pub fn key(&self) -> RowKey {
         match self {
             Self::Transmission(row) => RowKey::Transmission {
-                confirmed_at: row.confirmed_at,
-                id: row.id,
+                confirmed_at: row.delivery.confirmed_at,
+                id: row.summary.id,
             },
             Self::Edge(row) => {
                 let mut route = Vec::new();

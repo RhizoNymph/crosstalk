@@ -28,6 +28,10 @@
 //!   span, a location outside its body, a corrupt blob) are `Store`, with a
 //!   diagnostic reason. A message body content retention dropped is not an
 //!   error: the evidence reports it as `Excerpted::BodyDropped`.
+//! - A request value the surface builds before reading (an id batch, a
+//!   transmission selection, an excerpt window) that its checked
+//!   constructor refuses is `InvalidInput`: `TooManyIds` for too many ids
+//!   in either, `EmptySelection`, `ExcerptContextTooLong`.
 //! - A merge of one cluster into itself is `InvalidInput(SelfMerge)` when
 //!   the request names one id twice (no state needed) and
 //!   `Conflict(MergeIntoSelf)` when it names two ids that the merge table
@@ -52,8 +56,9 @@ use crate::interfaces::l6_analysis::{
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
-use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
+use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError, InvalidWindow};
 use crate::interfaces::l8_surface::export::ExportPlanError;
+use crate::interfaces::l8_surface::summary::InvalidSelection;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
 
@@ -364,8 +369,8 @@ impl From<SelfMerge> for ActionError {
     }
 }
 
-/// For a batch lookup (`QueryApi::agent_names`) whose ids do not fit an
-/// `IdBatch`.
+/// For a name lookup (`QueryApi::agent_names`, `channel_names`) whose ids
+/// do not fit an `IdBatch`, refused before the call.
 impl From<TooManyIds> for QueryError {
     fn from(error: TooManyIds) -> Self {
         Self::InvalidInput(InputError::TooManyIds {
@@ -399,5 +404,31 @@ impl From<ExportPlanError> for QueryError {
             ExportPlanError::UnalignedWindow => Self::InvalidInput(InputError::UnalignedWindow),
             ExportPlanError::Projection(projection) => projection.into(),
         }
+    }
+}
+
+/// For `QueryApi::transmissions_by_id`: a selection the surface could not
+/// build from the request, refused before anything is read. Going over the
+/// bound is the same `TooManyIds` a name lookup reports, with the
+/// selection's bound.
+impl From<InvalidSelection> for QueryError {
+    fn from(error: InvalidSelection) -> Self {
+        match error {
+            InvalidSelection::Empty => Self::InvalidInput(InputError::EmptySelection),
+            InvalidSelection::TooMany { max, got } => {
+                Self::InvalidInput(InputError::TooManyIds { max, got })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::transmission_evidence`: a window the surface could not
+/// build from the request, refused before anything is read.
+impl From<InvalidWindow> for QueryError {
+    fn from(error: InvalidWindow) -> Self {
+        Self::InvalidInput(InputError::ExcerptContextTooLong {
+            max: error.max,
+            got: error.got,
+        })
     }
 }

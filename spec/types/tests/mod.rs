@@ -26,6 +26,7 @@ mod operators;
 mod overview;
 mod paging;
 mod part_text;
+mod pattern_overlap;
 mod policy;
 mod projection;
 mod projection_frame;

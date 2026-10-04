@@ -31,7 +31,7 @@
 //!   to re-query.
 //! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`. Each configured
-//!   sink has a [`SinkId`]; an alert is delivered to the sinks its rule
+//!   sink has a [`SinkId`](crate::ids::SinkId) ([`sinks`]); an alert is delivered to the sinks its rule
 //!   lists, and `QueryApi::sinks` reports each sink's last delivery.
 //!
 //! **Channels.** `channels` lists [`ChannelRow`]s (the stored channel, its
@@ -134,11 +134,12 @@ pub mod lists;
 pub mod live;
 pub mod operators;
 pub mod overview;
+pub mod permissions;
 pub mod query_errors;
+pub mod sinks;
 pub mod summary;
 
 use std::collections::HashMap;
-use std::fmt;
 
 use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crate::aggregates::agents::{AgentDetail, AgentName, AgentRow};
@@ -158,7 +159,7 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{AgentId, AlertId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::paging::{
@@ -166,7 +167,7 @@ use crate::paging::{
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
     TopicList, TransmissionList,
 };
-use crate::support::{TimeWindow, Timestamp};
+use crate::support::TimeWindow;
 
 use audit::{AuditEntry, AuditFilter};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
@@ -180,136 +181,12 @@ use summary::{TransmissionPage, TransmissionSelection};
 
 pub use actions::{ActionKind, ActionOutcome, OperatorAction};
 pub use errors::{ActionError, ConflictKind, InputError, QueryError};
+pub use permissions::{Caller, Permission, PermissionSet};
+pub use sinks::{AlertSink, SinkError, SinkInfo, SinkKind};
 
 /// The policy an operator asks for. The surface stamps the author and time
 /// from the authenticated caller; callers cannot supply them.
 pub use crate::derived::flow::channel::policy::PolicyKind;
-
-/// The authenticated caller of one request: an operator and the
-/// permissions it holds.
-///
-/// Built only by [`OperatorDirectory::caller`](operators::OperatorDirectory::caller),
-/// so its permissions are always those config gives its operator, and it
-/// always holds at least one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Caller {
-    operator: OperatorId,
-    permissions: PermissionSet,
-}
-
-impl Caller {
-    pub fn operator(&self) -> OperatorId {
-        self.operator
-    }
-
-    pub fn permissions(&self) -> PermissionSet {
-        self.permissions
-    }
-
-    pub fn has(&self, permission: Permission) -> bool {
-        self.permissions.contains(permission)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum Permission {
-    /// Topology (agent-centred and channel-centred, with node metadata and
-    /// harness claims), series, the transmissions behind an edge (ids, times,
-    /// byte counts and topic ids), channels (rows, names and promotion
-    /// previews), a channel's resources and who used them, channel policy
-    /// history, agents, alert
-    /// rules, alerts and the topic history (versions, sizes, lineage): ids,
-    /// counts, times and similarities, no message content and no topic
-    /// labels or terms. Also verdict logs, detection quality, transmission
-    /// rows by id (state, parties, route, times, byte counts, topic ids,
-    /// verdict) and the overview's counts.
-    View,
-    /// Transmission content (the stored record and the evidence page's
-    /// excerpts of message text), search, topics (their labels and terms
-    /// come from message text) and projections: fitting them, their jobs
-    /// and their points.
-    Content,
-    /// Identity and policy: channel policy and promotion, agent merges,
-    /// unmerges and renames, alert rules and their sinks (what the gateway
-    /// alerts on, and where), and topic-version pins (what history the
-    /// gateway keeps).
-    Govern,
-    /// Work alerts: acknowledge and resolve. Judge transmissions: set and
-    /// withdraw verdicts.
-    Triage,
-    /// Operate the pipeline: list and replay dead-lettered deliveries. A
-    /// replay re-runs a consumer on an old event, so it can reopen alerts or
-    /// re-apply stale decisions.
-    Operate,
-    /// Read the audit log: every operator action, who asked for it and
-    /// what came of it, including refused ones, and every change config
-    /// made.
-    Audit,
-}
-
-impl Permission {
-    pub const ALL: [Self; 6] = [
-        Self::View,
-        Self::Content,
-        Self::Govern,
-        Self::Triage,
-        Self::Operate,
-        Self::Audit,
-    ];
-
-    const fn bit(self) -> u8 {
-        1 << self as u8
-    }
-}
-
-/// A set of permissions.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct PermissionSet(u8);
-
-impl PermissionSet {
-    pub const EMPTY: Self = Self(0);
-
-    /// Every permission: what the trusted operator holds.
-    pub const ALL: Self = {
-        let mut bits = 0;
-        let mut i = 0;
-        while i < Permission::ALL.len() {
-            bits |= Permission::ALL[i].bit();
-            i += 1;
-        }
-        Self(bits)
-    };
-
-    pub fn of(permissions: impl IntoIterator<Item = Permission>) -> Self {
-        Self(
-            permissions
-                .into_iter()
-                .fold(0, |bits, permission| bits | permission.bit()),
-        )
-    }
-
-    pub fn contains(self, permission: Permission) -> bool {
-        self.0 & permission.bit() != 0
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    /// In `Permission::ALL` order.
-    pub fn iter(self) -> impl Iterator<Item = Permission> {
-        Permission::ALL
-            .into_iter()
-            .filter(move |permission| self.contains(*permission))
-    }
-}
-
-impl fmt::Debug for PermissionSet {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_set().entries(self.iter()).finish()
-    }
-}
 
 /// Empty `states` means every state. `channel` keeps alerts whose subject is
 /// that channel or a transmission routed through it, with the listed
@@ -342,8 +219,9 @@ pub trait QueryApi {
     /// the channel page: a superseded id answers with its own record and its
     /// supersession (the UI's banner to the channel in force), not with the
     /// channel it resolves to. Counts are over `window` (all time when
-    /// `None`), as for a `channels` row. `None` for an unknown channel. The
-    /// watermark is read from L7 before the registry.
+    /// `None`), as for a `channels` row, and an unaligned window is refused
+    /// as there. `None` for an unknown channel. The watermark is read from
+    /// L7 before the registry and the buckets.
     async fn channel(
         &self,
         caller: &Caller,
@@ -363,15 +241,20 @@ pub trait QueryApi {
     /// View. A page of the channels `filter` matches
     /// ([`ChannelFilter::matches`]; superseded channels only when its origin
     /// filter asks for them), newest channel first, each as a
-    /// [`ChannelRow`]. A row in force counts its writers, readers and
-    /// transmissions in `filter.window` (all time when `None`) over itself
-    /// and every channel it superseded, exactly as
+    /// [`ChannelRow`]. A row in force counts its writers and readers in
+    /// `filter.window` (all time when `None`) over itself and every channel
+    /// it superseded, exactly as
     /// [`ChannelCounts::tally`](channels::ChannelCounts::tally) of a full
-    /// `channel_resources` traversal of the same channel and window; a
-    /// superseded row carries its supersession and no counts. The window
-    /// never changes which channels are listed, and the cursor binds it with
-    /// the rest of the filter. The watermark is read from L7 before the
-    /// registry, as for `channel_resources`.
+    /// `channel_resources` traversal of the same channel and window, and
+    /// its transmissions as the topology graph counts them on it for that
+    /// window under `TopologyFilter::default()`
+    /// ([`ChannelCounts::routed`](channels::ChannelCounts::routed), as
+    /// `overview` counts active channels); a superseded row carries its
+    /// supersession and no counts. A window not on bucket boundaries is
+    /// `InvalidInput(UnalignedWindow)`, as for `topology`. The window never
+    /// changes which channels are listed, and the cursor binds it with the
+    /// rest of the filter. The watermark is read from L7 before the registry
+    /// and the buckets, as for `channel_resources`.
     async fn channels(
         &self,
         caller: &Caller,
@@ -379,17 +262,18 @@ pub trait QueryApi {
         page: &PageRequest<ChannelList>,
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError>;
 
-    /// View. For each id asked for that the registry knows, keyed by that
+    /// View. For each id of `ids` that the registry knows, keyed by that
     /// id, the name of the channel it resolves to through
     /// `ChannelDirectory` (a superseded id is named by its channel in
     /// force): the channel's id and its pattern or seed locator. Unknown ids
-    /// are left out. More than [`ChannelName::MAX_BATCH`] ids is
-    /// `InvalidInput(TooManyIds)`, reading nothing. Exactly
-    /// [`channels::resolve_names`] over the registered channels.
+    /// are left out. Exactly [`channels::resolve_names`] over the registered
+    /// channels. The batch is bounded as for `agent_names`: a request with
+    /// more than [`IdBatch::MAX`] distinct ids is refused before the call
+    /// as `InvalidInput(TooManyIds)` (`QueryError::from(TooManyIds)`).
     async fn channel_names(
         &self,
         caller: &Caller,
-        ids: &[ChannelId],
+        ids: &IdBatch<ChannelId>,
     ) -> Result<HashMap<ChannelId, ChannelName>, QueryError>;
 
     /// View. What `PromoteChannel { channel, pattern, .. }` would do if the
@@ -591,7 +475,12 @@ pub trait QueryApi {
     /// for any linked view; the catalog's retention decides what is
     /// retained) and pinned by the cursor. No window and no filter: the
     /// selection came from a view that applied them. Not `Watermarked`:
-    /// rows are each transmission's current state.
+    /// rows are each transmission's current state. A request the surface
+    /// cannot build a selection from is refused before the call
+    /// (`QueryError::from(InvalidSelection)`): no ids is
+    /// `InvalidInput(EmptySelection)`, more than
+    /// [`TransmissionSelection::MAX`] distinct ids
+    /// `InvalidInput(TooManyIds)`.
     ///
     /// [`TransmissionSummary::of`]: summary::TransmissionSummary::of
     async fn transmissions_by_id(
@@ -670,7 +559,9 @@ pub trait QueryApi {
     /// agent. A body content retention dropped is
     /// [`Excerpted::BodyDropped`], and the rest is still returned. `None`
     /// for an unknown id. A record the transmission names that cannot be
-    /// read is `Store` ([`evidence::EvidenceError`]).
+    /// read is `Store` ([`evidence::EvidenceError`]). A window over
+    /// [`ExcerptWindow::MAX_CONTEXT`] is refused before the call as
+    /// `InvalidInput(ExcerptContextTooLong)` (`QueryError::from(InvalidWindow)`).
     ///
     /// [`Excerpted::of`]: excerpt::Excerpted::of
     /// [`Excerpted::BodyDropped`]: excerpt::Excerpted::BodyDropped
@@ -805,35 +696,4 @@ pub trait OperatorActions {
         caller: &Caller,
         action: OperatorAction,
     ) -> Result<ActionOutcome, ActionError>;
-}
-
-pub trait AlertSink {
-    fn id(&self) -> SinkId;
-
-    async fn deliver(&self, alert: &Alert) -> Result<(), SinkError>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SinkKind {
-    Webhook,
-    Slack,
-    Log,
-}
-
-/// A configured sink, as `QueryApi::sinks` reports it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SinkInfo {
-    pub id: SinkId,
-    pub kind: SinkKind,
-    /// The name from config.
-    pub name: String,
-    /// When its last delivery succeeded, or why it failed. `None` before
-    /// its first delivery.
-    pub last_delivery: Option<Result<Timestamp, SinkError>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SinkError {
-    Unreachable { reason: String },
-    Rejected { status: u16 },
 }

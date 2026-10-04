@@ -13,6 +13,7 @@ use crate::derived::flow::channel::{
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::{DelegationDirection, Route};
 use crate::ids::{AlertId, AlertRuleId, OperatorId};
+use crate::interfaces::l8_surface::channels::ChannelCounts;
 use crate::interfaces::l8_surface::overview::QueueCounts;
 use crate::support::{Share, TimeWindow};
 use crate::tests::fixtures::{access, agent, at, channel, resource};
@@ -213,4 +214,65 @@ fn queues_count_unreviewed_channels_that_are_not_superseded() {
         "never reviewed, reset, declared"
     );
     assert_eq!(counts.open_alerts, 0);
+}
+
+#[test]
+fn rows_count_the_transmissions_the_graph_routes_through_each_channel() {
+    let graph = graph(vec![
+        edge(1, 2, Route::Channel(channel(7)), 3, 300),
+        edge(2, 1, Route::Channel(channel(7)), 1, 10),
+        edge(1, 3, Route::Channel(channel(8)), 2, 20),
+        edge(
+            1,
+            3,
+            Route::Delegation(DelegationDirection::ParentToChild),
+            4,
+            40,
+        ),
+        edge(3, 2, Route::Unobserved, 1, 5),
+    ]);
+    let routed = ChannelCounts::routed(&graph);
+    assert_eq!(routed.len(), 2, "only channel routes");
+    assert_eq!(routed[&channel(7)], 4, "both directions on one channel");
+    assert_eq!(routed[&channel(8)], 2);
+    assert!(ChannelCounts::routed(&self::graph(Vec::new())).is_empty());
+}
+
+#[test]
+fn active_channels_are_the_channels_rows_count_transmissions_on() {
+    let graphs = [
+        graph(Vec::new()),
+        graph(vec![edge(1, 2, Route::Unobserved, 2, 20)]),
+        graph(vec![
+            edge(1, 2, Route::Channel(channel(7)), 3, 300),
+            edge(2, 3, Route::Channel(channel(7)), 1, 10),
+            edge(3, 1, Route::Channel(channel(9)), 5, 50),
+            edge(
+                1,
+                3,
+                Route::Delegation(DelegationDirection::ChildToParent),
+                1,
+                1,
+            ),
+        ]),
+    ];
+    for graph in &graphs {
+        let routed = ChannelCounts::routed(graph);
+        let rows_with_traffic = routed.values().filter(|&&n| n > 0).count();
+        assert_eq!(
+            EdgeTotals::of(graph).active_channels,
+            u64::try_from(rows_with_traffic).expect("small"),
+        );
+        let routed_sum: u64 = routed.values().sum();
+        let channel_edges: u64 = graph
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.route, Route::Channel(_)))
+            .map(|edge| edge.stats.transmissions.get())
+            .sum();
+        assert_eq!(
+            routed_sum, channel_edges,
+            "every channel-routed transmission once"
+        );
+    }
 }

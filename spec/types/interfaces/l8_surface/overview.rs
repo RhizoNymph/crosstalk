@@ -8,7 +8,12 @@
 //!   `topology` counts them (`EdgeStore::totals`): transmissions, their
 //!   matched bytes, and active channels, the distinct canonical channels
 //!   that carried at least one counted transmission. It is final before the
-//!   response's watermark, like the graph.
+//!   response's watermark, like the graph. Channel rows count their
+//!   transmissions from the same graph under the default filter
+//!   (`ChannelCounts::routed`), so with the default filter and the same
+//!   window `active_channels` is the number of channel rows in force whose
+//!   `transmissions` is non-zero. A row's `ChannelActivity::Seen` is wider
+//!   (any access or confirmation ever) and is not what "active" means here.
 //! - **Queues** ([`QueueCounts`]) are what waits for an operator now,
 //!   whatever the window or filter, as the alert and channel lists show it:
 //!   open alerts are the alerts whose state is `Open` (not acknowledged,

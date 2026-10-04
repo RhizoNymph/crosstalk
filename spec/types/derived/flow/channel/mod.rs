@@ -29,8 +29,11 @@
 //! [`ChannelOrigin::Superseded`] by the promoted channel
 //! ([`ChannelOrigin::superseded`], [`promotion::plan`]). A superseded
 //! channel keeps its id, seed, resources, policy history and the detection
-//! it had, accepts no new resources (lookups of its resources return the
-//! promoted channel), and cannot be promoted or have its policy set.
+//! it had, frozen: a later confirmation of a transmission routed through it
+//! advances the promoted channel's detection instead (`l5_flow`, "Detection
+//! follows resolution"). It accepts no new resources (lookups of its
+//! resources return the promoted channel), and cannot be promoted or have
+//! its policy set.
 //! Records naming it (routes, accesses, edges, alerts) keep its id and
 //! resolve to the promoted channel at read time, like a merged agent
 //! ([`crate::aliases`], `ChannelDirectory`).

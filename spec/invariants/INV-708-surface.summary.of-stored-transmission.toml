@@ -1,13 +1,15 @@
 [invariant]
 id = "surface.summary.of-stored-transmission"
-statement = "TransmissionSummary::of names the transmission's canonical reader, its route with the channel resolved through supersession, its opened time and state, and once confirmed its canonical sender, Confirmed::at and Confirmed::matched_bytes, reading the current verdict only for a judgeable state and the topic only for a classified or aggregated one."
+statement = "TransmissionSummary::of names the transmission's canonical reader, its route with the channel resolved through supersession and its opened time, and fills each field its state's SummaryState holds: the delivery with the canonical sender, Confirmed::at and Confirmed::matched_bytes, the topic with the page version's assignment, and the verdict with the current one, calling the verdict and topic lookups only for states that hold them."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 Every list of transmissions (explore selections, the evidence page header,
 export) builds its rows with this one function, so rows agree with each
-other and with the linked views, which resolve the same aliases.
+other and with the linked views, which resolve the same aliases. Which
+fields a state holds is the type's (surface.summary.shape-follows-state);
+this is what goes in them.
 """
 
 [evidence]
