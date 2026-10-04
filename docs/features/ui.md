@@ -201,6 +201,10 @@ scroll position do not.
   rather than silently using another version.
 - Aggregate views show the response's watermark ("final up to 14:05"), so
   a cited view says whether its numbers can still change.
+- **Follow mode** (design, not implemented): a `follow=<span>` page key
+  whose window ends at the present and slides, pinned for everything below
+  the page, with signal-driven re-renders that keep the WebGL elements;
+  see [follow_mode.md](follow_mode.md).
 
 ## Screens
 
@@ -743,7 +747,9 @@ GET /data/live (View; Last-Event-ID ─▶ Resume::from_last_event_id)
   response is not the page, a region is missing, or a region holds a form
   control the user is editing (focused, or changed from its default). It
   has unit tests for token and event parsing only; the swap itself has
-  not been exercised in a browser.
+  not been exercised in a browser. [Follow mode](follow_mode.md#refresh-mechanism)
+  proposes replacing it with a re-render triggered by a signal the page
+  reads on the server, which Topcoat merges into the DOM.
 
 ## Element payloads
 

@@ -209,6 +209,33 @@ Features Index:
       - ui/elements/src/ct-live.ts
     depends_on: [query_surface, read_models, export, type_spec]
     doc: docs/features/ui.md
+  follow_mode:
+    status: design
+    description: >
+      Keeping UI views live as a gateway produces data. A follow=<span>
+      page key resolves on every render to the window ending at the
+      present (rounded up to a bucket) and is pinned into today's citeable
+      from/to URLs for everything below the page; the provisional tail
+      after the watermark is marked. Pages refresh by a server re-render
+      that Topcoat merges into the DOM, triggered by a tracked signal that
+      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
+      elements keep their nodes and update in place (topology keeps node
+      positions and places new nodes with fixed-node ForceAtlas2; the time
+      brush stays anchored right). Includes the spec gap list (the present,
+      the bucket width, a coalesced traffic event, channel events for
+      traffic-driven listing changes, data revisions, projection
+      extensions), the fixture's controllable clock and deterministic
+      trickle, the testing strategy and a parallel implementation plan.
+    entry_points:
+      - ui/src/url/view_state.rs
+      - ui/src/pages/view.rs
+      - ui/src/components/live.rs
+      - ui/src/data/live.rs
+      - ui/elements/src/live/element.ts
+      - ui/elements/src/shared/element.ts
+      - ui/elements/src/topology/element.ts
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/follow_mode.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
