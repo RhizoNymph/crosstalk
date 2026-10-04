@@ -9,6 +9,10 @@
 //!   window and filter, which has a node for every channel a transmission
 //!   edge names); in channels mode the channel nodes, with their accesses.
 //!
+//! Each channel carries its node's confirmation, so an unconfirmed one is
+//! marked; under confirmed only (`u=confirmed`) both graphs already leave
+//! it out, so the lists do too.
+//!
 //! Names are the payload's: [`agent_node_name`] and one `channel_names`
 //! call. Each item's selection value is the one the graph emits for it, so
 //! selecting from a list and selecting in the graph are the same thing.
@@ -19,6 +23,7 @@ use crosstalk_spec::aggregates::access::BipartiteGraph;
 use crosstalk_spec::aggregates::edge::{TopologyGraph, WeightedEdge};
 use crosstalk_spec::aggregates::node::{AgentNode, CanonicalStateKind, ChannelNode, GraphNode};
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind, QueryApi};
 use crosstalk_spec::observed::client::HarnessClaim;
@@ -98,6 +103,8 @@ pub struct ChannelItem {
     /// `None` when the bipartite graph has no node for the channel, which
     /// its contract rules out; the item is listed without a policy badge.
     pub policy: Option<PolicyKind>,
+    /// The node's confirmation; `None` exactly when `policy` is.
+    pub confirmation: Option<Confirmation>,
     pub carried: Carried,
 }
 
@@ -108,11 +115,21 @@ impl ChannelItem {
         Selection::Channel(self.id).encode()
     }
 
+    /// Whether the row is marked unconfirmed: only suspected cross-agent
+    /// traffic goes through the channel.
+    pub fn is_unconfirmed(&self) -> bool {
+        self.confirmation == Some(Confirmation::Unconfirmed)
+    }
+
     pub fn search_key(&self) -> String {
         let mut key = format!("{} {}", self.name, self.id.to_ulid());
         if let Some(policy) = self.policy {
             key.push(' ');
             key.push_str(crate::components::Badge::label(&policy));
+        }
+        if self.is_unconfirmed() {
+            key.push(' ');
+            key.push_str(crate::components::Badge::label(&Confirmation::Unconfirmed));
         }
         key.to_lowercase()
     }
@@ -179,14 +196,17 @@ fn sort_channels(items: &mut [ChannelItem]) {
     });
 }
 
-/// The policies of the channel nodes among `nodes`.
-fn policies(nodes: &[GraphNode]) -> HashMap<ChannelId, PolicyKind> {
+/// The policies and confirmations of the channel nodes among `nodes`.
+fn policies(nodes: &[GraphNode]) -> HashMap<ChannelId, (PolicyKind, Confirmation)> {
     nodes
         .iter()
         .filter_map(|node| match node {
             GraphNode::Channel(ChannelNode {
-                id, policy_kind, ..
-            }) => Some((*id, *policy_kind)),
+                id,
+                policy_kind,
+                confirmation,
+                ..
+            }) => Some((*id, (*policy_kind, *confirmation))),
             GraphNode::Agent(_) => None,
         })
         .collect()
@@ -196,7 +216,7 @@ fn policies(nodes: &[GraphNode]) -> HashMap<ChannelId, PolicyKind> {
 /// carry, heaviest first.
 pub fn routed_channels(
     edges: &[WeightedEdge],
-    policies: &HashMap<ChannelId, PolicyKind>,
+    policies: &HashMap<ChannelId, (PolicyKind, Confirmation)>,
     names: &ChannelNames,
 ) -> Vec<ChannelItem> {
     let mut carried: HashMap<ChannelId, (u64, usize)> = HashMap::new();
@@ -212,7 +232,8 @@ pub fn routed_channels(
         .map(|(id, (transmissions, edges))| ChannelItem {
             id,
             name: names.name(id),
-            policy: policies.get(&id).copied(),
+            policy: policies.get(&id).map(|(policy, _)| *policy),
+            confirmation: policies.get(&id).map(|(_, confirmation)| *confirmation),
             carried: Carried::Transmissions {
                 transmissions,
                 edges,
@@ -246,6 +267,7 @@ pub fn channel_node_items(graph: &BipartiteGraph, names: &ChannelNames) -> Vec<C
                 id: channel.id,
                 name: names.name(channel.id),
                 policy: Some(channel.policy_kind),
+                confirmation: Some(channel.confirmation),
                 carried: Carried::Accesses { writes, reads },
             }
         })
@@ -441,5 +463,53 @@ mod tests {
             assert_eq!(key, key.to_lowercase());
         }
         assert!(lists.channels[0].search_key().contains("sanctioned"));
+    }
+
+    #[test]
+    fn channels_carry_their_nodes_confirmation_and_unconfirmed_ones_match_it() {
+        let graph = fixtures::topology_graph().value;
+        let bipartite = fixtures::bipartite_graph().value;
+        let confirmations: HashMap<ChannelId, Confirmation> = policies(bipartite.nodes())
+            .into_iter()
+            .map(|(id, (_, confirmation))| (id, confirmation))
+            .collect();
+        for lists in [
+            agents_mode(&graph, Some(&bipartite), &names()),
+            channels_mode(&bipartite, &names()),
+        ] {
+            for item in &lists.channels {
+                assert_eq!(item.confirmation, confirmations.get(&item.id).copied());
+                assert_eq!(
+                    item.search_key().ends_with(" unconfirmed"),
+                    item.is_unconfirmed(),
+                    "{}",
+                    item.search_key()
+                );
+            }
+        }
+        let mut item = channels_mode(&bipartite, &names()).channels.remove(0);
+        item.confirmation = Some(Confirmation::Unconfirmed);
+        assert!(item.is_unconfirmed());
+        assert!(item.search_key().contains("unconfirmed"));
+        item.confirmation = Some(Confirmation::Confirmed);
+        assert!(!item.is_unconfirmed());
+        assert!(!item.search_key().contains("confirmed"));
+        let unrouted = agents_mode(&graph, None, &names());
+        assert!(unrouted.channels.iter().all(|c| c.confirmation.is_none()));
+    }
+
+    #[test]
+    fn a_routed_channel_takes_its_confirmation_from_the_bipartite_node() {
+        // The fixture's edges are confirmed transmissions, so every routed
+        // channel is confirmed; mark one unconfirmed by hand.
+        let graph = fixtures::topology_graph().value;
+        let first = agents_mode(&graph, None, &names()).channels[0].id;
+        let standings =
+            HashMap::from([(first, (PolicyKind::Unreviewed, Confirmation::Unconfirmed))]);
+        let items = routed_channels(&graph.edges, &standings, &names());
+        let item = items.iter().find(|c| c.id == first).expect("routed");
+        assert_eq!(item.confirmation, Some(Confirmation::Unconfirmed));
+        assert!(item.is_unconfirmed());
+        assert!(item.search_key().ends_with(" unreviewed unconfirmed"));
     }
 }
