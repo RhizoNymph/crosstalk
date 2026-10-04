@@ -205,10 +205,13 @@ Features Index:
       reproduces it; transmission rows are the surface's transmission
       summaries and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
-      is audited.
+      is audited. In JSONL each line is a tagged header, row or trailer
+      (ExportLine, read_jsonl), so any truncation reads as a missing
+      trailer; Parquet keeps the header and trailer JSON in its footer.
     entry_points:
       - spec/types/interfaces/l8_surface/export/mod.rs
       - spec/types/interfaces/l8_surface/export/stream.rs
+      - spec/types/interfaces/l8_surface/export/framing.rs
     depends_on: [query_surface, read_models, type_spec]
     doc: docs/features/export.md
   wire_contract:
@@ -229,9 +232,11 @@ Features Index:
       surface's actions (ActionRequest, the request a client sends, stamped
       into an OperatorAction), audit log (records keep a CallerSnapshot,
       never a Caller), live feed (with its SSE framing), operators, sinks,
-      list filters and overview, with goldens; every
-      other type a wire root reaches has its serde derives and decode
-      mirrors (stage 0), its goldens to follow per area.
+      list filters and overview, with goldens; the surface read models and
+      export (channel rows, names and previews, transmission rows, evidence,
+      excerpts, export requests, manifests, rows and JSONL lines), with
+      goldens; every other type a wire root reaches has its serde derives
+      and decode mirrors (stage 0), its goldens to follow per area.
     entry_points:
       - spec/types/wire/mod.rs
       - spec/types/wire/time.rs

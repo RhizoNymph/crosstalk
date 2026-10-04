@@ -804,3 +804,98 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 `OperatorDirectory`, `RequestIdentity`, `Unauthenticated`,
 `InvalidAccessConfig` and the traits (`OperatorActions`, `AuditLog`,
 `LiveFeed`, `LiveStream`, `AlertSink`): no wire root reaches them.
+
+## Surface reads
+
+The channel, transmission and evidence read models and export
+(`interfaces/l8_surface/{channels,summary,evidence,excerpt}.rs`,
+`interfaces/l8_surface/export/`). Tests are in
+`spec/types/tests/wire/surface_reads/`, goldens under
+`spec/types/tests/golden/surface-reads/{channels,transmissions,evidence,export}/`,
+and the one JSONL golden at
+`spec/types/tests/jsonl/surface-reads/export_complete.jsonl` (outside
+`golden/`, whose layout check admits only `.json`).
+
+### What each type is on the wire
+
+| Type | Role | Decoded |
+| --- | --- | --- |
+| `TransmissionSelection` | request: an array of ids | through `new` (distinct, newest first, 1 to 100,000) |
+| `ExcerptWindow` | request: `{"context": n}` | through `new` (at most 2,048) |
+| `ExportRequest` (with `ExportDataset`, `ExportScope`, `ExportFormat`) | request | through `new` (no content for accesses or verdicts) |
+| `ChannelRow` (with `ChannelStanding`, `ChannelActivity`, `ChannelCounts`) | response of `channel`, `channels` (watermarked) | through `new` |
+| `SupersededInto`, `ChannelName` (with `ChannelShape`) | response (inside a row; `channel_names` as an object keyed by id) | field by field: `SupersededInto::of` and `ChannelName::of` read the registry; `ChannelRow::new` checks a row's supersession against its channel |
+| `PromotionPreview` | response: `{"type": "promotes", "data": <PromotionCoverage>}` or `{"type": "refused", "data": <ConflictKind>}` | refuses a conflict other than `ChannelSuperseded`, `ChannelNotDiscovered`, `PatternOverlaps` (`NotAPromotionConflict`); the coverage as received |
+| `TransmissionSummary`, `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionPage` | response of `transmissions_by_id` | plain: the per-state shape is the enum |
+| `TransmissionEvidence` (with `MatchEvidence`, `MatchQuotes`, `AccessDetail`) | response of `transmission_evidence` (`Option`) | through `assemble` over its own transmission, answering each request with the next decoded match or access (`InvalidTransmissionEvidence`); `AccessDetail` through `new` |
+| `Excerpt`, `Excerpted` | response (inside evidence and export rows); the highlight as `{"start", "end"}` | `Excerpt` through `new`, which now also refuses counts that fit no part (`CountsOverflow`) |
+| `ExportHeader` (with `ExportBasis`, `GatewayVersion`) | export line, audit event; stamped, never a request | through `ExportHeader::new` (its `ExportHeaderParts`) |
+| `ExportRow` and each dataset's row | export line | `TransmissionRow` through `new` (its delivery is the summary's, not written twice); the rest plain |
+| `ExportTrailer` (with `ExportEnd`, `ExportFailure`, `RowRefused`, `ExportDigest`) | export line, audit event | checked for what the sealer guarantees about it alone (`InvalidTrailer`); rows and digest by `verify_export` |
+| `ExportLine` | one JSONL line: `header`, `row` or `trailer`, adjacently tagged; never a request (it holds the stamped header) | plain; `read_jsonl` checks the framing ([export.md](export.md#formats)) |
+| `ExportEvent` | inside the audit log's `ExportRecord` | plain |
+
+No serde, because no wire root reaches them: `TransmissionStateKind`, the
+error enums (`InvalidSelection`, `InvalidEvidence`, `EvidenceError`,
+`ExcerptError`, `CutError`, `InvalidExcerpt`, `InvalidHeader`,
+`InvalidTrailer`, `InvalidExportRequest`, `SourceFailure`, `JsonlError`),
+`RowKey`, `ExportLimits` (config), `JsonlExport` (what a reader holds), and
+the stream and sealer machinery. `ExportRecord` has its wire form but no
+golden here: its caller field is changing shape in the surface-actions
+area, which goldens the audit log.
+
+### Stage-0 choices changed
+
+- `PromotionPreview` was `transparent` over its outcome; it now decodes
+  through `TryFrom<Outcome>`, refusing a conflict no promotion is refused
+  with (`surface.channels.preview-refusal-is-a-promotion-conflict`).
+- `TransmissionEvidence` decoded field by field; it now decodes through
+  `assemble`, so decoded evidence lists exactly its transmission's matches
+  and co-access accesses, in order (`surface.evidence.follows-transmission`).
+- `ExportTrailer` decoded field by field; it now refuses what no sealer
+  builds (`surface.export.trailer-self-consistent`).
+- `Excerpt::new` refuses counts that place the matched range past
+  `u32::MAX` or overflow the part's length
+  (`surface.excerpt.counts-fit-a-part`); `Excerpt::cut` never builds such
+  counts.
+- `ExportLine` is new: the export group's line format, so a JSONL line
+  is one tagged value.
+
+### What replaces the UI's stand-ins
+
+For the UI agent deleting `ui/src/contract/` on `feat/ui`. Paths are
+under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
+`aggregates/`.
+
+| Stand-in file | Replaced by | Still no spec type |
+| --- | --- | --- |
+| `mod.rs` | `MergeId`, `ProjectionId`, `SinkId`, `AuditId` in `ids.rs` (ULID text on the wire) | — |
+| `actions.rs` | `OperatorAction`, `ActionOutcome` (l8/actions.rs). Rules take `UserRule`; `SetRuleEnabled { id, enabled }`; new `PinTopicVersion`, `UnpinTopicVersion`, `Unchanged`; `ChannelPromoted { channel, superseded }`. The action a client sends is the surface-actions group's `ActionRequest`. `requires` is `required_permission` | `also_requires`: dropped (`SetVerdict` needs Triage only) |
+| `agents.rs` | `AgentLabel`, `ActiveAgentState`, `AgentState` (`Merged(MergedInto)`), `Agent` (observed/agent.rs); `InvalidText` (support.rs); `CanonicalStateKind` (agg/node.rs) for `AgentStateKind`; `MergeRecord`, `MergeVeto` (observed/agent/merge.rs); `SeenClaim` (claims.rs); `AgentName`, `AgentRow` for `AgentSummary`, `AgentDetail` (agg/agents/mod.rs); `AgentFilter` (agg/agents/filter.rs) for `AgentListFilter` | `AgentState::is_merged` (use `merged_into`) |
+| `alerts.rs` | `Alert`, `AlertState`, `SuppressReason` (agg/alert.rs), `AlertStateKind` (l8_surface.rs): the same shapes | `AlertState::kind`, `is_active` helpers |
+| `channels.rs` | `CanonicalOriginKind` (agg/node.rs) for `OriginKind`; `DetectionKind` (derived/flow/channel/detection.rs, via `ChannelOrigin::detection_kind`); `Policy::kind` for `policy_kind`; `SupersededInto` for `Supersession`; `ChannelName`; `ChannelRow` for `ChannelSummary` (standing, activity and counts as above); `ChannelFilter` with `OriginFilter` (l8/lists.rs) for `ChannelListFilter`; `PromotionPreview`; `ResourceUse` (agg/access.rs) | — |
+| `errors.rs` | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (l8/errors.rs). Conflicts carry the ids involved, several renamed (`AlertNotActive`, `MergeAlreadyReverted`, `RuleNotEditable`, `TransmissionNotJudgeable`); `PatternMissesSeed` is an `InputError` | `InputError::Field { field, reason }`: specific variants and `MalformedRequest` instead |
+| `evidence.rs` | `Excerpt` (l8/excerpt.rs: highlight `Range<u32>`, `elided_before`/`elided_after` as `u64`, plus `highlight_cut`), `InvalidExcerpt`, `MatchEvidence` (quotes are `Excerpted`: `Shown` or `BodyDropped`), `AccessDetail` (adds the canonical `agent`), `TransmissionEvidence` (l8/evidence.rs); the request's `ExcerptWindow` | `TransmissionEvidence::verdicts`: read `QueryApi::verdicts` (`VerdictLog`); `Excerpt::elided() -> (u32, u32)` |
+| `graph.rs` | `ChannelShape` (l8/channels.rs); `ChannelNode`, `InvalidNodes` (agg/node.rs); `TopologyGraph` (agg/edge.rs, `Watermarked`) for `TopologyView`; `WeightedAccess` for `AccessEdge`, `BipartiteGraph`, `InvalidBipartite` (agg/access.rs) for `BipartiteView`; `TopologySeries` (agg/series.rs) for `Timeline`; `EdgeSelector` and `TransmissionSelection` for `TransmissionSelector::{Edge, Ids}`; `TransmissionStateKind`, `TransmissionSummary` (l8/summary.rs: sender, bytes, topic and verdict inside `SummaryState`); `RouteKind::from(&Route)` for `route_kind` | `TimelineBucket` (a series is a value per grid point); `TransmissionSelector::All` |
+| `lists.rs` | `Cursor<L>`, `PageRequest<L>`, `Page<T, L>` (paging.rs), typed by list | `PageRequest::first` |
+| `research.rs` | `ProjectionParams`, `InvalidParams`, `ProjectionInfo` for `ProjectionMeta`, `ProjectionStatus` for `ProjectionJob` (agg/projection/mod.rs); `FrameColumns`, `ProjectionFrame`, `InvalidFrame` (agg/projection/frame.rs; binary, not JSON); `QualityRow`, `MatchClass` for `MatchKindName` (agg/quality.rs); `ExportDataset` (each carrying its selection), `ExportFormat`, `ExportRequest` (l8/export/request.rs); `AuditAuthor` for `Actor`, `AuditBody` for `AuditedAction`, `AuditOutcome`, `AuditEntry`, `AuditSubject`, `AuditFilter` (l8/audit.rs); `Operator` (l8/operators.rs). For reading an export, which no stand-in covers: `ExportLine`, `ExportHeader`, `ExportRow`, `ExportTrailer`, `read_jsonl`, `verify_export` | `ProjectionJob::Running { done, total }` progress; a channel column in `PointCategories`; `ExportRequest::scope` (inside the dataset) |
+| `rules.rs` | `BuiltinRule`, `UserRule` for `UserRuleSpec`, `RuleDefinition` for the stored `UserRule`, `AlertRule` for `RuleKind`, `RuleName`, `StaleReason`, `RuleStatus`, `AlertRuleDef` for `RuleDef` (agg/alert.rs); `NonBlank` and `InputError::QueryTooLong` for `QueryText`; `SinkKind`, `SinkInfo` (l8/sinks.rs) | `OperatorRuleStatus` (a `bool` in `SetRuleEnabled`); `RuleAuthor` (a user rule's `created`); `UserRule::spec` |
+| `scope.rs` | `TopologyFilter` (agg/filter.rs, adds `topic_version`), `FalseDetections` for `VerdictFilter` | `Scope`: the window is a separate argument; `ExportScope` and `ProjectionSpec` are the nearest |
+| `search.rs` | `SearchMode`, `SearchRequest` (l8/lists.rs), `NonBlank` for `SearchText`, `Blank` for `EmptySearch`; results are `SearchResults` (l6_analysis.rs) | `Default` for `SearchMode` |
+| `topics.rs` | `TopicVersionInfo`, `TopicSizes`/`TopicSize` for `TopicStats`, `LineageEntry` for `TopicRemap`, `TopicLineage` for `TopicVersionRemap` (agg/topic_history.rs) | `TopicStats::trend` (use `series` by topic); `TopicVersionInfo::embedding_model` |
+| `verdict.rs` | `Verdict`, `TransmissionVerdict` (derived/flow/verdict.rs), the log as `VerdictLog` | — |
+
+### Invariants
+
+New: `surface.export.jsonl-framing`, `surface.export.trailer-self-consistent`,
+`surface.excerpt.counts-fit-a-part`,
+`surface.channels.preview-refusal-is-a-promotion-conflict`. The decode
+tests are also evidence for the area invariants they recheck
+(`surface.channels.row-standing-matches-origin`,
+`surface.evidence.follows-transmission`, `surface.excerpt.well-formed`,
+`surface.query.selection-bounded`, `surface.export.header-matches-request`,
+`surface.export.request-content-columns`,
+`surface.export.transmission-row-confirmed`,
+`surface.export.truncation-detected`) and for the general wire
+invariants (`canonical.wire.checked-decode`, `goldens-pin-format`,
+`round-trip`, `strict-decode`, `surface.wire.authority-not-decoded`).

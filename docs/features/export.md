@@ -30,9 +30,9 @@ It is part of the [query surface](query_surface.md). The types are in
 
 - The wire bytes of Parquet pages, beyond what the manifest needs (where
   the header and trailer go, and the canonical encoding the digest is
-  defined over). A JSONL line is a value's JSON under the
-  [wire contract](wire_contract.md), as is the `ExportRequest` a client
-  sends.
+  defined over). The JSON inside each JSONL line, and the `ExportRequest`
+  a client sends, follow the [wire contract](wire_contract.md); this
+  feature fixes only how lines are framed.
 - Resuming an interrupted export; a client runs it again.
 - Listing past exports: the audit log lists them, filtered by
   `AuditSubject::Export`.
@@ -157,7 +157,14 @@ The trailer (`ExportTrailer`) is built only by the sealer and holds the
 export id, the rows sent, their `ExportDigest` and an `ExportEnd`:
 `Complete`, or `Failed(ExportFailure)` with `Store`, `VersionNotRetained`
 (retention dropped the pinned version mid-stream), `CountMismatch` or
-`InvalidRow`.
+`InvalidRow`. A trailer is a response, and decoding one checks what the
+sealer guarantees about it alone (`InvalidTrailer`): a `CountMismatch`
+records the trailer's own row count as `produced`, against a different
+plan; an `InvalidRow` is at the trailer's own row count (the sealer accepts
+nothing after a refusal), never `AfterRefusal`, and a `BeyondPlan` refusal
+comes after exactly `planned` rows. Its rows and digest are checked
+against the received rows by `verify_export`. The header decodes through
+`ExportHeader::new`.
 
 ### Stream and sealer
 
@@ -196,12 +203,65 @@ failed, shortened, extended, altered or reordered export fails it.
 
 ### Formats
 
-JSONL: the header is the first line, each row a line, the trailer the last
-line; a body without a trailer line is truncated. Parquet: the rows fill
-row groups in export order, and the header and trailer are JSON in the
-footer's key-value metadata (`crosstalk.export.header`,
-`crosstalk.export.trailer`), written on failure too; a file cut off before
-its footer cannot be read at all.
+**JSONL.** The body is UTF-8 text made of lines,
+each one `ExportLine` encoded as compact JSON (`serde_json::to_string`: no
+whitespace between tokens, none around the value) followed by exactly one
+`\n` (no `\r`). `ExportLine` is adjacently tagged like every data enum of
+the wire contract, so each line is a JSON object with exactly the keys
+`type` and `data`:
+
+| Line | `type` | `data` | Where |
+| --- | --- | --- | --- |
+| header | `"header"` | the `ExportHeader` (`id`, `request`, `by`, `started_at`, `watermark`, `basis`, `embedding_model`, `gateway`, `rows`) | line 1, exactly once |
+| row | `"row"` | the `ExportRow`, itself tagged: `{"type": "<transmission\|edge\|access\|topic\|point\|verdict>", "data": <row>}` | lines 2 to `rows + 1`, in `RowKey` order |
+| trailer | `"trailer"` | the `ExportTrailer` (`export`, `rows`, `digest`, `end`) | the last line, at most once |
+
+A complete export of two access rows, from the golden
+`spec/types/tests/jsonl/surface-reads/export_complete.jsonl` (header and
+trailer shortened here):
+
+```text
+{"type":"header","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA","request":{..},"by":"01J9Z3N4P5Q6R7S8T9V0W1X2Y3",..,"rows":2}}
+{"type":"row","data":{"type":"access","data":{"agent":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA","channel":"01J9Z3P5R6S7T8V9W0X1Y2Z3A4","op":"write","bucket":{..},"accesses":2}}}
+{"type":"row","data":{"type":"access","data":{"agent":"01J9Z3M2C5D6E7F8G9H0J1K2M3","channel":"01J9Z3P5R6S7T8V9W0X1Y2Z3A4","op":"read","bucket":{..},"accesses":5}}}
+{"type":"trailer","data":{"export":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA","rows":2,"digest":"..","end":{"type":"complete"}}}
+```
+
+The framing rules, which `read_jsonl` (the reference reader) checks:
+
+- The first complete line is the header; a row or trailer there is
+  `HeaderNotFirst`, and a body with no complete line is `NoHeader`.
+- Every line after it is a row until the trailer; a second header is
+  `SecondHeader`.
+- Nothing follows the trailer line (`AfterTrailer`); the writer ends the
+  trailer line with `\n` like every other.
+- A line that is not an `ExportLine` (an unknown `type`, a blank line, a
+  malformed row) is `Undecodable`, with the wire contract's `DecodeError`.
+- Bytes after the last `\n` are a line the writer never finished (the
+  stream was cut off): the reader drops them. So a body cut at any byte
+  reads as the complete lines before the cut and no trailer, and
+  `verify_export` refuses it with `NoTrailer`; a truncated export is never
+  a different, shorter complete one.
+
+Whether the rows match the header (dataset, content, order, count) and
+the trailer's digest is `verify_export`'s check, not the framing's;
+`JsonlExport::verify` runs it over what `read_jsonl` read. The writer
+sends the header line as soon as the export starts and the trailer line
+when the stream ends, failure included; a client that went away gets no
+trailer.
+
+**Parquet.** The rows fill row groups
+in export order. The footer's key-value metadata holds two entries,
+written on failure too: `crosstalk.export.header`
+(`PARQUET_HEADER_KEY`), whose value is the `ExportHeader`'s compact JSON,
+and `crosstalk.export.trailer` (`PARQUET_TRAILER_KEY`), whose value is the
+`ExportTrailer`'s compact JSON: each the `data` of the matching JSONL
+line, without the line's tag. A reader decodes them as the wire contract
+decodes those types, so a decoded header and trailer are checked the same
+way in either format. A file cut off before its footer cannot be opened
+at all, so a Parquet export is never read without its trailer. The row
+columns are the implementation's; a reader turns each row back into an
+`ExportRow` to verify the digest.
 
 ### Errors
 
@@ -240,7 +300,8 @@ can end after it started, so it has its own record rather than a place in
 | `spec/types/interfaces/l8_surface/export/mod.rs` | Module docs and re-exports | — |
 | `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked), `InvalidExportRequest`, `ExportDataset`, `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `ExportFormat`, `ExportLimits` (`check`) |
 | `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow` (checked: `new`, `of`), `InvalidTransmissionRow`, `TransmissionContent` (`of`), `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
-| `spec/types/interfaces/l8_surface/export/manifest.rs` | Header and trailer | `ExportHeader` (checked), `ExportHeaderParts`, `InvalidHeader`, `ExportBasis`, `GatewayVersion`, `settled_window`, `ExportTrailer`, `ExportEnd`, `ExportFailure`, `SourceFailure` |
+| `spec/types/interfaces/l8_surface/export/manifest.rs` | Header and trailer | `ExportHeader` (checked), `ExportHeaderParts`, `InvalidHeader`, `ExportBasis`, `GatewayVersion`, `settled_window`, `ExportTrailer` (decode checked), `InvalidTrailer`, `ExportEnd`, `ExportFailure`, `SourceFailure` |
+| `spec/types/interfaces/l8_surface/export/framing.rs` | The JSONL framing and the Parquet footer keys | `ExportLine`, `read_jsonl`, `JsonlExport` (`verify`), `JsonlError`, `JsonlErrorKind`, `PARQUET_HEADER_KEY`, `PARQUET_TRAILER_KEY` |
 | `spec/types/interfaces/l8_surface/export/digest.rs` | Canonical row encoding and the digest | `ExportRow::encode`, `encode_route`, `hash_row`, `RowHasher`, `ExportDigest`, `ROW_DIGEST_CONTEXT` |
 | `spec/types/interfaces/l8_surface/export/seal.rs` | Row checks, the trailer, verification | `ExportSealer` (`push`, `finish`, `fail`), `RowRefused`, `verify_export`, `Incomplete` |
 | `spec/types/interfaces/l8_surface/export/stream.rs` | The stream and the stores behind it | `Export`, `ExportStep`, `ExportStream`, `RowSource`, `SealedRows`, `ExportSource` (`plan`), `ExportPlan`, `ExportPlanError` |
@@ -254,6 +315,8 @@ can end after it started, so it has its own record rather than a place in
 | `spec/types/tests/export.rs` | Requests, headers, limits, plan errors, transmission, projection and verdict rows, audit records | — |
 | `spec/types/tests/export_stream.rs` | Encoding, digest, sealer, sealed stream, verification, a transmission row is a confirmed summary | — |
 | `spec/types/tests/evidence.rs` (part) | Export content quotes the evidence | — |
+| `spec/types/tests/wire/surface_reads/export.rs` | Goldens of every request, header basis, row, trailer end, refusal and audit event; decode refusals; the JSONL golden and framing | — |
+| `spec/types/tests/golden/surface-reads/export/`, `spec/types/tests/jsonl/surface-reads/export_complete.jsonl` | The goldens | — |
 
 ## Invariants and constraints
 
@@ -281,6 +344,14 @@ can end after it started, so it has its own record rather than a place in
   counting and digesting exactly the rows sent, `Complete` only when every
   planned row was sent and none refused. A store failure mid-stream is
   recorded in the trailer.
+- A JSONL body is the header line, then row lines, then at most one
+  trailer line, each a compact tagged `ExportLine` ended by `\n`; a body
+  cut at any byte reads as one without a trailer. Parquet keeps the
+  header and trailer JSON in its footer under `crosstalk.export.header`
+  and `crosstalk.export.trailer`.
+- A decoded trailer is one a sealer could have built: a count mismatch
+  records its own row count as produced, and a refused row is the first
+  refusal, at its own row count.
 - The digest is defined over the canonical row encoding, so it does not
   depend on the format. `verify_export` accepts exactly a complete,
   untampered export; a truncated one never verifies.

@@ -104,26 +104,28 @@ spec/types/
 │       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, MalformedRequest); adjacently tagged on the wire
 │       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError
 │       ├── lists.rs       ChannelFilter (a WireRequest, with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter (a WireRequest), SearchRequest (a WireRequest), TopicPage
-│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
-│       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
-│       ├── evidence.rs    TransmissionEvidence (assemble), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, EvidenceError
-│       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
+│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry; decode refuses a non-promotion conflict); responses only
+│       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked; a WireRequest), TransmissionPage
+│       ├── evidence.rs    TransmissionEvidence (assemble; decoded through it), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, InvalidTransmissionEvidence, EvidenceError
+│       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY; a WireRequest), Excerpt (checked: boundaries, bounds, counts that fit a part; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
 │       ├── overview.rs    OverviewCounts, QueueCounts (tally)
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveItem (event_name: the SSE event; its cursor is the SSE id), LiveCursor (its text on the wire), LiveEnd (EVENT_NAME), FeedWindow (checked), LiveConfig (checked; neither serialized)
 │       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome, ConfigChange, AuditSubject, AuditFilter (a WireRequest)
 │       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError
 │       └── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │           ├── mod.rs     module docs and re-exports
-│           ├── request.rs ExportRequest (checked; required_permission), ExportDataset, ExportScope, ExportFormat, ExportLimits
+│           ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportLimits
 │           ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence), RowKey (row order), projection_rows, verdict_rows
-│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer, ExportEnd, ExportFailure
+│           ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
+│           ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
 │           ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
 │           ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
 │           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
 │           └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
     ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), one module per area
-    └── golden/            one JSON file per wire shape, <area>/<name>.json
+    ├── golden/            one JSON file per wire shape, <area>/<name>.json
+    └── jsonl/             JSONL goldens (surface-reads/export_complete.jsonl: a complete export, line by line)
 ```
 
 ## Conventions

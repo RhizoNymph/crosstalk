@@ -18,6 +18,7 @@ unit = [
     "crosstalk_spec::tests::export_stream::a_failed_export_never_verifies",
     "crosstalk_spec::tests::export_stream::verify_rejects_altered_extra_and_misplaced_rows",
     "crosstalk_spec::tests::export_stream::verify_rejects_another_exports_trailer",
+    "crosstalk_spec::tests::wire::surface_reads::export::a_cut_off_jsonl_export_has_no_trailer",
 ]
 
 [evidence-review]

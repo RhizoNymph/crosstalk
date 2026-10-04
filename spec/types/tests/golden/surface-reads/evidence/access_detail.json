@@ -1,0 +1,33 @@
+{
+  "access": {
+    "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+    "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+    "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+    "resource": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+    "at": "2026-10-04T09:16:40.002513Z",
+    "via": "structured",
+    "op": {
+      "type": "read",
+      "data": {
+        "result": {
+          "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+          "index": 2
+        }
+      }
+    }
+  },
+  "resource": {
+    "id": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+    "locator": {
+      "type": "url",
+      "data": {
+        "scheme": "https",
+        "host": "wiki.example.com",
+        "path": "/team/release-plan",
+        "query": null
+      }
+    },
+    "first_seen": "2026-10-04T09:15:02.418000Z"
+  },
+  "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+}

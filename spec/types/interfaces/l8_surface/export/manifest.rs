@@ -331,15 +331,94 @@ impl From<SourceFailure> for ExportFailure {
 /// The manifest sent after the rows. Built only by the sealer
 /// ([`super::ExportSealer`]), so `rows` and `digest` are those of the rows
 /// it accepted and `Complete` means it accepted every planned row.
-/// Decoding cannot rerun the sealer; a reader checks a decoded trailer
-/// against the rows it received ([`super::verify_export`]).
+///
+/// A response, never a request. Decoding cannot rerun the sealer; a reader
+/// checks a decoded trailer against the rows it received
+/// ([`super::verify_export`]). It does check what the sealer guarantees
+/// about the trailer alone ([`InvalidTrailer`]): a count mismatch records
+/// the rows counted as produced, and a refused row is the first refusal,
+/// after exactly the rows counted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", try_from = "RawExportTrailer")]
 pub struct ExportTrailer {
     pub(super) export: ExportId,
     pub(super) rows: u64,
     pub(super) digest: ExportDigest,
     pub(super) end: ExportEnd,
+}
+
+/// A decoded trailer the sealer could not have built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidTrailer {
+    /// A `CountMismatch` whose `produced` is not the trailer's `rows`, or
+    /// that matches its plan.
+    CountMismatch {
+        rows: u64,
+        planned: u64,
+        produced: u64,
+    },
+    /// An `InvalidRow` whose `index` is not the trailer's `rows`: the sealer
+    /// accepts no row after a refusal.
+    RefusalIndex { rows: u64, index: u64 },
+    /// An `InvalidRow` that is not a first refusal: `AfterRefusal`, or
+    /// `BeyondPlan` after other than `planned` rows.
+    NotFirstRefusal,
+}
+
+/// [`ExportTrailer`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExportTrailer {
+    export: ExportId,
+    rows: u64,
+    digest: ExportDigest,
+    end: ExportEnd,
+}
+
+impl TryFrom<RawExportTrailer> for ExportTrailer {
+    type Error = Rejected<InvalidTrailer>;
+
+    fn try_from(raw: RawExportTrailer) -> Result<Self, Self::Error> {
+        let rows = raw.rows;
+        let check = match &raw.end {
+            ExportEnd::Complete
+            | ExportEnd::Failed(
+                ExportFailure::Store { .. } | ExportFailure::VersionNotRetained { .. },
+            ) => Ok(()),
+            &ExportEnd::Failed(ExportFailure::CountMismatch { planned, produced }) => {
+                if produced == rows && planned != produced {
+                    Ok(())
+                } else {
+                    Err(InvalidTrailer::CountMismatch {
+                        rows,
+                        planned,
+                        produced,
+                    })
+                }
+            }
+            ExportEnd::Failed(ExportFailure::InvalidRow { index, refused }) => match refused {
+                _ if *index != rows => Err(InvalidTrailer::RefusalIndex {
+                    rows,
+                    index: *index,
+                }),
+                RowRefused::AfterRefusal => Err(InvalidTrailer::NotFirstRefusal),
+                RowRefused::BeyondPlan { planned } if *planned != rows => {
+                    Err(InvalidTrailer::NotFirstRefusal)
+                }
+                RowRefused::OtherDataset { .. }
+                | RowRefused::ContentMismatch { .. }
+                | RowRefused::OutOfOrder
+                | RowRefused::BeyondPlan { .. } => Ok(()),
+            },
+        };
+        check.map_err(|error| Rejected::new("export trailer", error))?;
+        Ok(Self {
+            export: raw.export,
+            rows,
+            digest: raw.digest,
+            end: raw.end,
+        })
+    }
 }
 
 impl ExportTrailer {

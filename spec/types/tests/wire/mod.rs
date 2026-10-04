@@ -21,6 +21,7 @@ mod provenance;
 mod requests;
 mod support;
 mod surface_actions;
+mod surface_reads;
 mod time;
 mod topology;
 

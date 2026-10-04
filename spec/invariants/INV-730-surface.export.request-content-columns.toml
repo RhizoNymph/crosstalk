@@ -17,6 +17,7 @@ type = "crosstalk_spec::interfaces::l8_surface::export::request::ExportRequest::
 unit = [
     "crosstalk_spec::tests::export::request_refuses_content_for_datasets_without_content_columns",
     "crosstalk_spec::tests::export::content_columns_by_dataset",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_requests_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]
