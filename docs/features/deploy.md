@@ -139,6 +139,35 @@ without breaking the linking of exchanges across the change:
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
 
+## Store tests against the compose Postgres
+
+Until there is a live deployment, the store tests (`crates/store`'s
+`TestDb`) may run against the compose `postgres` service instead of
+`scripts/test-db.sh`. Reach it through an SSH tunnel to node0's
+`127.0.0.1:5432` as role `crosstalk`; the URL lives in the gitignored
+`.env.test` the harness reads.
+
+- Each test creates and drops its own `crosstalk_test_*` database, which
+  shows in the dashboard's per-database Postgres panels while it exists.
+- Each test holds a pool of 4 connections plus one admin connection, and
+  libtest runs one test per core. That stays under the default
+  `max_connections=200`. If `PostgresConnectionsNearMax` fires or tests
+  fail with "too many clients", set `PG_MAX_CONNECTIONS=500` in
+  `deploy/.env` and run `bash deploy/run.sh up`, which recreates Postgres.
+- The server keeps durable settings (fsync on), so tests run slower here
+  than on `scripts/test-db.sh`.
+
+Before a real deployment, or after a killed test run, drop the leftovers
+from `bash deploy/run.sh psql`:
+
+```sql
+SELECT format('DROP DATABASE %I WITH (FORCE)', datname)
+FROM pg_database WHERE datname LIKE 'crosstalk\_test\_%' \gexec
+```
+
+`WITH (FORCE)` ends any sessions still connected; `\gexec` runs each
+generated statement.
+
 ## Invariants and constraints
 
 - **Secrets never live in a tracked file.**
