@@ -11,12 +11,12 @@
 
 use std::fmt::Write as _;
 
-use crosstalk_canonical::encoding;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l2_transport::{BlobError, BlobStore};
 use crosstalk_spec::observed::exchange::{Exchange, ExchangeOutcome};
+use crosstalk_spec::observed::message::encoding;
 use crosstalk_transport::blob::{FsBlobStore, OpenError};
 use serde_json::{Value, json};
 

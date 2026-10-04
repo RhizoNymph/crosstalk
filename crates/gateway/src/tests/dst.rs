@@ -14,6 +14,7 @@ use crosstalk_sim::{CheckFailed, DurationRange, Probability, SimCtx, StoreFaults
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Subject};
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
+use crosstalk_spec::interfaces::l1_canonical::Normalizer;
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, ConsumerGroup, EventBus, Subscription};
 use crosstalk_spec::observed::exchange::{Exchange, ExchangeOutcome};
 use crosstalk_testkit::ids::Ids;
@@ -80,15 +81,14 @@ pub async fn blobs_written_before_capture_published(ctx: SimCtx) -> Result<(), C
     let mut expected: BTreeMap<ExchangeId, Vec<MessageHash>> = BTreeMap::new();
     for raw in &raws {
         let normalization = AnthropicMessages
-            .normalize_with_media(raw)
+            .normalize(raw)
             .map_err(|error| failed("normalize", error))?;
         let mut hashes: Vec<MessageHash> = normalization
-            .exchange
             .messages
             .iter()
             .map(|message| message.hash)
             .collect();
-        hashes.extend(normalization.media.iter().map(|media| media.hash));
+        hashes.extend(normalization.media.iter().map(|media| media.hash()));
         expected.insert(raw.meta.id, hashes);
     }
     let sent = raws.len();

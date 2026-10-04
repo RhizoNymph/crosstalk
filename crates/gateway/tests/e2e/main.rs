@@ -7,12 +7,12 @@ mod support;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crosstalk_canonical::encoding;
 use crosstalk_gateway::inspect;
 use crosstalk_gateway::log;
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::observed::exchange::{ExchangeFailure, ExchangeOutcome};
+use crosstalk_spec::observed::message::encoding;
 use crosstalk_testkit::client::{BodyEnd, HarnessClient, Next};
 use crosstalk_testkit::upstream::{FakeUpstream, Fault, Pacing, Reply, Script};
 use crosstalk_transport::blob::FsBlobStore;

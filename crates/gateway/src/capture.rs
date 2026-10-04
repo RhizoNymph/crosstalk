@@ -22,12 +22,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crosstalk_canonical::{AnthropicMessages, Normalization, StoreError};
+use crosstalk_canonical::{AnthropicMessages, StoreError};
 use crosstalk_ingress::ids::ExchangeIds;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::EventId;
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
+use crosstalk_spec::interfaces::l1_canonical::{NormalizedExchange, Normalizer};
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, EventBus};
 use crosstalk_spec::observed::exchange::ExchangeOutcome;
 use crosstalk_spec::support::{Clock, Timestamp};
@@ -176,7 +177,7 @@ where
     /// Normalize, store and publish one exchange.
     pub async fn capture(&self, raw: &RawExchange) -> Captured {
         let exchange = raw.meta.id.ulid_text();
-        let normalization = match AnthropicMessages.normalize_with_media(raw) {
+        let normalization = match AnthropicMessages.normalize(raw) {
             Ok(normalization) => normalization,
             Err(error) => {
                 PipelineStats::bump(&self.stats.normalize_failed);
@@ -201,7 +202,7 @@ where
             id,
             at,
             event: BusEvent::Ingest(IngestEvent::ExchangeCaptured(Box::new(
-                normalization.exchange.exchange,
+                normalization.exchange,
             ))),
         };
         match self.bus.publish(envelope).await {
@@ -227,7 +228,7 @@ where
         }
     }
 
-    async fn store(&self, normalization: &Normalization) -> Result<(), StoreError> {
+    async fn store(&self, normalization: &NormalizedExchange) -> Result<(), StoreError> {
         let mut attempt = 1;
         loop {
             match crosstalk_canonical::store(&self.blobs, normalization).await {
@@ -235,7 +236,7 @@ where
                 Err(error) if attempt < self.retry.attempts.get() => {
                     PipelineStats::bump(&self.stats.store_retries);
                     tracing::warn!(
-                        exchange = %normalization.exchange.exchange.meta.id.ulid_text(),
+                        exchange = %normalization.exchange.meta.id.ulid_text(),
                         attempt,
                         error = %error,
                         "blob put failed; retrying"
@@ -258,16 +259,15 @@ struct Summary {
 }
 
 impl Summary {
-    fn of(normalization: &Normalization) -> Self {
-        let exchange = &normalization.exchange;
+    fn of(normalization: &NormalizedExchange) -> Self {
         Self {
-            outcome: match exchange.exchange.outcome {
+            outcome: match normalization.exchange.outcome {
                 ExchangeOutcome::Completed { .. } => "completed",
                 ExchangeOutcome::Failed { .. } => "failed",
             },
-            messages: exchange.messages.len(),
+            messages: normalization.messages.len(),
             media: normalization.media.len(),
-            warnings: exchange.warnings.len(),
+            warnings: normalization.warnings.len(),
         }
     }
 }
