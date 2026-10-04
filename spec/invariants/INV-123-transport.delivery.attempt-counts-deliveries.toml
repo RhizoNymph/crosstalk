@@ -1,0 +1,22 @@
+[invariant]
+id = "transport.delivery.attempt-counts-deliveries"
+statement = "The attempt of a delivery equals the number of deliveries of that envelope to that consumer group since it was published or last replayed from the dead-letter store, including this one."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Starts at 1 and rises by exactly one per redelivery, whether caused by a nack
+or an ack timeout. Consumers use it for backoff and logging, and the bus
+compares it with RetryPolicy::max_attempts to decide when to dead-letter, so
+a counter that resets or skips either retries forever or dead-letters early.
+A replay starts a fresh retry budget at attempt 1; otherwise a replayed
+envelope would be dead-lettered again on its first failure. Counted per
+group, since each group gets its own deliveries.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::attempt_counts_deliveries_per_group"
+integration = "crosstalk::transport::integration::jetstream_attempt_matches_delivery_count"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

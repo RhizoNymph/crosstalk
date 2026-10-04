@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.retry.backoff-floor"
+statement = "A delivery that is nacked or whose ack timeout expires is not redelivered to its consumer group sooner than the group's RetryPolicy::initial_backoff after the nack or timeout."
+kind = "performance"
+requires = ["dst"]
+rationale = """
+Without a floor, a consumer that nacks with a zero delay, or one that
+crashes on every delivery, burns its whole retry budget in a tight loop
+before a transient dependency failure can clear, sending envelopes to the
+dead-letter store that would have succeeded moments later. A nack's
+retry_after below initial_backoff is raised to it.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::redelivery_waits_at_least_initial_backoff"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

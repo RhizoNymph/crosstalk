@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.ack.unknown-delivery"
+statement = "Calling ack or nack with a DeliveryId that the subscription does not currently hold returns Err(BusError::UnknownDelivery(id)) and changes no delivery state."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "dst"]
+rationale = """
+Covers ids never issued, ids already acked or nacked, and deliveries whose
+ack timeout expired. A stale ack must not settle a delivery another consumer
+now holds, and a double ack must be visible as an error rather than silently
+accepted. The dst test covers the expired case, which needs simulated time.
+"""
+
+[evidence]
+unit = "crosstalk::transport::tests::ack_of_unheld_delivery_is_unknown"
+dst = "crosstalk::transport::dst::ack_after_ack_timeout_is_unknown"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }
