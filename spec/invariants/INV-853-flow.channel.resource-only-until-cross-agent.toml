@@ -14,8 +14,8 @@ is discovered from it later), so nothing observed is lost.
 
 [evidence]
 unit = "crosstalk_memory::flow::registry::tests::traffic::single_agent_resource_stays_a_resource"
-dst = "crosstalk_flow::dst::writes_without_cross_reads_create_no_channel"
+dst = "crosstalk_flow::consumer::tests::dst::writes_without_cross_reads_create_no_channel"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

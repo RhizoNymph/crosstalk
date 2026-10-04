@@ -11,7 +11,7 @@ CoAccesses so the decision stays auditable.
 """
 
 [evidence]
-unit = "crosstalk_flow::correlator::tests::expiry_discards_suspected"
+unit = "crosstalk_flow::correlate::tests::channel::expiry_discards_suspected"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
