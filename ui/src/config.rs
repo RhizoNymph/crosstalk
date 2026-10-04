@@ -38,8 +38,22 @@ struct RawOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackendConfig {
-    /// Deterministic synthetic data generated from `seed`.
-    Fixture { seed: u64 },
+    /// Deterministic synthetic data generated from `seed`; with `replay`,
+    /// the data's last stretch plays out in accelerated real time.
+    Fixture {
+        seed: u64,
+        #[serde(default)]
+        replay: Option<ReplayConfig>,
+    },
+}
+
+/// What a replay plays: the last `window_minutes` of the data at `speed`
+/// times real time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayConfig {
+    pub window_minutes: u64,
+    pub speed: u32,
 }
 
 /// Who uses the UI: the spec's operator directory loaded from the trusted
@@ -171,10 +185,32 @@ mod tests {
         let text = include_str!("../config.json");
         let config = Config::parse(text).ok().expect("shipped config parses");
         assert_eq!(config.access.name(), "researcher");
-        assert_eq!(config.backend, BackendConfig::Fixture { seed: 7 });
+        assert_eq!(
+            config.backend,
+            BackendConfig::Fixture {
+                seed: 7,
+                replay: None
+            }
+        );
         assert_eq!(
             config.access.caller().permissions(),
             crosstalk_spec::interfaces::l8_surface::PermissionSet::ALL
+        );
+    }
+
+    #[test]
+    fn parses_the_demo_config_with_a_replay() {
+        let text = include_str!("../config.demo.json");
+        let config = Config::parse(text).ok().expect("demo config parses");
+        assert_eq!(
+            config.backend,
+            BackendConfig::Fixture {
+                seed: 7,
+                replay: Some(ReplayConfig {
+                    window_minutes: 240,
+                    speed: 10
+                })
+            }
         );
     }
 

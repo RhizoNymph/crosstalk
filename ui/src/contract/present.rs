@@ -27,4 +27,10 @@ pub trait Present {
 
     /// View. The end of the data a default view shows.
     async fn now(&self, caller: &Caller) -> Result<Timestamp, QueryError>;
+
+    /// View. Where a default view's window ends: `now`, unless the backend
+    /// replays data up to a fixed end.
+    async fn view_end(&self, caller: &Caller) -> Result<Timestamp, QueryError> {
+        self.now(caller).await
+    }
 }

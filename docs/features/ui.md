@@ -1023,6 +1023,41 @@ checks a fixture export only.
   are deliberate, one version at a time, and only to releases at least a
   week old.
 
+## Replay mode (demo)
+
+`"backend": {"fixture": {"seed": 7, "replay": {"window_minutes": 240, "speed": 10}}}`
+(`ui/config.demo.json`) plays the data's last `window_minutes` out at
+`speed` times real time. Without `replay` nothing changes.
+
+- Clock: `Clock::Replay { started, from, speed }`, `from = NOW - window`,
+  `now = min(NOW, from + elapsed * speed)`. It stops at `NOW` and does not
+  loop; restart the process to replay again.
+- Visibility: `FixtureBackend::read` (which every `QueryApi` read except
+  projections, export and sinks goes through) builds its `Ctx` over a
+  `replay::Snapshot`: `World::at(cutoff)` keeps accesses and transmissions
+  (by `opened_at`) at or before the cutoff and rebuilds the indexes, and
+  `State::at(cutoff)` keeps channels by `created`, alerts by `raised_at`
+  (an alert acknowledged, resolved or suppressed later shows open),
+  verdict records and audit entries by time. The snapshot is cached per
+  10 s of data time and dropped after every action. Agents are all first
+  seen before the data starts, so none appear.
+- Watermark: ten minutes before the replay's present, on a bucket boundary
+  (`clock::replay_watermark`), reported by `QueryApi::watermark` and, via
+  a thread-local set around each snapshot read, by every `Watermarked`
+  result.
+- Default views: `Present::view_end` (default: `now`) is `NOW` + one
+  bucket under a replay, so a fresh page's 24-hour window holds the whole
+  replay range and fills in. `Present::now` still reports the replay clock.
+- Events: `main.rs` starts `replay::Replay::spawn_ticker`, which every 2 s
+  publishes `Watermark` plus `Alert`, `Channel` and `Agent` for every
+  alert raised, channel created and transmission opened (its channel and
+  agents) since the last tick. It goes quiet at `NOW`.
+- Pages: topology now watches `watermark`; overview, channels, agents and
+  alerts already watch these kinds. `<ct-live>` refreshes a page at most
+  once every 4 s (`live/throttle.ts`).
+- Deployment: `deploy/ui.demo.Dockerfile` (context: repo root) bakes
+  `ui/config.demo.json` in as `/etc/crosstalk/ui.json`.
+
 ## What the UI uses from L8
 
 Every read is a `QueryApi` method, every action an `OperatorAction` sent

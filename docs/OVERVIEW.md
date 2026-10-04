@@ -190,7 +190,9 @@ Features Index:
       feed. Reads and acts through the spec's L8 traits (QueryApi,
       OperatorActions, LiveFeed) with a deterministic fixture
       implementation; what the spec lacks is two documented gap traits
-      (ui/src/contract: bucket width and present, export formats).
+      (ui/src/contract: bucket width and present, export formats). An
+      optional replay mode plays the fixture's last hours out in
+      accelerated real time for demos (deploy/ui.demo.Dockerfile).
     entry_points:
       - ui/src/main.rs
       - ui/src/app.rs

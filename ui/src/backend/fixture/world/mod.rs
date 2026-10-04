@@ -218,8 +218,9 @@ pub struct World {
     /// Oldest first.
     pub transmissions: Vec<TxRecord>,
     pub tx_index: HashMap<TransmissionId, usize>,
-    /// Span records and the message bodies content retention kept.
-    pub blobs: Blobs,
+    /// Span records and the message bodies content retention kept. Shared,
+    /// so a replay's truncated copy does not clone the bodies.
+    pub blobs: std::sync::Arc<Blobs>,
     /// Harness claims per agent id as recorded (the claim store: not
     /// resolved; a canonical agent's are the union over its cluster).
     pub claims: HashMap<AgentId, ClaimSet>,
@@ -253,6 +254,44 @@ impl World {
             .get(&id)
             .and_then(|i| self.transmissions.get(*i))
     }
+
+    /// The world as it stood at `cutoff`, for a replay: only the accesses
+    /// made and the transmissions opened at or before it.
+    pub fn at(&self, cutoff: crosstalk_spec::support::Timestamp) -> World {
+        let accesses: Vec<Access> = self
+            .accesses
+            .iter()
+            .filter(|a| a.at <= cutoff)
+            .cloned()
+            .collect();
+        let transmissions: Vec<TxRecord> = self
+            .transmissions
+            .iter()
+            .filter(|t| t.transmission.opened_at <= cutoff)
+            .cloned()
+            .collect();
+        let mut world = World {
+            seed: self.seed,
+            directory: self.directory.clone(),
+            resources: self.resources.clone(),
+            resource_index: self.resource_index.clone(),
+            resource_channel: self.resource_channel.clone(),
+            access_index: index_by(&accesses, |a| a.id),
+            accesses,
+            access_transmissions: link_accesses(&transmissions),
+            tx_index: index_by(&transmissions, |t| t.transmission.id),
+            transmissions,
+            blobs: std::sync::Arc::clone(&self.blobs),
+            claims: self.claims.clone(),
+            last_activity: HashMap::new(),
+            topics: self.topics.clone(),
+            sinks: self.sinks.clone(),
+            rule_config: self.rule_config,
+            scenario: self.scenario.clone(),
+        };
+        world.last_activity = last_activity(&world);
+        world
+    }
 }
 
 /// Builds the world and the initial mutable state for `seed`.
@@ -283,7 +322,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         access_transmissions: HashMap::new(),
         tx_index: index_by(&traffic.transmissions, |t| t.transmission.id),
         transmissions: traffic.transmissions,
-        blobs,
+        blobs: std::sync::Arc::new(blobs),
         claims: HashMap::new(),
         last_activity: HashMap::new(),
         topics: topic_model,

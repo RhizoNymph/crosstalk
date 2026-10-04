@@ -19,6 +19,7 @@ pub mod lists;
 pub mod query;
 pub mod selection;
 
+use crate::components::live::live_watch;
 use crate::contract::present::Present;
 use std::time::Duration;
 
@@ -189,6 +190,8 @@ async fn topology_page(
     Ok(view! {
         <script type="module" src=(TOPOLOGY_JS)></script>
         <script type="module" src=(TIMEBRUSH_JS)></script>
+        // New traffic advances the watermark: the graph is read again.
+        live_watch(tokens: "watermark".to_owned())
         if let Some(status) = failed_status {
             (status)
         }

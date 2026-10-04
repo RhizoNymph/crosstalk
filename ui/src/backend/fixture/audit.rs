@@ -34,6 +34,18 @@ impl AuditLog {
         }
     }
 
+    /// The entries made at or before `cutoff`, for a replay.
+    pub fn until(&self, cutoff: Timestamp) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|e| e.at <= cutoff)
+                .cloned()
+                .collect(),
+        }
+    }
+
     /// Every entry, in append order.
     pub fn entries(&self) -> &[AuditEntry] {
         &self.entries
