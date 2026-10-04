@@ -9,7 +9,7 @@ use std::num::NonZeroU64;
 
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ChannelId, TransmissionId};
-use crate::support::Timestamp;
+use crate::support::{Timestamp, Watermark};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassificationCause {
@@ -52,6 +52,15 @@ pub enum InsightEvent {
         version: TopicModelVersion,
         previous: TopicModelVersion,
     },
+    /// From analysis (L6): retention marked `version` dropped in the topic
+    /// catalog. L7 deletes its buckets and contributions on it; queries for
+    /// its data already return `VersionNotRetained`.
+    TopicVersionDropped {
+        version: TopicModelVersion,
+    },
+    /// From topology (L7): the exposed watermark strictly advanced to this
+    /// value, which is later than every earlier `WatermarkAdvanced`.
+    WatermarkAdvanced(Watermark),
     EdgeUpdated(EdgeKey),
     /// Revision 1 (`AlertRevision::OPENED`).
     AlertOpened(Alert),
@@ -77,6 +86,8 @@ impl InsightEvent {
             Self::TransmissionClassified { .. } => Subject::TransmissionClassified,
             Self::TopicVersionReady { .. } => Subject::TopicVersionReady,
             Self::TopicVersionActivated { .. } => Subject::TopicVersionActivated,
+            Self::TopicVersionDropped { .. } => Subject::TopicVersionDropped,
+            Self::WatermarkAdvanced(_) => Subject::WatermarkAdvanced,
             Self::EdgeUpdated(_) => Subject::EdgeUpdated,
             Self::AlertOpened(_) => Subject::AlertOpened,
             Self::AlertChanged { .. } => Subject::AlertChanged,

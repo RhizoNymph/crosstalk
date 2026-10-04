@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.watermark.final-buckets"
+statement = "Once EdgeStore::watermark has returned a watermark W, no bucket of a topic-model version that has been activated whose window ends at or before W changes its stats."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+This is what the watermark promises: a client can cache, cite or export
+any part of an aggregate before it. It holds for every version from its
+activation on, including superseded versions retention keeps; a version
+being rebuilt by a re-fit is not covered until it is activated, and
+activation waits for every re-fit classification.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::buckets_before_watermark_never_change"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

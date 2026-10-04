@@ -1,14 +1,16 @@
 [invariant]
 id = "surface.query.series-matches-edge-store"
-statement = "For a Caller with View, QueryApi::series returns exactly what EdgeStore::series returns for the same grid, weighting, grouping and filter, with BucketWidthMismatch mapped to BadRequest and other store errors to Store."
+statement = "For a Caller with View, QueryApi::series returns exactly the Watermarked result EdgeStore::series returns for the same grid, weighting, grouping and filter, watermark included, with BucketWidthMismatch mapped to InvalidInput(BucketWidthMismatch), VersionNotRetained to VersionNotRetained with the same version, and other store errors to Store."
 kind = "domain"
 property = "model-based"
 requires = ["property"]
 rationale = """
 L7 computes series so that they add up to its graphs. If the surface
 re-filtered, re-grouped or dropped points, the brush would no longer match
-the graph. Mapping BucketWidthMismatch to BadRequest tells the UI to
-rebuild its grid from the store's bucket width.
+the graph. Passing L7's watermark through unchanged keeps the brush's
+settled region the same as the graph's. Mapping BucketWidthMismatch to
+InvalidInput tells the UI to rebuild its grid from the store's bucket
+width, and VersionNotRetained tells it the version it pinned is gone.
 """
 
 [evidence]

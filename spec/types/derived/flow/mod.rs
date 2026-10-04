@@ -9,4 +9,5 @@ pub mod access;
 pub mod channel;
 pub mod evidence;
 pub mod resource;
+pub mod timing;
 pub mod transmission;

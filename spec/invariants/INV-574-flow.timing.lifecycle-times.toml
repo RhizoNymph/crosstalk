@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.timing.lifecycle-times"
+statement = "The correlator opens a channel transmission AwaitingContent with window_closes_at equal to CorrelationTiming::window_closes_at of the read access's at, marks it Suspected with since equal to that window_closes_at, expires it at CorrelationTiming::expires_at(since), and opens a pending tool-result match as Direct(ToolResult) at window_closes_at of its reader exchange's started_at."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+These are the only places the correlator holds a transmission open, and
+together they bound how long after its time a transmission can still be
+confirmed by settle_after (evidence window plus suspected TTL). L7's
+watermark is computed from that bound, so the correlator must place every
+window exactly where CorrelationTiming says.
+"""
+
+[evidence]
+unit = "crosstalk::flow::correlator::tests::windows_follow_correlation_timing"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

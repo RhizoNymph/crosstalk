@@ -12,6 +12,15 @@
 //! `TopicVersionActivated` from L7 makes it `Active` and supersedes the older
 //! versions.
 //!
+//! **Retention.** The catalog applies a [`RetentionPolicy`] (configuration):
+//! after it processes `TopicVersionActivated` or an unpin, and when it
+//! starts, it calls [`TopicCatalog::enforce_retention`], which marks every
+//! version [`RetentionPolicy::to_drop`] returns dropped, freezing its
+//! all-time sizes, and then publishes `TopicVersionDropped` for each. Only
+//! after the mark does `analyze` delete the version's topic assignments; L7
+//! deletes its buckets on the event. Topics and lineage are kept. Pins and
+//! drops are serialized in the catalog's store.
+//!
 //! `alerts` evaluates rules against detect and insight events and triages
 //! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned) and
 //! `TransmissionDismissed`. On `TopicVersionReady` it carries every current
@@ -45,12 +54,13 @@ use crate::aggregates::alert::{
 use crate::aggregates::alert::{AlertRuleDef, ContentRule, TopicWatch};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::projection::{Projection, ProjectionLimit};
+use crate::aggregates::retention::{Pin, PinChange, RetentionPolicy};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::policy::Policy;
 use crate::events::Envelope;
 use crate::ids::{AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
-use crate::support::{NonBlank, Similarity, TimeWindow};
+use crate::support::{NonBlank, Similarity, TimeWindow, Timestamp};
 
 pub trait Embedder {
     fn model(&self) -> EmbeddingModel;
@@ -75,7 +85,9 @@ pub trait TopicCatalog {
     /// Each of `version`'s topics, and its outliers, with the transmissions
     /// assigned to them under `version`; with a window, only transmissions
     /// confirmed in it. Every topic of the version is listed once. Fails with
-    /// `StillFitting` for a version that is not ready yet.
+    /// `StillFitting` for a version that is not ready yet. For a dropped
+    /// version, returns without a window the all-time sizes frozen when it
+    /// was dropped, and with a window `VersionNotRetained`.
     async fn sizes(
         &self,
         version: TopicModelVersion,
@@ -87,6 +99,27 @@ pub trait TopicCatalog {
     /// centroid (ties to the lower id). `None` while `from` has no successor
     /// whose fit has returned.
     async fn lineage(&self, from: TopicModelVersion) -> Result<Option<TopicLineage>, CatalogError>;
+
+    /// The policy retention applies.
+    fn retention(&self) -> RetentionPolicy;
+
+    /// Pin `version` ([`TopicVersionHistory::pin`]): `UnknownVersion`,
+    /// `StillFitting` or `VersionNotRetained` when it is unknown, fitting or
+    /// dropped, changing nothing. Serialized with `enforce_retention`.
+    async fn pin(&self, version: TopicModelVersion, pin: Pin) -> Result<PinChange, CatalogError>;
+
+    /// Unpin `version` ([`TopicVersionHistory::unpin`]), then enforce
+    /// retention, so an unpinned version outside the policy is dropped.
+    async fn unpin(&self, version: TopicModelVersion) -> Result<PinChange, CatalogError>;
+
+    /// Mark every version `RetentionPolicy::to_drop` returns dropped at `at`,
+    /// freezing its all-time sizes, in one transaction. Returns those
+    /// versions, oldest first; the caller then publishes one
+    /// `TopicVersionDropped` per version and deletes their assignments.
+    async fn enforce_retention(
+        &self,
+        at: Timestamp,
+    ) -> Result<Vec<TopicModelVersion>, CatalogError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -258,9 +291,13 @@ pub enum TopicError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogError {
-    Store { reason: String },
+    Store {
+        reason: String,
+    },
     UnknownVersion(TopicModelVersion),
     StillFitting(TopicModelVersion),
+    /// Retention dropped the version's assignments.
+    VersionNotRetained(TopicModelVersion),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

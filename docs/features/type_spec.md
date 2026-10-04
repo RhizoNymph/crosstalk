@@ -95,7 +95,10 @@ The types follow data through the stack:
    `Correlator` turns accesses, content matches and clock ticks into
    `TransmissionUpdate`s, which move a `Transmission` through
    `TransmissionState`, choosing its `Route` (`Delegation`, `Channel`,
-   `Direct`, `Unobserved`, in that precedence). Channel and transmission
+   `Direct`, `Unobserved`, in that precedence). Its windows come from a
+   `CorrelationTiming`: a read waits `evidence_window` for content, then
+   stays `Suspected` for `suspected_ttl`; `Confirmed::at` is the reader
+   exchange's start, so a late match confirms into the read's time. Channel and transmission
    events are published. Each policy decision, from config (a declaration
    or reload) or from `PolicyChanged`, becomes a `PolicyDecision` that
    `ChannelRegistry::set_policy` records in the channel's `PolicyHistory`
@@ -127,7 +130,9 @@ The types follow data through the stack:
    the new version, or `Stale` naming the unmapped topics), so the UI's
    lineage and the rules cannot disagree; the rule's `RuleStatus` is left
    as the operator set it. `TopicVersionActivated { version, previous }`
-   from L7 makes the version `Active` and every older one `Superseded`. `TopicSizes` count topic
+   from L7 makes the version `Active` and every older one `Superseded`;
+   the catalog then enforces its `RetentionPolicy` (see "Retention and
+   watermarks" below), as it does after an unpin and on start. `TopicSizes` count topic
    assignments per topic (outliers apart), optionally over a window. The
    `SearchIndex` and the `ProjectionIndex` take a `TopologyFilter` and
    report the topic-model version they evaluated topics under
@@ -156,20 +161,29 @@ The types follow data through the stack:
    `EdgeStore::transmissions` lists the contributions behind one edge
    (`EdgeSelector`) from the same stored rows, a page at a time
    (`EdgeTransmissionPage`), with the first page's topic version pinned in
-   the cursor.
+   the cursor. Activation deletes nothing; a version's buckets go only on
+   `TopicVersionDropped` (`EdgeStore::drop_version`). The topology consumer
+   recomputes the watermark from a `FrontierSource` at least once per bucket
+   width (`EdgeStore::advance_watermark`), publishes `WatermarkAdvanced` on
+   each strict advance, and refuses a contribution into a final bucket
+   (`LateContribution`). Graph, series and drill-down results come back
+   `Watermarked`.
 9. **L8 surface.** `QueryApi` serves channels, policy histories, agents,
    alert rules, dead letters, alerts, the topology, series, the topic
    history (versions, sizes, lineage), the transmissions behind an edge,
    search, transmissions, topics, projections and the audit log to an
    authenticated `Caller` with `Permission`s (View for structure, Content
    for anything derived from message text, Operate for dead letters, Audit
-   for the audit log). Series and the topic history need `View`: they carry
+   for the audit log). `topology`, `series`, `edge_transmissions` and
+   `topic_sizes` return `Watermarked` results, the watermark read from L7
+   before the data, and `watermark` returns the current one. Series and the topic history need `View`: they carry
    ids, counts, times and similarities but no text, and topic labels stay
    behind `Content`. `OperatorActions::act` checks
    `OperatorAction::required_permission` before any effect, then publishes
    `PolicyChanged` or forwards the action down the stack: merges, unmerges
    and labels to L3, channel promotion and transmission dismissal to L5,
-   alert rule management to L6; acknowledging and resolving an alert
+   alert rule management and topic-version pins (`PinTopicVersion`,
+   `UnpinTopicVersion`, Govern) to L6; acknowledging and resolving an alert
    publishes `AlertChanged`. It stamps every author and time from the
    caller and returns an `ActionEffect`. `AlertSink`s deliver alerts.
    - **Audit log.** Every `act` call leaves one `AuditRecord` (the caller,
@@ -253,6 +267,61 @@ are the `limit` with the smallest keyed sample hash, so the sample is fixed
 per token and survives narrowing. `Projection::new` checks that it holds
 exactly `min(matching, limit)` points, none twice, all finite.
 
+### Retention and watermarks
+
+**Retention** (`aggregates/retention.rs`). A `RetentionPolicy` (config,
+`keep_last` at least 2) keeps the active version, every newer one, the
+`keep_last` newest versions that have been active, and every pinned
+version; `RetentionPolicy::to_drop` lists the rest, all superseded. Each
+`TopicVersionInfo` carries a `Retention`: `Retained { pin }` or
+`Dropped { at }`.
+
+| Data | Retained version | Dropped version |
+| --- | --- | --- |
+| edge buckets and stored contributions (L7) | kept | deleted; graph, series and drill-down return `VersionNotRetained` |
+| topic assignments (L6) | kept | deleted |
+| sizes over a window | from assignments | `VersionNotRetained` |
+| all-time sizes | from assignments | frozen at the drop |
+| topics and lineage | kept | kept |
+| history entry | kept | kept, marked `Dropped` |
+
+The catalog enforces the policy after `TopicVersionActivated`, after an
+unpin and on start: it marks each `to_drop` version dropped (freezing its
+all-time sizes), then publishes `TopicVersionDropped`; only then do L6 and
+L7 delete data. Pins and drops are serialized. `PinTopicVersion` and
+`UnpinTopicVersion` need Govern. Pinning returns `Unchanged` when already
+pinned, `NotFound` for an unknown version, `Conflict(TopicVersionFitting)`
+for a fitting one (a fit can still fail, and pending versions are kept
+anyway) and `Conflict(TopicVersionDropped)` for a dropped one. Unpinning a
+version without a pin, dropped or not, is `Unchanged`.
+
+**Watermarks** (`aggregates/watermark.rs`). Buckets are keyed by
+`Confirmed::at`, so late matches and suspected-to-confirmed upgrades add
+to closed buckets. L7 computes
+
+```text
+watermark = align_down( min( ticked_through − (evidence_window + suspected_ttl), oldest_pending ) )
+```
+
+from a `PipelineFrontier`: `ticked_through` is the earliest last tick of
+the correlator shards, and `oldest_pending` the earliest event time of an
+exchange in flight at the proxy or of an unacked or dead-lettered delivery
+in `reconstruct`, `provenance`, `flow`, `analyze` or `topology` (re-fit
+classifications aside). Caught up, that is `now − settle_after` rounded
+down to a bucket; a lagging consumer or a dead letter holds it back. The
+exposed watermark never decreases and advances in whole buckets, each
+strict advance published once as `WatermarkAdvanced`, at most one per
+recompute and in steady state one per bucket width. Once `W` is exposed, no
+bucket of an activated version ending at or before `W` changes. Every
+aggregate response (`TopologyGraph`, `TopologySeries`, `TopicSizes`,
+`EdgeTransmissionPage`) is `Watermarked` with the watermark read before
+its data. Other aggregates use the same value read the same way: the
+projection, and the channel graph, whose access and transmission counts
+are keyed by event time, so L7's watermark (read before the data) is a
+sound, conservative bound for them too. Results before the watermark can
+still change through what is resolved at query time: merges, verdicts and
+the active topic version.
+
 ## Files
 
 | File | Role | Key exports |
@@ -274,6 +343,7 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern`, `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
+| `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `settle_after`), `InvalidTiming` |
 | `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
 | `spec/types/derived/flow/channel/mod.rs` | Channels and promotion | `Channel`, `ChannelOrigin` (`promoted`), `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
@@ -282,16 +352,18 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
 | `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
+| `spec/types/aggregates/retention.rs` | Retention of topic-model versions | `RetentionPolicy` (checked: `protected`, `to_drop`), `Pin`, `Retention`, `PinChange`, `PinError`, `DropError`, `TopicVersionHistory::pin`, `unpin`, `mark_dropped` |
+| `spec/types/aggregates/watermark.rs` | When a bucket is final | `PipelineFrontier`, `Watermark::settled`, `finalizes`, `advance`, `Watermarked`; re-exports `Watermark` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
-| `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo`, `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
+| `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo` (`with_retention`), `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`), `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark` and `FrontierSource` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions; `retention.rs`, `watermark.rs` for retention and watermarks) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -464,6 +536,21 @@ exactly `min(matching, limit)` points, none twice, all finite.
 - `TopicSizes` list every topic of the version once (`TopicSizes::new`) and
   count topic assignments, so unlike series they keep transmissions between
   agents later merged into one.
+- A `RetentionPolicy` keeps at least 2 versions. Only superseded versions
+  are dropped, a fitting version is never pinned, a pin is no earlier than
+  its version was ready, and a dropped version has no pin
+  (`TopicVersionInfo::with_retention`). `to_drop` never lists the active,
+  a newer, a recent or a pinned version, and `mark_dropped` accepts nothing
+  else. Activation deletes nothing; data is deleted only after the catalog
+  marks the version dropped, and a query never sees a version half
+  deleted.
+- `CorrelationTiming` durations are non-zero. `Confirmed::at` is the
+  reader exchange's start. The watermark is
+  `align_down(min(ticked_through − settle_after, oldest_pending))`, never
+  decreases, and moves in whole buckets; once exposed, buckets of activated
+  versions ending at or before it never change (`apply` returns
+  `LateContribution`). Every aggregate response carries the watermark read
+  before its data.
 - `TimeWindow` and `ByteRange` are never empty. `Similarity` and `Share` are
   never NaN or outside `0..=1`.
 - Bus delivery is at least once. Consumers are idempotent on the envelope id

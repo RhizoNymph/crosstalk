@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.watermark.frontier-not-behind"
+statement = "For every frontier FrontierSource returns, Watermark::settled is no earlier than the watermark L7 has already exposed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+This is the soundness of the whole design: given the correlator's bound
+(flow.timing.confirm-within-settle), consumers acking after publishing
+(transport.consumer.ack-after-outputs) and a frontier that counts every
+pending input (topology.frontier.covers-pending), a later frontier never
+settles less than an earlier one did. If it ever did, some input older
+than the exposed watermark was not counted, and a final bucket could
+change.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::settled_watermark_never_behind_exposed"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

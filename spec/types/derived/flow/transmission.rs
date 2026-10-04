@@ -108,11 +108,14 @@ pub enum TransmissionState {
     Detected,
     AwaitingContent {
         co_access: CoAccess,
+        /// `CorrelationTiming::window_closes_at` of the read's time.
         window_closes_at: Timestamp,
     },
     /// Only access-pattern evidence.
     Suspected {
         co_access: NonEmpty<CoAccess>,
+        /// The `window_closes_at` it was suspected at. It expires at
+        /// `CorrelationTiming::expires_at(since)`.
         since: Timestamp,
     },
     Confirmed(Confirmed),
@@ -251,6 +254,12 @@ impl Confirmed {
         &self.co_access
     }
 
+    /// When the reader received the content: the `started_at` of the
+    /// reader exchange holding the first content match. For a channel
+    /// transmission that is the exchange whose tool result made the read, so
+    /// it is the read's time. Edges are bucketed by it and query windows are
+    /// tested against it, so a late match adds to an earlier bucket; see
+    /// [`crate::aggregates::watermark`].
     pub fn at(&self) -> Timestamp {
         self.at
     }

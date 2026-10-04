@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.retention.drop-only-eligible"
+statement = "TopicVersionHistory::mark_dropped marks a version dropped only when RetentionPolicy::to_drop returns it for the history and the drop time is no earlier than its superseded_at, and otherwise returns an error and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The mark is what makes queries answer VersionNotRetained and what
+licenses deleting data, so it must never reach a protected version: the
+active one, a pending one, a recent one or a pinned one.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::retention::mark_dropped_takes_only_what_policy_drops", "crosstalk_spec::tests::retention::mark_dropped_is_not_before_supersession", "crosstalk_spec::tests::retention::pinned_version_cannot_be_marked_dropped"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

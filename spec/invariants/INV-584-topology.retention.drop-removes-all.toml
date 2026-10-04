@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.retention.drop-removes-all"
+statement = "After EdgeStore::drop_version(v) returns Ok, the store holds no bucket or stored contribution of v, and apply, graph, series and transmissions for v return VersionNotRetained."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+A drop must actually reclaim the space, and every later read must say so
+rather than answer as if the version had no traffic. In TimescaleEdgeStore
+this is a delete or chunk drop by version.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::dropped_version_is_gone"
+integration = "crosstalk::topology::integration::timescale_drop_version_removes_buckets"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

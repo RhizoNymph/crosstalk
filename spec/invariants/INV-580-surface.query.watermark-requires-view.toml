@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.query.watermark-requires-view"
+statement = "QueryApi::watermark returns Forbidden when the Caller lacks View."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+The watermark reveals how far the pipeline has processed traffic, which is
+operational information of the same class as the topology, so it sits
+under View with the views it qualifies.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::watermark_without_view_forbidden"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

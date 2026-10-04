@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.retention.enforced-on-change"
+statement = "After the topic catalog processes TopicVersionActivated or an unpin, and after it starts, every version RetentionPolicy::to_drop returns for its history is marked dropped and has had exactly one TopicVersionDropped published."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Those are the only events that can shrink the protected set: an
+activation pushes a version out of the last N, an unpin removes a pin,
+and a restart may come with a smaller N. Enforcing then, and only then,
+keeps storage bounded without dropping anything still protected.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::retention_enforced_after_activation_unpin_and_start"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

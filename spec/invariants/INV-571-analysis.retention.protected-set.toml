@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.retention.protected-set"
+statement = "RetentionPolicy::to_drop returns exactly the retained versions that are older than the active version, not pinned, and not among the keep_last newest versions that have been active."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the policy: keep the last N versions that were actually shown,
+everything pending, and whatever an operator pinned. A ready version
+overtaken before it was ever active does not count towards N. Versions
+already dropped are not listed again, and raising N never revives one.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::retention::policy_protects_active_newer_and_recent_activated", "crosstalk_spec::tests::retention::policy_protects_pinned_versions", "crosstalk_spec::tests::retention::policy_never_redrops_dropped_versions"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

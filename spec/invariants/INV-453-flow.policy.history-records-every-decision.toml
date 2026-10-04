@@ -8,8 +8,7 @@ Channel.policy keeps only the latest decision, so without the history an
 earlier sanction, and who made it, is lost the moment it is overridden.
 Config decisions are included so the history explains a channel's policy
 from its first decision, not only from the first operator action.
-PolicyHistory::record returns Duplicate for a redelivered decision, so at-
-least-once delivery adds nothing twice.
+PolicyHistory::record returns Duplicate for a redelivered decision, so at-least-once delivery adds nothing twice.
 """
 
 [evidence]

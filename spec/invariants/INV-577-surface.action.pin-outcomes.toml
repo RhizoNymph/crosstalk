@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.action.pin-outcomes"
+statement = "PinTopicVersion returns Applied when it pins, Unchanged for a pinned version, NotFound for an unknown version, Conflict(TopicVersionFitting) for a fitting one and Conflict(TopicVersionDropped) for a dropped one; UnpinTopicVersion returns Applied when it removes a pin, Unchanged for any version without one and NotFound for an unknown version; a pin is stamped with the caller's operator and the acceptance time."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+These are TopicCatalog::pin and unpin outcomes in the surface's
+vocabulary, so the UI and the audit log can tell a pin that took effect
+from one that was already there or could not be taken.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::pin_and_unpin_outcomes"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

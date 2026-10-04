@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.retention.dropped-sizes-frozen"
+statement = "TopicCatalog::sizes for a dropped version returns, without a window, the all-time sizes it returned when the version was marked dropped, and with a window VersionNotRetained."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+All-time sizes are one row per topic, cheap to keep, and let the topic
+history still show how big an old version's topics were. Sizes over a
+window need the per-transmission assignments, which are gone. Nothing new
+is ever classified under a superseded version, so the frozen sizes are
+its final ones.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::dropped_version_keeps_all_time_sizes_only"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
