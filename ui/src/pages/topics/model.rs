@@ -34,6 +34,10 @@ pub struct VersionTab {
     pub dropped: bool,
     /// Still being fitted: it cannot be pinned yet.
     pub fitting: bool,
+    /// A view can read it: retained and activated at some point (a linked
+    /// view refuses a dropped version with `VersionNotRetained` and a
+    /// never-activated one with `TopicVersionNotActivated`).
+    pub readable: bool,
     pub in_view: bool,
 }
 
@@ -80,6 +84,7 @@ pub fn version_tabs(history: &TopicVersionHistory, in_view: TopicModelVersion) -
                 newest: Some(info.version()) == newest,
                 dropped: !retention.is_retained(),
                 fitting: matches!(info.status(), TopicVersionStatus::Fitting { .. }),
+                readable: retention.is_retained() && info.status().activated_at().is_some(),
                 in_view: info.version() == in_view,
             }
         })
@@ -368,11 +373,42 @@ mod tests {
             .expect("pin");
         let tabs = version_tabs(&history, TopicModelVersion(1));
         assert_eq!(tabs[0].label, "v0");
-        assert!(tabs[0].dropped && !tabs[0].pinned);
+        assert!(tabs[0].dropped && !tabs[0].pinned && !tabs[0].readable);
         assert_eq!(tabs[0].detail, "unfitted");
         assert!(tabs[1].pinned && tabs[1].in_view && !tabs[1].newest && !tabs[1].dropped);
         assert!(tabs[1].detail.starts_with("3 topics · fitted "));
+        assert!(tabs[1].readable && tabs[2].readable);
         assert!(tabs[2].newest);
+    }
+
+    #[test]
+    fn a_version_never_activated_is_not_readable() {
+        let history = TopicVersionHistory::new(vec![
+            TopicVersionInfo::new(
+                TopicModelVersion(0),
+                TopicVersionStatus::Active {
+                    fit: FitRecord::Unfitted,
+                    activated_at: hours(1),
+                },
+            )
+            .expect("v0"),
+            TopicVersionInfo::new(
+                TopicModelVersion(1),
+                TopicVersionStatus::Ready {
+                    fit: CompletedFit {
+                        started_at: hours(2),
+                        fitted_at: hours(2),
+                        ready_at: hours(2),
+                        topics: 2,
+                    },
+                },
+            )
+            .expect("v1"),
+        ])
+        .expect("history");
+        let tabs = version_tabs(&history, TopicModelVersion(0));
+        assert!(tabs[0].readable);
+        assert!(!tabs[1].readable && !tabs[1].dropped);
     }
 
     #[test]

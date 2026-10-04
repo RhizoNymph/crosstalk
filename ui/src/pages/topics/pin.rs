@@ -137,6 +137,7 @@ mod tests {
             newest: false,
             dropped,
             fitting,
+            readable: !dropped && !fitting,
             in_view: false,
         }
     }

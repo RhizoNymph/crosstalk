@@ -229,13 +229,24 @@ async fn topics_page(
     })
 }
 
+/// Whether the shown version can become the view's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UseVersion {
+    /// It already is the view's.
+    InView,
+    /// The view with the shown version.
+    Link(String),
+    /// Views cannot read it (dropped by retention, or never activated), so
+    /// no link is offered: every view would refuse it.
+    Unreadable,
+}
+
 /// The version picker, the link that makes the shown version the view's,
 /// and the shown version's pin control.
 struct Picker {
     tabs: Vec<Tab>,
     detail: String,
-    /// `None` when the shown version already is the view's.
-    use_url: Option<String>,
+    use_version: UseVersion,
     /// The pin or unpin the shown version takes, for a `Govern` caller.
     pin: Option<pin::PinChoice>,
 }
@@ -266,7 +277,13 @@ fn picker(
             })
             .collect(),
         detail,
-        use_url: (selected != state.scope.topic_version).then(|| href(PATH, &use_state, &[])),
+        use_version: if selected == state.scope.topic_version {
+            UseVersion::InView
+        } else if shown.is_some_and(|t| t.readable) {
+            UseVersion::Link(href(PATH, &use_state, &[]))
+        } else {
+            UseVersion::Unreadable
+        },
         pin: shown.filter(|_| govern).and_then(pin::choice),
     }
 }
@@ -300,9 +317,10 @@ async fn topics_body(
                 <span class=(FACET)>"Version"</span>
                 segmented(label: "Topic model version", items: picked.tabs)
                 <span class="text-xs text-zinc-500">(picked.detail)</span>
-                match picked.use_url {
-                    Some(url) => <a class=(format!("{LINK} text-xs")) href=(url)>"Use v" (selected.0) " in every view"</a>,
-                    None => <span class="text-xs text-zinc-500">"· the version every view reads"</span>,
+                match picked.use_version {
+                    UseVersion::Link(url) => <a class=(format!("{LINK} text-xs")) href=(url)>"Use v" (selected.0) " in every view"</a>,
+                    UseVersion::InView => <span class="text-xs text-zinc-500">"· the version every view reads"</span>,
+                    UseVersion::Unreadable => <span class="text-xs text-zinc-500">"· views cannot read this version"</span>,
                 }
                 if let Some(choice) = picked.pin {
                     pin::pin_control(action: pin_url, version: selected.0, choice: choice)
@@ -502,6 +520,11 @@ mod tests {
         assert!(reply.body.contains("no longer retained"));
         assert!(reply.body.contains("Remap v0 → v1"));
         assert!(reply.body.contains("No topics to carry over."));
+        assert!(
+            !reply.body.contains("Use v0 in every view"),
+            "a dropped version is not offered to the views, which would refuse it"
+        );
+        assert!(reply.body.contains("views cannot read this version"));
         let reply = get(&url("&ver=9")).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
         let reply = get(&url("&ver=x")).await;
