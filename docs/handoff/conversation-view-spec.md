@@ -16,6 +16,23 @@ sections marked **depends on P4.1/P4.2** say what they need from those
 branches rather than assume their shapes. Invariant numbers come from the
 block crosstalk-impl assigned to this feature: **INV-1000..1029**.
 
+**Revision 2** (after crosstalk-impl's reply) folds in the eval session's
+spec PR `docs/spec-eval-gaps` (crosstalk-rollouts, INV-950..999). It was not
+on origin when this was revised, so its shapes are taken from the relayed
+description:
+- L4: `ProvenanceReads` extends that PR's `SpanIndex::span` and defines no
+  second span lookup.
+- L5: `TransmissionStore::holding` sits beside its `AccessStore::access` and
+  relies on its evidence read covering `Suspected` and `Discarded`.
+- L1: `ExchangeReads` becomes the spec's exchange store and read, replacing
+  today's JSONL stopgap.
+- Replayed traffic (`IngressMode::Replay { corpus }`) is labelled and
+  filterable.
+
+P4.1 (ordered messages across roles) and P4.2 (persisted scan status, match
+indexes by reader and by origin) were passed to their agents. The sections
+that depend on them stay marked until crosstalk-impl reconciles them.
+
 ## Why
 
 The operator UI wants a view of one agent's conversation: its exchanges in
@@ -45,11 +62,11 @@ span records" but no trait names them.
 | `interfaces/l8_surface/http/routes.rs` | Seven routes |
 | `interfaces/l8_surface/errors.rs` | `InputError::TextLimitTooLarge { max, got }`; `TooManyIds` reused |
 | `interfaces/l8_surface/query_errors.rs` | `From<ConversationReadError>`, `From<ProvenanceReadError>`, `From<ExchangeReadError>`, `From<TextError>` for `QueryError` |
-| `paging.rs` | Markers `ConversationList` (key `ConversationId`), `SpanReaderList` (key (`ExchangeId`, `SpanId`)) |
-| `interfaces/l1_canonical.rs` | `ExchangeReads` (exchange records by id) |
+| `paging.rs` | Markers `ConversationList` (key `ConversationId`), `SpanReaderList` (key (`ExchangeId`, `SpanId`)), `ExchangeList` (key (`ExchangeMeta::started_at`, `ExchangeId`)) |
+| `interfaces/l1_canonical.rs` | `ExchangeReads`: the spec's L1 exchange store and read (records by id, paged by conversation or by time), replacing the JSONL stopgap |
 | `interfaces/l3_reconstruction/conversations.rs` (new) | `ConversationReads` |
-| `interfaces/l4_provenance/reads.rs` (new) | `ProvenanceReads` |
-| `interfaces/l5_flow/transmissions.rs` | `TransmissionStore::holding(matches)` lookup |
+| `interfaces/l4_provenance/reads.rs` (new) | `ProvenanceReads: SpanIndex`: extends the eval PR's `SpanIndex::span`; one L4 read trait once crosstalk-impl merges them |
+| `interfaces/l5_flow/transmissions.rs` | `TransmissionStore::holding(matches)` lookup, beside the eval PR's `AccessStore::access` |
 | `observed/message.rs` | `Serialize`/`Deserialize` (snake_case strings) on `Role`, `MediaKind`, `ToolExecution`, `ToolOutcome` |
 | `events/ingest.rs` (**depends on P4.1**) | The delta must keep the order of its new messages across roles (see "System messages mid-conversation") |
 | `spec/invariants/` | INV-1000..1029 |
@@ -190,8 +207,22 @@ constructors (`try_from = "Raw…"`).
 pub struct ConversationFilter {
     pub agent: Option<AgentId>,
     pub origins: Vec<OriginKind>,
+    /// Default `Include`. `{"type": "include"}`, `{"type": "exclude"}`,
+    /// `{"type": "only", "data": {"corpus": null}}` for every replayed
+    /// conversation, or a corpus name for one corpus.
+    pub replay: ReplayFilter,
 }
 impl WireRequest for ConversationFilter {}
+
+/// Which conversations to keep by their `TrafficSource`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReplayFilter {
+    #[default]
+    Include,
+    Exclude,
+    Only { corpus: Option<CorpusName> },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -261,6 +292,19 @@ pub struct ConversationRow {
     /// Turns threaded when read.
     pub turns: u32,
     pub traffic: ConversationTraffic,
+    /// Live, or replayed from a dataset corpus: the first turn's
+    /// `ClientContext::ingress`.
+    pub source: TrafficSource,
+}
+
+/// Where a conversation's traffic came from. `CorpusName` is whatever type
+/// the eval PR gives `IngressMode::Replay { corpus }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TrafficSource {
+    /// Through the gateway as reverse or forward proxy.
+    Live,
+    Replay { corpus: CorpusName },
 }
 
 /// Distinct transmissions, any state but `Discarded`, counted once each.
@@ -389,6 +433,9 @@ pub struct Turn {
     pub model: ModelName,
     /// `ClientContext::harness`: what the request said about itself.
     pub harness: Option<HarnessClaim>,
+    /// `ClientContext::ingress`: how the exchange reached the gateway
+    /// (reverse proxy route, forward proxy host, or replay corpus).
+    pub ingress: IngressMode,
     pub continuation: TurnContinuation,
     pub outcome: TurnOutcome,
     /// The request's messages new to the conversation, in request order,
@@ -662,30 +709,72 @@ a fault and becomes `Store`, as `EvidenceError` does.
 | Conversation list by canonical agent, origin, successors | L3 conversation table (`Conversation`, `ConversationOrigin`) and `AgentDirectory` | **Missing:** no read trait. New `ConversationReads` (below). Successors need an index on `origin.parent`/`origin.predecessor`. |
 | Turn sequence, `TurnIndex` | L3: the deltas in threading order | **Missing:** deltas are only published, not stored. `ConversationReads` must store each delta with its index (the Postgres threader already writes the conversation row in the same transaction; the delta row goes with it). |
 | `inputs` in request order across roles, `Placement::CarriedOver` | L3 delta + the exchange's request | **Depends on P4.1:** today's `ConversationDelta` has `new_system` apart from `new_inputs`, so a system message's position among the new inputs is lost. See below. Carried-over messages are the first request's messages whose hash is in the predecessor's history, which L3 computes when threading; store them with the delta (`carried_over: Vec<MessageHash>`) rather than recompute. |
-| Exchange meta, continuation, outcome, harness claim | L1: the `Exchange` record (`ExchangeCaptured`) | **Missing:** no exchange store trait. New `ExchangeReads::exchanges(ids)`. |
+| Exchange meta, continuation, outcome, harness claim, ingress | L1: the `Exchange` record (`ExchangeCaptured`) | **Missing:** exchanges only go to a stopgap JSONL log. New `ExchangeReads` (L1 store and read, Postgres behind it), shaped like `NormalizedExchange` without the bodies (they stay in the blob store). |
 | Message bodies, part kinds, `text_bytes`, text | Blob store (`BlobStore::get`, `Message::part_text`) | Exists. Part shapes are computed from the body at read time (View reads bodies but returns no text). |
 | `IncrementHistory` | L3 `ResponsesStateThreader` outcome | **Depends on P4.1:** record on the stored delta whether the increment's previous response resolved. |
-| Output spans and their state | L4 span records | **Missing:** no span read trait. New `ProvenanceReads::spans_of(exchange)`. |
-| `Inbound` marks | L4 `ContentMatched` by `reader_exchange` | **Missing:** `ProvenanceReads::matches_read_in(exchange)`. |
-| `ReadBy`, `span_readers` | L4 `ContentMatched` by `origin` | **Missing:** `ProvenanceReads::readers(span, page)` and a count. |
+| Output spans and their state | L4 span records | **Missing:** no span read trait. The eval PR adds `SpanIndex::span(SpanId)`; `ProvenanceReads` extends it with `spans_of(exchange)` and the span's agent and state. |
+| `Inbound` marks | L4 `ContentMatched` by `reader_exchange` | **Missing, asked of P4.2:** `ProvenanceReads::matches_read_in(exchange)` over the match index by reader message (an exchange's messages are known from its record, so either key serves). |
+| `ReadBy`, `span_readers` | L4 `ContentMatched` by `origin` | **Missing, asked of P4.2:** `ProvenanceReads::readers(span, page)` and a count over the match index by origin span. |
+| `TrafficSource`, `Turn::ingress`, `ReplayFilter` | `ClientContext::ingress` (`IngressMode::Replay { corpus }` from the eval PR) | Read from the exchange record. Filtering the list by source needs the conversation table to record its first turn's source (or join to L1). |
 | `ProvenanceStatus` | L4: per-delta completion | **Missing, depends on P4.2:** L4 must record when it committed a delta's spans and matches (one row per exchange). |
-| `TransmissionMark` | L5: the transmission holding a content match | **Missing:** transmissions are read by id only. New `TransmissionStore::holding`. |
+| `TransmissionMark` | L5: the transmission holding a content match | **Missing:** transmissions are read by id only. New `TransmissionStore::holding`, beside the eval PR's `AccessStore::access`. A mark links to the evidence page in every state, `Suspected` and `Discarded` included, which that PR's evidence read covers. |
 | `ConversationTraffic` | L5 + L4 + L3 joined | **Missing:** needs the two lookups above per conversation; a materialized `(conversation, direction, transmission)` table in the surface's read side, or computed per page with the indexes. Acceptable to ship it as two counts recomputed on read at first. |
-| `SpanPoint` | L4 span (`exchange`, `agent`, `location`) + L3 `exchange_turn` | Covered by the new traits. |
+| `SpanPoint` | `SpanIndex::span` (exchange, message, part, range) + the span's agent + L3 `locate` | Covered by `SpanIndex` once it also gives the agent (or `ProvenanceReads::spans` does). |
 | Claims | `ClientContext::harness` per exchange; `ClaimSet` per conversation | Computed from exchange records; no new store. |
 
 ### New store traits
 
 ```rust
-// interfaces/l1_canonical.rs
+// interfaces/l1_canonical.rs: the spec's L1 exchange store (Postgres),
+// replacing the JSONL stopgap. Written by capture in the transaction that
+// publishes `ExchangeCaptured`.
+
+/// One stored exchange: `NormalizedExchange` without the bodies, which live
+/// in the blob store under the hashes `exchange` names. `exchange.meta.client`
+/// is the full `ClientContext` (ingress, upstream, claims, harness ids).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct StoredExchange {
+    pub exchange: Exchange,
+    pub warnings: Vec<NormalizeWarning>,
+    /// Set once L3 threads it (`ExchangeStage::Threaded`).
+    pub threaded: Option<TurnPoint>,
+}
+
+/// `{"window": null, "conversation": null}`. With `conversation`, that
+/// conversation's exchanges; with `window`, those started in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ExchangeFilter {
+    pub window: Option<TimeWindow>,
+    pub conversation: Option<ConversationId>,
+}
+
+pub trait ExchangeStore {
+    /// Store a captured exchange. Idempotent by id.
+    fn put(&mut self, exchange: StoredExchange)
+        -> impl Future<Output = Result<(), ExchangeReadError>> + Send;
+    /// Record where L3 threaded `id`.
+    fn threaded(&mut self, id: ExchangeId, at: TurnPoint)
+        -> impl Future<Output = Result<(), ExchangeReadError>> + Send;
+}
+
 pub trait ExchangeReads {
-    /// The stored exchange records of `ids`; unknown ids left out.
+    /// The stored exchanges of `ids`; unknown ids left out.
     fn exchanges(
         &self,
         ids: &IdBatch<ExchangeId>,
-    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, Exchange>, ExchangeReadError>> + Send;
+    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, StoredExchange>, ExchangeReadError>> + Send;
+
+    /// The exchanges `filter` admits, newest first by
+    /// (`started_at`, `ExchangeId`).
+    fn list(
+        &self,
+        filter: &ExchangeFilter,
+        page: &PageRequest<ExchangeList>,
+    ) -> impl Future<Output = Result<Page<StoredExchange, ExchangeList>, ExchangeReadError>> + Send;
 }
-pub enum ExchangeReadError { Store { reason: String } }
+pub enum ExchangeReadError { Store { reason: String }, InvalidCursor }
 
 // interfaces/l3_reconstruction/conversations.rs
 /// One stored delta and its position.
@@ -736,12 +825,15 @@ pub trait ConversationReads {
 pub enum ConversationReadError { Store { reason: String }, InvalidCursor }
 
 // interfaces/l4_provenance/reads.rs
-pub trait ProvenanceReads {
-    /// The spans of `exchange`'s output, with their current state.
+// Extends the eval PR's `SpanIndex` (`span(SpanId) -> Option<SpanLocation>`
+// with exchange, message, PartRef and ByteRange); crosstalk-impl merges the
+// two into one L4 read trait. No second span lookup: `span_points` uses
+// `SpanIndex::span`, and needs the span's agent beside its location
+// (either `SpanIndex` returns it or `spans_of` does).
+pub trait ProvenanceReads: SpanIndex {
+    /// The spans of `exchange`'s output, with their agent and current state.
     fn spans_of(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Vec<Span>, ProvenanceReadError>> + Send;
-    fn spans(&self, ids: &IdBatch<SpanId>)
-        -> impl Future<Output = Result<BTreeMap<SpanId, Span>, ProvenanceReadError>> + Send;
     /// Every content match whose `reader_exchange` is `exchange`.
     fn matches_read_in(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Vec<ContentMatch>, ProvenanceReadError>> + Send;
@@ -756,6 +848,8 @@ pub trait ProvenanceReads {
 pub enum ProvenanceReadError { Store { reason: String }, InvalidCursor }
 
 // interfaces/l5_flow/transmissions.rs
+// Beside the eval PR's `AccessStore::access(AccessId)`, which this relies
+// on for co-access details rather than redefining.
 pub trait TransmissionStore {
     // ...save, transmission...
     /// For each match of `matches` (by origin span and reader exchange) the
@@ -798,6 +892,9 @@ reads.
 
 ## Proposed invariants (INV-1000..1029)
 
+Canonical ids in responses and permission-before-read are already
+surface-wide rules and are not restated here.
+
 Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 `provenance.*` ones belong to those layers.
 
@@ -819,7 +916,7 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 | 1013 | `surface.conversation.inbound-transmission` | An `Inbound` (or `Reader`) carries `transmission` iff a stored transmission holds that match, and it is that transmission with its route resolved. |
 | 1014 | `surface.conversation.output-spans` | An output part's `spans` are exactly L4's non-`Common` spans located in it, ordered by range start, with the origin and status of the span's current state. |
 | 1015 | `surface.conversation.read-by` | An originated span's `ReadBy::total` is the number of matches whose origin is the span; `first` is the newest `min(total, INLINE)` of them; `span_readers` traverses all `total` exactly once. |
-| 1016 | `surface.conversation.canonical-ids` | Every agent id in a conversation read is canonical and every channel in a route resolved, as for every surface read. |
+| 1016 | `surface.conversation.traffic-source` | A conversation's `source` is `Replay { corpus }` iff its first turn's `ClientContext::ingress` is `Replay { corpus }`; `ReplayFilter::Exclude` keeps exactly the `Live` ones, `Only { corpus }` exactly the replayed ones (of that corpus when named), `Include` all. |
 | 1017 | `surface.conversation.view-no-text` | View conversation reads carry no message text: no part text, tool arguments, tool result text or media bytes. |
 | 1018 | `surface.conversation.text-content` | `conversation_text` and `part_text` require Content and read nothing without it. |
 | 1019 | `surface.conversation.text-aligns` | For one window, `conversation_text` returns the same turns, and per turn the same messages and parts in the same order, as `conversation_turns`. |
@@ -827,7 +924,7 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 | 1021 | `surface.conversation.body-dropped` | A body content retention dropped is `BodyDropped` and the rest of the read is returned. |
 | 1022 | `surface.conversation.locate` | `exchange_turns` maps an exchange to `(c, i)` iff turn `i` of `c` is that exchange; `span_points` names the span's own exchange and that turn. |
 | 1023 | `provenance.scan.status-after-commit` | A turn is `Scanned` only once L4 has committed every span of its output and every match read in its exchange; until then marks may be partial. |
-| 1024 | `surface.conversation.permission-first` | Every conversation read checks its permission before reading anything. |
+| 1024 | `canonical.exchange.store-read` | `ExchangeReads::exchanges` returns each stored exchange as `put` stored it, with `threaded` set iff L3 threaded it there; `list` is (`started_at`, `ExchangeId`) descending, a keyset traversal returns each admitted exchange once, and `conversation` admits exactly the exchanges whose `threaded` names that conversation. |
 | 1025 | `surface.conversation.merge-split` | Merges and unmerges change no stored conversation, turn, span or match; conversation reads follow `AgentDirectory` on the next read. |
 | 1026 | `surface.conversation.claims-only` | Turn `harness` fields and the head's `claims` come only from `ClientContext::harness`; the head's `ClaimSet` is the union of its turns' claims at their start times. |
 | 1027 | `surface.conversation.increment-unseen` | A turn is `Increment { history: Unseen }` iff its exchange is an increment whose previous response did not resolve; it is turn 0 of a `Root` conversation. |
@@ -835,6 +932,11 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 | 1029 | `surface.conversation.traffic-counts` | `ConversationTraffic::received` and `sent` count each non-`Discarded` transmission once, as `Inbound`/`Reader` marks across all turns name them. |
 
 ## Open questions (recommendations in bold)
+
+0. **Replayed conversations** (the user's decision, pending).
+   **Recommend showing them, labelled "replayed: <corpus>" on the row,
+   head and each turn, with a filter (`ReplayFilter`, default `Include`).**
+   The alternatives were hiding them by default or showing them unlabelled.
 
 1. **Live updates.** Conversations grow on every exchange. `Changed`
    announces neither agent activity nor turns. **Recommend: no new

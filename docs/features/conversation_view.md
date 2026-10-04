@@ -30,7 +30,7 @@ that.
   drawer.
 - Fixture scenarios for conversations (forks, compaction, an increment with
   unseen history, a delegation, a mid-conversation system message, a
-  dropped body).
+  dropped body, a replayed corpus).
 
 ## Non-scope
 
@@ -49,7 +49,7 @@ that.
 
 | Path | Page | Page keys |
 | --- | --- | --- |
-| `/agents/{id}/conversations` | conversations of the canonical agent `id` resolves to (an alias shows a banner, as the agent page does) | `cursor` (the list's `PageRequest<ConversationList>`), `origin` (comma list of `root,fork,compaction`; empty means all) |
+| `/agents/{id}/conversations` | conversations of the canonical agent `id` resolves to (an alias shows a banner, as the agent page does) | `cursor` (the list's `PageRequest<ConversationList>`), `origin` (comma list of `root,fork,compaction`; empty means all), `replay` (`include` default and omitted, `exclude`, `only`, or `only:<corpus>`) |
 | `/conversations/{id}` | the conversation page | `turn` (a `TurnIndex`), `hl` (a `SpanId` to highlight), `rcursor` (the open reader list's `PageRequest<SpanReaderList>`) |
 | `/exchanges/{id}` | 303 to `/conversations/{c}?turn={i}` via `exchange_turns`; 404 page "not threaded yet" otherwise | none of its own |
 | `/spans/{id}` | 303 to `/conversations/{c}?turn={i}&hl={id}` via `span_points`; a span whose exchange is not threaded shows the span's agent and exchange instead | none of its own |
@@ -103,6 +103,11 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
 ── increment on ws connection 01J…W (history before this turn unseen) ──
 ```
 
+- **Replayed traffic.** A conversation whose traffic came from a dataset
+  replay (`TrafficSource::Replay { corpus }`, from the eval PR's
+  `IngressMode::Replay`) carries a "replayed: <corpus>" badge on its list
+  row, its head and each turn header, and the list filters on it (`replay`
+  key). Live conversations carry no badge.
 - **Head.** Agent (canonical, named), claims shown with the existing
   `claim_badge` ("claims"), start and last turn, turn count, received/sent
   transmission counts, origin (`Root`; "forked from … at turn k, shared n
@@ -122,7 +127,8 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
   plus the route (via channel locator, delegation, direct carrier,
   unobserved), match kind and bytes; links: the sender's turn
   (`/spans/{origin}`), the transmission's evidence
-  (`/transmissions/{id}`) when one holds the match, the channel. A match no
+  (`/transmissions/{id}`) when one holds the match, in any state (suspected
+  and discarded included; the evidence read covers them), the channel. A match no
   transmission holds says so ("content match, no transmission").
 - **Output spans** (`⟶`): originated spans with status (pending, indexed,
   propagated with hits, expired: "no later readers can be detected") and
@@ -273,3 +279,6 @@ pass unchanged.
 3. The agents list gets no new column in v1; the agent page header and
    drawer carry the link.
 4. Carried-over messages on a compaction's first turn are shown, folded.
+5. **Pending the user:** replayed conversations are shown, labelled
+   "replayed: <corpus>", with a `replay` filter defaulting to include
+   (the alternatives were hiding them by default or not labelling them).
