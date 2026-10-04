@@ -11,7 +11,6 @@
 //! (`analysis.search.within-window`, `within-limit`).
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use proptest::prelude::*;
 
@@ -21,77 +20,66 @@ use crosstalk_spec::aggregates::projection::{ProjectionLimit, ProjectionParams, 
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::Watermark;
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, Route};
-use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crosstalk_spec::ids::{AgentId, ChannelId, TopicId, TransmissionId};
+use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRevision};
+use crosstalk_spec::ids::{TopicId, TransmissionId};
+use crosstalk_spec::interfaces::l6_analysis::corpus::{
+    CorpusError, IndexedTransmission, SearchCorpus,
+};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
+    CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
+};
 use crosstalk_spec::interfaces::l6_analysis::{
     ProjectionSource, Sample, SampleError, SearchError, SearchIndex, SearchQuery,
 };
 use crosstalk_spec::paging::{PageRequest, PageSize, SearchList};
-use crosstalk_spec::support::{NonBlank, TimeWindow, Timestamp};
+use crosstalk_spec::support::{Change, NonBlank, TimeWindow, Timestamp};
 
-use crate::analysis::aliases::{AliasError, StaticDirectory};
-use crate::analysis::catalog::{
-    Activated, Assigned, CatalogConfig, InMemoryTopicCatalog, LifecycleError, RetentionPolicy,
-    StoredAssignment,
-};
-use crate::analysis::search::{
-    InMemoryProjectionSource, InMemorySearchIndex, IndexedTransmission, ManualWatermark,
-};
-use crate::analysis::support::{Clock, ManualClock};
+use crate::analysis::aliases::StaticDirectory;
+use crate::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
+use crate::analysis::search::{InMemoryProjectionSource, InMemorySearchIndex, ManualWatermark};
 use crate::model::build::{
     agent, channel, non_zero, raw, similarity, test_model, topic, transmission, ts, unit, window,
 };
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
+use crate::support::Outbox;
 
-/// A search index (and projection source) with the writes and the world
-/// it reads.
-pub trait SearchSubject: SearchIndex + ProjectionSource {
-    fn index(&self, document: IndexedTransmission) -> impl Future<Output = ()> + Send;
+/// Every spec trait the search harness drives: the search index and its
+/// writes, the projection source over the same documents, and the topic
+/// catalog's lifecycle, whose versions and assignments both read.
+pub trait SearchSubject: SearchIndex + SearchCorpus + ProjectionSource + TopicLifecycle {}
 
-    fn remove(&self, transmission: TransmissionId) -> impl Future<Output = ()> + Send;
+impl<T> SearchSubject for T where T: SearchIndex + SearchCorpus + ProjectionSource + TopicLifecycle {}
 
-    fn judge(
-        &self,
-        transmission: TransmissionId,
-        verdict: Option<Verdict>,
-        revision: VerdictRevision,
-    ) -> impl Future<Output = Observed> + Send;
-
-    /// A merge in the agent directory the index resolves through.
-    fn merge(&self, from: AgentId, into: AgentId) -> Result<(), AliasError>;
-
-    fn unmerge(&self, agent: AgentId);
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError>;
-
-    /// Fit a new topic-model version with `topics`, make it ready and
-    /// activate it at `at` in the catalog the index reads (retention
-    /// enforced).
-    fn new_version(
-        &self,
-        topics: Vec<Topic>,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<(TopicModelVersion, Activated), LifecycleError>> + Send;
-
-    fn assign(
-        &self,
-        transmission: TransmissionId,
-        version: TopicModelVersion,
-        assignment: StoredAssignment,
-    ) -> impl Future<Output = Result<Assigned, LifecycleError>> + Send;
-
-    /// The aggregate watermark samples read.
-    fn set_watermark(&self, watermark: Watermark);
+/// What the stores read from other layers: the merges and supersessions
+/// they resolve ids through, and L7's watermark samples are dated by. The
+/// harness changes both, for the subject and the reference alike.
+#[derive(Debug, Clone)]
+pub struct SearchWorld {
+    pub directory: StaticDirectory,
+    pub watermark: ManualWatermark,
 }
 
-/// The reference index, the catalog and directory it reads, and its
-/// projection source.
+impl SearchWorld {
+    /// No merges or supersessions, the watermark at the epoch.
+    pub fn new() -> Self {
+        Self {
+            directory: StaticDirectory::new(),
+            watermark: ManualWatermark::new(Watermark(ts(0))),
+        }
+    }
+}
+
+impl Default for SearchWorld {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The reference index, the catalog it reads, and its projection source.
 #[derive(Clone)]
 pub struct ReferenceSearch {
     pub catalog: InMemoryTopicCatalog,
-    pub directory: StaticDirectory,
     pub index: InMemorySearchIndex<StaticDirectory>,
-    pub watermark: ManualWatermark,
     pub source: InMemoryProjectionSource<StaticDirectory, ManualWatermark>,
 }
 
@@ -105,21 +93,16 @@ pub fn search_catalog_config() -> Option<CatalogConfig> {
 }
 
 impl ReferenceSearch {
-    /// An empty world whose queries are embedded with `model`.
-    pub fn new(model: EmbeddingModel) -> Result<Self, LifecycleError> {
-        let config =
-            search_catalog_config().ok_or(LifecycleError::UnknownVersion(TopicModelVersion(0)))?;
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(ts(0)));
-        let catalog = InMemoryTopicCatalog::new(config, clock, ts(0))?;
-        let directory = StaticDirectory::new();
-        let index = InMemorySearchIndex::new(catalog.clone(), directory.clone(), model);
-        let watermark = ManualWatermark::new(Watermark(ts(0)));
-        let source = InMemoryProjectionSource::new(index.clone(), watermark.clone());
+    /// An empty index over `world` whose queries are embedded with `model`.
+    pub fn new(model: EmbeddingModel, world: SearchWorld) -> Result<Self, TopicLifecycleError> {
+        let config = search_catalog_config()
+            .ok_or(TopicLifecycleError::UnknownVersion(TopicModelVersion(0)))?;
+        let catalog = InMemoryTopicCatalog::new(config, ts(0), Outbox::none())?;
+        let index = InMemorySearchIndex::new(catalog.clone(), world.directory, model);
+        let source = InMemoryProjectionSource::new(index.clone(), world.watermark);
         Ok(Self {
             catalog,
-            directory,
             index,
-            watermark,
             source,
         })
     }
@@ -148,67 +131,111 @@ impl ProjectionSource for ReferenceSearch {
     }
 }
 
-impl SearchSubject for ReferenceSearch {
-    async fn index(&self, document: IndexedTransmission) {
-        self.index.index(document);
+impl SearchCorpus for ReferenceSearch {
+    fn index(
+        &mut self,
+        document: IndexedTransmission,
+    ) -> impl Future<Output = Result<(), CorpusError>> + Send {
+        self.index.index(document)
     }
 
-    async fn remove(&self, transmission: TransmissionId) {
-        self.index.remove(transmission);
+    fn remove(
+        &mut self,
+        transmission: TransmissionId,
+    ) -> impl Future<Output = Result<(), CorpusError>> + Send {
+        self.index.remove(transmission)
     }
 
-    async fn judge(
-        &self,
+    fn judge(
+        &mut self,
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
-    ) -> Observed {
+    ) -> impl Future<Output = Result<crosstalk_spec::derived::flow::verdict::Observed, CorpusError>> + Send
+    {
         self.index.judge(transmission, verdict, revision)
     }
 
-    fn merge(&self, from: AgentId, into: AgentId) -> Result<(), AliasError> {
-        self.directory.merge(from, into)
+    fn set_model(
+        &mut self,
+        model: EmbeddingModel,
+    ) -> impl Future<Output = Result<(), CorpusError>> + Send {
+        self.index.set_model(model)
     }
 
-    fn unmerge(&self, agent: AgentId) {
-        self.directory.unmerge(agent);
-    }
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError> {
-        self.directory.supersede(channel, by)
-    }
-
-    async fn new_version(
-        &self,
-        topics: Vec<Topic>,
-        at: Timestamp,
-    ) -> Result<(TopicModelVersion, Activated), LifecycleError> {
-        new_version_in(&self.catalog, topics, at)
-    }
-
-    async fn assign(
-        &self,
-        transmission: TransmissionId,
-        version: TopicModelVersion,
-        assignment: StoredAssignment,
-    ) -> Result<Assigned, LifecycleError> {
-        self.catalog.assign(transmission, version, assignment)
-    }
-
-    fn set_watermark(&self, watermark: Watermark) {
-        self.watermark.set(watermark);
+    fn drop_model(
+        &mut self,
+        model: &EmbeddingModel,
+    ) -> impl Future<Output = Result<(), CorpusError>> + Send {
+        self.index.drop_model(model)
     }
 }
 
-/// Fit, ready and activate a version whose topics are `topics` (their
-/// version and time are set here) at `at`, `at + 1`, `at + 2`, `at + 3`.
-pub fn new_version_in(
-    catalog: &InMemoryTopicCatalog,
+impl TopicLifecycle for ReferenceSearch {
+    fn begin_fit(
+        &mut self,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<TopicModelVersion, TopicLifecycleError>> + Send {
+        self.catalog.begin_fit(at)
+    }
+
+    fn complete_fit(
+        &mut self,
+        version: TopicModelVersion,
+        topics: Vec<Topic>,
+        fitted_at: Timestamp,
+    ) -> impl Future<
+        Output = Result<
+            crosstalk_spec::aggregates::topic_history::TopicLineage,
+            TopicLifecycleError,
+        >,
+    > + Send {
+        self.catalog.complete_fit(version, topics, fitted_at)
+    }
+
+    fn fail_fit(
+        &mut self,
+        version: TopicModelVersion,
+    ) -> impl Future<Output = Result<(), TopicLifecycleError>> + Send {
+        self.catalog.fail_fit(version)
+    }
+
+    fn mark_ready(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<(), TopicLifecycleError>> + Send {
+        self.catalog.mark_ready(version, at)
+    }
+
+    fn mark_active(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<CatalogActivation, TopicLifecycleError>> + Send {
+        self.catalog.mark_active(version, at)
+    }
+
+    fn assign(
+        &mut self,
+        transmission: TransmissionId,
+        version: TopicModelVersion,
+        assignment: StoredAssignment,
+    ) -> impl Future<Output = Result<Change, TopicLifecycleError>> + Send {
+        self.catalog.assign(transmission, version, assignment)
+    }
+}
+
+/// Fit, ready and activate through `catalog` a version whose topics are
+/// `topics` (their version and time are set here) at `at`, `at + 1`,
+/// `at + 2`, `at + 3`.
+pub async fn new_version_in<C: TopicLifecycle>(
+    catalog: &mut C,
     topics: Vec<Topic>,
     at: Timestamp,
-) -> Result<(TopicModelVersion, Activated), LifecycleError> {
+) -> Result<(TopicModelVersion, CatalogActivation), TopicLifecycleError> {
     let micros = at.as_micros();
-    let version = catalog.begin_fit(at)?;
+    let version = catalog.begin_fit(at).await?;
     let fitted = ts(micros + 1);
     let topics = topics
         .into_iter()
@@ -218,9 +245,9 @@ pub fn new_version_in(
             ..one
         })
         .collect();
-    catalog.fit_returned(version, topics, fitted)?;
-    catalog.ready(version, ts(micros + 2))?;
-    let activated = catalog.activated(version, ts(micros + 3))?;
+    catalog.complete_fit(version, topics, fitted).await?;
+    catalog.mark_ready(version, ts(micros + 2)).await?;
+    let activated = catalog.mark_active(version, ts(micros + 3)).await?;
     Ok((version, activated))
 }
 
@@ -489,20 +516,22 @@ fn check_traversal(
 /// Random indexing, verdicts, merges, re-fits, searches and samples
 /// against the reference. `make` builds a fresh, empty subject whose
 /// queries are embedded with the given model, its catalog holding only
-/// version 0 and keeping the two most recent activated versions, its
-/// watermark at the epoch.
+/// version 0 and keeping the two most recent activated versions, resolving
+/// ids through the world's directory and dating samples by the world's
+/// watermark.
 pub fn check_search_index<S, F, Fut>(harness: HarnessConfig, make: F) -> Result<(), ModelMismatch>
 where
     S: SearchSubject,
-    F: Fn(EmbeddingModel) -> Fut,
+    F: Fn(EmbeddingModel, SearchWorld) -> Fut,
     Fut: Future<Output = S>,
 {
     let strategy = prop::collection::vec(search_op(), 1..harness.max_ops);
     run(harness, strategy, |runtime, ops| {
         runtime.block_on(async {
-            let subject = make(harness_model()).await;
-            let reference = ReferenceSearch::new(harness_model())
-                .map_err(|error| Divergence::new(0, format!("reference: {error}")))?;
+            let world = SearchWorld::new();
+            let mut subject = make(harness_model(), world.clone()).await;
+            let mut reference = ReferenceSearch::new(harness_model(), world.clone())
+                .map_err(|error| Divergence::new(0, format!("reference: {error:?}")))?;
             let mut indexed: BTreeSet<(TransmissionId, Timestamp)> = BTreeSet::new();
             for (step, op) in ops.iter().enumerate() {
                 let now = ts(1_000 + 10 * u64::try_from(step).unwrap_or(0));
@@ -527,13 +556,15 @@ where
                         };
                         indexed.retain(|(id, _)| *id != document.transmission);
                         indexed.insert((document.transmission, document.confirmed_at));
-                        subject.index(document.clone()).await;
-                        reference.index(document).await;
+                        let theirs = subject.index(document.clone()).await;
+                        let ours = reference.index(document).await;
+                        same(step, "index", &theirs, &ours)?;
                     }
                     SearchOp::Remove { transmission: n } => {
                         indexed.retain(|(id, _)| *id != transmission(*n));
-                        subject.remove(transmission(*n)).await;
-                        reference.remove(transmission(*n)).await;
+                        let theirs = subject.remove(transmission(*n)).await;
+                        let ours = reference.remove(transmission(*n)).await;
+                        same(step, "remove", &theirs, &ours)?;
                     }
                     SearchOp::Judge {
                         transmission: n,
@@ -550,27 +581,16 @@ where
                         let ours = reference.judge(transmission(*n), verdict, revision).await;
                         same(step, "judge", &theirs, &ours)?;
                     }
+                    // The world both stores read: a refused merge or
+                    // supersession leaves it as it was for both.
                     SearchOp::Merge { from, into } => {
-                        let theirs = subject.merge(agent(*from), agent(*into));
-                        same(
-                            step,
-                            "merge",
-                            &theirs,
-                            &reference.merge(agent(*from), agent(*into)),
-                        )?;
+                        let _ = world.directory.merge(agent(*from), agent(*into));
                     }
                     SearchOp::Unmerge { agent: a } => {
-                        subject.unmerge(agent(*a));
-                        reference.unmerge(agent(*a));
+                        world.directory.unmerge(agent(*a));
                     }
                     SearchOp::Supersede { channel: c, by } => {
-                        let theirs = subject.supersede(channel(*c), channel(*by));
-                        same(
-                            step,
-                            "supersede",
-                            &theirs,
-                            &reference.supersede(channel(*c), channel(*by)),
-                        )?;
+                        let _ = world.directory.supersede(channel(*c), channel(*by));
                     }
                     SearchOp::NewVersion { topics } => {
                         let history_len =
@@ -590,8 +610,8 @@ where
                                 ))
                             })
                             .collect();
-                        let theirs = subject.new_version(made.clone(), now).await;
-                        let ours = reference.new_version(made, now).await;
+                        let theirs = new_version_in(&mut subject, made.clone(), now).await;
+                        let ours = new_version_in(&mut reference, made, now).await;
                         same(step, "new version", &theirs, &ours)?;
                     }
                     SearchOp::Assign {
@@ -616,8 +636,7 @@ where
                         same(step, "assign", &theirs, &ours)?;
                     }
                     SearchOp::Watermark { at } => {
-                        subject.set_watermark(Watermark(ts(*at)));
-                        reference.set_watermark(Watermark(ts(*at)));
+                        world.watermark.set(Watermark(ts(*at)));
                     }
                     SearchOp::Query {
                         mode,

@@ -2,28 +2,34 @@
 //! `analyze` and `alerts`.
 //!
 //! `analyze` is triggered by `TransmissionConfirmed`: embed the matched
-//! content, assign a topic, publish `TransmissionClassified`. The clock
-//! triggers periodic re-fits, one at a time. A re-fit records its version as
-//! `Fitting` in the [`TopicCatalog`]; when `TopicModel::fit` returns, the
-//! catalog stores the [`TopicLineage`] from the predecessor (the newest
-//! version that is no longer fitting) to the new version, computed from
-//! centroid similarity. `analyze` then re-classifies every transmission and
-//! publishes `TopicVersionReady`, and the version becomes `Ready`.
-//! `TopicVersionActivated` from L7 makes it `Active` and supersedes the older
-//! versions.
+//! content, index it ([`corpus::SearchCorpus::index`]), assign a topic
+//! ([`lifecycle::TopicLifecycle::assign`]), publish
+//! `TransmissionClassified`. The clock triggers periodic re-fits, one at a
+//! time, through [`lifecycle::TopicLifecycle`]: a re-fit records its
+//! version as `Fitting` in the [`TopicCatalog`] (`begin_fit`); when
+//! `TopicModel::fit` returns, the catalog stores the topics and the
+//! [`TopicLineage`] from the predecessor (the version before it in the
+//! history) to the new version, computed from centroid similarity
+//! (`complete_fit`). `analyze` then re-classifies every transmission,
+//! publishes `TopicVersionReady`, and marks the version `Ready`
+//! (`mark_ready`). `TopicVersionActivated` from L7 makes it `Active` and
+//! supersedes the older versions (`mark_active`).
 //!
-//! **Retention.** The catalog applies a [`RetentionPolicy`] (configuration):
-//! after it processes `TopicVersionActivated` or an unpin, and when it
-//! starts, it calls [`TopicCatalog::enforce_retention`], which marks every
-//! version [`RetentionPolicy::to_drop`] returns dropped, freezing its
-//! all-time sizes, and then publishes `TopicVersionDropped` for each. Only
-//! after the mark does `analyze` delete the version's topic assignments; L7
-//! deletes its buckets on the event. Topics and lineage are kept. Pins and
-//! drops are serialized in the catalog's store.
+//! **Retention.** The catalog applies a [`RetentionPolicy`] (configuration)
+//! when it processes `TopicVersionActivated` (`mark_active`) or an unpin,
+//! and `analyze` calls [`TopicCatalog::enforce_retention`] when it starts.
+//! Enforcement marks every version [`RetentionPolicy::to_drop`] returns
+//! dropped, freezing its all-time sizes, and only then deletes the
+//! version's topic assignments, in one transaction; the catalog publishes
+//! `TopicVersionDropped` (and `Changed::TopicVersion`) for each from that
+//! transaction. The catalog owns the event: it is the only publisher of
+//! `TopicVersionDropped`, since the drop is its decision. L7 deletes its
+//! buckets on the event. Topics and lineage are kept. Pins and drops are
+//! serialized in the catalog's store.
 //!
 //! `alerts` evaluates rules against detect and insight events and triages
 //! the drafts; it suppresses alerts on `PolicyChanged` and `ChannelPromoted`
-//! (sanctioned), and on
+//! (sanctioned), stamping each suppression with the event's time, and on
 //! `VerdictSet` keeps its copy of the transmission's current verdict
 //! ([`CurrentVerdict`]) and suppresses the transmission's active alerts when
 //! it is `FalseDetection` ([`AlertTriage::transmission_judged`]). On
@@ -32,17 +38,23 @@
 //! [`TopicLineage::remap`] over the stored lineage), which yields the rule's
 //! new [`TopicWatch`]: it becomes [`TopicWatch::Stale`] exactly when the
 //! lineage shows a watched topic without a successor at or above the rule's
-//! threshold. When it starts with an [`Embedder`] whose model differs from a
-//! current semantic rule's, it marks the rule stale
-//! ([`AlertRuleDef::embedding_model_changed`]) before evaluating any event.
+//! threshold ([`alerts::AlertRuleMaintenance::topic_version_ready`]). When
+//! it starts with an [`Embedder`] whose model differs from a current
+//! semantic rule's, it marks the rule stale
+//! ([`AlertRuleDef::embedding_model_changed`],
+//! [`alerts::AlertRuleMaintenance::embedding_model_changed`]) before
+//! evaluating any event.
 //! A triage outcome that changes a stored alert (a deduplicated occurrence,
 //! a suppression) publishes `AlertChanged` with the alert's next
 //! `AlertRevision`; a rule going stale publishes `AlertRuleChanged` with its
 //! next `RuleRevision`. The surface manages rules directly through
-//! `AlertRuleStore`.
+//! `AlertRuleStore`, acknowledges and resolves alerts through
+//! [`alerts::AlertActions`], and reads rules and alerts through
+//! [`alerts::AlertReads`].
 //!
 //! For the live feed, L6 publishes `Changed` after every committed change:
-//! `Alert` for an opened, deduplicated or suppressed alert; `Rule` for a
+//! `Alert` for an opened, deduplicated, suppressed, acknowledged or
+//! resolved alert; `Rule` for a
 //! created (by an operator or config), updated, enabled, disabled or newly
 //! stale rule; `TopicVersion` for each status change in the catalog and for
 //! each pin, unpin and drop; and `Projection` when a projection job becomes
@@ -51,14 +63,18 @@
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
 //! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).
-//! - `TopicCatalog`: `PgTopicCatalog`.
-//! - `SearchIndex`: `PgHybridSearch` (full-text plus pgvector).
+//! - `TopicCatalog`, `TopicLifecycle`: `PgTopicCatalog`.
+//! - `SearchIndex`, `SearchCorpus`: `PgHybridSearch` (full-text plus
+//!   pgvector).
 //! - `ProjectionStore`: `PgProjectionStore` (jobs, and frames as `bytea` in
 //!   the binary layout of [`crate::aggregates::projection::frame`]).
 //! - `ProjectionSource`: `PgProjectionSource` (reads a fit's sample beside
 //!   the embeddings).
 //! - `LayoutFitter`: `UmapLayout` (seeded, single-threaded, so deterministic).
 //! - `AlertRuleEval`: one per [`AlertRuleKind`].
+//! - `AlertTriage`, `AlertRuleStore`, `AlertRuleMaintenance`,
+//!   `AlertActions`, `AlertReads`: `PgAlertStore`, one transaction scope
+//!   over rules, alerts and triage's verdict copy.
 //!
 //! Search and projection take the same [`TopologyFilter`] as the topology
 //! graph and apply it as [`TopologyFilter::admits`] defines, resolving agents
@@ -80,6 +96,10 @@
 //! other error leaves the job to be requeued when its lease lapses. One fit
 //! runs at a time per fitter.
 
+pub mod alerts;
+pub mod corpus;
+pub mod lifecycle;
+
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::{
@@ -94,8 +114,8 @@ use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::filter::{TopologyFilter, VersionUnavailable};
 use crate::aggregates::projection::frame::ProjectionFrame;
 use crate::aggregates::projection::{
-    FitFailure, InvalidTransition, PointRoute, Projection, ProjectionInfo, ProjectionParams,
-    ProjectionSpec, ProjectionStatusKind,
+    FitFailure, InvalidTransition, PointRoute, Projection, ProjectionInfo, ProjectionMismatch,
+    ProjectionParams, ProjectionSpec, ProjectionStatusKind,
 };
 use crate::aggregates::retention::{Pin, PinChange, RetentionPolicy};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
@@ -169,17 +189,22 @@ pub trait TopicCatalog {
         pin: Pin,
     ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send;
 
-    /// Unpin `version` ([`TopicVersionHistory::unpin`]), then enforce
-    /// retention, so an unpinned version outside the policy is dropped.
+    /// Unpin `version` ([`TopicVersionHistory::unpin`]) as of `at`, then,
+    /// when the pin changed, enforce retention at `at` as
+    /// [`TopicCatalog::enforce_retention`] does, in the same transaction, so
+    /// an unpinned version outside the policy is dropped.
     fn unpin(
         &self,
         version: TopicModelVersion,
+        at: Timestamp,
     ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send;
 
     /// Mark every version `RetentionPolicy::to_drop` returns dropped at `at`,
-    /// freezing its all-time sizes, in one transaction. Returns those
-    /// versions, oldest first; the caller then publishes one
-    /// `TopicVersionDropped` per version and deletes their assignments.
+    /// freezing its all-time sizes, and delete their topic assignments, in
+    /// one transaction; publish one `TopicVersionDropped` and one
+    /// `Changed::TopicVersion` per version from it. Returns those versions,
+    /// oldest first. A version superseded after `at` cannot be marked yet
+    /// and is left for a later enforcement.
     fn enforce_retention(
         &self,
         at: Timestamp,
@@ -277,7 +302,9 @@ pub trait ProjectionStore {
     ) -> impl Future<Output = Result<Option<ProjectionInfo>, ProjectionJobError>> + Send;
 
     /// Store `frame` and make the job `Ready` in one transaction. The fit's
-    /// watermark, matching and point counts are the frame header's.
+    /// watermark, matching and point counts are the frame header's. A job
+    /// that is not fitting is `Transition`, and a frame that does not belong
+    /// to the job `FrameMismatch`, changing nothing.
     fn complete(
         &mut self,
         id: ProjectionId,
@@ -411,33 +438,38 @@ pub trait AlertTriage {
         draft: AlertDraft,
     ) -> impl Future<Output = Result<TriageOutcome, TriageError>> + Send;
 
-    /// Suppress the active alerts whose subject is `channel` or a channel
-    /// it superseded (`AlertSubject::resolved`). Triggered by
-    /// `PolicyChanged` and `ChannelPromoted` carrying `Sanctioned`.
+    /// Suppress at `at` the active alerts whose subject is `channel` or a
+    /// channel it superseded (`AlertSubject::resolved`). Triggered by
+    /// `PolicyChanged` and `ChannelPromoted` carrying `Sanctioned`; `at` is
+    /// the event's time. Returns how many alerts it suppressed.
     fn channel_sanctioned(
         &mut self,
         channel: ChannelId,
+        at: Timestamp,
     ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 
-    /// Suppress the active alerts raised by `rule`.
+    /// Suppress at `at` the active alerts raised by `rule`. Returns how many
+    /// alerts it suppressed.
     fn rule_disabled(
         &mut self,
         rule: AlertRuleId,
+        at: Timestamp,
     ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 
     /// Record `transmission`'s verdict at `revision` in triage's copy
     /// ([`CurrentVerdict::observe`]). When the revision is newer and the
     /// verdict is `FalseDetection`, suppress every active alert whose
     /// subject is `transmission`, whatever its rule, with reason
-    /// `OperatorRejected`, in the same transaction. A stale revision, a
-    /// `Genuine` verdict and a withdrawal suppress nothing and reopen
-    /// nothing. Triggered by `VerdictSet`; returns how many alerts it
-    /// suppressed.
+    /// `OperatorRejected` at `at`, in the same transaction. A stale
+    /// revision, a `Genuine` verdict and a withdrawal suppress nothing and
+    /// reopen nothing. Triggered by `VerdictSet`, whose time is `at`;
+    /// returns how many alerts it suppressed.
     fn transmission_judged(
         &mut self,
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
+        at: Timestamp,
     ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 }
 
@@ -483,16 +515,18 @@ pub trait AlertRuleStore {
     ) -> impl Future<Output = Result<Change, RuleError>> + Send;
 
     /// Enable or disable any rule, built in or not
-    /// ([`AlertRuleDef::set_enabled`]). Disabling suppresses its active
-    /// alerts (`AlertTriage::rule_disabled`) in the same transaction, and is
-    /// allowed whether or not the rule is stale. Enabling a stale rule is
-    /// refused with `Stale`, changing nothing and publishing nothing: only
-    /// `update` retargets a stale rule, and it enables it too.
+    /// ([`AlertRuleDef::set_enabled`]), as `by` at `at`. Disabling
+    /// suppresses its active alerts at `at` (`AlertTriage::rule_disabled`)
+    /// in the same transaction, and is allowed whether or not the rule is
+    /// stale. Enabling a stale rule is refused with `Stale`, changing
+    /// nothing and publishing nothing: only `update` retargets a stale rule,
+    /// and it enables it too.
     fn set_enabled(
         &mut self,
         id: AlertRuleId,
         enabled: bool,
         by: OperatorId,
+        at: Timestamp,
     ) -> impl Future<Output = Result<Change, RuleError>> + Send;
 }
 
@@ -575,16 +609,22 @@ pub enum ProjectionStoreError {
     InvalidCursor,
 }
 
-/// Why a fitter's call on a job failed.
+/// Why a fitter's call on a job failed. Each refusal changes nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionJobError {
     Store {
         reason: String,
     },
     Unknown(ProjectionId),
-    /// `complete` or `fail` on a job not in a state that allows it, or a
-    /// frame that does not belong to the job.
+    /// `complete` or `fail` on a job not in a state that allows it.
     Transition(InvalidTransition),
+    /// `complete` with a frame that does not belong to the job: its header
+    /// names another projection or topic version, or its watermark, sample
+    /// limit or counts disagree with the fit ([`Projection::new`]'s check).
+    FrameMismatch {
+        projection: ProjectionId,
+        mismatch: ProjectionMismatch,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

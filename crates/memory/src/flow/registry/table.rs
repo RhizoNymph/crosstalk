@@ -21,9 +21,10 @@ use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TransmissionId};
 use crosstalk_spec::interfaces::l5_flow::{ChannelLookup, Promoted, RegistryError};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
+use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
 
-use super::seed::{DetectionUpdate, SeedError};
+use crosstalk_spec::interfaces::l5_flow::channels::{DetectionUpdate, TrafficError};
 
 /// A resource and the channel it is stored on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,13 +302,13 @@ impl ChannelTable {
         Ok((canonical, rows))
     }
 
-    // ---- seeding ----------------------------------------------------------------
+    // ---- `ChannelTraffic` ---------------------------------------------------------
 
     /// The lookup of an unstored resource's locator; a stored resource is
     /// refused.
-    fn new_resource_lookup(&self, resource: &Resource) -> Result<ChannelLookup, SeedError> {
+    fn new_resource_lookup(&self, resource: &Resource) -> Result<ChannelLookup, TrafficError> {
         if self.resources.contains_key(&resource.id) {
-            return Err(SeedError::DuplicateResource(resource.id));
+            return Err(TrafficError::DuplicateResource(resource.id));
         }
         Ok(self.lookup(&resource.locator))
     }
@@ -317,13 +318,13 @@ impl ChannelTable {
         id: ChannelId,
         resource: Resource,
         first_access: AccessId,
-    ) -> Result<Vec<BusEvent>, SeedError> {
+    ) -> Result<Vec<BusEvent>, TrafficError> {
         if self.channels.contains_key(&id) {
-            return Err(SeedError::DuplicateChannel(id));
+            return Err(TrafficError::DuplicateChannel(id));
         }
         let lookup = self.new_resource_lookup(&resource)?;
         if lookup != ChannelLookup::New {
-            return Err(SeedError::NotNew(lookup));
+            return Err(TrafficError::NotNew(lookup));
         }
         let seed = Seed {
             resource: resource.id,
@@ -356,13 +357,13 @@ impl ChannelTable {
         &mut self,
         id: ChannelId,
         resource: Resource,
-    ) -> Result<Vec<BusEvent>, SeedError> {
+    ) -> Result<Vec<BusEvent>, TrafficError> {
         let channel = self
             .channels
             .get(&id)
-            .ok_or(SeedError::UnknownChannel(id))?;
+            .ok_or(TrafficError::UnknownChannel(id))?;
         if let Some(supersession) = channel.origin.supersession() {
-            return Err(SeedError::Superseded {
+            return Err(TrafficError::Superseded {
                 channel: id,
                 by: supersession.by,
             });
@@ -374,7 +375,7 @@ impl ChannelTable {
             ChannelLookup::New => {}
             ChannelLookup::Declared(declared) if declared == id => {}
             other @ (ChannelLookup::Known(_) | ChannelLookup::Declared(_)) => {
-                return Err(SeedError::NotNew(other));
+                return Err(TrafficError::NotNew(other));
             }
         }
         let resource_id = resource.id;
@@ -391,12 +392,12 @@ impl ChannelTable {
         Ok(vec![changed(id)])
     }
 
-    pub(crate) fn record_access(&mut self, access: Access) -> Result<(), SeedError> {
+    pub(crate) fn record_access(&mut self, access: Access) -> Result<(), TrafficError> {
         if !self.resources.contains_key(&access.resource) {
-            return Err(SeedError::UnknownResource(access.resource));
+            return Err(TrafficError::UnknownResource(access.resource));
         }
         if self.accesses.contains_key(&access.id) {
-            return Err(SeedError::DuplicateAccess(access.id));
+            return Err(TrafficError::DuplicateAccess(access.id));
         }
         self.accesses.insert(access.id, access);
         Ok(())
@@ -406,19 +407,35 @@ impl ChannelTable {
         &mut self,
         id: ChannelId,
         update: DetectionUpdate,
-    ) -> Result<Vec<BusEvent>, SeedError> {
+    ) -> Result<(Change, Vec<BusEvent>), TrafficError> {
         let channel = self
             .channels
             .get(&id)
-            .ok_or(SeedError::UnknownChannel(id))?;
+            .ok_or(TrafficError::UnknownChannel(id))?;
         let origin = next_origin(&channel.origin, id, update)?;
         if channel.origin == origin {
-            return Ok(Vec::new());
+            return Ok((Change::Unchanged, Vec::new()));
         }
         if let Some(channel) = self.channels.get_mut(&id) {
             channel.origin = origin;
         }
-        Ok(vec![changed(id)])
+        Ok((Change::Applied, vec![changed(id)]))
+    }
+
+    /// `ChannelReads::channels`, before paging: the channels `filter`
+    /// keeps, newest first, after `after`.
+    pub(crate) fn channels_matching(
+        &self,
+        filter: &ChannelFilter,
+        after: Option<ChannelId>,
+    ) -> Vec<Channel> {
+        self.channels
+            .values()
+            .rev()
+            .filter(|channel| after.is_none_or(|after| channel.id < after))
+            .filter(|channel| filter.matches(channel))
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn confirm(
@@ -426,15 +443,15 @@ impl ChannelTable {
         id: ChannelId,
         transmission: TransmissionId,
         at: Timestamp,
-    ) -> Result<(ChannelId, Vec<BusEvent>), SeedError> {
+    ) -> Result<(ChannelId, Vec<BusEvent>), TrafficError> {
         if !self.channels.contains_key(&id) {
-            return Err(SeedError::UnknownChannel(id));
+            return Err(TrafficError::UnknownChannel(id));
         }
         let canonical = self.canonical(id);
         let channel = self
             .channels
             .get(&canonical)
-            .ok_or(SeedError::UnknownChannel(canonical))?;
+            .ok_or(TrafficError::UnknownChannel(canonical))?;
         let active = |current: Option<&TrafficDetection>| {
             let since = match current {
                 Some(TrafficDetection::Active { since, .. }) => *since,
@@ -468,9 +485,9 @@ fn next_origin(
     origin: &ChannelOrigin,
     id: ChannelId,
     update: DetectionUpdate,
-) -> Result<ChannelOrigin, SeedError> {
+) -> Result<ChannelOrigin, TrafficError> {
     match (origin, update) {
-        (ChannelOrigin::Superseded { supersession, .. }, _) => Err(SeedError::Superseded {
+        (ChannelOrigin::Superseded { supersession, .. }, _) => Err(TrafficError::Superseded {
             channel: id,
             by: supersession.by,
         }),
@@ -514,6 +531,6 @@ fn next_origin(
         (
             ChannelOrigin::Declared { .. } | ChannelOrigin::Discovered { .. },
             DetectionUpdate::Unused { .. },
-        ) => Err(SeedError::NotAwaitingTraffic(id)),
+        ) => Err(TrafficError::NotAwaitingTraffic(id)),
     }
 }

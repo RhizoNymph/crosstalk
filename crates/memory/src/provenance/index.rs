@@ -3,9 +3,10 @@
 //! **Frequency.** `observe` is called once per scanned text (a span of any
 //! origin, or a scanned input part) with that text's fingerprints, so one
 //! call is one text, and a fingerprint repeated within it counts once.
-//! `frequency(f)` is the number of observed texts containing `f` whose
-//! observation time is within the retention period of the clock's now:
-//! `now - retention <= at`. Older observations are dropped on every write.
+//! `frequency(f, now)` is the number of observed texts containing `f` whose
+//! observation time is within the retention period before `now`:
+//! `now - retention <= at`. Every call that measures that window takes
+//! `now` as an argument; older observations are dropped on every write.
 //!
 //! **Cutoff.** A fingerprint is boilerplate while its frequency is above
 //! the cutoff (`frequency > cutoff`). `insert` stores no posting for it, and
@@ -37,7 +38,7 @@ use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError};
 use crosstalk_spec::support::Timestamp;
 
-use crate::pipeline::{Clock, ManualClock, State};
+use crate::support::State;
 
 /// How an index is configured: the boilerplate cutoff, how long frequency
 /// observations count, and which shards this node owns.
@@ -150,18 +151,16 @@ impl IndexState {
 
 /// The in-memory `FingerprintIndex`. Clones are handles on one index.
 #[derive(Debug, Clone)]
-pub struct MemoryFingerprintIndex<C = ManualClock> {
+pub struct MemoryFingerprintIndex {
     state: State<IndexState>,
     config: IndexConfig,
-    clock: C,
 }
 
-impl<C: Clock> MemoryFingerprintIndex<C> {
-    pub fn new(config: IndexConfig, clock: C) -> Self {
+impl MemoryFingerprintIndex {
+    pub fn new(config: IndexConfig) -> Self {
         Self {
             state: State::new(IndexState::default()),
             config,
-            clock,
         }
     }
 
@@ -191,14 +190,14 @@ impl<C: Clock> MemoryFingerprintIndex<C> {
     }
 }
 
-impl<C: Clock> FingerprintIndex for MemoryFingerprintIndex<C> {
+impl FingerprintIndex for MemoryFingerprintIndex {
     async fn insert(
         &mut self,
         span: &OriginatedSpan,
         fingerprints: &[PositionedFingerprint],
+        now: Timestamp,
     ) -> Result<(), IndexError> {
         self.check_shards(fingerprints)?;
-        let now = self.clock.now();
         let mut state = self.state.write();
         state.age_out(&self.config, now);
         let id = span.span().id;
@@ -219,9 +218,9 @@ impl<C: Clock> FingerprintIndex for MemoryFingerprintIndex<C> {
     async fn lookup(
         &self,
         fingerprints: &[PositionedFingerprint],
+        now: Timestamp,
     ) -> Result<Vec<FingerprintHit>, IndexError> {
         self.check_shards(fingerprints)?;
-        let now = self.clock.now();
         let state = self.state.read();
         let hits = fingerprints
             .iter()
@@ -243,8 +242,7 @@ impl<C: Clock> FingerprintIndex for MemoryFingerprintIndex<C> {
         Ok(hits)
     }
 
-    async fn frequency(&self, fingerprint: Fingerprint) -> Result<u64, IndexError> {
-        let now = self.clock.now();
+    async fn frequency(&self, fingerprint: Fingerprint, now: Timestamp) -> Result<u64, IndexError> {
         Ok(self.state.read().frequency(&self.config, now, fingerprint))
     }
 
@@ -252,8 +250,8 @@ impl<C: Clock> FingerprintIndex for MemoryFingerprintIndex<C> {
         &mut self,
         fingerprints: &[Fingerprint],
         at: Timestamp,
+        now: Timestamp,
     ) -> Result<(), IndexError> {
-        let now = self.clock.now();
         let mut state = self.state.write();
         state.age_out(&self.config, now);
         if self.config.counts(at, now) {
@@ -264,8 +262,7 @@ impl<C: Clock> FingerprintIndex for MemoryFingerprintIndex<C> {
         Ok(())
     }
 
-    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError> {
-        let now = self.clock.now();
+    async fn evict(&mut self, spans: &[SpanId], now: Timestamp) -> Result<(), IndexError> {
         let evicted: BTreeSet<SpanId> = spans.iter().copied().collect();
         let mut state = self.state.write();
         state.age_out(&self.config, now);

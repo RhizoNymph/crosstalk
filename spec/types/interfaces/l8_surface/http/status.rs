@@ -126,6 +126,7 @@ impl ErrorStatus for AuthError {
 pub fn conflict_status(kind: &ConflictKind) -> Status {
     match kind {
         ConflictKind::AlertNotActive { .. }
+        | ConflictKind::AlertNotAcknowledged { .. }
         | ConflictKind::AgentMerged { .. }
         | ConflictKind::MergeAlreadyReverted { .. }
         | ConflictKind::MergeIntoSelf { .. }

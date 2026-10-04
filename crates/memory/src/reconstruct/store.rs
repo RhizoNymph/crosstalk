@@ -1,6 +1,6 @@
-//! The spec traits (and [`SeedAgents`]) on [`MemoryAgents`]. Each method
-//! runs one table operation in one critical section, then publishes the
-//! events it returned.
+//! The spec traits on [`MemoryAgents`]. Each method runs one table
+//! operation in one critical section, then publishes the events it
+//! returned.
 
 use std::collections::BTreeMap;
 
@@ -11,6 +11,9 @@ use crosstalk_spec::ids::{AgentId, MergeId, OperatorId};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::{
     ActivityStore, AgentReadError, AgentReads,
 };
+use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    Advance, AgentLifecycle, AgentLifecycleError, NewAgent,
+};
 use crosstalk_spec::interfaces::l3_reconstruction::{
     AgentDirectory, ClaimStore, IdentityResolver, Resolution, ResolveError,
 };
@@ -18,16 +21,13 @@ use crosstalk_spec::observed::agent::{
     AgentLabel, ClaimSet, IdentityEvidence, MergeRecord, MergeRequest, Reversal,
 };
 use crosstalk_spec::observed::client::HarnessClaim;
-use crosstalk_spec::observed::exchange::ExchangeMeta;
-use crosstalk_spec::observed::message::Message;
 use crosstalk_spec::paging::{AgentList, Page, PageRequest};
-use crosstalk_spec::support::{Change, Timestamp};
+use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 
 use super::MemoryAgents;
-use super::resolve::{context_evidence, resolve_evidence};
-use super::seed::{Advance, NewAgent, SeedAgents, SeedError};
+use super::resolve::resolve_evidence;
 use super::table::ReadModelError;
-use crate::pipeline::{PageError, page_after};
+use crate::support::{PageError, lock, page_after};
 
 fn read_model(error: ReadModelError) -> AgentReadError {
     AgentReadError::Store {
@@ -85,21 +85,12 @@ impl IdentityResolver for MemoryAgents {
         Ok(change)
     }
 
-    /// The reference lookup of [`super::resolve`] over the evidence the
-    /// exchange's client context carries. An exchange carrying none (no
-    /// credential, account or harness id) is a `Store` error: its only
-    /// evidence would be a prompt fingerprint, which this store does not
-    /// compute.
+    /// The reference lookup of [`super::resolve`].
     async fn resolve(
-        &mut self,
-        meta: &ExchangeMeta,
-        _request: &[Message],
+        &self,
+        evidence: &NonEmpty<IdentityEvidence>,
     ) -> Result<Resolution, ResolveError> {
-        let evidence = context_evidence(&meta.client);
-        resolve_evidence(&self.state.read(), evidence).ok_or_else(|| ResolveError::Store {
-            reason: "the exchange carries no identity evidence the memory resolver derives"
-                .to_owned(),
-        })
+        Ok(resolve_evidence(&self.state.read(), evidence))
     }
 }
 
@@ -139,11 +130,12 @@ impl AgentReads for MemoryAgents {
         let request = serde_json::to_string(filter).map_err(|error| AgentReadError::Store {
             reason: error.to_string(),
         })?;
+        let mut cursors = lock(&self.cursors);
         let after = match &page.after {
             None => None,
             Some(cursor) => Some(
-                self.cursors
-                    .redeem(cursor, &request)
+                cursors
+                    .resolve(cursor, &request)
                     .ok_or(AgentReadError::InvalidCursor)?,
             ),
         };
@@ -151,6 +143,9 @@ impl AgentReads for MemoryAgents {
             let table = self.state.read();
             let mut profiles = Vec::new();
             for agent in table.canonical_agents() {
+                if after.is_some_and(|after| agent.id >= after) {
+                    continue;
+                }
                 let profile = table.profile(agent).map_err(read_model)?;
                 if filter.matches(&profile, |id| table.canonical(id)) {
                     profiles.push(profile);
@@ -158,12 +153,7 @@ impl AgentReads for MemoryAgents {
             }
             profiles
         };
-        page_after(profiles, AgentProfile::id, after, page.size, |last| {
-            self.cursors
-                .issue(&request, last)
-                .map_err(|_| PageError::Token)
-        })
-        .map_err(page_error)
+        page_after(&mut cursors, profiles, page.size, request, AgentProfile::id).map_err(page_error)
     }
 
     async fn cluster(&self, id: AgentId) -> Result<Option<AgentCluster>, AgentReadError> {
@@ -178,25 +168,29 @@ impl AgentReads for MemoryAgents {
     }
 }
 
-impl SeedAgents for MemoryAgents {
-    async fn create(&mut self, agent: NewAgent) -> Result<(), SeedError> {
+impl AgentLifecycle for MemoryAgents {
+    async fn create(&mut self, agent: NewAgent) -> Result<(), AgentLifecycleError> {
         let events = self.state.write().create(agent)?;
         self.outbox.publish(events);
         Ok(())
     }
 
-    async fn advance(&mut self, agent: AgentId, advance: Advance) -> Result<(), SeedError> {
+    async fn advance(
+        &mut self,
+        agent: AgentId,
+        advance: Advance,
+    ) -> Result<(), AgentLifecycleError> {
         let events = self.state.write().advance(agent, advance)?;
         self.outbox.publish(events);
         Ok(())
     }
 
-    async fn attach(
+    async fn attach_evidence(
         &mut self,
         agent: AgentId,
         evidence: IdentityEvidence,
-    ) -> Result<(), SeedError> {
-        let events = self.state.write().attach(agent, evidence)?;
+    ) -> Result<(), AgentLifecycleError> {
+        let events = self.state.write().attach_evidence(agent, evidence)?;
         self.outbox.publish(events);
         Ok(())
     }

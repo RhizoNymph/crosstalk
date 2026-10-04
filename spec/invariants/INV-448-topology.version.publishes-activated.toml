@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.version.publishes-activated"
-statement = "L7 publishes TopicVersionActivated for a version, naming the version queries read before as previous, exactly once per switch, only after EdgeStore::activate has switched graph and series queries to it, and never for a version older than the active one."
+statement = "The edge store publishes TopicVersionActivated for a version, naming the version queries read before as previous, exactly once per switch, from the transaction in which EdgeStore::activate switches graph and series queries to it (activate then returns Switched), and never for a version older than the active one."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

@@ -89,6 +89,8 @@ pub enum ActionError {
 pub enum ConflictKind {
     /// Acknowledging or resolving an alert that is no longer active.
     AlertNotActive { alert: AlertId },
+    /// Resolving an open alert: it is acknowledged first.
+    AlertNotAcknowledged { alert: AlertId },
     /// Acting on a merged agent where only its canonical agent is valid:
     /// renaming it, or naming it in a merge.
     AgentMerged { agent: AgentId, into: AgentId },

@@ -3,7 +3,7 @@
 //! | Harness | Trait | Subject |
 //! | --- | --- | --- |
 //! | [`check_audit_log`] | `AuditLog` | the trait itself |
-//! | [`check_operator_store`] | the stored `OperatorDirectory` | [`OperatorStoreSubject`] |
+//! | [`check_operator_store`] | `OperatorStore` | [`OperatorStoreSubject`]: the store and the `AuditLog` its loads record into |
 //!
 //! `check_audit_log` also checks `surface.audit.append-only`: an entry a
 //! query returned is returned unchanged by every later query it matches.
@@ -18,7 +18,8 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord, OperatorRecord,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::{
-    AccessConfig, Operator, OperatorConfig, OperatorName, RequestIdentity, TrustedOperator,
+    AccessConfig, CallerError, Operator, OperatorConfig, OperatorLoadError, OperatorName,
+    OperatorStore, OperatorStoreError, RequestIdentity, TrustedOperator,
 };
 use crosstalk_spec::interfaces::l8_surface::{
     ActionOutcome, Caller, CallerSnapshot, OperatorAction, Permission, PermissionSet,
@@ -26,11 +27,11 @@ use crosstalk_spec::interfaces::l8_surface::{
 use crosstalk_spec::paging::{AuditList, PageRequest, PageSize};
 use crosstalk_spec::support::{Blake3, Timestamp};
 
-use crate::analysis::support::IdSequence;
 use crate::model::build::{audit_id, operator, raw, ts, window};
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
+use crate::support::IdSequence;
 use crate::surface::audit::InMemoryAuditLog;
-use crate::surface::operators::{CallerError, InMemoryOperatorStore, LoadError};
+use crate::surface::operators::InMemoryOperatorStore;
 
 #[derive(Debug, Clone)]
 pub enum AuditOp {
@@ -184,26 +185,11 @@ where
     })
 }
 
-/// The operator directory's store: config loads recorded in the audit log,
-/// and the reads the surface makes.
-pub trait OperatorStoreSubject {
-    fn load(
-        &self,
-        config: &AccessConfig,
-        hash: ConfigHash,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<Vec<ConfigChange>, LoadError>> + Send;
+/// The operator directory's store and the audit log its config loads are
+/// recorded in, both through their spec traits.
+pub trait OperatorStoreSubject: OperatorStore + AuditLog {}
 
-    fn operators(&self) -> impl Future<Output = Vec<Operator>> + Send;
-
-    fn caller(
-        &self,
-        identity: RequestIdentity,
-    ) -> impl Future<Output = Result<Caller, CallerError>> + Send;
-
-    /// The config entries recorded so far, in any order.
-    fn audit_entries(&self) -> impl Future<Output = Vec<AuditEntry>> + Send;
-}
+impl<T: OperatorStore + AuditLog> OperatorStoreSubject for T {}
 
 /// The reference operator store and the log it records into.
 #[derive(Debug, Clone)]
@@ -228,26 +214,52 @@ impl Default for ReferenceOperators {
     }
 }
 
-impl OperatorStoreSubject for ReferenceOperators {
-    async fn load(
-        &self,
+impl OperatorStore for ReferenceOperators {
+    fn load(
+        &mut self,
         config: &AccessConfig,
         hash: ConfigHash,
         at: Timestamp,
-    ) -> Result<Vec<ConfigChange>, LoadError> {
+    ) -> impl Future<Output = Result<Vec<ConfigChange>, OperatorLoadError>> + Send {
         self.store.load(config, hash, at)
     }
 
-    async fn operators(&self) -> Vec<Operator> {
+    fn operators(&self) -> impl Future<Output = Result<Vec<Operator>, OperatorStoreError>> + Send {
         self.store.operators()
     }
 
-    async fn caller(&self, identity: RequestIdentity) -> Result<Caller, CallerError> {
+    fn caller(
+        &self,
+        identity: RequestIdentity,
+    ) -> impl Future<Output = Result<Caller, CallerError>> + Send {
         self.store.caller(identity)
     }
+}
 
-    async fn audit_entries(&self) -> Vec<AuditEntry> {
-        self.log.entries()
+impl AuditLog for ReferenceOperators {
+    fn append(&mut self, entry: AuditEntry) -> impl Future<Output = Result<(), AuditError>> + Send {
+        self.log.append(entry)
+    }
+
+    fn query(
+        &self,
+        filter: &AuditFilter,
+        page: &PageRequest<AuditList>,
+    ) -> impl Future<
+        Output = Result<crosstalk_spec::paging::Page<AuditEntry, AuditList>, AuditError>,
+    > + Send {
+        self.log.query(filter, page)
+    }
+}
+
+/// Every audit entry a store holds, by a full traversal of the unfiltered
+/// log.
+async fn audit_entries<S: AuditLog>(store: &S) -> Result<Vec<AuditEntry>, AuditError> {
+    let size = PageSize::new(10).map_err(|_| AuditError::InvalidCursor)?;
+    let (pages, error) = traverse(store, &AuditFilter::default(), size).await;
+    match error {
+        Some(error) => Err(error),
+        None => Ok(pages.into_iter().flat_map(|(items, _)| items).collect()),
     }
 }
 
@@ -317,8 +329,8 @@ where
     let strategy = prop::collection::vec(operator_op(), 1..harness.max_ops);
     run(harness, strategy, |runtime, ops| {
         runtime.block_on(async {
-            let subject = make().await;
-            let reference = ReferenceOperators::new();
+            let mut subject = make().await;
+            let mut reference = ReferenceOperators::new();
             for (step, op) in ops.iter().enumerate() {
                 let at = ts(10 * u64::try_from(step).unwrap_or(0));
                 let hash = ConfigHash::from_digest(Blake3::from_bytes(
@@ -355,15 +367,16 @@ where
                     &subject.operators().await,
                     &reference.operators().await,
                 )?;
-                let mut theirs: Vec<String> = subject
-                    .audit_entries()
+                let read = |error: AuditError| Divergence::new(step, format!("{error:?}"));
+                let mut theirs: Vec<String> = audit_entries(&subject)
                     .await
+                    .map_err(read)?
                     .iter()
                     .map(entry_view)
                     .collect();
-                let mut ours: Vec<String> = reference
-                    .audit_entries()
+                let mut ours: Vec<String> = audit_entries(&reference)
                     .await
+                    .map_err(read)?
                     .iter()
                     .map(entry_view)
                     .collect();

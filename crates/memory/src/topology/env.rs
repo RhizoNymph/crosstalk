@@ -3,9 +3,10 @@
 //! topics, and the agent and channel facts graph nodes describe.
 //!
 //! [`TopologyEnv`] is that whole read interface. [`Env`] builds one from a
-//! [`TopicVersions`] (the topic catalog), the spec's `AgentDirectory` and
-//! `ChannelDirectory`, and a [`NodeDescriptions`]; [`StaticNodes`] is a
-//! [`NodeDescriptions`] a test sets directly.
+//! [`TopicVersions`] (the topic catalog), and the spec's `AgentDirectory`,
+//! `ChannelDirectory` and `NodeFacts`; [`StaticNodes`] is a `NodeFacts` a
+//! test sets directly. A node the facts source has not seen is described by
+//! the defaults `NodeFacts` documents ([`agent_facts`], [`channel_facts`]).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -19,39 +20,25 @@ use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
-use crosstalk_spec::observed::agent::{AgentLabel, ClaimSet};
+use crosstalk_spec::interfaces::l7_topology::{AgentFacts, ChannelFacts, NodeFacts};
+use crosstalk_spec::observed::agent::ClaimSet;
 use crosstalk_spec::support::NonBlank;
 
 use crate::analysis::catalog::TopicVersions;
-use crate::analysis::support::lock;
+use crate::support::lock;
 
-/// A canonical agent as a graph node describes it, before counts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentDescription {
-    pub label: Option<AgentLabel>,
-    pub state: CanonicalStateKind,
-    /// The parent as stored; the store resolves it.
-    pub parent: Option<AgentId>,
-    /// The claims of the agent and every agent merged into it.
-    pub claims: ClaimSet,
+/// `canonical`'s facts from `facts`, or the default for an agent it has not
+/// seen: a provisional top-level agent with no label or claims.
+pub fn agent_facts(facts: &impl NodeFacts, canonical: AgentId) -> AgentFacts {
+    facts.agent(canonical).unwrap_or_else(default_agent)
 }
 
-/// A canonical channel as a channel node describes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChannelDescription {
-    pub label: Option<String>,
-    pub origin: CanonicalOriginKind,
-    pub detection: DetectionKind,
-    pub policy: PolicyKind,
-    pub locator_summary: NonBlank,
-}
-
-/// Node facts, read at query time from L3 (agents, claims) and L5 (the
-/// channel registry).
-pub trait NodeDescriptions: Send + Sync {
-    fn agent(&self, canonical: AgentId) -> AgentDescription;
-
-    fn channel(&self, canonical: ChannelId) -> ChannelDescription;
+/// `canonical`'s facts from `facts`, or the default for a channel it has not
+/// seen: a discovered, observed, unreviewed channel summarized by its id.
+pub fn channel_facts(facts: &impl NodeFacts, canonical: ChannelId) -> ChannelFacts {
+    facts
+        .channel(canonical)
+        .unwrap_or_else(|| default_channel(canonical))
 }
 
 /// Everything the edge store reads from other stores.
@@ -68,9 +55,9 @@ pub trait TopologyEnv: Send + Sync {
     /// The topics of `version`, ascending.
     fn topic_ids(&self, version: TopicModelVersion) -> Vec<TopicId>;
 
-    fn agent(&self, canonical: AgentId) -> AgentDescription;
+    fn agent(&self, canonical: AgentId) -> AgentFacts;
 
-    fn channel(&self, canonical: ChannelId) -> ChannelDescription;
+    fn channel(&self, canonical: ChannelId) -> ChannelFacts;
 }
 
 /// A [`TopologyEnv`] from its parts.
@@ -85,7 +72,7 @@ impl<T, D, N> TopologyEnv for Env<T, D, N>
 where
     T: TopicVersions,
     D: AgentDirectory + ChannelDirectory + Send + Sync,
-    N: NodeDescriptions,
+    N: NodeFacts + Send + Sync,
 {
     fn canonical_agent(&self, id: AgentId) -> AgentId {
         AgentDirectory::canonical(&self.directory, id)
@@ -107,12 +94,12 @@ where
         self.topics.topic_ids(version)
     }
 
-    fn agent(&self, canonical: AgentId) -> AgentDescription {
-        self.nodes.agent(canonical)
+    fn agent(&self, canonical: AgentId) -> AgentFacts {
+        agent_facts(&self.nodes, canonical)
     }
 
-    fn channel(&self, canonical: ChannelId) -> ChannelDescription {
-        self.nodes.channel(canonical)
+    fn channel(&self, canonical: ChannelId) -> ChannelFacts {
+        channel_facts(&self.nodes, canonical)
     }
 }
 
@@ -139,9 +126,8 @@ impl<V: TopologyEnv> Aliases for EnvAliases<'_, V> {
     }
 }
 
-/// Node facts a test sets. An agent it was never told about is a
-/// provisional top-level agent with no label or claims; a channel, a
-/// discovered, observed, unreviewed one summarized by its id.
+/// Node facts a test sets. An agent or channel it was never told about is
+/// unknown to it (`None`), which the edge store draws with the defaults.
 #[derive(Debug, Clone, Default)]
 pub struct StaticNodes {
     state: Arc<Mutex<NodeTables>>,
@@ -149,8 +135,8 @@ pub struct StaticNodes {
 
 #[derive(Debug, Default)]
 struct NodeTables {
-    agents: BTreeMap<AgentId, AgentDescription>,
-    channels: BTreeMap<ChannelId, ChannelDescription>,
+    agents: BTreeMap<AgentId, AgentFacts>,
+    channels: BTreeMap<ChannelId, ChannelFacts>,
 }
 
 impl StaticNodes {
@@ -158,7 +144,7 @@ impl StaticNodes {
         Self::default()
     }
 
-    pub fn set_agent(&self, agent: AgentId, description: AgentDescription) {
+    pub fn set_agent(&self, agent: AgentId, description: AgentFacts) {
         lock(&self.state).agents.insert(agent, description);
     }
 
@@ -175,13 +161,13 @@ impl StaticNodes {
         tables.agents.insert(agent, description);
     }
 
-    pub fn set_channel(&self, channel: ChannelId, description: ChannelDescription) {
+    pub fn set_channel(&self, channel: ChannelId, description: ChannelFacts) {
         lock(&self.state).channels.insert(channel, description);
     }
 }
 
-fn default_agent() -> AgentDescription {
-    AgentDescription {
+fn default_agent() -> AgentFacts {
+    AgentFacts {
         label: None,
         state: CanonicalStateKind::Provisional,
         parent: None,
@@ -198,25 +184,22 @@ fn default_summary(channel: ChannelId) -> NonBlank {
         .expect("a summary starting with \"channel\" is never blank")
 }
 
-impl NodeDescriptions for StaticNodes {
-    fn agent(&self, canonical: AgentId) -> AgentDescription {
-        lock(&self.state)
-            .agents
-            .get(&canonical)
-            .cloned()
-            .unwrap_or_else(default_agent)
+fn default_channel(canonical: ChannelId) -> ChannelFacts {
+    ChannelFacts {
+        label: None,
+        origin: CanonicalOriginKind::Discovered,
+        detection: DetectionKind::Observed,
+        policy: PolicyKind::Unreviewed,
+        locator_summary: default_summary(canonical),
+    }
+}
+
+impl NodeFacts for StaticNodes {
+    fn agent(&self, canonical: AgentId) -> Option<AgentFacts> {
+        lock(&self.state).agents.get(&canonical).cloned()
     }
 
-    fn channel(&self, canonical: ChannelId) -> ChannelDescription {
-        if let Some(description) = lock(&self.state).channels.get(&canonical) {
-            return description.clone();
-        }
-        ChannelDescription {
-            label: None,
-            origin: CanonicalOriginKind::Discovered,
-            detection: DetectionKind::Observed,
-            policy: PolicyKind::Unreviewed,
-            locator_summary: default_summary(canonical),
-        }
+    fn channel(&self, canonical: ChannelId) -> Option<ChannelFacts> {
+        lock(&self.state).channels.get(&canonical).cloned()
     }
 }

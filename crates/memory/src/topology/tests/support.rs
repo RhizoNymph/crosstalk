@@ -6,19 +6,22 @@ use std::num::NonZeroU64;
 use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::{Classification, Route};
+use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::insight::ClassificationCause;
-use crosstalk_spec::interfaces::l7_topology::{EdgeContribution, EdgeStore};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycle;
+use crosstalk_spec::interfaces::l7_topology::{Activation, EdgeContribution, EdgeStore};
 use crosstalk_spec::support::TimeWindow;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::analysis::aliases::StaticDirectory;
 use crate::analysis::catalog::InMemoryTopicCatalog;
-use crate::analysis::support::ManualClock;
 use crate::analysis::tests::support::fit_ready;
 use crate::model::build::{
     agent, bucket_width, catalog, timing, topic_id, transmission, ts, window,
 };
+use crate::support::Outbox;
 use crate::topology::env::{Env, StaticNodes};
-use crate::topology::store::{Activation, EdgeStoreConfig, InMemoryEdgeStore};
+use crate::topology::store::{EdgeStoreConfig, InMemoryEdgeStore};
 
 pub type TestEnv = Env<InMemoryTopicCatalog, StaticDirectory, StaticNodes>;
 pub type Store = InMemoryEdgeStore<TestEnv>;
@@ -31,10 +34,13 @@ pub struct World {
     pub directory: StaticDirectory,
     pub nodes: StaticNodes,
     pub store: Store,
+    /// What the store published, in order.
+    pub events: UnboundedReceiver<BusEvent>,
 }
 
 pub fn world() -> World {
-    let catalog = catalog(3, 0.5, ManualClock::at(ts(0))).unwrap();
+    let catalog = catalog(3, 0.5, Outbox::none()).unwrap();
+    let (outbox, events) = Outbox::channel();
     let directory = StaticDirectory::new();
     let nodes = StaticNodes::new();
     let env = Env {
@@ -50,7 +56,8 @@ pub fn world() -> World {
         catalog,
         directory,
         nodes,
-        store: InMemoryEdgeStore::new(config, env),
+        store: InMemoryEdgeStore::new(config, env, outbox),
+        events,
     }
 }
 
@@ -79,6 +86,15 @@ pub fn contribution(
             topic: topic.map(topic_id),
             watched: false,
         },
+        cause: ClassificationCause::Confirmation,
+    }
+}
+
+/// `contribution` classified by a re-fit.
+pub fn refit_of(contribution: &EdgeContribution) -> EdgeContribution {
+    EdgeContribution {
+        cause: ClassificationCause::Refit,
+        ..contribution.clone()
     }
 }
 
@@ -121,8 +137,8 @@ pub fn edge_counts(graph: &TopologyGraph) -> Vec<(u64, u64, u64, u64)> {
 /// Fit version `n` in the catalog with topics `topics`, re-classify the
 /// given contributions under it with cause `Refit`, and activate it in the
 /// store and then the catalog.
-pub fn refit(
-    world: &World,
+pub async fn refit(
+    world: &mut World,
     at: u64,
     topics: &[u64],
     contributions: &[EdgeContribution],
@@ -132,19 +148,23 @@ pub fn refit(
         .enumerate()
         .map(|(index, id)| (*id, [1.0, index as f32, 0.5]))
         .collect();
-    let version = fit_ready(&world.catalog, at, &directions);
+    let version = fit_ready(&mut world.catalog, at, &directions).await;
     for contribution in contributions {
-        let _ = world
-            .store
-            .apply_classified(contribution, ClassificationCause::Refit);
+        let _ = world.store.apply(&refit_of(contribution)).await;
     }
     world
         .store
-        .version_ready(version, u64::try_from(contributions.len()).unwrap());
+        .version_ready(version, u64::try_from(contributions.len()).unwrap())
+        .await
+        .unwrap();
     assert!(matches!(
-        world.store.activate_if_complete(version),
+        world.store.activate(version).await,
         Ok(Activation::Switched { .. })
     ));
-    world.catalog.activated(version, ts(at + 3)).unwrap();
+    world
+        .catalog
+        .mark_active(version, ts(at + 3))
+        .await
+        .unwrap();
     version
 }

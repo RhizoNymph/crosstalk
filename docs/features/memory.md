@@ -14,12 +14,29 @@ in-memory store is:
 The crate is a dev-dependency of the layer crates, never a normal one
 (`docs/features/workspace.md`, dependency rule 2).
 
+Every store implements spec traits only, write side included (roadmap
+P0.6): there are no seeding traits and no inherent write hooks. The
+harnesses drive the store under test through the same spec traits, and
+what a store reads from another layer's caches (merges and supersessions,
+node facts, L7's watermark) is a world of spec read traits (`AgentDirectory`,
+`ChannelDirectory`, `NodeFacts`, `WatermarkRead`) the harness hands `make`
+and changes itself, for the subject and the reference alike. So a Postgres
+store needs nothing crate-specific to be checked.
+
 The pipeline half (L3 to L5) and the insight and surface half (L6 to L8)
-are separate sections of this page. Each half keeps its own harness runner
-and `HarnessConfig`: `pipeline::harness` (64 cases by default; a failing
-harness panics) for L3 to L5, and `model` (48 cases by default; a failing
-harness returns a `ModelMismatch`) for L6 to L8. Both draw sequences of at
-most 40 operations and run each case on a fresh current-thread runtime.
+are separate sections of this page. They share one set of building blocks
+(`support`: `IdSequence`, `Outbox`, `CursorBook` and `page_after`, the
+locks) and one harness runner (`model::run` with `HarnessConfig`,
+`Divergence` and `ModelMismatch`: a failing harness returns a
+`ModelMismatch` with proptest's minimal sequence). `HarnessConfig::default`
+is 48 cases of at most 40 operations; the pipeline harnesses' own tests run
+64 cases, as they always have. Each case runs on a fresh current-thread
+runtime.
+
+No store reads a clock: every store method that depends on the time takes
+it as an argument. `support::ManualClock` implements the spec's `Clock`
+for the one computation double that stamps its output (`FakeTopicModel`'s
+`fitted_at`).
 
 ## Pipeline stores (L3–L5)
 
@@ -27,19 +44,17 @@ most 40 operations and run each case on a fresh current-thread runtime.
 
 | Store | Spec traits | Module |
 | --- | --- | --- |
-| `MemoryAgents` | `AgentDirectory`, `IdentityResolver` (`merge`, `unmerge`, `rename`; `resolve` as a reference lookup), `ClaimStore`, `ActivityStore`, `AgentReads` | `reconstruct` |
+| `MemoryAgents` | `AgentDirectory`, `IdentityResolver` (`merge`, `unmerge`, `rename`, `resolve`), `AgentLifecycle`, `ClaimStore`, `ActivityStore`, `AgentReads` | `reconstruct` |
 | `MemoryFingerprintIndex` | `FingerprintIndex` | `provenance` |
-| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelDirectory` | `flow::registry` |
-| `MemoryVerdicts` | `TransmissionVerdicts` (the verdict store) | `flow::verdicts` |
+| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | `flow::registry` |
+| `MemoryVerdicts` | `TransmissionStore`, `TransmissionVerdicts` | `flow::verdicts` |
 
-Each store also implements a seeding trait for the writes the spec gives
-no trait method, because the layer's consumer makes them (P4.1, P5):
-`SeedAgents` (create an agent, move it Registered to Provisional to
-Established, attach evidence), `SeedChannels` (discover a channel, add a
-resource, record an access, set a detection, apply a confirmation, read
-every channel back) and `SeedTransmissions` (put a transmission). The
-harnesses drive the store under test through the same seeding traits, so
-the Postgres stores implement them too.
+The writes the layer consumers make (P4.1, P5) are spec traits:
+`AgentLifecycle` (create an agent, move it Registered to Provisional to
+Established, attach evidence), `ChannelTraffic` (discover a channel, add a
+resource, record an access, set a detection, apply a confirmation) with
+`ChannelReads` (a channel by id, filtered pages of them), and
+`TransmissionStore` (save a transmission, read it back).
 
 ### Non-scope
 
@@ -48,25 +63,28 @@ the Postgres stores implement them too.
 - `Threader`. It keeps conversations, but it is L3's threading algorithm
   (prefix matching, forks, compaction, increments), not a store; it belongs
   to P4.1.
-- `IdentityResolver::resolve`'s algorithm. The chain of resolvers, conflict
-  handling and prompt fingerprints are P4.1's. `MemoryAgents::resolve` only
-  looks up the evidence an exchange's client context carries (see
-  "Resolution" below).
+- Deriving identity evidence (`EvidenceDeriver`), conflict handling and
+  prompt fingerprints: P4.1's. `MemoryAgents::resolve` is the store half,
+  the lookup of derived evidence (see "Resolution" below);
+  `reconstruct::resolve::context_evidence` derives the client context's
+  part of it for tests.
 - `SemanticMatcher`: its lookup embeds query text, which needs a model.
 - Postgres. The Postgres stores are P4.1, P4.2 and P5; their tests reuse
   the harnesses here.
 
-### Shared building blocks (`pipeline`)
+### Shared building blocks (`support`, every store)
 
 | Item | Role |
 | --- | --- |
-| `State<T>` | `Arc<std::sync::RwLock<T>>` around a store's plain data. Every operation is a pure function over `T` run in one critical section, which is the store's transaction. A `std` lock, not a `tokio` one, because `AgentDirectory::canonical` and `ChannelDirectory::canonical` are synchronous and called from async tasks; no guard is ever held across an `.await`, so every trait future is `Send`. A poisoned lock is recovered (writes check before they change anything) |
-| `Outbox` | The sending half of an unbounded `tokio::sync::mpsc` channel of `BusEvent`s. A store publishes after its critical section ends, so a re-query after any event sees the change. `Outbox::none()` drops events; `drain` empties a receiver |
-| `Clock`, `ManualClock` | The "now" a trait does not pass in: `declare`'s declaration time, the fingerprint index's retention; the L6–L8 stores use the same pair (re-exported from `analysis::support`) |
-| `IdSequence` | Deterministic increasing ids (`prefix << 64 \| counter`) for ids a store creates (`MergeId`, declared `ChannelId`). Drawn only for accepted operations |
-| `CursorTable<K>` | Page cursors: a token `<list>-<n>` indexes a row holding the request it was issued for and the last key served. An unknown token, or one presented with another request, is `InvalidCursor` |
-| `page_after` | Newest-first keyset paging over an already filtered list |
-| `harness::{run, same, HarnessConfig}` | The proptest runner every harness shares: fresh current-thread runtime per case, shrinking, a panic naming the first mismatch |
+| `State<T>` | `Arc<std::sync::RwLock<T>>` around an L3–L5 store's plain data. Every operation is a pure function over `T` run in one critical section, which is the store's transaction. A `std` lock, not a `tokio` one, because `AgentDirectory::canonical` and `ChannelDirectory::canonical` are synchronous and called from async tasks; no guard is ever held across an `.await`, so every trait future is `Send`. A poisoned lock is recovered (writes check before they change anything). The L6–L8 stores take a `std::sync::Mutex` with `lock`, which recovers the same way |
+| `Outbox` | The sending half of an unbounded `tokio::sync::mpsc` channel of `BusEvent`s. The L3–L5 stores publish right after their critical section, the L6–L8 stores from inside it (in commit order); either way a re-query after any event sees the change. `Outbox::none()` drops events; `drain` empties a receiver |
+| `IdSequence` | Deterministic increasing ids (`base + 1`, `base + 2`, …; default base `1 << 80`, above the reserved rule ids) for ids a store creates (`MergeId`, declared `ChannelId`, rule and alert ids, config audit ids). Clones share the counter. Drawn only for accepted operations (`peek` and `skip` for an operation that draws several) |
+| `CursorBook<B, K>`, `page_after` | Page cursors: a token is a key into the issuing store's book, bound to the request (`B`) and resuming after `K`. An unknown token, one from another store, or one presented with another request is `InvalidCursor`. `page_after` cuts one page of the already filtered items and issues the next cursor only when more follow |
+| `ManualClock` | A spec `Clock` a test moves, for `FakeTopicModel` |
+
+The harness runner is `model::run` (`HarnessConfig`, `same`, `holds`,
+`Divergence`, `ModelMismatch`), shared by every harness here and by the
+merge round-trip property test.
 
 ### Data and control flow
 
@@ -108,21 +126,27 @@ activity per attributed agent.
   and pages them with a cursor bound to the filter's JSON. `cluster` and
   `names` resolve the id first.
 
-**Resolution.** `resolve` derives evidence from the client context only:
-the scope (account, else stable credential, else upstream; plus the same
-under the previous digests during a rotation), harness agent and session
-ids in that scope, the account and the credential by stability. It takes
-the most specific evidence present; the holders of it (for a session, only
-agents holding no harness agent id) map to canonical agents: none is
-`New`, one is `Known` (with the evidence that agent lacks), more is
-`Conflict` (ascending, with the deciding evidence). An exchange with no
-such evidence is a `Store` error: its only evidence would be a prompt
-fingerprint, which needs a content hash this crate does not compute.
+**Resolution.** `resolve` takes derived evidence (`NonEmpty`, so "no
+evidence" cannot reach it). It takes the most specific evidence present;
+the holders of it (for a session, only agents holding no harness agent id)
+map to canonical agents: none is `New`, one is `Known` (with the evidence
+that agent lacks), more is `Conflict` (ascending, with the deciding
+evidence). `context_evidence` derives the client context's evidence for
+tests: the scope (account, else stable credential, else upstream; plus
+the same under the previous digests during a rotation), harness agent and
+session ids in that scope, the account and the credential by stability.
+
+**Agent writes (`AgentLifecycle`).** `create` refuses a taken id; an agent
+from traffic starts `Provisional` with its first exchange recorded in the
+activity store in the same transaction. `advance` accepts only
+`Registered` to `Provisional` (recording activity) and `Provisional` to
+`Established`; `attach_evidence` refuses evidence the record holds. Each
+publishes `Changed::Agent` (and, for a creation, the canonical parent's).
 
 **L4 (`provenance`).** `IndexState` holds postings (`Fingerprint →
 {(SpanId, offset)}`) and one observation per scanned text (its time and
-distinct fingerprints). `frequency(f)` counts observations containing `f`
-with `now - retention <= at`. `insert` stores no posting for a fingerprint
+distinct fingerprints). Every call takes `now`. `frequency(f, now)` counts
+observations containing `f` with `now - retention <= at`. `insert` stores no posting for a fingerprint
 above the cutoff, and `lookup` returns no hit on one, including postings
 stored while it was below. `insert` and `lookup` refuse a call holding a
 fingerprint of a shard the node does not own, naming the first. Writes
@@ -135,8 +159,8 @@ histories, resources (each on one channel) and accesses.
   that locator), else `Declared` (the declared channel whose pattern
   matches), else `New`.
 - `declare` refuses a pattern overlapping a declared one, dates the
-  declaration by the clock, and records the policy's decision, if any, as
-  the history's first entry.
+  declaration by the time it is given, and records the policy's decision,
+  if any, as the history's first entry.
 - `set_policy` refuses a superseded channel, records the decision in the
   history (`Current`, `Superseded` or `Duplicate`) and sets the channel's
   policy to the history's current one; anything but `Duplicate` announces
@@ -151,12 +175,22 @@ histories, resources (each on one channel) and accesses.
   every channel it superseded, counts accesses in the window by canonical
   agent (through `D: AgentDirectory`) and kind, and pages newest resource
   first with a cursor bound to (canonical channel, window).
-- `confirm` (seeding) advances the canonical channel's detection to
-  `Active` (keeping `since` when already active) and leaves a superseded
-  channel's frozen.
+- `ChannelTraffic`: `discover` creates a channel only for an unstored
+  resource whose lookup is `New`; `add_resource` stores a resource on the
+  channel its lookup names (any channel for `New`), never on a superseded
+  one; `record_access` needs a stored resource and a new access id;
+  `set_detection` returns `Applied` or `Unchanged` and refuses a frozen
+  (superseded) channel and `Unused` off `AwaitingTraffic`; `confirm`
+  advances the canonical channel's detection to `Active` (keeping `since`
+  when already active) and leaves a superseded channel's frozen. Each
+  refusal is a `TrafficError` and changes nothing.
+- `ChannelReads`: `channel` returns the stored record (a superseded
+  channel as itself); `channels` pages the channels `ChannelFilter::matches`
+  keeps, newest id first, its cursor bound to the filter.
 
-**L5 verdicts (`flow::verdicts`).** `VerdictTable` holds transmissions and
-one `VerdictLog` each. `set` refuses an unknown transmission and one whose
+**L5 transmissions (`flow::verdicts`).** `VerdictTable` holds
+transmissions and one `VerdictLog` each. `TransmissionStore::save`
+replaces the stored transmission and keeps its log. `set` refuses an unknown transmission and one whose
 state is not judgeable, appends through `VerdictLog::record`, and on
 `Appended(r)` publishes `VerdictSet` with revision `r` and
 `Changed::Verdict`. `quality` is `DetectionQuality::tally` over every
@@ -174,21 +208,22 @@ cursors; unordered results (fingerprint hits) as multisets.
 
 | Harness | Store under test is built by | Observes after each step | Also checks on the store under test |
 | --- | --- | --- | --- |
-| `reconstruct::model::check_agent_store(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + ClaimStore + ActivityStore + AgentReads + SeedAgents`) | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
-| `provenance::model::check_fingerprint_index(config, make)` | `make(IndexConfig, ManualClock) -> S` where `S: FingerprintIndex`; run for a single node and for one of two shards | `frequency` and `lookup` of every fingerprint | — |
-| `flow::registry::model::check_channel_registry(config, make)` | `make(MemoryAgents, IdSequence, ManualClock, Outbox) -> S` where `S: ChannelStore` (`ChannelRegistry + ChannelDirectory + SeedChannels`) | every channel; `canonical` and `policy_history` of every id; `lookup` of every locator; a full `resource_use` traversal of every channel | declared patterns disjoint; policy is the history's current; supersession one step, to a declared channel |
-| `flow::verdicts::model::check_transmission_verdicts(config, make)` | `make(Outbox) -> S` where `S: VerdictStore` (`TransmissionVerdicts + SeedTransmissions + TransmissionReads`) | every log; the all-time quality | `set` never changes the stored transmission |
+| `reconstruct::model::check_agent_store(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads`) | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
+| `provenance::model::check_fingerprint_index(config, make)` | `make(IndexConfig) -> S` where `S: FingerprintIndex`; run for a single node and for one of two shards, both stores given the same `now` | `frequency` and `lookup` of every fingerprint | — |
+| `flow::registry::model::check_channel_registry(config, make)` | `make(MemoryAgents, IdSequence, Outbox) -> S` where `S: ChannelStore` (`ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory`) | every channel (a full `ChannelReads::channels` traversal); `channel`, `canonical` and `policy_history` of every id; `lookup` of every locator; a full `resource_use` traversal of every channel | declared patterns disjoint; policy is the history's current; supersession one step, to a declared channel |
+| `flow::verdicts::model::check_transmission_verdicts(config, make)` | `make(Outbox) -> S` where `S: VerdictStore` (`TransmissionVerdicts + TransmissionStore`) | every log and every stored transmission; the all-time quality | `set` never changes the stored transmission |
 
 Ids the store creates come from the `IdSequence` it is given, so the two
 stores create equal ids and results compare without translation. Each
 harness is proved twice in this crate: the reference passes against
 itself, and a deliberately broken store (dropped activity records, no
 cutoff, a directory without merges, an outbox that drops everything) is
-caught (`#[should_panic]`).
+caught (the harness returns `ModelMismatch::Failed`).
 
 ### Invariants and constraints
 
 - Every store is `Send + Sync`; every trait future is `Send`.
+- No store reads a clock; every time is an argument.
 - Every write checks before it changes anything: a refusal leaves the
   state (and the outbox) untouched.
 - Events are published after the critical section, in the order the
@@ -208,13 +243,11 @@ caught (`#[should_panic]`).
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/memory/src/pipeline/mod.rs` | Shared building blocks | `State`, `Outbox`, `drain`, `Clock`, `ManualClock`, `IdSequence`, `CursorTable` |
-| `crates/memory/src/pipeline/harness.rs` | The harness runner | `HarnessConfig`, `run`, `same`, `Mismatch` |
+| `crates/memory/src/support/mod.rs` | Shared building blocks of every store | `State`, `lock`, `Outbox`, `drain`, `IdSequence`, `CursorBook`, `page_after`, `PageError`, `ManualClock` |
 | `crates/memory/src/reconstruct/mod.rs` | The L3 store | `MemoryAgents` |
 | `crates/memory/src/reconstruct/table.rs` | L3 state and operations | (crate) `AgentTable` |
-| `crates/memory/src/reconstruct/store.rs` | L3 trait impls | — |
-| `crates/memory/src/reconstruct/seed.rs` | L3 seeding | `SeedAgents`, `NewAgent`, `AgentOrigin`, `Advance`, `SeedError` |
-| `crates/memory/src/reconstruct/resolve.rs` | The reference lookup behind `resolve` | `context_evidence` |
+| `crates/memory/src/reconstruct/store.rs` | L3 trait impls, `AgentLifecycle` included | — |
+| `crates/memory/src/reconstruct/resolve.rs` | The lookup behind `resolve`; the client context's evidence | `context_evidence` |
 | `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
 | `crates/memory/src/reconstruct/tests/` | L3 reference tests | — |
 | `crates/memory/src/provenance/index.rs` | The fingerprint index | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
@@ -222,64 +255,66 @@ caught (`#[should_panic]`).
 | `crates/memory/src/provenance/tests.rs` | L4 reference tests | — |
 | `crates/memory/src/flow/registry/mod.rs` | The L5 registry | `MemoryChannels` |
 | `crates/memory/src/flow/registry/table.rs` | Registry state and operations | (crate) `ChannelTable` |
-| `crates/memory/src/flow/registry/store.rs` | Registry trait impls | — |
-| `crates/memory/src/flow/registry/seed.rs` | Registry seeding | `SeedChannels`, `DetectionUpdate`, `SeedError` |
-| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `ChannelStore`, `RegistryOp`, `traverse` |
+| `crates/memory/src/flow/registry/store.rs` | Registry trait impls: `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | — |
+| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `ChannelStore`, `RegistryOp`, `traverse`, `all_channels` |
 | `crates/memory/src/flow/registry/tests.rs` | Registry reference tests | — |
-| `crates/memory/src/flow/verdicts/mod.rs` | The verdict store | `MemoryVerdicts`, `SeedTransmissions` |
-| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness | `check_transmission_verdicts`, `VerdictStore`, `TransmissionReads`, `VerdictOp` |
+| `crates/memory/src/flow/verdicts/mod.rs` | The transmission and verdict store | `MemoryVerdicts` |
+| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness | `check_transmission_verdicts`, `VerdictStore`, `VerdictOp` |
 | `crates/memory/src/flow/verdicts/tests.rs` | Verdict reference tests | — |
 
 ## Insight and surface stores (L6–L8)
 
 ### Scope
 
-- L6 (`crosstalk_spec::interfaces::l6_analysis`): `TopicCatalog`,
-  `SearchIndex` (exact search over the stored text and embeddings),
-  `ProjectionSource`, `ProjectionStore`, `AlertRuleStore` and `AlertTriage`;
+- L6 (`crosstalk_spec::interfaces::l6_analysis`): `TopicCatalog` and
+  `TopicLifecycle`, `SearchIndex` (exact search over the stored text and
+  embeddings) and `SearchCorpus`, `ProjectionSource`, `ProjectionStore`,
+  `AlertRuleStore`, `AlertTriage`, `AlertRuleMaintenance`, `AlertActions`
+  and `AlertReads`;
   deterministic `Fake*` doubles of the computational traits (`Embedder`,
   `TopicModel`, `LayoutFitter`) and of `RuleContext`.
-- L7 (`l7_topology`): `EdgeStore`, with buckets per topic version,
-  activation, the watermark, retention and pins (through the catalog), the
-  graph, series, the channel-centred graph, totals, the edge drill-down and
-  agent traffic, all computed from the stored contributions; and a
-  `FrontierSource` the test sets.
-- L8 (`l8_surface*`): `AuditLog`, the store behind `OperatorDirectory`, the
-  sink registry (`QueryApi::sinks`' data) and an `AlertSink` double.
+- L7 (`l7_topology`): `EdgeStore` (and `WatermarkRead`), with buckets per
+  topic version, `version_ready` and activation, the watermark, retention
+  and pins (through the catalog), the graph, series, the channel-centred
+  graph, totals, the edge drill-down and agent traffic, all computed from
+  the stored contributions; a `FrontierSource` the test sets, and
+  `StaticNodes`, a `NodeFacts` the test sets.
+- L8 (`l8_surface*`): `AuditLog`, `OperatorStore`, `SinkRegistry` and an
+  `AlertSink` double.
 - The model-based harnesses for all of the above (`model::analysis`,
   `model::topology`, `model::surface`).
 
 ### Non-scope
 
 - `QueryApi`, `OperatorActions` and `LiveFeed`: composed over these stores
-  by `crosstalk-surface` (P2.6). The stores give it what it needs that the
-  spec traits do not (alert listing and acknowledgement, rule listing, the
-  operator directory's reads), as inherent methods.
-- Bus publishing. Each store appends what the spec says it publishes to an
-  outbox, in the same critical section as the change; the consumer drains
-  it (`Published`) and forwards it.
+  by `crosstalk-surface` (P2.6), through the spec traits alone.
+- Bus publishing. Each store sends what the spec says it publishes to its
+  `Outbox`, from the critical section of the change; the wiring owns the
+  receiver and forwards it.
 - Embedding, topic fitting and layout. The `Fake*` doubles are stable
   stand-ins, not reference models.
 
 ### Data and control flow
 
 ```text
-            ┌──────────── InMemoryTopicCatalog ◀── begin_fit / fit_returned / ready / activated / assign (analyze)
-            │   history, topics, lineage, assignments, frozen sizes; pin / unpin / enforce_retention
+            ┌──────────── InMemoryTopicCatalog ◀── TopicLifecycle: begin_fit / complete_fit / mark_ready / mark_active / assign (analyze)
+            │   history, topics, lineage, assignments, frozen sizes; pin / unpin / enforce_retention (publishes TopicVersionDropped)
             │        │ TopicVersions (history, version_of, topic_ids)        │ assignment(v, t), retains(v)
             ▼        ▼                                                       ▼
  InMemoryEdgeStore ◀─ Env { catalog, directory, nodes }        InMemorySearchIndex ── InMemoryProjectionSource
-   contributions, accesses, verdict copy,                        documents, verdict copy     (+ WatermarkRead)
+   contributions, accesses, verdict copy,                        documents, verdict copy     (+ spec WatermarkRead)
+   (nodes: spec NodeFacts)                                       ◀── SearchCorpus (analyze)
    watermark, activated / dropped versions                       │
    every read = the fold over contributions                      └─ search / sample under one resolved version
             │ WatermarkRead
             ▼
  InMemoryProjectionStore (jobs, leases, frames)      InMemoryAlertStore (rule set, alerts, verdict copy)
-                                                        ▲ create / update / set_enabled (surface)
-                                                        ▲ triage / sanctioned / disabled / judged (alerts consumer)
-                                                        ▲ topic_version_ready (lineage) / embedding_model_changed
- InMemoryOperatorStore ── load(config) ──▶ InMemoryAuditLog (config entries, same lock order)
- InMemorySinkRegistry (configured sinks, last delivery)
+                                                        ▲ AlertRuleStore: create / update / set_enabled (surface)
+                                                        ▲ AlertTriage: triage / sanctioned / disabled / judged (alerts consumer)
+                                                        ▲ AlertRuleMaintenance: topic_version_ready / embedding_model_changed
+                                                        ▲ AlertActions: acknowledge / resolve (surface); AlertReads
+ InMemoryOperatorStore ── OperatorStore::load ──▶ InMemoryAuditLog (config entries, same lock order)
+ InMemorySinkRegistry (SinkRegistry: configured sinks, last delivery)
 ```
 
 - **One lock per store.** Every store keeps its state behind one
@@ -291,7 +326,7 @@ caught (`#[should_panic]`).
   catalog, directory, nodes; alerts → directory; operators → audit log), so
   there is no lock cycle. Every store is `Send + Sync`.
 - **Paging.** Every list pages with a `CursorBook`
-  (`surface::paging`): a token is a key into the issuing store's book,
+  (`support`): a token is a key into the issuing store's book,
   bound to the request (filter, window, edge, query) and, for linked views,
   to the version the first page resolved. A token from another store, an
   unknown one and one presented with another request are all
@@ -303,15 +338,17 @@ caught (`#[should_panic]`).
   its predecessor (the version before it in the history) is computed when
   the fit returns (`lineage_between`): for each older topic, every newer
   topic ranked by centroid similarity, ties to the lower id; the best link
-  whatever the floor, the others at or above it. `activated` supersedes
-  every older version not yet superseded, then enforces retention, which
-  freezes the all-time sizes, deletes the assignments and publishes
-  `TopicVersionDropped` for each dropped version.
+  whatever the floor, the others at or above it (`complete_fit`).
+  `mark_active` supersedes every older version not yet superseded, then
+  enforces retention, which freezes the all-time sizes, deletes the
+  assignments and publishes `TopicVersionDropped` for each dropped
+  version: the catalog is the event's one publisher.
 - **Edge store.** It stores contributions keyed by (version,
   transmission) and accesses keyed by id, never buckets. `apply` checks, in
   order: dropped version, self-edge, already applied (returns the stored
   key), late (activated version, bucket final under the watermark). A
-  version activates once `version_ready` has its count and that many
+  version activates (`activate` returns `Switched` and publishes
+  `TopicVersionActivated`) once `version_ready` has its count and that many
   distinct `Refit` classifications under it were processed (applied,
   already applied or self-edges). Reads take the watermark first, resolve
   the filter's selector against the catalog's history (retained = not
@@ -371,13 +408,13 @@ tokio runtime, so `make` may be async (a Postgres pool). A failure is a
 
 | Harness | Subject | `make` takes |
 | --- | --- | --- |
-| `model::analysis::check_topic_catalog` | `CatalogSubject`: `TopicCatalog` + the fit lifecycle, assignments, the clock | `CatalogConfig` |
-| `model::analysis::check_search_index` | `SearchSubject`: `SearchIndex` + `ProjectionSource` + indexing, verdicts, merges, supersessions, versions, assignments, the watermark | `EmbeddingModel` |
+| `model::analysis::check_topic_catalog` | `CatalogSubject`: `TopicCatalog + TopicLifecycle` | `CatalogConfig` |
+| `model::analysis::check_search_index` | `SearchSubject`: `SearchIndex + SearchCorpus + ProjectionSource + TopicLifecycle` | `EmbeddingModel`, `SearchWorld` (the `StaticDirectory` the harness merges and supersedes in, the `ManualWatermark` samples are dated by) |
 | `model::analysis::check_projection_store` | `ProjectionStore` | `ProjectionConfig` |
-| `model::analysis::check_alert_rule_store`, `check_alert_triage` | `AlertStoreSubject`: both alert traits + the consumer's rule changes, acknowledge and resolve, full reads, supersessions, the clock | `AlertWorld` |
-| `model::topology::check_edge_store` | `EdgeSubject`: `EdgeStore` + classification causes, `version_ready`, activation, merges, supersessions, parents, the catalog | `EdgeStoreConfig` |
+| `model::analysis::check_alert_rule_store`, `check_alert_triage` | `AlertStoreSubject`: `AlertRuleStore + AlertTriage + AlertRuleMaintenance + AlertActions + AlertReads` | `AlertWorld` (config, embedder, and the `StaticDirectory` the harness supersedes channels in) |
+| `model::topology::check_edge_store` | `EdgeSubject`: `EdgeStore + TopicLifecycle` (the catalog whose history the store reads) | `EdgeStoreConfig`, `EdgeWorld` (the `StaticDirectory` and `StaticNodes` the harness merges, supersedes and parents in) |
 | `model::surface::check_audit_log` | `AuditLog` | nothing |
-| `model::surface::check_operator_store` | `OperatorStoreSubject`: load, operators, caller, the config entries | nothing |
+| `model::surface::check_operator_store` | `OperatorStoreSubject`: `OperatorStore + AuditLog` (config entries read back through `AuditLog::query`) | nothing |
 
 Beyond equality, the harnesses keep their own oracles: the catalog's
 sizes against a count of the assignments (`analysis.sizes.match-
@@ -397,28 +434,27 @@ harness catches it, so none is vacuous.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `analysis/catalog.rs` | The topic catalog: history, topics, lineage, assignments, retention | `InMemoryTopicCatalog`, `CatalogConfig`, `TopicVersions`, `StoredAssignment`, `Assigned`, `Activated`, `LifecycleError` |
+| `analysis/catalog.rs` | The topic catalog: `TopicCatalog` and `TopicLifecycle` (history, topics, lineage, assignments, retention) | `InMemoryTopicCatalog`, `CatalogConfig`, `TopicVersions` |
 | `analysis/lineage.rs` | The lineage stored when a fit returns | `lineage_between`, `LineageError` |
-| `analysis/search.rs` | Exact search, the verdict copy, projection sampling | `InMemorySearchIndex`, `IndexedTransmission`, `InMemoryProjectionSource`, `WatermarkRead`, `FixedWatermark`, `ManualWatermark`, `text_score`, `terms`, `sample_key` |
-| `analysis/projection.rs` | Projection jobs, leases and frames | `InMemoryProjectionStore`, `ProjectionConfig`, `plus` |
-| `analysis/alerts/mod.rs` | The alert store's state, reads and commits | `InMemoryAlertStore`, `AlertStoreConfig`, `CommitRefused`, `AlertReadError`, `is_active`, `state_kind` |
-| `analysis/alerts/rules.rs` | `AlertRuleStore`; remap on version ready; model changes | `InMemoryAlertStore::{topic_version_ready, embedding_model_changed, start}` |
-| `analysis/alerts/triage.rs` | `AlertTriage`; acknowledge and resolve | `AlertActionError`, `InMemoryAlertStore::{acknowledge, resolve}` |
+| `analysis/search.rs` | Exact search and `SearchCorpus`, the verdict copy, projection sampling | `InMemorySearchIndex`, `InMemoryProjectionSource`, `FixedWatermark`, `ManualWatermark` (spec `WatermarkRead`s), `text_score`, `terms`, `sample_key` |
+| `analysis/projection.rs` | Projection jobs, leases and frames (`FrameMismatch` for a frame of another job) | `InMemoryProjectionStore`, `ProjectionConfig`, `plus` |
+| `analysis/alerts/mod.rs` | The alert store's state, `AlertReads` and commits; reads transmission routes from a `MemoryVerdicts` | `InMemoryAlertStore`, `AlertStoreConfig`, `CommitRefused`, `is_active`, `state_kind` |
+| `analysis/alerts/rules.rs` | `AlertRuleStore`; `AlertRuleMaintenance` (remap on version ready, model changes) | — |
+| `analysis/alerts/triage.rs` | `AlertTriage`; `AlertActions` (acknowledge and resolve) | — |
 | `analysis/fakes.rs` | Deterministic doubles | `FakeEmbedder`, `FakeTopicModel`, `FakeLayoutFitter`, `FakeRuleContext`, `fake_model` |
 | `analysis/aliases.rs` | Merges and supersessions a test sets | `StaticDirectory`, `Directories`, `AliasError` |
-| `analysis/support.rs` | Id sequences, outbox, similarity; re-exports the pipeline's clock | `Clock`, `ManualClock` (from `pipeline`), `IdSequence`, `Outbox`, `Published`, `similarity` |
-| `topology/store.rs` | The edge store's state and writes | `InMemoryEdgeStore`, `EdgeStoreConfig`, `Activation`, `ManualFrontier`, `bucket_of` |
+| `analysis/support.rs` | The similarity every score uses | `similarity` |
+| `topology/store.rs` | The edge store's state and writes (`version_ready`, `activate`, the watermark); `WatermarkRead` | `InMemoryEdgeStore`, `EdgeStoreConfig`, `ManualFrontier`, `bucket_of` |
 | `topology/reads.rs` | `EdgeStore` | — |
 | `topology/fold.rs` | The fold, edges, nodes, access edges | `edges`, `nodes`, `route_key`, `kind_index` |
-| `topology/env.rs` | What the edge store reads from other stores | `TopologyEnv`, `Env`, `NodeDescriptions`, `StaticNodes`, `AgentDescription`, `ChannelDescription` |
+| `topology/env.rs` | What the edge store reads from other stores | `TopologyEnv`, `Env`, `StaticNodes` (a spec `NodeFacts`), `agent_facts`, `channel_facts` |
 | `surface/audit.rs` | The append-only audit log | `InMemoryAuditLog` |
-| `surface/operators.rs` | The operator directory's store | `InMemoryOperatorStore`, `LoadError`, `CallerError` |
-| `surface/sinks.rs` | The sink registry and a sink double | `InMemorySinkRegistry`, `SinkConfig`, `UnknownSink`, `FakeSink` |
-| `surface/paging.rs` | Cursor books and page cutting | `CursorBook`, `page_after`, `PageError` |
-| `model/mod.rs` | The harness runner | `HarnessConfig`, `ModelMismatch`, `Divergence` |
+| `surface/operators.rs` | `OperatorStore`: the directory and its config loads | `InMemoryOperatorStore` |
+| `surface/sinks.rs` | `SinkRegistry`, and a sink double | `InMemorySinkRegistry`, `SinkConfig`, `FakeSink` |
+| `model/mod.rs` | The harness runner every harness shares | `HarnessConfig`, `ModelMismatch`, `Divergence`, `run`, `same`, `holds` |
 | `model/build.rs` | Value builders the harnesses and tests share | id builders, `ts`, `window`, `unit`, `topic`, `catalog`, `timing`, `bucket_width` |
-| `model/analysis.rs`, `model/analysis/*.rs` | The L6 harnesses | see the table above, and `ReferenceCatalog`, `ReferenceSearch`, `ReferenceAlerts`, `FilterSeed` |
-| `model/topology.rs`, `model/topology/*.rs` | The L7 harness | `check_edge_store`, `EdgeSubject`, `ReferenceEdges`, `edge_config` |
+| `model/analysis.rs`, `model/analysis/*.rs` | The L6 harnesses | see the table above, and `ReferenceCatalog` (`reference_catalog`), `ReferenceSearch`, `SearchWorld`, `ReferenceAlerts` (`reference_alerts`), `new_version_in`, `FilterSeed` |
+| `model/topology.rs`, `model/topology/*.rs` | The L7 harness | `check_edge_store`, `EdgeSubject`, `EdgeWorld`, `ReferenceEdges`, `catalog_ready`, `edge_config` |
 | `model/surface.rs` | The L8 harnesses | `check_audit_log`, `check_operator_store`, `OperatorStoreSubject`, `ReferenceOperators` |
 
 Unit tests are in `analysis/tests/`, `topology/tests/`, `surface/tests.rs`;
@@ -436,7 +472,7 @@ bugs in `model/mutants.rs`.
 - Nothing is published before it is visible: the outbox is appended in the
   critical section of the change.
 - Determinism: ids come from per-store sequences (`IdSequence`, above the
-  reserved rule range), times from the caller or a `ManualClock`, and every
+  reserved rule range), times from the caller, and every
   output order is fixed (sorted keys), so the same calls give the same
   results.
 - The evidence these tests provide for invariants that name
@@ -448,19 +484,16 @@ bugs in `model/mutants.rs`.
 
 - Similarity is the cosine of two unit vectors clamped to `0.0..=1.0`
   (negative cosines score 0).
-- `AlertTriage::channel_sanctioned`, `rule_disabled`, `transmission_judged`
-  and `TopicCatalog::unpin` take no time; the stores read a `Clock`.
-- `EdgeContribution` carries no classification cause, yet activation
-  counts `Refit` classifications: the store adds `apply_classified(_,
-  cause)` and `version_ready`, and the trait's `apply` counts as a
-  confirmation. `EdgeStore::activate` returns `()`; `activate_if_complete`
-  says whether it switched.
 - A triage draft for an unknown rule is `RuleInactive`.
 - Enqueuing a job that is not queued is a `Store` error; enqueuing any job
-  under a used id is a no-op. A completed frame that does not belong to
-  its job is `Transition(NotAllowed { Fitting → Ready })`.
-- Resolving an open alert is refused (`NotAcknowledged`); there is no
-  `ConflictKind` for it.
+  under a used id is a no-op.
+- `AlertReads::rules` lists every rule newest id first, so user rules come
+  before the built-in rules (whose ids are reserved below every generated
+  one).
+- An agent `NodeFacts` has not seen is drawn provisional, top-level,
+  unlabelled and without claims; a channel, discovered, observed,
+  unreviewed and summarized by its id (the spec fixes these defaults;
+  `StaticNodes` returns `None` for what it was never told).
 - `TopicSizes` lists topics in ascending id; graph edges and nodes, access
   edges and grouped series come sorted by key.
 - A text hit needs at least one shared term; a semantic or hybrid hit

@@ -108,17 +108,15 @@ pub fn holds(
     }
 }
 
-/// Run `case` on `config.cases` sequences from `strategy`, each on a fresh
-/// current-thread runtime.
-pub(crate) fn run<Op, S, F>(
-    config: HarnessConfig,
-    strategy: S,
-    case: F,
-) -> Result<(), ModelMismatch>
+/// Run `case` on `config.cases` inputs from `strategy` (operation
+/// sequences, for the store harnesses), each on a fresh current-thread
+/// runtime. The one runner every harness and property test in this crate
+/// shares.
+pub(crate) fn run<S, F>(config: HarnessConfig, strategy: S, case: F) -> Result<(), ModelMismatch>
 where
-    Op: Debug + Clone,
-    S: Strategy<Value = Vec<Op>>,
-    F: Fn(&tokio::runtime::Runtime, &[Op]) -> Result<(), Divergence>,
+    S: Strategy,
+    S::Value: Debug,
+    F: Fn(&tokio::runtime::Runtime, &S::Value) -> Result<(), Divergence>,
 {
     let mut runner = TestRunner::new(Config {
         cases: config.cases,

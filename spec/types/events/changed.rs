@@ -11,13 +11,13 @@
 //!
 //! | Variant | Published by | After |
 //! | --- | --- | --- |
-//! | `Alert` | L6 alert store, L8 actions | open, deduplicate, suppress (sanction, rule disabled, false detection), acknowledge, resolve |
-//! | `Channel` | L5 `ChannelRegistry` | discovery, declaration (config), a new resource, every detection change (observed, candidate, active, dormant, unused), a recorded policy decision (config or `PolicyChanged`), a promotion: the promoted channel and every channel it superseded ([`Changed::promotion`]) |
-//! | `Agent` | L3 identity resolver | creation (traffic or config), a state change, a merge (source, target and every agent it repointed), an unmerge (the source, the agent it was merged into, every restored agent), a rename (label set or cleared) |
+//! | `Alert` | L6 alert store | open, deduplicate, suppress (sanction, rule disabled, false detection), acknowledge, resolve (`AlertActions`) |
+//! | `Channel` | L5 `ChannelRegistry`, `ChannelTraffic` | discovery, declaration (config), a new resource, every detection change (observed, candidate, active, dormant, unused), a recorded policy decision (config or `PolicyChanged`), a promotion: the promoted channel and every channel it superseded ([`Changed::promotion`]) |
+//! | `Agent` | L3 agent store (`AgentLifecycle`, `IdentityResolver`) | creation (traffic or config), a state change, new evidence, a merge (source, target and every agent it repointed), an unmerge (the source, the agent it was merged into, every restored agent), a rename (label set or cleared) |
 //! | `Rule` | L6 `AlertRuleStore` | create (operator or config), update, enable or disable, turning stale |
 //! | `Verdict` | L5 `TransmissionVerdicts` | a verdict record appended to the transmission's log (set or withdrawn) |
 //! | `Watermark` | L7 `EdgeStore` | the watermark advancing |
-//! | `TopicVersion` | L6 `TopicCatalog` | a status change of that version (ready, active, superseded), and a retention change (pinned, unpinned, dropped) |
+//! | `TopicVersion` | L6 `TopicCatalog`, `TopicLifecycle` | a status change of that version (ready, active, superseded), and a retention change (pinned, unpinned, dropped) |
 //! | `Projection` | L6 `ProjectionStore` | a projection job becoming ready or failed, or its frame expiring |
 //!
 //! A store that changes nothing (a redelivery, an `Unchanged` action)

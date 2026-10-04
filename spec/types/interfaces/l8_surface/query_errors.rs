@@ -24,6 +24,12 @@
 //!   naming the channel that superseded it.
 //! - Enabling a stale alert rule is `Conflict(RuleStale)`: the rule needs
 //!   an update, not a retry.
+//! - Acknowledging or resolving an alert that is resolved or suppressed is
+//!   `Conflict(AlertNotActive)`; resolving an open alert is
+//!   `Conflict(AlertNotAcknowledged)`.
+//! - Consumer-side store errors (`AgentLifecycleError`, `TrafficError`,
+//!   `TopicLifecycleError`, `CorpusError`) and the operator store's load and
+//!   caller errors reach no query or action, so none has a mapping here.
 //! - Stored records that cannot be read or do not fit together (a missing
 //!   span, a location outside its body, a corrupt blob) are `Store`, with a
 //!   diagnostic reason. A message body content retention dropped is not an
@@ -60,8 +66,10 @@ use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::{BlobError, BusError};
 use crate::interfaces::l3_reconstruction::ResolveError;
 use crate::interfaces::l3_reconstruction::agents::AgentReadError;
+use crate::interfaces::l5_flow::transmissions::TransmissionStoreError;
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
+use crate::interfaces::l6_analysis::alerts::{AlertActionError, AlertReadError};
 use crate::interfaces::l6_analysis::{
     CatalogError, EmbedError, ProjectionStoreError, RuleError, SearchError,
 };
@@ -70,6 +78,8 @@ use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError, InvalidWindow};
 use crate::interfaces::l8_surface::export::{ExportPlanError, UnsupportedFormat};
+use crate::interfaces::l8_surface::operators::OperatorStoreError;
+use crate::interfaces::l8_surface::sinks::SinkRegistryError;
 use crate::interfaces::l8_surface::summary::InvalidSelection;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
@@ -478,6 +488,66 @@ impl From<TooManyIds> for QueryError {
             max: error.max,
             got: error.got,
         })
+    }
+}
+
+/// For `Acknowledge` and `Resolve` (`AlertActions`). An unknown alert is
+/// `NotFound`; one no action can leave (resolved or suppressed) is
+/// `Conflict(AlertNotActive)`; resolving one that is still open is
+/// `Conflict(AlertNotAcknowledged)`, which an acknowledgement cures.
+impl From<AlertActionError> for ActionError {
+    fn from(error: AlertActionError) -> Self {
+        match error {
+            AlertActionError::Store { reason } => Self::Store { reason },
+            AlertActionError::UnknownAlert(_) => Self::NotFound,
+            AlertActionError::NotActive(alert) => {
+                Self::Conflict(ConflictKind::AlertNotActive { alert })
+            }
+            AlertActionError::NotAcknowledged(alert) => {
+                Self::Conflict(ConflictKind::AlertNotAcknowledged { alert })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::alert_rules`, `alert_rule`, `alerts`, `alert` and
+/// `present` (`AlertReads`).
+impl From<AlertReadError> for QueryError {
+    fn from(error: AlertReadError) -> Self {
+        match error {
+            AlertReadError::Store { reason } => Self::Store { reason },
+            AlertReadError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::transmission` and the reads that start from stored
+/// transmissions (`TransmissionStore::transmission`).
+impl From<TransmissionStoreError> for QueryError {
+    fn from(error: TransmissionStoreError) -> Self {
+        match error {
+            TransmissionStoreError::Store { reason } => Self::Store { reason },
+        }
+    }
+}
+
+/// For `QueryApi::sinks` (`SinkRegistry::sinks`). A read names no sink, but
+/// the mapping is total: an unknown sink is `NotFound`.
+impl From<SinkRegistryError> for QueryError {
+    fn from(error: SinkRegistryError) -> Self {
+        match error {
+            SinkRegistryError::Store { reason } => Self::Store { reason },
+            SinkRegistryError::UnknownSink(_) => Self::NotFound,
+        }
+    }
+}
+
+/// For `QueryApi::operators` (`OperatorStore::operators`).
+impl From<OperatorStoreError> for QueryError {
+    fn from(error: OperatorStoreError) -> Self {
+        match error {
+            OperatorStoreError::Store { reason } => Self::Store { reason },
+        }
     }
 }
 

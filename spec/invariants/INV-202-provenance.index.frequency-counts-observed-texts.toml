@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.index.frequency-counts-observed-texts"
-statement = "FingerprintIndex::frequency(f) equals the number of distinct texts containing f that were passed to FingerprintIndex::observe within the retention period."
+statement = "FingerprintIndex::frequency(f, now) equals the number of distinct texts containing f that were passed to FingerprintIndex::observe with an observation time within the retention period before now."
 kind = "domain"
 property = "model-based"
 requires = ["property", "integration"]

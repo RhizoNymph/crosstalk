@@ -7,11 +7,12 @@ use crosstalk_spec::aggregates::filter::TopologyFilter;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
     FitFailure, InvalidProjectionInfo, InvalidTransition, PointRoute, ProjectedPoint,
-    ProjectionInfo, ProjectionLimit, ProjectionParams, ProjectionSpec, ProjectionStatus,
-    ProjectionStatusKind,
+    ProjectionInfo, ProjectionLimit, ProjectionMismatch, ProjectionParams, ProjectionSpec,
+    ProjectionStatus, ProjectionStatusKind,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::Watermark;
+use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l6_analysis::{
@@ -22,17 +23,21 @@ use crosstalk_spec::support::Finite;
 
 use super::support::{at, model};
 use crate::analysis::projection::{InMemoryProjectionStore, ProjectionConfig};
-use crate::analysis::support::Published;
 use crate::model::build::{agent, operator, projection, transmission, window};
+use crate::support::{Outbox, drain};
 
 const LEASE: u64 = 100;
 const RETENTION: u64 = 1_000;
 
-fn store() -> InMemoryProjectionStore {
-    InMemoryProjectionStore::new(ProjectionConfig {
+fn config() -> ProjectionConfig {
+    ProjectionConfig {
         lease: Duration::from_micros(LEASE),
         frame_retention: Duration::from_micros(RETENTION),
-    })
+    }
+}
+
+fn store() -> InMemoryProjectionStore {
+    InMemoryProjectionStore::new(config(), Outbox::none())
 }
 
 fn spec(limit: u32) -> ProjectionSpec {
@@ -80,7 +85,8 @@ fn status(info: &ProjectionInfo) -> ProjectionStatusKind {
 
 #[tokio::test]
 async fn job_runs_queued_fitting_ready_expired() {
-    let mut store = store();
+    let (outbox, mut events) = Outbox::channel();
+    let mut store = InMemoryProjectionStore::new(config(), outbox);
     store.enqueue(job(1, 10)).await.unwrap();
     let claimed = store.claim(at(20)).await.unwrap().unwrap();
     assert_eq!(
@@ -105,12 +111,12 @@ async fn job_runs_queued_fitting_ready_expired() {
     assert_eq!(store.expire(at(31 + RETENTION)).await, Ok(1));
     let info = store.info(projection(1)).await.unwrap().unwrap();
     assert_eq!(status(&info), ProjectionStatusKind::Expired);
-    let published: Vec<_> = store.drain_published();
+    let published = drain(&mut events);
     assert_eq!(
         published,
         vec![
-            Published::Changed(Changed::Projection(projection(1))),
-            Published::Changed(Changed::Projection(projection(1))),
+            BusEvent::Changed(Changed::Projection(projection(1))),
+            BusEvent::Changed(Changed::Projection(projection(1))),
         ]
     );
 }
@@ -237,12 +243,15 @@ async fn complete_needs_a_fitting_job_and_its_frame() {
     );
     store.claim(at(20)).await.unwrap();
     // A frame of another job.
-    assert!(matches!(
+    assert_eq!(
         store
             .complete(projection(1), frame(projection(2), 1, 1, 5), at(30))
             .await,
-        Err(ProjectionJobError::Transition(_))
-    ));
+        Err(ProjectionJobError::FrameMismatch {
+            projection: projection(1),
+            mismatch: ProjectionMismatch::Id
+        })
+    );
     // A watermark after the start.
     assert!(matches!(
         store
@@ -255,10 +264,13 @@ async fn complete_needs_a_fitting_job_and_its_frame() {
     other_limit.limit = ProjectionLimit::new(5).unwrap();
     let points: Vec<ProjectedPoint> = frame(projection(1), 1, 1, 5).points().collect();
     let other_limit = ProjectionFrame::from_points(other_limit, &points).unwrap();
-    assert!(matches!(
+    assert_eq!(
         store.complete(projection(1), other_limit, at(30)).await,
-        Err(ProjectionJobError::Transition(_))
-    ));
+        Err(ProjectionJobError::FrameMismatch {
+            projection: projection(1),
+            mismatch: ProjectionMismatch::Limit
+        })
+    );
     assert_eq!(
         status(&store.info(projection(1)).await.unwrap().unwrap()),
         ProjectionStatusKind::Fitting

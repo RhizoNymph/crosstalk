@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.resolve.conflict-not-silently-attributed"
-statement = "The chain resolver attributes an exchange whose evidence points at several agents to one of them only when the same resolution merges every other candidate into that agent."
+statement = "The reconstruct consumer attributes an exchange whose evidence points at several agents to one of them only when the same resolution merges every other candidate into that agent."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

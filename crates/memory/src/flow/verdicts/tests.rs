@@ -12,14 +12,23 @@ use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{AgentId, OperatorId, TransmissionId};
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use super::MemoryVerdicts;
 use super::model::{self, route, state, transmission_id, unknown_transmission};
-use super::{MemoryVerdicts, SeedTransmissions};
-use crate::pipeline::harness::HarnessConfig;
-use crate::pipeline::{Outbox, drain};
+use crate::model::{HarnessConfig, ModelMismatch};
+use crate::support::{Outbox, drain};
+
+/// The case count the pipeline harnesses have always run with.
+fn pipeline_harness() -> HarnessConfig {
+    HarnessConfig {
+        cases: 64,
+        ..HarnessConfig::default()
+    }
+}
 
 fn at(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)
@@ -51,7 +60,7 @@ async fn store_with(
     let (outbox, events) = Outbox::channel();
     let mut store = MemoryVerdicts::new(outbox);
     for transmission in transmissions {
-        store.put(transmission).await;
+        assert_eq!(store.save(transmission).await, Ok(()));
     }
     (store, events)
 }
@@ -172,7 +181,10 @@ async fn set_verdict_keeps_transmission_state() {
                 .await
                 .is_ok()
         );
-        assert_eq!(store.transmission(transmission_id(0)), Some(stored.clone()));
+        assert_eq!(
+            store.transmission(transmission_id(0)).await,
+            Ok(Some(stored.clone()))
+        );
     }
 }
 
@@ -188,21 +200,21 @@ async fn verdicts_follow_the_transmission_forward() {
             .await
             .is_err()
     );
-    store.put(transmission(0, 2, &[0], 0, 5)).await;
+    assert_eq!(store.save(transmission(0, 2, &[0], 0, 5)).await, Ok(()));
     assert!(
         store
             .set(id, Some(Verdict::Genuine), operator(), at(11), None)
             .await
             .is_ok()
     );
-    store.put(transmission(0, 3, &[0], 0, 5)).await;
+    assert_eq!(store.save(transmission(0, 3, &[0], 0, 5)).await, Ok(()));
     let Ok(log) = store.log(id).await else {
         panic!("log");
     };
     assert_eq!(log.current(), Some(Verdict::Genuine));
     assert!(matches!(
-        store.transmission(id).map(|t| t.state),
-        Some(TransmissionState::Confirmed(_))
+        store.transmission(id).await.map(|t| t.map(|t| t.state)),
+        Ok(Some(TransmissionState::Confirmed(_)))
     ));
 }
 
@@ -274,16 +286,20 @@ async fn logs_of_unknown_and_unjudged_transmissions() {
 /// The reference agrees with itself under the harness.
 #[test]
 fn reference_agrees_with_itself_under_the_harness() {
-    model::check_transmission_verdicts(HarnessConfig::default(), MemoryVerdicts::new);
+    let outcome = model::check_transmission_verdicts(pipeline_harness(), MemoryVerdicts::new);
+    assert_eq!(outcome, Ok(()));
 }
 
 /// The harness catches a store that publishes nothing.
 #[test]
-#[should_panic(expected = "disagrees with the reference")]
 fn harness_rejects_a_store_that_publishes_nothing() {
-    model::check_transmission_verdicts(HarnessConfig::default(), |_outbox| {
+    let outcome = model::check_transmission_verdicts(pipeline_harness(), |_outbox| {
         MemoryVerdicts::new(Outbox::none())
     });
+    assert!(
+        matches!(outcome, Err(ModelMismatch::Failed { .. })),
+        "{outcome:?}"
+    );
 }
 
 /// The store is `Send + Sync`, so its futures are `Send`.

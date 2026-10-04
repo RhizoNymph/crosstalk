@@ -7,17 +7,21 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::events::changed::Changed;
-use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
+use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::interfaces::l7_topology::{
     EdgeError, EdgeQueryError, EdgeStore, FrontierSource,
 };
 use crosstalk_spec::paging::{PageRequest, PageSize};
 
-use super::support::{SETTLE, WIDTH, all, contribution, edge_counts, graph, plain, refit, world};
-use crate::analysis::support::Published;
+use super::support::{
+    SETTLE, WIDTH, all, contribution, edge_counts, graph, plain, refit, refit_of, world,
+};
 use crate::analysis::tests::support::fit_ready;
 use crate::model::build::{agent, bucket_width, non_zero, ts, window};
-use crate::topology::store::{Activation, ManualFrontier};
+use crate::support::drain;
+use crate::topology::store::ManualFrontier;
+use crosstalk_spec::events::BusEvent;
+use crosstalk_spec::interfaces::l7_topology::Activation;
 
 fn frontier(ticked: u64, pending: Option<u64>) -> PipelineFrontier {
     PipelineFrontier {
@@ -30,73 +34,94 @@ fn frontier(ticked: u64, pending: Option<u64>) -> PipelineFrontier {
 async fn activation_waits_for_ready_count_of_processed_classifications() {
     // topology.version.activate-after-complete and publishes-activated
     let mut world = world();
-    let version = fit_ready(&world.catalog, 1, &[(11, [1.0, 0.0, 0.0])]);
-    assert_eq!(
-        world.store.activate_if_complete(version),
-        Ok(Activation::Pending)
-    );
-    world.store.version_ready(version, 2);
+    let version = fit_ready(&mut world.catalog, 1, &[(11, [1.0, 0.0, 0.0])]).await;
+    assert_eq!(world.store.activate(version).await, Ok(Activation::Pending));
+    world.store.version_ready(version, 2).await.unwrap();
     // A confirmation under the version does not count.
     world
         .store
-        .apply_classified(
-            &contribution(9, 1, 2, Route::Unobserved, 20, 1, 1, Some(11)),
-            ClassificationCause::Confirmation,
-        )
+        .apply(&contribution(
+            9,
+            1,
+            2,
+            Route::Unobserved,
+            20,
+            1,
+            1,
+            Some(11),
+        ))
+        .await
         .unwrap();
     world
         .store
-        .apply_classified(
-            &contribution(1, 1, 2, Route::Unobserved, 20, 1, 1, Some(11)),
-            ClassificationCause::Refit,
-        )
+        .apply(&refit_of(&contribution(
+            1,
+            1,
+            2,
+            Route::Unobserved,
+            20,
+            1,
+            1,
+            Some(11),
+        )))
+        .await
         .unwrap();
     // A redelivery counts once.
     world
         .store
-        .apply_classified(
-            &contribution(1, 1, 2, Route::Unobserved, 20, 1, 1, Some(11)),
-            ClassificationCause::Refit,
-        )
+        .apply(&refit_of(&contribution(
+            1,
+            1,
+            2,
+            Route::Unobserved,
+            20,
+            1,
+            1,
+            Some(11),
+        )))
+        .await
         .unwrap();
-    assert_eq!(
-        world.store.activate_if_complete(version),
-        Ok(Activation::Pending)
-    );
+    assert_eq!(world.store.activate(version).await, Ok(Activation::Pending));
     // A self-edge rejection is processed too.
     assert_eq!(
-        world.store.apply_classified(
-            &contribution(2, 3, 3, Route::Unobserved, 20, 1, 1, Some(11)),
-            ClassificationCause::Refit
-        ),
+        world
+            .store
+            .apply(&refit_of(&contribution(
+                2,
+                3,
+                3,
+                Route::Unobserved,
+                20,
+                1,
+                1,
+                Some(11)
+            )))
+            .await,
         Err(EdgeError::SelfEdge)
     );
-    world.store.drain_published();
+    drain(&mut world.events);
     assert_eq!(
-        world.store.activate_if_complete(version),
+        world.store.activate(version).await,
         Ok(Activation::Switched {
             version,
             previous: TopicModelVersion(0)
         })
     );
     assert_eq!(
-        world.store.drain_published(),
-        vec![Published::Insight(InsightEvent::TopicVersionActivated {
+        drain(&mut world.events),
+        vec![BusEvent::Insight(InsightEvent::TopicVersionActivated {
             version,
             previous: TopicModelVersion(0)
         })]
     );
     // Once, and never for an older version.
+    assert_eq!(world.store.activate(version).await, Ok(Activation::Ignored));
     assert_eq!(
-        world.store.activate_if_complete(version),
-        Ok(Activation::Ignored)
-    );
-    assert_eq!(
-        world.store.activate_if_complete(TopicModelVersion(0)),
+        world.store.activate(TopicModelVersion(0)).await,
         Ok(Activation::Ignored)
     );
     world.store.activate(version).await.unwrap();
-    assert!(world.store.drain_published().is_empty());
+    assert!(drain(&mut world.events).is_empty());
     assert_eq!(world.store.active_version(), version);
 }
 
@@ -116,11 +141,12 @@ async fn activate_keeps_every_version_and_graph_reads_one() {
         .await
         .unwrap();
     let v1 = refit(
-        &world,
+        &mut world,
         100,
         &[11],
         &[contribution(1, 1, 2, Route::Unobserved, 20, 4, 1, Some(11))],
-    );
+    )
+    .await;
     assert_eq!(world.store.contributions().len(), 3);
     let current = graph(&world, all(), &TopologyFilter::default()).await;
     assert_eq!(current.topic_version(), v1);
@@ -168,11 +194,12 @@ async fn dropped_version_is_gone() {
         .await
         .unwrap();
     refit(
-        &world,
+        &mut world,
         100,
         &[11],
         &[contribution(1, 1, 2, Route::Unobserved, 20, 4, 1, Some(11))],
-    );
+    )
+    .await;
     world
         .store
         .drop_version(TopicModelVersion(0))
@@ -275,14 +302,14 @@ async fn advance_watermark_exposes_settled() {
             .await,
         Ok(Some(Watermark(ts(110))))
     );
-    let published = world.store.drain_published();
+    let published = drain(&mut world.events);
     assert_eq!(
         published,
         vec![
-            Published::Insight(InsightEvent::WatermarkAdvanced(Watermark(ts(50)))),
-            Published::Changed(Changed::Watermark(Watermark(ts(50)))),
-            Published::Insight(InsightEvent::WatermarkAdvanced(Watermark(ts(110)))),
-            Published::Changed(Changed::Watermark(Watermark(ts(110)))),
+            BusEvent::Insight(InsightEvent::WatermarkAdvanced(Watermark(ts(50)))),
+            BusEvent::Changed(Changed::Watermark(Watermark(ts(50)))),
+            BusEvent::Insight(InsightEvent::WatermarkAdvanced(Watermark(ts(110)))),
+            BusEvent::Changed(Changed::Watermark(Watermark(ts(110)))),
         ]
     );
     // Every read reports the watermark it read first.
@@ -324,14 +351,21 @@ async fn apply_into_final_bucket_is_late() {
     );
     // A version never activated is not final yet: its rebuild may fill old
     // buckets.
-    let version = fit_ready(&world.catalog, 1, &[(11, [1.0, 0.0, 0.0])]);
+    let version = fit_ready(&mut world.catalog, 1, &[(11, [1.0, 0.0, 0.0])]).await;
     assert!(
         world
             .store
-            .apply_classified(
-                &contribution(1, 1, 2, Route::Unobserved, 45, 4, version.0, Some(11)),
-                ClassificationCause::Refit
-            )
+            .apply(&refit_of(&contribution(
+                1,
+                1,
+                2,
+                Route::Unobserved,
+                45,
+                4,
+                version.0,
+                Some(11)
+            )))
+            .await
             .is_ok()
     );
 }
@@ -341,4 +375,24 @@ async fn manual_frontier_reports_what_was_set() {
     let frontier_source = ManualFrontier::new(frontier(10, None));
     frontier_source.set(frontier(20, Some(5)));
     assert_eq!(frontier_source.frontier().await, Ok(frontier(20, Some(5))));
+}
+
+/// `EdgeStore::version_ready` keeps the first count, and refuses a version
+/// retention has dropped, as `apply` and `activate` do.
+#[tokio::test]
+async fn version_ready_keeps_first_count_and_refuses_dropped_versions() {
+    let mut world = world();
+    let v1 = refit(&mut world, 100, &[11], &[]).await;
+    let v2 = refit(&mut world, 200, &[12], &[]).await;
+    assert_eq!(world.store.version_ready(v2, 5).await, Ok(()));
+    assert_eq!(world.store.activate(v2).await, Ok(Activation::Ignored));
+    assert_eq!(world.store.drop_version(v1).await, Ok(()));
+    assert_eq!(
+        world.store.version_ready(v1, 0).await,
+        Err(EdgeError::VersionNotRetained { version: v1 })
+    );
+    assert_eq!(
+        world.store.activate(v1).await,
+        Err(EdgeError::VersionNotRetained { version: v1 })
+    );
 }

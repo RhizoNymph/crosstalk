@@ -10,17 +10,21 @@ use super::*;
 /// invariants of the reference.
 #[test]
 fn reference_agrees_with_itself_under_the_harness() {
-    model::check_agent_store(HarnessConfig::default(), MemoryAgents::new);
+    let outcome = model::check_agent_store(pipeline_harness(), MemoryAgents::new);
+    assert_eq!(outcome, Ok(()));
 }
 
 /// The harness catches a store that disagrees with the reference: one
 /// that forgets every activity record.
 #[test]
-#[should_panic(expected = "disagrees with the reference")]
 fn harness_rejects_a_store_that_drops_activity() {
-    model::check_agent_store(HarnessConfig::default(), |ids, outbox| ForgetfulActivity {
+    let outcome = model::check_agent_store(pipeline_harness(), |ids, outbox| ForgetfulActivity {
         inner: MemoryAgents::new(ids, outbox),
     });
+    assert!(
+        matches!(outcome, Err(ModelMismatch::Failed { .. })),
+        "{outcome:?}"
+    );
 }
 
 /// [`MemoryAgents`] with `ActivityStore::record` doing nothing.
@@ -62,11 +66,10 @@ impl IdentityResolver for ForgetfulActivity {
     }
 
     async fn resolve(
-        &mut self,
-        meta: &crosstalk_spec::observed::exchange::ExchangeMeta,
-        request: &[crosstalk_spec::observed::message::Message],
+        &self,
+        evidence: &NonEmpty<IdentityEvidence>,
     ) -> Result<Resolution, ResolveError> {
-        self.inner.resolve(meta, request).await
+        self.inner.resolve(evidence).await
     }
 }
 
@@ -128,21 +131,25 @@ impl AgentReads for ForgetfulActivity {
     }
 }
 
-impl SeedAgents for ForgetfulActivity {
-    async fn create(&mut self, agent: NewAgent) -> Result<(), SeedError> {
+impl AgentLifecycle for ForgetfulActivity {
+    async fn create(&mut self, agent: NewAgent) -> Result<(), AgentLifecycleError> {
         self.inner.create(agent).await
     }
 
-    async fn advance(&mut self, agent: AgentId, advance: Advance) -> Result<(), SeedError> {
+    async fn advance(
+        &mut self,
+        agent: AgentId,
+        advance: Advance,
+    ) -> Result<(), AgentLifecycleError> {
         self.inner.advance(agent, advance).await
     }
 
-    async fn attach(
+    async fn attach_evidence(
         &mut self,
         agent: AgentId,
         evidence: IdentityEvidence,
-    ) -> Result<(), SeedError> {
-        self.inner.attach(agent, evidence).await
+    ) -> Result<(), AgentLifecycleError> {
+        self.inner.attach_evidence(agent, evidence).await
     }
 }
 

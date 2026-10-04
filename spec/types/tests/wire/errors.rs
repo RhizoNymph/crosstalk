@@ -61,6 +61,7 @@ pub(super) fn every_conflict() -> Vec<ConflictKind> {
     fn declared(kind: ConflictKind) -> ConflictKind {
         match kind {
             ConflictKind::AlertNotActive { .. }
+            | ConflictKind::AlertNotAcknowledged { .. }
             | ConflictKind::AgentMerged { .. }
             | ConflictKind::MergeAlreadyReverted { .. }
             | ConflictKind::MergeIntoSelf { .. }
@@ -86,6 +87,9 @@ pub(super) fn every_conflict() -> Vec<ConflictKind> {
     let channel = |text| id(ChannelId::from_ulid_text, text);
     [
         ConflictKind::AlertNotActive {
+            alert: id(AlertId::from_ulid_text, ULID_A),
+        },
+        ConflictKind::AlertNotAcknowledged {
             alert: id(AlertId::from_ulid_text, ULID_A),
         },
         ConflictKind::AgentMerged {
@@ -332,5 +336,14 @@ fn errors_refuse_unknown_variants_and_fields() {
     assert_rejected::<InputError>(
         r#"{"type": "malformed_request", "data": {"kind": "io", "reason": "x"}}"#,
         "unknown variant `io`",
+    );
+    assert_rejected::<ConflictKind>(
+        r#"{"type": "alert_not_acknowledged", "data": {"alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "by": "01J9Z3M2C5D6E7F8G9H0J1K2M3"}}"#,
+        "unknown field `by`",
+    );
+    assert_rejected::<ConflictKind>(
+        r#"{"type": "alert_not_acknowledged", "data": {}}"#,
+        "missing field `alert`",
     );
 }

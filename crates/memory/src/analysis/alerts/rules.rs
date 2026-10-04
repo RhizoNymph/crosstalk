@@ -1,6 +1,7 @@
-//! `AlertRuleStore` on the reference alert store, and the rule changes the
-//! `alerts` consumer makes: remapping watched topics on `TopicVersionReady`
-//! and marking semantic rules stale when the embedding model changes.
+//! `AlertRuleStore` on the reference alert store, and
+//! `AlertRuleMaintenance`, the rule changes the `alerts` consumer makes:
+//! remapping watched topics on `TopicVersionReady` and marking semantic
+//! rules stale when the embedding model changes.
 
 use std::collections::BTreeSet;
 
@@ -13,11 +14,12 @@ use crosstalk_spec::aggregates::topic_history::TopicLineage;
 use crosstalk_spec::ids::{AlertRuleId, OperatorId, SinkId, TopicId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
+use crosstalk_spec::interfaces::l6_analysis::alerts::AlertRuleMaintenance;
 use crosstalk_spec::interfaces::l6_analysis::{AlertRuleStore, EmbedError, Embedder, RuleError};
 use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 
 use super::{AlertStoreConfig, AlertsState, CommitRefused, InMemoryAlertStore};
-use crate::analysis::support::lock;
+use crate::support::lock;
 
 fn store_error(error: CommitRefused) -> RuleError {
     RuleError::Store {
@@ -105,25 +107,20 @@ where
             embedding,
         }))
     }
+}
 
-    /// The consumer starting: every current semantic rule embedded with a
-    /// model other than the embedder's is marked stale before any event is
-    /// evaluated.
-    pub fn start(&self) -> Result<Vec<AlertRuleId>, CommitRefused> {
-        self.embedding_model_changed(&self.embedder.model())
-    }
-
-    /// `TopicVersionReady` for `lineage.to()`, whose topics are `topics`:
-    /// every watched-topic rule current on `lineage.from()` is carried over
-    /// with `AlertRuleDef::remap` (current on the new version, or stale),
-    /// and the new version becomes the one rules must name. Returns the
-    /// rules that changed. A version not newer than the current one changes
-    /// nothing (a redelivery).
-    pub fn topic_version_ready(
-        &self,
+impl<E, D> AlertRuleMaintenance for InMemoryAlertStore<E, D>
+where
+    E: Embedder + Send + Sync,
+    D: AgentDirectory + ChannelDirectory + Send + Sync,
+{
+    /// A version not newer than the current one changes nothing (a
+    /// redelivery).
+    async fn topic_version_ready(
+        &mut self,
         lineage: &TopicLineage,
-        topics: impl IntoIterator<Item = TopicId>,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
+        topics: &[TopicId],
+    ) -> Result<Vec<AlertRuleId>, RuleError> {
         let mut state = lock(&self.state);
         if lineage.to() <= state.version {
             return Ok(Vec::new());
@@ -138,23 +135,22 @@ where
                 remapped.push(next);
             }
         }
-        state.check_rule_revisions(remapped.iter().map(AlertRuleDef::id))?;
+        state
+            .check_rule_revisions(remapped.iter().map(AlertRuleDef::id))
+            .map_err(store_error)?;
         let changed = remapped.iter().map(AlertRuleDef::id).collect();
         for rule in remapped {
-            state.commit_rule(rule)?;
+            state.commit_rule(rule, &self.outbox).map_err(store_error)?;
         }
         state.version = lineage.to();
-        state.topics = topics.into_iter().collect::<BTreeSet<_>>();
+        state.topics = topics.iter().copied().collect::<BTreeSet<_>>();
         Ok(changed)
     }
 
-    /// The embedder now uses `model`: every current semantic rule embedded
-    /// with another model becomes stale, keeping its status. Returns the
-    /// rules that changed.
-    pub fn embedding_model_changed(
-        &self,
+    async fn embedding_model_changed(
+        &mut self,
         model: &EmbeddingModel,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
+    ) -> Result<Vec<AlertRuleId>, RuleError> {
         let mut state = lock(&self.state);
         let mut stale = Vec::new();
         for rule in state.rules.iter() {
@@ -163,10 +159,12 @@ where
                 stale.push(next);
             }
         }
-        state.check_rule_revisions(stale.iter().map(AlertRuleDef::id))?;
+        state
+            .check_rule_revisions(stale.iter().map(AlertRuleDef::id))
+            .map_err(store_error)?;
         let changed = stale.iter().map(AlertRuleDef::id).collect();
         for rule in stale {
-            state.commit_rule(rule)?;
+            state.commit_rule(rule, &self.outbox).map_err(store_error)?;
         }
         state.model = model.clone();
         Ok(changed)
@@ -222,13 +220,13 @@ where
         let mut state = lock(&self.state);
         let definition = state.resolve(&self.config, rule, embedded)?;
         check_sinks(&self.config, &sinks)?;
-        let id = AlertRuleId::from_ulid(state.rule_ids.next_raw());
+        let id = AlertRuleId::from_ulid(state.rule_ids.next_ulid());
         let rule = AlertRuleDef::user(id, name, (by, at), definition, sinks).map_err(|error| {
             RuleError::Store {
                 reason: format!("generated a reserved rule id: {error:?}"),
             }
         })?;
-        state.commit_rule(rule).map_err(store_error)?;
+        state.commit_rule(rule, &self.outbox).map_err(store_error)?;
         Ok(id)
     }
 
@@ -260,7 +258,9 @@ where
             .update(name, definition, sinks)
             .map_err(RuleError::NotEditable)?;
         if change == Change::Applied {
-            state.commit_rule(stored).map_err(store_error)?;
+            state
+                .commit_rule(stored, &self.outbox)
+                .map_err(store_error)?;
         }
         Ok(change)
     }
@@ -270,8 +270,8 @@ where
         id: AlertRuleId,
         enabled: bool,
         _by: OperatorId,
+        at: Timestamp,
     ) -> Result<Change, RuleError> {
-        let at = self.clock.now();
         let mut state = lock(&self.state);
         let mut stored = state
             .rules
@@ -287,10 +287,17 @@ where
             .map_err(store_error)?;
         if !enabled {
             state
-                .suppress(|alert| alert.rule == id, SuppressReason::RuleDisabled, at)
+                .suppress(
+                    |alert| alert.rule == id,
+                    SuppressReason::RuleDisabled,
+                    at,
+                    &self.outbox,
+                )
                 .map_err(store_error)?;
         }
-        state.commit_rule(stored).map_err(store_error)?;
+        state
+            .commit_rule(stored, &self.outbox)
+            .map_err(store_error)?;
         Ok(change)
     }
 }

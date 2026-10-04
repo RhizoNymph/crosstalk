@@ -7,10 +7,11 @@
 //! requires:
 //!
 //! - equal results from the operation itself (lookups, declarations,
-//!   policy decisions, promotions, coverage previews, seeding);
+//!   policy decisions, promotions, coverage previews, traffic writes);
 //! - equal published events, except that the store under test must
 //!   announce at least the `Changed` notifications the reference does;
-//! - equal observations: every stored channel (`SeedChannels::channels`),
+//! - equal observations: every stored channel (a full `ChannelReads::channels`
+//!   traversal), `channel` of every channel id the case knows,
 //!   `canonical` and `policy_history` of every channel id the case knows,
 //!   `lookup` of every pooled locator, and a full `resource_use` traversal
 //!   of every channel in pages of 2;
@@ -23,11 +24,10 @@
 //! `make` builds the registry under test from the agent directory it must
 //! resolve agents through (a [`MemoryAgents`] in which agent 3 is merged
 //! into agent 2), the [`IdSequence`] it must draw declared channel ids from
-//! (one per accepted declaration), the clock that dates declarations, and
-//! the outbox for its events.
+//! (one per accepted declaration) and the outbox for its events.
+//! Declarations are dated by the time passed to `declare`.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crosstalk_spec::aggregates::access::ResourceUse;
 use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
@@ -45,7 +45,14 @@ use crosstalk_spec::ids::{
     AccessId, AgentId, ChannelId, ExchangeId, MessageHash, OperatorId, ResourceId, TransmissionId,
 };
 use crosstalk_spec::interfaces::l3_reconstruction::IdentityResolver;
+use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    AgentLifecycle, AgentOrigin, NewAgent,
+};
+use crosstalk_spec::interfaces::l5_flow::channels::{
+    ChannelReads, ChannelTraffic, DetectionUpdate,
+};
 use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, ChannelRegistry, RegistryError};
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use crosstalk_spec::observed::message::{PartRef, ToolName};
 use crosstalk_spec::paging::{Cursor, PageRequest, PageSize, ResourceUseList};
@@ -53,15 +60,39 @@ use crosstalk_spec::support::{Blake3, NonEmpty, TimeWindow, Timestamp};
 use proptest::prelude::*;
 
 use super::MemoryChannels;
-use super::seed::{DetectionUpdate, SeedChannels};
-use crate::pipeline::harness::{HarnessConfig, Mismatch, run, same};
-use crate::pipeline::{IdSequence, ManualClock, Outbox, drain};
-use crate::reconstruct::{AgentOrigin, MemoryAgents, NewAgent, SeedAgents};
+use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
+use crate::reconstruct::MemoryAgents;
+use crate::support::{IdSequence, Outbox, drain};
 
-/// Every trait a registry implements, plus [`SeedChannels`].
-pub trait ChannelStore: ChannelRegistry + ChannelDirectory + SeedChannels {}
+/// Every spec trait a registry implements.
+pub trait ChannelStore: ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory {}
 
-impl<T: ChannelRegistry + ChannelDirectory + SeedChannels> ChannelStore for T {}
+impl<T: ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory> ChannelStore for T {}
+
+/// Every stored channel, ascending by id: a full traversal of
+/// `ChannelReads::channels` with a filter that keeps every channel, in
+/// pages of 2.
+pub async fn all_channels<S: ChannelReads>(store: &S) -> Result<Vec<Channel>, RegistryError> {
+    let filter = ChannelFilter {
+        origin: OriginFilter::WithSuperseded(Vec::new()),
+        ..ChannelFilter::default()
+    };
+    let size = PageSize::new(2).map_err(|error| RegistryError::Store {
+        reason: format!("{error:?}"),
+    })?;
+    let mut request = PageRequest { size, after: None };
+    let mut channels = Vec::new();
+    loop {
+        let (items, next) = store.channels(&filter, &request).await?.into_parts();
+        channels.extend(items);
+        match next {
+            Some(cursor) => request.after = Some(cursor),
+            None => break,
+        }
+    }
+    channels.reverse();
+    Ok(channels)
+}
 
 /// Discovered channel ids the harness picks; declared ones come from the
 /// registry.
@@ -180,7 +211,7 @@ pub fn decision(n: u8, at: u64, by_config: bool, note: bool) -> PolicyDecision {
 }
 
 /// The directory both registries resolve agents through.
-pub async fn directory() -> Result<MemoryAgents, Mismatch> {
+pub async fn directory() -> Result<MemoryAgents, Divergence> {
     let mut agents = MemoryAgents::default();
     for n in 0..4 {
         let agent = NewAgent {
@@ -195,14 +226,14 @@ pub async fn directory() -> Result<MemoryAgents, Mismatch> {
         agents
             .create(agent)
             .await
-            .map_err(|error| format!("directory: {error}"))?;
+            .map_err(|error| Divergence::new(0, format!("directory: {error:?}")))?;
     }
     let request = MergeRequest::new(access_agent(3), access_agent(2), MergeAuthor::Resolver)
-        .map_err(|_| "directory: self merge".to_owned())?;
+        .map_err(|_| Divergence::new(0, "directory: self merge"))?;
     agents
         .merge(request, Timestamp::from_micros(2))
         .await
-        .map_err(|error| format!("directory: {error:?}"))?;
+        .map_err(|error| Divergence::new(0, format!("directory: {error:?}")))?;
     Ok(agents)
 }
 
@@ -323,33 +354,21 @@ pub fn registry_ops(max: usize) -> impl Strategy<Value = Vec<RegistryOp>> {
 }
 
 /// Run the harness: the registry `make` builds must agree with
-/// [`MemoryChannels`] on every generated sequence. Panics on the first
-/// disagreement.
-pub fn check_channel_registry<S, F>(config: HarnessConfig, make: F)
+/// [`MemoryChannels`] on every generated sequence. A failure is a
+/// [`ModelMismatch`] with the shrunk sequence.
+pub fn check_channel_registry<S, F>(config: HarnessConfig, make: F) -> Result<(), ModelMismatch>
 where
     S: ChannelStore,
-    F: Fn(MemoryAgents, IdSequence, ManualClock, Outbox) -> S,
+    F: Fn(MemoryAgents, IdSequence, Outbox) -> S,
 {
-    run(
-        "channel registry",
-        config,
-        registry_ops(config.max_ops),
-        |ops| {
-            let make = &make;
-            async move {
-                let agents = directory().await?;
-                let clock = ManualClock::default();
-                let (sut_outbox, sut_events) = Outbox::channel();
-                let sut = make(
-                    agents.clone(),
-                    IdSequence::default(),
-                    clock.clone(),
-                    sut_outbox,
-                );
-                run_case(sut, sut_events, agents, clock, ops).await
-            }
-        },
-    );
+    run(config, registry_ops(config.max_ops), |runtime, ops| {
+        runtime.block_on(async {
+            let agents = directory().await?;
+            let (sut_outbox, sut_events) = Outbox::channel();
+            let sut = make(agents.clone(), IdSequence::default(), sut_outbox);
+            run_case(sut, sut_events, agents, ops).await
+        })
+    })
 }
 
 struct Case {
@@ -381,23 +400,17 @@ async fn run_case<S: ChannelStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
     agents: MemoryAgents,
-    clock: ManualClock,
-    ops: Vec<RegistryOp>,
-) -> Result<(), Mismatch> {
+    ops: &[RegistryOp],
+) -> Result<(), Divergence> {
     let (model_outbox, mut model_events) = Outbox::channel();
-    let mut model = MemoryChannels::new(
-        agents,
-        IdSequence::default(),
-        Arc::new(clock.clone()),
-        model_outbox,
-    );
+    let mut model = MemoryChannels::new(agents, IdSequence::default(), model_outbox);
     let mut case = Case {
         declared: Vec::new(),
         accesses: 0,
     };
     for (step, op) in ops.iter().enumerate() {
-        clock.set(Timestamp::from_micros(100 + step as u64));
-        apply(step, op, &mut case, &mut sut, &mut model).await?;
+        let now = Timestamp::from_micros(100 + step as u64);
+        apply(step, now, op, &mut case, &mut sut, &mut model).await?;
         compare_events(step, drain(&mut sut_events), drain(&mut model_events))?;
         observe(step, &case, &sut, &model).await?;
         check_invariants(step, &case, &sut).await?;
@@ -451,11 +464,12 @@ fn update(n: u8, at: u64) -> DetectionUpdate {
 
 async fn apply<S: ChannelStore>(
     step: usize,
+    now: Timestamp,
     op: &RegistryOp,
     case: &mut Case,
     sut: &mut S,
     model: &mut MemoryChannels<MemoryAgents>,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     match op {
         RegistryOp::Declare {
             pattern: p,
@@ -470,8 +484,8 @@ async fn apply<S: ChannelStore>(
             } else {
                 PolicyAuthor::Operator(operator(0))
             };
-            let s = sut.declare(pattern(*p), policy.clone(), by).await;
-            let m = model.declare(pattern(*p), policy, by).await;
+            let s = sut.declare(pattern(*p), policy.clone(), by, now).await;
+            let m = model.declare(pattern(*p), policy, by, now).await;
             if let Ok(id) = m {
                 case.declared.push(id);
             }
@@ -528,7 +542,7 @@ async fn apply<S: ChannelStore>(
             note,
         } => {
             let id = case.channel(*c);
-            let at = Timestamp::from_micros(100 + step as u64);
+            let at = now;
             let promotion = Promotion::new(
                 pattern(*p),
                 kind(*k),
@@ -548,7 +562,7 @@ async fn apply<S: ChannelStore>(
             let declaration = Declaration {
                 pattern: pattern(*p),
                 by: PolicyAuthor::Operator(operator(1)),
-                at: Timestamp::from_micros(100 + step as u64),
+                at: now,
             };
             let s = sut.promotion_coverage(id, &declaration).await;
             let m = model.promotion_coverage(id, &declaration).await;
@@ -592,7 +606,7 @@ async fn apply<S: ChannelStore>(
                 Timestamp::from_micros(*start),
                 Timestamp::from_micros(start + len),
             )
-            .map_err(|_| format!("step {step}: window"))?;
+            .map_err(|_| Divergence::new(step, "window"))?;
             same(
                 step,
                 "resource_use",
@@ -647,7 +661,7 @@ pub(crate) fn compare_events(
     step: usize,
     sut: Vec<BusEvent>,
     model: Vec<BusEvent>,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     let (sut_events, sut_changed) = split(sut);
     let (model_events, model_changed) = split(model);
     same(step, "published events", &sut_events, &model_events)?;
@@ -655,8 +669,9 @@ pub(crate) fn compare_events(
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "step {step}: change notifications missing: {missing:?}"
+        Err(Divergence::new(
+            step,
+            format!("change notifications missing: {missing:?}"),
         ))
     }
 }
@@ -666,17 +681,23 @@ async fn observe<S: ChannelStore>(
     case: &Case,
     sut: &S,
     model: &MemoryChannels<MemoryAgents>,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     same(
         step,
         "channels",
-        &sut.channels().await,
-        &model.channels().await,
+        &all_channels(sut).await,
+        &all_channels(model).await,
     )?;
     let all_time = TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(10_000))
-        .map_err(|_| format!("step {step}: window"))?;
+        .map_err(|_| Divergence::new(step, "window"))?;
     for id in case.known() {
         same(step, "canonical", &sut.canonical(id), &model.canonical(id))?;
+        same(
+            step,
+            "channel",
+            &sut.channel(id).await,
+            &model.channel(id).await,
+        )?;
         same(
             step,
             "policy_history",
@@ -705,37 +726,39 @@ async fn check_invariants<S: ChannelStore>(
     step: usize,
     case: &Case,
     sut: &S,
-) -> Result<(), Mismatch> {
-    let channels: Vec<Channel> = sut.channels().await;
+) -> Result<(), Divergence> {
+    let channels: Vec<Channel> = all_channels(sut)
+        .await
+        .map_err(|error| Divergence::new(step, format!("channels: {error:?}")))?;
     let declared: Vec<(&Channel, &ResourcePattern)> = channels
         .iter()
         .filter_map(|channel| channel.origin.pattern().map(|pattern| (channel, pattern)))
         .collect();
     for (index, (a, p)) in declared.iter().enumerate() {
         if let Some((b, _)) = declared[index + 1..].iter().find(|(_, q)| p.overlaps(q)) {
-            return Err(format!(
-                "step {step}: declared channels {:?} and {:?} overlap",
-                a.id, b.id
+            return Err(Divergence::new(
+                step,
+                format!("declared channels {:?} and {:?} overlap", a.id, b.id),
             ));
         }
     }
     for channel in &channels {
-        let history = sut
-            .policy_history(channel.id)
-            .await
-            .map_err(|error| format!("step {step}: history of {:?}: {error:?}", channel.id))?;
+        let history = sut.policy_history(channel.id).await.map_err(|error| {
+            Divergence::new(step, format!("history of {:?}: {error:?}", channel.id))
+        })?;
         if channel.policy != history.current() {
-            return Err(format!(
-                "step {step}: {:?}'s policy is not its history's current one",
-                channel.id
+            return Err(Divergence::new(
+                step,
+                format!("{:?}'s policy is not its history's current one", channel.id),
             ));
         }
     }
     for id in case.known() {
         let canonical = sut.canonical(id);
         if sut.canonical(canonical) != canonical {
-            return Err(format!(
-                "step {step}: {id:?} resolves in more than one step"
+            return Err(Divergence::new(
+                step,
+                format!("{id:?} resolves in more than one step"),
             ));
         }
         if canonical != id {
@@ -744,8 +767,9 @@ async fn check_invariants<S: ChannelStore>(
                 .and_then(|channel| channel.origin.pattern())
                 .is_none()
             {
-                return Err(format!(
-                    "step {step}: {id:?} resolves to {canonical:?}, which is not declared"
+                return Err(Divergence::new(
+                    step,
+                    format!("{id:?} resolves to {canonical:?}, which is not declared"),
                 ));
             }
         }

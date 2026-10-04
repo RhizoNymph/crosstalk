@@ -23,6 +23,7 @@ use super::search::harness_model;
 use crate::analysis::projection::{InMemoryProjectionStore, ProjectionConfig};
 use crate::model::build::{agent, operator, projection, transmission, ts, window};
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
+use crate::support::Outbox;
 
 /// The harness's store configuration: 50 µs leases, 500 µs frame
 /// retention.
@@ -236,7 +237,7 @@ where
     run(harness, strategy, |runtime, ops| {
         runtime.block_on(async {
             let mut subject = make(projection_config()).await;
-            let mut reference = InMemoryProjectionStore::new(projection_config());
+            let mut reference = InMemoryProjectionStore::new(projection_config(), Outbox::none());
             let mut now = 100u64;
             for (step, op) in ops.iter().enumerate() {
                 now += match op {

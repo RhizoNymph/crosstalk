@@ -20,9 +20,9 @@ use crosstalk_spec as _;
 pub mod analysis;
 pub mod flow;
 pub mod model;
-pub mod pipeline;
 pub mod provenance;
 pub mod reconstruct;
+pub mod support;
 pub mod surface;
 pub mod topology;
 

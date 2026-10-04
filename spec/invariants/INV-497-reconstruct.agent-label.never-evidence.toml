@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.agent-label.never-evidence"
-statement = "IdentityResolver::resolve returns the same Resolution for an exchange whatever labels the stored agents carry."
+statement = "IdentityResolver::resolve returns the same Resolution for the same evidence whatever labels the stored agents carry."
 kind = "domain"
 property = "metamorphic"
 requires = ["property"]

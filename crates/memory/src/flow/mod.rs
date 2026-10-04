@@ -1,13 +1,13 @@
 //! L5 reference stores: the channel registry and directory, and the
 //! verdict store.
 //!
-//! - [`MemoryChannels`] implements `ChannelRegistry` and
-//!   `ChannelDirectory`: lookups, declarations, policy decisions with
-//!   their history, promotion by `promotion::plan` (and its preview by
-//!   `promotion::coverage`), supersession, and per-resource use; plus
-//!   [`SeedChannels`], the flow consumer's writes.
-//! - [`MemoryVerdicts`] implements `TransmissionVerdicts` over stored
-//!   transmissions; plus [`SeedTransmissions`].
+//! - [`MemoryChannels`] implements `ChannelRegistry`, `ChannelTraffic`,
+//!   `ChannelReads` and `ChannelDirectory`: lookups, declarations, policy
+//!   decisions with their history, promotion by `promotion::plan` (and its
+//!   preview by `promotion::coverage`), supersession, per-resource use, the
+//!   flow consumer's traffic writes and the stored channels.
+//! - [`MemoryVerdicts`] implements `TransmissionStore` and
+//!   `TransmissionVerdicts` over one table.
 //!
 //! `ResourceExtractor` and `Correlator` are computations, not stores, and
 //! are not here.
@@ -18,5 +18,5 @@
 pub mod registry;
 pub mod verdicts;
 
-pub use registry::{DetectionUpdate, MemoryChannels, SeedChannels, SeedError};
-pub use verdicts::{MemoryVerdicts, SeedTransmissions};
+pub use registry::MemoryChannels;
+pub use verdicts::MemoryVerdicts;

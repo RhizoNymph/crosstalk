@@ -3,7 +3,6 @@
 //! (`analysis.sizes.match-assignments`).
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use proptest::prelude::*;
 
@@ -12,186 +11,32 @@ use crosstalk_spec::aggregates::retention::{Pin, PinChange};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes};
 use crosstalk_spec::ids::{TopicId, TransmissionId};
-use crosstalk_spec::interfaces::l6_analysis::{CatalogError, TopicCatalog};
-use crosstalk_spec::paging::{PageRequest, PageSize, TopicList};
-use crosstalk_spec::support::Timestamp;
-
-use crate::analysis::catalog::{
-    Activated, Assigned, CatalogConfig, InMemoryTopicCatalog, LifecycleError, RetentionPolicy,
-    StoredAssignment,
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
+    CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
 };
-use crate::analysis::support::{Clock, ManualClock};
+use crosstalk_spec::interfaces::l6_analysis::{CatalogError, TopicCatalog};
+use crosstalk_spec::paging::{PageRequest, PageSize};
+use crosstalk_spec::support::{Change, Timestamp};
+
+use crate::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
 use crate::model::build::{
     non_zero, operator, similarity, test_model, topic, transmission, ts, unit, window,
 };
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
+use crate::support::Outbox;
 
-/// A topic catalog with its lifecycle writes and its clock.
-pub trait CatalogSubject: TopicCatalog {
-    fn begin_fit(
-        &self,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<TopicModelVersion, LifecycleError>> + Send;
+/// Every spec trait of a topic catalog: its reads, pins and retention, and
+/// the fit lifecycle and assignments.
+pub trait CatalogSubject: TopicCatalog + TopicLifecycle {}
 
-    fn fit_returned(
-        &self,
-        version: TopicModelVersion,
-        topics: Vec<Topic>,
-        fitted_at: Timestamp,
-    ) -> impl Future<Output = Result<TopicLineage, LifecycleError>> + Send;
+impl<T: TopicCatalog + TopicLifecycle> CatalogSubject for T {}
 
-    fn fit_failed(
-        &self,
-        version: TopicModelVersion,
-    ) -> impl Future<Output = Result<(), LifecycleError>> + Send;
+/// The reference catalog.
+pub type ReferenceCatalog = InMemoryTopicCatalog;
 
-    fn ready(
-        &self,
-        version: TopicModelVersion,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<(), LifecycleError>> + Send;
-
-    fn activated(
-        &self,
-        version: TopicModelVersion,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<Activated, LifecycleError>> + Send;
-
-    fn assign(
-        &self,
-        transmission: TransmissionId,
-        version: TopicModelVersion,
-        assignment: StoredAssignment,
-    ) -> impl Future<Output = Result<Assigned, LifecycleError>> + Send;
-
-    /// Set the clock `unpin` reads.
-    fn set_now(&self, at: Timestamp);
-}
-
-/// The reference catalog and its clock.
-#[derive(Clone)]
-pub struct ReferenceCatalog {
-    pub catalog: InMemoryTopicCatalog,
-    pub clock: ManualClock,
-}
-
-impl ReferenceCatalog {
-    /// A reference catalog under `config`, version 0 active at the epoch.
-    pub fn new(config: CatalogConfig) -> Result<Self, LifecycleError> {
-        let clock = ManualClock::at(ts(0));
-        let shared: Arc<dyn Clock> = Arc::new(clock.clone());
-        Ok(Self {
-            catalog: InMemoryTopicCatalog::new(config, shared, ts(0))?,
-            clock,
-        })
-    }
-}
-
-impl TopicCatalog for ReferenceCatalog {
-    fn versions(
-        &self,
-    ) -> impl Future<
-        Output = Result<
-            crosstalk_spec::aggregates::topic_history::TopicVersionHistory,
-            CatalogError,
-        >,
-    > + Send {
-        self.catalog.versions()
-    }
-
-    fn sizes(
-        &self,
-        version: TopicModelVersion,
-        window: Option<crosstalk_spec::support::TimeWindow>,
-    ) -> impl Future<Output = Result<TopicSizes, CatalogError>> + Send {
-        self.catalog.sizes(version, window)
-    }
-
-    fn lineage(
-        &self,
-        from: TopicModelVersion,
-    ) -> impl Future<Output = Result<Option<TopicLineage>, CatalogError>> + Send {
-        self.catalog.lineage(from)
-    }
-
-    fn retention(&self) -> RetentionPolicy {
-        self.catalog.retention()
-    }
-
-    fn pin(
-        &self,
-        version: TopicModelVersion,
-        pin: Pin,
-    ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send {
-        self.catalog.pin(version, pin)
-    }
-
-    fn unpin(
-        &self,
-        version: TopicModelVersion,
-    ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send {
-        self.catalog.unpin(version)
-    }
-
-    fn enforce_retention(
-        &self,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<Vec<TopicModelVersion>, CatalogError>> + Send {
-        self.catalog.enforce_retention(at)
-    }
-
-    fn topics(
-        &self,
-        version: TopicModelVersion,
-        page: &PageRequest<TopicList>,
-    ) -> impl Future<Output = Result<crosstalk_spec::paging::Page<Topic, TopicList>, CatalogError>> + Send
-    {
-        self.catalog.topics(version, page)
-    }
-}
-
-impl CatalogSubject for ReferenceCatalog {
-    async fn begin_fit(&self, at: Timestamp) -> Result<TopicModelVersion, LifecycleError> {
-        self.catalog.begin_fit(at)
-    }
-
-    async fn fit_returned(
-        &self,
-        version: TopicModelVersion,
-        topics: Vec<Topic>,
-        fitted_at: Timestamp,
-    ) -> Result<TopicLineage, LifecycleError> {
-        self.catalog.fit_returned(version, topics, fitted_at)
-    }
-
-    async fn fit_failed(&self, version: TopicModelVersion) -> Result<(), LifecycleError> {
-        self.catalog.fit_failed(version)
-    }
-
-    async fn ready(&self, version: TopicModelVersion, at: Timestamp) -> Result<(), LifecycleError> {
-        self.catalog.ready(version, at)
-    }
-
-    async fn activated(
-        &self,
-        version: TopicModelVersion,
-        at: Timestamp,
-    ) -> Result<Activated, LifecycleError> {
-        self.catalog.activated(version, at)
-    }
-
-    async fn assign(
-        &self,
-        transmission: TransmissionId,
-        version: TopicModelVersion,
-        assignment: StoredAssignment,
-    ) -> Result<Assigned, LifecycleError> {
-        self.catalog.assign(transmission, version, assignment)
-    }
-
-    fn set_now(&self, at: Timestamp) {
-        self.clock.set(at);
-    }
+/// A reference catalog under `config`, version 0 active at the epoch.
+pub fn reference_catalog(config: CatalogConfig) -> Result<ReferenceCatalog, TopicLifecycleError> {
+    InMemoryTopicCatalog::new(config, ts(0), Outbox::none())
 }
 
 /// One generated catalog operation. Versions are small numbers, so some
@@ -304,22 +149,21 @@ async fn view<S: TopicCatalog>(store: &S) -> CatalogView {
 /// What one operation returned, comparable across the two stores.
 #[derive(Debug, PartialEq)]
 enum Outcome {
-    Version(Result<TopicModelVersion, LifecycleError>),
-    Lineage(Result<TopicLineage, LifecycleError>),
-    Unit(Result<(), LifecycleError>),
-    Activated(Result<Activated, LifecycleError>),
-    Assigned(Result<Assigned, LifecycleError>),
+    Version(Result<TopicModelVersion, TopicLifecycleError>),
+    Lineage(Result<TopicLineage, TopicLifecycleError>),
+    Unit(Result<(), TopicLifecycleError>),
+    Activated(Result<CatalogActivation, TopicLifecycleError>),
+    Assigned(Result<Change, TopicLifecycleError>),
     Pin(Result<PinChange, CatalogError>),
     Dropped(Result<Vec<TopicModelVersion>, CatalogError>),
 }
 
 async fn apply<S: CatalogSubject>(
-    store: &S,
+    store: &mut S,
     op: &CatalogOp,
     now: Timestamp,
     fitting: Option<TopicModelVersion>,
 ) -> Outcome {
-    store.set_now(now);
     match op {
         CatalogOp::BeginFit => Outcome::Version(store.begin_fit(now).await),
         CatalogOp::FitReturned { directions } => {
@@ -338,16 +182,16 @@ async fn apply<S: CatalogSubject>(
                     ))
                 })
                 .collect();
-            Outcome::Lineage(store.fit_returned(version, topics, now).await)
+            Outcome::Lineage(store.complete_fit(version, topics, now).await)
         }
         CatalogOp::FitFailed { version } => {
-            Outcome::Unit(store.fit_failed(TopicModelVersion(*version)).await)
+            Outcome::Unit(store.fail_fit(TopicModelVersion(*version)).await)
         }
         CatalogOp::Ready { version } => {
-            Outcome::Unit(store.ready(TopicModelVersion(*version), now).await)
+            Outcome::Unit(store.mark_ready(TopicModelVersion(*version), now).await)
         }
         CatalogOp::Activated { version } => {
-            Outcome::Activated(store.activated(TopicModelVersion(*version), now).await)
+            Outcome::Activated(store.mark_active(TopicModelVersion(*version), now).await)
         }
         CatalogOp::Assign {
             transmission: t,
@@ -376,7 +220,7 @@ async fn apply<S: CatalogSubject>(
                 .await,
         ),
         CatalogOp::Unpin { version } => {
-            Outcome::Pin(store.unpin(TopicModelVersion(*version)).await)
+            Outcome::Pin(store.unpin(TopicModelVersion(*version), now).await)
         }
         CatalogOp::Enforce => Outcome::Dropped(store.enforce_retention(now).await),
     }
@@ -437,19 +281,19 @@ where
     let strategy = prop::collection::vec(catalog_op(), 1..harness.max_ops);
     run(harness, strategy, |runtime, ops| {
         runtime.block_on(async {
-            let subject = make(config).await;
-            let reference = ReferenceCatalog::new(config).map_err(|error| Divergence::new(0, format!("reference: {error}")))?;
+            let mut subject = make(config).await;
+            let mut reference = reference_catalog(config).map_err(|error| Divergence::new(0, format!("reference: {error:?}")))?;
             let mut assignments = BTreeMap::new();
             let mut fitting: Option<TopicModelVersion> = None;
             for (step, op) in ops.iter().enumerate() {
                 let now = ts(10 * (u64::try_from(step).unwrap_or(0) + 1));
-                let theirs = apply(&subject, op, now, fitting).await;
-                let ours = apply(&reference, op, now, fitting).await;
+                let theirs = apply(&mut subject, op, now, fitting).await;
+                let ours = apply(&mut reference, op, now, fitting).await;
                 same(step, &format!("{op:?}"), &theirs, &ours)?;
                 match (&ours, op) {
                     (Outcome::Version(Ok(version)), _) => fitting = Some(*version),
                     (Outcome::Unit(Ok(())), CatalogOp::Ready { .. } | CatalogOp::FitFailed { .. }) => fitting = None,
-                    (Outcome::Assigned(Ok(Assigned::New)), CatalogOp::Assign { transmission: t, version, topic: k, at, bytes }) => {
+                    (Outcome::Assigned(Ok(Change::Applied)), CatalogOp::Assign { transmission: t, version, topic: k, at, bytes }) => {
                         let version = TopicModelVersion(*version);
                         assignments.insert(
                             (version, transmission(*t)),

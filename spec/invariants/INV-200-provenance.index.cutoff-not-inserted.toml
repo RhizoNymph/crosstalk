@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.index.cutoff-not-inserted"
-statement = "FingerprintIndex::insert stores no entry for a fingerprint whose frequency is above the cutoff."
+statement = "FingerprintIndex::insert stores no entry for a fingerprint whose frequency at the now it is given is above the cutoff."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

@@ -13,8 +13,9 @@ use super::support::model;
 use crate::analysis::fakes::{
     FakeEmbedder, FakeLayoutFitter, FakeRuleContext, FakeTopicModel, fake_model,
 };
-use crate::analysis::support::{ManualClock, similarity as cosine};
+use crate::analysis::support::similarity as cosine;
 use crate::model::build::{channel, similarity, test_model, transmission, ts, unit};
+use crate::support::ManualClock;
 
 fn topic_model() -> FakeTopicModel {
     FakeTopicModel::new(

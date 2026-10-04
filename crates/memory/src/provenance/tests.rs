@@ -15,8 +15,15 @@ use proptest::prelude::*;
 
 use super::model::{self, originated, span_id};
 use super::{IndexConfig, MemoryFingerprintIndex};
-use crate::pipeline::ManualClock;
-use crate::pipeline::harness::HarnessConfig;
+use crate::model::{HarnessConfig, ModelMismatch};
+
+/// The case count the pipeline harnesses have always run with.
+fn pipeline_harness() -> HarnessConfig {
+    HarnessConfig {
+        cases: 64,
+        ..HarnessConfig::default()
+    }
+}
 
 fn at(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)
@@ -37,23 +44,25 @@ fn span(n: u8) -> OriginatedSpan {
     originated(n).unwrap_or_else(|| panic!("span fixture {n}"))
 }
 
-/// A single-node index with cutoff 1 and retention 100µs at time 0.
-fn index() -> (MemoryFingerprintIndex, ManualClock) {
-    let clock = ManualClock::default();
+/// A single-node index with cutoff 1 and retention 100µs. Unless a test
+/// says otherwise, every call is made at time 0.
+fn index() -> MemoryFingerprintIndex {
     let config = IndexConfig::single_node(1, Duration::from_micros(100));
-    (MemoryFingerprintIndex::new(config, clock.clone()), clock)
+    MemoryFingerprintIndex::new(config)
 }
+
+const T0: Timestamp = Timestamp::from_micros(0);
 
 /// `provenance.index.cutoff-not-inserted`.
 #[tokio::test]
 async fn insert_skips_fingerprints_above_cutoff() {
-    let (mut index, _clock) = index();
-    assert_eq!(index.observe(&[fp(1)], at(0)).await, Ok(()));
-    assert_eq!(index.observe(&[fp(1), fp(1)], at(0)).await, Ok(()));
-    assert_eq!(index.frequency(fp(1)).await, Ok(2));
+    let mut index = index();
+    assert_eq!(index.observe(&[fp(1)], at(0), T0).await, Ok(()));
+    assert_eq!(index.observe(&[fp(1), fp(1)], at(0), T0).await, Ok(()));
+    assert_eq!(index.frequency(fp(1), T0).await, Ok(2));
     assert_eq!(
         index
-            .insert(&span(0), &[positioned(1, 0), positioned(2, 4)])
+            .insert(&span(0), &[positioned(1, 0), positioned(2, 4)], T0)
             .await,
         Ok(())
     );
@@ -66,11 +75,14 @@ async fn insert_skips_fingerprints_above_cutoff() {
 /// cutoff is not returned once the fingerprint crosses it.
 #[tokio::test]
 async fn lookup_ignores_fingerprints_that_crossed_cutoff() {
-    let (mut index, _clock) = index();
-    assert_eq!(index.insert(&span(0), &[positioned(1, 3)]).await, Ok(()));
+    let mut index = index();
+    assert_eq!(
+        index.insert(&span(0), &[positioned(1, 3)], T0).await,
+        Ok(())
+    );
     let query = [positioned(1, 7)];
     assert_eq!(
-        index.lookup(&query).await,
+        index.lookup(&query, T0).await,
         Ok(vec![FingerprintHit {
             fingerprint: fp(1),
             span: span_id(0),
@@ -78,9 +90,9 @@ async fn lookup_ignores_fingerprints_that_crossed_cutoff() {
             query_offset: 7
         }])
     );
-    assert_eq!(index.observe(&[fp(1)], at(0)).await, Ok(()));
-    assert_eq!(index.observe(&[fp(1)], at(0)).await, Ok(()));
-    assert_eq!(index.lookup(&query).await, Ok(Vec::new()));
+    assert_eq!(index.observe(&[fp(1)], at(0), T0).await, Ok(()));
+    assert_eq!(index.observe(&[fp(1)], at(0), T0).await, Ok(()));
+    assert_eq!(index.lookup(&query, T0).await, Ok(Vec::new()));
 }
 
 /// `provenance.index.wrong-shard-rejected`, for `insert`.
@@ -91,10 +103,10 @@ async fn insert_on_wrong_shard_errors() {
     else {
         panic!("config");
     };
-    let mut index = MemoryFingerprintIndex::new(config, ManualClock::default());
+    let mut index = MemoryFingerprintIndex::new(config);
     assert_eq!(
         index
-            .insert(&span(0), &[positioned(2, 0), positioned(3, 0)])
+            .insert(&span(0), &[positioned(2, 0), positioned(3, 0)], T0)
             .await,
         Err(IndexError::WrongShard { fingerprint: fp(3) })
     );
@@ -109,9 +121,11 @@ async fn lookup_on_wrong_shard_errors() {
     else {
         panic!("config");
     };
-    let index = MemoryFingerprintIndex::new(config, ManualClock::default());
+    let index = MemoryFingerprintIndex::new(config);
     assert_eq!(
-        index.lookup(&[positioned(1, 0), positioned(4, 0)]).await,
+        index
+            .lookup(&[positioned(1, 0), positioned(4, 0)], T0)
+            .await,
         Err(IndexError::WrongShard { fingerprint: fp(4) })
     );
 }
@@ -120,10 +134,10 @@ async fn lookup_on_wrong_shard_errors() {
 /// fingerprint inserted for a span finds it.
 #[tokio::test]
 async fn originated_span_fingerprints_are_indexed() {
-    let (mut index, _clock) = index();
+    let mut index = index();
     let fingerprints = [positioned(1, 0), positioned(2, 5), positioned(3, 9)];
-    assert_eq!(index.insert(&span(4), &fingerprints).await, Ok(()));
-    let Ok(hits) = index.lookup(&fingerprints).await else {
+    assert_eq!(index.insert(&span(4), &fingerprints, T0).await, Ok(()));
+    let Ok(hits) = index.lookup(&fingerprints, T0).await else {
         panic!("lookup");
     };
     let found: Vec<(Fingerprint, u32)> = hits
@@ -138,11 +152,17 @@ async fn originated_span_fingerprints_are_indexed() {
 /// never returned.
 #[tokio::test]
 async fn lookup_after_evict_has_no_hits() {
-    let (mut index, _clock) = index();
-    assert_eq!(index.insert(&span(0), &[positioned(1, 0)]).await, Ok(()));
-    assert_eq!(index.insert(&span(1), &[positioned(1, 2)]).await, Ok(()));
-    assert_eq!(index.evict(&[span_id(0)]).await, Ok(()));
-    let Ok(hits) = index.lookup(&[positioned(1, 0)]).await else {
+    let mut index = index();
+    assert_eq!(
+        index.insert(&span(0), &[positioned(1, 0)], T0).await,
+        Ok(())
+    );
+    assert_eq!(
+        index.insert(&span(1), &[positioned(1, 2)], T0).await,
+        Ok(())
+    );
+    assert_eq!(index.evict(&[span_id(0)], T0).await, Ok(()));
+    let Ok(hits) = index.lookup(&[positioned(1, 0)], T0).await else {
         panic!("lookup");
     };
     assert!(hits.iter().all(|hit| hit.span != span_id(0)));
@@ -153,14 +173,12 @@ async fn lookup_after_evict_has_no_hits() {
 /// of the frequency and out of the stored data.
 #[tokio::test]
 async fn observations_age_out() {
-    let (mut index, clock) = index();
-    assert_eq!(index.observe(&[fp(1)], at(10)).await, Ok(()));
-    assert_eq!(index.frequency(fp(1)).await, Ok(1));
-    clock.set(at(110));
-    assert_eq!(index.frequency(fp(1)).await, Ok(1));
-    clock.set(at(111));
-    assert_eq!(index.frequency(fp(1)).await, Ok(0));
-    assert_eq!(index.observe(&[fp(2)], at(111)).await, Ok(()));
+    let mut index = index();
+    assert_eq!(index.observe(&[fp(1)], at(10), T0).await, Ok(()));
+    assert_eq!(index.frequency(fp(1), T0).await, Ok(1));
+    assert_eq!(index.frequency(fp(1), at(110)).await, Ok(1));
+    assert_eq!(index.frequency(fp(1), at(111)).await, Ok(0));
+    assert_eq!(index.observe(&[fp(2)], at(111), at(111)).await, Ok(()));
     let observations = index.snapshot().observations;
     assert_eq!(observations.len(), 1);
     assert!(observations.iter().all(|(_, fps)| !fps.contains(&fp(1))));
@@ -176,17 +194,15 @@ proptest! {
         now in 0u64..400,
     ) {
         let runtime = tokio::runtime::Builder::new_current_thread().build()?;
-        let (index, clock) = index();
-        let mut index = index;
+        let mut index = index();
         let counted = runtime.block_on(async {
             for (fingerprints, t) in &texts {
                 let fingerprints: Vec<Fingerprint> = fingerprints.iter().map(|n| fp(*n)).collect();
-                let _ = index.observe(&fingerprints, at(*t)).await;
+                let _ = index.observe(&fingerprints, at(*t), T0).await;
             }
-            clock.set(at(now));
             let mut counted = Vec::new();
             for n in 0..6 {
-                counted.push(index.frequency(fp(n)).await);
+                counted.push(index.frequency(fp(n), at(now)).await);
             }
             counted
         });
@@ -205,19 +221,20 @@ proptest! {
 /// for the converse.
 #[test]
 fn reference_agrees_with_itself_under_the_harness() {
-    model::check_fingerprint_index(HarnessConfig::default(), MemoryFingerprintIndex::new);
+    let outcome = model::check_fingerprint_index(pipeline_harness(), MemoryFingerprintIndex::new);
+    assert_eq!(outcome, Ok(()));
 }
 
 /// The harness catches an index that keeps returning boilerplate.
 #[test]
-#[should_panic(expected = "disagrees with the reference")]
 fn harness_rejects_an_index_that_ignores_the_cutoff() {
-    model::check_fingerprint_index(HarnessConfig::default(), |config, clock| NoCutoff {
-        inner: MemoryFingerprintIndex::new(
-            IndexConfig::single_node(u64::MAX, config.retention()),
-            clock,
-        ),
+    let outcome = model::check_fingerprint_index(pipeline_harness(), |config| NoCutoff {
+        inner: MemoryFingerprintIndex::new(IndexConfig::single_node(u64::MAX, config.retention())),
     });
+    assert!(
+        matches!(outcome, Err(ModelMismatch::Failed { .. })),
+        "{outcome:?}"
+    );
 }
 
 /// An index with no cutoff at all.
@@ -230,31 +247,38 @@ impl FingerprintIndex for NoCutoff {
         &mut self,
         span: &OriginatedSpan,
         fingerprints: &[PositionedFingerprint],
+        now: Timestamp,
     ) -> Result<(), IndexError> {
-        self.inner.insert(span, fingerprints).await
+        self.inner.insert(span, fingerprints, now).await
     }
 
     async fn lookup(
         &self,
         fingerprints: &[PositionedFingerprint],
+        now: Timestamp,
     ) -> Result<Vec<FingerprintHit>, IndexError> {
-        self.inner.lookup(fingerprints).await
+        self.inner.lookup(fingerprints, now).await
     }
 
-    async fn frequency(&self, fingerprint: Fingerprint) -> Result<u64, IndexError> {
-        self.inner.frequency(fingerprint).await
+    async fn frequency(&self, fingerprint: Fingerprint, now: Timestamp) -> Result<u64, IndexError> {
+        self.inner.frequency(fingerprint, now).await
     }
 
     async fn observe(
         &mut self,
         fingerprints: &[Fingerprint],
         at: Timestamp,
+        now: Timestamp,
     ) -> Result<(), IndexError> {
-        self.inner.observe(fingerprints, at).await
+        self.inner.observe(fingerprints, at, now).await
     }
 
-    async fn evict(&mut self, spans: &[crosstalk_spec::ids::SpanId]) -> Result<(), IndexError> {
-        self.inner.evict(spans).await
+    async fn evict(
+        &mut self,
+        spans: &[crosstalk_spec::ids::SpanId],
+        now: Timestamp,
+    ) -> Result<(), IndexError> {
+        self.inner.evict(spans, now).await
     }
 }
 

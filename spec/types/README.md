@@ -90,27 +90,34 @@ spec/types/
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed (bus payloads; a golden per variant inside an Envelope)
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet); bus payloads inside an Envelope, never requests
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged; golden inside a full Envelope each
-├── interfaces/            one module per layer: traits and their errors
+├── interfaces/            one module per layer: traits (read and write side) and their errors; mod.rs states the write-side, publication and time conventions
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
-│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
-│   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
-│   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
+│   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
+│   │   └── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
+│   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex (every call measuring retention takes now), SemanticMatcher
+│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
 │   ├── l5_flow/
+│   │   ├── channels.rs    ChannelTraffic (discover, add_resource, record_access, set_detection, confirm), DetectionUpdate, TrafficError; ChannelReads (channel by id, filtered channel pages)
+│   │   ├── transmissions.rs TransmissionStore (save, transmission), TransmissionStoreError
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore; SearchHit and SearchResults are its only wire types
-│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic as a BTreeMap, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention; publishes TopicVersionDropped), SearchIndex, ProjectionStore (FrameMismatch), ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage (suppressions at a time), AlertRuleStore; SearchHit and SearchResults are its only wire types
+│   ├── l6_analysis/
+│   │   ├── lifecycle.rs   TopicLifecycle (begin_fit, complete_fit, fail_fit, mark_ready, mark_active, assign), StoredAssignment, CatalogActivation, TopicLifecycleError
+│   │   ├── corpus.rs      SearchCorpus (index, remove, judge, set_model, drop_model), IndexedTransmission, CorpusError
+│   │   └── alerts.rs      AlertRuleMaintenance (topic_version_ready, embedding_model_changed), AlertActions (acknowledge, resolve), AlertReads (rule, rules, alert, alerts, rule_version), AlertActionError, AlertReadError
+│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic as a BTreeMap, series, edge drill-down, judge, version_ready, activate (Activation), drop_version, watermark), EdgeContribution (with its cause), FrontierSource, NodeFacts (AgentFacts, ChannelFacts), WatermarkRead, EdgeError (writes), EdgeQueryError (reads)
 │   ├── l8_surface.rs      QueryApi (every read, incl. the read models, present, alert_rule and export; agent_names and channel_names as BTreeMaps in id order), OperatorActions (act on a stamped ActionRequest), AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/
 │       ├── permissions.rs Caller (built only by the directory; never serialized), CallerSnapshot (checked; an audit record's plain copy of a caller, never a WireRequest), Permission, PermissionSet (an array in Permission::ALL order)
 │       ├── present.rs     Present: the gateway's clock and the config a request is built with (bucket width, export formats, rule version, remap threshold, frame retention); a response
-│       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName (checked text); the directory and config never serialized
+│       ├── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName (checked text); the directory and config never serialized; OperatorStore (load, operators, caller), OperatorLoadError, OperatorStoreError, CallerError
 │       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects; stamped, never a WireRequest), ActionKind (ALL, index, required_permission), ActionOutcome (subjects), SupersededChannels
 │       ├── actions/request.rs ActionRequest (a WireRequest: one variant per action, no author; into_action stamps the caller, of, kind)
-│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, UnsupportedFormat, MalformedRequest); adjacently tagged on the wire
+│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. AlertNotAcknowledged, RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds, UnsupportedFormat, MalformedRequest); adjacently tagged on the wire
 │       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError, every action's refusals included
 │       ├── lists.rs       ChannelFilter (a WireRequest, with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter (a WireRequest), SearchRequest (a WireRequest), SearchMode (default Hybrid), TopicPage
 │       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry; decode refuses a non-promotion conflict); responses only
@@ -120,7 +127,7 @@ spec/types/
 │       ├── overview.rs    OverviewCounts, QueueCounts (tally)
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveItem (event_name: the SSE event; its cursor is the SSE id), LiveCursor (its text on the wire), LiveEnd (EVENT_NAME), FeedWindow (checked), LiveConfig (checked; neither serialized)
 │       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome, ConfigChange (incl. sinks, never their endpoints, and retention), AuditSubject (incl. Sink), AuditFilter (a WireRequest)
-│       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError
+│       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError; SinkRegistry (record_delivery, sinks), SinkRegistryError
 │       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │       │   ├── mod.rs     module docs and re-exports
 │       │   ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportFormats (checked: non-empty, distinct; check gives UnsupportedFormat), ExportLimits
@@ -143,7 +150,7 @@ spec/types/
 │           ├── frame.rs   GET /projections/{id}/frame: FrameCache (digest ETag, retention-bounded immutable caching, 304)
 │           └── export.rs  POST /exports: content types, Content-Disposition file name
 └── tests/                 tests for the invariants checked at runtime, one module per subject
-    ├── send.rs, send/     compile-time check that every async trait method's future is Send and every associated stream Send + 'static (Dummy, assert_send)
+    ├── send.rs, send/     compile-time check that every async trait method's future is Send and every associated stream Send + 'static (Dummy, assert_send); writes.rs covers the P0.6 write and read traits
     ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area; http/ the HTTP binding (TableClient: a QueryApi over the route table)
     └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
@@ -208,6 +215,15 @@ spec/types/
   it into its future. `tests/send.rs` checks every trait at compile time.
 - **Error enums are plain.** Implementations derive `thiserror::Error` on
   their copies; serde's `Display` requirement is met by `wire::Rejected`.
+- **Stores have a spec write side, publish what they decide, and take time
+  as an argument.** Every write a consumer, the surface or config makes to
+  a stateful store is a trait method here, so any store can be driven
+  through the spec alone. A store publishes, from the transaction that
+  makes a change, `Changed` and the events of decisions it takes
+  (`TopicVersionDropped` is the topic catalog's); a consumer publishes the
+  events of its own computations. Every store method that depends on the
+  time takes a `Timestamp`; no store reads a clock. See
+  `interfaces/mod.rs`.
 
 ## Harnesses, upstreams and credentials
 

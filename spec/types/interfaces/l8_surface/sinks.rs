@@ -92,3 +92,28 @@ mod last_delivery {
         }))
     }
 }
+
+/// The configured sinks and how each one's last delivery went: the data of
+/// `QueryApi::sinks`, and the set `AlertRuleStore` checks a rule's sinks
+/// against. The sinks come from config; deliveries are recorded by the
+/// component that delivers alerts.
+pub trait SinkRegistry {
+    /// Record how a delivery to `sink` went: when it succeeded, or why it
+    /// failed. The latest delivery replaces the one before. `UnknownSink`
+    /// for a sink config does not define, changing nothing.
+    fn record_delivery(
+        &mut self,
+        sink: SinkId,
+        outcome: Result<Timestamp, SinkError>,
+    ) -> impl Future<Output = Result<(), SinkRegistryError>> + Send;
+
+    /// Every configured sink, by id.
+    fn sinks(&self) -> impl Future<Output = Result<Vec<SinkInfo>, SinkRegistryError>> + Send;
+}
+
+/// Why a sink registry call failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SinkRegistryError {
+    Store { reason: String },
+    UnknownSink(SinkId),
+}

@@ -18,6 +18,9 @@ use crate::interfaces::l2_transport::{
     DeliveryId, EventBus, RetryPolicy, Subscription,
 };
 use crate::interfaces::l3_reconstruction::agents::{ActivityStore, AgentReadError, AgentReads};
+use crate::interfaces::l3_reconstruction::lifecycle::{
+    Advance, AgentLifecycle, AgentLifecycleError, NewAgent,
+};
 use crate::interfaces::l3_reconstruction::{
     ClaimStore, IdentityResolver, Resolution, ResolveError, ThreadError, ThreadOutcome, Threader,
 };
@@ -25,12 +28,11 @@ use crate::interfaces::l4_provenance::{
     FingerprintIndex, IndexError, SemanticHit, SemanticMatcher,
 };
 use crate::observed::agent::merge::{MergeRecord, Reversal};
-use crate::observed::agent::{AgentLabel, ClaimSet, MergeRequest};
+use crate::observed::agent::{AgentLabel, ClaimSet, IdentityEvidence, MergeRequest};
 use crate::observed::client::{ClientContext, EndpointKind, HarnessClaim};
-use crate::observed::exchange::{ConnectionId, Exchange, ExchangeMeta, WireProtocol};
-use crate::observed::message::Message;
+use crate::observed::exchange::{ConnectionId, Exchange, WireProtocol};
 use crate::paging::{AgentList, DeadLetterList, Page, PageRequest};
-use crate::support::{Change, Similarity, Timestamp};
+use crate::support::{Change, NonEmpty, Similarity, Timestamp};
 
 use super::{Dummy, arg, assert_send, assert_send_static};
 
@@ -219,10 +221,29 @@ impl IdentityResolver for Dummy {
         match *self {}
     }
     async fn resolve(
-        &mut self,
-        _meta: &ExchangeMeta,
-        _request: &[Message],
+        &self,
+        _evidence: &NonEmpty<IdentityEvidence>,
     ) -> Result<Resolution, ResolveError> {
+        match *self {}
+    }
+}
+
+impl AgentLifecycle for Dummy {
+    async fn create(&mut self, _agent: NewAgent) -> Result<(), AgentLifecycleError> {
+        match *self {}
+    }
+    async fn advance(
+        &mut self,
+        _agent: AgentId,
+        _advance: Advance,
+    ) -> Result<(), AgentLifecycleError> {
+        match *self {}
+    }
+    async fn attach_evidence(
+        &mut self,
+        _agent: AgentId,
+        _evidence: IdentityEvidence,
+    ) -> Result<(), AgentLifecycleError> {
         match *self {}
     }
 }
@@ -246,7 +267,13 @@ fn identity_resolver<T: IdentityResolver>(x: &mut T, never: &Dummy) {
     assert_send(x.merge(arg(never), arg(never)));
     assert_send(x.unmerge(arg(never), arg(never), arg(never)));
     assert_send(x.rename(arg(never), arg(never), arg(never)));
-    assert_send(x.resolve(arg(never), arg(never)));
+    assert_send(x.resolve(arg(never)));
+}
+
+fn agent_lifecycle<T: AgentLifecycle>(x: &mut T, never: &Dummy) {
+    assert_send(x.create(arg(never)));
+    assert_send(x.advance(arg(never), arg(never)));
+    assert_send(x.attach_evidence(arg(never), arg(never)));
 }
 
 fn threader<T: Threader>(x: &mut T, never: &Dummy) {
@@ -299,26 +326,33 @@ impl FingerprintIndex for Dummy {
         &mut self,
         _span: &OriginatedSpan,
         _fingerprints: &[PositionedFingerprint],
+        _now: Timestamp,
     ) -> Result<(), IndexError> {
         match *self {}
     }
     async fn lookup(
         &self,
         _fingerprints: &[PositionedFingerprint],
+        _now: Timestamp,
     ) -> Result<Vec<FingerprintHit>, IndexError> {
         match *self {}
     }
-    async fn frequency(&self, _fingerprint: Fingerprint) -> Result<u64, IndexError> {
+    async fn frequency(
+        &self,
+        _fingerprint: Fingerprint,
+        _now: Timestamp,
+    ) -> Result<u64, IndexError> {
         match *self {}
     }
     async fn observe(
         &mut self,
         _fingerprints: &[Fingerprint],
         _at: Timestamp,
+        _now: Timestamp,
     ) -> Result<(), IndexError> {
         match *self {}
     }
-    async fn evict(&mut self, _spans: &[SpanId]) -> Result<(), IndexError> {
+    async fn evict(&mut self, _spans: &[SpanId], _now: Timestamp) -> Result<(), IndexError> {
         match *self {}
     }
 }
@@ -344,11 +378,11 @@ impl SemanticMatcher for Dummy {
 }
 
 fn fingerprint_index<T: FingerprintIndex>(x: &mut T, never: &Dummy) {
-    assert_send(x.insert(arg(never), arg(never)));
-    assert_send(x.lookup(arg(never)));
-    assert_send(x.frequency(arg(never)));
-    assert_send(x.observe(arg(never), arg(never)));
-    assert_send(x.evict(arg(never)));
+    assert_send(x.insert(arg(never), arg(never), arg(never)));
+    assert_send(x.lookup(arg(never), arg(never)));
+    assert_send(x.frequency(arg(never), arg(never)));
+    assert_send(x.observe(arg(never), arg(never), arg(never)));
+    assert_send(x.evict(arg(never), arg(never)));
 }
 
 fn semantic_matcher<T: SemanticMatcher>(x: &mut T, never: &Dummy) {
@@ -374,6 +408,7 @@ fn l2_transport_futures_are_send() {
 fn l3_reconstruction_futures_are_send() {
     let _ = claim_store::<Dummy>;
     let _ = identity_resolver::<Dummy>;
+    let _ = agent_lifecycle::<Dummy>;
     let _ = threader::<Dummy>;
     let _ = agent_reads::<Dummy>;
     let _ = activity_store::<Dummy>;

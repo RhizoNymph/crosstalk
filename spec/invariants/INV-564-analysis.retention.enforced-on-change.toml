@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.retention.enforced-on-change"
-statement = "After the topic catalog processes TopicVersionActivated or an unpin, and after it starts, every version RetentionPolicy::to_drop returns for its history is marked dropped and has had exactly one TopicVersionDropped published."
+statement = "After the topic catalog processes TopicVersionActivated (TopicLifecycle::mark_active) or an unpin, and after analyze starts and calls TopicCatalog::enforce_retention, every version RetentionPolicy::to_drop returns for its history is marked dropped and the catalog has published exactly one TopicVersionDropped for it."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

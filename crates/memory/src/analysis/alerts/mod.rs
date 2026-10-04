@@ -1,5 +1,6 @@
-//! [`InMemoryAlertStore`]: the reference [`AlertRuleStore`] and
-//! [`AlertTriage`], in one store.
+//! [`InMemoryAlertStore`]: the reference [`AlertRuleStore`],
+//! [`AlertTriage`], `AlertRuleMaintenance`, `AlertActions` and
+//! `AlertReads`, in one store.
 //!
 //! The spec reads rules and alerts "in the same transaction": triage
 //! re-checks a draft's rule, a disable suppresses the rule's active alerts,
@@ -7,10 +8,14 @@
 //! lock over the rule set, the alerts and the verdict copy makes each call
 //! one transaction.
 //!
-//! - [`rules`]: `AlertRuleStore`, and the `alerts` consumer's rule
-//!   changes: remapping on `TopicVersionReady`, staleness on an embedding
-//!   model change.
-//! - [`triage`]: `AlertTriage`, and the surface's acknowledge and resolve.
+//! - [`rules`]: `AlertRuleStore`, and `AlertRuleMaintenance`, the `alerts`
+//!   consumer's rule changes: remapping on `TopicVersionReady`, staleness
+//!   on an embedding model change.
+//! - [`triage`]: `AlertTriage`, and `AlertActions`, the surface's
+//!   acknowledge and resolve.
+//! - This module: `AlertReads`. The channel filter matches a transmission
+//!   subject by its stored route, read from the L5 transmission store the
+//!   alert store is given (the reference reads [`MemoryVerdicts`] directly).
 //!
 //! Every stored change bumps the rule's or alert's revision by one and
 //! publishes the matching `AlertRuleChanged`, `AlertOpened` or
@@ -20,6 +25,7 @@
 //!
 //! [`AlertRuleStore`]: crosstalk_spec::interfaces::l6_analysis::AlertRuleStore
 //! [`AlertTriage`]: crosstalk_spec::interfaces::l6_analysis::AlertTriage
+//! [`MemoryVerdicts`]: crate::flow::MemoryVerdicts
 
 pub mod rules;
 pub mod triage;
@@ -40,13 +46,14 @@ use crosstalk_spec::ids::{AlertId, AlertRuleId, SinkId, TopicId, TransmissionId}
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l6_analysis::Embedder;
+use crosstalk_spec::interfaces::l6_analysis::alerts::{AlertReadError, AlertReads};
 use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind};
 use crosstalk_spec::paging::{AlertList, AlertRuleList, Page, PageRequest};
 use crosstalk_spec::support::Timestamp;
 
-use super::support::{Clock, IdSequence, Outbox, Published, lock};
-use crate::surface::paging::{CursorBook, PageError, page_after};
+use crate::flow::MemoryVerdicts;
+use crate::support::{CursorBook, IdSequence, Outbox, PageError, lock, page_after};
 
 /// The alert store's configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +72,8 @@ pub struct InMemoryAlertStore<E, D> {
     config: AlertStoreConfig,
     embedder: E,
     directory: D,
-    clock: Arc<dyn Clock>,
+    transmissions: MemoryVerdicts,
+    outbox: Outbox,
     state: Arc<Mutex<AlertsState>>,
 }
 
@@ -86,7 +94,6 @@ struct AlertsState {
     alert_ids: IdSequence,
     rule_cursors: CursorBook<AlertRuleFilter, AlertRuleId>,
     alert_cursors: CursorBook<AlertFilter, AlertId>,
-    outbox: Outbox,
 }
 
 #[derive(Debug, Clone)]
@@ -95,13 +102,22 @@ struct StoredAlert {
     revision: AlertRevision,
 }
 
-/// Why a read of the store failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AlertReadError {
-    #[error("a cursor this store did not issue, or issued for another filter")]
-    InvalidCursor,
-    #[error("the page could not be built: {0}")]
-    Page(PageError),
+#[cfg(test)]
+impl<E, D> InMemoryAlertStore<E, D> {
+    /// The alert's current revision, for tests of the revision sequence (it
+    /// travels in `AlertOpened` and `AlertChanged`).
+    pub(crate) fn alert_revision(&self, id: AlertId) -> Option<AlertRevision> {
+        lock(&self.state)
+            .alerts
+            .get(&id)
+            .map(|stored| stored.revision)
+    }
+}
+
+fn page_error(error: PageError) -> AlertReadError {
+    AlertReadError::Store {
+        reason: error.to_string(),
+    }
 }
 
 /// Whether an alert is open or acknowledged.
@@ -125,10 +141,17 @@ where
     D: AgentDirectory + ChannelDirectory + Send + Sync,
 {
     /// A store holding every built-in rule, provisioned by config (each
-    /// publishes `AlertRuleChanged` at `RuleRevision::CREATED`), no user
-    /// rule and no alert. Topic-model version 0 is current, and the
-    /// embedder's model.
-    pub fn new(config: AlertStoreConfig, embedder: E, directory: D, clock: Arc<dyn Clock>) -> Self {
+    /// publishes `AlertRuleChanged` at `RuleRevision::CREATED` to `outbox`),
+    /// no user rule and no alert. Topic-model version 0 is current, and the
+    /// embedder's model. Transmission subjects' routes are read from
+    /// `transmissions`.
+    pub fn new(
+        config: AlertStoreConfig,
+        embedder: E,
+        directory: D,
+        transmissions: MemoryVerdicts,
+        outbox: Outbox,
+    ) -> Self {
         let rules = AlertRuleSet::new(|rule| {
             config
                 .builtins
@@ -136,7 +159,6 @@ where
                 .cloned()
                 .unwrap_or((RuleStatus::Enabled, Vec::new()))
         });
-        let mut outbox = Outbox::default();
         let mut rule_revisions = BTreeMap::new();
         for rule in rules.iter() {
             rule_revisions.insert(rule.id(), RuleRevision::CREATED);
@@ -151,7 +173,8 @@ where
             config,
             embedder,
             directory,
-            clock,
+            transmissions,
+            outbox,
             state: Arc::new(Mutex::new(AlertsState {
                 rules,
                 rule_revisions,
@@ -164,37 +187,135 @@ where
                 alert_ids: IdSequence::default(),
                 rule_cursors: CursorBook::default(),
                 alert_cursors: CursorBook::default(),
-                outbox,
             })),
         }
     }
 
-    /// Everything published since the last drain, in commit order.
-    pub fn drain_published(&self) -> Vec<Published> {
-        lock(&self.state).outbox.drain()
+    fn alert_matches(&self, filter: &AlertFilter, alert: &Alert) -> bool {
+        let by_state =
+            filter.states.is_empty() || filter.states.contains(&state_kind(&alert.state));
+        let by_channel = filter.channel.is_none_or(|listed| {
+            let listed = ChannelDirectory::canonical(&self.directory, listed);
+            match alert.subject {
+                AlertSubject::Channel(channel) => {
+                    ChannelDirectory::canonical(&self.directory, channel) == listed
+                }
+                AlertSubject::Transmission(transmission) => {
+                    matches!(
+                        self.transmissions.route(transmission),
+                        Some(Route::Channel(channel))
+                            if ChannelDirectory::canonical(&self.directory, channel) == listed
+                    )
+                }
+                AlertSubject::Agent(_) => false,
+            }
+        });
+        by_state && by_channel
+    }
+}
+
+impl AlertsState {
+    /// Store `rule` (already changed) under its id, at its next revision,
+    /// and publish the change. Refused, changing nothing, when the
+    /// revision counter is exhausted.
+    fn commit_rule(
+        &mut self,
+        rule: AlertRuleDef,
+        outbox: &Outbox,
+    ) -> Result<RuleRevision, CommitRefused> {
+        let id = rule.id();
+        let revision = match self.rule_revisions.get(&id) {
+            Some(current) => current.next().ok_or(CommitRefused::RevisionExhausted)?,
+            None => RuleRevision::CREATED,
+        };
+        match self.rules.get_mut(id) {
+            Some(stored) => *stored = rule.clone(),
+            None => self
+                .rules
+                .insert(rule.clone())
+                .map_err(CommitRefused::Insert)?,
+        }
+        self.rule_revisions.insert(id, revision);
+        outbox.insight(InsightEvent::AlertRuleChanged { rule, revision });
+        outbox.changed(Changed::Rule(id));
+        Ok(revision)
     }
 
-    /// The topic-model version rules must currently name.
-    pub fn current_version(&self) -> TopicModelVersion {
-        lock(&self.state).version
+    /// Replace a stored alert with `alert` at its next revision and publish
+    /// `AlertChanged`. Refused, changing nothing, when the counter is
+    /// exhausted.
+    fn commit_alert(
+        &mut self,
+        alert: Alert,
+        outbox: &Outbox,
+    ) -> Result<AlertRevision, CommitRefused> {
+        let stored = self
+            .alerts
+            .get_mut(&alert.id)
+            .ok_or(CommitRefused::UnknownAlert(alert.id))?;
+        let revision = stored
+            .revision
+            .next()
+            .ok_or(CommitRefused::RevisionExhausted)?;
+        stored.alert = alert.clone();
+        stored.revision = revision;
+        let id = alert.id;
+        outbox.insight(InsightEvent::AlertChanged { alert, revision });
+        outbox.changed(Changed::Alert(id));
+        Ok(revision)
     }
 
-    pub fn rule(&self, id: AlertRuleId) -> Option<AlertRuleDef> {
-        lock(&self.state).rules.get(id).cloned()
+    /// Suppress every active alert `selected` picks, at `at`, all or none.
+    fn suppress(
+        &mut self,
+        selected: impl Fn(&Alert) -> bool,
+        reason: SuppressReason,
+        at: Timestamp,
+        outbox: &Outbox,
+    ) -> Result<u32, CommitRefused> {
+        let targets: Vec<Alert> = self
+            .alerts
+            .values()
+            .filter(|stored| is_active(&stored.alert.state) && selected(&stored.alert))
+            .map(|stored| stored.alert.clone())
+            .collect();
+        if targets.iter().any(|alert| {
+            self.alerts
+                .get(&alert.id)
+                .is_none_or(|stored| stored.revision.next().is_none())
+        }) {
+            return Err(CommitRefused::RevisionExhausted);
+        }
+        for mut alert in targets.iter().cloned() {
+            alert.state = AlertState::Suppressed { at, reason };
+            self.commit_alert(alert, outbox)?;
+        }
+        Ok(u32::try_from(targets.len()).unwrap_or(u32::MAX))
+    }
+}
+
+/// Why a change could not be stored. Each refusal changes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CommitRefused {
+    #[error("the revision counter is exhausted")]
+    RevisionExhausted,
+    #[error("the rule set refused the rule: {0:?}")]
+    Insert(InsertError),
+    #[error("no stored alert {0:?}")]
+    UnknownAlert(AlertId),
+}
+
+impl<E, D> AlertReads for InMemoryAlertStore<E, D>
+where
+    E: Embedder + Send + Sync,
+    D: AgentDirectory + ChannelDirectory + Send + Sync,
+{
+    async fn rule(&self, id: AlertRuleId) -> Result<Option<AlertRuleDef>, AlertReadError> {
+        Ok(lock(&self.state).rules.get(id).cloned())
     }
 
-    pub fn rule_revision(&self, id: AlertRuleId) -> Option<RuleRevision> {
-        lock(&self.state).rule_revisions.get(&id).copied()
-    }
-
-    /// Every rule: built-in rules in `BuiltinRule::ALL` order, then user
-    /// rules by id.
-    pub fn all_rules(&self) -> Vec<AlertRuleDef> {
-        lock(&self.state).rules.iter().cloned().collect()
-    }
-
-    /// The rules `filter` matches, newest id first (`QueryApi::alert_rules`).
-    pub fn rules_page(
+    /// Newest id first, so user rules before the built-in rules.
+    async fn rules(
         &self,
         filter: &AlertRuleFilter,
         page: &PageRequest<AlertRuleList>,
@@ -224,40 +345,19 @@ where
             filter.clone(),
             AlertRuleDef::id,
         )
-        .map_err(AlertReadError::Page)
+        .map_err(page_error)
     }
 
-    pub fn alert(&self, id: AlertId) -> Option<Alert> {
-        lock(&self.state)
+    async fn alert(&self, id: AlertId) -> Result<Option<Alert>, AlertReadError> {
+        Ok(lock(&self.state)
             .alerts
             .get(&id)
-            .map(|stored| stored.alert.clone())
+            .map(|stored| stored.alert.clone()))
     }
 
-    pub fn alert_revision(&self, id: AlertId) -> Option<AlertRevision> {
-        lock(&self.state)
-            .alerts
-            .get(&id)
-            .map(|stored| stored.revision)
-    }
-
-    /// Every alert, by id.
-    pub fn all_alerts(&self) -> Vec<Alert> {
-        lock(&self.state)
-            .alerts
-            .values()
-            .map(|stored| stored.alert.clone())
-            .collect()
-    }
-
-    /// The alerts `filter` matches, newest id first (`QueryApi::alerts`).
-    /// The channel filter resolves the listed channel, a channel subject
-    /// and a transmission subject's route through supersession; `route_of`
-    /// reads a transmission's stored route.
-    pub fn alerts_page(
+    async fn alerts(
         &self,
         filter: &AlertFilter,
-        route_of: impl Fn(TransmissionId) -> Option<Route>,
         page: &PageRequest<AlertList>,
     ) -> Result<Page<Alert, AlertList>, AlertReadError> {
         let mut state = lock(&self.state);
@@ -276,7 +376,7 @@ where
             .rev()
             .map(|stored| &stored.alert)
             .filter(|alert| after.is_none_or(|after| alert.id < after))
-            .filter(|alert| self.alert_matches(filter, alert, &route_of))
+            .filter(|alert| self.alert_matches(filter, alert))
             .cloned()
             .collect();
         page_after(
@@ -286,117 +386,10 @@ where
             filter.clone(),
             |alert| alert.id,
         )
-        .map_err(AlertReadError::Page)
+        .map_err(page_error)
     }
 
-    fn alert_matches(
-        &self,
-        filter: &AlertFilter,
-        alert: &Alert,
-        route_of: &impl Fn(TransmissionId) -> Option<Route>,
-    ) -> bool {
-        let by_state =
-            filter.states.is_empty() || filter.states.contains(&state_kind(&alert.state));
-        let by_channel = filter.channel.is_none_or(|listed| {
-            let listed = ChannelDirectory::canonical(&self.directory, listed);
-            match alert.subject {
-                AlertSubject::Channel(channel) => {
-                    ChannelDirectory::canonical(&self.directory, channel) == listed
-                }
-                AlertSubject::Transmission(transmission) => {
-                    matches!(
-                        route_of(transmission),
-                        Some(Route::Channel(channel))
-                            if ChannelDirectory::canonical(&self.directory, channel) == listed
-                    )
-                }
-                AlertSubject::Agent(_) => false,
-            }
-        });
-        by_state && by_channel
+    async fn rule_version(&self) -> Result<TopicModelVersion, AlertReadError> {
+        Ok(lock(&self.state).version)
     }
-}
-
-impl AlertsState {
-    /// Store `rule` (already changed) under its id, at its next revision,
-    /// and publish the change. Refused, changing nothing, when the
-    /// revision counter is exhausted.
-    fn commit_rule(&mut self, rule: AlertRuleDef) -> Result<RuleRevision, CommitRefused> {
-        let id = rule.id();
-        let revision = match self.rule_revisions.get(&id) {
-            Some(current) => current.next().ok_or(CommitRefused::RevisionExhausted)?,
-            None => RuleRevision::CREATED,
-        };
-        match self.rules.get_mut(id) {
-            Some(stored) => *stored = rule.clone(),
-            None => self
-                .rules
-                .insert(rule.clone())
-                .map_err(CommitRefused::Insert)?,
-        }
-        self.rule_revisions.insert(id, revision);
-        self.outbox
-            .insight(InsightEvent::AlertRuleChanged { rule, revision });
-        self.outbox.changed(Changed::Rule(id));
-        Ok(revision)
-    }
-
-    /// Replace a stored alert with `alert` at its next revision and publish
-    /// `AlertChanged`. Refused, changing nothing, when the counter is
-    /// exhausted.
-    fn commit_alert(&mut self, alert: Alert) -> Result<AlertRevision, CommitRefused> {
-        let stored = self
-            .alerts
-            .get_mut(&alert.id)
-            .ok_or(CommitRefused::UnknownAlert(alert.id))?;
-        let revision = stored
-            .revision
-            .next()
-            .ok_or(CommitRefused::RevisionExhausted)?;
-        stored.alert = alert.clone();
-        stored.revision = revision;
-        let id = alert.id;
-        self.outbox
-            .insight(InsightEvent::AlertChanged { alert, revision });
-        self.outbox.changed(Changed::Alert(id));
-        Ok(revision)
-    }
-
-    /// Suppress every active alert `selected` picks, at `at`, all or none.
-    fn suppress(
-        &mut self,
-        selected: impl Fn(&Alert) -> bool,
-        reason: SuppressReason,
-        at: Timestamp,
-    ) -> Result<u32, CommitRefused> {
-        let targets: Vec<Alert> = self
-            .alerts
-            .values()
-            .filter(|stored| is_active(&stored.alert.state) && selected(&stored.alert))
-            .map(|stored| stored.alert.clone())
-            .collect();
-        if targets.iter().any(|alert| {
-            self.alerts
-                .get(&alert.id)
-                .is_none_or(|stored| stored.revision.next().is_none())
-        }) {
-            return Err(CommitRefused::RevisionExhausted);
-        }
-        for mut alert in targets.iter().cloned() {
-            alert.state = AlertState::Suppressed { at, reason };
-            self.commit_alert(alert)?;
-        }
-        Ok(u32::try_from(targets.len()).unwrap_or(u32::MAX))
-    }
-}
-
-/// Why a change could not be stored. Each refusal changes nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum CommitRefused {
-    #[error("the revision counter is exhausted")]
-    RevisionExhausted,
-    #[error("the rule set refused the rule: {0:?}")]
-    Insert(InsertError),
-    #[error("no stored alert {0:?}")]
-    UnknownAlert(AlertId),
 }

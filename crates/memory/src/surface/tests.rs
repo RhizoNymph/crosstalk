@@ -8,9 +8,10 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord, OperatorRecord,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::{
-    AccessConfig, AccessMode, InvalidAccessConfig, OperatorConfig, OperatorName, RequestIdentity,
-    TrustedOperator, Unauthenticated,
+    AccessConfig, AccessMode, CallerError, InvalidAccessConfig, OperatorConfig, OperatorLoadError,
+    OperatorName, OperatorStore, RequestIdentity, TrustedOperator, Unauthenticated,
 };
+use crosstalk_spec::interfaces::l8_surface::sinks::{SinkRegistry, SinkRegistryError};
 use crosstalk_spec::interfaces::l8_surface::{
     ActionOutcome, AlertSink, CallerSnapshot, OperatorAction, Permission, PermissionSet, SinkError,
     SinkKind,
@@ -19,10 +20,10 @@ use crosstalk_spec::paging::{AuditList, PageRequest, PageSize};
 use crosstalk_spec::support::Blake3;
 
 use super::audit::InMemoryAuditLog;
-use super::operators::{CallerError, InMemoryOperatorStore, LoadError};
-use super::sinks::{FakeSink, InMemorySinkRegistry, SinkConfig, UnknownSink};
-use crate::analysis::support::IdSequence;
+use super::operators::InMemoryOperatorStore;
+use super::sinks::{FakeSink, InMemorySinkRegistry, SinkConfig};
 use crate::model::build::{audit_id, channel, operator, raw, rule_id, sink, ts, window};
+use crate::support::IdSequence;
 
 fn hash(n: u8) -> ConfigHash {
     ConfigHash::from_digest(Blake3::from_bytes([n; 32]))
@@ -204,15 +205,15 @@ fn store() -> (InMemoryOperatorStore, InMemoryAuditLog) {
     )
 }
 
-#[test]
-fn config_reload_records_each_change_once() {
+#[tokio::test]
+async fn config_reload_records_each_change_once() {
     // surface.audit.config-changes-recorded, for the operator directory
-    let (store, log) = store();
+    let (mut store, log) = store();
     let first = authenticated(&[
         (1, "ana", &[Permission::View]),
         (2, "bo", &[Permission::Audit]),
     ]);
-    let changes = store.load(&first, hash(1), ts(10)).unwrap();
+    let changes = store.load(&first, hash(1), ts(10)).await.unwrap();
     assert_eq!(changes.len(), 3);
     let recorded: Vec<_> = log
         .entries()
@@ -229,12 +230,12 @@ fn config_reload_records_each_change_once() {
         .collect();
     assert_eq!(recorded, changes);
     // Reloading the same config records nothing.
-    assert_eq!(store.load(&first, hash(2), ts(20)), Ok(Vec::new()));
+    assert_eq!(store.load(&first, hash(2), ts(20)).await, Ok(Vec::new()));
     assert_eq!(log.entries().len(), 3);
     // Dropping operator 2 records one removal.
     let second = authenticated(&[(1, "ana", &[Permission::View])]);
     assert_eq!(
-        store.load(&second, hash(3), ts(30)),
+        store.load(&second, hash(3), ts(30)).await,
         Ok(vec![ConfigChange::RemoveOperator {
             operator: operator(2)
         }])
@@ -242,30 +243,33 @@ fn config_reload_records_each_change_once() {
     assert_eq!(log.entries().len(), 4);
 }
 
-#[test]
-fn invalid_config_changes_nothing_and_records_nothing() {
+#[tokio::test]
+async fn invalid_config_changes_nothing_and_records_nothing() {
     // surface.operators.config-rejects-unusable, through the store
-    let (store, log) = store();
+    let (mut store, log) = store();
     store
         .load(
             &authenticated(&[(1, "ana", &[Permission::View])]),
             hash(1),
             ts(10),
         )
+        .await
         .unwrap();
     let before = store.directory();
     assert_eq!(
-        store.load(&AccessConfig::Authenticated(Vec::new()), hash(2), ts(20)),
-        Err(LoadError::Invalid(InvalidAccessConfig::NoOperators))
+        store
+            .load(&AccessConfig::Authenticated(Vec::new()), hash(2), ts(20))
+            .await,
+        Err(OperatorLoadError::Invalid(InvalidAccessConfig::NoOperators))
     );
     assert_eq!(store.directory(), before);
     assert_eq!(log.entries().len(), 2);
 }
 
-#[test]
-fn operators_query_returns_directory_with_former_operators() {
+#[tokio::test]
+async fn operators_query_returns_directory_with_former_operators() {
     // surface.query.operators-match-directory and operators.former-kept
-    let (store, _) = store();
+    let (mut store, _) = store();
     store
         .load(
             &authenticated(&[
@@ -275,6 +279,7 @@ fn operators_query_returns_directory_with_former_operators() {
             hash(1),
             ts(10),
         )
+        .await
         .unwrap();
     store
         .load(
@@ -282,8 +287,9 @@ fn operators_query_returns_directory_with_former_operators() {
             hash(2),
             ts(20),
         )
+        .await
         .unwrap();
-    let operators = store.operators();
+    let operators = store.operators().await.unwrap();
     assert_eq!(
         operators.iter().map(|one| one.id).collect::<Vec<_>>(),
         vec![operator(1), operator(2)]
@@ -291,24 +297,25 @@ fn operators_query_returns_directory_with_former_operators() {
     assert!(operators[1].permissions.is_empty());
     assert_eq!(operators[1].name, name("bo"));
     assert_eq!(
-        store.caller(RequestIdentity::Verified(operator(2))),
+        store.caller(RequestIdentity::Verified(operator(2))).await,
         Err(CallerError::Unauthenticated(
             Unauthenticated::FormerOperator(operator(2))
         ))
     );
     let caller = store
         .caller(RequestIdentity::Verified(operator(1)))
+        .await
         .unwrap();
     assert_eq!(caller.operator(), operator(1));
     assert!(caller.has(Permission::Audit));
     assert!(!caller.has(Permission::View));
 }
 
-#[test]
-fn trusted_mode_gives_every_request_the_trusted_caller() {
-    let (store, _) = store();
+#[tokio::test]
+async fn trusted_mode_gives_every_request_the_trusted_caller() {
+    let (mut store, _) = store();
     assert_eq!(
-        store.caller(RequestIdentity::Anonymous),
+        store.caller(RequestIdentity::Anonymous).await,
         Err(CallerError::NotLoaded)
     );
     store
@@ -320,15 +327,16 @@ fn trusted_mode_gives_every_request_the_trusted_caller() {
             hash(1),
             ts(10),
         )
+        .await
         .unwrap();
-    let caller = store.caller(RequestIdentity::Anonymous).unwrap();
+    let caller = store.caller(RequestIdentity::Anonymous).await.unwrap();
     assert_eq!(caller.operator(), operator(1));
     assert_eq!(caller.permissions(), PermissionSet::ALL);
 }
 
-#[test]
-fn sink_registry_reports_last_delivery() {
-    let registry = InMemorySinkRegistry::new([
+#[tokio::test]
+async fn sink_registry_reports_last_delivery() {
+    let mut registry = InMemorySinkRegistry::new([
         SinkConfig {
             id: sink(2),
             kind: SinkKind::Slack,
@@ -347,18 +355,24 @@ fn sink_registry_reports_last_delivery() {
     assert!(
         registry
             .sinks()
+            .await
+            .unwrap()
             .iter()
             .all(|info| info.last_delivery.is_none())
     );
-    registry.record_delivery(sink(2), Ok(ts(5))).unwrap();
+    registry.record_delivery(sink(2), Ok(ts(5))).await.unwrap();
     let failure = SinkError::Rejected { status: 500 };
     registry
         .record_delivery(sink(2), Err(failure.clone()))
+        .await
         .unwrap();
-    assert_eq!(registry.sinks()[1].last_delivery, Some(Err(failure)));
     assert_eq!(
-        registry.record_delivery(sink(9), Ok(ts(5))),
-        Err(UnknownSink(sink(9)))
+        registry.sinks().await.unwrap()[1].last_delivery,
+        Some(Err(failure))
+    );
+    assert_eq!(
+        registry.record_delivery(sink(9), Ok(ts(5))).await,
+        Err(SinkRegistryError::UnknownSink(sink(9)))
     );
     assert!(registry.contains(sink(1)));
 }

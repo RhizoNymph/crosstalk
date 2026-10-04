@@ -10,20 +10,26 @@ use super::*;
 async fn conflict_names_two_distinct_canonical_agents() {
     let (mut store, _events) = seeded(3).await;
     let shared = evidence(5);
-    assert_eq!(store.attach(agent(0), shared.clone()).await, Ok(()));
-    assert_eq!(store.attach(agent(1), shared.clone()).await, Ok(()));
-    let resolved = resolve_evidence(&store.state.read(), vec![shared.clone()]);
-    let Some(Resolution::Conflict { candidates, .. }) = resolved else {
+    assert_eq!(
+        store.attach_evidence(agent(0), shared.clone()).await,
+        Ok(())
+    );
+    assert_eq!(
+        store.attach_evidence(agent(1), shared.clone()).await,
+        Ok(())
+    );
+    let resolved = resolve_evidence(&store.state.read(), &NonEmpty::new(shared.clone()));
+    let Resolution::Conflict { candidates, .. } = resolved else {
         panic!("expected a conflict, got {resolved:?}");
     };
     assert_eq!(candidates.into_vec(), vec![agent(0), agent(1)]);
     merge(&mut store, 0, 1, 10).await;
     assert_eq!(
-        resolve_evidence(&store.state.read(), vec![shared]),
-        Some(Resolution::Known {
+        resolve_evidence(&store.state.read(), &NonEmpty::new(shared)),
+        Resolution::Known {
             agent: agent(1),
             new_evidence: Vec::new()
-        })
+        }
     );
 }
 
@@ -40,14 +46,14 @@ proptest! {
         let (plain, labelled) = runtime.block_on(async {
             let (mut store, _events) = seeded(4).await;
             for n in &holders {
-                let _ = store.attach(agent(*n), evidence(item)).await;
+                let _ = store.attach_evidence(agent(*n), evidence(item)).await;
             }
-            let plain = resolve_evidence(&store.state.read(), vec![evidence(item)]);
+            let plain = resolve_evidence(&store.state.read(), &NonEmpty::new(evidence(item)));
             for (n, l) in labels.iter().enumerate() {
                 let n = u8::try_from(n).unwrap_or(0);
                 let _ = store.rename(agent(n), l.and_then(label), op(1)).await;
             }
-            let labelled = resolve_evidence(&store.state.read(), vec![evidence(item)]);
+            let labelled = resolve_evidence(&store.state.read(), &NonEmpty::new(evidence(item)));
             (plain, labelled)
         });
         prop_assert_eq!(plain, labelled);
@@ -65,7 +71,7 @@ proptest! {
         let (alone, with_extra) = runtime.block_on(async {
             let (mut store, _events) = seeded(4).await;
             for (n, e) in &holders {
-                let _ = store.attach(agent(*n), evidence(*e)).await;
+                let _ = store.attach_evidence(agent(*n), evidence(*e)).await;
             }
             let top = evidence(deciding);
             let weaker: Vec<IdentityEvidence> = extra
@@ -74,8 +80,14 @@ proptest! {
                 .filter(|e| e.specificity() < top.specificity())
                 .collect();
             let table = store.state.read();
-            let alone = named(resolve_evidence(&table, vec![top.clone()]));
-            let with_extra = named(resolve_evidence(&table, std::iter::once(top).chain(weaker).collect()));
+            let alone = named(resolve_evidence(&table, &NonEmpty::new(top.clone())));
+            let with_extra = {
+                let mut all = NonEmpty::new(top);
+                for item in weaker {
+                    all.push(item);
+                }
+                named(resolve_evidence(&table, &all))
+            };
             (alone, with_extra)
         });
         prop_assert_eq!(alone, with_extra);
@@ -83,11 +95,11 @@ proptest! {
 }
 
 /// The agents a resolution names.
-fn named(resolution: Option<Resolution>) -> Vec<AgentId> {
+fn named(resolution: Resolution) -> Vec<AgentId> {
     match resolution {
-        Some(Resolution::Known { agent, .. }) => vec![agent],
-        Some(Resolution::Conflict { candidates, .. }) => candidates.into_vec(),
-        Some(Resolution::New { .. }) | None => Vec::new(),
+        Resolution::Known { agent, .. } => vec![agent],
+        Resolution::Conflict { candidates, .. } => candidates.into_vec(),
+        Resolution::New { .. } => Vec::new(),
     }
 }
 
@@ -104,12 +116,18 @@ async fn session_resolves_to_its_main_agent() {
     // Agents 1 and 2 were seeded with an account and a credential; both
     // hold the session, and agent 2 also a harness agent id, which makes it
     // a sub-agent of the session rather than its main agent.
-    assert_eq!(store.attach(agent(1), session.clone()).await, Ok(()));
-    assert_eq!(store.attach(agent(2), session.clone()).await, Ok(()));
-    assert_eq!(store.attach(agent(2), evidence(4)).await, Ok(()));
-    let resolved = resolve_evidence(&store.state.read(), vec![session]);
+    assert_eq!(
+        store.attach_evidence(agent(1), session.clone()).await,
+        Ok(())
+    );
+    assert_eq!(
+        store.attach_evidence(agent(2), session.clone()).await,
+        Ok(())
+    );
+    assert_eq!(store.attach_evidence(agent(2), evidence(4)).await, Ok(()));
+    let resolved = resolve_evidence(&store.state.read(), &NonEmpty::new(session));
     assert!(matches!(
         resolved,
-        Some(Resolution::Known { agent: found, .. }) if found == agent(1)
+        Resolution::Known { agent: found, .. } if found == agent(1)
     ));
 }

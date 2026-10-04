@@ -1,4 +1,4 @@
-//! Keyset paging for the reference stores.
+//! Keyset paging for every reference store.
 //!
 //! [`crosstalk_spec::paging`] leaves the cursor's content to the server: the
 //! last sort key served and the request it was issued for, authenticated.
@@ -22,7 +22,8 @@ use crosstalk_spec::support::NonEmpty;
 static BOOKS: AtomicU64 = AtomicU64::new(0);
 
 /// Every cursor one store has issued, with the request it is bound to (`B`)
-/// and what the next page starts after (`K`).
+/// and what the next page starts after (`K`). A store whose reads take only
+/// a shared lock keeps its book behind its own mutex.
 #[derive(Debug)]
 pub struct CursorBook<B, K> {
     book: u64,

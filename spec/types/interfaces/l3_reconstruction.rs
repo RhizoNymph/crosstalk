@@ -2,9 +2,16 @@
 //! continues. Consumer group `reconstruct`, triggered by `ExchangeCaptured`.
 //!
 //! Implementations:
-//! - `IdentityResolver`: `ApiKeyResolver`, `HeaderResolver`,
-//!   `PromptFingerprintResolver`, and `ChainResolver`, which runs the others
-//!   in order and merges their answers.
+//! - `EvidenceDeriver`: `ApiKeyEvidence`, `HeaderEvidence`,
+//!   `PromptFingerprintEvidence`, and `ChainEvidence`, which runs the others
+//!   in order and concatenates their evidence, most specific first. A
+//!   computation: it reads no store.
+//! - `IdentityResolver`: `PgIdentityResolver`, over the agent table, the
+//!   merge log and the vetoes. `resolve` looks the derived evidence up; the
+//!   reconstruct consumer turns its answer into an attribution, a new agent
+//!   ([`lifecycle::AgentLifecycle::create`]), a merge or an operator review.
+//! - [`lifecycle::AgentLifecycle`]: `PgAgentStore`, the writes that create
+//!   agents, move them between active states and attach new evidence.
 //! - `Threader`: `PrefixThreader` (message-hash prefix match),
 //!   `ResponsesStateThreader` (resolves `Continuation::Increment` exchanges,
 //!   from Codex's WebSocket turns, through the stored response chain),
@@ -21,8 +28,8 @@
 //! [`crate::observed::agent::merge`].
 //!
 //! After every committed change to a stored agent (creation, a registered
-//! agent from config, a state change, a merge, an unmerge, a rename), L3
-//! publishes `Changed::Agent` for each agent whose `QueryApi::agents` row or
+//! agent from config, a state change, new evidence, a merge, an unmerge, a
+//! rename), the store publishes `Changed::Agent` for each agent whose `QueryApi::agents` row or
 //! `QueryApi::agent` detail changed outside its activity: the created agent
 //! and its canonical parent (whose children grew); the source, target and
 //! every repointed agent of a merge; the source, its former target and
@@ -37,10 +44,14 @@
 //! [`agents::AgentReads`]; [`agents::ActivityStore`] keeps when each agent
 //! was last seen.
 //!
-//! Identity resolution uses the most specific evidence present
-//! (`IdentityEvidence::specificity`). Harness ids count only within their
-//! `IdentityScope`. Rotating credentials and prompt fingerprints are weak:
-//! they attach to an agent but never establish one alone.
+//! Identity resolution has two halves. An [`EvidenceDeriver`] computes the
+//! evidence an exchange carries (its credential by stability, its account,
+//! its harness ids scoped by `IdentityScope`, its prompt fingerprint);
+//! [`IdentityResolver::resolve`] answers which stored agents hold it. The
+//! most specific evidence present decides (`IdentityEvidence::specificity`).
+//! Harness ids count only within their `IdentityScope`. Rotating
+//! credentials and prompt fingerprints are weak: they attach to an agent but
+//! never establish one alone.
 //!
 //! An increment exchange whose previous response the gateway never saw (it
 //! was sent around the proxy) is threaded as `Starts` holding only its
@@ -66,6 +77,7 @@
 //! not its canonical agent; readers resolve through `AgentDirectory`.
 
 pub mod agents;
+pub mod lifecycle;
 
 use crate::events::ingest::ConversationDelta;
 use crate::ids::{AgentId, ConversationId, MergeId, OperatorId};
@@ -89,8 +101,8 @@ pub enum Resolution {
     New {
         evidence: NonEmpty<IdentityEvidence>,
     },
-    /// The evidence points at more than one agent. The chain resolver turns
-    /// this into a merge or an operator review.
+    /// The evidence points at more than one agent. The reconstruct consumer
+    /// turns this into a merge or an operator review.
     Conflict {
         candidates: NonEmpty<AgentId>,
         evidence: NonEmpty<IdentityEvidence>,
@@ -184,11 +196,42 @@ pub trait IdentityResolver {
         by: OperatorId,
     ) -> impl Future<Output = Result<Change, ResolveError>> + Send;
 
+    /// Which stored agents hold `evidence` (an [`EvidenceDeriver`]'s
+    /// output), read in one snapshot of the agent table:
+    ///
+    /// - only the most specific items decide (the items whose
+    ///   `IdentityEvidence::specificity` is the highest present); less
+    ///   specific items never make agents conflict;
+    /// - an agent holds an item when its evidence contains an equal value,
+    ///   so harness ids under two scopes never meet; a `HarnessSession` item
+    ///   is held only by an agent holding it and no `HarnessAgent` evidence
+    ///   (the session's main agent);
+    /// - holders are resolved through the merge table.
+    ///
+    /// No holder is `New { evidence }`. One canonical holder is
+    /// `Known { agent, new_evidence }`, `new_evidence` being the items of
+    /// `evidence` that agent's own record does not hold yet, in input order.
+    /// Several are `Conflict` with the canonical holders ascending and the
+    /// deciding items. Labels and harness claims are never read. Changes
+    /// nothing: attaching new evidence is
+    /// [`lifecycle::AgentLifecycle::attach_evidence`].
     fn resolve(
-        &mut self,
-        meta: &ExchangeMeta,
-        request: &[Message],
+        &self,
+        evidence: &NonEmpty<IdentityEvidence>,
     ) -> impl Future<Output = Result<Resolution, ResolveError>> + Send;
+}
+
+/// The identity evidence one exchange carries, derived from its metadata
+/// and request (P4.1's algorithm). A computation: it reads no store, so the
+/// same exchange always yields the same evidence.
+pub trait EvidenceDeriver {
+    /// Every item of evidence `meta` and `request` carry, most specific
+    /// first: the credential by its stability (none for a shared or missing
+    /// one), the account, harness agent and session ids in the exchange's
+    /// `IdentityScope` (also under the previous digests during a secret
+    /// rotation), and the prompt fingerprint. Empty when it carries none, in
+    /// which case the exchange is not attributed.
+    fn derive(&self, meta: &ExchangeMeta, request: &[Message]) -> Vec<IdentityEvidence>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

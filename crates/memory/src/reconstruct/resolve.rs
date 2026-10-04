@@ -1,9 +1,8 @@
-//! The reference lookup behind `IdentityResolver::resolve`.
+//! The reference lookup behind `IdentityResolver::resolve`, and a reference
+//! derivation of the evidence an exchange's client context carries.
 //!
-//! Resolution itself (the chain of resolvers, conflicts turned into merges
-//! or reviews, prompt fingerprints) is L3's algorithm (P4.1). This module is
-//! only the part a store answers: which stored agents hold the evidence an
-//! exchange carries, by the rules the spec states:
+//! Resolution decides over the stored agents by the rules the spec states
+//! (`IdentityResolver::resolve`):
 //!
 //! - the most specific evidence present decides (`IdentityEvidence::
 //!   specificity`); less specific evidence never makes agents conflict;
@@ -13,9 +12,10 @@
 //!   that scope holding the session and no `HarnessAgent` evidence;
 //! - labels and harness claims are never read.
 //!
-//! The evidence comes from the exchange's `ClientContext` only. A
-//! `PromptFingerprint` needs a content hash of the system prompt and first
-//! user turn, which this crate does not compute.
+//! Deriving the evidence is P4.1's `EvidenceDeriver`. [`context_evidence`]
+//! is the part of it the tests here need: the evidence of an exchange's
+//! `ClientContext` only. A `PromptFingerprint` needs a content hash of the
+//! system prompt and first user turn, which this crate does not compute.
 
 use std::collections::BTreeSet;
 
@@ -99,12 +99,16 @@ pub fn context_evidence(client: &ClientContext) -> Vec<IdentityEvidence> {
 /// its most specific evidence, `Known` (the canonical agent, with the
 /// evidence it does not hold yet) when the holders form one cluster, and
 /// `Conflict` (the clusters' canonical agents, ascending, and the deciding
-/// evidence) otherwise. `None` for no evidence at all.
+/// evidence) otherwise.
 pub(crate) fn resolve_evidence(
     table: &AgentTable,
-    evidence: Vec<IdentityEvidence>,
-) -> Option<Resolution> {
-    let top = evidence.iter().map(IdentityEvidence::specificity).max()?;
+    evidence: &NonEmpty<IdentityEvidence>,
+) -> Resolution {
+    let top = evidence
+        .iter()
+        .map(IdentityEvidence::specificity)
+        .max()
+        .unwrap_or_else(|| evidence.first().specificity());
     let deciding: Vec<&IdentityEvidence> = evidence
         .iter()
         .filter(|item| item.specificity() == top)
@@ -135,25 +139,37 @@ pub(crate) fn resolve_evidence(
         .collect();
     let mut canonical = holders.into_iter();
     match (canonical.next(), canonical.next()) {
-        (None, _) => NonEmpty::from_vec(evidence).map(|evidence| Resolution::New { evidence }),
+        (None, _) => Resolution::New {
+            evidence: evidence.clone(),
+        },
         (Some(agent), None) => {
             let held = table.agents.get(&agent);
             let new_evidence = evidence
-                .into_iter()
-                .filter(|item| held.is_none_or(|held| !held.evidence.iter().any(|h| h == item)))
+                .iter()
+                .filter(|item| held.is_none_or(|held| !held.evidence.iter().any(|h| h == *item)))
+                .cloned()
                 .collect();
-            Some(Resolution::Known {
+            Resolution::Known {
                 agent,
                 new_evidence,
-            })
+            }
         }
         (Some(first), Some(second)) => {
-            let candidates = [first, second].into_iter().chain(canonical).collect();
-            let deciding = deciding.into_iter().cloned().collect();
-            Some(Resolution::Conflict {
-                candidates: NonEmpty::from_vec(candidates)?,
-                evidence: NonEmpty::from_vec(deciding)?,
-            })
+            let mut candidates = NonEmpty::new(first);
+            candidates.push(second);
+            for more in canonical {
+                candidates.push(more);
+            }
+            let mut deciding = deciding.into_iter().cloned();
+            let mut evidence =
+                NonEmpty::new(deciding.next().unwrap_or_else(|| evidence.first().clone()));
+            for item in deciding {
+                evidence.push(item);
+            }
+            Resolution::Conflict {
+                candidates,
+                evidence,
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
-//! [`InMemorySearchIndex`]: the reference [`SearchIndex`], exact search over
-//! the stored text and embeddings; and [`InMemoryProjectionSource`], the
-//! reference [`ProjectionSource`] over the same documents.
+//! [`InMemorySearchIndex`]: the reference [`SearchIndex`] and
+//! [`SearchCorpus`], exact search over the stored text and embeddings; and
+//! [`InMemoryProjectionSource`], the reference [`ProjectionSource`] over
+//! the same documents, dated by L7's watermark through [`WatermarkRead`].
 //!
 //! **Scores.** A hit's score depends only on the query, the embedding model
 //! and the document, as the spec requires (no corpus statistics):
@@ -32,43 +33,24 @@ use crosstalk_spec::derived::flow::verdict::{CurrentVerdict, Observed, Verdict, 
 use crosstalk_spec::ids::{AgentId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
+use crosstalk_spec::interfaces::l6_analysis::corpus::{
+    CorpusError, IndexedTransmission, SearchCorpus,
+};
 use crosstalk_spec::interfaces::l6_analysis::{
     ProjectionSource, Sample, SampleError, SampleRow, SearchError, SearchHit, SearchIndex,
     SearchQuery, SearchResults,
 };
+use crosstalk_spec::interfaces::l7_topology::WatermarkRead;
 use crosstalk_spec::paging::{PageRequest, SearchList};
 use crosstalk_spec::support::{Similarity, TimeWindow, Timestamp, Watermark};
 
 use super::aliases::Directories;
 use super::catalog::{InMemoryTopicCatalog, TopicVersions};
-use super::support::{lock, similarity};
-use crate::surface::paging::{CursorBook, page_after};
+use super::support::similarity;
+use crate::support::{CursorBook, lock, page_after};
 
 /// The most characters of a document's text a hit's snippet shows.
 pub const SNIPPET_CHARS: usize = 160;
-
-/// One confirmed transmission as the index stores it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexedTransmission {
-    pub transmission: TransmissionId,
-    /// As attributed; resolved at query time.
-    pub from: AgentId,
-    pub to: AgentId,
-    /// As stored; its channel is resolved at query time.
-    pub route: Route,
-    /// `Confirmed::at`.
-    pub confirmed_at: Timestamp,
-    /// The matched content, as the embedder saw it.
-    pub text: String,
-    /// Its embedding, when one was made.
-    pub embedding: Option<Embedding>,
-}
-
-/// Reads the aggregate watermark when a sample is taken. The edge store
-/// implements it; [`FixedWatermark`] stands in for it.
-pub trait WatermarkRead: Send + Sync {
-    fn current_watermark(&self) -> Watermark;
-}
 
 /// A watermark that never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,76 +160,6 @@ impl<D: AgentDirectory + ChannelDirectory + Send + Sync> InMemorySearchIndex<D> 
         lock(&self.state).model.clone()
     }
 
-    /// Add or re-index a transmission. Its embedding, if any, replaces the
-    /// one from the same model.
-    pub fn index(&self, document: IndexedTransmission) {
-        let mut state = lock(&self.state);
-        let mut embeddings = state
-            .docs
-            .remove(&document.transmission)
-            .map(|doc| doc.embeddings)
-            .unwrap_or_default();
-        if let Some(embedding) = document.embedding {
-            embeddings.retain(|kept| kept.model() != embedding.model());
-            embeddings.push(embedding);
-        }
-        state.docs.insert(
-            document.transmission,
-            Doc {
-                from: document.from,
-                to: document.to,
-                route: document.route,
-                confirmed_at: document.confirmed_at,
-                text: document.text,
-                embeddings,
-            },
-        );
-    }
-
-    /// Remove a transmission from the index.
-    pub fn remove(&self, transmission: TransmissionId) {
-        lock(&self.state).docs.remove(&transmission);
-    }
-
-    /// The embedder's model changed: queries must now be embedded with
-    /// `model`. Vectors of the old model stay until
-    /// [`InMemorySearchIndex::drop_model`].
-    pub fn set_model(&self, model: EmbeddingModel) {
-        lock(&self.state).model = model;
-    }
-
-    /// Delete every vector of `model`.
-    pub fn drop_model(&self, model: &EmbeddingModel) {
-        let mut state = lock(&self.state);
-        for doc in state.docs.values_mut() {
-            doc.embeddings
-                .retain(|embedding| embedding.model() != model);
-        }
-        if !state.dropped_models.contains(model) {
-            state.dropped_models.push(model.clone());
-        }
-    }
-
-    /// `VerdictSet`: record the verdict in the index's copy
-    /// ([`CurrentVerdict::observe`]); the first one seen becomes the copy.
-    pub fn judge(
-        &self,
-        transmission: TransmissionId,
-        verdict: Option<Verdict>,
-        revision: VerdictRevision,
-    ) -> Observed {
-        let mut state = lock(&self.state);
-        match state.verdicts.get_mut(&transmission) {
-            Some(copy) => copy.observe(verdict, revision),
-            None => {
-                state
-                    .verdicts
-                    .insert(transmission, CurrentVerdict { verdict, revision });
-                Observed::Newer
-            }
-        }
-    }
-
     /// The document as a filter sees it under `version`, now.
     fn subject_admits(
         &self,
@@ -291,6 +203,73 @@ impl<D: AgentDirectory + ChannelDirectory + Send + Sync> InMemorySearchIndex<D> 
             });
         }
         Ok(version)
+    }
+}
+
+impl<D: AgentDirectory + ChannelDirectory + Send + Sync> SearchCorpus for InMemorySearchIndex<D> {
+    async fn index(&mut self, document: IndexedTransmission) -> Result<(), CorpusError> {
+        let mut state = lock(&self.state);
+        let mut embeddings = state
+            .docs
+            .remove(&document.transmission)
+            .map(|doc| doc.embeddings)
+            .unwrap_or_default();
+        if let Some(embedding) = document.embedding {
+            embeddings.retain(|kept| kept.model() != embedding.model());
+            embeddings.push(embedding);
+        }
+        state.docs.insert(
+            document.transmission,
+            Doc {
+                from: document.from,
+                to: document.to,
+                route: document.route,
+                confirmed_at: document.confirmed_at,
+                text: document.text,
+                embeddings,
+            },
+        );
+        Ok(())
+    }
+
+    async fn remove(&mut self, transmission: TransmissionId) -> Result<(), CorpusError> {
+        lock(&self.state).docs.remove(&transmission);
+        Ok(())
+    }
+
+    async fn set_model(&mut self, model: EmbeddingModel) -> Result<(), CorpusError> {
+        lock(&self.state).model = model;
+        Ok(())
+    }
+
+    async fn drop_model(&mut self, model: &EmbeddingModel) -> Result<(), CorpusError> {
+        let mut state = lock(&self.state);
+        for doc in state.docs.values_mut() {
+            doc.embeddings
+                .retain(|embedding| embedding.model() != model);
+        }
+        if !state.dropped_models.contains(model) {
+            state.dropped_models.push(model.clone());
+        }
+        Ok(())
+    }
+
+    async fn judge(
+        &mut self,
+        transmission: TransmissionId,
+        verdict: Option<Verdict>,
+        revision: VerdictRevision,
+    ) -> Result<Observed, CorpusError> {
+        let mut state = lock(&self.state);
+        Ok(match state.verdicts.get_mut(&transmission) {
+            Some(copy) => copy.observe(verdict, revision),
+            None => {
+                state
+                    .verdicts
+                    .insert(transmission, CurrentVerdict { verdict, revision });
+                Observed::Newer
+            }
+        })
     }
 }
 
@@ -463,7 +442,7 @@ pub fn sample_key(seed: u64, transmission: TransmissionId) -> [u8; 32] {
 impl<D, W> ProjectionSource for InMemoryProjectionSource<D, W>
 where
     D: AgentDirectory + ChannelDirectory + Send + Sync,
-    W: WatermarkRead,
+    W: WatermarkRead + Send + Sync,
 {
     async fn sample(&self, spec: &ProjectionSpec) -> Result<Sample, SampleError> {
         let index = &self.index;

@@ -10,7 +10,8 @@
 //! equal logs of every transmission id and an equal all-time quality tally.
 //! It also checks that `set` never changes a stored transmission
 //! (`flow.verdict.state-untouched`), through
-//! [`TransmissionReads::transmission`].
+//! `TransmissionStore::transmission`, and that every stored transmission
+//! reads back as last saved.
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -30,33 +31,21 @@ use crosstalk_spec::ids::{
     AccessId, AgentId, ChannelId, ExchangeId, MessageHash, OperatorId, ResourceId, SpanId,
     TransmissionId,
 };
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
 use crosstalk_spec::observed::message::{PartRef, ToolCallId};
 use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty, Similarity, TimeWindow, Timestamp};
 use proptest::prelude::*;
 
-use super::{MemoryVerdicts, SeedTransmissions};
+use super::MemoryVerdicts;
 use crate::flow::registry::model::compare_events;
-use crate::pipeline::harness::{HarnessConfig, Mismatch, run, same};
-use crate::pipeline::{Outbox, drain};
+use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
+use crate::support::{Outbox, drain};
 
-/// A store's stored transmissions, read back. The Postgres store has this
-/// read for the surface's transmission rows.
-pub trait TransmissionReads {
-    fn transmission(&self, id: TransmissionId)
-    -> impl Future<Output = Option<Transmission>> + Send;
-}
+/// Every spec trait a transmission store implements.
+pub trait VerdictStore: TransmissionVerdicts + TransmissionStore {}
 
-impl TransmissionReads for MemoryVerdicts {
-    async fn transmission(&self, id: TransmissionId) -> Option<Transmission> {
-        MemoryVerdicts::transmission(self, id)
-    }
-}
-
-/// Every trait a verdict store implements for the harness.
-pub trait VerdictStore: TransmissionVerdicts + SeedTransmissions + TransmissionReads {}
-
-impl<T: TransmissionVerdicts + SeedTransmissions + TransmissionReads> VerdictStore for T {}
+impl<T: TransmissionVerdicts + TransmissionStore> VerdictStore for T {}
 
 /// How many transmission ids the harness draws from.
 pub const TRANSMISSIONS: u8 = 5;
@@ -247,33 +236,32 @@ fn id(n: u8) -> TransmissionId {
 }
 
 /// Run the harness: the store `make` builds from its outbox must agree with
-/// [`MemoryVerdicts`]. Panics on the first disagreement.
-pub fn check_transmission_verdicts<S, F>(config: HarnessConfig, make: F)
+/// [`MemoryVerdicts`]. A failure is a [`ModelMismatch`] with the shrunk
+/// sequence.
+pub fn check_transmission_verdicts<S, F>(
+    config: HarnessConfig,
+    make: F,
+) -> Result<(), ModelMismatch>
 where
     S: VerdictStore,
     F: Fn(Outbox) -> S,
 {
-    run(
-        "verdict store",
-        config,
-        verdict_ops(config.max_ops),
-        |ops| {
-            let (sut_outbox, sut_events) = Outbox::channel();
-            let sut = make(sut_outbox);
-            run_case(sut, sut_events, ops)
-        },
-    );
+    run(config, verdict_ops(config.max_ops), |runtime, ops| {
+        let (sut_outbox, sut_events) = Outbox::channel();
+        let sut = make(sut_outbox);
+        runtime.block_on(run_case(sut, sut_events, ops))
+    })
 }
 
 async fn run_case<S: VerdictStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
-    ops: Vec<VerdictOp>,
-) -> Result<(), Mismatch> {
+    ops: &[VerdictOp],
+) -> Result<(), Divergence> {
     let (model_outbox, mut model_events) = Outbox::channel();
     let mut model = MemoryVerdicts::new(model_outbox);
     let all_time = TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(1_000))
-        .map_err(|_| "window".to_owned())?;
+        .map_err(|_| Divergence::new(0, "window"))?;
     for (step, op) in ops.iter().enumerate() {
         match op {
             VerdictOp::Put {
@@ -283,7 +271,8 @@ async fn run_case<S: VerdictStore>(
                 route: r,
                 opened_at,
             } => {
-                let state = state(*n, classes).ok_or(format!("step {step}: state fixture"))?;
+                let state =
+                    state(*n, classes).ok_or_else(|| Divergence::new(step, "state fixture"))?;
                 let stored = Transmission {
                     id: transmission_id(*transmission),
                     to: reader(),
@@ -291,8 +280,9 @@ async fn run_case<S: VerdictStore>(
                     opened_at: Timestamp::from_micros(*opened_at),
                     state,
                 };
-                sut.put(stored.clone()).await;
-                model.put(stored).await;
+                let s = sut.save(stored.clone()).await;
+                let m = model.save(stored).await;
+                same(step, "save", &s, &m)?;
             }
             VerdictOp::Set {
                 transmission,
@@ -337,7 +327,7 @@ async fn run_case<S: VerdictStore>(
                     Timestamp::from_micros(*start),
                     Timestamp::from_micros(start + len),
                 )
-                .map_err(|_| format!("step {step}: window"))?;
+                .map_err(|_| Divergence::new(step, "window"))?;
                 same(
                     step,
                     "quality",
@@ -353,6 +343,12 @@ async fn run_case<S: VerdictStore>(
                 "every log",
                 &sut.log(id(n)).await,
                 &model.log(id(n)).await,
+            )?;
+            same(
+                step,
+                "every transmission",
+                &sut.transmission(id(n)).await,
+                &model.transmission(id(n)).await,
             )?;
         }
         same(

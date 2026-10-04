@@ -23,16 +23,16 @@ use crosstalk_spec::interfaces::l7_topology::{
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest, PageSize};
 use crosstalk_spec::support::TimeWindow;
 
-use super::subject::{EdgeSubject, ReferenceEdges};
+use super::subject::{EdgeSubject, EdgeWorld, ReferenceEdges, catalog_ready};
 use super::{Ledger, check_graph, revision, weighting};
-use crate::analysis::catalog::Activated;
 use crate::model::analysis::harness_model;
 use crate::model::build::{
     access, agent, bucket_width, channel, non_zero, raw, topic, transmission, ts, unit, window,
 };
 use crate::model::{Divergence, holds, same};
 use crate::topology::fold::{kind_index, route_key};
-use crate::topology::store::Activation;
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{CatalogActivation, TopicLifecycle};
+use crosstalk_spec::interfaces::l7_topology::Activation;
 
 /// A window of whole 10 µs buckets, or one cut 3 µs into its first bucket.
 #[derive(Debug, Clone, Copy)]
@@ -228,6 +228,7 @@ fn contribution(
             topic,
             watched: false,
         },
+        cause: ClassificationCause::Confirmation,
     }
 }
 
@@ -357,21 +358,21 @@ async fn activate_pending<S: EdgeSubject>(
     world: &mut World,
 ) -> Result<(), Divergence> {
     for version in world.pending.clone() {
-        let theirs = subject.activate_if_complete(version).await;
-        let ours = reference.activate_if_complete(version).await;
+        let theirs = subject.activate(version).await;
+        let ours = reference.activate(version).await;
         same(step, "activate", &theirs, &ours)?;
         if !matches!(ours, Ok(Activation::Switched { .. })) {
             continue;
         }
         world.pending.remove(&version);
         let at = ts(world.now);
-        let theirs = subject.catalog_activated(version, at).await;
-        let ours = reference.catalog_activated(version, at).await;
+        let theirs = subject.mark_active(version, at).await;
+        let ours = reference.mark_active(version, at).await;
         same(step, "catalog activation", &theirs, &ours)?;
         if version == world.newest.0 {
             world.active = world.newest.clone();
         }
-        if let Ok(Activated::Switched { dropped, .. }) = ours {
+        if let Ok(CatalogActivation::Switched { dropped, .. }) = ours {
             for gone in dropped {
                 let theirs = subject.drop_version(gone).await;
                 let ours = reference.drop_version(gone).await;
@@ -387,11 +388,13 @@ async fn activate_pending<S: EdgeSubject>(
 
 /// Play `op` on both stores, comparing everything it returns, and keep
 /// the ledger and the world.
+#[allow(clippy::too_many_arguments)]
 pub async fn play<S: EdgeSubject>(
     step: usize,
     op: &EdgeOp,
     subject: &mut S,
     reference: &mut ReferenceEdges,
+    outside: &EdgeWorld,
     ledger: &mut Ledger,
     world: &mut World,
 ) -> Result<(), Divergence> {
@@ -452,24 +455,23 @@ pub async fn play<S: EdgeSubject>(
                 })
                 .collect();
             let ids: Vec<TopicId> = made.iter().map(|one| one.id).collect();
-            let theirs = subject.catalog_ready(made.clone(), ts(world.now)).await;
-            let ours = reference.catalog_ready(made, ts(world.now)).await;
+            let theirs = catalog_ready(subject, made.clone(), ts(world.now)).await;
+            let ours = catalog_ready(reference, made, ts(world.now)).await;
             same(step, "catalog ready", &theirs, &ours)?;
             let Ok(version) = ours else { return Ok(()) };
             let mut processed = 0u64;
             for (index, (n, facts)) in world.transmissions.clone().into_iter().enumerate() {
-                let one = contribution(
-                    n,
-                    facts,
-                    version,
-                    pick(&ids, picks.get(index).copied().flatten()),
-                );
-                let theirs = subject
-                    .apply_classified(&one, ClassificationCause::Refit)
-                    .await;
-                let ours = reference
-                    .apply_classified(&one, ClassificationCause::Refit)
-                    .await;
+                let one = EdgeContribution {
+                    cause: ClassificationCause::Refit,
+                    ..contribution(
+                        n,
+                        facts,
+                        version,
+                        pick(&ids, picks.get(index).copied().flatten()),
+                    )
+                };
+                let theirs = subject.apply(&one).await;
+                let ours = reference.apply(&one).await;
                 same(step, "refit classification", &theirs, &ours)?;
                 if ours.is_ok() {
                     ledger
@@ -480,8 +482,9 @@ pub async fn play<S: EdgeSubject>(
                 processed += 1;
             }
             let expected = processed + u64::from(*shortfall);
-            subject.version_ready(version, expected).await;
-            reference.version_ready(version, expected).await;
+            let theirs = subject.version_ready(version, expected).await;
+            let ours = reference.version_ready(version, expected).await;
+            same(step, "version ready", &theirs, &ours)?;
             world.newest = (version, ids);
             world.pending.insert(version);
             activate_pending(step, subject, reference, ledger, world).await?;
@@ -552,31 +555,19 @@ pub async fn play<S: EdgeSubject>(
             let ours = reference.apply_access(&one).await;
             same(step, &label, &theirs, &ours)?;
         }
+        // The world both stores read: a refused merge or supersession
+        // leaves it as it was for both.
         EdgeOp::Merge { from, into } => {
-            let theirs = subject.merge(agent(*from), agent(*into));
-            same(
-                step,
-                &label,
-                &theirs,
-                &reference.merge(agent(*from), agent(*into)),
-            )?;
+            let _ = outside.directory.merge(agent(*from), agent(*into));
         }
         EdgeOp::Unmerge { agent: a } => {
-            subject.unmerge(agent(*a));
-            reference.unmerge(agent(*a));
+            outside.directory.unmerge(agent(*a));
         }
         EdgeOp::Supersede { channel: c, by } => {
-            let theirs = subject.supersede(channel(*c), channel(*by));
-            same(
-                step,
-                &label,
-                &theirs,
-                &reference.supersede(channel(*c), channel(*by)),
-            )?;
+            let _ = outside.directory.supersede(channel(*c), channel(*by));
         }
         EdgeOp::Parent { agent: a, parent } => {
-            subject.set_parent(agent(*a), parent.map(agent));
-            reference.set_parent(agent(*a), parent.map(agent));
+            outside.nodes.set_parent(agent(*a), parent.map(agent));
         }
         EdgeOp::Graph {
             window: seed,
@@ -596,7 +587,7 @@ pub async fn play<S: EdgeSubject>(
                 &ours.as_ref().map(graph_view),
             )?;
             if let Ok(read) = &theirs {
-                check_graph(step, &read.value, ledger, &reference.directory, &filter)?;
+                check_graph(step, &read.value, ledger, &outside.directory, &filter)?;
             }
         }
         EdgeOp::Totals {

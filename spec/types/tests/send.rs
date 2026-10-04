@@ -22,6 +22,7 @@
 mod detection;
 mod pipeline;
 mod surface;
+mod writes;
 
 /// Implements every async trait. It has no values, so no method body runs.
 pub(super) enum Dummy {}

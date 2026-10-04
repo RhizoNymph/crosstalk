@@ -198,6 +198,14 @@ be asked. The page cursor binds the whole filter, window included. The
 watermark is read from L7 before the registry and the buckets, and the UI
 re-queries rows on `Watermark` as well as `ChannelChanged`.
 
+**Where the rows come from.** The registry serves the stored channels
+through `ChannelReads` (`l5_flow/channels.rs`): `channel(id)` is the stored
+record behind `QueryApi::channel` (a superseded channel as itself, with its
+supersession), and `channels(filter, page)` pages the channels
+`ChannelFilter::matches` keeps, newest id first, its cursor bound to the
+filter, behind `QueryApi::channels`; the surface adds each row's seed,
+counts and standing (`flow.channel-reads.list-matches-filter`).
+
 **Promotion preview.** `promotion_preview(channel, pattern)` shows what
 `PromoteChannel { channel, pattern, .. }` would do if sent now:
 
@@ -425,7 +433,9 @@ subject as raised; matching against channels and agents resolves it with
 through it. Alert ids are never aliased. On the wire it is the alert's
 JSON or `null` (`tests/golden/alerts/alert_found.json`,
 `alert_unknown.json`); the alert inbox is the wire contract's reference
-area ([wire_contract.md](wire_contract.md)).
+area ([wire_contract.md](wire_contract.md)). The alert store serves it,
+and `alerts`, `alert_rules`, `alert_rule` and `present`'s rule version,
+through `AlertReads` (`l6_analysis/alerts.rs`).
 
 ## Files
 

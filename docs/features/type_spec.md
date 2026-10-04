@@ -97,6 +97,16 @@ The types follow data through the stack:
    kept, so redelivery and reordering change nothing). `ClaimStore::claims`
    reads a canonical agent's claims as `ClaimSet::union` over every agent
    resolving to it, so merges and unmerges change no stored claim.
+   Resolution has two halves: an `EvidenceDeriver` (a computation) derives
+   the `IdentityEvidence` an exchange carries, and
+   `IdentityResolver::resolve(&NonEmpty<IdentityEvidence>)` answers which
+   stored agents hold its most specific items (`New`, `Known` with the
+   evidence the agent lacks, or `Conflict`). The consumer then writes
+   through `AgentLifecycle` (`l3_reconstruction/lifecycle.rs`): `create`
+   (`NewAgent`, from config `Registered` or from traffic `Provisional`,
+   recording the first exchange's activity in the same transaction),
+   `advance` (`Advance::FirstTraffic` or `Establish`, the only forward
+   moves) and `attach_evidence`; each publishes `Changed::Agent`.
    `ActivityStore::record` keeps, the same way, the latest exchange start
    per attributed agent, and `last_seen` reads the latest over a canonical
    agent's cluster. `AgentReads` (`l3_reconstruction/agents.rs`) serves the
@@ -117,7 +127,10 @@ The types follow data through the stack:
    and inserted into the `FingerprintIndex` (which accepts only an
    `OriginatedSpan`). New inputs and the output are run through the
    `Decoder`s, fingerprinted and looked up, with an optional
-   `SemanticMatcher` for paraphrase. Hits on another agent's span become a
+   `SemanticMatcher` for paraphrase. Every index call that measures the
+   retention window (`insert`, `lookup`, `frequency`, `observe`, `evict`)
+   takes `now` as an argument, the time of the exchange being scanned.
+   Hits on another agent's span become a
    `ContentMatch` (`DetectEvent::ContentMatched`); a hit in the output that
    no visible input explains has carrier `ReaderOutput`. Every
    `SpanLocation` (a span's, or a match's `read_at`) is a byte range into
@@ -128,7 +141,14 @@ The types follow data through the stack:
    the stored bodies.
 6. **L5 flow.** `ResourceExtractor`s turn tool calls and results into
    `ExtractedAccess`es. The `ChannelRegistry` maps each `Locator` to a known,
-   declared or new channel, and the access is stored as an `Access`. The
+   declared or new channel, and the consumer writes what it saw through
+   `ChannelTraffic` (`l5_flow/channels.rs`): `discover` (a channel for a
+   `New` locator), `add_resource`, `record_access`, `set_detection`
+   (`DetectionUpdate`) and `confirm` (advancing the canonical channel's
+   detection); `ChannelReads` returns a stored channel by id and a
+   `ChannelFilter`ed page of them. Each transmission state the correlator
+   decides is stored with `TransmissionStore::save`
+   (`l5_flow/transmissions.rs`), which keeps its verdict log. The
    `Correlator` turns accesses, content matches and clock ticks into
    `TransmissionUpdate`s, which move a `Transmission` through
    `TransmissionState`, choosing its `Route` (`Delegation`, `Channel`,
@@ -185,23 +205,37 @@ The types follow data through the stack:
    from L7 makes the version `Active` and every older one `Superseded`;
    the catalog then enforces its `RetentionPolicy` (see
    [query_surface.md](query_surface.md#retention-and-watermarks)), as it
-   does after an unpin and on start. `TopicSizes` count topic
+   does after an unpin and when `analyze` starts, and publishes
+   `TopicVersionDropped` itself, from the transaction that marks each
+   version dropped. The fit lifecycle is the catalog's write side,
+   `TopicLifecycle` (`l6_analysis/lifecycle.rs`): `begin_fit`,
+   `complete_fit` (topics and the lineage), `fail_fit`, `mark_ready`,
+   `mark_active` (a `CatalogActivation`) and `assign` (a
+   `StoredAssignment`). `TopicSizes` count topic
    assignments per topic (outliers apart), optionally over a window. The
    `SearchIndex` takes a `TopologyFilter`, pages hits in (score, id) order
-   and reports the topic-model version it resolved (`SearchResults`).
+   and reports the topic-model version it resolved (`SearchResults`); its
+   write side is `SearchCorpus` (`l6_analysis/corpus.rs`: `index` an
+   `IndexedTransmission`, `remove`, `judge`, `set_model`, `drop_model`).
    Projection jobs go through the `ProjectionStore`: a fitter claims the
    oldest queued job, reads its `Sample` from the `ProjectionSource`, lays it
    out with the seeded, deterministic `LayoutFitter`, and stores the
-   `ProjectionFrame` (see [query_surface.md](query_surface.md#projections)). `AlertRuleEval`s turn envelopes into
+   `ProjectionFrame` (see [query_surface.md](query_surface.md#projections));
+   a frame that does not belong to its job is `FrameMismatch`. `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), or drops as `RuleInactive` when the rule stopped
    evaluating, and suppresses on sanctioning or rule disabling, and on a
    `VerdictSet` holding `FalseDetection` suppresses every active alert
    about that transmission (`SuppressReason::OperatorRejected`), after which
    triage opens nothing about it (`TriageOutcome::OperatorRejected`) while
-   that verdict is current. Every stored
+   that verdict is current. Every suppression is stamped with the time the
+   caller passes (the triggering event's). Every stored
    change to an alert bumps its `AlertRevision` and publishes
-   `AlertChanged`. Rules live in an `AlertRuleSet`: the five `BuiltinRule`s,
+   `AlertChanged`. The same store implements `AlertRuleMaintenance`
+   (`topic_version_ready`, `embedding_model_changed`), `AlertActions`
+   (`acknowledge`, `resolve`, refusing an open alert with
+   `NotAcknowledged`) and `AlertReads` (`rule`, `rules`, `alert`, `alerts`,
+   `rule_version`) (`l6_analysis/alerts.rs`). Rules live in an `AlertRuleSet`: the five `BuiltinRule`s,
    each exactly once under a fixed reserved id, which operators can only
    enable or disable, and user rules (`WatchedTopic`, `SemanticQuery`)
    under server-assigned ids. Each `AlertRuleDef` has a name, its sinks
@@ -219,12 +253,15 @@ The types follow data through the stack:
    a `StaleReason`) is separate from status and no operator action sets it.
    Every stored change to a rule bumps its `RuleRevision` and publishes
    `AlertRuleChanged`.
-8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
-   `EdgeKey` bucket (per topic-model version, `BucketWidth` wide), activates
-   a version once it is complete (it has processed as many distinct `Refit`
+8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` (which
+   carries its `ClassificationCause`) to its `EdgeKey` bucket (per
+   topic-model version, `BucketWidth` wide), records each
+   `TopicVersionReady` count (`version_ready`, the first kept), activates a
+   version once it is complete (it has processed as many distinct `Refit`
    classifications under it as `TopicVersionReady` counts; `Confirmation`
-   classifications under it do not count) and publishes
-   `TopicVersionActivated`, and
+   classifications under it do not count; `activate` returns an
+   `Activation`) and publishes `TopicVersionActivated` from the switching
+   transaction, and
    answers `TopologyGraph` queries over canonical agents with per-edge
    `Share`s. A series query takes a `SeriesGrid` (a bucket-aligned window
    cut into `SeriesStep`s, each a whole number of buckets), a `Weighting`, a
@@ -245,8 +282,8 @@ The types follow data through the stack:
    a version's buckets go only on `TopicVersionDropped`
    (`EdgeStore::drop_version`). The topology consumer recomputes the
    watermark from a `FrontierSource` at least once per bucket width
-   (`EdgeStore::advance_watermark`), publishes `WatermarkAdvanced` on each
-   strict advance, and refuses a contribution into a final bucket
+   (`EdgeStore::advance_watermark`); the store publishes `WatermarkAdvanced`
+   on each strict advance, and refuses a contribution into a final bucket
    (`LateContribution`). Graph, totals, series and drill-down results come
    back `Watermarked`. `EdgeStore::apply_access` counts each `AccessRecorded`
    into an `AccessEdge` bucket (agent, channel, op, bucket), idempotent on
@@ -254,8 +291,10 @@ The types follow data through the stack:
    channel-centred graph. `EdgeStore::agent_traffic` gives listed agents'
    transmissions in and out over a window, equal to their node counts in
    `graph` under the default filter (for agent rows). Every query resolves stored agents and
-   channels through the two directories and fills graph nodes from the
-   agent store, the claim store and the channel registry. Reads (graph,
+   channels through the two directories and fills graph nodes from
+   `NodeFacts` (`AgentFacts`, `ChannelFacts`; a synchronous cache of L3's
+   and L5's facts, with fixed defaults for a node it has not seen).
+   Readers outside L7 read its exposed watermark through `WatermarkRead`. Reads (graph,
    totals, channel topology, series, drill-down, watermark) fail with
    `EdgeQueryError`; writes with `EdgeError`.
 9. **L8 surface.** `QueryApi` serves every read the UI makes,
@@ -263,13 +302,40 @@ The types follow data through the stack:
    the layer that owns its effect, `LiveFeed` streams id-only change
    events built from every store's `Changed`, and `AuditLog` records every
    action call, config change and export, each for a `Caller` the
-   `OperatorDirectory` built. `AlertSink`s deliver each alert to the sinks
-   its rule lists. The surface is its own feature:
+   `OperatorDirectory` built; the directory is stored by an
+   `OperatorStore` (`load`, `operators`, `caller`). `AlertSink`s deliver
+   each alert to the sinks its rule lists, and a `SinkRegistry` records
+   each delivery (`record_delivery`, `sinks`). The surface is its own feature:
    [query_surface.md](query_surface.md), with the read models it serves
    in [read_models.md](read_models.md) and export in
    [export.md](export.md).
 
 ### Conventions for the layer traits
+
+- **Stores have a spec write side.** Every write a consumer, the surface
+  or config makes to a stateful store is a spec trait method (the
+  `AgentLifecycle`, `ChannelTraffic`, `TransmissionStore`,
+  `TopicLifecycle`, `SearchCorpus`, `AlertRuleMaintenance`, `AlertActions`,
+  `OperatorStore` and `SinkRegistry` traits, and the write methods of the
+  existing traits), so the in-memory and Postgres stores implement the
+  same traits and a model-based harness drives either through the spec
+  alone. Reads of other layers' caches go through spec read traits
+  (`AgentDirectory`, `ChannelDirectory`, `NodeFacts`, `WatermarkRead`).
+- **A store publishes what it decides.** A write that commits a change
+  publishes, from its transaction's outbox, `Changed` for every entity it
+  changed and the bus events of decisions taken inside the store (merges,
+  promotions, verdict records, triage outcomes, rules going stale,
+  retention drops, edge activation, watermark advances), and returns a
+  typed outcome; no store method returns an event for its caller to
+  publish. Events announcing a consumer's own computation (a lookup's
+  `New` behind `ChannelDiscovered`, correlator updates, classifications,
+  new evidence behind `AgentSeen`) are the consumer's, published once the
+  write commits. `TopicVersionDropped` is the topic catalog's.
+- **Time is an argument.** Every store method whose effect or answer
+  depends on the time takes it as a `Timestamp` (`at` for what it records,
+  `now` for a window or lease measured from it); no store reads a clock.
+  The caller passes the triggering event's time or a reading of the
+  `Clock` it was handed.
 
 - **Async methods return `Send` futures.** Every async trait method in
   `interfaces/` is declared in its desugared form,
@@ -342,7 +408,7 @@ The types follow data through the stack:
 | `spec/types/aggregates/alert/mod.rs` | Alerts | `AlertSubject`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState` (`kind`, `is_active`), `AlertStateKind` (`ALL`, `is_active`; re-exported by L8), `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge`, `rename` and `resolve` (over derived evidence), `EvidenceDeriver`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError`, and in `l3_reconstruction/lifecycle.rs` `AgentLifecycle` (`NewAgent`, `AgentOrigin`, `Advance`, `AgentLifecycleError`) (L3); `ChannelDirectory`, `ChannelRegistry::declare`, `set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use`, in `l5_flow/channels.rs` `ChannelTraffic` (`DetectionUpdate`, `TrafficError`) and `ChannelReads`, in `l5_flow/transmissions.rs` `TransmissionStore` (`TransmissionStoreError`) (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), in `l6_analysis/lifecycle.rs` `TopicLifecycle` (`StoredAssignment`, `CatalogActivation`, `TopicLifecycleError`), in `l6_analysis/corpus.rs` `SearchCorpus` (`IndexedTransmission`, `CorpusError`), in `l6_analysis/alerts.rs` `AlertRuleMaintenance`, `AlertActions` (`AlertActionError`) and `AlertReads` (`AlertReadError`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `version_ready`, `activate` (`Activation`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `NodeFacts` (`AgentFacts`, `ChannelFacts`), `WatermarkRead`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
 | `spec/types/tests/send.rs`, `tests/send/{pipeline,detection,surface}.rs` | Compile-time check that every async trait method's future is `Send` and every associated stream or handle `Send + 'static`: an uninhabited `Dummy` implementing each trait with `async fn`, and one check function generic over each trait | `Dummy`, `assert_send`, `assert_send_static`, `arg` (test-only) |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
@@ -482,9 +548,16 @@ The types follow data through the stack:
   evaluates only when enabled and current.
   Once a disable returns, the rule has no active alerts and triage opens
   none for it.
-- L7 publishes `TopicVersionActivated { version, previous }` exactly once
-  per switch, only after `EdgeStore::activate` has switched graph and
-  series queries, and never for a version older than the active one.
+- The edge store publishes `TopicVersionActivated { version, previous }`
+  exactly once per switch, from the transaction in which
+  `EdgeStore::activate` switches graph and series queries (it returns
+  `Activation::Switched` then), and never for a version older than the
+  active one.
+- `TopicVersionDropped` is published by the topic catalog alone, once per
+  dropped version, from the transaction that marks it dropped and deletes
+  its assignments.
+- A refused store write changes nothing and publishes nothing; every
+  store method that depends on the time takes it as an argument.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges;
   every graph is built by `TopologyGraph::new`, which checks shares,
   edges and nodes, so no value breaks a rule.
