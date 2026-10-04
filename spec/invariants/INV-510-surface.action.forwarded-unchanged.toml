@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.forwarded-unchanged"
-statement = "Each MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule and SetRuleEnabled that returns Ok passed exactly its requested ids, label, name, rule, sinks, enabled flag, pattern, policy and note to IdentityResolver::merge, unmerge or rename, ChannelRegistry::promote (a Promotion holding the requested pattern, policy and note, stamped with the caller and accept time), or AlertRuleStore::create, update or set_enabled."
+statement = "Each MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule and SetRuleEnabled that returns Ok passed exactly its requested ids, label, name, rule, sinks, enabled flag, pattern, policy and note to IdentityResolver::merge, unmerge or rename, ChannelRegistry::promote (in a Promotion), or AlertRuleStore::create, update or set_enabled."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

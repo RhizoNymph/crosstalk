@@ -22,7 +22,9 @@ use crate::events::insight::ClassificationCause;
 use crate::events::insight::InsightEvent;
 use crate::events::{BusEvent, Subject};
 use crate::ids::ConversationId;
-use crate::ids::{AlertId, AlertRuleId, MergeId, OperatorId};
+use crate::ids::{AlertId, AlertRuleId, MergeId, OperatorId, ProjectionId};
+use crate::interfaces::l8_surface::Permission;
+use crate::interfaces::l8_surface::live::UiEvent;
 use crate::observed::agent::{AgentLabel, IdentityEvidence, IdentityScope, MergeAuthor};
 use crate::observed::client::UpstreamId;
 use crate::observed::client::{
@@ -382,4 +384,97 @@ fn samples_cover_every_subject() {
     let sampled: HashSet<Subject> = sample_events().iter().map(BusEvent::subject).collect();
     let every: HashSet<Subject> = every_subject().into_iter().collect();
     assert_eq!(sampled, every);
+}
+
+/// One change notification of every `Changed` variant: the feed's only
+/// source. Adding a variant breaks the exhaustive match in `declared`,
+/// which is the reminder to sample it here.
+fn every_change() -> Vec<Changed> {
+    fn declared(changed: Changed) -> Changed {
+        match changed {
+            Changed::Alert(_)
+            | Changed::Channel(_)
+            | Changed::Agent(_)
+            | Changed::Rule(_)
+            | Changed::Verdict(_)
+            | Changed::Watermark(_)
+            | Changed::TopicVersion(_)
+            | Changed::Projection(_) => changed,
+        }
+    }
+    [
+        Changed::Alert(AlertId::from_ulid(1)),
+        Changed::Channel(channel(1)),
+        Changed::Agent(agent(1)),
+        Changed::Rule(AlertRuleId::from_ulid(2)),
+        Changed::Verdict(transmission(1)),
+        Changed::Watermark(Watermark(at(60))),
+        Changed::TopicVersion(TopicModelVersion(3)),
+        Changed::Projection(ProjectionId::from_ulid(4)),
+    ]
+    .into_iter()
+    .map(declared)
+    .collect()
+}
+
+/// The feed event kind, with no wildcard arm: a new `UiEvent` variant does
+/// not compile until it is listed, and `every_feed_event_has_a_source`
+/// then fails until a `Changed` variant produces it.
+fn feed_kind(event: UiEvent) -> &'static str {
+    match event {
+        UiEvent::AlertChanged { .. } => "AlertChanged",
+        UiEvent::ChannelChanged { .. } => "ChannelChanged",
+        UiEvent::AgentChanged { .. } => "AgentChanged",
+        UiEvent::RuleChanged { .. } => "RuleChanged",
+        UiEvent::VerdictChanged { .. } => "VerdictChanged",
+        UiEvent::Watermark { .. } => "Watermark",
+        UiEvent::TopicVersionReady { .. } => "TopicVersionReady",
+        UiEvent::ProjectionReady { .. } => "ProjectionReady",
+    }
+}
+
+const FEED_KINDS: [&str; 8] = [
+    "AlertChanged",
+    "ChannelChanged",
+    "AgentChanged",
+    "RuleChanged",
+    "VerdictChanged",
+    "Watermark",
+    "TopicVersionReady",
+    "ProjectionReady",
+];
+
+#[test]
+fn every_change_travels_on_the_changed_subject() {
+    for changed in every_change() {
+        assert_eq!(changed.subject(), Subject::Changed, "{changed:?}");
+        assert_eq!(
+            BusEvent::Changed(changed).subject(),
+            Subject::Changed,
+            "{changed:?}"
+        );
+    }
+}
+
+#[test]
+fn every_feed_event_has_a_source() {
+    let produced: HashSet<&str> = every_change()
+        .into_iter()
+        .map(|changed| feed_kind(UiEvent::from(changed)))
+        .collect();
+    assert_eq!(produced, FEED_KINDS.into_iter().collect());
+    assert_eq!(produced.len(), every_change().len());
+}
+
+#[test]
+fn every_feed_event_but_projection_ready_needs_view_alone() {
+    for changed in every_change() {
+        let event = UiEvent::from(changed);
+        let expected = if matches!(event, UiEvent::ProjectionReady { .. }) {
+            Permission::Content
+        } else {
+            Permission::View
+        };
+        assert_eq!(event.required_permission(), expected, "{event:?}");
+    }
 }

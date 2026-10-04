@@ -4,10 +4,12 @@ statement = "L7 publishes WatermarkAdvanced(w) exactly once for each value w the
 kind = "coordination"
 requires = ["dst"]
 rationale = """
-The live feed turns this event into the UI's notice that more history is
-final. One event per advance, in increasing order, lets a client keep the
-latest value without comparing; publishing after persisting means no
-client sees a watermark L7 could forget.
+Bus consumers learn from this event that more history is final; the live
+feed does not read it but Changed::Watermark, which the same advance
+publishes (topology.watermark.change-announced). One event per advance, in
+increasing order, lets a consumer keep the latest value without comparing;
+publishing after persisting means no consumer sees a watermark L7 could
+forget.
 """
 
 [evidence]

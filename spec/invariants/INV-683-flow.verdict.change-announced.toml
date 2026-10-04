@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.verdict.change-announced"
+statement = "Each TransmissionVerdicts::set that returns Appended publishes Changed::Verdict for its transmission at least once, never before QueryApi::verdicts returns the appended record, and a set that returns Unchanged or an error publishes none."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The live feed carries ids only, and the verdict store is the only place a
+verdict changes, so this is how a UI showing a transmission, its verdict
+log, the detection quality report or a view that excludes false detections
+learns to re-query. Announcing before the record is visible would make the
+client re-query, read the old log, and wait for an event that already
+passed. VerdictSet is the bus fact for L6 and L7; Changed::Verdict is the
+feed's notification, like every other store's Changed.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::verdict_changes_announced_after_commit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

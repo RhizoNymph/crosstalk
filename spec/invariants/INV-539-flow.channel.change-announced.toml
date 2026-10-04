@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.channel.change-announced"
-statement = "After every committed change to a stored channel (discovery, a declaration from config, a new resource, any detection change including turning dormant or unused, a recorded policy decision from config or PolicyChanged, a promotion) flow publishes Changed::Channel at least once for it, and never before the change is visible to QueryApi::channel and policy_history."
+statement = "After every committed change to a stored channel (discovery, a declaration from config, a new resource, any detection change including turning dormant or unused, a recorded policy decision from config or PolicyChanged) flow publishes Changed::Channel at least once for it, and after a promotion for the promoted channel and every channel it superseded, never before the change is visible to QueryApi::channel and policy_history."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

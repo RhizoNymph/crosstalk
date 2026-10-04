@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.author-is-caller"
-statement = "For MergeAgents, Unmerge, RenameAgent, CreateRule, UpdateRule and SetRuleEnabled, the operator the surface passes to L3 or L6 is the Caller's OperatorId and any time it passes is the time it accepted the action."
+statement = "For MergeAgents, Unmerge, RenameAgent, PromoteChannel, SetVerdict, CreateRule, UpdateRule, SetRuleEnabled, PinTopicVersion and UnpinTopicVersion, the operator the surface passes to L3, L5 or L6 is the Caller's OperatorId and any time it passes is the time it accepted the action."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -13,7 +13,11 @@ identity there would make them unattributable.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::identity_and_rule_actions_stamp_caller"
+unit = [
+    "crosstalk::surface::tests::identity_and_rule_actions_stamp_caller",
+    "crosstalk::surface::tests::set_verdict_stamps_caller",
+    "crosstalk::surface::tests::pin_and_unpin_outcomes",
+]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

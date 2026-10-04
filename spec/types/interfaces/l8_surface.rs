@@ -62,11 +62,15 @@
 //! a channel (policy, promotion) refuse a superseded one with
 //! `Conflict(ChannelSuperseded)`, naming the channel to act on instead.
 //!
-//! **Watermarks.** `topology`, `series`, `edge_transmissions` and
-//! `topic_sizes` return their result [`Watermarked`]: with L7's watermark,
-//! read before the data. Everything in the result before the watermark is
-//! final ([`crate::aggregates::watermark`]). `watermark` returns the current
-//! one, and the feed reports each advance.
+//! **Watermarks.** `topology`, `channel_topology`, `series`,
+//! `edge_transmissions`, `channel_resources` and `topic_sizes` return their
+//! result [`Watermarked`]: with L7's watermark (`EdgeStore::watermark`),
+//! read before the data. They all count by event time (`Confirmed::at`,
+//! `Access::at`), so everything in the result before the watermark is final
+//! ([`crate::aggregates::watermark`]). `watermark` returns the current one,
+//! and the feed reports each advance. A stored projection is not wrapped:
+//! its frame is fixed when fitted and carries the watermark its sample was
+//! read under (`Projection::watermark`, from `Fitted::watermark`).
 //!
 //! **Retention.** A topic-model version that retention has dropped
 //! ([`crate::aggregates::retention`]) is `VersionNotRetained` wherever its
@@ -83,7 +87,9 @@
 //! error becomes one is defined once, by the `From` impls in
 //! [`query_errors`].
 
+pub mod actions;
 pub mod audit;
+pub mod errors;
 pub mod lists;
 pub mod live;
 pub mod operators;
@@ -92,14 +98,12 @@ pub mod query_errors;
 use std::fmt;
 
 use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
-use crate::aggregates::alert::{Alert, AlertRuleDef, RuleName, UserRule};
+use crate::aggregates::alert::{Alert, AlertRuleDef};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
 use crate::aggregates::filter::TopicVersionSelector;
-use crate::aggregates::projection::{
-    FitFailure, Projection, ProjectionInfo, ProjectionParams, ProjectionStatusKind,
-};
+use crate::aggregates::projection::{Projection, ProjectionInfo, ProjectionParams};
 use crate::aggregates::quality::DetectionQuality;
 use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
@@ -107,18 +111,12 @@ use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHis
 use crate::aggregates::watermark::{Watermark, Watermarked};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
-use crate::derived::flow::channel::promotion::PromotionRefusal;
-use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
-use crate::derived::flow::verdict::{Verdict, VerdictLog};
-use crate::ids::{
-    AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, ProjectionId, SinkId,
-    TopicId, TransmissionId,
-};
+use crate::derived::flow::verdict::VerdictLog;
+use crate::ids::{ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
-use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::SearchResults;
-use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
+use crate::observed::agent::Agent;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
@@ -126,9 +124,12 @@ use crate::paging::{
 };
 use crate::support::{TimeWindow, Timestamp};
 
-use audit::{AuditEntry, AuditFilter, AuditSubject};
+use audit::{AuditEntry, AuditFilter};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage};
 use operators::Operator;
+
+pub use actions::{ActionKind, ActionOutcome, OperatorAction};
+pub use errors::{ActionError, ConflictKind, InputError, QueryError};
 
 /// The policy an operator asks for. The surface stamps the author and time
 /// from the authenticated caller; callers cannot supply them.
@@ -359,8 +360,8 @@ pub trait QueryApi {
 
     /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels as
     /// nodes, access edges (writes nobody read included) and the same
-    /// transmission edges as `topology`. An unaligned window is
-    /// `InvalidInput(UnalignedWindow)`.
+    /// transmission edges as `topology`, with the watermark read before the
+    /// buckets. An unaligned window is `InvalidInput(UnalignedWindow)`.
     ///
     /// [`EdgeStore::channel_topology`]: crate::interfaces::l7_topology::EdgeStore::channel_topology
     async fn channel_topology(
@@ -369,12 +370,15 @@ pub trait QueryApi {
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<BipartiteGraph, QueryError>;
+    ) -> Result<Watermarked<BipartiteGraph>, QueryError>;
 
     /// View. Exactly [`ChannelRegistry::resource_use`]: the resources of
     /// `channel`'s canonical channel accessed in `window`, newest first, with
     /// canonical writers and readers. A superseded `channel` answers for the
     /// channel that superseded it, named in the page. Unknown is `NotFound`.
+    /// The surface reads L7's watermark (`EdgeStore::watermark`) before the
+    /// registry: accesses are stored by event time, so every access before it
+    /// is already counted.
     ///
     /// [`ChannelRegistry::resource_use`]: crate::interfaces::l5_flow::ChannelRegistry::resource_use
     async fn channel_resources(
@@ -383,7 +387,7 @@ pub trait QueryApi {
         channel: ChannelId,
         window: TimeWindow,
         page: &PageRequest<ResourceUseList>,
-    ) -> Result<ResourceUsePage, QueryError>;
+    ) -> Result<Watermarked<ResourceUsePage>, QueryError>;
 
     /// View. The transmissions `topology` counts into one of its edges for
     /// the same window and filter (`EdgeStore::transmissions`): ids, times,
@@ -545,205 +549,6 @@ pub trait QueryApi {
     async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>, QueryError>;
 }
 
-/// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
-/// similarity thresholds, which are floats.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OperatorAction {
-    SetPolicy {
-        channel: ChannelId,
-        policy: PolicyKind,
-        note: Option<String>,
-    },
-    /// Built with `MergeAuthor::Operator` of the caller; self-merges cannot
-    /// be expressed. Both agents must be canonical. Returns
-    /// `ActionOutcome::Merged` with the new record's id.
-    MergeAgents(MergeRequest),
-    /// Revert one merge record exactly (`IdentityResolver::unmerge`).
-    Unmerge {
-        merge: MergeId,
-    },
-    /// Set (`Some`) or clear (`None`) an active agent's display label. A
-    /// merged agent is refused, not redirected.
-    RenameAgent {
-        agent: AgentId,
-        label: Option<AgentLabel>,
-    },
-    /// Promote a discovered channel: attach `pattern`, making it declared
-    /// under the same id, record `policy` (with `note`) as the operator's
-    /// decision, and supersede every other discovered channel whose seed the
-    /// pattern matches. The surface stamps the operator and time into a
-    /// `Promotion` and calls `ChannelRegistry::promote`; success is
-    /// `ChannelPromoted(channel)`, the same id.
-    PromoteChannel {
-        channel: ChannelId,
-        pattern: ResourcePattern,
-        policy: PolicyKind,
-        note: Option<String>,
-    },
-    Acknowledge {
-        alert: AlertId,
-    },
-    Resolve {
-        alert: AlertId,
-        note: Option<String>,
-    },
-    /// Create an enabled user rule. The server assigns its id and returns
-    /// `ActionOutcome::RuleCreated`. "Watch this topic" is
-    /// [`UserRule::watch_topic`].
-    CreateRule {
-        name: RuleName,
-        rule: UserRule,
-        sinks: Vec<SinkId>,
-    },
-    /// Set (`Some`) or withdraw (`None`) the operator's verdict on a
-    /// transmission (`TransmissionVerdicts::set`). The transmission's state
-    /// never changes. `Applied` when a record was appended, `Unchanged` when
-    /// the verdict was already current; an unknown transmission is
-    /// `NotFound`, and a `Detected` or `AwaitingContent` one is
-    /// `Conflict(TransmissionNotJudgeable)`. A `FalseDetection` verdict
-    /// suppresses the transmission's active alerts once L6 sees `VerdictSet`.
-    SetVerdict {
-        transmission: TransmissionId,
-        verdict: Option<Verdict>,
-        note: Option<String>,
-    },
-    /// Replace a user rule's name, definition and sinks. A stale rule is
-    /// retargeted to the current version or model and enabled.
-    UpdateRule {
-        id: AlertRuleId,
-        name: RuleName,
-        rule: UserRule,
-        sinks: Vec<SinkId>,
-    },
-    /// Enable or disable any rule. Staleness cannot be set.
-    SetRuleEnabled {
-        id: AlertRuleId,
-        enabled: bool,
-    },
-    /// Redeliver a dead-lettered envelope to its consumer group.
-    ReplayDeadLetter {
-        group: ConsumerGroup,
-        id: EventId,
-    },
-    /// Keep `version`'s data whatever the retention policy
-    /// (`TopicCatalog::pin`), stamped with the caller and the acceptance
-    /// time. `Applied` when it pins, `Unchanged` when already pinned;
-    /// `NotFound` for an unknown version, `Conflict(TopicVersionFitting)` for
-    /// a fitting one and `Conflict(TopicVersionDropped)` for a dropped one.
-    PinTopicVersion {
-        version: TopicModelVersion,
-    },
-    /// Remove `version`'s pin (`TopicCatalog::unpin`); retention may then
-    /// drop it. `Applied` when it was pinned, `Unchanged` otherwise (a
-    /// dropped version included); `NotFound` for an unknown version.
-    UnpinTopicVersion {
-        version: TopicModelVersion,
-    },
-}
-
-/// Which action, without its arguments. The audit log filters on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ActionKind {
-    SetPolicy,
-    MergeAgents,
-    Unmerge,
-    RenameAgent,
-    PromoteChannel,
-    Acknowledge,
-    Resolve,
-    SetVerdict,
-    CreateRule,
-    UpdateRule,
-    SetRuleEnabled,
-    ReplayDeadLetter,
-    PinTopicVersion,
-    UnpinTopicVersion,
-}
-
-impl OperatorAction {
-    pub fn kind(&self) -> ActionKind {
-        match self {
-            Self::SetPolicy { .. } => ActionKind::SetPolicy,
-            Self::MergeAgents(_) => ActionKind::MergeAgents,
-            Self::Unmerge { .. } => ActionKind::Unmerge,
-            Self::RenameAgent { .. } => ActionKind::RenameAgent,
-            Self::PromoteChannel { .. } => ActionKind::PromoteChannel,
-            Self::Acknowledge { .. } => ActionKind::Acknowledge,
-            Self::Resolve { .. } => ActionKind::Resolve,
-            Self::SetVerdict { .. } => ActionKind::SetVerdict,
-            Self::CreateRule { .. } => ActionKind::CreateRule,
-            Self::UpdateRule { .. } => ActionKind::UpdateRule,
-            Self::SetRuleEnabled { .. } => ActionKind::SetRuleEnabled,
-            Self::ReplayDeadLetter { .. } => ActionKind::ReplayDeadLetter,
-            Self::PinTopicVersion { .. } => ActionKind::PinTopicVersion,
-            Self::UnpinTopicVersion { .. } => ActionKind::UnpinTopicVersion,
-        }
-    }
-
-    /// The permission the caller must hold, checked before any effect; a
-    /// caller without it gets `Forbidden`. Govern for identity, policy,
-    /// rules and topic-version pins, Triage for alerts and verdicts, Operate
-    /// for the pipeline. No action needs View, Content or Audit, which are
-    /// read permissions.
-    ///
-    /// `SetVerdict` needs Triage alone, not Content as well: it reveals no
-    /// content (its outcome and the records it writes hold no message text),
-    /// and reading the text to judge from is already gated by `transmission`
-    /// and `search`. One permission per action keeps `OperatorRecord`'s
-    /// `Forbidden` check exact.
-    pub fn required_permission(&self) -> Permission {
-        match self {
-            Self::SetPolicy { .. }
-            | Self::MergeAgents(_)
-            | Self::Unmerge { .. }
-            | Self::RenameAgent { .. }
-            | Self::PromoteChannel { .. }
-            | Self::CreateRule { .. }
-            | Self::UpdateRule { .. }
-            | Self::SetRuleEnabled { .. }
-            | Self::PinTopicVersion { .. }
-            | Self::UnpinTopicVersion { .. } => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::SetVerdict { .. } => {
-                Permission::Triage
-            }
-            Self::ReplayDeadLetter { .. } => Permission::Operate,
-        }
-    }
-
-    /// The entities the action names, as requested (not resolved through
-    /// merges). The audit log's subject filter matches these, together with
-    /// any id the outcome created ([`ActionOutcome::subject`]). A dead-letter
-    /// replay names no entity, and a rule creation names none until its
-    /// outcome (`RuleCreated`) carries the new rule's id.
-    pub fn subjects(&self) -> Vec<AuditSubject> {
-        match self {
-            Self::SetPolicy { channel, .. } | Self::PromoteChannel { channel, .. } => {
-                vec![AuditSubject::Channel(*channel)]
-            }
-            Self::MergeAgents(request) => vec![
-                AuditSubject::Agent(request.source()),
-                AuditSubject::Agent(request.target()),
-            ],
-            Self::Unmerge { merge } => vec![AuditSubject::Merge(*merge)],
-            Self::RenameAgent { agent, .. } => vec![AuditSubject::Agent(*agent)],
-            Self::Acknowledge { alert } | Self::Resolve { alert, .. } => {
-                vec![AuditSubject::Alert(*alert)]
-            }
-            Self::SetVerdict { transmission, .. } => {
-                vec![AuditSubject::Transmission(*transmission)]
-            }
-            Self::CreateRule { .. } => Vec::new(),
-            Self::UpdateRule { id, .. } | Self::SetRuleEnabled { id, .. } => {
-                vec![AuditSubject::Rule(*id)]
-            }
-            Self::PinTopicVersion { version } | Self::UnpinTopicVersion { version } => {
-                vec![AuditSubject::TopicVersion(*version)]
-            }
-            Self::ReplayDeadLetter { .. } => Vec::new(),
-        }
-    }
-}
-
 pub trait OperatorActions {
     /// Check the permission, apply the action and record it. `SetPolicy` on
     /// a superseded channel is refused with `Conflict(ChannelSuperseded)`
@@ -785,212 +590,6 @@ pub struct SinkInfo {
     /// When its last delivery succeeded, or why it failed. `None` before
     /// its first delivery.
     pub last_delivery: Option<Result<Timestamp, SinkError>>,
-}
-
-/// Why a query failed. Every variant is something the UI can act on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum QueryError {
-    /// A store or bus failure; retrying may succeed.
-    Store {
-        reason: String,
-    },
-    NotFound,
-    Forbidden {
-        missing: Permission,
-    },
-    /// A topic-model version, pinned by the filter or by a cursor, that was
-    /// activated but whose buckets or assignments are no longer retained.
-    VersionNotRetained {
-        version: TopicModelVersion,
-    },
-    /// The request is well-formed but the state does not allow it.
-    Conflict(ConflictKind),
-    InvalidInput(InputError),
-    /// A cursor the surface did not issue, or issued for a different list
-    /// or request. The client restarts from the first page.
-    InvalidCursor,
-    /// A projection whose frame was dropped after the retention period. Its
-    /// spec is still readable with `projection_status`.
-    ProjectionNotRetained {
-        projection: ProjectionId,
-    },
-}
-
-/// Why an operator action was refused. A strict subset of what a query can
-/// fail with: an action takes no cursor, reads no projection and reads no
-/// version's buckets, so those variants cannot be returned (or recorded in
-/// the audit log) for one. Pinning a dropped version is
-/// `Conflict(TopicVersionDropped)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ActionError {
-    Store { reason: String },
-    NotFound,
-    Forbidden { missing: Permission },
-    Conflict(ConflictKind),
-    InvalidInput(InputError),
-}
-
-/// A request that is valid on its own but not in the current state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConflictKind {
-    /// Acknowledging or resolving an alert that is no longer active.
-    AlertNotActive { alert: AlertId },
-    /// Acting on a merged agent where only its canonical agent is valid:
-    /// renaming it, or naming it in a merge.
-    AgentMerged { agent: AgentId, into: AgentId },
-    /// Reverting a merge that was already reverted.
-    MergeAlreadyReverted { merge: MergeId },
-    /// Acting on a channel that has been superseded by another.
-    ChannelSuperseded { channel: ChannelId, by: ChannelId },
-    /// Promoting a channel that is not a discovered channel.
-    ChannelNotDiscovered { channel: ChannelId },
-    /// A declared pattern that overlaps another declared channel's.
-    PatternOverlaps { existing: ChannelId },
-    /// Changing an alert rule's kind, or editing a built-in rule.
-    RuleNotEditable { rule: AlertRuleId },
-    /// A watched-topic rule on a topic-model version that is no longer, or
-    /// not yet, the one rules are written against.
-    TopicVersionNotCurrent {
-        requested: TopicModelVersion,
-        current: TopicModelVersion,
-    },
-    /// A verdict on a transmission whose state does not take one
-    /// (`Detected`, `AwaitingContent`).
-    TransmissionNotJudgeable { transmission: TransmissionId },
-    /// Querying or pinning a topic-model version that is still being fitted.
-    TopicVersionFitting { version: TopicModelVersion },
-    /// Pinning a topic-model version whose data retention has dropped.
-    TopicVersionDropped { version: TopicModelVersion },
-    /// A linked view pinned to a version that was never activated, so its
-    /// edge buckets were never complete.
-    TopicVersionNotActivated { version: TopicModelVersion },
-    /// A filter listing topics that are not in the version it resolved to,
-    /// usually because `Current` moved on. The client re-reads the topics of
-    /// `version`, or pins the version its topics came from.
-    TopicsNotInVersion {
-        version: TopicModelVersion,
-        topics: Vec<TopicId>,
-    },
-    /// The embedding model changed between embedding the query and running
-    /// it, or between two pages of one search.
-    EmbeddingModelChanged,
-    /// Reading a projection that is queued or fitting.
-    ProjectionNotReady {
-        projection: ProjectionId,
-        status: ProjectionStatusKind,
-    },
-    /// Reading a projection whose fit failed.
-    ProjectionFailed {
-        projection: ProjectionId,
-        failure: FitFailure,
-    },
-    /// Fitting a projection while the job queue is full.
-    ProjectionQueueFull,
-}
-
-/// A request that is invalid whatever the state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputError {
-    /// A window that does not start and end on bucket boundaries.
-    UnalignedWindow,
-    /// A series grid built for another bucket width.
-    BucketWidthMismatch,
-    /// A promotion pattern that does not cover the channel's seed resource.
-    PatternMissesSeed,
-    /// A watched-topic rule naming topics or a version that do not exist.
-    UnknownTopics,
-    /// A rule naming a sink that is not configured.
-    UnknownSink { sink: SinkId },
-    /// A semantic query whose text could not be embedded (too long for the
-    /// model).
-    QueryNotEmbeddable,
-    /// Search text longer than the embedding model's context.
-    QueryTooLong,
-}
-
-impl From<PromotionRefusal> for ActionError {
-    fn from(refusal: PromotionRefusal) -> Self {
-        match refusal {
-            PromotionRefusal::UnknownChannel(_) => Self::NotFound,
-            PromotionRefusal::Superseded { channel, by } => {
-                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
-            }
-            PromotionRefusal::NotDiscovered(channel) => {
-                Self::Conflict(ConflictKind::ChannelNotDiscovered { channel })
-            }
-            PromotionRefusal::PatternMissesSeed => {
-                Self::InvalidInput(InputError::PatternMissesSeed)
-            }
-            PromotionRefusal::PatternOverlaps { existing } => {
-                Self::Conflict(ConflictKind::PatternOverlaps { existing })
-            }
-        }
-    }
-}
-
-impl From<PromoteError> for ActionError {
-    fn from(error: PromoteError) -> Self {
-        match error {
-            PromoteError::Store { reason } => Self::Store { reason },
-            PromoteError::Refused(refusal) => refusal.into(),
-        }
-    }
-}
-
-impl From<RegistryError> for QueryError {
-    fn from(error: RegistryError) -> Self {
-        match error {
-            RegistryError::Store { reason } => Self::Store { reason },
-            RegistryError::UnknownChannel(_) => Self::NotFound,
-            RegistryError::OverlappingDeclaration { existing } => {
-                Self::Conflict(ConflictKind::PatternOverlaps { existing })
-            }
-            RegistryError::Superseded { channel, by } => {
-                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
-            }
-            RegistryError::InvalidCursor => Self::InvalidCursor,
-        }
-    }
-}
-
-impl From<ActionError> for QueryError {
-    fn from(error: ActionError) -> Self {
-        match error {
-            ActionError::Store { reason } => Self::Store { reason },
-            ActionError::NotFound => Self::NotFound,
-            ActionError::Forbidden { missing } => Self::Forbidden { missing },
-            ActionError::Conflict(kind) => Self::Conflict(kind),
-            ActionError::InvalidInput(input) => Self::InvalidInput(input),
-        }
-    }
-}
-
-/// What an accepted operator action did, including any ids it created so
-/// the UI can navigate to them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionOutcome {
-    /// The action changed state.
-    Applied,
-    /// Accepted, but the state already matched: acknowledging an
-    /// acknowledged alert, or the losing request of a race.
-    Unchanged,
-    RuleCreated(AlertRuleId),
-    ChannelPromoted(ChannelId),
-    Merged(MergeId),
-}
-
-impl ActionOutcome {
-    /// The entity the outcome names, when it names one. A merge's id exists
-    /// only once the merge is recorded, so this is the only place an audit
-    /// entry can take it from.
-    pub fn subject(self) -> Option<AuditSubject> {
-        match self {
-            Self::Applied | Self::Unchanged => None,
-            Self::RuleCreated(rule) => Some(AuditSubject::Rule(rule)),
-            Self::ChannelPromoted(channel) => Some(AuditSubject::Channel(channel)),
-            Self::Merged(merge) => Some(AuditSubject::Merge(merge)),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,8 +1,11 @@
-//! How each store error behind a query becomes a [`QueryError`].
+//! How each store error behind a query becomes a [`QueryError`], and each
+//! store refusal behind an operator action an [`ActionError`].
 //!
-//! One `From` impl per error type, so the mapping is total, checked by the
-//! compiler when a variant is added, and the same for every query that reads
-//! that store. The rules:
+//! One `From` impl per store error type and target, so the mapping is
+//! total, checked by the compiler when a variant is added, and the same for
+//! every query or action that reaches that store. An error that reaches both
+//! (a promotion refusal) maps to the same variant either way, because
+//! `QueryError::from(ActionError)` keeps the variant. The rules:
 //!
 //! - A store or bus failure that a retry may cure is `Store`.
 //! - An id the store does not know is `NotFound`; so is an unknown pinned
@@ -17,12 +20,18 @@
 //!   or `ProjectionNotRetained`.
 //! - A cursor the store did not issue, or issued for another request, is
 //!   `InvalidCursor`.
+//! - A channel superseded by a promotion is `Conflict(ChannelSuperseded)`,
+//!   naming the channel that superseded it.
 
-use super::{ConflictKind, InputError, QueryError};
+use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
+use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::BusError;
+use crate::interfaces::l5_flow::verdicts::VerdictError;
+use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
 use crate::interfaces::l7_topology::EdgeQueryError;
+use crate::interfaces::l8_surface::audit::AuditError;
 
 impl From<VersionUnavailable> for QueryError {
     fn from(error: VersionUnavailable) -> Self {
@@ -134,5 +143,79 @@ impl From<BusError> for QueryError {
             BusError::GroupRetryMismatch { .. } => "group retry mismatch".to_owned(),
         };
         Self::Store { reason }
+    }
+}
+
+impl From<PromotionRefusal> for ActionError {
+    fn from(refusal: PromotionRefusal) -> Self {
+        match refusal {
+            PromotionRefusal::UnknownChannel(_) => Self::NotFound,
+            PromotionRefusal::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            PromotionRefusal::NotDiscovered(channel) => {
+                Self::Conflict(ConflictKind::ChannelNotDiscovered { channel })
+            }
+            PromotionRefusal::PatternMissesSeed => {
+                Self::InvalidInput(InputError::PatternMissesSeed)
+            }
+            PromotionRefusal::PatternOverlaps { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+        }
+    }
+}
+
+impl From<PromoteError> for ActionError {
+    fn from(error: PromoteError) -> Self {
+        match error {
+            PromoteError::Store { reason } => Self::Store { reason },
+            PromoteError::Refused(refusal) => refusal.into(),
+        }
+    }
+}
+
+impl From<RegistryError> for QueryError {
+    fn from(error: RegistryError) -> Self {
+        match error {
+            RegistryError::Store { reason } => Self::Store { reason },
+            RegistryError::UnknownChannel(_) => Self::NotFound,
+            RegistryError::OverlappingDeclaration { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+            RegistryError::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            RegistryError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::verdicts` and `detection_quality`. A read never names an
+/// unjudgeable transmission, but the mapping is total and agrees with the
+/// `SetVerdict` refusal.
+impl From<VerdictError> for QueryError {
+    fn from(error: VerdictError) -> Self {
+        match error {
+            VerdictError::Store { reason } => Self::Store { reason },
+            VerdictError::UnknownTransmission(_) => Self::NotFound,
+            VerdictError::NotJudgeable(transmission) => {
+                Self::Conflict(ConflictKind::TransmissionNotJudgeable { transmission })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::audit` (`AuditLog::query`). A reused id is a write-side
+/// fault the read cannot cause; if a store reports it, it is a store failure.
+impl From<AuditError> for QueryError {
+    fn from(error: AuditError) -> Self {
+        match error {
+            AuditError::Store { reason } => Self::Store { reason },
+            AuditError::IdReused(id) => Self::Store {
+                reason: format!("audit id reused: {id:?}"),
+            },
+            AuditError::InvalidCursor => Self::InvalidCursor,
+        }
     }
 }

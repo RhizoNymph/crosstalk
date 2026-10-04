@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.watermark.final-buckets"
-statement = "Once EdgeStore::watermark has returned a watermark W, no bucket of a topic-model version that has been activated whose window ends at or before W changes its stats."
+statement = "Once EdgeStore::watermark has returned a watermark W, no bucket of a topic-model version that has been activated and is still retained whose window ends at or before W changes its stats."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

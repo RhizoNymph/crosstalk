@@ -1,16 +1,21 @@
 [invariant]
 id = "surface.action.rejections-typed"
-statement = "An operator action rejected by L3, L5 or L6 returns NotFound for an unknown agent, merge record, channel, transmission or rule; Conflict with AgentMerged, MergeAlreadyReverted, ChannelSuperseded, ChannelNotDiscovered, PatternOverlaps, RuleNotEditable or TopicVersionNotCurrent; and InvalidInput with PatternMissesSeed, UnknownTopics, UnknownSink or QueryNotEmbeddable."
+statement = "An operator action other than SetVerdict, PinTopicVersion and UnpinTopicVersion that L3, L5 or L6 refuses returns NotFound for ResolveError::UnknownAgent and UnknownMerge, PromotionRefusal::UnknownChannel and RuleError::UnknownRule; Conflict(AgentMerged) for ResolveError::AgentMerged; Conflict(MergeAlreadyReverted) for MergeAlreadyReverted; Conflict(ChannelSuperseded) for PromotionRefusal::Superseded; Conflict(ChannelNotDiscovered) for NotDiscovered; Conflict(PatternOverlaps) for PatternOverlaps; InvalidInput(PatternMissesSeed) for PatternMissesSeed; Conflict(RuleNotEditable) for RuleError::NotEditable; Conflict(TopicVersionNotCurrent) for TopicVersionNotCurrent; InvalidInput(UnknownTopics) for UnknownTopics; InvalidInput(UnknownSink) for UnknownSink; and InvalidInput(QueryTooLong) for Embed(TooLong)."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 The UI shows these to the operator. Collapsing them into a store error
-would hide that a retry is pointless (already unmerged, a built-in rule) or
-that the request needs changing (rename the canonical agent instead,
+would hide that a retry is pointless (already unmerged, a built-in rule)
+or that the request needs changing (rename the canonical agent instead,
 overlapping pattern, pick topics from the current version, choose a
-configured sink), or that the request belongs on another channel
-(superseded).
+configured sink, shorten the query), or that the request belongs on
+another channel (superseded). The wave-1 reasons map as follows: an
+unmerge names a merge record, so NotMerged became NotFound (UnknownMerge)
+or Conflict(MergeAlreadyReverted); KindChanged is Conflict(RuleNotEditable);
+NotCurrentVersion is Conflict(TopicVersionNotCurrent); UnknownTopic is
+InvalidInput(UnknownTopics). NotSuspected and DuplicateId no longer exist:
+verdicts replaced dismissal, and the server assigns rule ids.
 """
 
 [evidence]

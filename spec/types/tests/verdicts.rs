@@ -420,7 +420,7 @@ fn set_verdict_audit_records_follow_triage() {
             OperatorRecord::new(
                 triager.clone(),
                 action.clone(),
-                AuditOutcome::Succeeded(outcome),
+                AuditOutcome::Succeeded(outcome.clone()),
             )
             .expect("Triage suffices");
             assert_eq!(

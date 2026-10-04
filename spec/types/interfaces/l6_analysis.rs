@@ -44,8 +44,9 @@
 //! For the live feed, L6 publishes `Changed` after every committed change:
 //! `Alert` for an opened, deduplicated or suppressed alert; `Rule` for a
 //! created (by an operator or config), updated, enabled, disabled or newly
-//! stale rule; `TopicVersion` for each status change in the catalog; and
-//! `Projection` when a new layout becomes current.
+//! stale rule; `TopicVersion` for each status change in the catalog and for
+//! each pin, unpin and drop; and `Projection` when a projection job becomes
+//! ready or fails, or its frame expires.
 //!
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
@@ -61,8 +62,9 @@
 //!
 //! Search and projection take the same [`TopologyFilter`] as the topology
 //! graph and apply it as [`TopologyFilter::admits`] defines, resolving agents
-//! (the transmission's and the filter's) through `AgentDirectory`, so the
-//! views link. Both resolve the filter's topic-model version with
+//! (the transmission's and the filter's) through `AgentDirectory` and
+//! channels through `ChannelDirectory` (`Route::resolved`, see
+//! [`crate::aliases`]), so the views link. Both resolve the filter's topic-model version with
 //! [`TopicVersionSelector::resolve`] against the catalog's history (see
 //! [`crate::aggregates::filter`]). `analyze` also keeps a [`CurrentVerdict`]
 //! per transmission from `VerdictSet`, from which each hit's and point's

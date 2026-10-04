@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.rule.create-assigns-id"
-statement = "AlertRuleStore::create that returns Ok(id) stored one new enabled, current user rule under id, an id no other rule had and outside the reserved range, with the caller as creator."
+statement = "AlertRuleStore::create that returns Ok(id) stored one new enabled, current user rule under id, an id no other rule had, with the caller as creator."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

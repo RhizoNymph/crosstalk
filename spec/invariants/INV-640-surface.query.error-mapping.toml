@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.error-mapping"
-statement = "QueryError::from maps every store error behind a query by its cause: retryable store and bus failures to Store, unknown ids and unknown versions to NotFound, requests the current state does not allow to Conflict, state-independent faults to InvalidInput, dropped data to VersionNotRetained or ProjectionNotRetained, and foreign cursors to InvalidCursor, exactly as the tests in query_errors enumerate per variant."
+statement = "QueryError::from maps every store error behind a query by its cause: retryable store and bus failures to Store, unknown ids and unknown versions to NotFound, requests the current state does not allow to Conflict, state-independent faults to InvalidInput, data dropped by retention to VersionNotRetained with the same version or ProjectionNotRetained, and foreign cursors to InvalidCursor, exactly as the evidence tests enumerate per variant."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -13,7 +13,19 @@ string reason the UI would have to parse.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::query_errors::unavailable_versions_map_by_cause", "crosstalk_spec::tests::query_errors::edge_query_errors_map_to_typed_query_errors", "crosstalk_spec::tests::query_errors::search_errors_map_to_typed_query_errors", "crosstalk_spec::tests::query_errors::embedding_a_search_maps_too_long_to_input", "crosstalk_spec::tests::query_errors::catalog_errors_map_to_typed_query_errors", "crosstalk_spec::tests::query_errors::projection_store_errors_map_to_typed_query_errors", "crosstalk_spec::tests::query_errors::dead_letter_bus_errors_keep_cursor_and_not_found_apart"]
+unit = [
+    "crosstalk_spec::tests::query_errors::unavailable_versions_map_by_cause",
+    "crosstalk_spec::tests::query_errors::edge_query_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::query_errors::search_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::query_errors::embedding_a_search_maps_too_long_to_input",
+    "crosstalk_spec::tests::query_errors::catalog_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::query_errors::projection_store_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::query_errors::dead_letter_bus_errors_keep_cursor_and_not_found_apart",
+    "crosstalk_spec::tests::query_errors::catalog_drops_map_to_version_not_retained",
+    "crosstalk_spec::tests::query_errors::verdict_store_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::query_errors::audit_log_errors_map_to_typed_query_errors",
+    "crosstalk_spec::tests::channels::registry_errors_map_to_query_errors",
+]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

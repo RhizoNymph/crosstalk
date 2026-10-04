@@ -21,10 +21,11 @@
 //! [`crate::observed::agent::merge`].
 //!
 //! After every committed change to a stored agent (creation, a registered
-//! agent from config, a state change, a merge, an unmerge, a label), L3
+//! agent from config, a state change, a merge, an unmerge, a rename), L3
 //! publishes `Changed::Agent` for each agent whose `QueryApi::agents` entry
-//! changed: both agents of a merge; the agent, its former target and every
-//! restored agent of an unmerge.
+//! changed: the source, target and every repointed agent of a merge; the
+//! source, its former target and every restored agent of an unmerge; the
+//! renamed agent.
 //!
 //! Identity resolution uses the most specific evidence present
 //! (`IdentityEvidence::specificity`). Harness ids count only within their

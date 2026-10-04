@@ -1,14 +1,20 @@
 [invariant]
 id = "surface.action.permission-by-concern"
-statement = "OperatorAction::required_permission returns Govern for SetPolicy, MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule and SetRuleEnabled, Triage for Acknowledge and Resolve, and Operate for ReplayDeadLetter."
+statement = "OperatorAction::required_permission returns Govern for SetPolicy, MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule, SetRuleEnabled, PinTopicVersion and UnpinTopicVersion, Triage for Acknowledge, Resolve and SetVerdict (with a verdict or a withdrawal), and Operate for ReplayDeadLetter."
 kind = "domain"
 property = "postcondition"
 requires = ["type", "unit"]
 rationale = """
 Govern covers identity and policy, including what the gateway alerts on and
-where; Triage covers working alerts; Operate covers the pipeline. The match
-is exhaustive, so a new action does not compile until it names a
-permission, and the tests sample every ActionKind.
+where and which topic-model history it keeps; Triage covers working alerts
+and judging transmissions; Operate covers the pipeline. The match is
+exhaustive, so a new action does not compile until it names a permission,
+and the tests sample every ActionKind. SetVerdict needs Triage alone, not
+Content as well: the action reveals no message text (its outcome, record
+and event hold none), reading the text to judge from is gated by the
+Content queries, and one permission per action keeps OperatorRecord's
+Forbidden check exact. A Triage-only operator can still judge suspected
+transmissions from their structure.
 """
 
 [evidence]
@@ -18,6 +24,8 @@ unit = [
     "crosstalk_spec::tests::surface::every_action_names_its_kind",
     "crosstalk_spec::tests::surface::samples_cover_every_action_kind",
     "crosstalk_spec::tests::surface::no_action_needs_a_read_permission",
+    "crosstalk_spec::tests::verdicts::set_verdict_needs_triage_alone",
+    "crosstalk_spec::tests::verdicts::set_verdict_audit_records_follow_triage",
 ]
 
 [evidence-review]

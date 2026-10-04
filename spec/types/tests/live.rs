@@ -12,7 +12,7 @@ use crate::interfaces::l8_surface::live::{
     Resume, ResumePlan, ResyncReason, UiEvent,
 };
 use crate::support::Watermark;
-use crate::tests::fixtures::{agent, at, channel};
+use crate::tests::fixtures::{agent, at, channel, transmission};
 use crate::tests::operators::caller;
 
 /// One notification of every variant, with the event it becomes.
@@ -33,6 +33,12 @@ fn every_change() -> Vec<(Changed, UiEvent)> {
             UiEvent::AgentChanged { id: agent(1) },
         ),
         (Changed::Rule(rule), UiEvent::RuleChanged { id: rule }),
+        (
+            Changed::Verdict(transmission(5)),
+            UiEvent::VerdictChanged {
+                id: transmission(5),
+            },
+        ),
         (
             Changed::Watermark(watermark),
             UiEvent::Watermark { at: watermark },

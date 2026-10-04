@@ -920,3 +920,68 @@ fn registry_errors_map_to_query_errors() {
         assert_eq!(QueryError::from(error), expected);
     }
 }
+
+#[test]
+fn a_promotion_announces_the_promoted_and_every_superseded_channel() {
+    use crate::events::changed::Changed;
+    use crate::interfaces::l8_surface::live::UiEvent;
+
+    let changes = Changed::promotion(channel(1), &[channel(2), channel(3)]);
+    let events: Vec<UiEvent> = changes.into_iter().map(UiEvent::from).collect();
+    assert_eq!(
+        events,
+        vec![
+            UiEvent::ChannelChanged { id: channel(1) },
+            UiEvent::ChannelChanged { id: channel(2) },
+            UiEvent::ChannelChanged { id: channel(3) },
+        ]
+    );
+    assert_eq!(
+        Changed::promotion(channel(1), &[]),
+        vec![Changed::Channel(channel(1))]
+    );
+}
+
+#[test]
+fn access_admission_ignores_false_detections() {
+    use crate::aggregates::filter::FalseDetections;
+
+    let topics = [topic(5)];
+    let with_topics = AccessSubject {
+        agent: agent(1),
+        channel: channel(1),
+        channel_topics: &topics,
+    };
+    let without_topics = AccessSubject {
+        channel_topics: &[],
+        ..with_topics
+    };
+    let filters = [
+        TopologyFilter::default(),
+        TopologyFilter {
+            topics: vec![topic(5)],
+            ..TopologyFilter::default()
+        },
+        TopologyFilter {
+            agents: vec![agent(2)],
+            ..TopologyFilter::default()
+        },
+    ];
+    for subject in [with_topics, without_topics] {
+        for filter in &filters {
+            let include = TopologyFilter {
+                false_detections: FalseDetections::Include,
+                ..filter.clone()
+            };
+            let exclude = TopologyFilter {
+                false_detections: FalseDetections::Exclude,
+                ..filter.clone()
+            };
+            assert_eq!(
+                include.admits_access(&subject, NoAliases),
+                exclude.admits_access(&subject, NoAliases),
+                "{filter:?} {subject:?}"
+            );
+        }
+    }
+}

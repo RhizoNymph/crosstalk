@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.retention.dropped-sizes-frozen"
-statement = "TopicCatalog::sizes for a dropped version returns, without a window, the all-time sizes it returned when the version was marked dropped, and with a window VersionNotRetained."
+statement = "TopicCatalog::sizes for a dropped version queried without a window returns the all-time sizes it returned when the version was marked dropped."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

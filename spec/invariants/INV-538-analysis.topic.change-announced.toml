@@ -1,13 +1,14 @@
 [invariant]
 id = "analysis.topic.change-announced"
-statement = "L6 publishes Changed::TopicVersion at least once after each committed status change of a topic-model version in the catalog, and Changed::Projection at least once after each projection layout becomes current, never before the change is visible to topic_versions or projection respectively."
+statement = "L6 publishes Changed::TopicVersion at least once after each committed status change (ready, active, superseded) and each pin, unpin or drop of a topic-model version in the catalog, and Changed::Projection at least once after each projection job becomes ready or failed or its frame expires, never before the change is visible to topic_versions or projection_status respectively."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
-The UI learns that topic-scoped views and the projection need reloading
-only from these. Publishing the layout token before the layout is current
-would make projection return StaleProjection to a client holding the
-announced token.
+The UI learns that topic-scoped views, retention and a projection it waits
+on need reloading only from these. Publishing a projection's id before its
+status is stored would make projection_status return the old status to a
+client re-querying on the event, and it would wait for an event that
+already passed.
 """
 
 [evidence]

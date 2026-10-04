@@ -1,12 +1,15 @@
 use crate::aggregates::alert::AlertRuleKind;
+use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::{PolicyAuthor, PolicyKind};
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::verdict::Verdict;
 use crate::ids::{
-    AccountHash, AlertId, AlertRuleId, AuditId, ConfigHash, EventId, MergeId, SecretVersion,
+    AccountHash, AlertId, AlertRuleId, AuditId, ConfigHash, EventId, MergeId, ProjectionId,
+    SecretVersion, SinkId, TopicId,
 };
 use crate::interfaces::l2_transport::ConsumerGroup;
+use crate::interfaces::l8_surface::actions::SupersededChannels;
 use crate::interfaces::l8_surface::audit::{
     AuditBody, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome,
     ConfigRecord, InvalidOperatorRecord, OperatorRecord, OutcomeKind, Rejection,
@@ -150,19 +153,23 @@ fn every_action_reports_its_kind_permission_and_subjects() {
 fn outcomes_name_the_ids_they_created() {
     let rule = AlertRuleId::from_ulid(1);
     let merge = MergeId::from_ulid(2);
-    assert_eq!(ActionOutcome::Applied.subject(), None);
-    assert_eq!(ActionOutcome::Unchanged.subject(), None);
+    assert_eq!(ActionOutcome::Applied.subjects(), Vec::new());
+    assert_eq!(ActionOutcome::Unchanged.subjects(), Vec::new());
     assert_eq!(
-        ActionOutcome::RuleCreated(rule).subject(),
-        Some(AuditSubject::Rule(rule))
+        ActionOutcome::RuleCreated(rule).subjects(),
+        vec![AuditSubject::Rule(rule)]
     );
     assert_eq!(
-        ActionOutcome::ChannelPromoted(channel(1)).subject(),
-        Some(AuditSubject::Channel(channel(1)))
+        ActionOutcome::ChannelPromoted {
+            channel: channel(1),
+            superseded: SupersededChannels::default(),
+        }
+        .subjects(),
+        vec![AuditSubject::Channel(channel(1))]
     );
     assert_eq!(
-        ActionOutcome::Merged(merge).subject(),
-        Some(AuditSubject::Merge(merge))
+        ActionOutcome::Merged(merge).subjects(),
+        vec![AuditSubject::Merge(merge)]
     );
 }
 
@@ -369,7 +376,10 @@ fn operator_entry_subjects_include_created_ids() {
             policy: PolicyKind::Sanctioned,
             note: None,
         },
-        AuditOutcome::Succeeded(ActionOutcome::ChannelPromoted(channel(3))),
+        AuditOutcome::Succeeded(ActionOutcome::ChannelPromoted {
+            channel: channel(3),
+            superseded: SupersededChannels::default(),
+        }),
     );
     assert_eq!(promoted.subjects(), vec![AuditSubject::Channel(channel(3))]);
     let refused = operator_entry(
@@ -524,4 +534,272 @@ fn audit_filter_combines_fields_with_and() {
         note: None,
     };
     assert!(!filter.matches(&operator_entry(4, 10, 1, elsewhere, applied())));
+}
+
+/// One value of every `ConflictKind`. The exhaustive match in `declared` is
+/// the reminder to sample a new variant here.
+fn every_conflict() -> Vec<ConflictKind> {
+    fn declared(kind: ConflictKind) -> ConflictKind {
+        match kind {
+            ConflictKind::AlertNotActive { .. }
+            | ConflictKind::AgentMerged { .. }
+            | ConflictKind::MergeAlreadyReverted { .. }
+            | ConflictKind::ChannelSuperseded { .. }
+            | ConflictKind::ChannelNotDiscovered { .. }
+            | ConflictKind::PatternOverlaps { .. }
+            | ConflictKind::RuleNotEditable { .. }
+            | ConflictKind::TopicVersionNotCurrent { .. }
+            | ConflictKind::TransmissionNotJudgeable { .. }
+            | ConflictKind::TopicVersionFitting { .. }
+            | ConflictKind::TopicVersionDropped { .. }
+            | ConflictKind::TopicVersionNotActivated { .. }
+            | ConflictKind::TopicsNotInVersion { .. }
+            | ConflictKind::EmbeddingModelChanged
+            | ConflictKind::ProjectionNotReady { .. }
+            | ConflictKind::ProjectionFailed { .. }
+            | ConflictKind::ProjectionQueueFull => kind,
+        }
+    }
+    let version = TopicModelVersion(2);
+    let projection = ProjectionId::from_ulid(9);
+    [
+        ConflictKind::AlertNotActive {
+            alert: AlertId::from_ulid(1),
+        },
+        ConflictKind::AgentMerged {
+            agent: agent(1),
+            into: agent(2),
+        },
+        ConflictKind::MergeAlreadyReverted {
+            merge: MergeId::from_ulid(3),
+        },
+        ConflictKind::ChannelSuperseded {
+            channel: channel(2),
+            by: channel(1),
+        },
+        ConflictKind::ChannelNotDiscovered {
+            channel: channel(1),
+        },
+        ConflictKind::PatternOverlaps {
+            existing: channel(4),
+        },
+        ConflictKind::RuleNotEditable {
+            rule: AlertRuleId::from_ulid(5),
+        },
+        ConflictKind::TopicVersionNotCurrent {
+            requested: version,
+            current: TopicModelVersion(3),
+        },
+        ConflictKind::TransmissionNotJudgeable {
+            transmission: transmission(1),
+        },
+        ConflictKind::TopicVersionFitting { version },
+        ConflictKind::TopicVersionDropped { version },
+        ConflictKind::TopicVersionNotActivated { version },
+        ConflictKind::TopicsNotInVersion {
+            version,
+            topics: vec![TopicId::from_ulid(6)],
+        },
+        ConflictKind::EmbeddingModelChanged,
+        ConflictKind::ProjectionNotReady {
+            projection,
+            status: ProjectionStatusKind::Fitting,
+        },
+        ConflictKind::ProjectionFailed {
+            projection,
+            failure: FitFailure::NonFiniteLayout,
+        },
+        ConflictKind::ProjectionQueueFull,
+    ]
+    .into_iter()
+    .map(declared)
+    .collect()
+}
+
+/// One value of every `InputError`, as for `every_conflict`.
+fn every_input_error() -> Vec<InputError> {
+    fn declared(input: InputError) -> InputError {
+        match input {
+            InputError::UnalignedWindow
+            | InputError::BucketWidthMismatch
+            | InputError::PatternMissesSeed
+            | InputError::UnknownTopics
+            | InputError::UnknownSink { .. }
+            | InputError::QueryTooLong => input,
+        }
+    }
+    [
+        InputError::UnalignedWindow,
+        InputError::BucketWidthMismatch,
+        InputError::PatternMissesSeed,
+        InputError::UnknownTopics,
+        InputError::UnknownSink {
+            sink: SinkId::from_ulid(1),
+        },
+        InputError::QueryTooLong,
+    ]
+    .into_iter()
+    .map(declared)
+    .collect()
+}
+
+/// Every result `act` can return: each `ActionOutcome`, and each
+/// `ActionError` with every conflict and input reason. The exhaustive
+/// matches are the reminder to extend it.
+fn every_act_result() -> Vec<Result<ActionOutcome, ActionError>> {
+    fn outcome(outcome: ActionOutcome) -> ActionOutcome {
+        match outcome {
+            ActionOutcome::Applied
+            | ActionOutcome::Unchanged
+            | ActionOutcome::RuleCreated(_)
+            | ActionOutcome::ChannelPromoted { .. }
+            | ActionOutcome::Merged(_) => outcome,
+        }
+    }
+    fn error(error: ActionError) -> ActionError {
+        match error {
+            ActionError::Store { .. }
+            | ActionError::NotFound
+            | ActionError::Forbidden { .. }
+            | ActionError::Conflict(_)
+            | ActionError::InvalidInput(_) => error,
+        }
+    }
+    let outcomes = [
+        ActionOutcome::Applied,
+        ActionOutcome::Unchanged,
+        ActionOutcome::RuleCreated(AlertRuleId::from_ulid(1)),
+        ActionOutcome::ChannelPromoted {
+            channel: channel(1),
+            superseded: SupersededChannels::new([channel(3), channel(2)]),
+        },
+        ActionOutcome::Merged(MergeId::from_ulid(1)),
+    ]
+    .map(|o| Ok(outcome(o)));
+    let errors = [
+        ActionError::Store {
+            reason: "connection reset".into(),
+        },
+        ActionError::NotFound,
+    ]
+    .into_iter()
+    .chain(Permission::ALL.map(|missing| ActionError::Forbidden { missing }))
+    .chain(every_conflict().into_iter().map(ActionError::Conflict))
+    .chain(
+        every_input_error()
+            .into_iter()
+            .map(ActionError::InvalidInput),
+    )
+    .map(|e| Err(error(e)));
+    outcomes.into_iter().chain(errors).collect()
+}
+
+#[test]
+fn audit_outcome_inverts_every_act_result() {
+    for result in every_act_result() {
+        let outcome = AuditOutcome::of(&result);
+        assert_eq!(outcome.result(), result, "{outcome:?}");
+        let expected = match &result {
+            Ok(ActionOutcome::Unchanged) => OutcomeKind::Unchanged,
+            Ok(_) => OutcomeKind::Applied,
+            Err(ActionError::Forbidden { .. }) => OutcomeKind::Forbidden,
+            Err(_) => OutcomeKind::Rejected,
+        };
+        assert_eq!(outcome.kind(), expected, "{result:?}");
+    }
+}
+
+#[test]
+fn every_action_error_keeps_its_variant_as_a_query_error() {
+    for result in every_act_result() {
+        let Err(error) = result else { continue };
+        let expected = match error.clone() {
+            ActionError::Store { reason } => QueryError::Store { reason },
+            ActionError::NotFound => QueryError::NotFound,
+            ActionError::Forbidden { missing } => QueryError::Forbidden { missing },
+            ActionError::Conflict(kind) => QueryError::Conflict(kind),
+            ActionError::InvalidInput(input) => QueryError::InvalidInput(input),
+        };
+        assert_eq!(QueryError::from(error), expected);
+    }
+}
+
+fn promote(channel_n: u128) -> OperatorAction {
+    OperatorAction::PromoteChannel {
+        channel: channel(channel_n),
+        pattern: wiki(),
+        policy: PolicyKind::Sanctioned,
+        note: None,
+    }
+}
+
+#[test]
+fn superseded_channels_are_sorted_and_listed_once() {
+    let superseded = SupersededChannels::new([channel(4), channel(2), channel(4), channel(3)]);
+    assert_eq!(superseded.as_slice(), &[channel(2), channel(3), channel(4)]);
+    assert_eq!(
+        superseded,
+        SupersededChannels::new([channel(3), channel(4), channel(2)])
+    );
+    assert!(SupersededChannels::new([]).is_empty());
+}
+
+#[test]
+fn a_promotion_entry_names_every_channel_it_superseded() {
+    let entry = operator_entry(
+        1,
+        1,
+        1,
+        promote(1),
+        AuditOutcome::Succeeded(ActionOutcome::ChannelPromoted {
+            channel: channel(1),
+            superseded: SupersededChannels::new([channel(3), channel(2)]),
+        }),
+    );
+    assert_eq!(
+        entry.subjects(),
+        vec![
+            AuditSubject::Channel(channel(1)),
+            AuditSubject::Channel(channel(2)),
+            AuditSubject::Channel(channel(3)),
+        ]
+    );
+    for superseded in [channel(2), channel(3)] {
+        let history = AuditFilter {
+            subject: Some(AuditSubject::Channel(superseded)),
+            ..AuditFilter::default()
+        };
+        assert!(history.matches(&entry), "{superseded:?}");
+    }
+    let unrelated = AuditFilter {
+        subject: Some(AuditSubject::Channel(channel(4))),
+        ..AuditFilter::default()
+    };
+    assert!(!unrelated.matches(&entry));
+}
+
+#[test]
+fn a_refused_promotion_names_only_the_requested_channel() {
+    let entry = operator_entry(
+        1,
+        1,
+        1,
+        promote(1),
+        AuditOutcome::Rejected(Rejection::Conflict(ConflictKind::ChannelSuperseded {
+            channel: channel(1),
+            by: channel(5),
+        })),
+    );
+    assert_eq!(entry.subjects(), vec![AuditSubject::Channel(channel(1))]);
+}
+
+#[test]
+fn a_promotion_outcome_round_trips_through_the_audit_log() {
+    let result = Ok(ActionOutcome::ChannelPromoted {
+        channel: channel(1),
+        superseded: SupersededChannels::new([channel(2)]),
+    });
+    let outcome = AuditOutcome::of(&result);
+    assert_eq!(outcome.kind(), OutcomeKind::Applied);
+    assert_eq!(outcome.result(), result);
 }

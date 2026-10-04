@@ -27,7 +27,7 @@ use crate::observed::agent::{
     ActiveAgentState, AgentLabel, AgentState, ClaimSet, DuplicateClaim, MergedInto, SeenClaim,
 };
 use crate::observed::client::{HarnessClaim, HarnessFamily};
-use crate::support::{NonBlank, Share, TimeWindow, Timestamp, Watermark};
+use crate::support::{NonBlank, Share, TimeWindow, Timestamp};
 use crate::tests::fixtures::{access, agent, agent_node, at, channel, resource};
 
 fn n(value: u64) -> NonZeroU64 {
@@ -337,7 +337,6 @@ fn parts(
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(1),
-        watermark: Watermark(at(60)),
         nodes,
         accesses,
         transmissions,
@@ -363,7 +362,6 @@ fn a_bipartite_graph_holds_accesses_transmissions_and_both_node_kinds() {
     assert_eq!(graph.accesses().len(), 2);
     assert_eq!(graph.transmissions().len(), 1);
     assert_eq!(graph.nodes().len(), 3);
-    assert_eq!(graph.watermark(), Watermark(at(60)));
     assert_eq!(graph.topic_version(), TopicModelVersion(1));
     assert_eq!(graph.weighting(), Weighting::Transmissions);
     assert_eq!(graph.window(), window());

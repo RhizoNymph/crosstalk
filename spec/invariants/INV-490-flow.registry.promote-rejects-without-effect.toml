@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.registry.promote-rejects-without-effect"
-statement = "ChannelRegistry::promote returns PromoteError::Refused with PromotionRefusal::UnknownChannel, Superseded, NotDiscovered, PatternMissesSeed or PatternOverlaps for an unknown channel, a superseded one, an already declared one, a pattern that does not match the channel's seed locator, or one overlapping another declared channel's pattern, and changes nothing."
+statement = "ChannelRegistry::promote returns PromoteError::Refused with exactly the PromotionRefusal that promotion::plan returns for the stored channels."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

@@ -60,7 +60,8 @@ impl GraphNode {
 pub struct AgentNode {
     pub id: AgentId,
     /// The canonical agent's current operator-set display label
-    /// (`LabelLog::current`). `None` when unlabelled. Display only, never
+    /// ([`Agent::label`](crate::observed::agent::Agent::label), set by
+    /// `Agent::rename`). `None` when unlabelled. Display only, never
     /// identity.
     pub label: Option<AgentLabel>,
     pub state_kind: CanonicalStateKind,

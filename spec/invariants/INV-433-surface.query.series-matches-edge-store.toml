@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.series-matches-edge-store"
-statement = "For a Caller with View, QueryApi::series returns exactly the Watermarked result EdgeStore::series returns for the same grid, weighting, grouping and filter, watermark included, with BucketWidthMismatch mapped to InvalidInput(BucketWidthMismatch), VersionNotRetained to VersionNotRetained with the same version, and other store errors to Store."
+statement = "For a Caller with View, QueryApi::series returns exactly the Watermarked result EdgeStore::series returns for the same grid, weighting, grouping and filter, watermark included."
 kind = "domain"
 property = "model-based"
 requires = ["property"]

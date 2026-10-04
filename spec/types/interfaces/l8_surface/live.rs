@@ -25,16 +25,18 @@
 //! | `UiEvent` | From `Changed` | Published by, after | Re-query |
 //! | --- | --- | --- | --- |
 //! | `AlertChanged { id }` | `Alert` | L6 triage (open, dedup, suppress), L8 acknowledge and resolve | `alerts` |
-//! | `ChannelChanged { id }` | `Channel` | L5: discovery, config declaration, new resource, detection change (incl. dormant and unused), recorded policy decision (config or `PolicyChanged`, once applied), promotion | `channel`, `policy_history` |
-//! | `AgentChanged { id }` | `Agent` | L3: new or registered agent, state change, merge (both agents), unmerge (the agent, its former target, restored agents), label | `agents` |
-//! | `RuleChanged { id }` | `Rule` | L6 rule store: create (operator or config), update, status, turning stale | `alert_rules` |
-//! | `Watermark { at }` | `Watermark` | L7 edge store: watermark advance | `topology`, `series`, `edge_transmissions` |
-//! | `TopicVersionReady { version }` | `TopicVersion` | L6 catalog: version ready, active or superseded | `topic_versions`, then topic-scoped queries if the active version changed |
+//! | `ChannelChanged { id }` | `Channel` | L5: discovery, config declaration, new resource, detection change (incl. dormant and unused), recorded policy decision (config or `PolicyChanged`, once applied), promotion (the promoted channel and each channel it superseded) | `channel`, `policy_history`, `channel_resources` |
+//! | `AgentChanged { id }` | `Agent` | L3: new or registered agent, state change, merge (source, target, repointed agents), unmerge (the source, its former target, restored agents), rename | `agents` |
+//! | `RuleChanged { id }` | `Rule` | L6 rule store: create (operator or config), update, enable or disable, turning stale | `alert_rules` |
+//! | `VerdictChanged { id }` | `Verdict` | L5 verdict store: a verdict set or withdrawn | `verdicts`, `detection_quality`, and views filtered with `FalseDetections::Exclude` |
+//! | `Watermark { at }` | `Watermark` | L7 edge store: watermark advance | `topology`, `channel_topology`, `series`, `edge_transmissions`, `channel_resources`, `topic_sizes` |
+//! | `TopicVersionReady { version }` | `TopicVersion` | L6 catalog: version ready, active or superseded; pinned, unpinned or dropped | `topic_versions`, then topic-scoped queries if the active version changed |
 //! | `ProjectionReady { id }` | `Projection` | L6 projection store: job ready or failed, frame expired | `projection_status`, then `projection` |
 //!
 //! **Permissions.** Subscribing needs `View`. Every event except
 //! `ProjectionReady` needs only `View`: it names an alert, channel, agent,
-//! rule, watermark or topic version, all of which View queries list.
+//! rule, transmission (whose verdict log `verdicts` returns), watermark or
+//! topic version, all of which View queries return.
 //! `ProjectionReady` names a projection job, which only `projection_status`
 //! and `projection` (Content) return, so it reaches only callers with
 //! `Content`
@@ -47,7 +49,11 @@
 //! dozen bytes. The UI knows exactly which ids it is showing and drops the
 //! rest; a server-side filter would have to reproduce every view's filter
 //! (alert states, graph filters, topic versions, merge resolution) and could
-//! only approximate them.
+//! only approximate them. Ids are not resolved through merges or
+//! supersession either: an event names the stored id that changed, and
+//! the stores announce every id a merge, unmerge or promotion re-points
+//! (the agents of the record, every superseded channel), so a client
+//! showing an alias learns that it now resolves elsewhere and re-queries.
 //!
 //! **Resumption.** Every item carries a [`LiveCursor`], sent as the SSE
 //! event id. A client reconnects with its last one (`Last-Event-ID`), and
@@ -70,7 +76,7 @@ use std::time::Duration;
 
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::changed::Changed;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crate::support::Watermark;
 
@@ -89,6 +95,10 @@ pub enum UiEvent {
     },
     RuleChanged {
         id: AlertRuleId,
+    },
+    /// A verdict was set on, or withdrawn from, transmission `id`.
+    VerdictChanged {
+        id: TransmissionId,
     },
     /// Every aggregate bucket before `at` is now final.
     Watermark {
@@ -112,6 +122,7 @@ impl From<Changed> for UiEvent {
             Changed::Channel(id) => Self::ChannelChanged { id },
             Changed::Agent(id) => Self::AgentChanged { id },
             Changed::Rule(id) => Self::RuleChanged { id },
+            Changed::Verdict(id) => Self::VerdictChanged { id },
             Changed::Watermark(at) => Self::Watermark { at },
             Changed::TopicVersion(version) => Self::TopicVersionReady { version },
             Changed::Projection(id) => Self::ProjectionReady { id },
@@ -128,6 +139,7 @@ impl UiEvent {
             | Self::ChannelChanged { .. }
             | Self::AgentChanged { .. }
             | Self::RuleChanged { .. }
+            | Self::VerdictChanged { .. }
             | Self::Watermark { .. }
             | Self::TopicVersionReady { .. } => Permission::View,
         }

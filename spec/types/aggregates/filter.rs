@@ -261,6 +261,13 @@ impl TopologyFilter {
     /// Whether an access bucket passes, as the module table defines.
     /// `subject`'s agent and channel are canonical; `aliases` resolves the
     /// filter's listed ids.
+    ///
+    /// `false_detections` is not read here: an access is an observed read or
+    /// write, not a detection, so `Exclude` never drops an access bucket on
+    /// its own. It applies where it means something, to the transmissions:
+    /// the store builds `channel_topics` only from the transmissions the
+    /// filter's `false_detections` keeps, so under `Exclude` a topic carried
+    /// to a channel only by false detections does not keep its accesses.
     pub fn admits_access(&self, subject: &AccessSubject<'_>, aliases: impl Aliases) -> bool {
         let agents = self.agents.is_empty()
             || self

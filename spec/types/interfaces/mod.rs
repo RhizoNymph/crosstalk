@@ -22,8 +22,8 @@
 //! | L8 | [`l8_surface`] | `AlertOpened`, `Changed`, operator, config | `PolicyChanged`, `AlertChanged`, agent merges, SSE `UiEvent`s |
 //!
 //! Every store whose entities a surface query returns (L3 agents, L5
-//! channels, L6 alerts, rules, topic versions and projection layouts, L7's
-//! watermark) also publishes [`Changed`](crate::events::changed::Changed)
+//! channels and verdicts, L6 alerts, rules, topic versions and projection
+//! jobs, L7's watermark) also publishes [`Changed`](crate::events::changed::Changed)
 //! after every committed change to one of them, for the live feed.
 
 pub mod l0_ingress;

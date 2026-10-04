@@ -18,9 +18,14 @@
 //!
 //! After every committed change to a stored channel (discovery, a
 //! declaration, a new resource, any detection change including turning
-//! dormant, a recorded policy decision, a promotion) flow publishes
-//! `Changed::Channel` for it. A `PolicyChanged` is announced to the UI only
-//! this way, once recorded, never by the surface that published it.
+//! dormant, a recorded policy decision) flow publishes `Changed::Channel`
+//! for it; after a promotion, for the promoted channel and every channel it
+//! superseded ([`Changed::promotion`]). A `PolicyChanged` is announced to
+//! the UI only this way, once recorded, never by the surface that published
+//! it. The verdict store publishes `Changed::Verdict` for each appended
+//! verdict record.
+//!
+//! [`Changed::promotion`]: crate::events::changed::Changed::promotion
 //!
 //! Implementations:
 //! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,

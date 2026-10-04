@@ -164,7 +164,7 @@ pub trait EdgeStore {
     /// Count one access into its bucket (agent and channel as recorded,
     /// `op`, the bucket holding `at`) and return the bucket after the apply.
     /// Idempotent on `access`: a redelivered access changes nothing and
-    /// returns the bucket as it is.
+    /// returns the bucket as it is. A write: fails with `EdgeError`.
     async fn apply_access(&mut self, access: &AccessContribution) -> Result<AccessEdge, EdgeError>;
 
     /// The graph over canonical agents: edges resolved, summed, filtered and
@@ -184,8 +184,11 @@ pub trait EdgeStore {
     /// summed per (agent, channel, op), with shares over all of them; the
     /// transmission edges exactly as `graph` returns them for the same
     /// window, weighting and filter, under the same topic version; nodes for
-    /// every agent and channel they name (`BipartiteGraph::new` holds); and
-    /// the store's watermark. The window must be bucket-aligned.
+    /// every agent and channel they name (`BipartiteGraph::new` holds). The
+    /// watermark ([`EdgeStore::watermark`]) is read before the buckets, as
+    /// for `graph`: access and transmission buckets are both keyed by event
+    /// time. Fails like `graph` (`UnalignedWindow`, the topic version's
+    /// errors).
     ///
     /// [`TopologyFilter::admits_access`]: crate::aggregates::filter::TopologyFilter::admits_access
     async fn channel_topology(
@@ -193,7 +196,7 @@ pub trait EdgeStore {
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<BipartiteGraph, EdgeError>;
+    ) -> Result<Watermarked<BipartiteGraph>, EdgeQueryError>;
 
     /// The applied contributions behind one edge: those `graph` counts into
     /// the edge (`from`, `to`, `route`) for the same window and filter, one

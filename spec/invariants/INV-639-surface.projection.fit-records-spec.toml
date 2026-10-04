@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.projection.fit-records-spec"
-statement = "A successful QueryApi::fit_projection returns a new ProjectionId whose projection_status is Queued, requested by the caller at the time of the call, with a spec holding the request's window and params, the filter pinned to the version its selector resolved to during the call, and the embedding model current during the call."
+statement = "A successful QueryApi::fit_projection returns a new ProjectionId whose projection_status is Queued, requested by the caller at the time of the call, with a spec holding the request's window and params, the topic version its selector resolved to during the call, and the embedding model current during the call."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

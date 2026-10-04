@@ -8,7 +8,8 @@
 //! ```text
 //! AccessRecorded { access, channel } ─L7─▶ AccessEdge (agent, channel, op, bucket) += 1
 //!
-//! channel_topology(window, weighting, filter)
+//! channel_topology(window, weighting, filter) -> Watermarked<BipartiteGraph>
+//!   watermark:     EdgeStore::watermark, read before the buckets
 //!   accesses:      AccessEdge buckets in the window, agents and channels
 //!                  resolved, filtered (TopologyFilter::admits_access), summed
 //!   transmissions: exactly topology(window, weighting, filter)'s edges
@@ -34,7 +35,7 @@ use crate::derived::flow::resource::Resource;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId};
 use crate::paging::{Page, ResourceUseList};
-use crate::support::{Share, TimeWindow, Watermark};
+use crate::support::{Share, TimeWindow};
 
 /// One bucket of the access table: how often `agent` read or wrote
 /// `channel` within `bucket`. A bucket exists only once an access has been
@@ -71,9 +72,6 @@ pub struct BipartiteParts {
     /// The weighting of `transmissions`' shares.
     pub weighting: Weighting,
     pub topic_version: TopicModelVersion,
-    /// The edge store's watermark when the response was computed: buckets
-    /// before it are final.
-    pub watermark: Watermark,
     pub nodes: Vec<GraphNode>,
     pub accesses: Vec<WeightedAccess>,
     /// The transmission edges `topology` returns for the same window,
@@ -178,10 +176,6 @@ impl BipartiteGraph {
 
     pub fn topic_version(&self) -> TopicModelVersion {
         self.parts.topic_version
-    }
-
-    pub fn watermark(&self) -> Watermark {
-        self.parts.watermark
     }
 
     pub fn nodes(&self) -> &[GraphNode] {

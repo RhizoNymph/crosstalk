@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.pin-outcomes"
-statement = "PinTopicVersion returns Applied when it pins, Unchanged for a pinned version, NotFound for an unknown version, Conflict(TopicVersionFitting) for a fitting one and Conflict(TopicVersionDropped) for a dropped one; UnpinTopicVersion returns Applied when it removes a pin, Unchanged for any version without one and NotFound for an unknown version; a pin is stamped with the caller's operator and the acceptance time."
+statement = "PinTopicVersion returns Applied when it pins, Unchanged for a pinned version, NotFound for an unknown version, Conflict(TopicVersionFitting) for a fitting one and Conflict(TopicVersionDropped) for a dropped one; UnpinTopicVersion returns Applied when it removes a pin, Unchanged for any version without one and NotFound for an unknown version."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

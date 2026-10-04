@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.superseded-refused"
-statement = "SetPolicy and PromoteChannel on a superseded channel return Conflict(ChannelSuperseded) naming the channel and its superseding channel, and publish and change nothing."
+statement = "SetPolicy and PromoteChannel on a superseded channel name both the channel and its superseding channel in their Conflict(ChannelSuperseded), and publish and change nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

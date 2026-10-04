@@ -13,7 +13,13 @@ a race from looking like a second transition.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::audit::outcome_maps_every_result_and_back", "crosstalk_spec::tests::audit::outcome_keeps_rejection_detail"]
+unit = [
+    "crosstalk_spec::tests::audit::outcome_maps_every_result_and_back",
+    "crosstalk_spec::tests::audit::outcome_keeps_rejection_detail",
+    "crosstalk_spec::tests::audit::audit_outcome_inverts_every_act_result",
+    "crosstalk_spec::tests::audit::every_action_error_keeps_its_variant_as_a_query_error",
+    "crosstalk_spec::tests::audit::a_promotion_outcome_round_trips_through_the_audit_log",
+]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

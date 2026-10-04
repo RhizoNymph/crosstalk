@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk::surface::tests::pg_alerts_after_promotion"
 
 [evidence-review]
-unit = { agent = "true", human = "false" }
+unit = { agent = "false", human = "false" }
 integration = { agent = "false", human = "false" }

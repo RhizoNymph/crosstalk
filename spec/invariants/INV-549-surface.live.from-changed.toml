@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.live.from-changed"
-statement = "UiEvent::from maps Changed::Alert, Channel, Agent, Rule, Watermark, TopicVersion and Projection to AlertChanged, ChannelChanged, AgentChanged, RuleChanged, Watermark, TopicVersionReady and ProjectionReady respectively, each naming the same id or value."
+statement = "UiEvent::from maps Changed::Alert, Channel, Agent, Rule, Verdict, Watermark, TopicVersion and Projection to AlertChanged, ChannelChanged, AgentChanged, RuleChanged, VerdictChanged, Watermark, TopicVersionReady and ProjectionReady respectively, each naming the same id or value, so every feed event has exactly one source."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -12,7 +12,12 @@ change would stay invisible until a resync.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::live::every_notification_becomes_the_event_naming_the_same_id", "crosstalk_spec::tests::live::notifications_travel_on_one_subject"]
+unit = [
+    "crosstalk_spec::tests::live::every_notification_becomes_the_event_naming_the_same_id",
+    "crosstalk_spec::tests::live::notifications_travel_on_one_subject",
+    "crosstalk_spec::tests::events::every_change_travels_on_the_changed_subject",
+    "crosstalk_spec::tests::events::every_feed_event_has_a_source",
+]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

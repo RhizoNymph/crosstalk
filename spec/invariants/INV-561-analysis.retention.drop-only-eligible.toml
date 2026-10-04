@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.retention.drop-only-eligible"
-statement = "TopicVersionHistory::mark_dropped marks a version dropped only when RetentionPolicy::to_drop returns it for the history and the drop time is no earlier than its superseded_at, and otherwise returns an error and changes nothing."
+statement = "TopicVersionHistory::mark_dropped marks a version dropped only when RetentionPolicy::to_drop returns it for the history, and otherwise returns an error and changes nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

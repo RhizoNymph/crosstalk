@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.series.rejects-bucket-width-mismatch"
-statement = "series returns EdgeError::BucketWidthMismatch and no series when the grid's bucket width differs from EdgeStore::bucket_width."
+statement = "series returns EdgeQueryError::BucketWidthMismatch and no series when the grid's bucket width differs from EdgeStore::bucket_width."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

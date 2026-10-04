@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.watermark-read-first"
-statement = "Every Watermarked response of QueryApi topology, series, edge_transmissions and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read."
+statement = "Every Watermarked response of QueryApi topology, channel_topology, series, edge_transmissions, channel_resources and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

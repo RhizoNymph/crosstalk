@@ -99,7 +99,7 @@ impl AuditOutcome {
     /// The outcome recorded for what `OperatorActions::act` returned.
     pub fn of(result: &Result<ActionOutcome, ActionError>) -> Self {
         match result {
-            Ok(outcome) => Self::Succeeded(*outcome),
+            Ok(outcome) => Self::Succeeded(outcome.clone()),
             Err(ActionError::Forbidden { missing }) => Self::Forbidden { missing: *missing },
             Err(ActionError::NotFound) => Self::Rejected(Rejection::NotFound),
             Err(ActionError::Conflict(kind)) => Self::Rejected(Rejection::Conflict(kind.clone())),
@@ -116,7 +116,7 @@ impl AuditOutcome {
     /// inverse of [`AuditOutcome::of`].
     pub fn result(&self) -> Result<ActionOutcome, ActionError> {
         match self {
-            Self::Succeeded(outcome) => Ok(*outcome),
+            Self::Succeeded(outcome) => Ok(outcome.clone()),
             Self::Forbidden { missing } => Err(ActionError::Forbidden { missing: *missing }),
             Self::Rejected(Rejection::NotFound) => Err(ActionError::NotFound),
             Self::Rejected(Rejection::Conflict(kind)) => Err(ActionError::Conflict(kind.clone())),
@@ -205,14 +205,16 @@ impl OperatorRecord {
         &self.outcome
     }
 
-    /// The action's subjects, then the id its outcome created, if any.
+    /// The action's subjects, then those its outcome names
+    /// ([`ActionOutcome::subjects`]), each once.
     pub fn subjects(&self) -> Vec<AuditSubject> {
         let mut subjects = self.action.subjects();
-        if let AuditOutcome::Succeeded(outcome) = self.outcome
-            && let Some(created) = outcome.subject()
-            && !subjects.contains(&created)
-        {
-            subjects.push(created);
+        if let AuditOutcome::Succeeded(outcome) = &self.outcome {
+            for named in outcome.subjects() {
+                if !subjects.contains(&named) {
+                    subjects.push(named);
+                }
+            }
         }
         subjects
     }

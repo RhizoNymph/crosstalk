@@ -6,10 +6,12 @@ use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
 use crate::aggregates::series::BucketWidth;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
-use crate::ids::{EventId, ProjectionId, TopicId};
+use crate::ids::{AuditId, EventId, ProjectionId, TopicId, TransmissionId};
 use crate::interfaces::l2_transport::{BusError, ConsumerGroup};
+use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
 use crate::interfaces::l7_topology::EdgeQueryError;
+use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
 
 const V: TopicModelVersion = TopicModelVersion(4);
@@ -223,6 +225,52 @@ fn dead_letter_bus_errors_keep_cursor_and_not_found_apart() {
     );
     assert!(matches!(
         QueryError::from(BusError::Disconnected),
+        QueryError::Store { .. }
+    ));
+}
+
+#[test]
+fn catalog_drops_map_to_version_not_retained() {
+    assert_eq!(
+        QueryError::from(CatalogError::VersionNotRetained(V)),
+        QueryError::VersionNotRetained { version: V }
+    );
+}
+
+#[test]
+fn verdict_store_errors_map_to_typed_query_errors() {
+    let transmission = TransmissionId::from_ulid(3);
+    let cases = [
+        (
+            VerdictError::Store { reason: store() },
+            QueryError::Store { reason: store() },
+        ),
+        (
+            VerdictError::UnknownTransmission(transmission),
+            QueryError::NotFound,
+        ),
+        (
+            VerdictError::NotJudgeable(transmission),
+            QueryError::Conflict(ConflictKind::TransmissionNotJudgeable { transmission }),
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(QueryError::from(error.clone()), expected, "{error:?}");
+    }
+}
+
+#[test]
+fn audit_log_errors_map_to_typed_query_errors() {
+    assert_eq!(
+        QueryError::from(AuditError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
+    assert_eq!(
+        QueryError::from(AuditError::InvalidCursor),
+        QueryError::InvalidCursor
+    );
+    assert!(matches!(
+        QueryError::from(AuditError::IdReused(AuditId::from_ulid(1))),
         QueryError::Store { .. }
     ));
 }

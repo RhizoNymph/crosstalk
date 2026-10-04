@@ -1,13 +1,17 @@
 [invariant]
 id = "surface.action.promote-same-id"
-statement = "An OperatorAction::PromoteChannel that returns Ok returns ChannelPromoted naming the requested channel, and that channel keeps its id."
+statement = "An OperatorAction::PromoteChannel that returns Ok returns ChannelPromoted naming the requested channel and, as superseded, exactly the channels ChannelRegistry::promote reported it superseded, sorted by id and each once."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 Transmissions, edges, alerts and policy history reference the channel id.
 Returning the same id tells the UI nothing moved, so its selection and
-links stay valid.
+links stay valid. Returning the superseded channels tells the UI which
+channels it shows now resolve to the promoted one, and puts them in the
+audit record, so a superseded channel's audit history leads to the
+promotion that retired it. Sorting and deduplicating
+(SupersededChannels::new) makes equal promotions record equal outcomes.
 """
 
 [evidence]

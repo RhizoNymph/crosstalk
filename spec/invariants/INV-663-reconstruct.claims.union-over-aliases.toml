@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk::reconstruct::tests::pg_claims_union_over_aliases"
 
 [evidence-review]
-unit = { agent = "true", human = "false" }
+unit = { agent = "false", human = "false" }
 integration = { agent = "false", human = "false" }

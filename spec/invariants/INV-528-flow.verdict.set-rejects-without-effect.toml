@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.verdict.set-rejects-without-effect"
-statement = "TransmissionVerdicts::set returns UnknownTransmission for an unknown transmission and NotJudgeable for a Detected or AwaitingContent one, appending no record and publishing no event."
+statement = "TransmissionVerdicts::set returns UnknownTransmission for an unknown transmission and NotJudgeable for a Detected or AwaitingContent one, and appends no record."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

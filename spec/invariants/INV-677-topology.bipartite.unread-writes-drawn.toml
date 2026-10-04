@@ -18,5 +18,5 @@ unit = [
 property = "crosstalk::topology::props::channel_topology_accesses_match_buckets"
 
 [evidence-review]
-unit = { agent = "true", human = "false" }
+unit = { agent = "false", human = "false" }
 property = { agent = "false", human = "false" }

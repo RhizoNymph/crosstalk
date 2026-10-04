@@ -22,8 +22,9 @@ use crate::support::{TimeWindow, Timestamp};
 pub trait TransmissionVerdicts {
     /// Append `verdict` (`None` withdraws) to the transmission's log,
     /// authored by `by` at `at`, unless it is already current
-    /// ([`VerdictLog::record`]). On `Appended` one `VerdictSet` is
-    /// published, carrying the record's revision; on `Unchanged` nothing is.
+    /// ([`VerdictLog::record`]). On `Appended` one `VerdictSet`, carrying
+    /// the record's revision, and one `Changed::Verdict` are published; on
+    /// `Unchanged` nothing is.
     ///
     /// Rejects, changing nothing: an unknown transmission, and one whose
     /// state takes no verdict (`Detected`, `AwaitingContent`).

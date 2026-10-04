@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.version.single-version-per-response"
-statement = "Every topic id in a successful topology, series, search, edge_transmissions or topics response, and in a stored projection's frame, belongs to the topic-model version that response or projection reports."
+statement = "Every topic id in a successful topology, series, search, edge_transmissions or topics response belongs to the topic-model version that response reports."
 kind = "domain"
 property = "invariant"
 requires = ["property"]

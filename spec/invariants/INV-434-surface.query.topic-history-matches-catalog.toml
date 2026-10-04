@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.topic-history-matches-catalog"
-statement = "For a Caller with View, QueryApi topic_versions and topic_lineage return exactly what TopicCatalog returns, and topic_sizes returns what TopicCatalog::sizes returns as a Watermarked value whose watermark EdgeStore::watermark returned before the catalog was read, with a missing topic_sizes version resolved to the history's active version, UnknownVersion mapped to NotFound, StillFitting to Conflict(TopicVersionFitting) and VersionNotRetained to VersionNotRetained with the same version."
+statement = "For a Caller with View, QueryApi topic_versions and topic_lineage return exactly what TopicCatalog returns, and topic_sizes returns what TopicCatalog::sizes returns, with a missing version resolved to the history's active version."
 kind = "domain"
 property = "model-based"
 requires = ["property"]

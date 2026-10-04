@@ -13,11 +13,11 @@ cargo test  --manifest-path spec/Cargo.toml
 
 ```text
 spec/types/
-├── mod.rs                 crate root: the three tiers, events, interfaces
+├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids (incl. ConfigHash)
-├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), list markers (incl. AuditList, ResourceUseList)
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, MergeId, ProjectionId, SinkId), BLAKE3 content ids (incl. ConfigHash)
+├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
@@ -46,8 +46,9 @@ spec/types/
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
 │   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
@@ -57,11 +58,10 @@ spec/types/
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
-│   ├── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
-│   └── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
+│   └── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
-│   ├── changed.rs         Changed: which entity a query returns changed (any store, for the live feed)
+│   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
@@ -75,15 +75,17 @@ spec/types/
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError, EdgeQueryError
-│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views incl. channel topology, channel resources, series, topic history, policy history, projections, verdicts, detection quality, audit, operators, sinks, watermark), QueryError, ConflictKind, InputError, OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink, SinkInfo
+│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi, OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
 │   └── l8_surface/
+│       ├── actions.rs     OperatorAction (kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
+│       ├── errors.rs      QueryError, ActionError, ConflictKind, InputError
+│       ├── query_errors.rs the From impls: each store error to one QueryError or ActionError
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
-│       ├── query_errors.rs From impls: each store error to one QueryError
-│       ├── live.rs        LiveFeed, UiEvent (id only), LiveCursor, FeedWindow (checked), LiveConfig (checked)
-│       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), ConfigChange, AuditSubject, AuditFilter
+│       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
+│       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
 │       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
-└── tests/                 tests for the invariants checked at runtime
+└── tests/                 tests for the invariants checked at runtime, one module per subject
 ```
 
 ## Conventions
@@ -101,8 +103,15 @@ spec/types/
   fields; clients only hand them back. A cursor's list is a type
   parameter, so one list's cursor does not fit another.
 - **Errors are typed end to end.** Each store's error enum maps to
-  `QueryError` through one `From` impl, so adding a variant forces a
-  decision about what the UI sees.
+  `QueryError` (or, behind an action, `ActionError`) through one `From` impl
+  in `l8_surface/query_errors.rs`, so adding a variant forces a decision
+  about what the UI sees. Reads and writes of the edge store fail with
+  different enums (`EdgeQueryError`, `EdgeError`).
+- **Exhaustive matches, no wildcards.** `OperatorAction::kind`,
+  `required_permission` and `subjects`, `UiEvent::from` and the error
+  mappings match every variant, and the tests list every variant behind an
+  exhaustive match, so a new action, event or error does not compile until
+  each is decided.
 - **Checked constructors for the rest.** When an invariant spans values
   (a content match's reader is not its origin agent; every match in a
   confirmed transmission has one sender), the type has private fields and a
