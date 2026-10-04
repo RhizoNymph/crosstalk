@@ -1,15 +1,17 @@
-//! L3 and L5 writes: agents and merges, channels and their traffic,
-//! transmissions, policies, the promotion and verdicts.
+//! L3 and L5 writes: agents and merges, resources, accesses and the
+//! channels their cross-agent transmissions discover, transmissions and the
+//! traffic they record, policies, the promotion and verdicts.
 
 use crosstalk_spec::derived::flow::channel::policy::{PolicyAuthor, PolicyKind, Recorded};
+use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRecorded};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::ActivityStore;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::AgentLifecycle;
 use crosstalk_spec::interfaces::l3_reconstruction::{ClaimStore, IdentityResolver};
-use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
+use crosstalk_spec::interfaces::l5_flow::{ChannelRegistry, Discovery};
 use crosstalk_spec::interfaces::l6_analysis::AlertTriage;
 use crosstalk_spec::interfaces::l6_analysis::corpus::SearchCorpus;
 use crosstalk_spec::interfaces::l7_topology::{AccessContribution, EdgeStore};
@@ -91,27 +93,28 @@ impl<S: WorldStores> Runner<'_, S> {
                 };
                 self.audit(at, by, action, Ok(outcome(change))).await
             }
-            Op::Discover {
-                channel,
-                resource,
-                first_access,
-            } => self
-                .stores
-                .channels()
-                .discover(channel, resource, first_access)
-                .await
-                .map_err(|e| WorldError::store("ChannelTraffic::discover", at, e)),
-            Op::AddResource { channel, resource } => self
-                .stores
-                .channels()
-                .add_resource(channel, resource)
-                .await
-                .map_err(|e| WorldError::store("ChannelTraffic::add_resource", at, e)),
-            Op::Access { access, channel } => {
+            Op::AddResource { resource, on } => {
+                let placed = self
+                    .stores
+                    .channels()
+                    .add_resource(resource)
+                    .await
+                    .map_err(|e| WorldError::store("ChannelTraffic::add_resource", at, e))?;
+                if placed != on {
+                    return Err(WorldError::diverged(
+                        "ChannelTraffic::add_resource",
+                        at,
+                        on,
+                        placed,
+                    ));
+                }
+                Ok(())
+            }
+            Op::Access(access) => {
                 let contribution = AccessContribution {
                     access: access.id,
                     agent: access.agent,
-                    channel,
+                    resource: access.resource,
                     op: access.op.kind(),
                     at: access.at,
                 };
@@ -127,6 +130,27 @@ impl<S: WorldStores> Runner<'_, S> {
                     .map_err(|e| WorldError::store("EdgeStore::apply_access", at, e))?;
                 Ok(())
             }
+            Op::Discover {
+                channel,
+                resource,
+                transmission,
+            } => {
+                let discovery = self
+                    .stores
+                    .channels()
+                    .discover(channel, resource, transmission, at)
+                    .await
+                    .map_err(|e| WorldError::store("ChannelTraffic::discover", at, e))?;
+                if discovery != Discovery::Created(channel) {
+                    return Err(WorldError::diverged(
+                        "ChannelTraffic::discover",
+                        at,
+                        Discovery::Created(channel),
+                        discovery,
+                    ));
+                }
+                Ok(())
+            }
             Op::Detection { channel, update } => self
                 .stores
                 .channels()
@@ -134,22 +158,29 @@ impl<S: WorldStores> Runner<'_, S> {
                 .await
                 .map(drop)
                 .map_err(|e| WorldError::store("ChannelTraffic::set_detection", at, e)),
-            Op::Save(transmission) => self
-                .stores
-                .transmissions()
-                .save(*transmission)
-                .await
-                .map_err(|e| WorldError::store("TransmissionStore::save", at, e)),
-            Op::Confirm {
-                channel,
-                transmission,
-            } => self
-                .stores
-                .channels()
-                .confirm(channel, transmission, at)
-                .await
-                .map(drop)
-                .map_err(|e| WorldError::store("ChannelTraffic::confirm", at, e)),
+            Op::Save(transmission) => {
+                // The flow consumer records each state the correlator
+                // decides for a channel transmission once it is stored; a
+                // `Detected` one names no sender yet, so it is no traffic.
+                let traffic = matches!(transmission.route, Route::Channel(_))
+                    && !matches!(transmission.state, TransmissionState::Detected);
+                let recorded = traffic.then(|| (*transmission).clone());
+                self.stores
+                    .transmissions()
+                    .save(*transmission)
+                    .await
+                    .map_err(|e| WorldError::store("TransmissionStore::save", at, e))?;
+                if let Some(transmission) = recorded {
+                    self.stores
+                        .channels()
+                        .record_transmission(&transmission)
+                        .await
+                        .map_err(|e| {
+                            WorldError::store("ChannelTraffic::record_transmission", at, e)
+                        })?;
+                }
+                Ok(())
+            }
             Op::Policy { channel, decision } => self.policy(at, channel, decision).await,
             Op::Promote { channel, promotion } => self.promote(at, channel, *promotion).await,
             Op::ForbiddenPolicy {

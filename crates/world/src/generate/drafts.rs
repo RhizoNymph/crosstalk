@@ -47,26 +47,47 @@ fn decision(kind: PolicyKind, by: PolicyAuthor, at: Timestamp, note: &str) -> Po
     }
 }
 
-/// How a channel came to exist.
+/// How a channel came to exist, with the resources its traffic uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraftOrigin {
-    /// Declared in config at `at`, before any traffic.
+    /// Declared in config at `at`, before any traffic; `locators` are on it
+    /// from their first sighting, through the pattern.
     Declared {
         pattern: ResourcePattern,
         at: Timestamp,
+        locators: Vec<Locator>,
     },
-    /// Discovered from traffic at the first access to one of its
-    /// resources.
-    Discovered,
+    /// Discovered by the first cross-agent transmission through `seed`. A
+    /// discovered channel holds exactly its seed: another resource joins a
+    /// channel only through a declared pattern, and would otherwise
+    /// discover a channel of its own.
+    Discovered { seed: Locator },
+}
+
+impl DraftOrigin {
+    /// The resources the channel's traffic uses: a declared channel's
+    /// locators, a discovered channel's seed.
+    pub fn locators(&self) -> Vec<Locator> {
+        match self {
+            Self::Declared { locators, .. } => locators.clone(),
+            Self::Discovered { seed } => vec![seed.clone()],
+        }
+    }
+
+    pub fn is_discovered(&self) -> bool {
+        matches!(self, Self::Discovered { .. })
+    }
 }
 
 /// Everything one channel needs before traffic exists.
 pub struct Draft {
     pub key: ChannelKey,
+    /// When the channel was declared, or when its traffic window opens (a
+    /// discovered channel is created by its first cross-agent transmission
+    /// in that window; its id carries this time).
     pub created: Timestamp,
     pub origin: DraftOrigin,
     pub target: Target,
-    pub locators: Vec<Locator>,
     pub window: (Timestamp, Timestamp),
     pub weight: f64,
     pub writers: &'static [&'static str],
@@ -158,27 +179,31 @@ pub fn operator_decisions(times: &Times) -> Vec<(ChannelKey, PolicyDecision)> {
 pub fn drafts(times: &Times) -> Vec<Draft> {
     use ChannelKey as K;
     use Theme as T;
-    let declared = |pattern| DraftOrigin::Declared {
+    let declared = |pattern, locators| DraftOrigin::Declared {
         pattern,
         at: times.config_at,
+        locators,
     };
+    let discovered = |seed| DraftOrigin::Discovered { seed };
     let (start, now) = (times.start, times.now);
     let whole = (start, now);
     vec![
         Draft {
             key: K::InternalWiki,
             created: times.config_at,
-            origin: declared(ResourcePattern::UrlPrefix {
-                host: Host("wiki.corp.internal".to_owned()),
-                path_prefix: "/eng".to_owned(),
-            }),
+            origin: declared(
+                ResourcePattern::UrlPrefix {
+                    host: Host("wiki.corp.internal".to_owned()),
+                    path_prefix: "/eng".to_owned(),
+                },
+                vec![
+                    url("wiki.corp.internal", "/eng/runbooks/deploy"),
+                    url("wiki.corp.internal", "/eng/research/agent-memory"),
+                    url("wiki.corp.internal", "/eng/meetings/2026-09-29"),
+                    url("wiki.corp.internal", "/eng/oncall/handbook"),
+                ],
+            ),
             target: Target::Active,
-            locators: vec![
-                url("wiki.corp.internal", "/eng/runbooks/deploy"),
-                url("wiki.corp.internal", "/eng/research/agent-memory"),
-                url("wiki.corp.internal", "/eng/meetings/2026-09-29"),
-                url("wiki.corp.internal", "/eng/oncall/handbook"),
-            ],
             window: whole,
             weight: 15.0,
             writers: &["cc0", "cc1", "cc2", "cx0", "cx2", "cc7"],
@@ -189,19 +214,21 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::Monorepo,
             created: times.config_at,
-            origin: declared(ResourcePattern::UrlPrefix {
-                host: Host("git.corp.internal".to_owned()),
-                path_prefix: "/platform/monorepo".to_owned(),
-            }),
+            origin: declared(
+                ResourcePattern::UrlPrefix {
+                    host: Host("git.corp.internal".to_owned()),
+                    path_prefix: "/platform/monorepo".to_owned(),
+                },
+                vec![
+                    url("git.corp.internal", "/platform/monorepo/pull/4182"),
+                    url("git.corp.internal", "/platform/monorepo/pull/4190"),
+                    url(
+                        "git.corp.internal",
+                        "/platform/monorepo/blob/main/README.md",
+                    ),
+                ],
+            ),
             target: Target::Active,
-            locators: vec![
-                url("git.corp.internal", "/platform/monorepo/pull/4182"),
-                url("git.corp.internal", "/platform/monorepo/pull/4190"),
-                url(
-                    "git.corp.internal",
-                    "/platform/monorepo/blob/main/README.md",
-                ),
-            ],
             window: whole,
             weight: 15.0,
             writers: &["cc0", "cc2", "cx0", "cx1", "cc0.b", "cx0.a"],
@@ -216,15 +243,15 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::IssueTracker,
             created: times.config_at,
-            origin: declared(ResourcePattern::Host(Host(
-                "issues.corp.internal".to_owned(),
-            ))),
+            origin: declared(
+                ResourcePattern::Host(Host("issues.corp.internal".to_owned())),
+                vec![
+                    url("issues.corp.internal", "/browse/INC-4471"),
+                    url("issues.corp.internal", "/browse/SUP-1029"),
+                    url("issues.corp.internal", "/browse/PLAT-880"),
+                ],
+            ),
             target: Target::Active,
-            locators: vec![
-                url("issues.corp.internal", "/browse/INC-4471"),
-                url("issues.corp.internal", "/browse/SUP-1029"),
-                url("issues.corp.internal", "/browse/PLAT-880"),
-            ],
             window: whole,
             weight: 10.0,
             writers: &["cc2", "cx4", "omp1", "cc3"],
@@ -241,9 +268,9 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
                     path_prefix: "/design".to_owned(),
                 },
                 at: times.design_docs_at,
+                locators: Vec::new(),
             },
             target: Target::Awaiting,
-            locators: Vec::new(),
             window: whole,
             weight: 0.0,
             writers: &[],
@@ -254,12 +281,14 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::ReleaseBucket,
             created: times.config_at,
-            origin: declared(ResourcePattern::PathPrefix {
-                host: Some(Host("nfs-01".to_owned())),
-                prefix: "/mnt/shared/releases".to_owned(),
-            }),
+            origin: declared(
+                ResourcePattern::PathPrefix {
+                    host: Some(Host("nfs-01".to_owned())),
+                    prefix: "/mnt/shared/releases".to_owned(),
+                },
+                Vec::new(),
+            ),
             target: Target::Unused,
-            locators: Vec::new(),
             window: whole,
             weight: 0.0,
             writers: &[],
@@ -270,12 +299,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::TeamNotes,
             created: times.team_notes_from,
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("notes.corp.internal", "/team-a/retro")),
             target: Target::Active,
-            locators: vec![
-                url("notes.corp.internal", "/team-a/retro"),
-                url("notes.corp.internal", "/team-a/plans"),
-            ],
             window: (times.team_notes_from, now),
             weight: 6.0,
             writers: &["cc4", "cx1", "cc7"],
@@ -286,18 +311,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::HijackedWiki,
             created: times.hijack_from,
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("wiki.example.org", "/wiki/Agent_Coordination")),
             target: Target::Active,
-            locators: vec![
-                url("wiki.example.org", "/wiki/Agent_Coordination"),
-                url("wiki.example.org", "/wiki/Agent_Coordination/Handoff"),
-                Locator::Url {
-                    scheme: "https".to_owned(),
-                    host: Host("wiki.example.org".to_owned()),
-                    path: "/w/index.php".to_owned(),
-                    query: Some("action=raw&title=Agent_Coordination".to_owned()),
-                },
-            ],
             window: (times.hijack_from, now),
             weight: 18.0,
             writers: &["pi0", "omp2", "sh1"],
@@ -314,9 +329,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::WikiTalk,
             created: crate::clock::minus(now, 4 * crate::clock::DAY),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("wiki.example.org", "/wiki/Talk:Agent_Coordination")),
             target: Target::Active,
-            locators: vec![url("wiki.example.org", "/wiki/Talk:Agent_Coordination")],
             window: (crate::clock::minus(now, 4 * crate::clock::DAY), now),
             weight: 3.0,
             writers: &["pi0", "cx2"],
@@ -327,13 +341,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::Pastebin,
             created: plus(start, 5 * HOUR),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("paste.example.net", "/raw/q8Zt3LmK")),
             target: Target::Active,
-            locators: vec![
-                url("paste.example.net", "/raw/q8Zt3LmK"),
-                url("paste.example.net", "/raw/Hx71bPwe"),
-                url("paste.example.net", "/raw/3nVd0aRc"),
-            ],
             window: (plus(start, 5 * HOUR), now),
             weight: 8.0,
             writers: &["pi1", "omp0", "al0"],
@@ -344,25 +353,12 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::McpMemory,
             created: plus(start, 2 * HOUR),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(Locator::Mcp {
+                server: "memory".to_owned(),
+                tool: ToolName("create_entities".to_owned()),
+                target: Some("project-atlas".to_owned()),
+            }),
             target: Target::Active,
-            locators: vec![
-                Locator::Mcp {
-                    server: "memory".to_owned(),
-                    tool: ToolName("create_entities".to_owned()),
-                    target: Some("project-atlas".to_owned()),
-                },
-                Locator::Mcp {
-                    server: "memory".to_owned(),
-                    tool: ToolName("search_nodes".to_owned()),
-                    target: Some("project-atlas".to_owned()),
-                },
-                Locator::Mcp {
-                    server: "memory".to_owned(),
-                    tool: ToolName("read_graph".to_owned()),
-                    target: None,
-                },
-            ],
             window: (plus(start, 2 * HOUR), now),
             weight: 8.0,
             writers: &["cc0", "cc0.a", "omp1", "al0"],
@@ -373,18 +369,11 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::SharedFile,
             created: plus(start, 9 * HOUR),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(Locator::File {
+                host: Some(Host("devbox-3".to_owned())),
+                path: "/tmp/agent-handoff/plan.md".to_owned(),
+            }),
             target: Target::Active,
-            locators: vec![
-                Locator::File {
-                    host: Some(Host("devbox-3".to_owned())),
-                    path: "/tmp/agent-handoff/plan.md".to_owned(),
-                },
-                Locator::File {
-                    host: Some(Host("devbox-3".to_owned())),
-                    path: "/tmp/agent-handoff/status.json".to_owned(),
-                },
-            ],
             window: (plus(start, 9 * HOUR), now),
             weight: 7.0,
             writers: &["cc2", "cc3"],
@@ -395,9 +384,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::Gist,
             created: plus(start, HOUR),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("gist.example.com", "/anon/5d41402abc4b2a76")),
             target: Target::Dormant,
-            locators: vec![url("gist.example.com", "/anon/5d41402abc4b2a76")],
             window: (plus(start, HOUR), times.gist_until),
             weight: 3.0,
             writers: &["pi3", "cx0"],
@@ -408,14 +396,13 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::S3Handoff,
             created: crate::clock::minus(now, 2 * crate::clock::DAY),
-            origin: DraftOrigin::Discovered,
-            target: Target::Active,
-            locators: vec![Locator::Url {
+            origin: discovered(Locator::Url {
                 scheme: "s3".to_owned(),
                 host: Host("agent-scratch".to_owned()),
                 path: "/handoff/batch-0412.jsonl".to_owned(),
                 query: None,
-            }],
+            }),
+            target: Target::Active,
             window: (crate::clock::minus(now, 2 * crate::clock::DAY), now),
             weight: 3.0,
             writers: &["sh0"],
@@ -426,12 +413,11 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::SelfNotes,
             created: times.self_notes_from,
-            origin: DraftOrigin::Discovered,
-            target: Target::Dormant,
-            locators: vec![Locator::File {
+            origin: discovered(Locator::File {
                 host: Some(Host("devbox-7".to_owned())),
                 path: "/home/dev/.codex/handoff.md".to_owned(),
-            }],
+            }),
+            target: Target::Dormant,
             window: (times.self_notes_from, times.self_notes_until),
             weight: 2.0,
             writers: &["al1", "cx1"],
@@ -442,9 +428,8 @@ pub fn drafts(times: &Times) -> Vec<Draft> {
         Draft {
             key: K::OldTeamNotes,
             created: plus(start, 3 * HOUR),
-            origin: DraftOrigin::Discovered,
+            origin: discovered(url("notes.corp.internal", "/team-a/standup")),
             target: Target::Active,
-            locators: vec![url("notes.corp.internal", "/team-a/standup")],
             window: (plus(start, 3 * HOUR), times.promote_at),
             weight: 4.0,
             writers: &["cc4", "cx1", "al1"],

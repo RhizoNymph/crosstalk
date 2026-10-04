@@ -14,7 +14,7 @@ use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{
-    AccessId, AgentId, ChannelId, ConfigHash, MessageHash, OperatorId, ProjectionId, SinkId,
+    AgentId, ChannelId, ConfigHash, MessageHash, OperatorId, ProjectionId, ResourceId, SinkId,
     TransmissionId,
 };
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
@@ -96,32 +96,32 @@ pub enum Op {
     },
 
     // Channels and transmissions (L5).
+    /// `ChannelTraffic::add_resource` at the resource's first sighting,
+    /// which must place it on `on` (a declared channel's pattern) or on no
+    /// channel.
+    AddResource {
+        resource: Resource,
+        on: Option<ChannelId>,
+    },
+    /// `ChannelTraffic::record_access`, then `EdgeStore::apply_access`
+    /// (L7 buckets accesses by resource).
+    Access(Access),
+    /// `ChannelTraffic::discover` of `channel` from the stored `resource`
+    /// for `transmission`, the first cross-agent transmission through it,
+    /// at the time it opened; the registry must create it.
     Discover {
         channel: ChannelId,
-        resource: Resource,
-        first_access: AccessId,
-    },
-    AddResource {
-        channel: ChannelId,
-        resource: Resource,
-    },
-    /// `ChannelTraffic::record_access`, then `EdgeStore::apply_access` with
-    /// the channel the resource is on.
-    Access {
-        access: Access,
-        channel: ChannelId,
+        resource: ResourceId,
+        transmission: TransmissionId,
     },
     Detection {
         channel: ChannelId,
         update: DetectionUpdate,
     },
-    /// `TransmissionStore::save` of the state the correlator reached.
+    /// `TransmissionStore::save` of the state the correlator reached and,
+    /// for a channel transmission past `Detected`,
+    /// `ChannelTraffic::record_transmission` of it.
     Save(Box<Transmission>),
-    /// `ChannelTraffic::confirm`.
-    Confirm {
-        channel: ChannelId,
-        transmission: TransmissionId,
-    },
     /// `ChannelRegistry::set_policy` of an operator's decision (audited)
     /// and, for a sanction, `AlertTriage::channel_sanctioned`.
     Policy {

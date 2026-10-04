@@ -795,8 +795,9 @@ Features Index:
       ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
       anchor and store implementation; ids are ULIDs minted at their
       entity's time. Tests seed the memory stores and assert every scenario
-      through the read traits; four channel-semantics tests wait for that
-      port. The feature doc lists the divergences from the UI fixture and
+      through the read traits, the channel semantics included (discovery
+      at the first cross-agent transmission, the scratch entry on no
+      channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
       the gap list: fixture reads no store or spec trait answers.
     entry_points:
       - crates/world/src/lib.rs
