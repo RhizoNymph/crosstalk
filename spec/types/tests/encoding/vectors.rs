@@ -97,13 +97,6 @@ pub fn vectors() -> Vec<(&'static str, MessageBody)> {
                     ToolArguments::Invalid(r#"{"query": "rust"#.to_owned()),
                     ToolExecution::Server,
                 ),
-                AssistantPart::ToolCall(ToolCall {
-                    id: ToolCallId("__thought__CiQB0e2Kb7=".to_owned()),
-                    name: ToolName("read_file".to_owned()),
-                    arguments: ToolArguments::Json(CanonicalJson(r#"{"path":"/b"}"#.to_owned())),
-                    execution: ToolExecution::Client,
-                    signature: Some("CiQB0e2Kb7Zg+u1kQx/==".to_owned()),
-                }),
                 AssistantPart::ServerToolResult(ToolResult {
                     call_id: ToolCallId("srvtoolu_01".to_owned()),
                     content: vec![
@@ -133,14 +126,27 @@ pub fn vectors() -> Vec<(&'static str, MessageBody)> {
                         content: Vec::new(),
                         outcome: ToolOutcome::Error,
                     },
-                    ToolResult {
-                        call_id: ToolCallId("call_unflagged".to_owned()),
-                        content: vec![ToolResultContent::Text(text("sent"))],
-                        outcome: ToolOutcome::Unknown,
-                    },
                 ])
                 .unwrap_or_else(|| panic!("two results")),
             ),
+        ),
+        (
+            "assistant_signed_tool_call",
+            MessageBody::Assistant(vec![AssistantPart::ToolCall(ToolCall {
+                id: ToolCallId("__thought__CiQB0e2Kb7=".to_owned()),
+                name: ToolName("read_file".to_owned()),
+                arguments: ToolArguments::Json(CanonicalJson(r#"{"path":"/b"}"#.to_owned())),
+                execution: ToolExecution::Client,
+                signature: Some("CiQB0e2Kb7Zg+u1kQx/==".to_owned()),
+            })]),
+        ),
+        (
+            "tool_result_unknown_outcome",
+            MessageBody::Tool(NonEmpty::new(ToolResult {
+                call_id: ToolCallId("call_unflagged".to_owned()),
+                content: vec![ToolResultContent::Text(text("sent"))],
+                outcome: ToolOutcome::Unknown,
+            })),
         ),
     ]
 }
@@ -261,4 +267,43 @@ pub fn decode_accepts_only_encodings() {
         encoding::decode(upper.as_bytes()),
         Err(DecodeError::Shape { .. })
     ));
+}
+
+/// A tool call without a signature encodes with no `signature` member, so
+/// its bytes and hash are what they were before the field existed; one
+/// with a signature round-trips; and an explicit `"signature":null`, which
+/// `encode` never writes, is refused as not canonical.
+pub fn tool_call_signature_omitted_when_absent() {
+    let body = |signature: Option<&str>| {
+        MessageBody::Assistant(vec![AssistantPart::ToolCall(ToolCall {
+            id: ToolCallId("toolu_01".to_owned()),
+            name: ToolName("Read".to_owned()),
+            arguments: ToolArguments::Json(CanonicalJson(r#"{"path":"/a"}"#.to_owned())),
+            execution: ToolExecution::Client,
+            signature: signature.map(str::to_owned),
+        })])
+    };
+    let unsigned = encoding::encode(&body(None));
+    assert_eq!(
+        String::from_utf8_lossy(&unsigned),
+        r#"{"data":[{"data":{"arguments":{"data":"{\"path\":\"/a\"}","type":"json"},"execution":"client","id":"toolu_01","name":"Read"},"type":"tool_call"}],"type":"assistant"}"#
+    );
+    assert_eq!(encoding::decode(&unsigned), Ok(body(None)));
+
+    let signed_body = body(Some("CiQB0e2Kb7Zg+u1kQx/=="));
+    let signed = encoding::encode(&signed_body);
+    assert!(
+        String::from_utf8_lossy(&signed)
+            .contains(r#""name":"Read","signature":"CiQB0e2Kb7Zg+u1kQx/=="}"#)
+    );
+    assert_eq!(encoding::decode(&signed), Ok(signed_body.clone()));
+    assert_eq!(encoding::hash_bytes(&signed), encoding::hash(&signed_body));
+    assert_ne!(encoding::hash(&signed_body), encoding::hash(&body(None)));
+
+    let explicit_null = String::from_utf8_lossy(&unsigned)
+        .replace(r#""name":"Read"}"#, r#""name":"Read","signature":null}"#);
+    assert_eq!(
+        encoding::decode(explicit_null.as_bytes()),
+        Err(DecodeError::NotCanonical)
+    );
 }

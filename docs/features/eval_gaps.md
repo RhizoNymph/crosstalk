@@ -28,7 +28,8 @@ view and the UI's world seed share (span records and accesses by batch).
   left out by its outcome.
 - **Tool-call signature.** `ToolCall::signature: Option<String>` (Gemini's
   `thoughtSignature`), hashed and kept out of part text like
-  `Reasoning::Visible`'s signature (P0.7).
+  `Reasoning::Visible`'s signature (P0.7); an absent one is omitted from
+  the encoding, so existing tool calls keep their bytes and hashes.
 - **Strict UTF-8 decoding** (invariant only): a decoder yields text only
   when the decoded bytes are valid UTF-8.
 - **Opaque material is not content**: ids, signatures and opaque reasoning
@@ -350,5 +351,6 @@ Constraints:
 
 - `WriteOutcome::pairs` is the one place that says which writes pair.
 - An access is recorded once, with its final outcome; nothing revises it.
-- Adding `ToolCall::signature` changed every tool call's encoding
-  (`"signature": null`) and so its hash; goldens were re-blessed.
+- An absent `ToolCall::signature` is omitted from the canonical encoding,
+  so a tool call without one encodes and hashes as before the field
+  existed; the canonical decoder refuses an explicit `"signature": null`.

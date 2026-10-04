@@ -50,7 +50,7 @@
     "request": [
       "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
       "21b7c4947d24598b108675789f3c6a8431c3e78b07ff318d103828f8086458c8",
-      "70ccadeafe8458f203c75d0c8de97b3b3137f926c6dd1f45e52728a3bae5a3e7",
+      "3726ec518f9c535028e4ab6e2ff498fe73266ff69a40a4754726300f377c4aaa",
       "9544b190895b318006e102661da51328122f23b4857d2069167432c1bc4c5feb"
     ],
     "outcome": {
@@ -105,7 +105,7 @@
       }
     },
     {
-      "hash": "70ccadeafe8458f203c75d0c8de97b3b3137f926c6dd1f45e52728a3bae5a3e7",
+      "hash": "3726ec518f9c535028e4ab6e2ff498fe73266ff69a40a4754726300f377c4aaa",
       "body": {
         "type": "assistant",
         "data": [
@@ -122,8 +122,7 @@
                 "type": "json",
                 "data": "{\"file_path\":\"/workspace/notes/plan.md\"}"
               },
-              "execution": "client",
-              "signature": null
+              "execution": "client"
             }
           }
         ]

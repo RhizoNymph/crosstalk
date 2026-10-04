@@ -1,7 +1,9 @@
 //! The JSON shape of a message body: private serde mirrors of the spec's
 //! message types, in the wire contract's conventions (snake_case keys,
-//! adjacently tagged enums, all-unit enums as strings, every option
-//! written, strict decoding).
+//! adjacently tagged enums, all-unit enums as strings, strict decoding).
+//! An optional field added after P0.7 (`ToolCall`'s `signature`) is
+//! omitted when absent, so existing bodies keep their bytes and hashes;
+//! `Reasoning::Visible`'s `signature`, from P0.7, is written as `null`.
 //!
 //! `Text` is its string, `CanonicalJson` its text as a JSON string (so its
 //! numbers stay exact), `MessageHash` its lower-case hex.
@@ -124,6 +126,11 @@ pub(super) struct CallItem {
     name: String,
     arguments: ArgumentsItem,
     execution: ExecutionItem,
+    /// Omitted when absent, so adding the field changed no existing tool
+    /// call's encoding or hash. Serde reads both an omitted field and an
+    /// explicit `null` as `None`; the canonical decoder refuses the `null`
+    /// because `encode` never writes it (`super::decode` re-encodes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
 }
 

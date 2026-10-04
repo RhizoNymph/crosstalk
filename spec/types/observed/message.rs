@@ -332,7 +332,10 @@ pub struct ToolCall {
     ///
     /// Treated as [`Reasoning::Visible`]'s signature is: part of the
     /// encoding, so of the hash (an echo carries the same signature, so it
-    /// still hashes like its response), and never part of the part's text
+    /// still hashes like its response), and never part of the part's text.
+    /// `None` is omitted from the encoding rather than written as `null`,
+    /// so a call without a signature encodes and hashes as it did before
+    /// the field existed
     /// (`canonical.tool-call.signature-verbatim`,
     /// `canonical.opaque.outside-part-text`).
     pub signature: Option<String>,

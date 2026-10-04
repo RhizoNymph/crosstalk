@@ -13,8 +13,12 @@ signature: it is in the encoding, so a body still round-trips through the
 blob store with every field and an echo hashes like its response
 (canonical.normalize.echo-stable), and it is not part text
 (canonical.opaque.outside-part-text). Mapping an empty signature to None
-gives one body for "no signature" whichever way it was spelled. Anthropic
-and OpenAI tool calls carry no signature and are always None.
+gives one body for "no signature" whichever way it was spelled. None is
+omitted from the canonical encoding, not written as null, so a tool call
+without a signature encodes and hashes exactly as it did before the field
+existed; the canonical decoder refuses an explicit "signature": null,
+which encode never writes. Anthropic and OpenAI tool calls carry no
+signature and are always None.
 """
 
 [evidence]

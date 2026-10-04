@@ -55,7 +55,7 @@
     "outcome": {
       "type": "completed",
       "data": {
-        "response": "e9045d2cd57f9132dca8cd84c6087a5aac09ae06d9fe6b1a893340e6a84433b0",
+        "response": "ee9c247c5fe7d255efb0a11f4253ac62905cc0d55500c799d7c794648b00a023",
         "response_id": "msg_01XFDUDYJgAACzvnptvVoYEL",
         "first_chunk_at": "2026-10-04T12:34:57.402118Z",
         "finished_at": "2026-10-04T12:35:03.950031Z",
@@ -128,7 +128,7 @@
       }
     },
     {
-      "hash": "e9045d2cd57f9132dca8cd84c6087a5aac09ae06d9fe6b1a893340e6a84433b0",
+      "hash": "ee9c247c5fe7d255efb0a11f4253ac62905cc0d55500c799d7c794648b00a023",
       "body": {
         "type": "assistant",
         "data": [
@@ -155,8 +155,7 @@
                 "type": "json",
                 "data": "{\"file_path\":\"/workspace/notes/plan.md\",\"limit\":1234567890123456789}"
               },
-              "execution": "client",
-              "signature": null
+              "execution": "client"
             }
           },
           {

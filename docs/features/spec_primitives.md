@@ -78,7 +78,7 @@ shape, which follows the wire contract's conventions and is also
 | `Reasoning::Opaque` | `{"type": "reasoning", "data": {"type": "opaque", "data": {"signature": ".."}}}` |
 | `Media` | `{"type": "media", "data": {"blob": "<hex>", "kind": "image" \| "audio" \| "document"}}` |
 | `Unknown` | `{"type": "unknown", "data": {"kind": "..", "raw": "<canonical JSON text>"}}` |
-| `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": ".."}, "execution": "client" \| "server", "id": "..", "name": "..", "signature": "<signature>" \| null}}` |
+| `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": ".."}, "execution": "client" \| "server", "id": "..", "name": "..", "signature": "<signature>"}}`, `signature` omitted when absent |
 | `ToolResult` | `{"call_id": "..", "content": [{"type": "text" \| "media" \| "unknown", "data": ..}], "outcome": "success" \| "error" \| "unknown"}` |
 
 Canonical JSON inside a body travels as a string, so its exact numbers
@@ -160,9 +160,10 @@ operating system.
   and for the same reason as the thinking signature: in the encoding (so
   echoes, which carry it byte for byte, hash like their responses), an
   empty or missing one `None`, and never part text. Anthropic and OpenAI
-  calls carry none. Adding the field changed the encoding of every tool
-  call (`"signature": null`), so the vectors and the corpus goldens were
-  re-blessed.
+  calls carry none. An absent signature is omitted from the encoding, not
+  written as `null`, so adding the field changed no existing tool call's
+  bytes or hash; the canonical decoder refuses an explicit
+  `"signature": null`, because `encode` never writes it.
 - **Opaque material is never part text.** Tool-call ids, reasoning and
   tool-call signatures and `Reasoning::Opaque` payloads are in the
   encoding but never in `Message::part_text`

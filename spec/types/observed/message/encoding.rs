@@ -11,7 +11,7 @@
 //! | `Reasoning::Opaque` | `{"type": "reasoning", "data": {"type": "opaque", "data": {"signature": "<payload>"}}}` |
 //! | `Media` | `{"type": "media", "data": {"blob": "<hex>", "kind": "image" \| "audio" \| "document"}}` |
 //! | `Unknown` | `{"type": "unknown", "data": {"kind": "<block type>", "raw": "<canonical JSON text>"}}` |
-//! | `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": "<text>"}, "execution": "client" \| "server", "id": "..", "name": "..", "signature": "<signature>" \| null}}` |
+//! | `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": "<text>"}, "execution": "client" \| "server", "id": "..", "name": "..", "signature": "<signature>"}}`, `signature` omitted when absent |
 //! | `ToolResult` (a tool body's item, or `server_tool_result`'s data) | `{"call_id": "..", "content": [{"type": "text" \| "media" \| "unknown", "data": ..}], "outcome": "success" \| "error" \| "unknown"}` |
 //!
 //! Canonical JSON inside a body (arguments, an unknown block) is carried as
