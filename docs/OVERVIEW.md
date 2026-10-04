@@ -194,7 +194,7 @@ Features Index:
     entry_points:
       - ui/src/main.rs
       - ui/src/app.rs
-      - ui/src/backend/fixture/surface.rs
+      - fixture/src/surface.rs
       - ui/src/contract/mod.rs
       - ui/src/pages/mod.rs
       - ui/src/pages/view.rs
@@ -209,6 +209,26 @@ Features Index:
       - ui/elements/src/ct-live.ts
     depends_on: [query_surface, read_models, export, type_spec]
     doc: docs/features/ui.md
+  conformance:
+    description: >
+      The L8 conformance suite (crosstalk-conformance): tests generic over
+      any implementation of the L8 traits, run against worlds a harness
+      provisions from scenarios (facts over typed roles: agents, resources,
+      channels, transmissions with their evidence, merges, promotions,
+      verdicts, topic history), each scenario checked fact by fact through
+      L8 before tests rely on it; assertions are relations the spec
+      defines and what the facts imply, citing spec/invariants ids. The
+      fixture runs it by binding named scenarios to its generated world;
+      the redesign seeds scenarios through the spec's write traits into the
+      memory stores and runs the gateway's surface.
+    entry_points:
+      - conformance/src/lib.rs
+      - conformance/src/harness/mod.rs
+      - conformance/src/scenario/mod.rs
+      - conformance/src/suite.rs
+      - fixture/src/conformance/mod.rs
+    depends_on: [query_surface, read_models, export, type_spec]
+    doc: docs/features/conformance.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
