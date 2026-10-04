@@ -10,3 +10,12 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+blake3.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

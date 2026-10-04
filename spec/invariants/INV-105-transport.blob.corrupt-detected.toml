@@ -12,9 +12,9 @@ read.
 """
 
 [evidence]
-property = "crosstalk_transport::tests::get_detects_corrupted_bytes"
+property = "crosstalk_transport::blob::tests::get_detects_corrupted_bytes"
 integration = "crosstalk_transport::integration::pg_blob_store_detects_corrupted_row"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

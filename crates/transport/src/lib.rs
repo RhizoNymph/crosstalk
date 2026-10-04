@@ -11,5 +11,7 @@
 // code uses it.
 use crosstalk_spec as _;
 
+pub mod blob;
+
 #[cfg(test)]
 mod tests {}
