@@ -1,5 +1,5 @@
 //! The shared filter as a form (agents, channels, route kinds, topics,
-//! verdicts) and as chips with remove links.
+//! verdicts, confirmed channels only) and as chips with remove links.
 //!
 //! Choices: agents in the window's unfiltered graph, every channel, and the
 //! topics of the view's topic version (only with `Content`, since topic
@@ -26,7 +26,9 @@ use crate::url::route::encode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::aggregates::filter::{
+    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
+};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
@@ -225,6 +227,13 @@ pub fn chips(
             remove: link(&|f| f.false_detections = FalseDetections::Include),
         });
     }
+    if filter.confirmed_only() {
+        out.push(Chip {
+            facet: "channels",
+            label: "confirmed only".to_owned(),
+            remove: link(&|f| f.unconfirmed_channels = UnconfirmedChannels::Include),
+        });
+    }
     out
 }
 
@@ -370,6 +379,7 @@ pub async fn filter_form(
     let routes = route_choices(filter);
     let topics = topic_choices(&choices, filter);
     let exclude = filter.false_detections == FalseDetections::Exclude;
+    let confirmed_only = filter.confirmed_only();
     Ok(view! {
         <form method="get" action=(action) class="flex flex-wrap items-center gap-1.5">
             for (name, value) in hidden {
@@ -387,6 +397,10 @@ pub async fn filter_form(
             <select name=(fields::VERDICTS) class=(format!("{INPUT} py-0.5 text-xs")) aria-label="Verdicts">
                 <option value="all" selected=(!exclude)>"All verdicts"</option>
                 <option value="exclude-false" selected=(exclude)>"Exclude false detections"</option>
+            </select>
+            <select name=(fields::UNCONFIRMED) class=(format!("{INPUT} py-0.5 text-xs")) aria-label="Channels" title="Unconfirmed channels carry only suspected transmissions (a write by one agent, a read by another, no content match yet)">
+                <option value="all" selected=(!confirmed_only)>"All channels"</option>
+                <option value="confirmed" selected=(confirmed_only)>"Confirmed channels only"</option>
             </select>
             <button type="submit" class=(format!("{BUTTON_PRIMARY} py-0.5 text-xs"))>"Apply"</button>
         </form>
@@ -439,6 +453,7 @@ mod tests {
             route_kinds: vec![RouteKind::Channel],
             topics: vec![TopicId::from_ulid(4)],
             false_detections: FalseDetections::Exclude,
+            unconfirmed_channels: UnconfirmedChannels::Include,
         };
         let chips = chips("/topology", &state, &[("sel", "")], &choices());
         let labels: Vec<_> = chips.iter().map(|c| (c.facet, c.label.as_str())).collect();
@@ -459,6 +474,20 @@ mod tests {
         assert!(!chips[5].remove.contains("x=exclude-false"));
         let clear = clear_href("/topology", &state, &[]);
         assert!(clear.ends_with("g=agents"), "{clear}");
+    }
+
+    #[test]
+    fn confirmed_only_is_a_removable_chip() {
+        let mut state = state();
+        state.scope.filter.unconfirmed_channels = UnconfirmedChannels::Exclude;
+        let chips = chips("/topology", &state, &[], &choices());
+        assert_eq!(chips.len(), 1);
+        assert_eq!(
+            (chips[0].facet, chips[0].label.as_str()),
+            ("channels", "confirmed only")
+        );
+        assert!(chips[0].remove.contains("g=agents"));
+        assert!(!chips[0].remove.contains("u=confirmed"));
     }
 
     #[test]

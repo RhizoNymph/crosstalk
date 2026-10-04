@@ -5,8 +5,17 @@
 //! `promoted` and `discovered`; `superseded=1` adds superseded channels,
 //! `superseded=only` lists only them (with no origin codes, since a
 //! superseded channel has no origin kind of its own).
+//!
+//! `tab` picks the spec's listings: active channels (`tab` absent; every
+//! channel with cross-agent traffic, unconfirmed ones marked), unconfirmed
+//! channels (`unconfirmed`), declarations with no traffic yet
+//! (`declared`), and the review queue (`review`). The shared view state's
+//! "confirmed only" (`u=confirmed`) leaves unconfirmed channels out of
+//! every tab.
 
+use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::confirmation::ListingKind;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
@@ -27,11 +36,62 @@ pub struct RawListQuery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
+    /// Channels with cross-agent traffic: confirmed, and unconfirmed ones
+    /// (marked) unless "confirmed only" is on. Superseded channels join on
+    /// request.
     #[default]
-    All,
-    /// Unreviewed channels that are not superseded: the channels waiting for
-    /// a policy decision.
+    Active,
+    /// Channels whose cross-agent traffic is all suspected: what to review
+    /// before trusting them as channels.
+    Unconfirmed,
+    /// Declared channels with no cross-agent transmission yet: operator
+    /// intent, counted as no channel.
+    Declared,
+    /// Unreviewed channels and declarations in force: the channels waiting
+    /// for a policy decision, unconfirmed ones marked.
     Review,
+}
+
+impl Tab {
+    pub const ALL: [Self; 4] = [
+        Self::Active,
+        Self::Unconfirmed,
+        Self::Declared,
+        Self::Review,
+    ];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Active => "",
+            Self::Unconfirmed => "unconfirmed",
+            Self::Declared => "declared",
+            Self::Review => "review",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "Active channels",
+            Self::Unconfirmed => "Unconfirmed",
+            Self::Declared => "Declared, no traffic yet",
+            Self::Review => "Review queue",
+        }
+    }
+
+    /// The listings the tab keeps, under the view's choice about
+    /// unconfirmed channels. `None`: the tab lists only unconfirmed channels
+    /// and "confirmed only" leaves it nothing to list.
+    pub fn listings(self, unconfirmed: UnconfirmedChannels) -> Option<Vec<ListingKind>> {
+        let include = unconfirmed == UnconfirmedChannels::Include;
+        match self {
+            Self::Active if include => Some(vec![ListingKind::Confirmed, ListingKind::Unconfirmed]),
+            Self::Active => Some(vec![ListingKind::Confirmed]),
+            Self::Unconfirmed => include.then(|| vec![ListingKind::Unconfirmed]),
+            Self::Declared => Some(vec![ListingKind::Declaration]),
+            Self::Review if include => Some(Vec::new()),
+            Self::Review => Some(vec![ListingKind::Confirmed, ListingKind::Declaration]),
+        }
+    }
 }
 
 pub const ORIGINS: [CanonicalOriginKind; 3] = [
@@ -40,10 +100,8 @@ pub const ORIGINS: [CanonicalOriginKind; 3] = [
     CanonicalOriginKind::DeclaredBeforeTraffic,
 ];
 
-pub const DETECTIONS: [DetectionKind; 6] = [
+pub const DETECTIONS: [DetectionKind; 4] = [
     DetectionKind::Active,
-    DetectionKind::Candidate,
-    DetectionKind::Observed,
     DetectionKind::Dormant,
     DetectionKind::AwaitingTraffic,
     DetectionKind::Unused,
@@ -61,8 +119,6 @@ pub fn detection_code(detection: DetectionKind) -> &'static str {
     match detection {
         DetectionKind::AwaitingTraffic => "awaiting",
         DetectionKind::Unused => "unused",
-        DetectionKind::Observed => "observed",
-        DetectionKind::Candidate => "candidate",
         DetectionKind::Active => "active",
         DetectionKind::Dormant => "dormant",
     }
@@ -104,9 +160,11 @@ fn parse_codes<T: Copy>(
 impl ListQuery {
     pub fn parse(raw: &RawListQuery) -> Result<Self, UiError> {
         let tab = match raw.tab.as_deref() {
-            None | Some("all") => Tab::All,
-            Some("review") => Tab::Review,
-            Some(other) => return Err(invalid("tab", format!("unknown tab {other:?}"))),
+            None | Some("") => Tab::Active,
+            Some(code) => Tab::ALL
+                .into_iter()
+                .find(|tab| tab.code() == code)
+                .ok_or_else(|| invalid("tab", format!("unknown tab {code:?}")))?,
         };
         let kinds = parse_codes(raw.origin.as_deref(), "origin", &ORIGINS, origin_code)?;
         let origin = match raw.superseded.as_deref() {
@@ -153,36 +211,48 @@ impl ListQuery {
         self.origin == OriginFilter::Superseded
     }
 
-    /// The filter sent to the backend, counting in `window`: the review
-    /// queue fixes the policy and leaves superseded channels out.
-    pub fn filter(&self, window: Option<TimeWindow>) -> ChannelFilter {
-        match self.tab {
-            Tab::All => ChannelFilter {
+    /// The filter sent to the backend, counting in `window`, with the
+    /// view's choice about unconfirmed channels: the active tab takes the
+    /// superseded toggles, the others list channels in force only, and the
+    /// review queue fixes the policy. `None` when the tab has nothing to
+    /// list under that choice (unconfirmed channels, confirmed only).
+    pub fn filter(
+        &self,
+        window: Option<TimeWindow>,
+        unconfirmed: UnconfirmedChannels,
+    ) -> Option<ChannelFilter> {
+        let listings = self.tab.listings(unconfirmed)?;
+        let in_force = OriginFilter::InForce(self.origin_kinds().to_vec());
+        Some(match self.tab {
+            Tab::Active => ChannelFilter {
                 origin: self.origin.clone(),
+                listings,
+                detections: self.detections.clone(),
+                policies: self.policies.clone(),
+                window,
+            },
+            Tab::Unconfirmed | Tab::Declared => ChannelFilter {
+                origin: in_force,
+                listings,
                 detections: self.detections.clone(),
                 policies: self.policies.clone(),
                 window,
             },
             Tab::Review => ChannelFilter {
-                origin: OriginFilter::InForce(self.origin_kinds().to_vec()),
+                origin: in_force,
+                listings,
                 detections: self.detections.clone(),
                 policies: vec![PolicyKind::Unreviewed],
                 window,
             },
-        }
+        })
     }
 
     /// The canonical query pairs, empty values left out by the link builder.
     pub fn pairs(&self) -> Vec<(&'static str, String)> {
         let join = |codes: Vec<&str>| codes.join(",");
         vec![
-            (
-                "tab",
-                match self.tab {
-                    Tab::All => String::new(),
-                    Tab::Review => "review".to_owned(),
-                },
-            ),
+            ("tab", self.tab.code().to_owned()),
             (
                 "origin",
                 join(
@@ -297,24 +367,30 @@ mod tests {
     fn empty_query_is_unfiltered() {
         let query = ListQuery::parse(&raw("", "", "")).expect("parse");
         assert_eq!(query, ListQuery::default());
-        assert_eq!(query.filter(None), ChannelFilter::default());
+        assert_eq!(
+            query.filter(None, UnconfirmedChannels::Include),
+            Some(ChannelFilter {
+                listings: vec![ListingKind::Confirmed, ListingKind::Unconfirmed],
+                ..ChannelFilter::default()
+            })
+        );
         assert!(query.pairs().iter().all(|(_, v)| v.is_empty()));
     }
 
     #[test]
     fn lists_parse_and_render_back() {
         let query =
-            ListQuery::parse(&raw("discovered", "active,candidate", "unreviewed")).expect("parse");
+            ListQuery::parse(&raw("discovered", "active,dormant", "unreviewed")).expect("parse");
         assert_eq!(
             query.origin,
             OriginFilter::InForce(vec![CanonicalOriginKind::Discovered])
         );
         assert_eq!(
             query.detections,
-            vec![DetectionKind::Active, DetectionKind::Candidate]
+            vec![DetectionKind::Active, DetectionKind::Dormant]
         );
         let pairs = query.pairs();
-        assert!(pairs.contains(&("detection", "active,candidate".to_owned())));
+        assert!(pairs.contains(&("detection", "active,dormant".to_owned())));
         let promoted = ListQuery::parse(&raw("promoted,declared", "", "")).expect("parse");
         assert_eq!(
             promoted.origin_kinds(),
@@ -363,7 +439,10 @@ mod tests {
     fn review_queue_fixes_policy_and_hides_superseded() {
         let mut query = ListQuery::parse(&raw("discovered", "", "sanctioned")).expect("parse");
         query.origin = OriginFilter::WithSuperseded(vec![CanonicalOriginKind::Discovered]);
-        let filter = query.with_tab(Tab::Review).filter(None);
+        let filter = query
+            .with_tab(Tab::Review)
+            .filter(None, UnconfirmedChannels::Include)
+            .expect("the review queue lists");
         assert_eq!(filter.policies, vec![PolicyKind::Unreviewed]);
         assert_eq!(
             filter.origin,
@@ -374,9 +453,66 @@ mod tests {
             ..ListQuery::default()
         };
         assert_eq!(
-            only.with_tab(Tab::Review).filter(None).origin,
+            only.with_tab(Tab::Review)
+                .filter(None, UnconfirmedChannels::Include)
+                .expect("the review queue lists")
+                .origin,
             OriginFilter::InForce(Vec::new())
         );
+    }
+
+    #[test]
+    fn tabs_pick_listings_and_confirmed_only_drops_unconfirmed() {
+        use UnconfirmedChannels::{Exclude, Include};
+        let listings = |tab: Tab, unconfirmed| {
+            ListQuery::default()
+                .with_tab(tab)
+                .filter(None, unconfirmed)
+                .map(|f| f.listings)
+        };
+        assert_eq!(
+            listings(Tab::Active, Exclude),
+            Some(vec![ListingKind::Confirmed])
+        );
+        assert_eq!(
+            listings(Tab::Unconfirmed, Include),
+            Some(vec![ListingKind::Unconfirmed])
+        );
+        assert_eq!(listings(Tab::Unconfirmed, Exclude), None);
+        assert_eq!(
+            listings(Tab::Declared, Exclude),
+            Some(vec![ListingKind::Declaration])
+        );
+        assert_eq!(listings(Tab::Review, Include), Some(Vec::new()));
+        assert_eq!(
+            listings(Tab::Review, Exclude),
+            Some(vec![ListingKind::Confirmed, ListingKind::Declaration])
+        );
+        // Only the active tab takes superseded channels.
+        let with = ListQuery::default().toggle_superseded();
+        let declared = with
+            .with_tab(Tab::Declared)
+            .filter(None, Include)
+            .expect("lists");
+        assert_eq!(declared.origin, OriginFilter::InForce(Vec::new()));
+    }
+
+    #[test]
+    fn tabs_parse_and_render_their_codes() {
+        for tab in Tab::ALL {
+            let raw = RawListQuery {
+                tab: Some(tab.code().to_owned()),
+                ..raw("", "", "")
+            };
+            let query = ListQuery::parse(&raw).expect("parse");
+            assert_eq!(query.tab, tab);
+            assert!(query.pairs().contains(&("tab", tab.code().to_owned())));
+        }
+        let old = RawListQuery {
+            tab: Some("all".to_owned()),
+            ..raw("", "", "")
+        };
+        assert!(ListQuery::parse(&old).is_err());
     }
 
     #[test]

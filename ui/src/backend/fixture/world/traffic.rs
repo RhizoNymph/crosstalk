@@ -1,6 +1,8 @@
 //! Seven days of traffic: about 5,000 transmissions on a diurnal, weekday
-//! heavy curve, the accesses behind the channel-routed ones, and background
-//! accesses that carried nothing.
+//! heavy curve, the accesses behind the channel-routed ones, background
+//! accesses that carried nothing, and a key-value entry only one agent
+//! (`cc7`) writes and reads, which is a resource on no channel
+//! ([`LONE_RESOURCE`]).
 //!
 //! Older transmissions are mostly `Aggregated` (some `Suspected` or
 //! `Discarded`); a burst in the last quarter hour holds the in-flight states
@@ -26,7 +28,7 @@ use crate::backend::fixture::clock::{
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
 
-use super::channels::{ChannelKey, ChannelPlan};
+use super::channels::ChannelPlan;
 use super::states::{self, Planned, Want, co_accesses, confirmed};
 use super::{Blobs, Cast, GenError, TopicModel, TxRecord, evidence};
 
@@ -80,70 +82,104 @@ const UNOBSERVED: &[(&str, &str)] = &[
     ("pi1", "cx2"),
 ];
 
+/// The key-value entry `cc7` alone uses: written and read only by one
+/// agent, so no transmission between different agents ever goes through it
+/// and it stays a resource, on no channel.
+pub fn lone_locator() -> Locator {
+    Locator::Opaque {
+        tool: ToolName("kv_put".to_owned()),
+        key: "scratch/notes".to_owned(),
+    }
+}
+
+/// The agent that uses [`lone_locator`], and when.
+pub const LONE_RESOURCE: (&str, u64) = ("cc7", 36 * HOUR);
+
 /// The generated traffic, before it is indexed into the world.
 #[derive(Debug, Clone)]
 pub struct Traffic {
     pub resources: Vec<Resource>,
+    /// The channel each resource on one belongs to; a resource on no
+    /// channel is absent.
     pub resource_channel: HashMap<ResourceId, ChannelId>,
+    /// The resource on no channel ([`lone_locator`]).
+    pub lone: ResourceId,
     pub accesses: Vec<Access>,
     pub transmissions: Vec<TxRecord>,
     /// The spans and bodies behind the transmissions' content matches.
     pub blobs: Blobs,
 }
 
-/// What a channel's detection state is derived from.
+/// What a channel's detection state is derived from: its cross-agent
+/// transmissions, which the generator only ever opens between two
+/// different agents (by co-access or content), so every one with evidence
+/// crosses agents when recorded.
 #[derive(Debug, Clone, Default)]
 pub struct ChannelStats {
-    pub first_access: Option<(AccessId, Timestamp)>,
-    pub first_cross_access: Option<CoAccess>,
-    pub first_confirmed: Option<(Timestamp, TransmissionId)>,
-    pub last_confirmed: Option<(Timestamp, TransmissionId)>,
+    /// The first one opened: when it opened.
+    pub first: Option<(Timestamp, TransmissionId)>,
+    /// The latest one to advance detection: when (its confirmation, else
+    /// its opening).
+    pub last: Option<(Timestamp, TransmissionId)>,
+}
+
+/// Whether `record` is traffic: evidence (a co-access or content) names a
+/// sender. `Detected` ones name none.
+fn is_traffic(record: &TxRecord) -> bool {
+    confirmed(&record.transmission.state).is_some()
+        || !co_accesses(&record.transmission.state).is_empty()
+}
+
+/// When `record` last advanced its channel's detection: its confirmation,
+/// else its opening.
+fn advanced_at(record: &TxRecord) -> Timestamp {
+    confirmed(&record.transmission.state).map_or(record.transmission.opened_at, |c| c.at())
 }
 
 impl Traffic {
-    /// The first access of `resource`, if it was ever accessed.
-    pub fn first_access_of(&self, resource: ResourceId) -> Option<(AccessId, Timestamp)> {
-        self.accesses
+    /// The first cross-agent transmission through `resource` (the
+    /// resource of its first recorded access): when it opened and its id.
+    /// What discovers a channel from the resource.
+    pub fn first_crossing_through(
+        &self,
+        resource: ResourceId,
+    ) -> Option<(Timestamp, TransmissionId)> {
+        let on: std::collections::HashSet<AccessId> = self
+            .accesses
             .iter()
-            .find(|a| a.resource == resource)
-            .map(|a| (a.id, a.at))
+            .filter(|a| a.resource == resource)
+            .map(|a| a.id)
+            .collect();
+        self.transmissions
+            .iter()
+            .filter(|t| matches!(t.transmission.route, Route::Channel(_)) && is_traffic(t))
+            .filter(|t| t.accesses.first().is_some_and(|first| on.contains(first)))
+            .map(|t| (t.transmission.opened_at, t.transmission.id))
+            .min()
     }
 
-    /// `channel`'s first access and first cross access, and the
-    /// confirmations `counts` keeps: given the channel a transmission's
-    /// route names and its `Confirmed::at`, whether its confirmation moves
-    /// `channel`'s detection (a superseded channel's is frozen at its
-    /// supersession; later confirmations move its superseding channel's).
-    pub fn channel_stats(
-        &self,
-        channel: ChannelId,
-        counts: impl Fn(ChannelId, Timestamp) -> bool,
-    ) -> ChannelStats {
-        let mut stats = ChannelStats {
-            first_access: self
-                .accesses
-                .iter()
-                .find(|a| self.resource_channel.get(&a.resource) == Some(&channel))
-                .map(|a| (a.id, a.at)),
-            ..ChannelStats::default()
-        };
+    /// The cross-agent transmissions that `counts` keeps: given
+    /// the channel a transmission's route names and when it advanced
+    /// detection, whether it moves `channel`'s detection (a superseded
+    /// channel's is frozen at its supersession; later traffic moves its
+    /// superseding channel's).
+    pub fn channel_stats(&self, counts: impl Fn(ChannelId, Timestamp) -> bool) -> ChannelStats {
+        let mut stats = ChannelStats::default();
         for record in &self.transmissions {
             let Route::Channel(routed) = record.transmission.route else {
                 continue;
             };
-            if routed == channel && stats.first_cross_access.is_none() {
-                stats.first_cross_access = co_accesses(&record.transmission.state).first().copied();
+            let at = advanced_at(record);
+            if !is_traffic(record) || !counts(routed, at) {
+                continue;
             }
-            if let Some(c) = confirmed(&record.transmission.state)
-                && counts(routed, c.at())
-            {
-                let entry = (c.at(), record.transmission.id);
-                if stats.first_confirmed.is_none_or(|f| entry.0 < f.0) {
-                    stats.first_confirmed = Some(entry);
-                }
-                if stats.last_confirmed.is_none_or(|l| entry.0 >= l.0) {
-                    stats.last_confirmed = Some(entry);
-                }
+            let opened = (record.transmission.opened_at, record.transmission.id);
+            if stats.first.is_none_or(|first| opened < first) {
+                stats.first = Some(opened);
+            }
+            let advanced = (at, record.transmission.id);
+            if stats.last.is_none_or(|last| advanced >= last) {
+                stats.last = Some(advanced);
             }
         }
         stats
@@ -160,6 +196,8 @@ struct Gen<'a> {
     transmissions: Vec<TxRecord>,
     blobs: Blobs,
     resource_channel: HashMap<ResourceId, ChannelId>,
+    /// The resource on no channel and its locator.
+    lone: (ResourceId, Locator),
 }
 
 pub fn generate(
@@ -169,6 +207,7 @@ pub fn generate(
     plan: &ChannelPlan,
     topics: &TopicModel,
 ) -> Result<Traffic, GenError> {
+    let lone = ResourceId::from_ulid(mint.ulid(minus(NOW, LONE_RESOURCE.1)));
     let mut g = Gen {
         rng: Rng::fork(seed, "traffic"),
         mint,
@@ -179,6 +218,7 @@ pub fn generate(
         transmissions: Vec::new(),
         blobs: Blobs::default(),
         resource_channel: HashMap::new(),
+        lone: (lone, lone_locator()),
     };
     for _ in 0..TRANSMISSIONS {
         g.one(None)?;
@@ -277,11 +317,13 @@ impl Gen<'_> {
         Ok(())
     }
 
+    /// Records an access; `channel` is the channel the resource is on, if
+    /// any.
     fn access(
         &mut self,
         agent: AgentId,
         resource: (ResourceId, &Locator),
-        channel: ChannelId,
+        channel: Option<ChannelId>,
         at: Timestamp,
         kind: AccessKind,
     ) -> Access {
@@ -309,7 +351,9 @@ impl Gen<'_> {
             via,
             op,
         };
-        self.resource_channel.insert(resource.0, channel);
+        if let Some(channel) = channel {
+            self.resource_channel.insert(resource.0, channel);
+        }
         self.accesses.push(access.clone());
         access
     }
@@ -342,8 +386,8 @@ impl Gen<'_> {
         }
         let resource = (rid, &locator);
         let write_at = minus(at, self.rng.between(2 * MINUTE, 20 * HOUR)).max(earliest);
-        let write = self.access(writer, resource, spec.id, write_at, AccessKind::Write);
-        let read = self.access(reader, resource, spec.id, at, AccessKind::Read);
+        let write = self.access(writer, resource, Some(spec.id), write_at, AccessKind::Write);
+        let read = self.access(reader, resource, Some(spec.id), at, AccessKind::Read);
         let co_access = |w: &Access| {
             CoAccess::new(w, &read, CORRELATION_WINDOW)
                 .map_err(|e| GenError::invalid("CoAccess", e))
@@ -357,7 +401,13 @@ impl Gen<'_> {
         {
             let second_at = minus(write_at, self.rng.between(MINUTE, 2 * HOUR)).max(earliest);
             if second_at < write_at {
-                let w2 = self.access(second, resource, spec.id, second_at, AccessKind::Write);
+                let w2 = self.access(
+                    second,
+                    resource,
+                    Some(spec.id),
+                    second_at,
+                    AccessKind::Write,
+                );
                 co.push(co_access(&w2)?);
                 accesses.push(w2.id);
             }
@@ -475,15 +525,11 @@ impl Gen<'_> {
     }
 
     /// Accesses that carried nothing: reads and writes by each channel's
-    /// agents, and the key-value tool only one agent uses.
+    /// agents, and the key-value entry only one agent uses ([`Self::lone`]).
     fn background(&mut self) {
         let plan = self.plan;
         for spec in &plan.specs {
-            let count = if spec.key == ChannelKey::KvScratch {
-                40
-            } else {
-                (spec.weight * 40.0) as usize
-            };
+            let count = (spec.weight * 40.0) as usize;
             for _ in 0..count {
                 let at = self.diurnal(spec.from, spec.until);
                 let kind = if self.rng.chance(0.4) {
@@ -501,8 +547,28 @@ impl Gen<'_> {
                 let Some((rid, locator)) = self.rng.pick(&spec.resources).cloned() else {
                     continue;
                 };
-                self.access(agent, (rid, &locator), spec.id, at, kind);
+                self.access(agent, (rid, &locator), Some(spec.id), at, kind);
             }
+        }
+        self.lone();
+    }
+
+    /// `cc7` writing and reading its key-value scratch entry: one agent, so
+    /// never a co-access and never a channel. Recorded on the resource
+    /// alone.
+    fn lone(&mut self) {
+        let Ok(agent) = self.cast.id(LONE_RESOURCE.0) else {
+            return;
+        };
+        let (id, locator) = self.lone.clone();
+        for _ in 0..40 {
+            let at = self.diurnal(minus(NOW, LONE_RESOURCE.1), NOW);
+            let kind = if self.rng.chance(0.4) {
+                AccessKind::Write
+            } else {
+                AccessKind::Read
+            };
+            self.access(agent, (id, &locator), None, at, kind);
         }
     }
 
@@ -526,9 +592,19 @@ impl Gen<'_> {
                 });
             }
         }
+        let (lone, lone_locator) = self.lone;
+        resources.push(Resource {
+            id: lone,
+            locator: lone_locator,
+            first_seen: first_seen
+                .get(&lone)
+                .copied()
+                .unwrap_or(minus(NOW, LONE_RESOURCE.1)),
+        });
         Traffic {
             resources,
             resource_channel: self.resource_channel,
+            lone,
             accesses: self.accesses,
             transmissions: self.transmissions,
             blobs: self.blobs,

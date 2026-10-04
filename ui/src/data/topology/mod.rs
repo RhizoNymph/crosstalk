@@ -26,7 +26,10 @@
 //! ```
 //!
 //! Channels mode adds `{ "kind": "channel", "id", "name", "origin",
-//! "detection", "policy", "volume" }` nodes and `{ "kind": "access",
+//! "detection", "confirmation", "policy", "volume" }` nodes (only channels
+//! with cross-agent traffic; `confirmation` is `unconfirmed` when all of it
+//! is suspected, and those nodes are absent under `u=confirmed`) and
+//! `{ "kind": "access",
 //! "agent", "channel", "op": "read" | "write", "accesses", "share" }` edges.
 //! Its transmission edges are the spec's channel-centred graph's edges not
 //! routed through a channel (those are drawn as accesses), with their shares
@@ -47,6 +50,7 @@ use crosstalk_spec::aggregates::node::{
 };
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
@@ -204,6 +208,7 @@ pub struct ChannelNodePayload {
     pub name: String,
     pub origin: OriginCode,
     pub detection: DetectionCode,
+    pub confirmation: ConfirmationCode,
     pub policy: PolicyCode,
     /// Accesses in the window, reads and writes.
     pub volume: u64,
@@ -233,10 +238,26 @@ impl From<CanonicalOriginKind> for OriginCode {
 pub enum DetectionCode {
     AwaitingTraffic,
     Unused,
-    Observed,
-    Candidate,
     Active,
     Dormant,
+}
+
+/// Whether a channel node's cross-agent traffic is confirmed; an
+/// unconfirmed node is drawn marked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfirmationCode {
+    Confirmed,
+    Unconfirmed,
+}
+
+impl From<Confirmation> for ConfirmationCode {
+    fn from(confirmation: Confirmation) -> Self {
+        match confirmation {
+            Confirmation::Confirmed => Self::Confirmed,
+            Confirmation::Unconfirmed => Self::Unconfirmed,
+        }
+    }
 }
 
 impl From<DetectionKind> for DetectionCode {
@@ -244,8 +265,6 @@ impl From<DetectionKind> for DetectionCode {
         match kind {
             DetectionKind::AwaitingTraffic => Self::AwaitingTraffic,
             DetectionKind::Unused => Self::Unused,
-            DetectionKind::Observed => Self::Observed,
-            DetectionKind::Candidate => Self::Candidate,
             DetectionKind::Active => Self::Active,
             DetectionKind::Dormant => Self::Dormant,
         }
@@ -368,6 +387,7 @@ fn channel_node(channel: &ChannelNode, accesses: &[WeightedAccess], name: String
         name,
         origin: channel.origin_kind.into(),
         detection: channel.detection_kind.into(),
+        confirmation: channel.confirmation.into(),
         policy: channel.policy_kind.into(),
         volume,
     })

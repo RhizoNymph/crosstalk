@@ -1,8 +1,14 @@
-//! `/channels`: every channel with its origin, detection and policy, its
-//! writers, readers and transmissions in the view's window, and the review
-//! queue of unreviewed channels.
+//! `/channels`: channels with cross-agent traffic (unconfirmed ones
+//! marked), unconfirmed channels on their own, declarations with no traffic
+//! yet, and the review queue, each row with its origin, detection,
+//! confirmation and policy, and its writers, readers and transmissions in
+//! the view's window. A resource that no transmission between two agents
+//! has gone through is not a channel and is in none of them; a channel a
+//! merge left without cross-agent traffic is hidden. "Confirmed only"
+//! (`u=confirmed`) leaves unconfirmed channels out of every tab.
 
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, CrossTraffic, Listing};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::interfaces::l8_surface::channels::{
@@ -48,7 +54,24 @@ pub struct ListRow {
     pub origin: CanonicalOriginKind,
     pub detection: DetectionKind,
     pub policy: PolicyKind,
+    /// `None` for a superseded channel.
+    pub listing: Option<Listing>,
+    /// Cross-agent transmissions over all time; `None` when superseded.
+    pub traffic: Option<CrossTraffic>,
     pub activity: Activity,
+}
+
+impl ListRow {
+    /// What the traffic cell says beside the listing badge: how much
+    /// suspected traffic an unconfirmed channel has.
+    pub fn traffic_note(&self) -> Option<String> {
+        match (self.listing, self.traffic) {
+            (Some(Listing::Channel(Confirmation::Unconfirmed)), Some(traffic)) => {
+                Some(format!("{} suspected, none confirmed", traffic.unconfirmed))
+            }
+            (Some(Listing::Channel(_) | Listing::Declaration | Listing::Hidden) | None, _) => None,
+        }
+    }
 }
 
 /// A row's activity as its count cells show it.
@@ -66,8 +89,14 @@ impl Activity {
     pub fn of(row: &ChannelRow) -> Self {
         match row.standing() {
             ChannelStanding::Superseded(_) => Self::Superseded,
-            ChannelStanding::InForce(ChannelActivity::Never) => Self::Never,
-            ChannelStanding::InForce(ChannelActivity::Seen { last, counts }) => Self::Seen {
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Never,
+                ..
+            } => Self::Never,
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Seen { last, counts },
+                ..
+            } => Self::Seen {
                 counts,
                 last: format_time(last),
             },
@@ -116,35 +145,44 @@ pub fn row(channel_row: &ChannelRow, state: &ViewState) -> ListRow {
         origin: origin_kind(&channel.origin),
         detection: channel.origin.detection_kind(),
         policy: channel.policy.kind(),
+        listing: channel_row.listing(),
+        traffic: channel_row.traffic(),
         activity: Activity::of(channel_row),
     }
 }
 
-struct Listing {
+struct Page {
     rows: Vec<ListRow>,
     next: Option<Cursor<ChannelList>>,
     current: Option<Cursor<ChannelList>>,
 }
 
+/// One page of the tab's rows; `None` when "confirmed only" leaves the tab
+/// nothing to list.
 async fn load(
     cx: &Cx,
     query: &ListQuery,
     state: &ViewState,
-) -> std::result::Result<Listing, UiError> {
+) -> std::result::Result<Option<Page>, UiError> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;
-    let filter = query.filter(Some(state.scope.window));
+    let Some(filter) = query.filter(
+        Some(state.scope.window),
+        state.scope.filter.unconfirmed_channels,
+    ) else {
+        return Ok(None);
+    };
     let (items, next) = backend(cx)
         .channels(&caller, &filter, &request)
         .await?
         .value
         .into_parts();
-    Ok(Listing {
+    Ok(Some(Page {
         rows: items.iter().map(|s| row(s, state)).collect(),
         next,
         current: request.after,
-    })
+    }))
 }
 
 /// A link to this list under another query.
@@ -166,18 +204,18 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
         Err(error) => Err(error),
     };
 
-    let tab_items = vec![
-        TabLink {
-            label: "All channels".to_owned(),
-            href: list_href(&state, &query.with_tab(Tab::All)),
-            active: query.tab == Tab::All,
-        },
-        TabLink {
-            label: "Review queue".to_owned(),
-            href: list_href(&state, &query.with_tab(Tab::Review)),
-            active: query.tab == Tab::Review,
-        },
-    ];
+    let tab_items: Vec<TabLink> = Tab::ALL
+        .into_iter()
+        .map(|tab| TabLink {
+            label: tab.label().to_owned(),
+            href: list_href(&state, &query.with_tab(tab)),
+            active: query.tab == tab,
+        })
+        .collect();
+    let confirmed_only = state.scope.filter.confirmed_only();
+    let mut toggled = state.clone();
+    toggled.scope.filter = state.scope.filter.toggle_confirmed_only();
+    let confirmed_only_href = list_href(&toggled, &query);
     let origin_chips: Vec<_> = ORIGINS
         .iter()
         .map(|o| {
@@ -209,15 +247,27 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
         })
         .collect();
     let review = query.tab == Tab::Review;
+    let active_tab = query.tab == Tab::Active;
+    let empty_message = match query.tab {
+        Tab::Active => "No channels match these filters.",
+        Tab::Unconfirmed => {
+            "No unconfirmed channels: every channel with cross-agent traffic has a confirmed transmission."
+        }
+        Tab::Declared => "Every declared channel has carried cross-agent traffic.",
+        Tab::Review => "Nothing to review: every channel in view has a policy decision.",
+    };
     let superseded_href = list_href(&state, &query.toggle_superseded());
     let superseded_on = query.includes_superseded() && !query.superseded_only();
     let only_href = list_href(&state, &query.toggle_superseded_only());
     let only_on = query.superseded_only();
     let pairs = query.pairs();
-    let empty = listing.as_ref().is_ok_and(|l| l.rows.is_empty());
+    let empty = listing
+        .as_ref()
+        .is_ok_and(|l| l.as_ref().is_some_and(|page| page.rows.is_empty()));
 
     Ok(view! {
-        live_watch(tokens: "channel".to_owned())
+        // A merge or unmerge can hide a channel or list it again.
+        live_watch(tokens: "channel agent".to_owned())
         page_header(
             title: "Channels",
             subtitle: "Resources agents write and read to reach each other, and the policy for each.",
@@ -243,23 +293,28 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                         filter_chip(label: label, href: link, active: active)
                     }
                 </div>
+            }
+            if active_tab {
                 filter_chip(label: "include superseded", href: superseded_href, active: superseded_on)
                 filter_chip(label: "superseded only", href: only_href, active: only_on)
             }
+            filter_chip(label: "confirmed only", href: confirmed_only_href.clone(), active: confirmed_only)
         </div>
         match listing {
             Err(error) => {
                 (status_of(&error))
                 error_panel(error: &error)
             },
-            Ok(_) if empty => {
-                if review {
-                    empty_state(message: "Nothing to review: every channel in view has a policy decision.")
-                } else {
-                    empty_state(message: "No channels match these filters.")
-                }
+            Ok(None) => {
+                <div class="rounded border border-dashed border-amber-300 p-6 text-center text-sm text-amber-900 dark:border-amber-800 dark:text-amber-100">
+                    "Unconfirmed channels are left out by the confirmed-only filter. "
+                    <a class=(LINK) href=(confirmed_only_href)>"Show them"</a>
+                </div>
             },
-            Ok(listing) => {
+            Ok(_) if empty => {
+                empty_state(message: empty_message)
+            },
+            Ok(Some(listing)) => {
                 let links = PageLinks::new(
                     PATH,
                     &state,
@@ -268,11 +323,12 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                     listing.next.as_ref(),
                 );
                 data_table(
-                    headers: &["Channel", "Origin", "Detection", "Policy", "Writers", "Readers", "Transmissions", "Last activity"],
+                    headers: &["Channel", "Origin", "Detection", "Traffic", "Policy", "Writers", "Readers", "Transmissions", "Last activity"],
                     for row in listing.rows {
                         let [writers, readers, transmissions] = row.activity.cells();
                         let superseded = row.activity == Activity::Superseded;
                         let last = row.activity.last();
+                        let note = row.traffic_note();
                         <tr class=(ROW)>
                             <td class=(TD)>
                                 <a href=(row.url) class="flex min-w-0 max-w-md flex-col gap-0.5">
@@ -291,6 +347,17 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                             </td>
                             <td class=(TD)>kind_badge(value: row.origin)</td>
                             <td class=(TD)>kind_badge(value: row.detection)</td>
+                            <td class=(TD)>
+                                match row.listing {
+                                    Some(listing) => {
+                                        kind_badge(value: listing)
+                                        if let Some(note) = note {
+                                            <div class="mt-0.5 text-[11px] text-amber-800 dark:text-amber-200">(note)</div>
+                                        }
+                                    },
+                                    None => <span class="text-xs text-zinc-500">"—"</span>,
+                                }
+                            </td>
                             <td class=(TD)>kind_badge(value: row.policy)</td>
                             <td class=(TD_NUM)>(writers)</td>
                             <td class=(TD_NUM)>(readers)</td>
@@ -303,7 +370,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
             },
         }
         <p class="mt-3 text-xs text-zinc-500">
-            "Channels are listed by current state. Writers, readers and transmissions are counted in the selected window; a superseded channel's are counted on the channel in force."
+            "A channel exists once a transmission between two different agents goes through it; a resource only one agent uses is not listed. Unconfirmed channels (suspected transmissions only, no content match yet) are listed and marked unless confirmed only is on. Writers, readers and transmissions are counted in the selected window; a superseded channel's are counted on the channel in force."
         </p>
     })
 }
@@ -370,6 +437,74 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains("notes.corp.internal/team-a"));
         assert!(!reply.body.contains("wiki.example.org"));
+    }
+
+    #[tokio::test]
+    async fn tabs_split_channels_and_mark_unconfirmed_ones() {
+        let state = state().to_query();
+        let tab = |extra: &str| format!("/channels?{state}{extra}");
+        let active = get(&tab("")).await;
+        assert_eq!(active.status, StatusCode::OK, "{}", active.body);
+        assert!(
+            active.body.contains("agent-scratch"),
+            "the unconfirmed S3 handoff is listed"
+        );
+        assert!(active.body.contains(">unconfirmed<"), "and marked");
+        assert!(
+            !active.body.contains("scratch/notes"),
+            "a resource one agent uses is no channel"
+        );
+        assert!(
+            !active.body.contains("handoff.md"),
+            "a channel a merge left without cross-agent traffic is hidden"
+        );
+        assert!(
+            !active.body.contains("docs.corp.internal"),
+            "declarations are apart"
+        );
+        let confirmed = get(&tab("&u=confirmed")).await;
+        assert_eq!(confirmed.status, StatusCode::OK);
+        assert!(!confirmed.body.contains("agent-scratch"));
+        assert!(confirmed.body.contains("wiki.example.org"));
+        let unconfirmed = get(&tab("&tab=unconfirmed")).await;
+        assert_eq!(unconfirmed.status, StatusCode::OK);
+        assert!(unconfirmed.body.contains("agent-scratch"));
+        assert!(unconfirmed.body.contains("suspected, none confirmed"));
+        assert!(!unconfirmed.body.contains("wiki.example.org"));
+        let left_out = get(&tab("&tab=unconfirmed&u=confirmed")).await;
+        assert_eq!(left_out.status, StatusCode::OK);
+        assert!(
+            left_out
+                .body
+                .contains("left out by the confirmed-only filter")
+        );
+        let declared = get(&tab("&tab=declared")).await;
+        assert_eq!(declared.status, StatusCode::OK);
+        assert!(declared.body.contains("docs.corp.internal"));
+        assert!(declared.body.contains("no traffic yet"));
+        assert!(!declared.body.contains("wiki.example.org"));
+    }
+
+    #[tokio::test]
+    async fn the_review_queue_marks_unconfirmed_channels_and_honours_confirmed_only() {
+        let state = state().to_query();
+        let review = get(&format!("/channels?{state}&tab=review")).await;
+        assert_eq!(review.status, StatusCode::OK, "{}", review.body);
+        assert!(review.body.contains("agent-scratch"));
+        assert!(review.body.contains(">unconfirmed<"));
+        let confirmed = get(&format!("/channels?{state}&tab=review&u=confirmed")).await;
+        assert_eq!(confirmed.status, StatusCode::OK);
+        assert!(!confirmed.body.contains("agent-scratch"));
+        assert!(confirmed.body.contains("wiki.example.org"));
+    }
+
+    #[tokio::test]
+    async fn the_confirmed_only_chip_toggles_the_shared_key() {
+        let state = state().to_query();
+        let reply = get(&format!("/channels?{state}")).await;
+        assert!(reply.body.contains("u=confirmed"), "a link turns it on");
+        let reply = get(&format!("/channels?{state}&u=confirmed")).await;
+        assert!(reply.body.contains("aria-pressed=\"true\""));
     }
 
     #[tokio::test]

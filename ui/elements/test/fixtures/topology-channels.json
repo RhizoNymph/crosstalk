@@ -223,6 +223,7 @@
       "name": "/srv/shared/handoff*",
       "origin": "declared",
       "detection": "active",
+      "confirmation": "confirmed",
       "policy": "sanctioned",
       "volume": 142
     },
@@ -231,7 +232,8 @@
       "id": "01K6HB7H000320002YXM000002",
       "name": "pastebin.com/raw/x9Qe2LmP",
       "origin": "discovered",
-      "detection": "candidate",
+      "detection": "active",
+      "confirmation": "unconfirmed",
       "policy": "unreviewed",
       "volume": 70
     },
@@ -241,6 +243,7 @@
       "name": "mcp:linear/get_issue:ENG-4411",
       "origin": "discovered",
       "detection": "active",
+      "confirmation": "confirmed",
       "policy": "unsanctioned",
       "volume": 61
     },
@@ -249,7 +252,8 @@
       "id": "01K6HB7H000320002YXM000004",
       "name": "github.com/acme/ops-notes*",
       "origin": "declared",
-      "detection": "observed",
+      "detection": "dormant",
+      "confirmation": "confirmed",
       "policy": "unreviewed",
       "volume": 25
     }

@@ -37,6 +37,9 @@ export function nodeTooltip(node: GraphNode): TooltipLine[] {
     return [
       line(c.name, 'title'),
       line(`channel · ${c.origin} · ${DETECTION_NAMES[c.detection] ?? c.detection}`, 'dim'),
+      ...(c.confirmation === 'unconfirmed'
+        ? [line('unconfirmed: suspected transmissions only, no content match yet')]
+        : []),
       line(`policy ${c.policy} · ${formatCount(c.volume)} accesses`),
       line(c.id, 'dim'),
     ];

@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.channel.discovered-by-cross-agent-transmission"
+statement = "ChannelRegistry::discover creates a discovered channel only for a resource on no channel, for the channel transmission a co-access between two different agents opened on it, seeded by that resource and transmission, TrafficDetection::Active since the transmission opened with it as last_transmission, Unreviewed and holding the resource, and returns Existing with the resource's canonical channel, changing nothing, when the resource is already on one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A channel is a medium two agents communicated through, so a discovered
+channel exists only once a transmission between different agents went
+through its resource, and that transmission and resource are the evidence
+for it: the NewChannel alert and the operator's review point at them. Every
+channel transmission is opened by a co-access, which CoAccess::new builds
+only for a write and a later read by two different agents, so the
+discovering transmission always crosses agents when recorded. A discovered
+channel therefore starts Active and unconfirmed (no content match yet) and
+becomes confirmed when content arrives.
+"""
+
+[evidence]
+unit = "crosstalk::flow::channel::tests::discovered_by_first_cross_agent_transmission"
+integration = "crosstalk::flow::registry::integration::pg_discover_seeds_channel"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

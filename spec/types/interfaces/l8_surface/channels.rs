@@ -4,20 +4,30 @@
 //! (`QueryApi::promotion_preview`).
 //!
 //! **Rows.** A [`ChannelRow`] is the stored channel, its seed resource, and
-//! its standing: in force with its activity, or superseded with who
-//! superseded it into which channel. Activity belongs to the channel in
-//! force: accesses to a superseded channel's resources and transmissions
-//! routed through it resolve to its superseding channel at read time and are
-//! counted there. A superseded row therefore carries no counts and no last
-//! activity, so summing a list's counts never counts an access twice; its
-//! supersession names the row that does carry them.
+//! its standing: in force with its cross-agent traffic and its activity, or
+//! superseded with who superseded it into which channel. Traffic and
+//! activity belong to the channel in force: accesses to a superseded
+//! channel's resources and transmissions routed through it resolve to its
+//! superseding channel at read time and are counted there. A superseded row
+//! therefore carries no counts and no last activity, so summing a list's
+//! counts never counts an access twice; its supersession names the row that
+//! does carry them.
 //!
 //! ```text
-//! in force:   ChannelActivity::Seen { last, counts } over the channel and every channel it superseded
-//!             counts = ChannelCounts::tally(full channel_resources(channel, window),
-//!                                           ChannelCounts::routed(graph(window, default filter))[channel])
-//! superseded: SupersededInto { into, by, at }, no counts
+//! in force:   traffic  = CrossTraffic::tally(every transmission routed through it, merges resolved), all time
+//!             activity = ChannelActivity::Seen { last, counts } over the channel and every channel it superseded
+//!             counts   = ChannelCounts::tally(full channel_resources(channel, window),
+//!                                             ChannelCounts::routed(graph(window, default filter))[channel])
+//! superseded: SupersededInto { into, by, at }, no traffic, no counts
 //! ```
+//!
+//! **Listings.** A row in force is listed by its [`Listing`], which follows
+//! from its origin and traffic ([`ChannelRow::listing`]): a channel
+//! (confirmed or unconfirmed), a declaration with no cross-agent traffic
+//! yet, or hidden. `channels` never lists a hidden channel; `channel` still
+//! returns its row, so its page can say why it is hidden. Traffic is all
+//! time and so is the listing: whether a channel exists does not depend on
+//! the window a page counts in.
 //!
 //! **Rows and the overview.** A row's `transmissions` is what the topology
 //! graph counts on the channel for the same window under
@@ -28,8 +38,8 @@
 //! default filter and the same window it is the number of rows in force
 //! whose `transmissions` is non-zero. "Active" in the overview is that
 //! count; a row's [`ChannelActivity::Seen`] is wider: any access or
-//! confirmation ever, so a channel written to and never read is `Seen` but
-//! not active.
+//! confirmation ever, so a channel whose last transmission is a while ago,
+//! or an unconfirmed one, is `Seen` but not active in the window.
 //!
 //! **Names.** [`ChannelName`] is what the UI shows for a channel id: the
 //! channel in force and its pattern (declared) or seed locator (discovered).
@@ -51,6 +61,7 @@ use std::collections::{HashMap, HashSet};
 use crate::aggregates::access::ResourceUse;
 use crate::aggregates::edge::TopologyGraph;
 use crate::batch::IdBatch;
+use crate::derived::flow::channel::confirmation::{Confirmation, CrossTraffic, Listing};
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::channel::promotion::{CappedResources, PromotionCoverage, Registered};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, DeclaredHistory, Supersession};
@@ -71,7 +82,13 @@ use super::{ActionError, ConflictKind, QueryError};
 /// - the standing is superseded exactly when the channel is, with the
 ///   channel's own supersession (`into` its superseding channel, `at` its
 ///   time);
-/// - a channel whose detection shows traffic is not listed as never active.
+/// - a channel whose detection shows traffic is not listed as never active;
+/// - a channel whose stored detection has no traffic (declared, awaiting
+///   traffic or unused) carries no cross-agent traffic: merges only ever
+///   remove crossing transmissions at read time, never add them.
+///
+/// Its [`Listing`] and [`Confirmation`] are derived from its origin and
+/// traffic, never stored beside them, so they cannot disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelRow {
     channel: Channel,
@@ -79,11 +96,14 @@ pub struct ChannelRow {
     standing: ChannelStanding,
 }
 
-/// Whether a channel is in force, with its activity, or superseded, with
-/// no activity of its own.
+/// Whether a channel is in force, with its cross-agent traffic and its
+/// activity, or superseded, with neither of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelStanding {
-    InForce(ChannelActivity),
+    InForce {
+        traffic: CrossTraffic,
+        activity: ChannelActivity,
+    },
     Superseded(SupersededInto),
 }
 
@@ -248,6 +268,9 @@ pub enum InvalidChannelRow {
     StandingMismatch,
     /// A channel whose detection shows traffic, listed as never active.
     TrafficWithoutActivity,
+    /// Cross-agent traffic on a channel whose stored detection has none
+    /// (declared, awaiting traffic or unused).
+    TrafficWithoutDetection,
 }
 
 impl ChannelRow {
@@ -263,9 +286,13 @@ impl ChannelRow {
         match (channel.origin.supersession(), standing) {
             (Some(own), ChannelStanding::Superseded(shown))
                 if shown.into == own.by && shown.at == own.at => {}
-            (None, ChannelStanding::InForce(activity)) => {
-                if channel.origin.traffic().is_some() && activity == ChannelActivity::Never {
+            (None, ChannelStanding::InForce { traffic, activity }) => {
+                let detected = channel.origin.traffic().is_some();
+                if detected && activity == ChannelActivity::Never {
                     return Err(InvalidChannelRow::TrafficWithoutActivity);
+                }
+                if !detected && traffic.confirmation().is_some() {
+                    return Err(InvalidChannelRow::TrafficWithoutDetection);
                 }
             }
             (Some(_), _) | (None, ChannelStanding::Superseded(_)) => {
@@ -277,6 +304,28 @@ impl ChannelRow {
             seed,
             standing,
         })
+    }
+
+    /// The cross-agent traffic of a channel in force; `None` when
+    /// superseded (its traffic is its superseding channel's).
+    pub fn traffic(&self) -> Option<CrossTraffic> {
+        match self.standing {
+            ChannelStanding::InForce { traffic, .. } => Some(traffic),
+            ChannelStanding::Superseded(_) => None,
+        }
+    }
+
+    /// Where the channel is listed: [`Listing::of`] its origin and traffic.
+    /// `None` when superseded.
+    pub fn listing(&self) -> Option<Listing> {
+        self.traffic()
+            .and_then(|traffic| Listing::of(&self.channel.origin, traffic))
+    }
+
+    /// The confirmation of a channel listed as a channel; `None` for a
+    /// declaration without traffic, a hidden channel and a superseded one.
+    pub fn confirmation(&self) -> Option<Confirmation> {
+        self.listing().and_then(Listing::confirmation)
     }
 
     /// The stored channel, as recorded under its own id.
@@ -298,7 +347,7 @@ impl ChannelRow {
     pub fn supersession(&self) -> Option<SupersededInto> {
         match self.standing {
             ChannelStanding::Superseded(supersession) => Some(supersession),
-            ChannelStanding::InForce(_) => None,
+            ChannelStanding::InForce { .. } => None,
         }
     }
 
@@ -306,20 +355,30 @@ impl ChannelRow {
     /// channel's) and for a channel never active.
     pub fn counts(&self) -> Option<ChannelCounts> {
         match self.standing {
-            ChannelStanding::InForce(ChannelActivity::Seen { counts, .. }) => Some(counts),
-            ChannelStanding::InForce(ChannelActivity::Never) | ChannelStanding::Superseded(_) => {
-                None
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Seen { counts, .. },
+                ..
+            } => Some(counts),
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Never,
+                ..
             }
+            | ChannelStanding::Superseded(_) => None,
         }
     }
 
     /// `None` for a superseded channel and for a channel never active.
     pub fn last_activity(&self) -> Option<Timestamp> {
         match self.standing {
-            ChannelStanding::InForce(ChannelActivity::Seen { last, .. }) => Some(last),
-            ChannelStanding::InForce(ChannelActivity::Never) | ChannelStanding::Superseded(_) => {
-                None
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Seen { last, .. },
+                ..
+            } => Some(last),
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Never,
+                ..
             }
+            | ChannelStanding::Superseded(_) => None,
         }
     }
 }

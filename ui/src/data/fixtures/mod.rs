@@ -193,7 +193,7 @@ pub fn payload() -> (Projection, PayloadPoints, ProjectionTables) {
         agents.iter().map(|a| (a.id, agent_node_name(a))).collect();
     let channel_names: HashMap<ChannelId, String> = channel_specs()
         .iter()
-        .map(|(n, _, _, _, shape)| (channel_id(*n), shape_name(shape)))
+        .map(|(n, _, _, _, _, shape)| (channel_id(*n), shape_name(shape)))
         .collect();
     let labels: HashMap<TopicId, &str> = (1..=6)
         .map(|n| TopicId::from_ulid(ulid(0x70, n)))

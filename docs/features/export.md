@@ -106,8 +106,13 @@ sender, reader, route encoding, topic); accesses by (bucket start, agent,
 channel, write before read); topics by id; points by frame index; verdicts
 by (transmission, revision). Every agent and channel a row names is
 canonical; an edge row is an `EdgeSelector`, so never a self-edge; a
-transmission row keeps a transmission whose two agents have since merged,
-with equal ends. `verdict_rows(transmission, log)` builds one row per
+transmission whose two agents have since merged into one is a transmission
+nowhere, so no dataset holds it (`TransmissionRow::new` refuses equal ends
+with `WithinOneAgent`); an access row's channel is the channel holding its
+resource, listed as a channel (a resource on no channel, a hidden channel
+or a declaration without traffic has no access rows; unconfirmed channels
+only under `UnconfirmedChannels::Include`), as `channel_topology` draws
+it. `verdict_rows(transmission, log)` builds one row per
 record with the transmission's route kind and detector call
 (`QualityMatch`), so the export reproduces `DetectionQuality::tally`.
 
