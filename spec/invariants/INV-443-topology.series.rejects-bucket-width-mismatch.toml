@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.series.rejects-bucket-width-mismatch"
+statement = "series returns EdgeError::BucketWidthMismatch and no series when the grid's bucket width differs from EdgeStore::bucket_width."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A SeriesGrid is checked against the bucket width it was built with, not
+against the store's. A grid built for another width could split buckets
+between points, so the store refuses it rather than answering with points
+that do not line up with its buckets.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::series_rejects_grid_for_other_bucket_width"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

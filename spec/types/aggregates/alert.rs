@@ -55,6 +55,12 @@ pub enum AlertRule {
     /// unmapped becomes [`RuleStatus::Stale`] instead of silently watching the
     /// wrong topics. Remapping at that moment switches the rule in step with
     /// new confirmations' classifications.
+    ///
+    /// The remap is [`TopicLineage::remap`] over the lineage from the rule's
+    /// version to the new one, the same lineage the UI shows, so the two
+    /// cannot disagree.
+    ///
+    /// [`TopicLineage::remap`]: crate::aggregates::topic_history::TopicLineage::remap
     WatchedTopic {
         version: TopicModelVersion,
         topics: NonEmpty<TopicId>,

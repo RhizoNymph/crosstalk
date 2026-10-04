@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.version.failed-fit-leaves-none"
+statement = "A fit that returns an error leaves no entry for its version in the TopicCatalog, and no later fit is given that version number."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A failed fit produced no topics, so a Fitting entry left behind would stay
+forever and, since only the newest version may be fitting, would block
+every later fit from being listed. Not reusing the number keeps version
+numbers unique across everything that ever referenced them.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::failed_fit_removes_its_version"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

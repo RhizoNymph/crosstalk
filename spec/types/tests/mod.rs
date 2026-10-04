@@ -14,4 +14,6 @@ mod observed;
 mod paging;
 mod projection;
 mod provenance;
+mod series;
 mod support;
+mod topic_history;

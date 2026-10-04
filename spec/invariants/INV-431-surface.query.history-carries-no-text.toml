@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.query.history-carries-no-text"
+statement = "No successful response of QueryApi series, topic_versions, topic_sizes or topic_lineage contains message text, a topic label or a topic term."
+kind = "confidentiality"
+requires = ["type"]
+rationale = """
+This is what lets these endpoints need only View. TopologySeries,
+TopicVersionHistory, TopicSizes and TopicLineage hold no free text: only
+ids, routes, counts, timestamps, versions and similarities, so the
+response types cannot carry content. Error reasons are covered by
+surface.query.no-blob-bytes-without-content-permission.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::series::TopologySeries", "crosstalk_spec::aggregates::topic_history::TopicVersionHistory", "crosstalk_spec::aggregates::topic_history::TopicSizes", "crosstalk_spec::aggregates::topic_history::TopicLineage"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

@@ -38,16 +38,18 @@ spec/types/
 │           ├── detection.rs DeclaredDetection, TrafficDetection
 │           └── policy.rs  Policy, Decision, TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── edge.rs            EdgeKey, EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
+│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
 │   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
+│   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
+│   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked), Remap
 │   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
-│   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
@@ -55,9 +57,9 @@ spec/types/
 │   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
-│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage
-│   ├── l7_topology.rs     EdgeStore (graph, edge drill-down)
-│   ├── l8_surface.rs      Caller, QueryApi (lists, linked views), OperatorActions, AlertSink
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage
+│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
+│   ├── l8_surface.rs      Caller, QueryApi (lists, linked views, series, topic history), OperatorActions, AlertSink
 │   └── l8_surface/
 │       └── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
 └── tests/                 tests for the invariants checked at runtime

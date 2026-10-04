@@ -1,9 +1,15 @@
 //! L7 topology: edge aggregation. Consumer group `topology`, triggered by
 //! `TransmissionClassified` (after analysis, so edges can be filtered by
 //! topic) and `TopicVersionReady` (switch queries to the new version's
-//! buckets). Graph queries resolve agents, including the ids named in a
-//! filter, through the `AgentDirectory`. A contribution rejected as a
-//! self-edge is a permanent outcome: its delivery is acked, not retried.
+//! buckets, then publish `TopicVersionActivated`). Graph and series queries
+//! resolve agents, including the ids named in a filter, through the
+//! `AgentDirectory`. A contribution rejected as a self-edge is a permanent
+//! outcome: its delivery is acked, not retried.
+//!
+//! A series query is a graph query cut into steps: for the same window,
+//! weighting, filter and topic version, the sum of every series value is the
+//! graph's [`TopologyGraph::total`], and grouped by edge each series sums to
+//! that edge's stat in the graph.
 //!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
@@ -13,6 +19,7 @@ use std::num::NonZeroU64;
 use crate::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
+use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::ids::{AgentId, TransmissionId};
@@ -63,6 +70,22 @@ pub trait EdgeStore {
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
     ) -> Result<EdgeTransmissionPage, EdgeError>;
+
+    /// The width of every bucket in this store. Graph windows and series
+    /// grids must be aligned to it.
+    fn bucket_width(&self) -> BucketWidth;
+
+    /// One series per group of `grouping`, one value per grid point: the
+    /// stat under `weighting` summed over that step, counted exactly as
+    /// [`EdgeStore::graph`] counts it over the step's window. Fails with
+    /// `BucketWidthMismatch` when the grid was built for another width.
+    async fn series(
+        &self,
+        grid: SeriesGrid,
+        weighting: Weighting,
+        grouping: SeriesGrouping,
+        filter: &TopologyFilter,
+    ) -> Result<TopologySeries, EdgeError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +95,11 @@ pub enum EdgeError {
     },
     /// The window is not aligned to bucket boundaries.
     UnalignedWindow,
+    /// A series grid built for a bucket width other than the store's.
+    BucketWidthMismatch {
+        store: BucketWidth,
+        grid: BucketWidth,
+    },
     SelfEdge,
     /// A cursor the store did not issue, issued for another edge, window or
     /// filter, or pinning a topic-model version whose contributions are gone.

@@ -83,27 +83,50 @@ The types follow data through the stack:
    events are published.
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
-   (`TransmissionClassified`); a re-fit re-classifies everything and then
-   publishes `TopicVersionReady`. Each fit also fits a 2-D layout; later
-   transmissions are placed into it. The `SearchIndex` and the
-   `ProjectionIndex` take a `TopologyFilter` and report the topic-model
-   version they evaluated topics under (`SearchResults`, `Projection`). `AlertRuleEval`s turn envelopes into
+   (`TransmissionClassified`). Re-fits run one at a time. The
+   `TopicCatalog` records a re-fit's version as `Fitting`; when the fit
+   returns it stores the `TopicLineage` from the predecessor (the version
+   before it in the `TopicVersionHistory`): for each older topic, the new
+   topic with the most similar centroid (`LineageEntry::best`, ties to the
+   lower id) and every other new topic at or above the lineage floor. Each
+   fit also fits a 2-D layout; later transmissions are placed into it. The
+   re-fit then re-classifies everything and publishes `TopicVersionReady`,
+   and the version becomes `Ready`. On `TopicVersionReady`, every watched
+   topic rule on the predecessor is carried over with `TopicLineage::remap`
+   (`Remap::Remapped` or `Remap::Stale`), so the UI's lineage and the rules
+   cannot disagree. `TopicVersionActivated` from L7 makes the version
+   `Active` and every older one `Superseded`. `TopicSizes` count topic
+   assignments per topic (outliers apart), optionally over a window. The
+   `SearchIndex` and the `ProjectionIndex` take a `TopologyFilter` and
+   report the topic-model version they evaluated topics under
+   (`SearchResults`, `Projection`). `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), and suppresses on sanctioning or rule disabling.
 8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
-   `EdgeKey` bucket (per topic-model version), activates a version once it is
-   complete, and answers `TopologyGraph` queries over canonical agents with
-   per-edge `Share`s. `EdgeStore::transmissions` lists the contributions
-   behind one edge (`EdgeSelector`) from the same stored rows, a page at a
-   time (`EdgeTransmissionPage`), with the first page's topic version pinned
-   in the cursor.
+   `EdgeKey` bucket (per topic-model version, `BucketWidth` wide), activates
+   a version once it is complete and publishes `TopicVersionActivated`, and
+   answers `TopologyGraph` queries over canonical agents with per-edge
+   `Share`s. A series query takes a `SeriesGrid` (a bucket-aligned window
+   cut into `SeriesStep`s, each a whole number of buckets), a `Weighting`, a
+   `SeriesGrouping` (total, topic, route kind, edge) and a `TopologyFilter`,
+   and returns a `TopologySeries`: one value per step per group, counted
+   exactly as a graph over that step. Summing every value gives
+   `TopologyGraph::total` for the same window, weighting, filter and topic
+   version, and grouped by edge each series sums to that edge's stat.
+   `EdgeStore::transmissions` lists the contributions behind one edge
+   (`EdgeSelector`) from the same stored rows, a page at a time
+   (`EdgeTransmissionPage`), with the first page's topic version pinned in
+   the cursor.
 9. **L8 surface.** `QueryApi` serves channels, agents, alert rules, dead
-   letters, alerts, the topology, the transmissions behind an edge, search,
-   transmissions, topics and projections to an authenticated `Caller` with
-   `Permission`s (View for structure, Content for anything derived from
-   message text, Operate for dead letters). `OperatorActions` publish
-   `PolicyChanged` (stamping author and time from the caller) and agent
-   merges back down the stack, and `AlertSink`s deliver alerts.
+   letters, alerts, the topology, series, the topic history (versions,
+   sizes, lineage), the transmissions behind an edge, search, transmissions,
+   topics and projections to an authenticated `Caller` with `Permission`s
+   (View for structure, Content for anything derived from message text,
+   Operate for dead letters). Series and the topic history need `View`: they
+   carry ids, counts, times and similarities but no text, and topic labels
+   stay behind `Content`. `OperatorActions` publish `PolicyChanged`
+   (stamping author and time from the caller) and agent merges back down
+   the stack, and `AlertSink`s deliver alerts.
 
 ### Lists and pagination
 
@@ -189,13 +212,16 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph`, `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
 | `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
+| `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
+| `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo`, `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage`, `Remap` |
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `AlertRuleDef`, `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent`, `ConversationDelta`, `DetectEvent`, `InsightEvent` |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above (`TopicCatalog` in L6, `EdgeStore::series` in L7, the series and topic-history queries on `QueryApi` in L8), and their error enums |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
-| `spec/types/tests/` | Invariant tests | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface) | — |
+| `spec/invariants/` | One TOML file per invariant, with its evidence | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
 ## Invariants and constraints
@@ -289,6 +315,34 @@ exactly `min(matching, limit)` points, none twice, all finite.
   `ProjectionToken` points never move or change topic.
 - Lists of dead letters need Operate; edge drill-down rows carry no message
   content and need View.
+- A `SeriesStep` is a whole number of buckets (`SeriesStep::new`). A
+  `SeriesGrid` starts on a bucket boundary and is a whole number of steps,
+  at most `SeriesGrid::MAX_POINTS` (`SeriesGrid::new`). A `TopologySeries`
+  has one value per grid point in every series, distinct keys, no all-zero
+  grouped series and no self-edge series (`TopologySeries::new`). A series
+  over a grid built for another bucket width is rejected.
+- For the same window, weighting, filter and topic version, the sum of a
+  series' values is `TopologyGraph::total`, and grouped by edge each series
+  sums to that edge's stat. Series concatenate over adjacent grids, and a
+  coarser step sums runs of finer points.
+- A `TopicVersionHistory` starts at version 0, which alone is unfitted;
+  versions strictly increase; exactly one is `Active`; older ones are
+  `Superseded` by the first newer activation, at its time; newer ones are
+  `Ready` or `Fitting`, and only the newest may be `Fitting`. A version's
+  timestamps never decrease (`TopicVersionInfo::new`,
+  `TopicVersionHistory::new`). A failed fit leaves no version.
+- A `TopicLineage` goes from a version to the next one in the history, with
+  one entry per older topic. Each entry's best link is the newer topic with
+  the most similar centroid, ties to the lower id, kept even below the
+  floor; the other links are the topics at or above the floor, in lineage
+  order (`LineageEntry::new`, `TopicLineage::new`).
+- Watched-topic rules are remapped only by `TopicLineage::remap` over the
+  stored lineage: every topic to its best link if that reaches the
+  threshold, otherwise the rule is stale. The lineage is stored before
+  `TopicVersionReady`.
+- `TopicSizes` list every topic of the version once (`TopicSizes::new`) and
+  count topic assignments, so unlike series they keep transmissions between
+  agents later merged into one.
 - `TimeWindow` and `ByteRange` are never empty. `Similarity` and `Share` are
   never NaN or outside `0..=1`.
 - Bus delivery is at least once. Consumers are idempotent on the envelope id

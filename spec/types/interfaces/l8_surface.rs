@@ -7,7 +7,8 @@
 //!
 //! Implementations:
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
-//!   share) and `ContentExplorer` (search, topics, UMAP).
+//!   share, the time brush and trend lines), `TopicHistory` (versions, sizes,
+//!   lineage) and `ContentExplorer` (search, topics, UMAP).
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
 //!
 //! **Lists.** Channels, agents, alert rules, dead letters and the
@@ -29,7 +30,9 @@ use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
 use crate::aggregates::projection::{Projection, ProjectionToken};
+use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
+use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::transmission::Transmission;
@@ -53,9 +56,10 @@ pub struct Caller {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Permission {
-    /// Topology, the transmissions behind an edge (ids, times, byte counts
-    /// and topic ids), channels, agents, alert rules and alerts: no message
-    /// content.
+    /// Topology, series, the transmissions behind an edge (ids, times, byte
+    /// counts and topic ids), channels, agents, alert rules, alerts and the
+    /// topic history (versions, sizes, lineage): ids, counts, times and
+    /// similarities, no message content and no topic labels or terms.
     View,
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
@@ -152,6 +156,39 @@ pub trait QueryApi {
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
     ) -> Result<EdgeTransmissionPage, QueryError>;
+
+    /// View. Exactly [`EdgeStore::series`]; a grid for another bucket width
+    /// is `BadRequest`, like an unaligned graph window.
+    ///
+    /// [`EdgeStore::series`]: crate::interfaces::l7_topology::EdgeStore::series
+    async fn series(
+        &self,
+        caller: &Caller,
+        grid: SeriesGrid,
+        weighting: Weighting,
+        grouping: SeriesGrouping,
+        filter: &TopologyFilter,
+    ) -> Result<TopologySeries, QueryError>;
+
+    /// View.
+    async fn topic_versions(&self, caller: &Caller) -> Result<TopicVersionHistory, QueryError>;
+
+    /// View. `None` is the active version. An unknown version is
+    /// `NotFound`; a fitting one is `BadRequest`.
+    async fn topic_sizes(
+        &self,
+        caller: &Caller,
+        version: Option<TopicModelVersion>,
+        window: Option<TimeWindow>,
+    ) -> Result<TopicSizes, QueryError>;
+
+    /// View. The lineage from `from` to its successor; `None` while it has
+    /// none. An unknown version is `NotFound`.
+    async fn topic_lineage(
+        &self,
+        caller: &Caller,
+        from: TopicModelVersion,
+    ) -> Result<Option<TopicLineage>, QueryError>;
 
     /// Content.
     async fn search(

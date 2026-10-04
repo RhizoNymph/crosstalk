@@ -43,6 +43,13 @@ pub enum InsightEvent {
         version: TopicModelVersion,
         transmissions: u64,
     },
+    /// From topology: graph and series queries now read `version`'s buckets
+    /// instead of `previous`'s. The topic catalog marks `version` active and
+    /// every older version superseded by it.
+    TopicVersionActivated {
+        version: TopicModelVersion,
+        previous: TopicModelVersion,
+    },
     EdgeUpdated(EdgeKey),
     AlertOpened(Alert),
     /// From the surface: an operator or config changed a channel's policy.
@@ -59,6 +66,7 @@ impl InsightEvent {
         match self {
             Self::TransmissionClassified { .. } => Subject::TransmissionClassified,
             Self::TopicVersionReady { .. } => Subject::TopicVersionReady,
+            Self::TopicVersionActivated { .. } => Subject::TopicVersionActivated,
             Self::EdgeUpdated(_) => Subject::EdgeUpdated,
             Self::AlertOpened(_) => Subject::AlertOpened,
             Self::PolicyChanged { .. } => Subject::PolicyChanged,
