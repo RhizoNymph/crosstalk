@@ -222,10 +222,15 @@ fn first_origin(
             // through falls back to the channel's first.
             let (created, first_transmission) =
                 traffic.first_crossing_through(*seed).unwrap_or(first);
+            // The spec's seed names an access (the channel-semantics port
+            // names the transmission): the write that opened it.
+            let first_access = traffic
+                .opening_access(first_transmission)
+                .ok_or_else(|| missing("opening access"))?;
             let origin = ChannelOrigin::Discovered {
                 seed: Seed {
                     resource: *seed,
-                    first_transmission,
+                    first_access,
                 },
                 detection: traffic_detection(spec, stats)?,
             };

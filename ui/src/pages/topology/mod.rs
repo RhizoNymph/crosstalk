@@ -127,12 +127,12 @@ fn summary(graph: &Watermarked<TopologyGraph>) -> Summary {
     let value = &graph.value;
     Summary {
         agents: value
-            .nodes
+            .nodes()
             .iter()
             .filter(|n| matches!(n, GraphNode::Agent(_)))
             .count(),
-        edges: value.edges.len(),
-        transmissions: value.edges.iter().fold(0u64, |sum, e| {
+        edges: value.edges().len(),
+        transmissions: value.edges().iter().fold(0u64, |sum, e| {
             sum.saturating_add(e.stats.transmissions.get())
         }),
         watermark: format_time(graph.watermark.at()),

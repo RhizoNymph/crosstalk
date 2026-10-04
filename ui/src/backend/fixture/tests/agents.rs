@@ -38,7 +38,7 @@ async fn rows_carry_their_topology_nodes_counts() {
             .expect("topology");
         let nodes: HashMap<AgentId, AgentTraffic> = graph
             .value
-            .nodes
+            .nodes()
             .iter()
             .filter_map(|n| match n {
                 GraphNode::Agent(a) => Some((
@@ -62,7 +62,7 @@ async fn rows_carry_their_topology_nodes_counts() {
             );
             if let Some(GraphNode::Agent(node)) = graph
                 .value
-                .nodes
+                .nodes()
                 .iter()
                 .find(|n| matches!(n, GraphNode::Agent(a) if a.id == id))
             {

@@ -8,10 +8,10 @@
 pub mod patterns;
 mod screen;
 
+use crate::pending::channel_semantics::ChannelRow;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::ChannelId;
-use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;
@@ -29,7 +29,6 @@ use crate::pages::common::form::{FormFields, invalid, note, policy};
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
-use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 

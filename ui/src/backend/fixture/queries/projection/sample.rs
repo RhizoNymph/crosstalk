@@ -15,14 +15,13 @@
 //! from the seed and the transmission id. A larger minimum distance spreads
 //! the clusters.
 
-use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, Fitted, ProjectedPoint, ProjectionParams, ProjectionSpec,
+    FitFailure, Fitted, PointRoute, ProjectedPoint, ProjectionParams, ProjectionSpec,
 };
 use crosstalk_spec::ids::{ProjectionId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
-use crosstalk_spec::support::{Timestamp, Watermark};
+use crosstalk_spec::support::{Finite, Timestamp, Watermark};
 
 use crate::backend::Result;
 use crate::backend::fixture::clock::{MINUTE, minus};
@@ -105,22 +104,23 @@ pub fn fit(ctx: &Ctx, spec: &ProjectionSpec, id: ProjectionId, at: Timestamp) ->
             got,
         }));
     }
+    let finite = |v: f32| Finite::new(v).map_err(|e| store_error("point position", e));
     let points: Vec<ProjectedPoint> = admitted
         .iter()
         .map(|counted| {
             let (x, y) = position(params, counted);
-            ProjectedPoint {
+            Ok(ProjectedPoint {
                 transmission: counted.record.transmission.id,
                 from: counted.from,
                 to: counted.to,
-                route: RouteKind::from(&counted.route),
+                route: PointRoute::of(&counted.route),
                 topic: counted.topic,
                 confirmed_at: counted.at,
-                x,
-                y,
-            }
+                x: finite(x)?,
+                y: finite(y)?,
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let watermark = watermark_at(at);
     let header = FrameHeader {
         projection: id,

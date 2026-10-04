@@ -19,13 +19,11 @@
 
 use std::collections::HashMap;
 
-use crosstalk_spec::aggregates::access::BipartiteGraph;
 use crosstalk_spec::aggregates::edge::{TopologyGraph, WeightedEdge};
 use crosstalk_spec::aggregates::node::{AgentNode, CanonicalStateKind, ChannelNode, GraphNode};
 use crosstalk_spec::derived::flow::access::AccessKind;
-use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind, QueryApi};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
 use crosstalk_spec::observed::client::HarnessClaim;
 use topcoat::context::Cx;
 
@@ -35,6 +33,7 @@ use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::transmissions::{ChannelNames, channel_names, route_channel};
 use crate::pages::topology::selection::Selection;
+use crate::pending::channel_semantics::{ChannelGraph, Confirmation};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::{GraphMode, ViewState};
 
@@ -196,17 +195,17 @@ fn sort_channels(items: &mut [ChannelItem]) {
     });
 }
 
-/// The policies and confirmations of the channel nodes among `nodes`.
-fn policies(nodes: &[GraphNode]) -> HashMap<ChannelId, (PolicyKind, Confirmation)> {
-    nodes
+/// The policies and confirmations of the channel nodes of `graph`.
+fn policies(graph: &ChannelGraph) -> HashMap<ChannelId, (PolicyKind, Confirmation)> {
+    graph
+        .nodes()
         .iter()
         .filter_map(|node| match node {
             GraphNode::Channel(ChannelNode {
-                id,
-                policy_kind,
-                confirmation,
-                ..
-            }) => Some((*id, (*policy_kind, *confirmation))),
+                id, policy_kind, ..
+            }) => graph
+                .confirmation(*id)
+                .map(|confirmation| (*id, (*policy_kind, confirmation))),
             GraphNode::Agent(_) => None,
         })
         .collect()
@@ -246,7 +245,7 @@ pub fn routed_channels(
 
 /// The channel nodes of a bipartite graph (channels mode), with their
 /// reads and writes, heaviest first.
-pub fn channel_node_items(graph: &BipartiteGraph, names: &ChannelNames) -> Vec<ChannelItem> {
+pub fn channel_node_items(graph: &ChannelGraph, names: &ChannelNames) -> Vec<ChannelItem> {
     let mut items: Vec<ChannelItem> = graph
         .nodes()
         .iter()
@@ -267,7 +266,7 @@ pub fn channel_node_items(graph: &BipartiteGraph, names: &ChannelNames) -> Vec<C
                 id: channel.id,
                 name: names.name(channel.id),
                 policy: Some(channel.policy_kind),
-                confirmation: Some(channel.confirmation),
+                confirmation: graph.confirmation(channel.id),
                 carried: Carried::Accesses { writes, reads },
             }
         })
@@ -280,19 +279,19 @@ pub fn channel_node_items(graph: &BipartiteGraph, names: &ChannelNames) -> Vec<C
 /// policies read from `bipartite` (the same window and filter).
 pub fn agents_mode(
     graph: &TopologyGraph,
-    bipartite: Option<&BipartiteGraph>,
+    bipartite: Option<&ChannelGraph>,
     names: &ChannelNames,
 ) -> GraphLists {
-    let policies = bipartite.map(|b| policies(b.nodes())).unwrap_or_default();
+    let policies = bipartite.map(policies).unwrap_or_default();
     GraphLists {
         mode: GraphMode::Agents,
-        agents: agent_items(&graph.nodes),
-        channels: routed_channels(&graph.edges, &policies, names),
+        agents: agent_items(graph.nodes()),
+        channels: routed_channels(graph.edges(), &policies, names),
     }
 }
 
 /// Channels mode: the bipartite graph's agents and channels.
-pub fn channels_mode(graph: &BipartiteGraph, names: &ChannelNames) -> GraphLists {
+pub fn channels_mode(graph: &ChannelGraph, names: &ChannelNames) -> GraphLists {
     GraphLists {
         mode: GraphMode::Channels,
         agents: agent_items(graph.nodes()),
@@ -314,7 +313,7 @@ pub async fn load(
     match state.graph {
         GraphMode::Agents => {
             let routed: Vec<ChannelId> = graph
-                .edges
+                .edges()
                 .iter()
                 .filter_map(|e| route_channel(&e.route))
                 .collect();
@@ -357,8 +356,8 @@ mod tests {
     #[test]
     fn agents_are_every_agent_node_heaviest_first() {
         let graph = fixtures::topology_graph().value;
-        let items = agent_items(&graph.nodes);
-        assert_eq!(items.len(), graph.nodes.len());
+        let items = agent_items(graph.nodes());
+        assert_eq!(items.len(), graph.nodes().len());
         assert_eq!(items[0].name, "planner");
         let volumes: Vec<u64> = items.iter().map(AgentItem::volume).collect();
         let mut sorted = volumes.clone();
@@ -401,7 +400,7 @@ mod tests {
         );
         let total: u64 = lists.channels.iter().map(|c| c.carried.volume()).sum();
         let routed: u64 = graph
-            .edges
+            .edges()
             .iter()
             .filter(|e| route_channel(&e.route).is_some())
             .map(|e| e.stats.transmissions.get())
@@ -469,7 +468,7 @@ mod tests {
     fn channels_carry_their_nodes_confirmation_and_unconfirmed_ones_match_it() {
         let graph = fixtures::topology_graph().value;
         let bipartite = fixtures::bipartite_graph().value;
-        let confirmations: HashMap<ChannelId, Confirmation> = policies(bipartite.nodes())
+        let confirmations: HashMap<ChannelId, Confirmation> = policies(&bipartite)
             .into_iter()
             .map(|(id, (_, confirmation))| (id, confirmation))
             .collect();
@@ -506,7 +505,7 @@ mod tests {
         let first = agents_mode(&graph, None, &names()).channels[0].id;
         let standings =
             HashMap::from([(first, (PolicyKind::Unreviewed, Confirmation::Unconfirmed))]);
-        let items = routed_channels(&graph.edges, &standings, &names());
+        let items = routed_channels(graph.edges(), &standings, &names());
         let item = items.iter().find(|c| c.id == first).expect("routed");
         assert_eq!(item.confirmation, Some(Confirmation::Unconfirmed));
         assert!(item.is_unconfirmed());

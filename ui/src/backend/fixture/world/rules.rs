@@ -6,13 +6,14 @@
 //! `AlertRuleDef::remap` over the catalog's lineage, so its staleness is
 //! exactly what `TopicLineage::remap` says.
 
+use crosstalk_spec::aggregates::alert::RuleQueryText;
 use crosstalk_spec::aggregates::alert::{
     AlertRuleConfig, AlertRuleSet, RuleName, RuleStatus, UserRule, WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AlertRuleId, SinkId};
 use crosstalk_spec::interfaces::l8_surface::{SinkError, SinkInfo, SinkKind};
-use crosstalk_spec::support::{NonBlank, NonEmpty, Similarity, Timestamp};
+use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
 
 use crate::backend::fixture::actions::rules::{insert, resolve};
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
@@ -73,7 +74,7 @@ pub fn config() -> Result<AlertRuleConfig, GenError> {
 /// A semantic query rule as an operator writes it.
 fn semantic(text: &str, threshold: f32) -> Result<UserRule, GenError> {
     Ok(UserRule::SemanticQuery {
-        text: NonBlank::new(text).map_err(|e| GenError::invalid("NonBlank", e))?,
+        text: RuleQueryText::new(text).map_err(|e| GenError::invalid("RuleQueryText", e))?,
         threshold: similarity(threshold)?,
     })
 }

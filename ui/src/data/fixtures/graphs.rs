@@ -4,8 +4,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::pending::channel_semantics::{ChannelGraph, Confirmation};
 use crosstalk_spec::aggregates::access::{BipartiteGraph, BipartiteParts, WeightedAccess};
-use crosstalk_spec::aggregates::edge::{EdgeStats, TopologyGraph, WeightedEdge, Weighting};
+use crosstalk_spec::aggregates::edge::{
+    EdgeStats, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
+};
 use crosstalk_spec::aggregates::node::{
     AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
 };
@@ -15,7 +18,6 @@ use crosstalk_spec::aggregates::series::{
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
-use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
@@ -254,25 +256,27 @@ fn agent_nodes() -> Vec<GraphNode> {
 }
 
 pub fn topology_graph() -> Watermarked<TopologyGraph> {
-    let graph = TopologyGraph {
+    let graph = TopologyGraph::new(TopologyGraphParts {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
         nodes: agent_nodes(),
         edges: edges(),
-    };
-    graph.check_nodes().expect("one node per endpoint");
+    })
+    .expect("one node per endpoint");
     watermarked(graph)
 }
 
 pub fn empty_topology_graph() -> Watermarked<TopologyGraph> {
-    watermarked(TopologyGraph {
+    let graph = TopologyGraph::new(TopologyGraphParts {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
         nodes: Vec::new(),
         edges: Vec::new(),
     })
+    .expect("an empty graph");
+    watermarked(graph)
 }
 
 /// The fixture's channels: id number, origin, detection, confirmation,
@@ -350,20 +354,25 @@ pub fn channel_names() -> ChannelNames {
 fn channel_nodes() -> Vec<GraphNode> {
     channel_specs()
         .into_iter()
-        .map(
-            |(n, origin_kind, detection_kind, confirmation, policy_kind, shape)| {
-                GraphNode::Channel(ChannelNode {
-                    id: channel_id(n),
-                    label: None,
-                    origin_kind,
-                    detection_kind,
-                    confirmation,
-                    policy_kind,
-                    locator_summary: NonBlank::new(&shape_name(&shape))
-                        .expect("names are not blank"),
-                })
-            },
-        )
+        .map(|(n, origin_kind, detection_kind, _, policy_kind, shape)| {
+            GraphNode::Channel(ChannelNode {
+                id: channel_id(n),
+                label: None,
+                origin_kind,
+                detection_kind,
+                policy_kind,
+                locator_summary: NonBlank::new(&shape_name(&shape)).expect("names are not blank"),
+            })
+        })
+        .collect()
+}
+
+/// Each channel node's confirmation (the stand-in for
+/// `ChannelNode::confirmation`).
+fn confirmations() -> BTreeMap<ChannelId, Confirmation> {
+    channel_specs()
+        .into_iter()
+        .map(|(n, _, _, confirmation, _, _)| (channel_id(n), confirmation))
         .collect()
 }
 
@@ -397,7 +406,7 @@ fn accesses() -> Vec<WeightedAccess> {
 
 /// The channel-centred graph: every edge of [`topology_graph`], the
 /// accesses behind its channel-routed ones, and the channels as nodes.
-pub fn bipartite_graph() -> Watermarked<BipartiteGraph> {
+pub fn bipartite_graph() -> Watermarked<ChannelGraph> {
     let mut nodes = agent_nodes();
     nodes.extend(channel_nodes());
     let graph = BipartiteGraph::new(BipartiteParts {
@@ -409,7 +418,10 @@ pub fn bipartite_graph() -> Watermarked<BipartiteGraph> {
         transmissions: edges(),
     })
     .expect("every endpoint has a node");
-    watermarked(graph)
+    watermarked(ChannelGraph {
+        graph,
+        confirmations: confirmations(),
+    })
 }
 
 /// 96 points of 15 minutes over [`window`], busier in working hours: the

@@ -32,10 +32,10 @@ use crate::pages::common::transmissions::{
 };
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
+use crate::pending::channel_semantics::Listing;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
-use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::PageRequest;
@@ -240,7 +240,7 @@ async fn listed(
     graph: &TopologyGraph,
     keep: impl Fn(&WeightedEdge) -> bool,
 ) -> Vec<EdgeItem> {
-    let mut chosen: Vec<&WeightedEdge> = graph.edges.iter().filter(|e| keep(e)).collect();
+    let mut chosen: Vec<&WeightedEdge> = graph.edges().iter().filter(|e| keep(e)).collect();
     chosen.sort_by(|a, b| b.share.get().total_cmp(&a.share.get()));
     chosen.truncate(LISTED_EDGES);
     let (agents, channels) = names_for(cx, caller, &chosen).await;
@@ -295,7 +295,7 @@ pub async fn load(
             let names = agent_names(cx, caller, vec![from, to]).await;
             let channels = channel_names(cx, caller, route_channel(&route)).await;
             let stats = view
-                .edges
+                .edges()
                 .iter()
                 .find(|e| e.from == from && e.to == to && e.route == route)
                 .map(|e| EdgeStatsView {

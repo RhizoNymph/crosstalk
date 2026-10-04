@@ -6,16 +6,15 @@
 //! recording a verdict (`SetVerdict`, posted to the channel page). Paged by
 //! the page's own `tcursor` key, so it pages apart from the resources.
 
+use crate::pending::channel_semantics::ChannelTransmissionList;
+use crate::pending::channel_semantics::Confirmation;
+use crate::pending::channel_semantics::{ChannelTransmission, ChannelTransmissionFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
-use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::Caller;
-use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
-    ChannelTransmission, ChannelTransmissionFilter,
-};
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
-use crosstalk_spec::paging::{ChannelTransmissionList, Cursor, PageRequest};
+use crosstalk_spec::paging::{Cursor, PageRequest};
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::query_params;
@@ -33,7 +32,6 @@ use crate::pages::common::paging::{parse_cursor, size};
 use crate::pages::transmission::verdict::Choice;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// The query key this section pages by.
 pub const CURSOR_KEY: &str = "tcursor";

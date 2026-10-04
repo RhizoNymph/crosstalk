@@ -21,6 +21,7 @@ mod clock;
 pub mod export;
 mod identity;
 pub mod live;
+mod pending;
 mod queries;
 mod rng;
 mod store;

@@ -203,7 +203,7 @@ fn point(row: &PointRow) -> Value {
         "transmission": id(point.transmission),
         "from": id(point.from),
         "to": id(point.to),
-        "route_kind": route_kind(point.route),
+        "route_kind": route_kind(point.route.kind()),
         "topic": point.topic.map(id),
         "confirmed_at": time(point.confirmed_at),
         "x": point.x,

@@ -67,7 +67,7 @@ async fn merge_then_unmerge_restores_the_graph() {
     assert!(
         merged
             .value
-            .edges
+            .edges()
             .iter()
             .all(|e| e.from != pi2 && e.to != pi2)
     );
@@ -106,7 +106,7 @@ async fn merge_then_unmerge_restores_the_graph() {
     let after = graph_of(&b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert_eq!(before.value.edges, after.value.edges);
+    assert_eq!(before.value.edges(), after.value.edges());
     assert_eq!(node_ids(&before.value), node_ids(&after.value));
     assert!(matches!(
         b.act(&c, OperatorAction::Unmerge { merge: id }).await.err(),

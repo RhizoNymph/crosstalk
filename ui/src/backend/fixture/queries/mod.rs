@@ -23,12 +23,20 @@ pub mod transmissions;
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::pending::channel_semantics::{Confirmation, CrossTraffic, Listing};
+use crate::pending::channel_semantics::{Crossing, crossing};
 use crosstalk_spec::aliases::{Aliases, Resolve};
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, CrossTraffic, Listing};
-use crosstalk_spec::derived::flow::transmission::{Crossing, Route, Transmission};
+use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+
+use std::num::NonZeroU64;
+
+use crosstalk_spec::aggregates::projection::FrameRetention;
+use crosstalk_spec::interfaces::l8_surface::export::ExportFormats;
+use crosstalk_spec::interfaces::l8_surface::present::Present;
+use crosstalk_spec::support::Similarity;
 
 use crate::backend::Result;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -127,7 +135,7 @@ impl<'a> Ctx<'a> {
 
     /// Whether `transmission` crosses agents at this read.
     pub fn crossing(&self, transmission: &Transmission) -> Crossing {
-        transmission.crossing(self.aliases(), |access| self.writer(access))
+        crossing(transmission, self.aliases(), |access| self.writer(access))
     }
 
     /// The cross-agent traffic of the channel `id` resolves to.
@@ -199,6 +207,34 @@ impl<'a> Ctx<'a> {
         self.verdicts.get(&id).copied()
     }
 }
+
+/// `present`: the clock, the bucket width and export formats the contract
+/// gaps report, the active topic version (what `CreateRule` and
+/// `UpdateRule` check), the rule form's default remap threshold and the
+/// projection frame retention.
+pub fn present(ctx: &Ctx) -> Result<Present> {
+    let fail = |what: &str| QueryError::Store {
+        reason: format!("fixture present: {what}"),
+    };
+    let export_formats =
+        ExportFormats::new(super::export::FORMATS.to_vec()).map_err(|_| fail("export formats"))?;
+    let default_remap_threshold =
+        Similarity::new(DEFAULT_REMAP_THRESHOLD).map_err(|_| fail("remap threshold"))?;
+    let retention =
+        NonZeroU64::new(projection::FRAME_RETENTION).ok_or_else(|| fail("retention"))?;
+    Ok(Present {
+        now: ctx.state.clock.now(),
+        bucket_width: super::clock::BUCKET,
+        export_formats,
+        current_rule_version: ctx.state.active_version(),
+        default_remap_threshold,
+        frame_retention_micros: FrameRetention::from_micros(retention),
+    })
+}
+
+/// The remap threshold of a watched-topic rule created without one; the
+/// rule form's default (`pages::alerts::rules::form::DEFAULT_REMAP`).
+const DEFAULT_REMAP_THRESHOLD: f32 = 0.8;
 
 /// A stable order for routes, which have no `Ord`.
 pub fn route_key(route: &Route) -> (u8, u128, String) {

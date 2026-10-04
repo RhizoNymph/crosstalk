@@ -6,9 +6,10 @@
 //! ([`shown`]); an unmerge lists it again. Rules list the built-ins first, in
 //! `BuiltinRule::ALL` order, then user rules newest first.
 
+use crate::pending::channel_semantics::{Crossing, alert_shown};
 use crosstalk_spec::aggregates::alert::{Alert, AlertRuleDef, AlertSubject, BuiltinRule};
-use crosstalk_spec::derived::flow::transmission::{Crossing, Route};
-use crosstalk_spec::ids::{AlertId, ChannelId};
+use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
 use crosstalk_spec::paging::{AlertList, AlertRuleList, Page, PageRequest};
@@ -36,7 +37,8 @@ fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
 /// (`AlertSubject::shown`): not when it is about a hidden channel or a
 /// transmission whose agents have merged into one.
 pub fn shown(ctx: &Ctx, alert: &Alert) -> bool {
-    alert.subject.shown(
+    alert_shown(
+        alert.subject,
         ctx.aliases(),
         |channel| ctx.hidden(channel),
         |transmission| {
@@ -87,6 +89,11 @@ fn rule_key(rule: &AlertRuleDef) -> Key {
         Some(index) => (0, index as u128),
         None => (1, u128::MAX - rule.id().as_ulid()),
     }
+}
+
+/// `alert_rule`: the rule stored under `id`, built-in or user.
+pub fn alert_rule(ctx: &Ctx, id: AlertRuleId) -> Option<AlertRuleDef> {
+    ctx.state.rules.get(id).cloned()
 }
 
 pub fn alert_rules(

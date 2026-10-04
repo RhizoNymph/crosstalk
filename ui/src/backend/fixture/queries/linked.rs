@@ -13,13 +13,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
+use crate::pending::channel_semantics::{Confirmation, TopologyFilter as ViewFilter};
 use crosstalk_spec::aggregates::filter::{
     AccessSubject, FalseDetections, FilterSubject, TopicVersionSelector, TopologyFilter,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::TopicVersionHistory;
 use crosstalk_spec::aliases::Aliases;
-use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
@@ -134,13 +134,19 @@ pub struct Counted<'a> {
 pub struct Linked<'a> {
     pub ctx: &'a Ctx<'a>,
     window: Option<TimeWindow>,
-    pub filter: &'a TopologyFilter,
+    /// The view's filter, with the channel-semantics stand-in's
+    /// `unconfirmed_channels` (`Include` when the caller sent the spec's).
+    pub filter: ViewFilter,
     pub version: TopicModelVersion,
 }
 
 impl<'a> Linked<'a> {
     /// Resolves the filter's version once, for the whole view.
-    pub fn new(ctx: &'a Ctx<'a>, window: TimeWindow, filter: &'a TopologyFilter) -> Result<Self> {
+    pub fn new(
+        ctx: &'a Ctx<'a>,
+        window: TimeWindow,
+        filter: impl Into<ViewFilter>,
+    ) -> Result<Self> {
         Self::paged(ctx, Some(window), filter, None)
     }
 
@@ -150,12 +156,13 @@ impl<'a> Linked<'a> {
     pub fn paged(
         ctx: &'a Ctx<'a>,
         window: Option<TimeWindow>,
-        filter: &'a TopologyFilter,
+        filter: impl Into<ViewFilter>,
         pinned: Option<TopicModelVersion>,
     ) -> Result<Self> {
+        let filter = filter.into();
         let version = match pinned {
             Some(version) => pinned_version(ctx.state, version)?,
-            None => resolve_version(ctx.world, ctx.state, filter)?,
+            None => resolve_version(ctx.world, ctx.state, &filter)?,
         };
         Ok(Self {
             ctx,
@@ -170,13 +177,13 @@ impl<'a> Linked<'a> {
     pub fn at(
         ctx: &'a Ctx<'a>,
         window: Option<TimeWindow>,
-        filter: &'a TopologyFilter,
+        filter: impl Into<ViewFilter>,
         version: TopicModelVersion,
     ) -> Self {
         Self {
             ctx,
             window,
-            filter,
+            filter: filter.into(),
             version,
         }
     }
@@ -294,10 +301,10 @@ impl<'a> Linked<'a> {
         let subject = AccessSubject {
             agent,
             channel,
-            confirmation,
             channel_topics: topics.get(&channel).map_or(&[], Vec::as_slice),
         };
-        self.filter.admits_access(&subject, self.aliases())
+        self.filter
+            .admits_access(&subject, confirmation, self.aliases())
     }
 }
 

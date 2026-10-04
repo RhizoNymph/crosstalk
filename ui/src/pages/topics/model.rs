@@ -132,7 +132,7 @@ pub fn topic_rows(
                 .terms
                 .iter()
                 .take(TERMS)
-                .map(|(term, weight)| (term.clone(), format!("{weight:.2}")))
+                .map(|(term, weight)| (term.clone(), format!("{:.2}", weight.get())))
                 .collect(),
             transmissions: size_of(sizes, Some(t.id)),
             trend: trends.of(Some(t.id)),
@@ -268,7 +268,7 @@ mod tests {
         CompletedFit, LineageEntry, LineageLink, TopicSize,
     };
     use crosstalk_spec::ids::{AlertRuleId, OperatorId};
-    use crosstalk_spec::support::Timestamp;
+    use crosstalk_spec::support::{Finite, Timestamp};
 
     use super::*;
     use crate::components::href::tests::state;
@@ -285,7 +285,10 @@ mod tests {
             id: TopicId::from_ulid(id),
             version: TopicModelVersion(version),
             label: label.to_owned(),
-            terms: vec![("token".into(), 0.4213), ("key".into(), 0.3)],
+            terms: vec![
+                ("token".into(), Finite::new(0.4213).expect("finite")),
+                ("key".into(), Finite::new(0.3).expect("finite")),
+            ],
             centroid: Embedding::new(model(), vec![1.0]).expect("embedding"),
             fitted_at: Timestamp::from_micros(0),
         }

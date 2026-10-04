@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use crate::pending::channel_semantics::ChannelFilter;
+use crate::pending::channel_semantics::ChannelRow;
 use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor, PolicyKind};
@@ -12,8 +14,6 @@ use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
-use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
 
 use super::super::clock::{NOW, all_time};
@@ -400,13 +400,13 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
         .expect("topology");
     assert!(
         view.value
-            .edges
+            .edges()
             .iter()
             .all(|e| e.route != Route::Channel(talk))
     );
     assert!(
         view.value
-            .edges
+            .edges()
             .iter()
             .any(|e| e.route == Route::Channel(wiki))
     );

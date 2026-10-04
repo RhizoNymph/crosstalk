@@ -12,14 +12,15 @@
 
 use std::collections::HashMap;
 
+use crate::pending::channel_semantics::ChannelFilter;
+use crate::pending::channel_semantics::{ChannelRow, ChannelStanding};
 use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::channels::{
-    ChannelActivity, ChannelCounts, ChannelRow, ChannelStanding, SupersededInto,
+    ChannelActivity, ChannelCounts, SupersededInto,
 };
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::paging::{ChannelList, Page, PageRequest};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
@@ -55,7 +56,7 @@ impl Counting {
             ctx,
             window,
             Weighting::Transmissions,
-            &TopologyFilter::default(),
+            TopologyFilter::default(),
         )?;
         Ok(Self {
             window,

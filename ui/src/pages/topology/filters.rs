@@ -22,15 +22,14 @@ use crate::components::{agent_node_name, href, route_kind_name, short_id};
 use crate::pages::common::lookup::agent_names;
 use crate::pages::common::topics::all_topics;
 use crate::pages::common::transmissions::summary_name;
+use crate::pending::channel_semantics::ChannelFilter;
+use crate::pending::channel_semantics::UnconfirmedChannels;
 use crate::url::route::encode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::aggregates::filter::{
-    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
-};
+use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 pub const ROUTE_KINDS: [RouteKind; 4] = [
     RouteKind::Channel,
@@ -103,7 +102,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
     {
         Ok(graph) => graph
             .value
-            .nodes
+            .nodes()
             .iter()
             .filter_map(|node| match node {
                 GraphNode::Agent(agent) => Some((agent.id, agent_node_name(agent))),

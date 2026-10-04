@@ -48,7 +48,7 @@ async fn heaviest_edge() -> Selection {
         .expect("topology");
     let edge = graph
         .value
-        .edges
+        .edges()
         .iter()
         .max_by(|a, b| a.share.get().total_cmp(&b.share.get()))
         .expect("an edge");
@@ -441,7 +441,7 @@ fn list_row<'a>(body: &'a str, code: &str) -> Option<&'a str> {
 
 fn state_path(
     graph: GraphMode,
-    unconfirmed: crosstalk_spec::aggregates::filter::UnconfirmedChannels,
+    unconfirmed: crate::pending::channel_semantics::UnconfirmedChannels,
 ) -> String {
     let mut state = fixture_state();
     state.graph = graph;
@@ -455,7 +455,7 @@ fn state_path(
 /// neither its graph nor its list.
 #[tokio::test]
 async fn an_unconfirmed_channel_is_marked_in_the_channels_list() {
-    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+    use crate::pending::channel_semantics::UnconfirmedChannels;
 
     let s3 = s3_handoff();
     let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
@@ -485,7 +485,7 @@ async fn an_unconfirmed_channel_is_marked_in_the_channels_list() {
 
 #[tokio::test]
 async fn confirmed_only_leaves_unconfirmed_channels_out_of_list_and_graph() {
-    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+    use crate::pending::channel_semantics::UnconfirmedChannels;
     use crosstalk_spec::aggregates::node::GraphNode;
 
     let s3 = s3_handoff();
@@ -506,7 +506,7 @@ async fn confirmed_only_leaves_unconfirmed_channels_out_of_list_and_graph() {
             .expect("topology")
             .value;
         let routed_through_s3 = agents
-            .edges
+            .edges()
             .iter()
             .any(|e| crate::pages::common::transmissions::route_channel(&e.route) == Some(s3_id));
         let bipartite = backend

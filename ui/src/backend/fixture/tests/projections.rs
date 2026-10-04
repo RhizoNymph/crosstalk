@@ -83,7 +83,7 @@ async fn every_fit_is_a_new_ready_job_with_a_reproducible_frame() {
     let points: Vec<_> = first_fit.frame().points().collect();
     assert!(points.iter().any(|p| p.topic.is_some()));
     assert!(points.iter().any(|p| p.topic.is_none()));
-    assert!(points.iter().any(|p| p.route == RouteKind::Channel));
+    assert!(points.iter().any(|p| p.route.kind() == RouteKind::Channel));
 }
 
 #[tokio::test]
@@ -99,7 +99,7 @@ async fn samples_honour_the_window_and_filter() {
         "below the limit everything is kept"
     );
     for point in projection.frame().points() {
-        assert_eq!(point.route, RouteKind::Channel);
+        assert_eq!(point.route.kind(), RouteKind::Channel);
         assert!(scope.window.contains(point.confirmed_at));
         let record = b.world.tx(point.transmission).expect("stored");
         assert_eq!(record.topic(TopicModelVersion(2)), point.topic);

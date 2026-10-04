@@ -136,7 +136,7 @@ pub async fn graph_of(
 /// The ids of a graph's agent nodes, in node order.
 pub fn node_ids(graph: &TopologyGraph) -> Vec<AgentId> {
     graph
-        .nodes
+        .nodes()
         .iter()
         .filter_map(|node| match node {
             GraphNode::Agent(agent) => Some(agent.id),

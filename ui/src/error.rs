@@ -94,6 +94,10 @@ pub fn permission_name(permission: Permission) -> &'static str {
 
 fn conflict(kind: &ConflictKind) -> String {
     match kind {
+        ConflictKind::AlertNotAcknowledged { alert } => format!(
+            "the alert is not acknowledged: alert {} must be acknowledged first",
+            alert.to_ulid()
+        ),
         ConflictKind::AlertNotActive { alert } => format!(
             "the alert is not in a state that allows this: alert {} is no longer open or acknowledged",
             alert.to_ulid()
@@ -268,6 +272,12 @@ fn input(error: &InputError) -> String {
         }
         InputError::TooManyIds { max, got } => {
             format!("{got} ids asked for at once, more than the maximum of {max}")
+        }
+        InputError::UnsupportedFormat { format } => {
+            format!("the gateway does not write {format:?} exports")
+        }
+        InputError::MalformedRequest { reason, .. } => {
+            format!("the request could not be read: {reason}")
         }
     }
 }

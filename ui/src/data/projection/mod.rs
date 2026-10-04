@@ -65,7 +65,7 @@ pub async fn point_channels<B: QueryApi>(
     let routed: Vec<TransmissionId> = projection
         .frame()
         .points()
-        .filter(|point| point.route == RouteKind::Channel)
+        .filter(|point| point.route.kind() == RouteKind::Channel)
         .map(|point| point.transmission)
         .collect();
     let mut channels = HashMap::with_capacity(routed.len());
@@ -232,7 +232,7 @@ mod tests {
             let c = points.categories()[i];
             assert_eq!(agent(decoded.senders[i]), point.from);
             assert_eq!(agent(decoded.readers[i]), point.to);
-            assert_eq!(decoded.routes[i], route_code(point.route));
+            assert_eq!(decoded.routes[i], route_code(point.route.kind()));
             assert_eq!(decoded.channels[i], c.channel);
             assert_eq!(
                 decoded.topics[i].map(|t| points.topics()[t as usize]),
@@ -298,7 +298,7 @@ mod tests {
         for (i, point) in projection.frame().points().enumerate() {
             assert_eq!(
                 decoded.channels[i].is_some(),
-                point.route == RouteKind::Channel,
+                point.route.kind() == RouteKind::Channel,
                 "exactly the channel-routed points name a channel"
             );
         }

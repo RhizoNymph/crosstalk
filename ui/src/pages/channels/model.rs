@@ -1,14 +1,14 @@
 //! Channel data as the pages show it: what a channel is matched by, its
 //! origin and detection in words, and its policy decisions.
 
+use crate::pending::channel_semantics::ChannelRow;
+use crate::pending::channel_semantics::{Confirmation, Listing};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::TransmissionId;
-use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
 use crate::components::format_time;
 use crate::components::locator::{format_locator, format_pattern};
@@ -97,6 +97,14 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
         | ChannelOrigin::Superseded { detection, .. } => detection,
     };
     match traffic {
+        // The spec still has these two states; the channel-semantics port
+        // removes them and the fixture never builds them.
+        TrafficDetection::Observed { .. } => {
+            plain("Accessed, but not yet written by one agent and read by another.".to_owned())
+        }
+        TrafficDetection::Candidate { .. } => {
+            plain("Written by one agent and read by another; no content match yet.".to_owned())
+        }
         TrafficDetection::Active {
             since,
             last_transmission,
@@ -152,14 +160,15 @@ pub fn decision_text(entry: &PolicyDecision) -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+    use crate::pending::channel_semantics::ChannelStanding;
+    use crate::pending::channel_semantics::CrossTraffic;
     use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
     use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
     use crosstalk_spec::derived::flow::channel::{Channel, Declaration, Seed, Supersession};
     use crosstalk_spec::derived::flow::resource::{Host, Resource};
-    use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::ids::{AccessId, ChannelId, OperatorId, ResourceId};
     use crosstalk_spec::interfaces::l8_surface::channels::{
-        ChannelActivity, ChannelCounts, ChannelStanding, SupersededInto,
+        ChannelActivity, ChannelCounts, SupersededInto,
     };
     use crosstalk_spec::support::Timestamp;
 
@@ -177,7 +186,7 @@ pub(crate) mod tests {
     fn seed(id: u128) -> Seed {
         Seed {
             resource: ResourceId::from_ulid(id),
-            first_transmission: TransmissionId::from_ulid(1),
+            first_access: AccessId::from_ulid(1),
         }
     }
 

@@ -18,9 +18,9 @@ use crosstalk_spec::support::TimeWindow;
 
 use super::super::clock::{MINUTE, NOW, START};
 use super::{caller, collect, day, first, graph_of, researcher, shared, week};
+use crate::pending::channel_semantics::ChannelFilter;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
 
 use super::reads_support::*;
@@ -40,7 +40,7 @@ async fn series_totals_match_the_graph() {
                 .await
                 .expect("series");
             assert_eq!(series.value.total(), graph.value.total());
-            assert_eq!(series.value.topic_version(), graph.value.topic_version);
+            assert_eq!(series.value.topic_version(), graph.value.topic_version());
             assert_eq!(series.watermark, graph.watermark);
             let windows: Vec<TimeWindow> = series.value.grid().point_windows().collect();
             assert_eq!(
@@ -92,8 +92,8 @@ async fn grouped_series_sum_to_the_graph_and_its_edges() {
     let SeriesGroups::ByEdge(series) = by_edge.value.groups() else {
         panic!("edge series")
     };
-    assert_eq!(series.len(), graph.value.edges.len());
-    for edge in &graph.value.edges {
+    assert_eq!(series.len(), graph.value.edges().len());
+    for edge in graph.value.edges() {
         let one = series
             .iter()
             .find(|s| s.key.from == edge.from && s.key.to == edge.to && s.key.route == edge.route)
@@ -331,7 +331,7 @@ async fn the_overview_counts_the_graph_and_the_queues() {
         assert_eq!(overview.watermark, graph.watermark);
         let routed: BTreeSet<_> = graph
             .value
-            .edges
+            .edges()
             .iter()
             .filter_map(|e| match e.route {
                 Route::Channel(channel) => Some(channel),

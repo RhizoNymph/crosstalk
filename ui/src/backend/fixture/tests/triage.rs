@@ -12,6 +12,7 @@ use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::CallerSnapshot;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditBody, AuditEntry, AuditOutcome, OperatorRecord,
@@ -77,7 +78,11 @@ async fn every_action_appends_one_audit_entry() {
         let last = state.audit.entries().last().expect("entry");
         assert_eq!(last.at, NOW);
         assert_eq!(record(last).action(), &action);
-        assert_eq!(record(last).caller(), &c, "the caller as authenticated");
+        assert_eq!(
+            record(last).caller(),
+            &CallerSnapshot::of(&c),
+            "the caller as authenticated"
+        );
         assert_eq!(record(last).outcome().result(), result, "what act returned");
         assert_eq!(
             matches!(record(last).outcome(), AuditOutcome::Succeeded(_)),

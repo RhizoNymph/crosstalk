@@ -13,12 +13,13 @@
 //! "confirmed only" (`u=confirmed`) leaves unconfirmed channels out of
 //! every tab.
 
-use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+use crate::pending::channel_semantics::ChannelFilter;
+use crate::pending::channel_semantics::ListingKind;
+use crate::pending::channel_semantics::UnconfirmedChannels;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
-use crosstalk_spec::derived::flow::channel::confirmation::ListingKind;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::OriginFilter;
 use crosstalk_spec::support::TimeWindow;
 use topcoat::router::query_params;
 
@@ -119,6 +120,8 @@ pub fn detection_code(detection: DetectionKind) -> &'static str {
     match detection {
         DetectionKind::AwaitingTraffic => "awaiting",
         DetectionKind::Unused => "unused",
+        DetectionKind::Observed => "observed",
+        DetectionKind::Candidate => "candidate",
         DetectionKind::Active => "active",
         DetectionKind::Dormant => "dormant",
     }

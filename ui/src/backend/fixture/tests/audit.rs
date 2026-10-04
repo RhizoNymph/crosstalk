@@ -21,6 +21,7 @@ use super::super::clock::{DAY, NOW, ago};
 use super::super::world::{ChannelKey, OPERATOR_ONCALL, OPERATOR_RESEARCHER};
 use super::actions_support::channel;
 use super::{caller, collect, first, fresh, researcher, shared, window};
+use crosstalk_spec::interfaces::l8_surface::CallerSnapshot;
 use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
 /// `audit` followed to its last page.
@@ -145,7 +146,7 @@ async fn every_call_leaves_one_entry_naming_what_it_touched_and_created() {
         };
         assert_eq!(
             (entry.at, record.caller(), record.action()),
-            (NOW, &who, &action)
+            (NOW, &CallerSnapshot::of(&who), &action)
         );
         assert_eq!(record.outcome(), &AuditOutcome::of(&result));
         assert_eq!(entry.by(), AuditAuthor::Operator(who.operator()));

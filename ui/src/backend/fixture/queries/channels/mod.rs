@@ -8,7 +8,7 @@ pub mod resources;
 pub mod rows;
 pub mod transmissions;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::Declaration;
@@ -76,7 +76,7 @@ pub fn coverage(
 }
 
 /// `channel_names`: exactly `channels::resolve_names` over the registry.
-pub fn names(ctx: &Ctx, ids: &IdBatch<ChannelId>) -> Result<HashMap<ChannelId, ChannelName>> {
+pub fn names(ctx: &Ctx, ids: &IdBatch<ChannelId>) -> Result<BTreeMap<ChannelId, ChannelName>> {
     resolve_names(ids, &registry(ctx.world, ctx.state))
 }
 

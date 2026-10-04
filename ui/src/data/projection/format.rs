@@ -148,7 +148,7 @@ impl PayloadPoints {
     pub fn new(projection: &Projection, channels: &HashMap<TransmissionId, ChannelId>) -> Self {
         let points: Vec<_> = projection.frame().points().collect();
         let channel_of = |point: &crosstalk_spec::aggregates::projection::ProjectedPoint| {
-            (point.route == RouteKind::Channel)
+            (point.route.kind() == RouteKind::Channel)
                 .then(|| channels.get(&point.transmission).copied())
                 .flatten()
         };
@@ -175,7 +175,7 @@ impl PayloadPoints {
             .map(|p| PointCategories {
                 sender: index_of(&agents, &p.from).unwrap_or(NONE),
                 reader: index_of(&agents, &p.to).unwrap_or(NONE),
-                route: p.route,
+                route: p.route.kind(),
                 channel: channel_of(p).and_then(|c| index_of(&channel_table, &c)),
                 topic: p.topic.and_then(|t| index_of(&topics, &t)),
             })

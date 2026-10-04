@@ -158,6 +158,15 @@ impl Traffic {
             .min()
     }
 
+    /// The access that opened `transmission`: the write its first co-access
+    /// pairs, on the resource the transmission went through.
+    pub fn opening_access(&self, transmission: TransmissionId) -> Option<AccessId> {
+        self.transmissions
+            .iter()
+            .find(|t| t.transmission.id == transmission)
+            .and_then(|t| t.accesses.first().copied())
+    }
+
     /// The cross-agent transmissions that `counts` keeps: given
     /// the channel a transmission's route names and when it advanced
     /// detection, whether it moves `channel`'s detection (a superseded

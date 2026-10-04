@@ -152,6 +152,20 @@ pub fn describe_change(change: &ConfigChange) -> String {
         ConfigChange::RemoveOperator { .. } => {
             "removed an operator: it keeps its name and loses every permission".to_owned()
         }
+        ConfigChange::SetSink { name, kind, .. } => {
+            format!("configured alert sink \u{201c}{name}\u{201d} ({kind:?})")
+        }
+        ConfigChange::RemoveSink { .. } => "removed an alert sink".to_owned(),
+        ConfigChange::SetTopicRetention(policy) => format!(
+            "set topic version retention to the last {}",
+            policy.keep_last()
+        ),
+        ConfigChange::SetFrameRetention {
+            frame_retention_micros,
+        } => format!(
+            "set projection frame retention to {} days",
+            frame_retention_micros.as_duration().as_secs() / 86_400
+        ),
     }
 }
 

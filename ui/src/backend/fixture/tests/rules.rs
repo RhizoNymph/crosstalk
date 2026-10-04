@@ -1,6 +1,7 @@
 //! Alert rules and sinks: the `alert_rules` list and the rule actions with
 //! the spec's `AlertRuleStore` semantics.
 
+use crosstalk_spec::aggregates::alert::RuleQueryText;
 use crosstalk_spec::aggregates::alert::{
     Alert, AlertRule, AlertRuleDef, AlertState, BuiltinRule, ContentRule, QueryWatch, RuleName,
     RuleStatus, SuppressReason, TopicWatch, UserRule, WatchedTopics,
@@ -9,7 +10,7 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AlertRuleId, SinkId};
 use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
-use crosstalk_spec::support::{NonBlank, NonEmpty, Similarity};
+use crosstalk_spec::support::{NonEmpty, Similarity};
 
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
@@ -46,7 +47,7 @@ fn watch(b: &FixtureBackend, version: u32, theme: Theme) -> UserRule {
 
 fn semantic(text: &str) -> UserRule {
     UserRule::SemanticQuery {
-        text: NonBlank::new(text).expect("text"),
+        text: RuleQueryText::new(text).expect("text"),
         threshold: similarity(0.7),
     }
 }

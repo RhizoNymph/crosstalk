@@ -252,10 +252,11 @@ pub fn delivery(info: &SinkInfo) -> (String, Tone) {
 pub(crate) mod tests {
     use std::num::NonZeroU16;
 
+    use crosstalk_spec::aggregates::alert::RuleQueryText;
     use crosstalk_spec::aggregates::alert::{RuleDefinition, RuleName};
     use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
     use crosstalk_spec::ids::{AlertRuleId, OperatorId};
-    use crosstalk_spec::support::{NonBlank, NonEmpty, Similarity, Timestamp};
+    use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
 
     use super::*;
     use crate::components::href::tests::state;
@@ -401,7 +402,7 @@ pub(crate) mod tests {
     #[test]
     fn semantic_and_builtin_rules_say_what_they_match() {
         let query = SemanticQuery {
-            text: NonBlank::new(" api keys ").expect("text"),
+            text: RuleQueryText::new(" api keys ").expect("text"),
             embedding: Embedding::new(model("minilm"), vec![1.0]).expect("embedding"),
         };
         let rule = AlertRuleDef::user(

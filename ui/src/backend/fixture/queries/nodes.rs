@@ -16,6 +16,7 @@ use crosstalk_spec::support::NonBlank;
 use crate::backend::Result;
 use crate::backend::fixture::store::ChannelRecord;
 use crate::data::names::{locator_name, pattern_name};
+use crate::pending::channel_semantics::Confirmation;
 
 use super::Ctx;
 use super::agents::profile::{claims, parent};
@@ -94,39 +95,44 @@ pub fn agent_nodes(
         .collect()
 }
 
-/// One channel node per distinct id of `channels`, in id order.
+/// One channel node per distinct id of `channels`, in id order, and each
+/// node's confirmation (the stand-in for `ChannelNode::confirmation`).
 pub fn channel_nodes(
     ctx: &Ctx,
     channels: impl IntoIterator<Item = ChannelId>,
-) -> Result<Vec<GraphNode>> {
+) -> Result<(Vec<GraphNode>, BTreeMap<ChannelId, Confirmation>)> {
     let ids: BTreeSet<ChannelId> = channels.into_iter().collect();
-    ids.into_iter()
-        .map(|id| {
-            let record = ctx
-                .state
-                .channels
-                .get(&id)
-                .ok_or_else(|| store("unknown channel", id))?;
-            channel_node(ctx, record).map(GraphNode::Channel)
-        })
-        .collect()
+    let mut nodes = Vec::with_capacity(ids.len());
+    let mut confirmations = BTreeMap::new();
+    for id in ids {
+        let record = ctx
+            .state
+            .channels
+            .get(&id)
+            .ok_or_else(|| store("unknown channel", id))?;
+        let (node, confirmation) = channel_node(ctx, record)?;
+        confirmations.insert(id, confirmation);
+        nodes.push(GraphNode::Channel(node));
+    }
+    Ok((nodes, confirmations))
 }
 
-fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<ChannelNode> {
+fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<(ChannelNode, Confirmation)> {
     let channel = record.channel();
     let origin_kind = CanonicalOriginKind::of(&channel.origin)
         .ok_or_else(|| store("superseded channel as a node", channel.id))?;
-    Ok(ChannelNode {
+    let confirmation = ctx
+        .confirmation(channel.id)
+        .ok_or_else(|| store("a channel not listed as a channel as a node", channel.id))?;
+    let node = ChannelNode {
         id: channel.id,
         label: None,
         origin_kind,
         detection_kind: channel.origin.detection_kind(),
-        confirmation: ctx
-            .confirmation(channel.id)
-            .ok_or_else(|| store("a channel not listed as a channel as a node", channel.id))?,
         policy_kind: channel.policy.kind(),
         locator_summary: locator_summary(ctx, record)?,
-    })
+    };
+    Ok((node, confirmation))
 }
 
 /// What a channel covers, as the spec's `locator_summary` words it: the

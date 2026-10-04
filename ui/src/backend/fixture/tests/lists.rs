@@ -16,13 +16,14 @@ use super::super::clock::{DAY, ago};
 use super::super::queries::{self, Ctx};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
+use crate::pending::channel_semantics::ChannelFilter;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditAuthor, AuditBody, AuditFilter, AuditSubject,
 };
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::OriginFilter;
 use crosstalk_spec::observed::agent::AgentState;
 
 use super::reads_support::*;

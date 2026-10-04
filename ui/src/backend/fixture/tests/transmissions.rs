@@ -29,7 +29,7 @@ async fn edge_and_id_selectors() {
         .expect("topology");
     let edge = view
         .value
-        .edges
+        .edges()
         .iter()
         .max_by_key(|e| e.stats.transmissions)
         .expect("edge");
@@ -40,7 +40,7 @@ async fn edge_and_id_selectors() {
         .await
         .expect("edge rows");
     assert_eq!(listed.watermark, super::super::queries::graph::watermark());
-    assert_eq!(listed.value.topic_version, view.value.topic_version);
+    assert_eq!(listed.value.topic_version, view.value.topic_version());
     let rows = listed.value.page.into_parts().0;
     // Exactly what the edge counts: as many rows, the same bytes.
     assert_eq!(rows.len() as u64, edge.stats.transmissions.get());

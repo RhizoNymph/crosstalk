@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
+use crate::pending::channel_semantics::Crossing;
 use crosstalk_spec::aggregates::edge::EdgeStats;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::retention::Retention;
@@ -21,7 +22,6 @@ use crosstalk_spec::aggregates::topic_history::{
     TopicVersionStatusKind,
 };
 use crosstalk_spec::aggregates::watermark::Watermarked;
-use crosstalk_spec::derived::flow::transmission::Crossing;
 use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::interfaces::l6_analysis::CatalogError;
 use crosstalk_spec::interfaces::l8_surface::QueryError;

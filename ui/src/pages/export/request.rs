@@ -100,7 +100,7 @@ pub fn parse(
     };
     let scope = ExportScope {
         window: state.scope.window,
-        filter: state.scope.filter.pinned(version),
+        filter: state.scope.filter.pinned(version).filter,
     };
     let dataset = match choice {
         DatasetChoice::Transmissions => ExportDataset::Transmissions(scope),
@@ -205,7 +205,7 @@ mod tests {
             request.dataset(),
             &ExportDataset::Transmissions(ExportScope {
                 window: state().scope.window,
-                filter: state().scope.topology_filter(),
+                filter: state().scope.topology_filter().filter,
             })
         );
         assert_eq!(request.format(), ExportFormat::Jsonl);

@@ -7,8 +7,8 @@ use crosstalk_spec::observed::agent::Strength;
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
+use crate::pending::channel_semantics::{Confirmation, Listing};
 use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 
 /// What a badge's colour says.
@@ -96,6 +96,8 @@ impl Badge for DetectionKind {
         match self {
             Self::AwaitingTraffic => "awaiting traffic",
             Self::Unused => "unused",
+            Self::Observed => "observed",
+            Self::Candidate => "candidate",
             Self::Active => "active",
             Self::Dormant => "dormant",
         }
@@ -104,6 +106,8 @@ impl Badge for DetectionKind {
     fn tone(&self) -> Tone {
         match self {
             Self::AwaitingTraffic | Self::Unused | Self::Dormant => Tone::Muted,
+            Self::Observed => Tone::Neutral,
+            Self::Candidate => Tone::Warn,
             Self::Active => Tone::Info,
         }
     }

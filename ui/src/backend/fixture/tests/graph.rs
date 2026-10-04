@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use crosstalk_spec::aggregates::edge::{RouteKind, Weighting};
+use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, Weighting};
 use crosstalk_spec::aggregates::filter::FalseDetections;
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::series::SeriesGrouping;
@@ -18,12 +18,12 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, ConflictKind, QueryErr
 use super::super::clock::WATERMARK;
 use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
+use crate::pending::channel_semantics::ChannelFilter;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 use super::reads_support::*;
 
@@ -41,7 +41,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         let topo = graph_of(b, &c, &scope, Weighting::Transmissions)
             .await
             .expect("topology");
-        assert!(!topo.value.edges.is_empty());
+        assert!(!topo.value.edges().is_empty());
         let bip = b
             .channel_topology(&c, scope.window, Weighting::MatchedBytes, &filter)
             .await
@@ -232,17 +232,20 @@ async fn topology_is_canonical_with_shares_summing_to_one() {
                 .expect("topology");
             assert_eq!(graph.watermark.at(), WATERMARK);
             let value = &graph.value;
-            assert_eq!(value.topic_version, scope.topic_version);
-            assert_eq!(value.check_nodes(), Ok(()));
-            let total = sum_shares(value.edges.iter().map(|e| e.share.get()));
+            assert_eq!(value.topic_version(), scope.topic_version);
+            assert!(TopologyGraph::new(value.clone().into_parts()).is_ok());
+            let total = sum_shares(value.edges().iter().map(|e| e.share.get()));
             assert!((total - 1.0).abs() < 1e-9, "{total}");
-            assert!(value.edges.iter().all(|e| e.from != e.to), "no self-edges");
+            assert!(
+                value.edges().iter().all(|e| e.from != e.to),
+                "no self-edges"
+            );
             let state = b.state.read().await;
             for id in node_ids(value) {
                 assert!(!state.identity.is_merged(id), "nodes are canonical");
             }
             let mut keys = HashSet::new();
-            for e in &value.edges {
+            for e in value.edges() {
                 assert!(
                     keys.insert((e.from, e.to, format!("{:?}", e.route))),
                     "one edge per key"
@@ -259,7 +262,7 @@ async fn agent_nodes_carry_labels_claims_and_parents() {
         .expect("topology");
     let agents: Vec<_> = graph
         .value
-        .nodes
+        .nodes()
         .iter()
         .filter_map(|n| match n {
             GraphNode::Agent(a) => Some(a),
@@ -309,7 +312,7 @@ async fn edges_count_confirmations_by_their_time() {
         .expect("topology");
     let counted: u64 = graph
         .value
-        .edges
+        .edges()
         .iter()
         .map(|e| e.stats.transmissions.get())
         .sum();
@@ -339,7 +342,7 @@ async fn the_channel_centred_view_shares_the_topology_edges() {
     let topology = graph_of(b, &c, &scope, Weighting::Transmissions)
         .await
         .expect("topology");
-    assert_eq!(value.transmissions(), topology.value.edges.as_slice());
+    assert_eq!(value.transmissions(), topology.value.edges());
     let state = b.state.read().await;
     for node in value.nodes() {
         if let GraphNode::Channel(channel) = node {
@@ -416,18 +419,18 @@ async fn agent_filter_matches_sender_or_reader_after_alias_resolution() {
     let by_canonical = graph_of(b, &c, &filtered(cc0), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert!(!by_canonical.value.edges.is_empty());
+    assert!(!by_canonical.value.edges().is_empty());
     assert!(
         by_canonical
             .value
-            .edges
+            .edges()
             .iter()
             .all(|e| e.from == cc0 || e.to == cc0)
     );
     let by_alias = graph_of(b, &c, &filtered(al0), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert_eq!(by_canonical.value.edges, by_alias.value.edges);
+    assert_eq!(by_canonical.value.edges(), by_alias.value.edges());
     // No node is a merged alias.
     let all = graph_of(b, &c, &week(), Weighting::Transmissions)
         .await
@@ -470,8 +473,8 @@ async fn channel_filter_follows_supersession() {
     let graph_old = graph_of(b, &c, &filtered(old), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert!(!graph_new.value.edges.is_empty());
-    assert_eq!(graph_new.value.edges, graph_old.value.edges);
+    assert!(!graph_new.value.edges().is_empty());
+    assert_eq!(graph_new.value.edges(), graph_old.value.edges());
 }
 
 #[tokio::test]
@@ -604,13 +607,13 @@ async fn verdict_filter_drops_false_detections() {
     let total = |edges: &[crosstalk_spec::aggregates::edge::WeightedEdge]| -> u64 {
         edges.iter().map(|e| e.stats.transmissions.get()).sum()
     };
-    assert!(total(&exclude.value.edges) < total(&include.value.edges));
+    assert!(total(exclude.value.edges()) < total(include.value.edges()));
 }
 
 #[tokio::test]
 async fn channel_graph_draws_only_listed_channels() {
-    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
-    use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+    use crate::pending::channel_semantics::Confirmation;
+    use crate::pending::channel_semantics::UnconfirmedChannels;
 
     let b = shared();
     let c = researcher();
@@ -628,7 +631,10 @@ async fn channel_graph_draws_only_listed_channels() {
         .nodes()
         .iter()
         .filter_map(|n| match n {
-            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
+            GraphNode::Channel(channel) => Some((
+                channel.id,
+                all.confirmation(channel.id).expect("confirmation"),
+            )),
             GraphNode::Agent(_) => None,
         })
         .collect();
@@ -684,7 +690,10 @@ async fn channel_graph_draws_only_listed_channels() {
         .nodes()
         .iter()
         .filter_map(|n| match n {
-            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
+            GraphNode::Channel(channel) => Some((
+                channel.id,
+                confirmed.confirmation(channel.id).expect("confirmation"),
+            )),
             GraphNode::Agent(_) => None,
         })
         .collect();
@@ -696,7 +705,7 @@ async fn channel_graph_draws_only_listed_channels() {
 
 #[tokio::test]
 async fn no_view_lists_a_transmission_within_one_agent() {
-    use crosstalk_spec::derived::flow::transmission::Crossing;
+    use crate::pending::channel_semantics::Crossing;
 
     let b = shared();
     let c = researcher();

@@ -2,24 +2,27 @@
 //! resources, names and policy history, and the team-notes promotion in
 //! the world's past. Policy and promotion actions are in `promotion`.
 
+use crate::pending::channel_semantics::ChannelFilter;
+use crate::pending::channel_semantics::ChannelTransmissionFilter;
+use crate::pending::channel_semantics::CrossTraffic;
+use crate::pending::channel_semantics::{ChannelRow, ChannelStanding};
+use crate::pending::channel_semantics::{Confirmation, Listing, ListingKind};
+use crate::pending::channel_semantics::{TopologyFilter, UnconfirmedChannels};
 use crosstalk_spec::aggregates::alert::AlertSubject;
-use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
-use crosstalk_spec::aggregates::filter::{TopicVersionSelector, UnconfirmedChannels};
+use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing, ListingKind};
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
-use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::channels::{
-    ChannelActivity, ChannelCounts, ChannelRow, ChannelShape, ChannelStanding,
+    ChannelActivity, ChannelCounts, ChannelShape,
 };
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::OriginFilter;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, OperatorAction, OperatorActions};
 use crosstalk_spec::interfaces::l8_surface::{InputError, Permission, QueryError};
 use crosstalk_spec::paging::PageRequest;
@@ -738,7 +741,12 @@ async fn a_merge_hides_the_channel_its_agents_shared_and_an_unmerge_restores_it(
         .await
         .expect("graph")
         .value;
-    assert!(graph.edges.iter().all(|e| e.route != Route::Channel(notes)));
+    assert!(
+        graph
+            .edges()
+            .iter()
+            .all(|e| e.route != Route::Channel(notes))
+    );
     // Unmerging lists, draws and counts it again.
     let merge = self_merge(&b).await;
     let outcome = b.act(&c, OperatorAction::Unmerge { merge }).await;

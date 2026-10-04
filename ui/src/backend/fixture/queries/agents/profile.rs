@@ -79,10 +79,10 @@ pub fn traffic(ctx: &Ctx, window: TimeWindow) -> Result<HashMap<AgentId, AgentTr
         ctx,
         window,
         Weighting::Transmissions,
-        &TopologyFilter::default(),
+        TopologyFilter::default(),
     )?;
     Ok(graph
-        .nodes
+        .nodes()
         .iter()
         .filter_map(|node| match node {
             GraphNode::Agent(agent) => Some((

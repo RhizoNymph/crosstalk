@@ -143,7 +143,7 @@ pub fn panel(
             id: info.id(),
             meta: meta(&info, fitted),
             stale: info.spec().window() != state.scope.window
-                || *info.spec().filter() != state.scope.topology_filter(),
+                || *info.spec().filter() != state.scope.topology_filter().filter,
         },
     }
 }

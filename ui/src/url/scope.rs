@@ -5,17 +5,18 @@
 //! The URL always names its version (`v`), so every request the UI sends
 //! pins it ([`TopicVersionSelector::Pinned`]): a cited view means the same
 //! thing after a re-fit. [`Scope::topology_filter`] is the one place the
-//! spec's [`TopologyFilter`] is built from the URL's filter keys, so the
-//! version a filter pins is always the scope's.
+//! [`TopologyFilter`] is built from the URL's filter keys, so the version a
+//! filter pins is always the scope's. It is the channel-semantics stand-in
+//! (`crate::pending`): the spec's filter plus `unconfirmed_channels`.
 
-use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
-use crosstalk_spec::aggregates::filter::{
-    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
-};
+use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter as SpecFilter};
+use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+use crate::pending::channel_semantics::{TopologyFilter, UnconfirmedChannels};
 
 /// The filter keys of the view state (`a`, `c`, `r`, `t`, `x`, `u`): the
 /// spec's [`TopologyFilter`] without its version, which the scope supplies.
@@ -55,12 +56,14 @@ impl ViewFilter {
     /// The spec's filter, pinned to `version`.
     pub fn pinned(&self, version: TopicModelVersion) -> TopologyFilter {
         TopologyFilter {
-            agents: self.agents.clone(),
-            channels: self.channels.clone(),
-            route_kinds: self.route_kinds.clone(),
-            topics: self.topics.clone(),
-            topic_version: TopicVersionSelector::Pinned(version),
-            false_detections: self.false_detections,
+            filter: SpecFilter {
+                agents: self.agents.clone(),
+                channels: self.channels.clone(),
+                route_kinds: self.route_kinds.clone(),
+                topics: self.topics.clone(),
+                topic_version: TopicVersionSelector::Pinned(version),
+                false_detections: self.false_detections,
+            },
             unconfirmed_channels: self.unconfirmed_channels,
         }
     }

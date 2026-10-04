@@ -18,13 +18,13 @@ use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
 use crosstalk_spec::aggregates::node::AgentNode;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    Fitted, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit, ProjectionParams,
-    ProjectionSpec, ProjectionStatus,
+    Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionId};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::{Finite, TimeWindow, Timestamp};
 
 use super::names::shape_name;
 use super::projection::format::{PayloadPoints, ProjectionTables, encode};
@@ -151,7 +151,7 @@ pub fn projection() -> (Projection, HashMap<TransmissionId, ChannelId>) {
         };
         let x = (cx + rng.normal() * spread) as f32;
         let y = (cy + rng.normal() * spread) as f32;
-        let route = match rng.below(10) {
+        let kind = match rng.below(10) {
             0..=3 => RouteKind::Channel,
             4..=6 => RouteKind::Delegation,
             7..=8 => RouteKind::Direct,
@@ -165,10 +165,12 @@ pub fn projection() -> (Projection, HashMap<TransmissionId, ChannelId>) {
         };
         let reader = (sender + 1 + usize::try_from(rng.below(7)).expect("small")) % 8;
         let transmission = TransmissionId::from_ulid(ulid(0x7E, u128::try_from(i).expect("small")));
-        if route == RouteKind::Channel {
-            let channel = usize::try_from(rng.below(4)).expect("small");
-            routes.insert(transmission, channels[channel]);
-        }
+        let channel = (kind == RouteKind::Channel).then(|| {
+            let channel = channels[usize::try_from(rng.below(4)).expect("small")];
+            routes.insert(transmission, channel);
+            channel
+        });
+        let route = PointRoute::from_parts(kind, channel).expect("route");
         points.push(ProjectedPoint {
             transmission,
             from: table_agents[sender].id,
@@ -176,8 +178,8 @@ pub fn projection() -> (Projection, HashMap<TransmissionId, ChannelId>) {
             route,
             topic: topic.map(|t| topics[t]),
             confirmed_at: ts(u64::try_from(i).expect("small") * 60_000_000),
-            x,
-            y,
+            x: Finite::new(x).expect("finite"),
+            y: Finite::new(y).expect("finite"),
         });
     }
     let projection = stored(ProjectionId::from_ulid(ulid(0x9F, 1)), &points);

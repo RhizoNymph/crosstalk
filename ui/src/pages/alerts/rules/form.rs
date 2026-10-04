@@ -3,10 +3,12 @@
 //! semantic query's text (and refuses text too long to embed as
 //! `QueryTooLong`), so the UI never handles embeddings.
 
+use crosstalk_spec::aggregates::alert::RuleQueryText;
 use crosstalk_spec::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::TopicId;
-use crosstalk_spec::support::{InvalidText, NonBlank, NonEmpty};
+use crosstalk_spec::support::InvalidQueryText;
+use crosstalk_spec::support::{InvalidText, NonEmpty};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
@@ -127,14 +129,17 @@ pub fn parse_watched(
     Ok((name, rule, parse_sinks(fields, &choices.sinks)?))
 }
 
-/// A semantic query rule: its text, checked as [`NonBlank`], and the
+/// A semantic query rule: its text, checked as [`RuleQueryText`], and the
 /// similarity threshold. How long the text may be is the embedder's to say.
 pub fn parse_semantic(
     fields: &FormFields,
     sinks: &[SinkId],
 ) -> std::result::Result<(RuleName, UserRule, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
-    let text = NonBlank::new(required(fields, "text")?).map_err(|_| invalid("text", "required"))?;
+    let text = RuleQueryText::new(required(fields, "text")?).map_err(|e| match e {
+        InvalidQueryText::Blank => invalid("text", "required"),
+        InvalidQueryText::TooLong { .. } => invalid("text", "at most 1000 characters"),
+    })?;
     let rule = UserRule::SemanticQuery {
         text,
         threshold: similarity(fields, "threshold")?,

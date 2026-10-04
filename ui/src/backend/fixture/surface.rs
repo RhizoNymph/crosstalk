@@ -4,7 +4,7 @@
 //! then reads under the state's lock through [`super::queries`], or acts
 //! through [`super::actions`] and publishes what changed to the feed.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::agents::filter::AgentFilter;
@@ -31,9 +31,6 @@ use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
-use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
-    ChannelTransmissionFilter, ChannelTransmissionPage,
-};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -54,13 +51,17 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crate::backend::Result;
 use crate::contract::formats::ExportFormats;
 use crate::contract::present::Present;
+use crate::pending::channel_semantics as pending;
 use crosstalk_spec::aggregates::series::BucketWidth;
+use crosstalk_spec::ids::AlertRuleId;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::present::Present as SpecPresent;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
+    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
+    TopicList, TransmissionList,
 };
+use crosstalk_spec::support::NonEmpty;
 
 use super::queries::require;
 
@@ -97,6 +98,15 @@ impl QueryApi for FixtureBackend {
         Ok(queries::graph::watermark())
     }
 
+    /// The fixture's present: its clock, the bucket width and export
+    /// formats the contract gaps report (`contract::present`,
+    /// `contract::formats`), and its rule version, remap threshold and
+    /// frame retention.
+    async fn present(&self, caller: &Caller) -> Result<SpecPresent> {
+        require(caller, Permission::View)?;
+        self.read(queries::present).await
+    }
+
     async fn topology(
         &self,
         caller: &Caller,
@@ -109,17 +119,24 @@ impl QueryApi for FixtureBackend {
             .await
     }
 
+    /// The port-shaped overview (`pending`) with unconfirmed channels
+    /// included, without the unconfirmed-channel queue.
     async fn overview(
         &self,
         caller: &Caller,
         window: TimeWindow,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<OverviewCounts>> {
-        require(caller, Permission::View)?;
-        self.read(|ctx| queries::graph::overview(ctx, window, filter))
-            .await
+        let filter = pending::TopologyFilter::from(filter.clone());
+        let counts = FixtureBackend::overview(self, caller, window, &filter).await?;
+        Ok(Watermarked {
+            watermark: counts.watermark,
+            value: counts.value.into(),
+        })
     }
 
+    /// The port-shaped graph (`pending`) with unconfirmed channels
+    /// included, without the nodes' confirmations.
     async fn channel_topology(
         &self,
         caller: &Caller,
@@ -127,9 +144,13 @@ impl QueryApi for FixtureBackend {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<BipartiteGraph>> {
-        require(caller, Permission::View)?;
-        self.read(|ctx| queries::graph::channel_topology(ctx, window, weighting, filter))
-            .await
+        let filter = pending::TopologyFilter::from(filter.clone());
+        let graph =
+            FixtureBackend::channel_topology(self, caller, window, weighting, &filter).await?;
+        Ok(Watermarked {
+            watermark: graph.watermark,
+            value: graph.value.graph,
+        })
     }
 
     async fn series(
@@ -291,39 +312,44 @@ impl QueryApi for FixtureBackend {
         queries::projection::read(&*self.state.read().await, id)
     }
 
+    /// The port-shaped list (`pending`) with every listing, as the
+    /// spec's rows.
     async fn channels(
         &self,
         caller: &Caller,
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
-        require(caller, Permission::View)?;
-        self.read(|ctx| queries::channels::rows::list(ctx, filter, page))
-            .await
+        let filter = pending::ChannelFilter::from(filter.clone());
+        let rows = FixtureBackend::channels(self, caller, &filter, page).await?;
+        let (items, next) = rows.value.into_parts();
+        let items: Vec<ChannelRow> = items
+            .into_iter()
+            .map(pending::ChannelRow::into_spec)
+            .collect();
+        let value = match (next, NonEmpty::from_vec(items.clone())) {
+            (Some(next), Some(items)) => Page::more(page.size, items, next),
+            (_, _) => Page::last(page.size, items),
+        }
+        .map_err(|e| queries::graph::store_error("channel page", e))?;
+        Ok(Watermarked {
+            watermark: rows.watermark,
+            value,
+        })
     }
 
-    async fn channel_transmissions(
-        &self,
-        caller: &Caller,
-        channel: ChannelId,
-        filter: &ChannelTransmissionFilter,
-        version: TopicVersionSelector,
-        page: &PageRequest<ChannelTransmissionList>,
-    ) -> Result<ChannelTransmissionPage> {
-        require(caller, Permission::View)?;
-        self.read(|ctx| queries::channels::transmissions::page(ctx, channel, filter, version, page))
-            .await
-    }
-
+    /// The port-shaped row (`pending`) as the spec's row.
     async fn channel(
         &self,
         caller: &Caller,
         id: ChannelId,
         window: Option<TimeWindow>,
     ) -> Result<Option<Watermarked<ChannelRow>>> {
-        require(caller, Permission::View)?;
-        self.read(|ctx| queries::channels::rows::one(ctx, id, window))
-            .await
+        let row = FixtureBackend::channel(self, caller, id, window).await?;
+        Ok(row.map(|row| Watermarked {
+            watermark: row.watermark,
+            value: row.value.into_spec(),
+        }))
     }
 
     async fn policy_history(
@@ -398,18 +424,20 @@ impl QueryApi for FixtureBackend {
         &self,
         caller: &Caller,
         ids: &IdBatch<AgentId>,
-    ) -> Result<HashMap<AgentId, AgentName>> {
+    ) -> Result<BTreeMap<AgentId, AgentName>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::agents::names(ctx, ids)).await
+        self.read(|ctx| queries::agents::names(ctx, ids).map(|names| names.into_iter().collect()))
+            .await
     }
 
     async fn channel_names(
         &self,
         caller: &Caller,
         ids: &IdBatch<ChannelId>,
-    ) -> Result<HashMap<ChannelId, ChannelName>> {
+    ) -> Result<BTreeMap<ChannelId, ChannelName>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::channels::names(ctx, ids)).await
+        self.read(|ctx| queries::channels::names(ctx, ids).map(|names| names.into_iter().collect()))
+            .await
     }
 
     async fn alerts(
@@ -436,6 +464,13 @@ impl QueryApi for FixtureBackend {
     ) -> Result<Page<AlertRuleDef, AlertRuleList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::alerts::alert_rules(ctx, filter, page))
+            .await
+    }
+
+    /// The rule `alert_rules` lists under `id`, built-in or user.
+    async fn alert_rule(&self, caller: &Caller, id: AlertRuleId) -> Result<Option<AlertRuleDef>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::alerts::alert_rule(ctx, id)))
             .await
     }
 

@@ -11,7 +11,7 @@ use crosstalk_spec::aggregates::topic::{
 };
 use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::interfaces::l6_analysis::EmbedError;
-use crosstalk_spec::support::{Similarity, Timestamp};
+use crosstalk_spec::support::{Finite, Similarity, Timestamp};
 
 use crate::backend::fixture::clock::{DAY, Mint, ago};
 use crate::backend::fixture::rng::Rng;
@@ -160,7 +160,7 @@ pub fn embed(model: &EmbeddingModel, seed: u64, query: &str) -> Result<Embedding
     })
 }
 
-fn terms(themes: &[Theme]) -> Vec<(String, f32)> {
+fn terms(themes: &[Theme]) -> Result<Vec<(String, Finite)>, GenError> {
     let mut all: Vec<(String, f32)> = themes
         .iter()
         .flat_map(|t| t.terms().iter())
@@ -168,7 +168,13 @@ fn terms(themes: &[Theme]) -> Vec<(String, f32)> {
         .collect();
     all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     all.truncate(8);
-    all
+    all.into_iter()
+        .map(|(term, weight)| {
+            Finite::new(weight)
+                .map(|weight| (term, weight))
+                .map_err(|e| GenError::invalid("term weight", e))
+        })
+        .collect()
 }
 
 pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
@@ -186,7 +192,7 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
             id,
             version: TopicModelVersion(1),
             label: (*label).to_owned(),
-            terms: terms(themes),
+            terms: terms(themes)?,
             centroid: mix(&model, seed, themes)?,
             fitted_at: catalog::fitted_at(V1_AT),
         });
@@ -201,7 +207,7 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
             id,
             version: TopicModelVersion(2),
             label: theme.label().to_owned(),
-            terms: terms(&[theme]),
+            terms: terms(&[theme])?,
             centroid: mix(&model, seed, &[theme])?,
             fitted_at: catalog::fitted_at(V2_AT),
         });

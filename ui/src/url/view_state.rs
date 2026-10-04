@@ -24,7 +24,8 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use super::route::{decode_kind, encode_kind};
 use super::scope::{Scope, ViewFilter, is_aligned, snap};
 use super::ulid::{InvalidUlid, UlidId};
-use crosstalk_spec::aggregates::filter::{FalseDetections, UnconfirmedChannels};
+use crate::pending::channel_semantics::UnconfirmedChannels;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 
 /// The query keys of the shared view state, as strings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
