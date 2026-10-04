@@ -75,6 +75,9 @@ pub enum ConflictKind {
     PatternOverlaps { existing: ChannelId },
     /// Changing an alert rule's kind, or editing a built-in rule.
     RuleNotEditable { rule: AlertRuleId },
+    /// Enabling a stale alert rule. `UpdateRule` retargets it to the current
+    /// topic version or embedding model and enables it.
+    RuleStale { rule: AlertRuleId },
     /// A watched-topic rule on a topic-model version that is no longer, or
     /// not yet, the one rules are written against.
     TopicVersionNotCurrent {

@@ -2,17 +2,21 @@
 
 use std::num::{NonZeroU16, NonZeroU64};
 
+use crate::aggregates::alert::{NotEditable, StaleRule};
 use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
 use crate::aggregates::series::BucketWidth;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
-use crate::ids::{AuditId, EventId, ProjectionId, TopicId, TransmissionId};
+use crate::ids::{AlertRuleId, AuditId, EventId, ProjectionId, SinkId, TopicId, TransmissionId};
 use crate::interfaces::l2_transport::{BusError, ConsumerGroup};
 use crate::interfaces::l5_flow::verdicts::VerdictError;
-use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
+use crate::interfaces::l6_analysis::{
+    CatalogError, EmbedError, ProjectionStoreError, RuleError, SearchError,
+};
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
-use crate::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
+use crate::interfaces::l8_surface::{ActionError, ConflictKind, InputError, QueryError};
+use crate::support::NonEmpty;
 
 const V: TopicModelVersion = TopicModelVersion(4);
 
@@ -235,6 +239,56 @@ fn catalog_drops_map_to_version_not_retained() {
         QueryError::from(CatalogError::VersionNotRetained(V)),
         QueryError::VersionNotRetained { version: V }
     );
+}
+
+#[test]
+fn rule_store_errors_map_to_typed_action_errors() {
+    let rule = AlertRuleId::from_ulid(1 << 80);
+    let sink = SinkId::from_ulid(4);
+    let cases = [
+        (
+            RuleError::Store { reason: store() },
+            ActionError::Store { reason: store() },
+        ),
+        (RuleError::UnknownRule(rule), ActionError::NotFound),
+        (
+            RuleError::NotEditable(NotEditable { rule }),
+            ActionError::Conflict(ConflictKind::RuleNotEditable { rule }),
+        ),
+        (
+            RuleError::Stale(StaleRule { rule }),
+            ActionError::Conflict(ConflictKind::RuleStale { rule }),
+        ),
+        (
+            RuleError::TopicVersionNotCurrent {
+                requested: V,
+                current: TopicModelVersion(3),
+            },
+            ActionError::Conflict(ConflictKind::TopicVersionNotCurrent {
+                requested: V,
+                current: TopicModelVersion(3),
+            }),
+        ),
+        (
+            RuleError::UnknownTopics(NonEmpty::new(TopicId::from_ulid(6))),
+            ActionError::InvalidInput(InputError::UnknownTopics),
+        ),
+        (
+            RuleError::UnknownSink(sink),
+            ActionError::InvalidInput(InputError::UnknownSink { sink }),
+        ),
+        (
+            RuleError::Embed(EmbedError::TooLong { index: 0 }),
+            ActionError::InvalidInput(InputError::QueryTooLong),
+        ),
+        (
+            RuleError::Embed(EmbedError::Model { reason: store() }),
+            ActionError::Store { reason: store() },
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(ActionError::from(error.clone()), expected, "{error:?}");
+    }
 }
 
 #[test]

@@ -22,6 +22,8 @@
 //!   `InvalidCursor`.
 //! - A channel superseded by a promotion is `Conflict(ChannelSuperseded)`,
 //!   naming the channel that superseded it.
+//! - Enabling a stale alert rule is `Conflict(RuleStale)`: the rule needs
+//!   an update, not a retry.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
@@ -29,7 +31,9 @@ use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::BusError;
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
-use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
+use crate::interfaces::l6_analysis::{
+    CatalogError, EmbedError, ProjectionStoreError, RuleError, SearchError,
+};
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 
@@ -171,6 +175,30 @@ impl From<PromoteError> for ActionError {
         match error {
             PromoteError::Store { reason } => Self::Store { reason },
             PromoteError::Refused(refusal) => refusal.into(),
+        }
+    }
+}
+
+/// For `CreateRule`, `UpdateRule` and `SetRuleEnabled`
+/// (`AlertRuleStore`).
+impl From<RuleError> for ActionError {
+    fn from(error: RuleError) -> Self {
+        match error {
+            RuleError::Store { reason } => Self::Store { reason },
+            RuleError::UnknownRule(_) => Self::NotFound,
+            RuleError::NotEditable(refused) => {
+                Self::Conflict(ConflictKind::RuleNotEditable { rule: refused.rule })
+            }
+            RuleError::Stale(stale) => Self::Conflict(ConflictKind::RuleStale { rule: stale.rule }),
+            RuleError::TopicVersionNotCurrent { requested, current } => {
+                Self::Conflict(ConflictKind::TopicVersionNotCurrent { requested, current })
+            }
+            RuleError::UnknownTopics(_) => Self::InvalidInput(InputError::UnknownTopics),
+            RuleError::UnknownSink(sink) => Self::InvalidInput(InputError::UnknownSink { sink }),
+            RuleError::Embed(EmbedError::Model { reason }) => Self::Store { reason },
+            RuleError::Embed(EmbedError::TooLong { .. }) => {
+                Self::InvalidInput(InputError::QueryTooLong)
+            }
         }
     }
 }

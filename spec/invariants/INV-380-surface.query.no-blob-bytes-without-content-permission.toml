@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.query.no-blob-bytes-without-content-permission"
+statement = "No response to a Caller without the Content permission, including channel, alert and topology responses and error reasons, contains message text or bytes read from the blob store."
+kind = "confidentiality"
+requires = ["property", "lint"]
+rationale = """
+Endpoint gating (Forbidden on Content endpoints) does not stop leaks
+through the endpoints a View caller may use: a QueryError::Store reason
+that echoes a snippet, or a channel or alert rendering enriched with
+message text. The property test seeds the blob store with marker strings
+and checks that no View-level response contains them; the lint rejects
+formatting message or blob values into error reasons.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_view_responses_contain_no_blob_bytes"
+lint = "lint:surface-error-reason-no-content"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+lint = { agent = "false", human = "false" }

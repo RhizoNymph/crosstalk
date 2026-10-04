@@ -6,8 +6,8 @@ use std::num::NonZeroU16;
 use crate::aggregates::alert::{
     AlertRule, AlertRuleDef, AlertRuleKind, AlertRuleSet, BuiltinRule, ContentRule, InsertError,
     NotEditable, QueryWatch, ReservedRuleId, RuleDefinition, RuleName, RuleRemapError,
-    RuleRevision, RuleStatus, SemanticQuery, StaleReason, TopicWatch, UserRule, WatchedTopics,
-    is_reserved_rule_id,
+    RuleRevision, RuleStatus, SemanticQuery, StaleReason, StaleRule, TopicWatch, UserRule,
+    WatchedTopics, is_reserved_rule_id,
 };
 use crate::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crate::aggregates::topic_history::{LineageEntry, LineageLink, RemapError, TopicLineage};
@@ -287,8 +287,8 @@ fn builtin_rules_can_only_be_enabled_or_disabled() {
         builtin.update(name("renamed"), watched_definition(1, &[12]), Vec::new()),
         Err(NotEditable { rule: id })
     );
-    assert_eq!(builtin.set_enabled(false), Change::Applied);
-    assert_eq!(builtin.set_enabled(false), Change::Unchanged);
+    assert_eq!(builtin.set_enabled(false), Ok(Change::Applied));
+    assert_eq!(builtin.set_enabled(false), Ok(Change::Unchanged));
     assert_eq!(
         set.builtin(BuiltinRule::NewChannel).rule(),
         &AlertRule::Builtin(BuiltinRule::NewChannel)
@@ -462,13 +462,49 @@ fn remap_refuses_other_rules_and_versions_without_effect() {
 #[test]
 fn set_enabled_reports_whether_it_changed_and_never_clears_staleness() {
     let mut rule = stored(stale_topics(), RuleStatus::Disabled);
-    assert_eq!(rule.set_enabled(true), Change::Applied);
-    assert_eq!(rule.status, RuleStatus::Enabled);
+    let before = rule.clone();
+    assert_eq!(rule.set_enabled(true), Err(StaleRule { rule: rule_id(1) }));
+    assert_eq!(rule, before, "a refused enable changes nothing");
+    assert_eq!(rule.status, RuleStatus::Disabled);
     assert!(rule.rule().is_stale());
     assert!(!rule.evaluates());
-    assert_eq!(rule.set_enabled(true), Change::Unchanged);
-    assert_eq!(rule.set_enabled(false), Change::Applied);
-    assert_eq!(rule.status, RuleStatus::Disabled);
+    assert_eq!(rule.set_enabled(false), Ok(Change::Unchanged));
+
+    let mut current = stored(
+        ContentRule::from(watched_definition(1, &[12])),
+        RuleStatus::Disabled,
+    );
+    assert_eq!(current.set_enabled(true), Ok(Change::Applied));
+    assert_eq!(current.status, RuleStatus::Enabled);
+    assert!(current.evaluates());
+    assert_eq!(current.set_enabled(true), Ok(Change::Unchanged));
+    assert_eq!(current.set_enabled(false), Ok(Change::Applied));
+    assert_eq!(current.status, RuleStatus::Disabled);
+}
+
+#[test]
+fn enabling_a_stale_rule_is_refused_in_either_status() {
+    for stale in [stale_topics(), stale_query()] {
+        for status in [RuleStatus::Disabled, RuleStatus::Enabled] {
+            let mut rule = stored(stale.clone(), status);
+            let before = rule.clone();
+            assert_eq!(rule.set_enabled(true), Err(StaleRule { rule: rule_id(1) }));
+            assert_eq!(rule, before);
+        }
+    }
+}
+
+#[test]
+fn disabling_a_stale_enabled_rule_works() {
+    for stale in [stale_topics(), stale_query()] {
+        let mut rule = stored(stale.clone(), RuleStatus::Enabled);
+        assert!(!rule.evaluates(), "stale, so not evaluating while enabled");
+        assert_eq!(rule.set_enabled(false), Ok(Change::Applied));
+        assert_eq!(rule.status, RuleStatus::Disabled);
+        assert_eq!(rule.rule(), stored(stale, RuleStatus::Disabled).rule());
+        assert!(rule.rule().is_stale(), "disabling leaves it stale");
+        assert_eq!(rule.set_enabled(false), Ok(Change::Unchanged));
+    }
 }
 
 #[test]

@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.topic.watched-flag"
+statement = "A Classification's watched flag is true exactly when its topic is listed by at least one WatchedTopic rule that evaluates (enabled, with TopicWatch::Current topics) whose topics' version equals the classification's version."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The watched flag is what the surface highlights and what downstream
+consumers filter on. It must agree with the rule set: an outlier (topic
+None) is never watched, a topic listed only by disabled or stale rules is
+not watched, and an id listed by a rule of another version is a different
+topic.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::outlier_is_never_watched", "crosstalk::analysis::tests::topic_in_disabled_or_stale_rule_is_not_watched", "crosstalk::analysis::tests::topic_in_rule_of_other_version_is_not_watched"]
+property = "crosstalk::analysis::tests::watched_iff_topic_in_enabled_watched_rule_of_version"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

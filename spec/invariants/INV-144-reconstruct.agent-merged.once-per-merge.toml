@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.agent-merged.once-per-merge"
+statement = "Each merge publishes exactly one AgentMerged event, however many times the request that caused it is delivered or repeated."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Downstream readers that cache the merge table update it on AgentMerged. A
+missing event leaves a stale alias; duplicates under fresh envelope ids
+make audit logs and merge alerts double count. A repeated merge request
+names an agent that is already merged, so `IdentityResolver::merge`
+refuses it with `ResolveError::AgentMerged`, changing nothing and
+publishing nothing.
+"""
+
+[evidence]
+dst = "crosstalk::reconstruct::tests::dst_agent_merged_once_per_merge"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

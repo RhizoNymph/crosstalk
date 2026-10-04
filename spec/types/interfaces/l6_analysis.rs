@@ -81,7 +81,7 @@
 //! runs at a time per fitter.
 
 use crate::aggregates::alert::{
-    AlertDraft, AlertRuleKind, NotEditable, RuleName, TriageOutcome, UserRule,
+    AlertDraft, AlertRuleKind, NotEditable, RuleName, StaleRule, TriageOutcome, UserRule,
 };
 #[cfg(doc)]
 use crate::aggregates::alert::{
@@ -417,8 +417,10 @@ pub trait AlertRuleStore {
 
     /// Enable or disable any rule, built in or not
     /// ([`AlertRuleDef::set_enabled`]). Disabling suppresses its active
-    /// alerts (`AlertTriage::rule_disabled`) in the same transaction.
-    /// Enabling a stale rule leaves it stale.
+    /// alerts (`AlertTriage::rule_disabled`) in the same transaction, and is
+    /// allowed whether or not the rule is stale. Enabling a stale rule is
+    /// refused with `Stale`, changing nothing and publishing nothing: only
+    /// `update` retargets a stale rule, and it enables it too.
     async fn set_enabled(
         &mut self,
         id: AlertRuleId,
@@ -540,6 +542,8 @@ pub enum RuleError {
     UnknownRule(AlertRuleId),
     /// An update of a built-in rule, or one changing a rule's kind.
     NotEditable(NotEditable),
+    /// Enabling a stale rule; it must be updated instead.
+    Stale(StaleRule),
     /// A watched-topic rule for a version that is not current.
     TopicVersionNotCurrent {
         requested: TopicModelVersion,

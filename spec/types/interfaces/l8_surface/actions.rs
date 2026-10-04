@@ -91,7 +91,9 @@ pub enum OperatorAction {
         rule: UserRule,
         sinks: Vec<SinkId>,
     },
-    /// Enable or disable any rule. Staleness cannot be set.
+    /// Enable or disable any rule. Staleness cannot be set. Enabling a stale
+    /// rule is `Conflict(RuleStale)`; `UpdateRule` retargets and enables it.
+    /// Disabling is always allowed.
     SetRuleEnabled {
         id: AlertRuleId,
         enabled: bool,

@@ -1,0 +1,24 @@
+[invariant]
+id = "analysis.triage.sanction-suppresses"
+statement = "AlertTriage::channel_sanctioned moves exactly the Open or Acknowledged alerts whose subject is that channel, or a channel it superseded (subjects compared with AlertSubject::resolved), to Suppressed with reason ChannelSanctioned."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Sanctioning a channel is the operator saying its traffic is expected, so
+alerts about the channel being new, unreviewed or unsanctioned stop being
+alert-worthy. Alerts stay stored under the ids they were raised with, so
+alerts raised on a channel before a promotion absorbed it are covered too:
+the operator reviewed the medium they belong to
+(analysis.alert.sanction-covers-superseded). Alerts whose subject is a
+transmission on the channel are about content, which can be worth flagging
+on a sanctioned channel, and stay. Resolved alerts keep their resolution.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::sanction_suppresses_open_and_acknowledged_channel_alerts", "crosstalk::analysis::tests::sanction_leaves_transmission_alerts_and_resolved_alerts"]
+property = "crosstalk::analysis::tests::sanction_suppresses_exactly_active_channel_alerts"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

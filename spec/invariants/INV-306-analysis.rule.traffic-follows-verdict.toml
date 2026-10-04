@@ -1,0 +1,23 @@
+[invariant]
+id = "analysis.rule.traffic-follows-verdict"
+statement = "On a TransmissionConfirmed event, an UnreviewedTraffic or UnsanctionedTraffic rule drafts exactly when the transmission's route is a channel whose policy verdict, read for the channel it resolves to through supersession, is Raise of that rule's kind."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+L5 owns the verdict (Policy::on_traffic); the rule must apply it, not
+re-decide it. Sanctioned channels drop traffic, direct routes (user turn
+or system prompt) have no channel and so no policy, and a channel whose
+policy lookup returns nothing raises nothing rather than being treated as
+unreviewed by default in one place and not another. A channel a promotion
+absorbed is judged by the promoted channel's policy
+(flow.policy.judged-on-canonical-channel), so the rule reads that one.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::unreviewed_channel_traffic_drafts", "crosstalk::analysis::tests::sanctioned_channel_traffic_does_not_draft", "crosstalk::analysis::tests::direct_route_traffic_does_not_draft"]
+property = "crosstalk::analysis::tests::traffic_rules_agree_with_policy_verdict"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

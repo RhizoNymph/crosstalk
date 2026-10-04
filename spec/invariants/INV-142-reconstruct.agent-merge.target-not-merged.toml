@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.agent-merge.target-not-merged"
+statement = "A Merged agent's MergedInto.into always names an agent whose state is not Merged."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Merge chains are at most one long, so `AgentDirectory::canonical` is a
+single lookup and cycles are impossible. This holds at every instant,
+which pins down the duties of `IdentityResolver::merge` and `unmerge`
+(observed/agent/merge.rs): a merge naming a Merged agent as source or
+target is refused with `ResolveError::AgentMerged`; agents already merged
+into the merge's source are repointed to its target (`Agent::repoint`);
+and an unmerge returns its source to an active state before pointing the
+agents it repointed back at it (`Agent::restore`).
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::merge_chains_are_flat"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

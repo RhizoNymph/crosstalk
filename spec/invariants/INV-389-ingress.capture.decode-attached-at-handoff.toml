@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.capture.decode-attached-at-handoff"
+statement = "The proxy hands off an HTTP exchange's RawExchange only once both its response stream has ended and its request decode has succeeded, in either order, with its request (the DecodedRequest: WireRequest, body and encoding) and meta.model taken from that decode."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Decoding runs concurrently with forwarding, so a short response can end
+before a large body is decoded, and a slow response can end long after.
+Handing off at stream end regardless would send a RawExchange with no
+request, which carries the tool results read-side detection needs; waiting
+only for the decode would freeze the response short. The decoded request
+attaches whenever it is ready, and the stream-end rule
+(ingress.capture.handoff-at-stream-end) still holds.
+"""
+
+[evidence]
+dst = ["crosstalk::ingress::tests::sim::handoff_waits_for_decode_after_stream_end", "crosstalk::ingress::tests::sim::handoff_waits_for_stream_end_after_decode"]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
