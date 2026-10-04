@@ -3,7 +3,9 @@
 //! Kept here so the fixture's tests build without the UI.
 
 use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
-use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::aggregates::filter::{
+    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
+};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::TimeWindow;
@@ -17,6 +19,7 @@ pub struct ViewFilter {
     pub route_kinds: Vec<RouteKind>,
     pub topics: Vec<TopicId>,
     pub false_detections: FalseDetections,
+    pub unconfirmed_channels: UnconfirmedChannels,
 }
 
 impl ViewFilter {
@@ -29,7 +32,7 @@ impl ViewFilter {
             topics: self.topics.clone(),
             topic_version: TopicVersionSelector::Pinned(version),
             false_detections: self.false_detections,
-            ..TopologyFilter::default()
+            unconfirmed_channels: self.unconfirmed_channels,
         }
     }
 }

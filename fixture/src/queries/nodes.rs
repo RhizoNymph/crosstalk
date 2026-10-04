@@ -121,6 +121,9 @@ fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<ChannelNode> {
         label: None,
         origin_kind,
         detection_kind: channel.origin.detection_kind(),
+        confirmation: ctx
+            .confirmation(channel.id)
+            .ok_or_else(|| store("a channel not listed as a channel as a node", channel.id))?,
         policy_kind: channel.policy.kind(),
         locator_summary: locator_summary(ctx, record)?,
     })

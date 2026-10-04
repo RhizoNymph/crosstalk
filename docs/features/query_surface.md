@@ -496,16 +496,33 @@ at query time.
 ### Channel-centred view
 
 Splitting `Route::Channel` edges into A→C→B would show only writes someone
-read, and the early stage of a hijacked wiki is writes nobody has read yet.
-So accesses have their own aggregate (`aggregates/access.rs`): an
-`AccessEdge { agent, channel, op, bucket, accesses }`, bucketed like
-`EdgeKey` with no topic, maintained by L7 from `AccessRecorded`.
+read, and once a channel exists its writes nobody has read yet matter (a
+hijacked wiki keeps being written to). So accesses have their own aggregate
+(`aggregates/access.rs`): an `AccessEdge { agent, resource, op, bucket,
+accesses }`, bucketed like `EdgeKey` with no topic, maintained by L7 from
+`AccessRecorded` whether or not the resource is on a channel yet. At read
+time each bucket's resource resolves to the channel holding it now
+(`ChannelRegistry::channels_of`), so accesses made before a channel was
+discovered from a resource count on it from then on.
+
+Only channels listed as channels are drawn (`Listing::Channel`, read from
+`ChannelRegistry::cross_traffic`): a channel with a transmission between two
+different agents once merges resolve. A resource on no channel, a hidden
+channel (every transmission through it now within one merged agent) and a
+declaration without cross-agent traffic have neither a node nor access
+edges. Each channel node carries its `Confirmation`; an unconfirmed channel
+(only suspected traffic) is drawn marked, and left out under
+`UnconfirmedChannels::Exclude` ("confirmed only"), the only thing that
+filter field changes in a linked view: transmission views count confirmed
+transmissions between different agents, whose channels are confirmed by
+them.
 `QueryApi::channel_topology(caller, window, weighting, filter)` returns a
 `Watermarked<BipartiteGraph { nodes, accesses, transmissions, topic_version }>`:
 
 - `accesses`: access buckets in the window, resolved to canonical agents and
-  channels, kept by `TopologyFilter::admits_access`, summed per (agent,
-  channel, op). Each share is its count over all access counts, normalized
+  to the channel holding each resource, kept when that channel is listed as
+  a channel and by `TopologyFilter::admits_access` (with the channel's
+  confirmation), summed per (agent, channel, op). Each share is its count over all access counts, normalized
   apart from transmissions and independent of the weighting.
 - `transmissions`: exactly `topology`'s edges for the same window, weighting
   and filter.
@@ -677,10 +694,25 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `pattern_overlap.rs`, `graph.rs` (supersession, promotion, pattern overlap, graph nodes, the channel-centred graph). The read models' tests are listed in [read_models.md](read_models.md), export's in [export.md](export.md) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `pattern_overlap.rs`, `graph.rs` (supersession, promotion, pattern overlap, graph nodes, the channel-centred graph); `confirmation.rs` (crossing, listings, unconfirmed channels in the filter, alert visibility, export rows). The read models' tests are listed in [read_models.md](read_models.md), export's in [export.md](export.md) | — |
 
 ## Invariants and constraints
 
+- A transmission counts only between two different agents
+  (`Transmission::crossing`): `TopologyFilter::admits` never admits one whose
+  ids have merged into one agent, so no linked view, export, topic size,
+  channel count or channel transmission list holds it, and alerts about it
+  are not listed (`AlertSubject::shown`). An unmerge brings it back at the
+  next read.
+- A channel exists once a cross-agent transmission goes through it
+  (`ChannelRegistry::discover`; `NewChannel` fires then); lookups create
+  nothing. Channel lists, the channel-centred graph and the overview's
+  channel counts hold listed channels only: confirmed and unconfirmed
+  channels (unconfirmed ones under `UnconfirmedChannels::Include`, the
+  default) and, apart, declarations without traffic; never a hidden one,
+  which `channel` still returns. `channel_transmissions` lists a channel's
+  cross-agent transmissions (an unconfirmed channel's suspected ones for
+  review) with their senders, for View.
 - Only a discovered channel can be superseded (`ChannelOrigin::superseded`),
   and a superseded one cannot be promoted or take a policy decision.
   Resolution is one step: `canonical(canonical(c)) = canonical(c)`. Lookups
@@ -748,7 +780,8 @@ free-text classification: `Store`'s reason is diagnostic only.
 - A `BipartiteGraph` has distinct access and transmission edges, no
   self-edge, and access and transmission shares each normalized on their
   own (`BipartiteGraph::new`). Its transmissions equal `topology`'s edges for
-  the same arguments; its accesses include writes nobody read.
+  the same arguments; its accesses include writes nobody read on channels
+  listed as channels, and none on a resource on no channel.
 - Every linked view (graph, channel-centred graph, series, search,
   projection fit, edge drill-down) applies one `TopologyFilter` as
   `TopologyFilter::admits` defines (`admits_access` for access edges, which

@@ -1,8 +1,10 @@
 //! Reads over the world and the current state.
 //!
 //! Every query builds a [`Ctx`]: a snapshot of alias and supersession
-//! resolution and of the verdicts in force, so each record is resolved the
-//! same way within one response.
+//! resolution, of the verdicts in force and of each channel's cross-agent
+//! traffic (`CrossTraffic::tally` with merges resolved, from which its
+//! listing and confirmation follow), so each record is resolved the same
+//! way within one response.
 
 pub mod agents;
 pub mod alerts;
@@ -22,9 +24,10 @@ pub mod transmissions;
 use std::collections::{BTreeMap, HashMap};
 
 use crosstalk_spec::aliases::{Aliases, Resolve};
-use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, CrossTraffic, Listing};
+use crosstalk_spec::derived::flow::transmission::{Crossing, Route, Transmission};
 use crosstalk_spec::derived::flow::verdict::Verdict;
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 
 use crate::Result;
@@ -53,6 +56,8 @@ pub struct Ctx<'a> {
     /// Canonical agent to the agents that resolve to it, itself included.
     members: BTreeMap<AgentId, Vec<AgentId>>,
     verdicts: HashMap<TransmissionId, Verdict>,
+    /// Each canonical channel's cross-agent traffic at this read.
+    traffic: HashMap<ChannelId, CrossTraffic>,
 }
 
 impl<'a> Ctx<'a> {
@@ -79,14 +84,80 @@ impl<'a> Ctx<'a> {
             .iter()
             .filter_map(|(id, log)| log.current().map(|v| (*id, v)))
             .collect();
-        Self {
+        let mut ctx = Self {
             world,
             state,
             agents,
             channels,
             members,
             verdicts,
+            traffic: HashMap::new(),
+        };
+        ctx.traffic = ctx.tally_traffic();
+        ctx
+    }
+
+    /// `CrossTraffic::tally` per canonical channel over the transmissions
+    /// whose route resolves to it.
+    fn tally_traffic(&self) -> HashMap<ChannelId, CrossTraffic> {
+        let mut routed: HashMap<ChannelId, Vec<&Transmission>> = HashMap::new();
+        for record in &self.world.transmissions {
+            if let Route::Channel(stored) = record.transmission.route {
+                routed
+                    .entry(self.channel(stored))
+                    .or_default()
+                    .push(&record.transmission);
+            }
         }
+        routed
+            .into_iter()
+            .map(|(channel, transmissions)| {
+                let traffic = CrossTraffic::tally(transmissions, self.aliases(), |access| {
+                    self.writer(access)
+                });
+                (channel, traffic)
+            })
+            .collect()
+    }
+
+    /// The agent that made `access`, as attributed.
+    pub fn writer(&self, access: AccessId) -> Option<AgentId> {
+        self.world.access(access).map(|a| a.agent)
+    }
+
+    /// Whether `transmission` crosses agents at this read.
+    pub fn crossing(&self, transmission: &Transmission) -> Crossing {
+        transmission.crossing(self.aliases(), |access| self.writer(access))
+    }
+
+    /// The cross-agent traffic of the channel `id` resolves to.
+    pub fn traffic(&self, id: ChannelId) -> CrossTraffic {
+        self.traffic
+            .get(&self.channel(id))
+            .copied()
+            .unwrap_or(CrossTraffic::NONE)
+    }
+
+    /// Where the channel stored under `id` is listed (`Listing::of` its
+    /// own origin and the traffic of its canonical channel); `None` for a
+    /// superseded or unknown channel.
+    pub fn listing(&self, id: ChannelId) -> Option<Listing> {
+        let record = self.state.channels.get(&id)?;
+        Listing::of(&record.channel().origin, self.traffic(id))
+    }
+
+    /// The confirmation of the channel `id` resolves to, when it is listed
+    /// as a channel; `None` for a declaration without traffic, a hidden
+    /// channel or an unknown one.
+    pub fn confirmation(&self, id: ChannelId) -> Option<Confirmation> {
+        self.listing(self.channel(id))
+            .and_then(Listing::confirmation)
+    }
+
+    /// Whether the channel `id` resolves to is hidden: discovered, and
+    /// every transmission through it now within one agent.
+    pub fn hidden(&self, id: ChannelId) -> bool {
+        self.listing(self.channel(id)) == Some(Listing::Hidden)
     }
 
     pub fn agent(&self, id: AgentId) -> AgentId {

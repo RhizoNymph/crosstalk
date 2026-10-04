@@ -8,7 +8,10 @@ Overview:
     showing up in another agent's input: in a tool result, a user turn or a
     system prompt. From that it classifies agent-to-agent communication,
     discovers the channels agents use (including ones nobody declared, such
-    as a public wiki agents start writing to), and records the content,
+    as a public wiki agents start writing to; a resource becomes a channel
+    once a transmission between two different agents goes through it, and
+    a channel whose transmissions are all suspected is marked unconfirmed),
+    and records the content,
     topology and location of the communication. The records power a
     topology view with edge weights and per-node metadata, a channel-centred
     view of who reads and writes each channel, search, topic modeling,
@@ -38,9 +41,12 @@ Overview:
     detect: >
       L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
-      channel registry with promotion and supersession, write/read
-      correlation into transmissions, and the operator verdict log kept
-      beside each transmission).
+      channel registry with discovery on the first cross-agent transmission
+      through a resource, promotion and supersession, write/read
+      correlation into transmissions, each channel's cross-agent traffic
+      read at query time with merges resolved (confirmed, unconfirmed, or
+      none: a declaration without traffic, or a hidden channel), and the
+      operator verdict log kept beside each transmission).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
       sizes, lineage, pins and retention, paged search, stored projection
@@ -51,8 +57,10 @@ Overview:
       surface (the query API with cursor-paginated lists and linked views
       sharing one filter and one resolved topic-model version; read models
       for agents, channels and transmissions: canonical agent rows and
-      details that follow merges, channel rows carrying activity or their
-      supersession, a promotion preview computed by the promotion's own
+      details that follow merges, channel rows carrying their cross-agent
+      traffic, listing and activity or their supersession, a channel's
+      cross-agent transmissions for review, a promotion preview computed by
+      the promotion's own
       plan, batch names over one bounded id batch, transmission rows by id
       with a per-state shape, the evidence behind a transmission with
       excerpts cut from stored bodies, the overview's counts and one alert
@@ -84,9 +92,12 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on canonical channels (AccessRecorded), resolves
-    channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
+    calls into accesses on resources and their canonical channels, if any
+    (AccessRecorded), correlates cross-agent accesses and content matches
+    into transmissions (TransmissionConfirmed / Suspected), and discovers a
+    channel from a resource on no channel when the first transmission
+    between two different agents goes through it (ChannelDiscovered,
+    raising NewChannel) → L6 embeds and
     classifies transmissions, records topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
@@ -97,10 +108,13 @@ Overview:
     topic history, search, projections, verdicts, detection quality,
     lists, alerts, and the read models: agent rows (L3's profiles joined
     with L7's traffic in the window) and details following merged ids;
-    channel rows (writers and readers from L5's resource use, transmissions
-    from the same graph the overview counts, over the channel and every
-    channel it superseded, in an optional window that never changes which
-    rows are listed); promotion previews (the registry's promotion plan run
+    channel rows (cross-agent traffic over all time from L5's
+    transmissions with merges resolved, from which each row's listing
+    follows: a confirmed or unconfirmed channel, a declaration without
+    traffic, or hidden; writers and readers from L5's resource use,
+    transmissions from the same graph the overview counts, over the channel
+    and every channel it superseded, in an optional window that never
+    changes which rows are listed); a channel's cross-agent transmissions; promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
     channel names; transmission rows by id; the evidence page, which cuts
     excerpts of both sides of each content match from the blob store's
@@ -116,7 +130,11 @@ Overview:
     TopologyFilter under one resolved (or pinned) topic-model version,
     with merged agents and superseded channels resolved at read time (a
     late confirmation on a superseded channel advances the superseding
-    channel's detection); projection fits run as background jobs whose
+    channel's detection; a transmission whose two agents merged into one
+    counts nowhere, and a discovered channel left with no cross-agent
+    transmission is hidden until an unmerge; the filter's
+    unconfirmed_channels leaves out channels whose traffic is all
+    suspected); projection fits run as background jobs whose
     stored frames read back exactly. Every store publishes an id-only
     Changed after each committed change (agents, channels, verdicts,
     alerts, rules, topic versions, projection jobs, the watermark), which
@@ -147,8 +165,10 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams, credentials, the merge log and harness
-      claims), derived inferences (including channel promotion with
-      supersession and operator verdicts beside the detector's state),
+      claims), derived inferences (including channels discovered by their
+      first cross-agent transmission, their confirmation and listing read
+      from that traffic, channel promotion with supersession, and operator
+      verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
       bus events and per-layer interfaces, with tests for the invariants
@@ -163,7 +183,9 @@ Features Index:
       Operator web UI: an overview, topology (agents or bipartite with
       channels) with an edge drawer, transmission evidence with verdicts,
       search and UMAP exploration, topics (with version pins), channels
-      with promotion, agents with merges, alerts and rules, export (JSON
+      (active, unconfirmed, declared with no traffic yet, and the review
+      queue; a channel's suspected transmissions with verdicts; a shared
+      confirmed-only filter) with promotion, agents with merges, alerts and rules, export (JSON
       Lines downloads), audit and pipeline, kept current by the SSE live
       feed. Reads and acts through the spec's L8 traits (QueryApi,
       OperatorActions, LiveFeed) with a deterministic fixture
@@ -193,8 +215,10 @@ Features Index:
       operator directory (with a trusted single-user mode) and one
       permission per query and action; paginated lists; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
-      merged agents and superseded channels resolved at read time; the
-      channel-centred graph and graph nodes; promotion with supersession;
+      merged agents and superseded channels resolved at read time (and
+      transmissions between ids of one merged agent counted nowhere); the
+      channel-centred graph of channels with cross-agent traffic and graph
+      nodes with their confirmation; promotion with supersession;
       stored projections and their columnar frame; verdicts and detection
       quality; watermarked aggregates and retention; typed query and action
       errors with one From impl per store error; operator actions; the
@@ -215,7 +239,9 @@ Features Index:
       The rows and pages the UI shows on the query surface: canonical agent
       rows with claims, last seen and windowed traffic, and a detail with
       aliases, children, merges and vetoes that follows merged ids; channel
-      rows with activity or their supersession, the channel list filter,
+      rows with their cross-agent traffic, listing (confirmed, unconfirmed,
+      declaration, hidden) and activity or their supersession, the channel
+      list filter with listings, a channel's cross-agent transmissions,
       and the promotion preview computed by the promotion's own plan; agent
       and channel names over one bounded IdBatch; transmission rows by id
       with a per-state shape; the evidence behind a transmission with
@@ -224,6 +250,8 @@ Features Index:
     entry_points:
       - spec/types/aggregates/agents/mod.rs
       - spec/types/interfaces/l8_surface/channels.rs
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+      - spec/types/derived/flow/channel/confirmation.rs
       - spec/types/batch.rs
       - spec/types/interfaces/l8_surface/summary.rs
       - spec/types/interfaces/l8_surface/evidence.rs

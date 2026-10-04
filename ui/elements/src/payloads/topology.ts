@@ -41,7 +41,9 @@ const channelNode = z.strictObject({
   id: ulid,
   name: z.string(),
   origin: z.enum(['declared', 'discovered']),
-  detection: z.enum(['awaitingTraffic', 'unused', 'observed', 'candidate', 'active', 'dormant']),
+  detection: z.enum(['awaitingTraffic', 'unused', 'active', 'dormant']),
+  /** `unconfirmed`: every transmission through it is suspected (no content match yet). */
+  confirmation: z.enum(['confirmed', 'unconfirmed']),
   policy: z.enum(POLICIES),
   volume: count,
 });

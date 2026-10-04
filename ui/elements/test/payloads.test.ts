@@ -24,6 +24,17 @@ describe('topology payload', () => {
     expect(c.edges.some((e) => e.kind === 'access')).toBe(true);
   });
 
+  it('marks unconfirmed channels and refuses an unknown confirmation', () => {
+    const c = topologyPayload.parse(channels());
+    const unconfirmed = c.nodes.filter(
+      (n) => n.kind === 'channel' && n.confirmation === 'unconfirmed',
+    );
+    expect(unconfirmed.length).toBe(1);
+    const payload = channels();
+    (payload.nodes.find((n) => n.kind === 'channel') as Json).confirmation = 'maybe';
+    expect(topologyPayload.safeParse(payload).success).toBe(false);
+  });
+
   it('parses the empty payload', () => {
     const empty = topologyPayload.parse(fixtureJson('topology-empty.json'));
     expect(empty.nodes).toEqual([]);

@@ -40,21 +40,22 @@ spec/types/
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
 │       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
-│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed
+│       ├── transmission.rs Transmission (crossing), Crossing, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed
 │       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
 │       └── channel/
-│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
+│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed (resource and first cross-agent transmission)
+│           ├── confirmation.rs Confirmation, CrossTraffic (tally), Listing (of), ListingKind: what a channel's cross-agent traffic shows at read time
 │           ├── promotion.rs Promotion (checked), Registered, plan, PromotionPlan, PromotionRefusal, coverage, PromotionCoverage (resource samples), COVERAGE_CAP
-│           ├── detection.rs DeclaredDetection, TrafficDetection (a superseded channel's is frozen), DetectionKind
+│           ├── detection.rs DeclaredDetection, TrafficDetection (Active, Dormant; a superseded channel's is frozen), DetectionKind
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── access.rs          AccessEdge (by resource), WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
 │   ├── agents/
 │   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details
 │   │   └── filter.rs      AgentFilter (matches, text_matches), AgentText
 │   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTotals (of), EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits (cross-agent only), AccessSubject, admits_access, UnconfirmedChannels, TopicVersionSelector (resolve), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
 │   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
@@ -69,7 +70,7 @@ spec/types/
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
-│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
+│   ├── detect.rs          L4/L5: span, match, access (with its channel, if any), channel (incl. ChannelDiscovered with its seed, ChannelPromoted) and transmission events (incl. VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
@@ -79,7 +80,7 @@ spec/types/
 │   ├── l3_reconstruction/
 │   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
+│   ├── l5_flow.rs         ResourceExtractor, ChannelLookup (NoChannel), OpensOn, Discovery, ChannelDirectory, ChannelRegistry (discover, channels_of, cross_traffic, policy history, promote with supersession, promotion coverage, resource use), Correlator; discovery on the first cross-agent transmission; detection follows resolution
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
@@ -91,12 +92,13 @@ spec/types/
 │       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
 │       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. RuleStale, MergeIntoSelf, ExportTooLarge), InputError (incl. SelfMerge, EmptySelection, ExcerptContextTooLong, TooManyIds)
 │       ├── query_errors.rs the From impls: each store error and refused request value to one QueryError or ActionError
-│       ├── lists.rs       ChannelFilter (with OriginFilter and a counts-only window), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
-│       ├── channels.rs    ChannelRow (checked), ChannelStanding, ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
+│       ├── lists.rs       ChannelFilter (OriginFilter, listings, a counts-only window; matches a ChannelRow), AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
+│       ├── channels.rs    ChannelRow (checked; listing, confirmation), ChannelStanding (in force with CrossTraffic), ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry)
+│       ├── channel_traffic.rs ChannelTransmission (of; senders), ChannelTransmissionFilter, ChannelTransmissionPage: a channel's cross-agent transmissions for review
 │       ├── summary.rs     TransmissionSummary (of), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked), TransmissionPage
 │       ├── evidence.rs    TransmissionEvidence (assemble), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, EvidenceError
 │       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY), Excerpt (checked; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
-│       ├── overview.rs    OverviewCounts, QueueCounts (tally)
+│       ├── overview.rs    OverviewCounts, QueueCounts (tally: shown alerts, listed channels, unconfirmed channels)
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
 │       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
 │       ├── sinks.rs       AlertSink, SinkInfo, SinkKind, SinkError
@@ -195,6 +197,17 @@ Code Assist) and self-hosted vLLM or SGLang. See
   says so. A merge of two ids of one cluster is `MergeIntoSelf`.
 - **Labels are display only.** An agent label is never identity evidence,
   and only an active agent can be renamed.
+- **A channel exists once agents communicate through it.** A resource is
+  only a resource until a transmission between two different agents goes
+  through it: then a discovered channel is created from it
+  (`ChannelRegistry::discover`) and `NewChannel` fires. A declared channel
+  is kept and listed as a declaration until then. Whether a channel's
+  traffic is confirmed (`Confirmation`), and whether it is listed at all
+  (`Listing`: a channel, a declaration, or hidden when a merge leaves every
+  transmission through it within one agent), is read from its
+  transmissions at query time, never stored, so it cannot disagree with
+  them. A transmission whose agents merge into one counts nowhere
+  (`Transmission::crossing`, `TopologyFilter::admits`).
 - **Verdicts sit beside detection.** An operator's `Genuine` or
   `FalseDetection` verdict never changes a transmission's state; it is an
   append-only label used to exclude false detections from views, suppress
@@ -228,9 +241,10 @@ and the `Changed` notifications and the live feed are not modelled.
 | `MergeVeto` machine per directed agent pair (`none`, `vetoed`), consulted by the resolver when an exchange's `sameAs` stand-in carries the other agent's strong evidence; an operator merge from `from` into `into` clears it | `MergeVeto` stores the pair unordered and `separates` tests whole clusters; an operator merge deletes every veto between the two clusters. The cascade checks only the declared pair, in its declared direction |
 | `AgentUnmerged`, `AgentRenamed` handled by `ReadModels` with no rules | applied by the `AgentDirectory` cache and the graph nodes' labels; no entity changes state |
 | **Channels** | |
-| `Channel.undiscovered` | no record: a channel exists once declared or discovered |
+| `Channel.undiscovered` | no record: a channel exists once declared, or discovered by the first cross-agent transmission through a resource on no channel (`ChannelRegistry::discover`); until then accesses are recorded on the resource alone |
+| a discovered channel created at its first access, in `discovered.observed`, then `discovered.candidate` on a cross access | differs: no discovered channel before a cross-agent transmission, so the `observed` and `candidate` leaves have no counterpart; a channel starts `TrafficDetection::Active`, and whether its traffic is confirmed is `Confirmation`, read at query time. `cascade.yaml` still creates the channel at first access |
 | `Channel` top-level states `declared`, `discovered`, `promoted`, `superseded`, each holding its detection; the traffic detection transitions are written out once per origin that runs them | `ChannelOrigin` (`Declared` with `DeclaredHistory::BeforeTraffic` or `Promoted`, `Discovered`, `Superseded`) holding `DeclaredDetection` or `TrafficDetection` |
-| `Channel.declared.awaiting_traffic` / `unused`; `declared.observed` … `dormant` | `DeclaredDetection::AwaitingTraffic` / `Unused` / `InUse(TrafficDetection)` |
+| `Channel.declared.awaiting_traffic` / `unused`; `declared.observed` … `dormant` | `DeclaredDetection::AwaitingTraffic` / `Unused` / `InUse(TrafficDetection)`; a declared channel leaves `AwaitingTraffic` on its first cross-agent transmission, not its first access |
 | `Channel.discovered.*`, `promoted.*` | `TrafficDetection`; promotion keeps the detection leaf (`ChannelOrigin::promoted`) |
 | `Channel.superseded.*`: the leaf it had, with no transitions out (detection frozen) | `ChannelOrigin::Superseded { seed, detection, supersession: Supersession { by, at } }` |
 | `Channel.promote`, refused (dropped) in a declared, promoted or superseded channel; the pattern check is a lone guard | `PromoteChannel { channel, pattern, policy, note }` → `Promotion` → `ChannelRegistry::promote` and `promotion::plan`, refusing `ChannelSuperseded`, `ChannelNotDiscovered`, `PatternMissesSeed`, `PatternOverlaps` |

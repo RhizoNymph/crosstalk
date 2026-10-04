@@ -1,10 +1,14 @@
 //! Channel rows (`QueryApi::channels` and `channel`): the stored channel,
-//! its seed resource and its standing. A row in force counts writers and
-//! readers as `ChannelCounts::tally` of its full resource use in the
-//! window, and transmissions as `ChannelCounts::routed` of the topology
-//! graph for the same window under `TopologyFilter::default()`, so the
-//! overview's active channels are the rows with traffic. A superseded row
-//! carries its supersession and no counts.
+//! its seed resource and its standing. A row in force carries its
+//! cross-agent traffic over all time (the read's `CrossTraffic`, merges
+//! resolved), from which its listing follows, counts writers and readers as
+//! `ChannelCounts::tally` of its full resource use in the window, and
+//! transmissions as `ChannelCounts::routed` of the topology graph for the
+//! same window under `TopologyFilter::default()`, so the overview's active
+//! channels are the rows with traffic. A superseded row carries its
+//! supersession and no counts. `channels` lists the rows its filter
+//! matches (`ChannelFilter::matches`: never a hidden one); `channel`
+//! returns any stored channel's row, a hidden one included.
 
 use std::collections::HashMap;
 
@@ -101,17 +105,23 @@ fn row(ctx: &Ctx, record: &ChannelRecord, counting: &Counting) -> Result<Channel
                 .map_err(|e| store_error("supersession", e))?;
             ChannelStanding::Superseded(into)
         }
-        None => match last_activity(ctx, channel.id) {
-            None => ChannelStanding::InForce(ChannelActivity::Never),
-            Some(last) => {
-                let uses = resources::uses(ctx, channel.id, counting.window)?;
-                let transmissions = counting.routed.get(&channel.id).copied().unwrap_or(0);
-                ChannelStanding::InForce(ChannelActivity::Seen {
-                    last,
-                    counts: ChannelCounts::tally(&uses, transmissions),
-                })
+        None => {
+            let activity = match last_activity(ctx, channel.id) {
+                None => ChannelActivity::Never,
+                Some(last) => {
+                    let uses = resources::uses(ctx, channel.id, counting.window)?;
+                    let transmissions = counting.routed.get(&channel.id).copied().unwrap_or(0);
+                    ChannelActivity::Seen {
+                        last,
+                        counts: ChannelCounts::tally(&uses, transmissions),
+                    }
+                }
+            };
+            ChannelStanding::InForce {
+                traffic: ctx.traffic(channel.id),
+                activity,
             }
-        },
+        }
     };
     let seed = channel
         .origin
@@ -134,17 +144,28 @@ pub fn list(
     request: &PageRequest<ChannelList>,
 ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
     let counting = Counting::new(ctx, filter.window)?;
-    let items = ctx
-        .state
+    let mut items = Vec::new();
+    for record in ctx.state.channels.values() {
+        let row = row(ctx, record, &counting)?;
+        if filter.matches(&row) {
+            items.push((
+                newest_first(record.created, row.channel().id.as_ulid()),
+                row,
+            ));
+        }
+    }
+    page::paginate("channels", page::digest(filter), items, request).map(watermarked)
+}
+
+/// Every stored channel's row, counted over all time: what the overview's
+/// queues tally.
+pub fn every(ctx: &Ctx) -> Result<Vec<ChannelRow>> {
+    let counting = Counting::new(ctx, None)?;
+    ctx.state
         .channels
         .values()
-        .filter(|record| filter.matches(record.channel()))
-        .map(|record| {
-            let key = newest_first(record.created, record.channel().id.as_ulid());
-            row(ctx, record, &counting).map(|row| (key, row))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    page::paginate("channels", page::digest(filter), items, request).map(watermarked)
+        .map(|record| row(ctx, record, &counting))
+        .collect()
 }
 
 /// `channel`: the channel stored under `id`, a superseded one with its own

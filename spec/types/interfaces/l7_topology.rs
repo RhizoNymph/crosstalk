@@ -59,15 +59,22 @@
 //! `TopicsNotInVersion`. Every response reports the resolved version.
 //!
 //! Accesses: the same consumer counts every `AccessRecorded` into an
-//! [`AccessEdge`] bucket (`EdgeStore::apply_access`), so the channel-centred
-//! view ([`EdgeStore::channel_topology`]) shows writes nobody has read yet.
+//! [`AccessEdge`] bucket by its resource (`EdgeStore::apply_access`),
+//! whether or not the resource is on a channel yet, so the channel-centred
+//! view ([`EdgeStore::channel_topology`]) shows a channel's writes nobody
+//! has read yet, including those made before the channel was discovered.
 //!
 //! Read-time resolution: every query resolves stored agent ids through the
-//! `AgentDirectory` and stored channel ids (in routes and access buckets)
-//! through the `ChannelDirectory`, including the ids a filter names, then
-//! sums what became equal. Graph responses describe their nodes
-//! ([`crate::aggregates::node`]) from the agent store, L3's `ClaimStore` and
-//! the channel registry, read at query time.
+//! `AgentDirectory`, stored channel ids (in routes) through the
+//! `ChannelDirectory`, and the resources of access buckets to the channel
+//! the registry holds each on (`ChannelRegistry::channels_of`), including
+//! the ids a filter names, then sums what became equal. Graph responses
+//! describe their nodes ([`crate::aggregates::node`]) from the agent store,
+//! L3's `ClaimStore` and the channel registry, and take each channel's
+//! [`Listing`] from the registry (`ChannelRegistry::cross_traffic`), all
+//! read at query time.
+//!
+//! [`Listing`]: crate::derived::flow::channel::confirmation::Listing
 //!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
@@ -90,7 +97,7 @@ use crate::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crate::ids::{AccessId, AgentId, ChannelId, TopicId, TransmissionId};
+use crate::ids::{AccessId, AgentId, ResourceId, TopicId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
@@ -107,12 +114,14 @@ pub struct EdgeContribution {
 }
 
 /// One recorded access, as the edge store counts it: an `AccessRecorded`
-/// event's access and channel.
+/// event's access, on its resource. The channel the event names (if any)
+/// is not stored: the bucket's resource resolves to its channel at read
+/// time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccessContribution {
     pub access: AccessId,
     pub agent: AgentId,
-    pub channel: ChannelId,
+    pub resource: ResourceId,
     pub op: AccessKind,
     pub at: Timestamp,
 }
@@ -168,7 +177,7 @@ pub trait EdgeStore {
         frontier: PipelineFrontier,
     ) -> Result<Option<Watermark>, EdgeError>;
 
-    /// Count one access into its bucket (agent and channel as recorded,
+    /// Count one access into its bucket (agent and resource as recorded,
     /// `op`, the bucket holding `at`) and return the bucket after the apply.
     /// Idempotent on `access`: a redelivered access changes nothing and
     /// returns the bucket as it is. A write: fails with `EdgeError`.
@@ -197,9 +206,13 @@ pub trait EdgeStore {
         filter: &TopologyFilter,
     ) -> Result<Watermarked<EdgeTotals>, EdgeQueryError>;
 
-    /// The channel-centred graph: access buckets in `window` with agents and
-    /// channels resolved, filtered by [`TopologyFilter::admits_access`] and
-    /// summed per (agent, channel, op), with shares over all of them; the
+    /// The channel-centred graph: access buckets in `window` with agents
+    /// resolved and each resource resolved to the channel holding it now,
+    /// left out when that is no channel or a channel not listed as one
+    /// (`Listing::Channel`, from `ChannelRegistry::cross_traffic`: a hidden
+    /// channel or a declaration without cross-agent traffic), filtered by
+    /// [`TopologyFilter::admits_access`] (with the channel's confirmation)
+    /// and summed per (agent, channel, op), with shares over all of them; the
     /// transmission edges exactly as `graph` returns them for the same
     /// window, weighting and filter, under the same topic version; nodes for
     /// every agent and channel they name (`BipartiteGraph::new` holds). The

@@ -34,14 +34,20 @@ pub const DESIGN_DOCS_AT: Timestamp = ago(20 * HOUR);
 pub const TEAM_NOTES_FROM: Timestamp = ago(5 * DAY + 6 * HOUR);
 /// When the hijacked wiki was first written to.
 pub const HIJACK_FROM: Timestamp = ago(5 * DAY + 14 * HOUR);
+/// When `al1` and `cx1` started passing notes through a local handoff
+/// file, two ids of one Codex agent before an operator merged them.
+pub const SELF_NOTES_FROM: Timestamp = ago(6 * DAY);
+/// When `al1` was merged into `cx1` (the merge in `agents.rs`); its last
+/// traffic is just before.
+pub const SELF_NOTES_UNTIL: Timestamp = ago(3 * DAY + HOUR);
 
-/// The detection state a channel is generated into.
+/// The detection state a channel is generated into. Whether its traffic
+/// is confirmed is not a detection state: it follows from the
+/// transmissions (`Draft::confirms`) and is read at query time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Awaiting,
     Unused,
-    Observed,
-    Candidate,
     Active,
     Dormant,
 }
@@ -426,26 +432,10 @@ pub fn drafts() -> Vec<Draft> {
             confirms: true,
         },
         Draft {
-            key: K::KvScratch,
-            created: ago(36 * HOUR),
-            origin: DraftOrigin::Discovered,
-            target: Target::Observed,
-            locators: vec![Locator::Opaque {
-                tool: ToolName("kv_put".to_owned()),
-                key: "scratch/notes".to_owned(),
-            }],
-            window: (ago(36 * HOUR), NOW),
-            weight: 0.0,
-            writers: &["cc7"],
-            readers: &["cc7"],
-            themes: &[],
-            confirms: false,
-        },
-        Draft {
             key: K::S3Handoff,
             created: ago(2 * DAY),
             origin: DraftOrigin::Discovered,
-            target: Target::Candidate,
+            target: Target::Active,
             locators: vec![Locator::Url {
                 scheme: "s3".to_owned(),
                 host: Host("agent-scratch".to_owned()),
@@ -458,6 +448,22 @@ pub fn drafts() -> Vec<Draft> {
             readers: &["cc6", "sh1"],
             themes: &[(T::DataPipeline, 1.0)],
             confirms: false,
+        },
+        Draft {
+            key: K::SelfNotes,
+            created: SELF_NOTES_FROM,
+            origin: DraftOrigin::Discovered,
+            target: Target::Dormant,
+            locators: vec![Locator::File {
+                host: Some(Host("devbox-7".to_owned())),
+                path: "/home/dev/.codex/handoff.md".to_owned(),
+            }],
+            window: (SELF_NOTES_FROM, SELF_NOTES_UNTIL),
+            weight: 2.0,
+            writers: &["al1", "cx1"],
+            readers: &["cx1", "al1"],
+            themes: &[(T::Deploy, 1.0), (T::CodeReview, 1.0)],
+            confirms: true,
         },
         Draft {
             key: K::OldTeamNotes,

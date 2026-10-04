@@ -44,10 +44,11 @@ pub struct Overview {
     pub alerts: Result<Vec<AlertRow>, UiError>,
 }
 
-/// The four tiles: transmissions with their matched bytes and active
+/// The five tiles: transmissions with their matched bytes and active
 /// channels (the window's activity under the view's filter), and the open
-/// alerts and unreviewed channels waiting now. A failed read shows each
-/// tile as unavailable.
+/// alerts, unreviewed channels and unconfirmed channels waiting now (the
+/// channel counts honour "confirmed only"; under it the unconfirmed tile
+/// says they are left out). A failed read shows each tile as unavailable.
 pub fn tiles(
     counts: &Result<Watermarked<OverviewCounts>, UiError>,
     state: &ViewState,
@@ -84,8 +85,33 @@ pub fn tiles(
         Tile {
             label: "Review queue",
             value: value(|c| c.queues.unreviewed_channels),
-            detail: "unreviewed channels".to_owned(),
+            detail: if state.scope.filter.confirmed_only() {
+                "unreviewed channels, confirmed only".to_owned()
+            } else {
+                "unreviewed channels, unconfirmed included".to_owned()
+            },
             href: href("/channels", state, &[("tab", "review")]),
+        },
+        Tile {
+            label: "Unconfirmed channels",
+            value: counts
+                .as_ref()
+                .map(|c| {
+                    c.value
+                        .queues
+                        .unconfirmed_channels
+                        .map_or_else(|| "—".to_owned(), |n| n.to_string())
+                })
+                .map_err(Clone::clone),
+            detail: match counts
+                .as_ref()
+                .ok()
+                .map(|c| c.value.queues.unconfirmed_channels)
+            {
+                Some(None) => "left out: confirmed only".to_owned(),
+                Some(Some(_)) | None => "suspected transmissions only".to_owned(),
+            },
+            href: href("/channels", state, &[("tab", "unconfirmed")]),
         },
     ]
 }
@@ -197,6 +223,7 @@ mod tests {
                 queues: QueueCounts {
                     open_alerts: 12,
                     unreviewed_channels: 3,
+                    unconfirmed_channels: Some(1),
                 },
             },
         });
@@ -212,10 +239,55 @@ mod tests {
                 ("Active channels", "7".to_owned()),
                 ("Open alerts", "12".to_owned()),
                 ("Review queue", "3".to_owned()),
+                ("Unconfirmed channels", "1".to_owned()),
             ]
         );
         assert_eq!(tiles[0].detail, "confirmed in the window · 2.0 KiB matched");
         assert!(tiles[3].href.contains("tab=review"));
+    }
+
+    #[test]
+    fn confirmed_only_says_unconfirmed_channels_are_left_out() {
+        let counts = Ok(Watermarked {
+            watermark: Watermark(Timestamp::from_micros(0)),
+            value: OverviewCounts {
+                activity: EdgeTotals {
+                    topic_version: TopicModelVersion(2),
+                    transmissions: 1,
+                    matched_bytes: 1,
+                    active_channels: 1,
+                },
+                queues: QueueCounts {
+                    open_alerts: 0,
+                    unreviewed_channels: 2,
+                    unconfirmed_channels: None,
+                },
+            },
+        });
+        let mut state = fixture_state();
+        state.scope.filter = state.scope.filter.toggle_confirmed_only();
+        let tiles = tiles(&counts, &state);
+        let unconfirmed = tiles.last().expect("five tiles");
+        assert_eq!(unconfirmed.value, Ok("—".to_owned()));
+        assert_eq!(unconfirmed.detail, "left out: confirmed only");
+        assert!(unconfirmed.href.contains("tab=unconfirmed"));
+        assert!(unconfirmed.href.contains("u=confirmed"));
+        assert_eq!(tiles[3].detail, "unreviewed channels, confirmed only");
+    }
+
+    #[tokio::test]
+    async fn the_overview_counts_unconfirmed_channels_unless_confirmed_only() {
+        use crate::testing::get;
+        use topcoat::router::StatusCode;
+
+        let state = fixture_state().to_query();
+        let reply = get(&format!("/?{state}")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("Unconfirmed channels"));
+        assert!(reply.body.contains("suspected transmissions only"));
+        let reply = get(&format!("/?{state}&u=confirmed")).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert!(reply.body.contains("left out: confirmed only"));
     }
 
     #[test]

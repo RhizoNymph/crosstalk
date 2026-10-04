@@ -1,11 +1,13 @@
 //! Alerts and alert rules as `QueryApi` lists them. Alerts are keyed by
 //! `AlertId`, newest first; the channel filter compares resolved subjects
 //! (`AlertSubject::resolved`) and resolved routes with the listed channel's
-//! canonical channel. Rules list the built-ins first, in
+//! canonical channel. An alert about a hidden channel, or about a
+//! transmission whose agents have merged into one, is not listed
+//! ([`shown`]); an unmerge lists it again. Rules list the built-ins first, in
 //! `BuiltinRule::ALL` order, then user rules newest first.
 
 use crosstalk_spec::aggregates::alert::{Alert, AlertRuleDef, AlertSubject, BuiltinRule};
-use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::transmission::{Crossing, Route};
 use crosstalk_spec::ids::{AlertId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
@@ -30,6 +32,21 @@ fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
     }
 }
 
+/// Whether the alert list shows `alert` at this read
+/// (`AlertSubject::shown`): not when it is about a hidden channel or a
+/// transmission whose agents have merged into one.
+pub fn shown(ctx: &Ctx, alert: &Alert) -> bool {
+    alert.subject.shown(
+        ctx.aliases(),
+        |channel| ctx.hidden(channel),
+        |transmission| {
+            ctx.world.tx(transmission).is_some_and(|record| {
+                ctx.crossing(&record.transmission) == Crossing::WithinOneAgent
+            })
+        },
+    )
+}
+
 /// Newest id first.
 fn newest_id(id: AlertId) -> Key {
     (0, u128::MAX - id.as_ulid())
@@ -49,6 +66,7 @@ pub fn alerts(
             filter.states.is_empty() || filter.states.contains(&alert_state::kind(&a.state))
         })
         .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
+        .filter(|a| shown(ctx, a))
         .map(|a| (newest_id(a.id), a.clone()))
         .collect();
     page::paginate("alerts", page::digest(filter), items, page)

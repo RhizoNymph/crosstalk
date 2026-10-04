@@ -145,6 +145,9 @@ pub async fn topology_drawer(
                         <div class="mt-1.5 flex flex-wrap gap-1">
                             kind_badge(value: panel.origin)
                             kind_badge(value: panel.detection)
+                            if let Some(listing) = panel.listing {
+                                kind_badge(value: listing)
+                            }
                             kind_badge(value: panel.policy)
                             if superseded {
                                 state_badge(label: "superseded", tone: Tone::Muted)

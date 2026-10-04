@@ -4,8 +4,10 @@
 //!
 //! Sizes count topic assignments, not graph edges: every confirmed
 //! transmission with an assignment under the version, by `Confirmed::at`,
-//! self-edges included. A dropped version's all-time sizes are frozen at
-//! its drop: the transmissions confirmed by then.
+//! whose agents have not merged into one (a transmission nowhere). A
+//! dropped version's all-time sizes are frozen at its drop: the
+//! transmissions confirmed by then (with merges as of the read; the
+//! fixture keeps no merge history per drop).
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -19,6 +21,7 @@ use crosstalk_spec::aggregates::topic_history::{
     TopicVersionStatusKind,
 };
 use crosstalk_spec::aggregates::watermark::Watermarked;
+use crosstalk_spec::derived::flow::transmission::Crossing;
 use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::interfaces::l6_analysis::CatalogError;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -99,6 +102,9 @@ pub fn sizes(
         };
         let at = confirmation.at();
         if window.is_some_and(|w| !w.contains(at)) || frozen.is_some_and(|cut| at > cut) {
+            continue;
+        }
+        if ctx.crossing(&record.transmission) != Crossing::Crosses {
             continue;
         }
         let topic = match assignment {

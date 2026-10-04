@@ -11,7 +11,10 @@ use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{PageRequest, TopicList};
 use crosstalk_spec::support::{NonEmpty, Similarity, TimeWindow, Timestamp};
 
+use crosstalk_spec::derived::flow::transmission::Crossing;
+
 use super::super::clock::WATERMARK;
+use super::super::queries::Ctx;
 use super::super::world::confirmed;
 use super::super::world::topics::{REMAP_THRESHOLD, V2_AT};
 use super::{collect, first, researcher, shared, week};
@@ -22,18 +25,25 @@ const V1: TopicModelVersion = TopicModelVersion(1);
 const V2: TopicModelVersion = TopicModelVersion(2);
 
 /// Every assignment under `version` of a transmission confirmed in
-/// `window` (all when `None`) and by `cut`, counted from the world.
-fn reference(
+/// `window` (all when `None`) and by `cut` whose agents have not merged
+/// into one, counted from the world.
+async fn reference(
     version: TopicModelVersion,
     window: Option<TimeWindow>,
     cut: Option<Timestamp>,
 ) -> (u64, u64) {
+    let b = shared();
+    let state = b.state.read().await;
+    let ctx = Ctx::new(&b.world, &state);
     let (mut topics, mut outliers) = (0, 0);
-    for record in &shared().world.transmissions {
+    for record in &b.world.transmissions {
         let Some(at) = confirmed(&record.transmission.state).map(|c| c.at()) else {
             continue;
         };
         if window.is_some_and(|w| !w.contains(at)) || cut.is_some_and(|cut| at > cut) {
+            continue;
+        }
+        if ctx.crossing(&record.transmission) != Crossing::Crosses {
             continue;
         }
         match record.assignment(version) {
@@ -71,13 +81,13 @@ async fn sizes_count_every_assignment_once() {
         assert_eq!(listed, of_version, "every topic of the version, once");
         assert_eq!(
             counted(&sizes.value),
-            reference(version, Some(window), None)
+            reference(version, Some(window), None).await
         );
         assert!(sizes.value.outliers().is_some());
     }
     let all_time = b.topic_sizes(&c, None, None).await.expect("all time");
     assert_eq!(all_time.value.window(), None);
-    assert_eq!(counted(&all_time.value), reference(V2, None, None));
+    assert_eq!(counted(&all_time.value), reference(V2, None, None).await);
 }
 
 #[tokio::test]
@@ -90,11 +100,11 @@ async fn a_dropped_version_has_frozen_all_time_sizes_only() {
     );
     let frozen = b.topic_sizes(&c, Some(V0), None).await.expect("frozen");
     assert!(frozen.value.topics().is_empty(), "v0 has no topics");
-    let (topics, outliers) = reference(V0, None, Some(V2_AT));
+    let (topics, outliers) = reference(V0, None, Some(V2_AT)).await;
     assert_eq!(topics, 0, "v0 classifies everything as an outlier");
     assert_eq!(counted(&frozen.value), (0, outliers));
     assert!(
-        outliers < reference(V0, None, None).1,
+        outliers < reference(V0, None, None).await.1,
         "transmissions confirmed after the drop are not counted"
     );
     assert_eq!(

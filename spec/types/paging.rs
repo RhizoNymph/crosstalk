@@ -17,6 +17,7 @@
 //! | search hits | [`SearchList`] | (score, `TransmissionId`) |
 //! | a channel's resources | [`ResourceUseList`] | `ResourceId` |
 //! | transmissions by id | [`TransmissionList`] | `TransmissionId` |
+//! | a channel's transmissions | [`ChannelTransmissionList`] | (`Transmission::opened_at`, `TransmissionId`) |
 //!
 //! A search hit's score is a fixed function of the query, the embedding
 //! model and the transmission (no rank fusion and no corpus statistics), so
@@ -35,7 +36,8 @@
 //! for an edge list or search its window and the topic-model version its
 //! first page resolved; for a channel's resources its canonical channel and
 //! window; for transmissions by id the selection and the version its first
-//! page resolved). The server
+//! page resolved; for a channel's transmissions its canonical channel, its
+//! filter and the version its first page resolved). The server
 //! authenticates the token it issues; one it cannot verify, or one presented
 //! with a different request, is rejected as an invalid cursor. The marker
 //! type parameter makes presenting one list's cursor to another list a
@@ -84,6 +86,8 @@ list_marker! {
     ResourceUseList;
     /// `QueryApi::transmissions_by_id`.
     TransmissionList;
+    /// `QueryApi::channel_transmissions`.
+    ChannelTransmissionList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

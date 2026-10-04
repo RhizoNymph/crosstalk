@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.registry.lookup-never-creates"
+statement = "ChannelRegistry::lookup agrees with a reference model that returns Known with the resource's canonical channel (the channel that superseded the one it is stored on, else that channel) for a resource already on a channel, otherwise Declared for a locator matching a declared pattern, and otherwise NoChannel, and creates no channel whatever it returns."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+A lookup is the first thing that happens to every access, so a lookup
+that created a channel would make every resource one agent touched a
+channel: a scratch key only one agent ever writes and reads would be
+listed, drawn and alerted on as communication. A resource on no channel
+stays a resource (NoChannel) until a cross-agent transmission goes through
+it; only ChannelRegistry::discover creates a discovered channel. A resource
+seen before but still on no channel joins a declared channel whose pattern
+it matches, as a first sighting would.
+"""
+
+[evidence]
+property = "crosstalk::flow::registry::tests::lookup_agrees_with_precedence_model"
+integration = "crosstalk::flow::registry::integration::pg_lookup_precedence"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

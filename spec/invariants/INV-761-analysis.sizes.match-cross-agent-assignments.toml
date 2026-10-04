@@ -1,0 +1,25 @@
+[invariant]
+id = "analysis.sizes.match-cross-agent-assignments"
+statement = "For a version that retention has not dropped, TopicCatalog::sizes for that version and a window equals a reference count that takes every TopicAssignment under that version whose transmission was confirmed in the window (every one when there is no window) and whose sender and reader resolve to different agents at the read, sums transmissions and matched_bytes per assigned topic and over outliers, and lists every topic of the version once, with no stats for topics that counted nothing."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+Sizes are read from topic assignments rather than edge buckets, so the
+topic history can size any retained version, the active one or a
+superseded one, from the same source. A transmission whose agents have
+since merged into one is a transmission nowhere, so it is not in a size
+either, as it is not in the graph; the catalog resolves agents at the read
+as the edge store does. A dropped version's assignments are gone; its
+sizes are covered by analysis.retention.dropped-sizes-frozen. Listing every
+topic, even an empty one in the window, lets the UI show a topic that went
+quiet.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::sizes_match_cross_agent_assignment_count"
+integration = "crosstalk::analysis::integration::pg_sizes_match_assignment_count"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

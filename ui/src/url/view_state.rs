@@ -5,7 +5,11 @@
 //! canonical query back. A URL is canonical when it carries every required
 //! key (`from`, `to`, `v`, `w`, `g`); pages redirect incomplete URLs to the
 //! canonical form, so any URL a user copies reproduces the view. Filter keys
-//! are omitted when empty, since an absent filter has a defined meaning.
+//! are omitted when empty, since an absent filter has a defined meaning:
+//! `x` and `u` are omitted at their defaults (every verdict, every
+//! channel), and `u=confirmed` is "confirmed only": channels whose
+//! cross-agent traffic is all unconfirmed are left out of channel lists,
+//! the review queue, the channels-mode graph and the overview's counts.
 //!
 //! The window is on bucket boundaries: the surface refuses any other
 //! (`InvalidInput(UnalignedWindow)`), so a URL with an unaligned window is
@@ -20,7 +24,7 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use super::route::{decode_kind, encode_kind};
 use super::scope::{Scope, ViewFilter, is_aligned, snap};
 use super::ulid::{InvalidUlid, UlidId};
-use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::{FalseDetections, UnconfirmedChannels};
 
 /// The query keys of the shared view state, as strings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
@@ -35,6 +39,7 @@ pub struct RawViewState {
     pub r: Option<String>,
     pub t: Option<String>,
     pub x: Option<String>,
+    pub u: Option<String>,
 }
 
 /// Agents mode draws agent to agent; channels mode draws channels as nodes
@@ -84,6 +89,8 @@ pub enum ViewStateError {
     RouteKind(String),
     #[error("x: expected all or exclude-false")]
     Verdicts,
+    #[error("u: expected all or confirmed")]
+    Unconfirmed,
 }
 
 /// The outcome of parsing: the state, and whether the URL was already
@@ -137,6 +144,11 @@ impl ViewState {
             Some("exclude-false") => FalseDetections::Exclude,
             Some(_) => return Err(ViewStateError::Verdicts),
         };
+        let unconfirmed_channels = match raw.u.as_deref() {
+            None | Some("all") => UnconfirmedChannels::Include,
+            Some("confirmed") => UnconfirmedChannels::Exclude,
+            Some(_) => return Err(ViewStateError::Unconfirmed),
+        };
 
         let filter = ViewFilter {
             agents: parse_ids::<AgentId>(raw.a.as_deref(), "a")?,
@@ -146,6 +158,7 @@ impl ViewState {
                 .collect::<Result<_, _>>()?,
             topics: parse_ids::<TopicId>(raw.t.as_deref(), "t")?,
             false_detections: verdicts,
+            unconfirmed_channels,
         };
 
         Ok(Parsed {
@@ -204,6 +217,9 @@ impl ViewState {
         push_list(&mut pairs, "t", filter.topics.iter().map(|id| id.to_ulid()));
         if filter.false_detections == FalseDetections::Exclude {
             pairs.push(("x", "exclude-false".to_owned()));
+        }
+        if filter.unconfirmed_channels == UnconfirmedChannels::Exclude {
+            pairs.push(("u", "confirmed".to_owned()));
         }
         pairs
             .into_iter()
@@ -312,6 +328,7 @@ mod tests {
                 "r" => &mut raw.r,
                 "t" => &mut raw.t,
                 "x" => &mut raw.x,
+                "u" => &mut raw.u,
                 other => panic!("unexpected key {other}"),
             };
             *slot = Some(v);
@@ -360,6 +377,7 @@ mod tests {
             route_kinds: vec![RouteKind::Channel, RouteKind::Unobserved],
             topics: vec![TopicId::from_ulid(9)],
             false_detections: FalseDetections::Exclude,
+            unconfirmed_channels: UnconfirmedChannels::Exclude,
         };
         let query = state.to_query();
         let parsed = ViewState::parse(&raw(&query), defaults()).expect("reparse");
@@ -376,6 +394,33 @@ mod tests {
         assert_eq!(
             state.to_query(),
             "from=2026-10-02T00:00:00Z&to=2026-10-03T00:00:00Z&v=3&w=tx&g=agents"
+        );
+    }
+
+    #[test]
+    fn confirmed_only_is_its_own_key_and_round_trips() {
+        let mut state = ViewState::parse(&RawViewState::default(), defaults())
+            .expect("parse")
+            .state;
+        assert_eq!(
+            state.scope.filter.unconfirmed_channels,
+            UnconfirmedChannels::Include
+        );
+        state.scope.filter.unconfirmed_channels = UnconfirmedChannels::Exclude;
+        let query = state.to_query();
+        assert!(query.ends_with("&u=confirmed"), "{query}");
+        let parsed = ViewState::parse(&raw(&query), defaults()).expect("reparse");
+        assert!(parsed.complete);
+        assert_eq!(parsed.state, state);
+        let all = ViewState::parse(&raw("u=all"), defaults()).expect("parse");
+        assert_eq!(
+            all.state.scope.filter.unconfirmed_channels,
+            UnconfirmedChannels::Include
+        );
+        assert!(!all.state.to_query().contains("u="));
+        assert_eq!(
+            ViewState::parse(&raw("u=maybe"), defaults()),
+            Err(ViewStateError::Unconfirmed)
         );
     }
 

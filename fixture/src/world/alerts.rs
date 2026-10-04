@@ -111,8 +111,8 @@ fn channel_alerts(world: &World, state: &mut State, plan: &ChannelPlan) -> Resul
         (K::McpMemory, None),
         (K::SharedFile, Some(suppressed(SHARED_FILE_DECIDED_AT))),
         (K::Gist, Some(deleted())),
-        (K::KvScratch, None),
         (K::S3Handoff, None),
+        (K::SelfNotes, None),
         (K::OldTeamNotes, Some(suppressed(PROMOTE_AT))),
     ] {
         let id = plan.id(key)?;

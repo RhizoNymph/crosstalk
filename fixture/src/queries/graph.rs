@@ -3,8 +3,11 @@
 //!
 //! Every view resolves its filter's version once ([`Linked::new`]) and
 //! counts confirmed transmissions by `Confirmed::at` over canonical agents
-//! and channels; self-edges after resolution are dropped. Windows must be
-//! on bucket boundaries. Every result carries the fixture's watermark.
+//! and channels; self-edges after resolution are dropped. The
+//! channel-centred graph draws accesses to channels listed as channels
+//! only (with cross-agent traffic at this read), unconfirmed ones only
+//! under `UnconfirmedChannels::Include`. Windows must be on bucket
+//! boundaries. Every result carries the fixture's watermark.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -24,10 +27,9 @@ use crosstalk_spec::support::{Share, TimeWindow};
 
 use crate::Result;
 use crate::clock::{BUCKET, WATERMARK};
-use crate::store::ChannelRecord;
 
 use super::linked::{Counted, Linked};
-use super::{Ctx, nodes, route_key};
+use super::{Ctx, alerts, channels, nodes, route_key};
 
 /// The watermark every aggregate reports: ten minutes before the end of
 /// the data, a bucket boundary.
@@ -140,14 +142,21 @@ pub fn topology(
 }
 
 /// What waits for an operator: `QueueCounts::tally` over every stored
-/// alert and channel.
-fn queues(ctx: &Ctx) -> QueueCounts {
-    let stored = ctx.state.channels.values().map(ChannelRecord::channel);
-    QueueCounts::tally(&ctx.state.alerts, stored)
+/// alert the alert list shows and every channel's row, under the filter's
+/// `unconfirmed_channels`.
+fn queues(ctx: &Ctx, filter: &TopologyFilter) -> Result<QueueCounts> {
+    let rows = channels::rows::every(ctx)?;
+    Ok(QueueCounts::tally(
+        &ctx.state.alerts,
+        |alert| alerts::shown(ctx, alert),
+        &rows,
+        filter.unconfirmed_channels,
+    ))
 }
 
 /// The overview: `EdgeTotals::of` the graph for the window and filter, and
-/// the queues, which no window or filter narrows.
+/// the queues, which no window narrows and of the filter only
+/// `unconfirmed_channels` does.
 pub fn overview(
     ctx: &Ctx,
     window: TimeWindow,
@@ -156,7 +165,7 @@ pub fn overview(
     let graph = graph(ctx, window, Weighting::Transmissions, filter)?;
     Ok(watermarked(OverviewCounts {
         activity: EdgeTotals::of(&graph),
-        queues: queues(ctx),
+        queues: queues(ctx, filter)?,
     }))
 }
 
@@ -167,7 +176,8 @@ fn op_order(op: AccessKind) -> u8 {
     }
 }
 
-/// Access buckets in the window, resolved, admitted by
+/// Access buckets in the window, resolved (each resource to the channel
+/// holding it, kept when that channel is listed as a channel), admitted by
 /// `TopologyFilter::admits_access` and summed per (agent, channel, op),
 /// with shares of all of them.
 fn accesses(linked: &Linked) -> Result<Vec<WeightedAccess>> {
@@ -182,7 +192,10 @@ fn accesses(linked: &Linked) -> Result<Vec<WeightedAccess>> {
             continue;
         };
         let (agent, channel) = (ctx.agent(access.agent), ctx.channel(*raw));
-        if !linked.admits_access(agent, channel, &topics) {
+        let Some(confirmation) = ctx.confirmation(channel) else {
+            continue;
+        };
+        if !linked.admits_access(agent, channel, confirmation, &topics) {
             continue;
         }
         let op = access.op.kind();

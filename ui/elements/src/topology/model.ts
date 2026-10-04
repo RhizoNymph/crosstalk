@@ -152,7 +152,8 @@ export function buildModel(payload: TopologyPayload, collapse: boolean): GraphMo
     nodes.push({
       kind: 'channel',
       id: channel.id,
-      label: channel.name,
+      label:
+        channel.confirmation === 'unconfirmed' ? `${channel.name} (unconfirmed)` : channel.name,
       volume: channel.volume,
       size: scaled(channel.volume, maxChannelVolume, NODE_SIZE),
       policy: channel.policy,

@@ -4,13 +4,14 @@
 //! ascending `RowKey` order.
 //!
 //! - Transmissions: every confirmed transmission confirmed in the settled
-//!   window that the filter admits, self-edges included
-//!   ([`Linked::admitted`]), as `TransmissionRow::of` builds it; with
+//!   window that the filter admits ([`Linked::admitted`]: never one whose
+//!   agents have merged into one), as `TransmissionRow::of` builds it; with
 //!   content, its match quotes cut with `ExcerptWindow::MATCH_ONLY` from
 //!   the same evidence the evidence page assembles.
 //! - Edges: what `topology` counts ([`Linked::counted`]), summed per bucket,
 //!   sender, reader, resolved route and topic.
-//! - Accesses: what `channel_topology` keeps, summed per bucket, agent,
+//! - Accesses: what `channel_topology` keeps (channels listed as channels,
+//!   unconfirmed ones only under `Include`), summed per bucket, agent,
 //!   channel and operation.
 //! - Topics: the version's topics (the filter's, or all), each with the
 //!   admitted transmissions assigned to it, zero included.
@@ -158,7 +159,10 @@ pub fn accesses(linked: &Linked) -> Result<Vec<ExportRow>, ExportPlanError> {
             continue;
         };
         let (agent, channel) = (ctx.agent(access.agent), ctx.channel(*raw));
-        if !linked.admits_access(agent, channel, &topics) {
+        let Some(confirmation) = ctx.confirmation(channel) else {
+            continue;
+        };
+        if !linked.admits_access(agent, channel, confirmation, &topics) {
             continue;
         }
         let op = access.op.kind();

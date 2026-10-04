@@ -90,15 +90,20 @@ pub enum AlertRuleKind {
 /// A rule that takes no parameters and exists exactly once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BuiltinRule {
-    /// A channel was discovered that no config declared.
+    /// A channel was discovered that no config declared: the first
+    /// transmission between two different agents went through a resource on
+    /// no channel (`ChannelDiscovered`). Never raised for a resource only one
+    /// agent uses, or written and not read by anyone else. The channel is
+    /// unconfirmed when this fires (a co-access opened its first
+    /// transmission) until content confirms one.
     NewChannel,
     /// Confirmed traffic on a channel whose policy is unreviewed.
     UnreviewedTraffic,
     /// Confirmed traffic on a channel whose policy is unsanctioned.
     UnsanctionedTraffic,
-    /// A declared channel whose policy is sanctioned saw no traffic within
-    /// its idle window. Flow reports every unused declared channel; this rule
-    /// checks the policy.
+    /// A declared channel whose policy is sanctioned saw no cross-agent
+    /// transmission within its idle window. Flow reports every unused
+    /// declared channel; this rule checks the policy.
     SanctionedUnused,
     /// A transmission was left with access-pattern evidence only.
     SuspectedTransmission,
@@ -800,6 +805,28 @@ impl AlertSubject {
             Self::Channel(channel) => Self::Channel(aliases.channel(channel)),
             Self::Agent(agent) => Self::Agent(aliases.agent(agent)),
             Self::Transmission(_) => self,
+        }
+    }
+
+    /// Whether readers show an alert about this subject: the alerts list,
+    /// the overview's open-alert count and the live feed leave out an alert
+    /// whose channel (resolved through `aliases`) is hidden
+    /// (`Listing::Hidden`: every transmission through it now resolves
+    /// within one agent) or whose transmission no longer crosses agents
+    /// (`Transmission::crossing` is `WithinOneAgent`). `hidden` and
+    /// `within_one_agent` answer those at the read. Read time only: the
+    /// stored alert keeps its state, and an unmerge shows it again. An agent
+    /// subject is always shown.
+    pub fn shown(
+        self,
+        aliases: impl Aliases,
+        hidden: impl Fn(ChannelId) -> bool,
+        within_one_agent: impl Fn(TransmissionId) -> bool,
+    ) -> bool {
+        match self.resolved(aliases) {
+            Self::Channel(channel) => !hidden(channel),
+            Self::Transmission(transmission) => !within_one_agent(transmission),
+            Self::Agent(_) => true,
         }
     }
 }
