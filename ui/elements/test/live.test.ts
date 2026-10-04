@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { lifecycleStep } from '../src/live/lifecycle.ts';
 import { parseNotice, parseWatch, watches } from '../src/live/watch.ts';
 
 const ALERT = '01K6HB7H0002GG002YXM000001';
@@ -47,5 +48,18 @@ describe('feed events', () => {
     expect(parseNotice('alert', 'not json').ok).toBe(false);
     expect(parseNotice('topic-version', JSON.stringify({ id: ALERT })).ok).toBe(false);
     expect(parseNotice('agent', JSON.stringify({ id: ALERT, extra: 1 })).ok).toBe(false);
+  });
+});
+
+describe('page lifecycle', () => {
+  it('closes the stream whenever the page hides, cached or not', () => {
+    expect(lifecycleStep('pagehide', true)).toBe('close');
+    expect(lifecycleStep('pagehide', false)).toBe('close');
+  });
+
+  it('reopens only for a page restored from the back/forward cache', () => {
+    expect(lifecycleStep('pageshow', true)).toBe('reopen');
+    expect(lifecycleStep('pageshow', false)).toBe('none');
+    expect(lifecycleStep('visibilitychange', true)).toBe('none');
   });
 });

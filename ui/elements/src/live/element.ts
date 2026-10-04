@@ -9,8 +9,11 @@
  *   matches, or on `resync`, it refreshes the page's live regions
  *   (`refresh.ts`), coalescing bursts. When a refresh is not possible it
  *   shows a notice with a reload button instead.
+ * - Closes the stream on `pagehide` and, when the page comes back from the
+ *   back/forward cache, opens a new one and refreshes (`lifecycle.ts`).
  */
 
+import { lifecycleStep } from './lifecycle.ts';
 import { type RefreshOutcome, refreshRegions } from './refresh.ts';
 import { isLiveKind, LIVE_KINDS, parseNotice, parseWatch, watches } from './watch.ts';
 
@@ -63,6 +66,21 @@ export class LiveElement extends HTMLElement {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #refresh: AbortController | null = null;
   #value = '';
+  readonly #lifecycle = (event: Event): void => {
+    const persisted = event instanceof PageTransitionEvent && event.persisted;
+    switch (lifecycleStep(event.type, persisted)) {
+      case 'close':
+        this.#disconnect();
+        break;
+      case 'reopen':
+        this.#connect();
+        // Events sent while the page sat in the cache were missed.
+        if (declaredTokens().length > 0) this.#schedule();
+        break;
+      case 'none':
+        break;
+    }
+  };
 
   constructor() {
     super();
@@ -92,10 +110,14 @@ export class LiveElement extends HTMLElement {
   }
 
   connectedCallback(): void {
+    window.addEventListener('pagehide', this.#lifecycle);
+    window.addEventListener('pageshow', this.#lifecycle);
     this.#connect();
   }
 
   disconnectedCallback(): void {
+    window.removeEventListener('pagehide', this.#lifecycle);
+    window.removeEventListener('pageshow', this.#lifecycle);
     this.#disconnect();
   }
 
