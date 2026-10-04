@@ -25,15 +25,25 @@ use crosstalk_spec::support::{Blake3, Timestamp};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
-use crate::contract::agents::AgentSummary;
+use crate::contract::agents::{AgentLabel, AgentName, AgentSummary};
 use crate::contract::errors::QueryError;
 use crate::url::ulid::UlidId;
 
 /// An agent's display name: its label, else its id's last six characters.
 pub fn agent_name(agent: &AgentSummary) -> String {
-    match &agent.label {
+    display_name(agent.id, agent.label.as_ref())
+}
+
+/// [`agent_name`] for a batch-looked-up name: the canonical agent's label,
+/// else its id's tail.
+pub fn agent_name_of(name: &AgentName) -> String {
+    display_name(name.id, name.label.as_ref())
+}
+
+fn display_name(id: crosstalk_spec::ids::AgentId, label: Option<&AgentLabel>) -> String {
+    match label {
         Some(label) => label.as_str().to_owned(),
-        None => short_id(agent.id.to_ulid()),
+        None => short_id(id.to_ulid()),
     }
 }
 

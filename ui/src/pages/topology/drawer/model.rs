@@ -21,12 +21,12 @@ use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
 use crate::contract::errors::QueryError;
 use crate::contract::graph::{TopologyView, TransmissionSelector, route_kind};
 use crate::contract::lists::PageRequest;
-use crate::data::names::channel_summary_name;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{agent_url, channel_url};
 use crate::pages::common::lookup::{AgentNames, agent_names};
 use crate::pages::common::paging::parse_cursor;
+use crate::pages::common::transmissions::summary_name;
 use crate::pages::common::transmissions::{
     ChannelNames, Named, TransmissionRow, channel_names, route_channel, route_text, rows,
 };
@@ -227,7 +227,7 @@ pub async fn load(
     cursor: &str,
 ) -> Result<(ViewState, Drawer), QueryError> {
     require(caller, Permission::View)?;
-    let state = state_from_query(cx, state)?;
+    let state = state_from_query(cx, state).await?;
     let selection = Selection::parse(sel).map_err(|e| invalid("sel", e))?;
     let cursor = parse_cursor(Some(cursor).filter(|c| !c.is_empty()))?;
     let backend = backend(cx);
@@ -321,7 +321,7 @@ pub async fn load(
                 let channel = &summary.channel;
                 let canonical = channel.id;
                 Drawer::Channel(ChannelPanel {
-                    name: channel_summary_name(&summary),
+                    name: summary_name(&summary),
                     url: channel_url(canonical, &state),
                     origin: OriginKind::of(&channel.origin),
                     detection: DetectionKind::of(&channel.origin),

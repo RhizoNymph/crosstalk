@@ -22,8 +22,8 @@ use crate::components::{agent_name, href, route_kind_name, short_id};
 use crate::contract::channels::ChannelListFilter;
 use crate::contract::lists::PageRequest;
 use crate::contract::scope::{TopologyFilter, VerdictFilter};
-use crate::data::names::channel_summary_name;
 use crate::pages::common::lookup::agent_names;
+use crate::pages::common::transmissions::summary_name;
 use crate::url::route::encode_kind;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -121,7 +121,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
         Ok(page) => page
             .items
             .iter()
-            .map(|s| (s.channel.id, channel_summary_name(s)))
+            .map(|s| (s.channel.id, summary_name(s)))
             .collect(),
         Err(error) => {
             tracing::warn!(%error, "filter channel choices unavailable");

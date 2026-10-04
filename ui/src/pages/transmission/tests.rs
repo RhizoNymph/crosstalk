@@ -17,10 +17,13 @@ fn everyone() -> Caller {
     crate::testing::operator().caller()
 }
 
-fn week_scope(backend: &FixtureBackend) -> Scope {
+async fn week_scope(backend: &FixtureBackend) -> Scope {
     Scope {
-        window: all_time(backend.now()).expect("window"),
-        topic_version: backend.current_topic_version(),
+        window: all_time(backend.now(&everyone()).await.expect("now")).expect("window"),
+        topic_version: backend
+            .current_topic_version(&everyone())
+            .await
+            .expect("version"),
         filter: TopologyFilter::default(),
     }
 }
@@ -31,7 +34,7 @@ async fn transmissions(limit: u32) -> Vec<TransmissionSummary> {
     backend
         .transmissions(
             &everyone(),
-            &week_scope(&backend),
+            &week_scope(&backend).await,
             &TransmissionSelector::All,
             &PageRequest::first(NonZeroU32::new(limit).expect("limit")),
         )

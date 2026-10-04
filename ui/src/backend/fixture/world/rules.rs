@@ -11,11 +11,10 @@ use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
 use crate::contract::SinkId;
-use crate::contract::actions::OperatorAction;
-use crate::contract::research::AuditSubject;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::rules::{
-    BuiltinRule, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, SinkInfo, SinkKind,
-    StaleReason, UserRule,
+    BuiltinRule, QueryText, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, SinkInfo,
+    SinkKind, StaleReason, UserRule,
 };
 
 use super::history::{CONFIG_AT, OPERATOR_RESEARCHER, operator_action};
@@ -74,6 +73,17 @@ fn similarity(value: f32) -> Result<Similarity, GenError> {
     Similarity::new(value).map_err(|e| GenError::invalid("Similarity", e))
 }
 
+/// A semantic query rule embedded the way `CreateRule` embeds one.
+fn semantic(world: &World, text: &str, threshold: f32) -> Result<UserRule, GenError> {
+    let text = QueryText::new(text).map_err(|e| GenError::invalid("QueryText", e))?;
+    Ok(UserRule::SemanticQuery {
+        embedding: topics::embed(&world.topics.model, world.seed, text.as_str())?,
+        model: world.topics.model.clone(),
+        text,
+        threshold: similarity(threshold)?,
+    })
+}
+
 /// The ids of the generated rules, by role.
 pub struct Rules {
     builtin: [AlertRuleId; 5],
@@ -128,7 +138,6 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
         .nth(V1_UNMAPPED)
         .map(|t| t.id)
         .ok_or_else(|| GenError::Missing("unmapped v1 topic".to_owned()))?;
-    let model = world.topics.model.clone();
     let watch_topics =
         NonEmpty::from_vec(vec![topic(Theme::Credentials)?, topic(Theme::Injection)?])
             .ok_or_else(|| GenError::Missing("watched topics".to_owned()))?;
@@ -159,24 +168,18 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
         ),
         (
             "Exfiltration to paste sites",
-            UserRule::SemanticQuery {
-                text: "credentials or scraped data posted to a public paste site".to_owned(),
-                model: model.clone(),
-                embedding: topics::mix(&model, world.seed, &[Theme::Credentials, Theme::Scraping])?,
-                threshold: similarity(0.82)?,
-            },
+            semantic(
+                world,
+                "credentials or scraped data posted to a public paste site",
+                0.82,
+            )?,
             RuleStatus::Enabled,
             SEMANTIC_RULE_AT,
             vec![sink(SinkKind::Webhook)?],
         ),
         (
             "Refund escalations",
-            UserRule::SemanticQuery {
-                text: "customer refund escalated between agents".to_owned(),
-                model: model.clone(),
-                embedding: topics::mix(&model, world.seed, &[Theme::Support])?,
-                threshold: similarity(0.8)?,
-            },
+            semantic(world, "customer refund escalated between agents", 0.8)?,
             RuleStatus::Enabled,
             OFF_RULE_AT,
             vec![sink(SinkKind::Log)?],
@@ -188,7 +191,7 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
         let rule_name = name(text)?;
         let action = OperatorAction::CreateRule {
             name: rule_name.clone(),
-            rule: rule.clone(),
+            rule: rule.spec(),
             sinks: sinks.clone(),
         };
         operator_action(
@@ -196,7 +199,7 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
             at,
             OPERATOR_RESEARCHER,
             action,
-            vec![AuditSubject::Rule(id)],
+            ActionOutcome::RuleCreated(id),
         );
         state.rules.push(RuleDef {
             id,

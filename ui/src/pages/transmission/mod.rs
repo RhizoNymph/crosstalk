@@ -128,8 +128,8 @@ async fn load(
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let content = can(caller, Permission::Content);
-    let version = backend.current_topic_version();
-    let window = all_time(backend.now()).ok_or_else(|| QueryError::Store {
+    let version = backend.current_topic_version(caller).await?;
+    let window = all_time(backend.now(caller).await?).ok_or_else(|| QueryError::Store {
         reason: "empty window".to_owned(),
     })?;
     let scope = Scope {
@@ -246,7 +246,7 @@ async fn load(
 
 #[page("/transmissions/{tx_ulid}")]
 async fn transmission_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = transmission_id(cx)?;
     let flash = flash(cx);
     Ok(view! { evidence_page(id: id, state: state, flash: flash, failure: None) })
@@ -254,7 +254,7 @@ async fn transmission_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/transmissions/{tx_ulid}")]
 async fn transmission_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = transmission_id(cx)?;
     let failure = match fields.text("action") {
         Some("set-verdict") => {

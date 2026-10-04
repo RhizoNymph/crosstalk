@@ -131,7 +131,7 @@ pub fn history_rows(entries: &[AuditEntry], operators: &OperatorNames) -> Vec<Hi
             what: describe(&e.action),
             note: note(&e.action).map(str::to_owned),
             outcome: match &e.outcome {
-                AuditOutcome::Applied => Ok(()),
+                AuditOutcome::Applied(_) => Ok(()),
                 AuditOutcome::Rejected(error) => Err(error.to_string()),
             },
         })
@@ -258,6 +258,9 @@ mod tests {
                 policy: PolicyKind::Sanctioned,
                 note: Some("ok".into()),
             }),
+            subject: Some(crate::contract::research::AuditSubject::Channel(
+                ChannelId::from_ulid(1),
+            )),
             outcome: AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::ChannelSuperseded)),
         };
         let operators = OperatorNames::new([(OperatorId::from_ulid(3), "ada".to_owned())]);

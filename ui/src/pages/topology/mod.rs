@@ -112,7 +112,7 @@ async fn summary(
 
 #[page("/topology")]
 async fn topology_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let form: FormFields = parse_query_params(cx).unwrap_or_default();
     let query = query_params::<RawTopologyQuery>(cx)
         .map_err(|e| invalid("query", e))
@@ -260,7 +260,11 @@ const TOGGLE_OFF: &str = "rounded border border-zinc-300 px-2 py-0.5 text-xs tex
 async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<impl View> {
     let collapse = query.collapse;
     let topology_src = href("/data/topology", state, &[]);
-    let brush_src = timeline_src(state, backend(cx).now());
+    let now = backend(cx)
+        .now(&caller(cx))
+        .await
+        .unwrap_or(state.scope.window.end());
+    let brush_src = timeline_src(state, now);
     let brush_from = rfc3339(state.scope.window.start());
     let brush_to = rfc3339(state.scope.window.end());
     let state_query = state.to_query();

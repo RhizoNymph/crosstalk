@@ -1,11 +1,12 @@
-//! Agent labels, merge history and vetoes (items 14 and 15).
+//! Agents, labels, merge history and vetoes (items 14 and 15).
 
 use crosstalk_spec::ids::{AgentId, OperatorId};
-use crosstalk_spec::observed::agent::{Agent, MergeAuthor};
-use crosstalk_spec::observed::client::HarnessClaim;
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::observed::agent::{IdentityEvidence, MergeAuthor};
+use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
+use crosstalk_spec::support::{NonEmpty, Timestamp};
 
 use super::MergeId;
+use super::search::SearchText;
 
 /// An operator-chosen display name: trimmed, non-empty, at most
 /// [`AgentLabel::MAX_CHARS`] characters.
@@ -49,6 +50,69 @@ pub enum ActiveAgentState {
     Established { since: Timestamp },
 }
 
+/// Replaces `crosstalk_spec::observed::agent::AgentState`: `Merged` keeps
+/// the state the agent had before the merge, which an unmerge restores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentState {
+    Registered {
+        at: Timestamp,
+    },
+    Provisional {
+        first_seen: Timestamp,
+    },
+    /// Holds evidence of at least two variants, at least one of them strong.
+    Established {
+        since: Timestamp,
+    },
+    /// This agent turned out to be `into`. Its records keep its own id and
+    /// resolve to `into` at read time. `into` is never this agent and is
+    /// never itself merged.
+    Merged {
+        into: AgentId,
+        at: Timestamp,
+        by: MergeAuthor,
+        prior: ActiveAgentState,
+    },
+}
+
+impl AgentState {
+    /// The active state, or `None` when merged.
+    pub fn active(&self) -> Option<ActiveAgentState> {
+        match *self {
+            Self::Registered { at } => Some(ActiveAgentState::Registered { at }),
+            Self::Provisional { first_seen } => Some(ActiveAgentState::Provisional { first_seen }),
+            Self::Established { since } => Some(ActiveAgentState::Established { since }),
+            Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn is_merged(&self) -> bool {
+        matches!(self, Self::Merged { .. })
+    }
+}
+
+impl From<ActiveAgentState> for AgentState {
+    fn from(state: ActiveAgentState) -> Self {
+        match state {
+            ActiveAgentState::Registered { at } => Self::Registered { at },
+            ActiveAgentState::Provisional { first_seen } => Self::Provisional { first_seen },
+            ActiveAgentState::Established { since } => Self::Established { since },
+        }
+    }
+}
+
+/// Replaces `crosstalk_spec::observed::agent::Agent`, holding the
+/// contract's [`AgentState`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agent {
+    pub id: AgentId,
+    pub evidence: NonEmpty<IdentityEvidence>,
+    /// The agent that spawned this one, from harness parent ids in the same
+    /// scope.
+    pub parent: Option<AgentId>,
+    pub state: AgentState,
+}
+
 /// The agent state kinds a canonical agent can be in. Graph nodes and lists
 /// show canonical agents only, so `Merged` is not a kind here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +154,30 @@ pub struct ClaimSeen {
     pub last_seen: Timestamp,
 }
 
+/// What an agent is called (item 24): its canonical agent and that agent's
+/// label. Asking for an alias names the agent it was merged into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentName {
+    /// The canonical agent.
+    pub id: AgentId,
+    pub label: Option<AgentLabel>,
+}
+
+/// Restricts the agents list (item 28). Empty lists and `None` do not
+/// restrict; fields combine with AND.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentListFilter {
+    pub states: Vec<AgentStateKind>,
+    /// Agents with a harness claim of one of these families. Claims are
+    /// what clients said, not identity.
+    pub harness_claims: Vec<HarnessFamily>,
+    /// Matches the label or the id's text, ignoring case.
+    pub text: Option<SearchText>,
+    /// Agents whose canonical parent is one of these: one level of a
+    /// sub-agent tree.
+    pub parents: Vec<AgentId>,
+}
+
 /// A row in the agents list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSummary {
@@ -113,4 +201,31 @@ pub struct AgentDetail {
     pub children: Vec<AgentId>,
     pub merges: Vec<MergeRecord>,
     pub vetoes: Vec<MergeVeto>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_states_round_trip_and_merged_has_none() {
+        let at = Timestamp::from_micros(5);
+        for active in [
+            ActiveAgentState::Registered { at },
+            ActiveAgentState::Provisional { first_seen: at },
+            ActiveAgentState::Established { since: at },
+        ] {
+            let state = AgentState::from(active);
+            assert_eq!(state.active(), Some(active));
+            assert!(!state.is_merged());
+        }
+        let merged = AgentState::Merged {
+            into: AgentId::from_ulid(2),
+            at,
+            by: MergeAuthor::Resolver,
+            prior: ActiveAgentState::Provisional { first_seen: at },
+        };
+        assert_eq!(merged.active(), None);
+        assert!(merged.is_merged());
+    }
 }

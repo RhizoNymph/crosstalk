@@ -12,9 +12,14 @@ use topcoat::asset::{
 use topcoat::runtime::RouterBuilderRuntimeExt;
 use topcoat::view::{View, ViewExt};
 
-use crate::backend::fixture::FixtureBackend;
+use crosstalk_spec::ids::{AgentId, ChannelId};
+
+use crate::backend::fixture::{ChannelKey, FixtureBackend};
 use crate::config::TrustedOperator;
 use crate::url::ulid::UlidId;
+
+/// The seed every harness backend is generated from.
+pub const SEED: u64 = 7;
 
 /// What a test sees of a response.
 pub struct Reply {
@@ -34,7 +39,7 @@ pub fn router() -> Router {
     Router::builder()
         .discover()
         .app_context(operator())
-        .app_context(FixtureBackend::new(7))
+        .app_context(FixtureBackend::new(SEED))
         .assets(assets())
         .runtime()
         .build()
@@ -72,7 +77,7 @@ fn assets() -> AssetConfig {
 pub fn cx() -> Cx {
     let mut app = AppContext::new();
     app.insert(operator());
-    app.insert(FixtureBackend::new(7));
+    app.insert(FixtureBackend::new(SEED));
     Cx::new(Arc::new(app))
 }
 
@@ -81,8 +86,55 @@ pub async fn render(view: impl View, cx: &Cx) -> String {
     view.first().await.expect("view renders").render(cx)
 }
 
+/// A copy of the harness world, for finding the ids of its scenario
+/// entities and what the backend says about them. Same seed, same ids.
+/// Never act on it: tests share it.
+pub fn world() -> &'static FixtureBackend {
+    static WORLD: OnceLock<FixtureBackend> = OnceLock::new();
+    WORLD.get_or_init(|| FixtureBackend::new(SEED))
+}
+
+/// The id of a scenario agent by its fixture key (`pi2`, `al3`, …).
+pub fn agent_id(key: &str) -> AgentId {
+    world()
+        .scenario()
+        .agent(key)
+        .unwrap_or_else(|| panic!("no fixture agent {key}"))
+}
+
+/// The id of a scenario channel.
+pub fn channel_id(key: ChannelKey) -> ChannelId {
+    world()
+        .scenario()
+        .channel(key)
+        .unwrap_or_else(|| panic!("no fixture channel {key:?}"))
+}
+
+/// One router, so the backend's state carries over between requests (an
+/// action posted, then the page that shows it). [`get`] and [`post`] build
+/// a fresh world per request.
+pub struct Session(Router);
+
+impl Session {
+    pub fn new() -> Self {
+        Self(router())
+    }
+
+    pub async fn get(&self, uri: &str) -> Reply {
+        send_to(&self.0, get_request(uri)).await
+    }
+
+    pub async fn post(&self, uri: &str, form: &str) -> Reply {
+        send_to(&self.0, post_request(uri, form)).await
+    }
+}
+
 async fn send(request: Request) -> Reply {
-    let response = router().handle(request).await;
+    send_to(&router(), request).await
+}
+
+async fn send_to(router: &Router, request: Request) -> Reply {
+    let response = router.handle(request).await;
     let status = response.status();
     let location = response
         .headers()
@@ -97,23 +149,29 @@ async fn send(request: Request) -> Reply {
     }
 }
 
-pub async fn get(uri: &str) -> Reply {
-    let request = Request::builder()
+fn get_request(uri: &str) -> Request {
+    Request::builder()
         .method("GET")
         .uri(uri)
         .body(Body::empty())
-        .expect("request");
-    send(request).await
+        .expect("request")
 }
 
-pub async fn post(uri: &str, form: &str) -> Reply {
-    let request = Request::builder()
+fn post_request(uri: &str, form: &str) -> Request {
+    Request::builder()
         .method("POST")
         .uri(uri)
         .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(form.to_owned()))
-        .expect("request");
-    send(request).await
+        .expect("request")
+}
+
+pub async fn get(uri: &str) -> Reply {
+    send(get_request(uri)).await
+}
+
+pub async fn post(uri: &str, form: &str) -> Reply {
+    send(post_request(uri, form)).await
 }
 
 #[tokio::test]

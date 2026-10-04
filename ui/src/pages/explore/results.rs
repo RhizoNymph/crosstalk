@@ -61,7 +61,7 @@ pub async fn load(
 ) -> std::result::Result<Results, QueryError> {
     require(caller, Permission::View)?;
     require(caller, Permission::Content)?;
-    let state = state_from_query(cx, state)?;
+    let state = state_from_query(cx, state).await?;
     let selection = ProjectionSelection::parse(selection).map_err(|e| invalid("ps", e))?;
     let cursor = parse_cursor(Some(cursor).filter(|c| !c.is_empty()))?;
     if selection == ProjectionSelection::None {

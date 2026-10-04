@@ -129,7 +129,7 @@ fn search_page(cx: &Cx) -> std::result::Result<PageRequest, QueryError> {
 
 #[page("/explore")]
 async fn explore_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let query = parse_query(cx).and_then(|q| search_page(cx).map(|page| (q, page)));
     let flash = flash(cx);
     Ok(view! { explore_page(state: state, query: query, flash: flash, failure: None) })
@@ -137,7 +137,7 @@ async fn explore_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/explore")]
 async fn explore_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let query = parse_query(cx);
     let failure = match fields.text("action") {
         Some("fit") => {

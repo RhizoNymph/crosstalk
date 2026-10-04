@@ -52,7 +52,7 @@ const SECTIONS: [(&str, &str, &str); 9] = [
 
 #[page("/")]
 async fn overview_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     Ok(view! { overview_page(state: state) })
 }
 

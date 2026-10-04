@@ -3,18 +3,21 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind};
+use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
 use crate::backend::fixture::world::confirmed;
-use crate::contract::agents::{AgentDetail, AgentSummary};
+use crate::contract::MergeId;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
@@ -22,9 +25,11 @@ use crate::contract::errors::QueryError;
 use crate::contract::graph::route_kind;
 use crate::contract::lists::{Page, PageRequest};
 use crate::contract::research::{
-    Actor, AuditEntry, AuditFilter, AuditSubject, MatchKindName, QualityRow,
+    Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
+    QualityRow,
 };
 use crate::contract::verdict::Verdict;
+use crate::url::ulid::UlidId;
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};
@@ -51,7 +56,7 @@ pub fn channels(
         .map(|r| {
             (
                 oldest_first(r.created, r.channel.id.as_ulid()),
-                summaries::channel(ctx, r),
+                summaries::channel(ctx, r, filter.window),
             )
         })
         .collect();
@@ -62,7 +67,7 @@ pub fn channel(ctx: &Ctx, id: ChannelId) -> Option<ChannelSummary> {
     ctx.state
         .channels
         .get(&id)
-        .map(|r| summaries::channel(ctx, r))
+        .map(|r| summaries::channel(ctx, r, None))
 }
 
 fn ranked(counts: HashMap<AgentId, u64>) -> Vec<(AgentId, u64)> {
@@ -113,13 +118,42 @@ pub fn channel_resources(ctx: &Ctx, id: ChannelId, window: TimeWindow) -> Result
         .collect())
 }
 
-pub fn agents(ctx: &Ctx, page: &PageRequest) -> Result<Page<AgentSummary>> {
+/// Whether a summary passes the agents list filter.
+fn keeps(filter: &AgentListFilter, summary: &AgentSummary) -> bool {
+    let text = filter.text.as_ref().map(|t| t.as_str().to_lowercase());
+    (filter.states.is_empty() || filter.states.contains(&summary.state))
+        && (filter.harness_claims.is_empty()
+            || summary
+                .claims
+                .iter()
+                .any(|c| filter.harness_claims.contains(&c.claim.family)))
+        && (filter.parents.is_empty()
+            || summary.parent.is_some_and(|p| filter.parents.contains(&p)))
+        && text.is_none_or(|needle| {
+            summary
+                .label
+                .as_ref()
+                .is_some_and(|l| l.as_str().to_lowercase().contains(&needle))
+                || summary.id.to_ulid().to_lowercase().contains(&needle)
+        })
+}
+
+pub fn agents(
+    ctx: &Ctx,
+    filter: &AgentListFilter,
+    page: &PageRequest,
+) -> Result<Page<AgentSummary>> {
     let counts = summaries::global_counts(ctx);
+    // Parents name canonical agents; an alias asks for its canonical agent.
+    let filter = AgentListFilter {
+        parents: filter.parents.iter().map(|p| ctx.agent(*p)).collect(),
+        ..filter.clone()
+    };
     let items = ctx
         .canonical_agents()
         .filter_map(|id| {
             let summary = summaries::agent(ctx, id, counts.get(&id).copied().unwrap_or_default())?;
-            Some(((0, id.as_ulid()), summary))
+            keeps(&filter, &summary).then(|| ((0, id.as_ulid()), summary))
         })
         .collect();
     page::paginate("agents", items, page)
@@ -177,15 +211,6 @@ pub fn agent(ctx: &Ctx, id: AgentId) -> Option<AgentDetail> {
     })
 }
 
-fn alert_kind(state: &AlertState) -> AlertStateKind {
-    match state {
-        AlertState::Open => AlertStateKind::Open,
-        AlertState::Acknowledged { .. } => AlertStateKind::Acknowledged,
-        AlertState::Resolved { .. } => AlertStateKind::Resolved,
-        AlertState::Suppressed { .. } => AlertStateKind::Suppressed,
-    }
-}
-
 /// Whether an alert is about `channel`: its subject is the channel, or a
 /// transmission routed through it (both after supersession).
 fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
@@ -204,7 +229,7 @@ pub fn alerts(ctx: &Ctx, filter: &AlertFilter, page: &PageRequest) -> Result<Pag
         .state
         .alerts
         .iter()
-        .filter(|a| filter.states.is_empty() || filter.states.contains(&alert_kind(&a.state)))
+        .filter(|a| filter.states.is_empty() || filter.states.contains(&a.state.kind()))
         .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
         .map(|a| (newest_first(a.raised_at, a.id.as_ulid()), a.clone()))
         .collect();
@@ -273,6 +298,39 @@ pub fn quality(ctx: &Ctx, window: TimeWindow) -> Vec<QualityRow> {
     rows.into_values().collect()
 }
 
+/// Every entity an audit entry concerns: its subject, the agents of a merge
+/// or unmerge, and what it created.
+fn concerns(ctx: &Ctx, entry: &AuditEntry) -> Vec<AuditSubject> {
+    let mut out: Vec<AuditSubject> = entry.subject.into_iter().collect();
+    if let AuditedAction::Operator(OperatorAction::MergeAgents(request)) = &entry.action {
+        out.push(AuditSubject::Agent(request.source()));
+        out.push(AuditSubject::Agent(request.target()));
+    }
+    if let AuditOutcome::Applied(outcome) = &entry.outcome {
+        match outcome {
+            ActionOutcome::RuleCreated(id) => out.push(AuditSubject::Rule(*id)),
+            ActionOutcome::ChannelPromoted(id) => out.push(AuditSubject::Channel(*id)),
+            ActionOutcome::Merged(id) => out.push(AuditSubject::Merge(*id)),
+            ActionOutcome::Applied => {}
+        }
+    }
+    let merges: Vec<MergeId> = out
+        .iter()
+        .filter_map(|s| match s {
+            AuditSubject::Merge(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for merge in merges {
+        if let Some(record) = ctx.state.merges.iter().find(|m| m.id == merge) {
+            out.push(AuditSubject::Agent(record.from));
+            out.push(AuditSubject::Agent(record.into));
+        }
+    }
+    out
+}
+
+/// Whether `subject` is `wanted`, after alias and supersession resolution.
 fn subject_matches(ctx: &Ctx, wanted: AuditSubject, subject: AuditSubject) -> bool {
     match (wanted, subject) {
         (AuditSubject::Agent(a), AuditSubject::Agent(b)) => a == b || ctx.agent(a) == ctx.agent(b),
@@ -288,22 +346,19 @@ pub fn audit(ctx: &Ctx, filter: &AuditFilter, page: &PageRequest) -> Result<Page
         .state
         .audit
         .iter()
-        .filter(|r| {
+        .filter(|e| {
             filter.operators.is_empty()
-                || matches!(r.entry.by, Actor::Operator(op) if filter.operators.contains(&op))
+                || matches!(e.by, Actor::Operator(op) if filter.operators.contains(&op))
         })
-        .filter(|r| filter.window.is_none_or(|w| w.contains(r.entry.at)))
-        .filter(|r| {
-            filter
-                .subject
-                .is_none_or(|s| r.subjects.iter().any(|x| subject_matches(ctx, s, *x)))
+        .filter(|e| filter.window.is_none_or(|w| w.contains(e.at)))
+        .filter(|e| {
+            filter.subject.is_none_or(|s| {
+                concerns(ctx, e)
+                    .into_iter()
+                    .any(|x| subject_matches(ctx, s, x))
+            })
         })
-        .map(|r| {
-            (
-                newest_first(r.entry.at, r.entry.id.as_ulid()),
-                r.entry.clone(),
-            )
-        })
+        .map(|e| (newest_first(e.at, e.id.as_ulid()), e.clone()))
         .collect();
     page::paginate("audit", items, page)
 }

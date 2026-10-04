@@ -87,8 +87,8 @@ pub enum ConfigError {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let path = std::env::var_os(CONFIG_ENV)
-            .map_or_else(|| PathBuf::from(DEFAULT_PATH), PathBuf::from);
+        let path =
+            std::env::var_os(CONFIG_ENV).map_or_else(|| PathBuf::from(DEFAULT_PATH), PathBuf::from);
         Self::load(&path)
     }
 

@@ -311,6 +311,15 @@ fn slot(name: &str, rng: &mut Rng) -> String {
     }
 }
 
+/// A theme's terms and label words: what a query's words are compared with
+/// by search and by the fixture's embedder.
+pub fn vocabulary(theme: Theme) -> std::collections::HashSet<String> {
+    let mut words: std::collections::HashSet<String> =
+        theme.terms().iter().map(|(t, _)| (*t).to_owned()).collect();
+    words.extend(tokens(theme.label()));
+    words
+}
+
 /// Lowercase alphanumeric words of at least three characters.
 pub fn tokens(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())

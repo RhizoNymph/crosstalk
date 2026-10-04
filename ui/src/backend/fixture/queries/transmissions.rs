@@ -189,12 +189,7 @@ fn text_hits(lower: &[String], needle: &str) -> (usize, Option<(usize, usize)>) 
 fn vocabularies() -> Vec<HashSet<String>> {
     Theme::ALL
         .iter()
-        .map(|theme| {
-            let mut words: HashSet<String> =
-                theme.terms().iter().map(|(t, _)| (*t).to_owned()).collect();
-            words.extend(text::tokens(theme.label()));
-            words
-        })
+        .map(|theme| text::vocabulary(*theme))
         .collect()
 }
 

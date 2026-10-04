@@ -98,7 +98,7 @@ async fn submit(
 
 #[page("/channels/{channel_ulid}/promote")]
 async fn promote_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let pattern = query_params::<PromoteQuery>(cx)
         .ok()
@@ -108,7 +108,7 @@ async fn promote_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/channels/{channel_ulid}/promote")]
 async fn promote_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let error = match submit(cx, id, &fields).await {
         Ok(declared) => {
@@ -197,5 +197,47 @@ mod tests {
         let reply = post(&url, "pattern=0&policy=sanctioned").await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
         assert!(reply.body.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn the_preview_comes_from_the_backend_and_promotion_follows_it() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::testing::{Session, channel_id};
+        use crate::url::ulid::UlidId;
+
+        let (wiki, talk) = (
+            channel_id(ChannelKey::HijackedWiki),
+            channel_id(ChannelKey::WikiTalk),
+        );
+        let session = Session::new();
+        let url = format!(
+            "/channels/{}/promote?{}",
+            wiki.to_ulid(),
+            state().to_query()
+        );
+        // Pattern 2 is the `/wiki` prefix, which covers the talk page too.
+        let reply = session.get(&format!("{url}&pattern=2")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("Also supersedes <strong>1</strong>"));
+        assert!(
+            reply
+                .body
+                .contains(&crate::components::short_id(talk.to_ulid()))
+        );
+        assert!(reply.body.contains("covered"));
+        let reply = session.get(&format!("{url}&pattern=0")).await;
+        assert!(
+            reply
+                .body
+                .contains("No other discovered channel is covered.")
+        );
+        let reply = session.post(&url, "pattern=2&policy=unsanctioned").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        let declared = reply.location.expect("location");
+        assert!(declared.starts_with("/channels/"));
+        assert!(!declared.contains(&wiki.to_ulid()));
+        let reply = session.get(&format!("{url}&pattern=2")).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        assert!(reply.body.contains("the channel is superseded"));
     }
 }

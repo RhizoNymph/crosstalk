@@ -107,7 +107,7 @@ async fn load(
 
 #[page("/topics")]
 async fn topics_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let selected = query_params::<RawTopicsQuery>(cx)
         .map_err(|e| invalid("query", e))
         .and_then(|q| parse_version(q.ver.as_deref()))

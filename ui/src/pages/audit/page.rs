@@ -6,7 +6,7 @@ use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
 use topcoat::view::{View, view};
 
-use super::describe::{describe, note, subject};
+use super::describe::{describe, note};
 use super::query::{AuditQuery, RawAuditQuery};
 use super::subject::{subject_code, subject_link};
 use crate::app::{backend, caller};
@@ -15,13 +15,15 @@ use crate::components::form::{BUTTON, FACET, INPUT, LABEL, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     PageLinks, data_table, empty_state, error_panel, filter_chip, format_time, href, page_header,
-    pagination, state_inputs,
+    pagination, short_id, state_inputs,
 };
+use crate::contract::actions::ActionOutcome;
 use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
-use crate::contract::research::{AuditEntry, AuditOutcome};
+use crate::contract::research::{AuditEntry, AuditOutcome, AuditSubject};
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
+use crate::pages::common::links::{channel_url, rule_url};
 use crate::pages::common::lookup::{OperatorNames, operator_names};
 use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
@@ -38,8 +40,33 @@ pub struct AuditRow {
     pub note: Option<String>,
     /// The subject's label, its page, and this list filtered to it.
     pub subject: Option<(String, Option<String>, String)>,
-    /// `Err` holds why the gateway rejected it.
-    pub outcome: std::result::Result<(), String>,
+    /// What an applied action created, with a link to it; `Err` holds why
+    /// the gateway rejected the action.
+    pub outcome: std::result::Result<Option<(String, String)>, String>,
+}
+
+/// What an applied action created, in words, and where to see it. A merge
+/// links to the log filtered to it.
+fn created(
+    outcome: &ActionOutcome,
+    query: &AuditQuery,
+    state: &ViewState,
+) -> Option<(String, String)> {
+    match *outcome {
+        ActionOutcome::Applied => None,
+        ActionOutcome::RuleCreated(id) => Some((
+            format!("created rule {}", short_id(id.to_ulid())),
+            rule_url(id, state),
+        )),
+        ActionOutcome::ChannelPromoted(id) => Some((
+            format!("declared channel {}", short_id(id.to_ulid())),
+            channel_url(id, state),
+        )),
+        ActionOutcome::Merged(id) => Some((
+            format!("merge {}", short_id(id.to_ulid())),
+            list_href(state, &query.with_subject(Some(AuditSubject::Merge(id)))),
+        )),
+    }
 }
 
 pub fn audit_row(
@@ -53,12 +80,12 @@ pub fn audit_row(
         actor: operators.actor(entry.by),
         what: describe(&entry.action),
         note: note(&entry.action).map(str::to_owned),
-        subject: subject(&entry.action).map(|s| {
+        subject: entry.subject.map(|s| {
             let (label, url) = subject_link(s, state);
             (label, url, list_href(state, &query.with_subject(Some(s))))
         }),
         outcome: match &entry.outcome {
-            AuditOutcome::Applied => Ok(()),
+            AuditOutcome::Applied(outcome) => Ok(created(outcome, query, state)),
             AuditOutcome::Rejected(error) => Err(error.to_string()),
         },
     }
@@ -107,7 +134,7 @@ async fn load(
 
 #[page("/audit")]
 async fn audit_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let caller = caller(cx);
     let parsed = query_params::<RawAuditQuery>(cx)
         .map_err(|e| invalid("query", e))
@@ -220,7 +247,12 @@ async fn audit_get(cx: &Cx) -> Result<impl View> {
                                 </td>
                                 <td class=(TD)>
                                     match row.outcome {
-                                        Ok(()) => <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>,
+                                        Ok(created) => {
+                                            <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>
+                                            if let Some((label, url)) = created {
+                                                <div class="text-xs"><a class=(LINK) href=(url)>(label)</a></div>
+                                            }
+                                        },
                                         Err(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
                                     }
                                 </td>
@@ -260,6 +292,7 @@ mod tests {
                 policy: PolicyKind::Unsanctioned,
                 note: None,
             }),
+            subject: Some(AuditSubject::Channel(ChannelId::from_ulid(3))),
             outcome: AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::ChannelSuperseded)),
         };
         let names = OperatorNames::new([(OperatorId::from_ulid(2), "ada".to_owned())]);
@@ -275,13 +308,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn applied_rows_link_what_they_created() {
+        use crosstalk_spec::ids::AlertRuleId;
+
+        let entry = AuditEntry {
+            id: AuditId::from_ulid(1),
+            at: Timestamp::from_micros(1_790_985_600_000_000),
+            by: Actor::Operator(OperatorId::from_ulid(2)),
+            action: AuditedAction::Operator(OperatorAction::SetRuleEnabled {
+                id: AlertRuleId::from_ulid(7),
+                status: crate::contract::rules::OperatorRuleStatus::Disabled,
+            }),
+            subject: Some(AuditSubject::Rule(AlertRuleId::from_ulid(7))),
+            outcome: AuditOutcome::Applied(ActionOutcome::Applied),
+        };
+        let row = audit_row(
+            &entry,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
+        assert_eq!(row.outcome, Ok(None));
+        let (label, page, _) = row.subject.expect("subject");
+        assert_eq!(label, "rule …000007");
+        assert!(page.is_some_and(|p| p.starts_with("/alerts/rules/")));
+        let promoted = AuditEntry {
+            action: AuditedAction::Operator(OperatorAction::PromoteChannel {
+                channel: ChannelId::from_ulid(3),
+                pattern: crosstalk_spec::derived::flow::resource::ResourcePattern::Host(
+                    crosstalk_spec::derived::flow::resource::Host("wiki.example.org".into()),
+                ),
+                policy: PolicyKind::Sanctioned,
+                note: None,
+            }),
+            subject: Some(AuditSubject::Channel(ChannelId::from_ulid(3))),
+            outcome: AuditOutcome::Applied(ActionOutcome::ChannelPromoted(ChannelId::from_ulid(8))),
+            ..entry
+        };
+        let row = audit_row(
+            &promoted,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
+        let (label, url) = row.outcome.expect("applied").expect("created");
+        assert_eq!(label, "declared channel …000008");
+        assert!(url.starts_with("/channels/00000000000000000000000008"));
+        let request = crosstalk_spec::observed::agent::MergeRequest::new(
+            crosstalk_spec::ids::AgentId::from_ulid(1),
+            crosstalk_spec::ids::AgentId::from_ulid(2),
+            crosstalk_spec::observed::agent::MergeAuthor::Operator(OperatorId::from_ulid(2)),
+        )
+        .expect("request");
+        let merged = AuditEntry {
+            action: AuditedAction::Operator(OperatorAction::MergeAgents(request)),
+            subject: Some(AuditSubject::Agent(
+                crosstalk_spec::ids::AgentId::from_ulid(1),
+            )),
+            outcome: AuditOutcome::Applied(ActionOutcome::Merged(
+                crate::contract::MergeId::from_ulid(9),
+            )),
+            ..promoted
+        };
+        let row = audit_row(
+            &merged,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
+        let (label, url) = row.outcome.expect("applied").expect("created");
+        assert_eq!(label, "merge …000009");
+        assert!(url.contains("subject=mg.00000000000000000000000009"));
+    }
+
     #[tokio::test]
     async fn audit_page_renders_and_validates_filters() {
         let q = state().to_query();
         let reply = get(&format!("/audit?{q}&span=all")).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(!reply.body.contains("No audit entries match these filters."));
-        let reply = get(&format!("/audit?{q}&span=all&op=01J9ZQ3W8D00000000000000ZZ")).await;
+        let reply = get(&format!(
+            "/audit?{q}&span=all&op=01J9ZQ3W8D00000000000000ZZ"
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No audit entries match these filters."));
         let reply = get(&format!(

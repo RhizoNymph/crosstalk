@@ -90,7 +90,7 @@ pub fn profile(
         claims: summary.claims.clone(),
         evidence: evidence_rows(detail.agent.evidence.iter(), &[]),
         aliases: alias_rows(&detail.aliases, operators, state),
-        merges: merge_rows(&detail.merges, operators, state),
+        merges: merge_rows(&detail.merges, &detail.aliases, operators, state),
         vetoes: veto_rows(&detail.vetoes, operators, state),
     }
 }
@@ -111,7 +111,7 @@ async fn load(
         return Ok(None);
     };
     let operators = operator_names(cx, caller).await;
-    let tree = tree::load(cx, caller, &detail.children, state).await;
+    let tree = tree::load(cx, caller, detail.summary.id, &detail.children, state).await;
     Ok(Some(Loaded {
         profile: profile(id, &detail, &operators, state),
         tree,
@@ -120,7 +120,7 @@ async fn load(
 
 #[page("/agents/{agent_ulid}")]
 async fn agent_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let flash = flash(cx);
     Ok(view! { agent_page(id: id, state: state, flash: flash, failure: None) })
@@ -128,7 +128,7 @@ async fn agent_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/agents/{agent_ulid}")]
 async fn agent_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let failure = match parse(id, &fields) {
         Ok((form, action, flash)) => match perform(cx, action).await {
@@ -274,12 +274,12 @@ async fn agent_page(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crosstalk_spec::observed::agent::{Agent, AgentState};
     use crosstalk_spec::support::{NonEmpty, Timestamp};
     use topcoat::router::StatusCode;
 
     use super::*;
     use crate::components::href::tests::state;
+    use crate::contract::agents::{Agent, AgentState};
     use crate::pages::agents::evidence::tests::{credential, harness};
     use crate::pages::agents::list::tests::summary;
     use crate::testing::{get, post};
@@ -352,6 +352,42 @@ pub(crate) mod tests {
             reply.status,
             StatusCode::NOT_FOUND,
             "the stub knows no agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_sub_agent_tree_lists_children_by_name() {
+        use crate::testing::{operator, world};
+
+        let c = operator().caller();
+        let all = world()
+            .agents(
+                &c,
+                &Default::default(),
+                &crate::contract::lists::PageRequest::first(
+                    std::num::NonZeroU32::new(1000).expect("limit"),
+                ),
+            )
+            .await
+            .expect("agents")
+            .items;
+        let child = all
+            .iter()
+            .find(|a| a.parent.is_some())
+            .expect("a sub-agent");
+        let parent = child.parent.expect("parent");
+        let reply = get(&format!(
+            "/agents/{}?{}",
+            parent.to_ulid(),
+            state().to_query()
+        ))
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(!reply.body.contains("No sub-agents."));
+        assert!(
+            reply.body.contains(&agent_name(child)),
+            "{}",
+            agent_name(child)
         );
     }
 }

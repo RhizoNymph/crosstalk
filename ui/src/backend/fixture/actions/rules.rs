@@ -1,8 +1,8 @@
 //! Rule management (item 18). Built-in rules can only be enabled or
 //! disabled; operator rules are validated against the retained topic
-//! versions, the embedding model and the configured sinks.
+//! versions and the configured sinks, and semantic queries are embedded
+//! with the fixture's model.
 
-use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AlertRuleId, OperatorId};
 
 use crate::backend::Result;
@@ -10,11 +10,12 @@ use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::queries::retained;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
+use crate::backend::fixture::world::topics::embed;
 use crate::contract::SinkId;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::errors::{ConflictKind, InputError, QueryError};
 use crate::contract::rules::{
-    OperatorRuleStatus, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
+    OperatorRuleStatus, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, UserRule, UserRuleSpec,
 };
 
 use super::effects;
@@ -26,10 +27,11 @@ fn invalid(field: &'static str, reason: &str) -> QueryError {
     })
 }
 
-/// A watched-topic rule must watch topics of the current version (new
-/// confirmations are classified under it); a semantic query must be
-/// embedded with the current model; every sink must exist.
-fn validate(world: &World, rule: &UserRule, sinks: &[SinkId]) -> Result<()> {
+/// Turns what an operator submitted into the rule to store. A
+/// watched-topic rule must watch topics of the current version (new
+/// confirmations are classified under it); a semantic query is embedded
+/// with the current model; every sink must exist.
+fn build(world: &World, spec: &UserRuleSpec, sinks: &[SinkId]) -> Result<UserRule> {
     if let Some(missing) = sinks
         .iter()
         .find(|s| !world.sinks.iter().any(|k| k.id == **s))
@@ -39,41 +41,40 @@ fn validate(world: &World, rule: &UserRule, sinks: &[SinkId]) -> Result<()> {
             &format!("unknown sink {:032x}", missing.as_ulid()),
         ));
     }
-    match rule {
-        UserRule::WatchedTopic {
-            version, topics, ..
+    match spec {
+        UserRuleSpec::WatchedTopic {
+            version,
+            topics,
+            remap_threshold,
         } => {
             retained(world, *version)?;
-            let current: TopicModelVersion = world.topics.latest();
-            if *version != current {
-                return Err(invalid(
-                    "rule.version",
-                    "watched topics must belong to the current topic version",
-                ));
+            if *version != world.topics.latest() {
+                return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent));
             }
             let known = |t| world.topics.topics_of(*version).any(|k| k.id == t);
             if topics.iter().any(|t| !known(*t)) {
                 return Err(invalid("rule.topics", "a topic is not in that version"));
             }
+            Ok(UserRule::WatchedTopic {
+                version: *version,
+                topics: topics.clone(),
+                remap_threshold: *remap_threshold,
+            })
         }
-        UserRule::SemanticQuery {
-            text,
-            model,
-            embedding,
-            ..
-        } => {
-            if text.trim().is_empty() {
-                return Err(invalid("rule.text", "the query text is empty"));
-            }
-            if *model != world.topics.model || *embedding.model() != world.topics.model {
-                return Err(invalid(
-                    "rule.model",
-                    "the query must be embedded with the current model",
-                ));
-            }
+        UserRuleSpec::SemanticQuery { text, threshold } => {
+            let model = &world.topics.model;
+            let embedding =
+                embed(model, world.seed, text.as_str()).map_err(|e| QueryError::Store {
+                    reason: format!("embedding the query failed: {e}"),
+                })?;
+            Ok(UserRule::SemanticQuery {
+                text: text.clone(),
+                model: model.clone(),
+                embedding,
+                threshold: *threshold,
+            })
         }
     }
-    Ok(())
 }
 
 pub fn create(
@@ -81,15 +82,15 @@ pub fn create(
     state: &mut State,
     by: OperatorId,
     name: &RuleName,
-    rule: &UserRule,
+    spec: &UserRuleSpec,
     sinks: &[SinkId],
 ) -> Result<ActionOutcome> {
-    validate(world, rule, sinks)?;
+    let rule = build(world, spec, sinks)?;
     let id = AlertRuleId::from_ulid(state.mint.ulid(NOW));
     state.rules.push(RuleDef {
         id,
         name: name.clone(),
-        rule: RuleKind::User(rule.clone()),
+        rule: RuleKind::User(rule),
         status: RuleStatus::Enabled,
         created: (RuleAuthor::Operator(by), NOW),
         sinks: sinks.to_vec(),
@@ -104,7 +105,7 @@ pub fn update(
     state: &mut State,
     id: AlertRuleId,
     name: &RuleName,
-    rule: &UserRule,
+    spec: &UserRuleSpec,
     sinks: &[SinkId],
 ) -> Result<ActionOutcome> {
     let existing = state
@@ -115,10 +116,10 @@ pub fn update(
     if matches!(existing.rule, RuleKind::Builtin(_)) {
         return Err(QueryError::Conflict(ConflictKind::BuiltinRule));
     }
-    validate(world, rule, sinks)?;
+    let rule = build(world, spec, sinks)?;
     if let Some(def) = state.rules.iter_mut().find(|r| r.id == id) {
         def.name = name.clone();
-        def.rule = RuleKind::User(rule.clone());
+        def.rule = RuleKind::User(rule);
         def.sinks = sinks.to_vec();
         if matches!(def.status, RuleStatus::Stale(_)) {
             def.status = RuleStatus::Enabled;
@@ -140,10 +141,7 @@ pub fn set_enabled(
         .find(|r| r.id == id)
         .ok_or(QueryError::NotFound)?;
     if matches!(def.status, RuleStatus::Stale(_)) && status == OperatorRuleStatus::Enabled {
-        return Err(invalid(
-            "status",
-            "a stale rule is re-targeted and enabled with UpdateRule",
-        ));
+        return Err(QueryError::Conflict(ConflictKind::RuleStale));
     }
     def.status = match status {
         OperatorRuleStatus::Enabled => RuleStatus::Enabled,

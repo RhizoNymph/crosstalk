@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU32;
 
-use crosstalk_spec::aggregates::alert::Alert;
+use crate::contract::alerts::Alert;
 use crosstalk_spec::interfaces::l8_surface::{
     AlertFilter, AlertStateKind, Caller, Permission, PolicyKind,
 };

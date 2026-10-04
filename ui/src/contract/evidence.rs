@@ -21,7 +21,11 @@ pub struct Excerpt {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidExcerpt {
     #[error("highlight {start}..{end} is empty or outside {len} bytes of text")]
-    OutOfRange { start: usize, end: usize, len: usize },
+    OutOfRange {
+        start: usize,
+        end: usize,
+        len: usize,
+    },
     #[error("highlight boundary {0} splits a character")]
     NotCharBoundary(usize),
 }

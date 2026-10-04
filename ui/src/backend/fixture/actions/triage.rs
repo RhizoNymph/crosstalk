@@ -1,6 +1,5 @@
 //! Verdicts, alert triage and dead-letter replay (item 17).
 
-use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::derived::flow::transmission::TransmissionState;
 use crosstalk_spec::ids::{AlertId, EventId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
@@ -10,14 +9,15 @@ use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
+use crate::contract::alerts::AlertState;
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
 
 use super::effects;
 
 /// Allowed on `Suspected`, `Discarded` and every state holding a
-/// `Confirmed`. A false detection resolves the transmission's active
-/// alerts.
+/// `Confirmed`. A false detection suppresses the transmission's active
+/// alerts (`OperatorRejected`).
 pub fn set_verdict(
     world: &World,
     state: &mut State,
@@ -45,7 +45,7 @@ pub fn set_verdict(
         note,
     });
     if verdict == Some(Verdict::FalseDetection) {
-        effects::reject_transmission_alerts(state, transmission, by, NOW);
+        effects::reject_transmission_alerts(state, transmission, NOW);
     }
     Ok(ActionOutcome::Applied)
 }

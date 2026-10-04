@@ -42,13 +42,13 @@ pub enum Submitted {
 
 #[page("/export")]
 async fn export_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     Ok(view! { export_page(state: state, submitted: None) })
 }
 
 #[page(POST "/export")]
 async fn export_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let caller = caller(cx);
     let submitted =
         match require(&caller, Permission::View).and_then(|()| parse(&fields, &state, &caller)) {

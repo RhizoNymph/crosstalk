@@ -11,14 +11,12 @@ use std::collections::{BTreeMap, HashMap};
 use crosstalk_spec::ids::{
     AccountHash, AgentId, CredentialHash, OperatorId, PromptHash, SecretVersion,
 };
-use crosstalk_spec::observed::agent::{
-    Agent, AgentState, IdentityEvidence, IdentityScope, MergeAuthor,
-};
+use crosstalk_spec::observed::agent::{IdentityEvidence, IdentityScope, MergeAuthor};
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily, UpstreamId};
 use crosstalk_spec::support::{Blake3, NonEmpty, Timestamp};
 
 use crate::contract::MergeId;
-use crate::contract::agents::{ActiveAgentState, AgentLabel, ClaimSeen, MergeRecord, MergeVeto};
+use crate::contract::agents::{Agent, AgentLabel, AgentState, ClaimSeen, MergeRecord, MergeVeto};
 
 use super::GenError;
 use super::history::OPERATOR_RESEARCHER;
@@ -184,7 +182,6 @@ pub struct Cast {
     /// `(parent, child)` for every sub-agent.
     pub delegations: Vec<(AgentId, AgentId)>,
     pub merges: Vec<MergeRecord>,
-    pub priors: HashMap<MergeId, ActiveAgentState>,
     pub vetoes: Vec<MergeVeto>,
 }
 
@@ -280,7 +277,6 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<Cast, GenError> {
         active_until: HashMap::new(),
         delegations,
         merges: Vec::new(),
-        priors: HashMap::new(),
         vetoes: Vec::new(),
     };
     apply_merges(&mut cast, mint)?;
@@ -295,7 +291,7 @@ fn apply_merges(cast: &mut Cast, mint: &mut Mint) -> Result<(), GenError> {
         let into = cast.id(plan.into)?;
         let id = MergeId::from_ulid(mint.ulid(plan.at));
         let prior = record(cast, from)
-            .and_then(|r| crate::backend::fixture::store::active_state(&r.agent.state))
+            .and_then(|r| r.agent.state.active())
             .ok_or_else(|| GenError::Missing(format!("active state of {}", plan.from)))?;
         let repointed: Vec<AgentId> = cast
             .records
@@ -315,13 +311,13 @@ fn apply_merges(cast: &mut Cast, mint: &mut Mint) -> Result<(), GenError> {
                 into,
                 at: plan.at,
                 by: plan.by,
+                prior,
             };
         }
         cast.active_until.insert(from, plan.at);
         for agent in &repointed {
             cast.active_until.insert(*agent, plan.at);
         }
-        cast.priors.insert(id, prior);
         cast.merges.push(MergeRecord {
             id,
             from,
@@ -344,13 +340,13 @@ fn revert(cast: &mut Cast, merge: MergeId, by: OperatorId, at: Timestamp) -> Res
         .iter()
         .position(|m| m.id == merge)
         .ok_or_else(|| GenError::Missing("merge to revert".to_owned()))?;
-    let prior = *cast
-        .priors
-        .get(&merge)
-        .ok_or_else(|| GenError::Missing("merge prior".to_owned()))?;
     let (from, into) = (cast.merges[index].from, cast.merges[index].into);
+    let prior = match record(cast, from).map(|r| &r.agent.state) {
+        Some(AgentState::Merged { prior, .. }) => *prior,
+        _ => return Err(GenError::Missing("merged state to revert".to_owned())),
+    };
     if let Some(r) = record_mut(cast, from) {
-        r.agent.state = crate::backend::fixture::store::from_active(prior);
+        r.agent.state = AgentState::from(prior);
     }
     cast.active_until.remove(&from);
     cast.merges[index].reverted = Some((by, at));

@@ -81,6 +81,7 @@ impl Polygon {
         Ok(Self(vertices))
     }
 
+    #[cfg(test)]
     pub fn vertices(&self) -> &[(f64, f64)] {
         &self.0
     }

@@ -6,5 +6,6 @@ pub mod detail;
 pub mod evidence;
 pub mod list;
 pub mod merge;
+pub mod query;
 pub mod sections;
 pub mod tree;

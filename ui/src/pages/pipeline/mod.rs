@@ -104,14 +104,14 @@ async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<Letters, QueryErr
 
 #[page("/pipeline")]
 async fn pipeline_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let flash = flash(cx);
     Ok(view! { pipeline_page(state: state, flash: flash, failure: None) })
 }
 
 #[page(POST "/pipeline")]
 async fn pipeline_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let error = match parse(&fields) {
         Ok(action) => match perform(cx, action).await {
             Ok(_) => return Err(done(PATH, &state, &[], Flash::Replayed)),

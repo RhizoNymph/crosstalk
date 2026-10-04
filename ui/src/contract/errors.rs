@@ -38,13 +38,16 @@ pub enum ConflictKind {
     AlertState,
     #[error("built-in rules can only be enabled or disabled")]
     BuiltinRule,
+    #[error("the rule is stale; update it to re-target and enable it")]
+    RuleStale,
+    #[error("the merge target resolves to the source agent")]
+    MergeIntoSelf,
+    #[error("watched topics must belong to the current topic version")]
+    TopicVersionNotCurrent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InputError {
     #[error("{field}: {reason}")]
-    Field {
-        field: &'static str,
-        reason: String,
-    },
+    Field { field: &'static str, reason: String },
 }

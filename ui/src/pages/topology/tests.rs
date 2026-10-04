@@ -12,7 +12,6 @@ use super::drawer::model::{Drawer, load};
 use super::selection::Selection;
 use super::*;
 use crate::backend::fixture::FixtureBackend;
-use crate::contract::channels::ChannelListFilter;
 use crate::contract::errors::InputError;
 use crate::contract::lists::PageRequest;
 use crate::testing::{cx, get};
@@ -56,7 +55,11 @@ async fn heaviest_edge() -> Selection {
 pub async fn agent_labelled(label: &str) -> crosstalk_spec::ids::AgentId {
     let backend = FixtureBackend::new(7);
     let page = backend
-        .agents(&everyone(), &first(500))
+        .agents(
+            &everyone(),
+            &crate::contract::agents::AgentListFilter::default(),
+            &first(500),
+        )
         .await
         .expect("agents");
     page.items
@@ -67,19 +70,7 @@ pub async fn agent_labelled(label: &str) -> crosstalk_spec::ids::AgentId {
 }
 
 pub async fn wiki_channel() -> crosstalk_spec::ids::ChannelId {
-    let backend = FixtureBackend::new(7);
-    let page = backend
-        .channels(&everyone(), &ChannelListFilter::default(), &first(500))
-        .await
-        .expect("channels");
-    page.items
-        .iter()
-        .find(|s| {
-            crate::data::names::channel_summary_name(s)
-                .starts_with("wiki.example.org/wiki/Agent_Coordination")
-        })
-        .map(|s| s.channel.id)
-        .expect("hijacked wiki")
+    crate::testing::channel_id(crate::backend::fixture::ChannelKey::HijackedWiki)
 }
 
 fn url(extra: &str) -> String {

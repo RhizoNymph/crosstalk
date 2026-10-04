@@ -18,7 +18,7 @@ mod evidence;
 mod history;
 mod rules;
 mod states;
-mod topics;
+pub mod topics;
 mod traffic;
 
 use std::collections::HashMap;
@@ -300,7 +300,6 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
     let channel_records = channels::finish(&plan, &traffic)?;
     let mut state = State::new(cast.records.clone(), channel_records, mint);
     state.merges = cast.merges.clone();
-    state.merge_priors = cast.priors.clone();
     state.vetoes = cast.vetoes.clone();
 
     let mut world = World {

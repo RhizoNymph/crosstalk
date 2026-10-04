@@ -3,18 +3,20 @@
 
 use std::collections::HashSet;
 
-use crosstalk_spec::aggregates::alert::{AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::topic::{Assignment, TopicModelVersion};
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::Policy;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::observed::agent::{AgentState, MergeAuthor};
+use crosstalk_spec::observed::agent::MergeAuthor;
 use crosstalk_spec::observed::client::HarnessFamily;
 
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::shared;
+use crate::contract::agents::AgentState;
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, RuleKind, RuleStatus, StaleReason, UserRule};
 use crate::contract::verdict::Verdict;
 
@@ -281,6 +283,7 @@ fn alerts_cover_every_state_reason_subject_and_dedup() {
     for reason in [
         SuppressReason::ChannelSanctioned,
         SuppressReason::RuleDisabled,
+        SuppressReason::OperatorRejected,
     ] {
         assert!(
             alerts.iter().any(
@@ -377,7 +380,7 @@ fn verdicts_audit_and_dead_letters() {
     let operators: HashSet<_> = state
         .audit
         .iter()
-        .filter_map(|r| match r.entry.by {
+        .filter_map(|r| match r.by {
             crate::contract::research::Actor::Operator(op) => Some(op),
             crate::contract::research::Actor::Config => None,
         })
@@ -387,17 +390,17 @@ fn verdicts_audit_and_dead_letters() {
         state
             .audit
             .iter()
-            .any(|r| matches!(r.entry.by, crate::contract::research::Actor::Config))
+            .any(|r| matches!(r.by, crate::contract::research::Actor::Config))
     );
     assert!(state.audit.iter().any(|r| matches!(
-        r.entry.outcome,
+        r.outcome,
         crate::contract::research::AuditOutcome::Rejected(_)
     )));
     assert!(
         state
             .audit
             .windows(2)
-            .all(|w| (w[0].entry.at, w[0].entry.id) <= (w[1].entry.at, w[1].entry.id))
+            .all(|w| (w[0].at, w[0].id) <= (w[1].at, w[1].id))
     );
     assert!((3..=5).contains(&state.dead_letters.len()));
 }

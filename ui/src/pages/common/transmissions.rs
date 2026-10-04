@@ -20,14 +20,24 @@ use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, format_bytes, format_time_short, kind_badge, route_badge, short_id,
 };
+use crate::contract::channels::ChannelSummary;
 use crate::contract::graph::{TransmissionStateKind, TransmissionSummary};
 use crate::contract::verdict::Verdict;
-use crate::data::names::channel_summary_name;
+use crate::data::names::{channel_name, locator_name, pattern_name};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
-/// At most this many channels are looked up one by one for a page.
-const CHANNEL_LOOKUPS: usize = 40;
+/// A channel list row's name: the declared pattern, else the seed
+/// resource, else the id's tail. Names follow `data::names`, as the graph
+/// shows them.
+pub fn summary_name(summary: &ChannelSummary) -> String {
+    use crosstalk_spec::derived::flow::channel::ChannelOrigin;
+    match (&summary.channel.origin, &summary.seed) {
+        (ChannelOrigin::Declared { pattern, .. }, _) => pattern_name(pattern),
+        (ChannelOrigin::Discovered { .. }, Some(seed)) => locator_name(&seed.locator),
+        (ChannelOrigin::Discovered { .. }, None) => short_id(summary.channel.id.to_ulid()),
+    }
+}
 
 /// Channel display names (pattern or seed locator). Unknown channels show
 /// as a short id.
@@ -48,8 +58,8 @@ impl ChannelNames {
     }
 }
 
-/// Names for up to [`CHANNEL_LOOKUPS`] distinct channels. A failed lookup
-/// leaves the short id.
+/// Names for every distinct channel in `ids`, in one `channel_names` call.
+/// A failed lookup degrades to short ids.
 pub async fn channel_names(
     cx: &Cx,
     caller: &Caller,
@@ -58,19 +68,21 @@ pub async fn channel_names(
     let mut wanted: Vec<ChannelId> = ids.into_iter().collect();
     wanted.sort_unstable();
     wanted.dedup();
-    let mut names = HashMap::new();
-    for id in wanted.into_iter().take(CHANNEL_LOOKUPS) {
-        match backend(cx).channel(caller, id).await {
-            Ok(Some(summary)) => {
-                names.insert(id, channel_summary_name(&summary));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::debug!(%error, channel = %id.to_ulid(), "channel name unavailable");
-            }
+    if wanted.is_empty() {
+        return ChannelNames::default();
+    }
+    match backend(cx).channel_names(caller, &wanted).await {
+        Ok(names) => ChannelNames(
+            names
+                .iter()
+                .map(|(id, name)| (*id, channel_name(name)))
+                .collect(),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, channels = wanted.len(), "channel names unavailable");
+            ChannelNames::default()
         }
     }
-    ChannelNames(names)
 }
 
 /// The channel a route goes through, if any.

@@ -423,7 +423,7 @@ impl TopologyPayload {
 async fn topology_data(cx: &Cx) -> topcoat::Result<Json<TopologyPayload>> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let backend = backend(cx);
     let payload = match state.graph {
         GraphMode::Agents => {
