@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.quality.cross-agent-only"
+statement = "DetectionQuality::tally, and so TransmissionVerdicts::quality, and verdict_rows leave out a transmission whose sender and reader resolve to one agent under the aliases of the read (Crossing::WithinOneAgent), and count or export it again once an unmerge makes it cross."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A transmission between two ids of one merged agent is a transmission
+nowhere: not in a graph, a list, a count or an export. Detection quality
+and the verdicts export count the detector's calls; keeping merged pairs
+there would make their totals disagree with every other view of the same
+transmissions. Resolving at the read, rather than at the merge, keeps the
+verdict logs untouched, so an unmerge restores the counts exactly.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::confirmation::detection_quality_leaves_out_transmissions_within_one_agent",
+    "crosstalk_spec::tests::confirmation::verdict_rows_leave_out_transmissions_within_one_agent",
+    "crosstalk_memory::flow::verdicts::tests::quality_leaves_out_transmissions_within_one_agent",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

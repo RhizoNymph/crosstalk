@@ -17,6 +17,7 @@ pub mod model;
 mod tests;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -26,13 +27,15 @@ use crosstalk_spec::derived::flow::verdict::{
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
-use crosstalk_spec::ids::{OperatorId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, OperatorId, TransmissionId};
+use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{
     TransmissionStore, TransmissionStoreError,
 };
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+use crate::analysis::aliases::StaticDirectory;
 use crate::support::{Outbox, State};
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -91,7 +94,11 @@ impl VerdictTable {
             .unwrap_or_else(|| VerdictLog::new(id)))
     }
 
-    fn quality(&self, window: TimeWindow) -> DetectionQuality {
+    fn quality(
+        &self,
+        window: TimeWindow,
+        agent: impl Fn(AgentId) -> AgentId + Copy,
+    ) -> DetectionQuality {
         DetectionQuality::tally(
             window,
             self.transmissions.values().map(|transmission| {
@@ -101,23 +108,51 @@ impl VerdictTable {
                     .and_then(VerdictLog::current);
                 (transmission, current)
             }),
+            agent,
         )
     }
 }
 
 /// The in-memory `TransmissionStore` and `TransmissionVerdicts`. Clones are
-/// handles on one store.
-#[derive(Debug, Clone, Default)]
+/// handles on one store. `quality` resolves agents through the directory it
+/// was given (none merged by default), so a transmission whose agents have
+/// since merged into one is not counted.
+#[derive(Clone)]
 pub struct MemoryVerdicts {
     state: State<VerdictTable>,
     outbox: Outbox,
+    agents: Arc<dyn AgentDirectory + Send + Sync>,
+}
+
+impl Default for MemoryVerdicts {
+    fn default() -> Self {
+        Self::new(Outbox::default())
+    }
+}
+
+impl std::fmt::Debug for MemoryVerdicts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryVerdicts")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemoryVerdicts {
+    /// A store with no agent merged.
     pub fn new(outbox: Outbox) -> Self {
+        Self::with_agents(StaticDirectory::default(), outbox)
+    }
+
+    /// A store that resolves agents through `agents` at the read.
+    pub fn with_agents(
+        agents: impl AgentDirectory + Send + Sync + 'static,
+        outbox: Outbox,
+    ) -> Self {
         Self {
             state: State::new(VerdictTable::default()),
             outbox,
+            agents: Arc::new(agents),
         }
     }
 
@@ -159,7 +194,11 @@ impl TransmissionVerdicts for MemoryVerdicts {
     }
 
     async fn quality(&self, window: TimeWindow) -> Result<DetectionQuality, VerdictError> {
-        Ok(self.state.read().quality(window))
+        let agents = &self.agents;
+        Ok(self
+            .state
+            .read()
+            .quality(window, |agent| agents.canonical(agent)))
     }
 }
 

@@ -8,7 +8,9 @@ rationale = """
 The SQL aggregate and the reference tally must agree on window, state,
 strongest match and verdict, or precision and recall figures quietly
 disagree with what the transmission list shows. One snapshot keeps a
-verdict appended mid-query from being counted under two verdicts.
+verdict appended mid-query from being counted under two verdicts. The
+tally resolves agents at the read, so a transmission whose agents have
+since merged into one is not counted (flow.quality.cross-agent-only).
 """
 
 [evidence]

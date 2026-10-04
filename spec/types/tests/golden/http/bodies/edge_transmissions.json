@@ -29,7 +29,8 @@
       "type": "pinned",
       "data": 3
     },
-    "false_detections": "include"
+    "false_detections": "include",
+    "unconfirmed_channels": "include"
   },
   "page": {
     "size": 50,

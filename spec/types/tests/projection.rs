@@ -5,8 +5,9 @@ use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
     FitFailure, Fitted, InvalidParams, InvalidProjectionInfo, InvalidProjectionLimit,
-    InvalidTransition, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
-    ProjectionMismatch, ProjectionParams, ProjectionSpec, ProjectionStatus, ProjectionStatusKind,
+    InvalidTransition, PointParts, PointRoute, ProjectedPoint, Projection, ProjectionInfo,
+    ProjectionLimit, ProjectionMismatch, ProjectionParams, ProjectionSpec, ProjectionStatus,
+    ProjectionStatusKind,
 };
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{OperatorId, ProjectionId, TopicId};
@@ -76,7 +77,7 @@ fn info(sample: u32, status: ProjectionStatus) -> Result<ProjectionInfo, Invalid
 }
 
 fn point(n: u128) -> ProjectedPoint {
-    ProjectedPoint {
+    ProjectedPoint::new(PointParts {
         transmission: transmission(n),
         from: agent(1),
         to: agent(2),
@@ -85,7 +86,8 @@ fn point(n: u128) -> ProjectedPoint {
         confirmed_at: at(10),
         x: Finite::new(0.5).expect("finite"),
         y: Finite::new(-1.5).expect("finite"),
-    }
+    })
+    .expect("a point between two agents")
 }
 
 fn header(sample: u32, matching: u64) -> FrameHeader {
@@ -438,4 +440,30 @@ fn projection_rejects_a_frame_from_elsewhere() {
     // Sampled frame (2 of 9) against a job that matched 2.
     let other = ProjectionFrame::from_points(header(2, 9), &points).expect("valid frame");
     assert_eq!(Projection::new(job, other), Err(ProjectionMismatch::Counts));
+}
+
+/// A projection holds transmissions between different agents only, so a
+/// point whose sender is its reader is refused, built or decoded.
+#[test]
+fn a_projected_point_is_never_within_one_agent() {
+    let within = PointParts {
+        from: agent(2),
+        ..*point(1).parts()
+    };
+    assert_eq!(
+        ProjectedPoint::new(within),
+        Err(crate::aggregates::projection::PointWithinOneAgent(agent(2)))
+    );
+    let json = serde_json::to_string(&within).expect("parts encode");
+    crate::tests::wire::harness::assert_rejected::<ProjectedPoint>(
+        &json,
+        "invalid projected point: PointWithinOneAgent",
+    );
+    // The same parts with two agents decode to the point.
+    let between = *point(1).parts();
+    let decoded: ProjectedPoint =
+        serde_json::from_str(&serde_json::to_string(&between).expect("parts encode"))
+            .expect("a point between two agents decodes");
+    assert_eq!(decoded, point(1));
+    assert_eq!((decoded.from(), decoded.to()), (agent(1), agent(2)));
 }

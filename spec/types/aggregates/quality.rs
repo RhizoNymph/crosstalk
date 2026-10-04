@@ -39,7 +39,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::RouteKind;
-use crate::derived::flow::transmission::{Confirmed, Transmission};
+use crate::aliases::Aliases;
+use crate::derived::flow::transmission::{Confirmed, Crossing, Transmission};
 use crate::derived::flow::verdict::{Judgeable, Verdict};
 use crate::derived::provenance::matching::MatchKind;
 use crate::support::TimeWindow;
@@ -202,16 +203,24 @@ impl DetectionQuality {
     }
 
     /// The reference tally: each transmission with its current verdict.
-    /// Keeps those opened in `window` whose state is judgeable, and counts
-    /// each once in its row under its verdict. An implementation's query
-    /// returns exactly this for the stored transmissions and verdict logs.
+    /// Keeps those opened in `window` whose state is judgeable and that
+    /// still cross agents under `aliases` (a transmission whose sender and
+    /// reader have since merged into one agent, [`Crossing::WithinOneAgent`],
+    /// is a transmission nowhere, so it is no detector call to count either;
+    /// an unmerge counts it again), and counts each once in its row under
+    /// its verdict. An implementation's query returns exactly this for the
+    /// stored transmissions and verdict logs, with agents resolved at the
+    /// read.
     pub fn tally<'a>(
         window: TimeWindow,
         transmissions: impl IntoIterator<Item = (&'a Transmission, Option<Verdict>)>,
+        aliases: impl Aliases + Copy,
     ) -> Self {
         let mut rows: BTreeMap<(u8, QualityMatch), QualityRow> = BTreeMap::new();
         for (transmission, verdict) in transmissions {
-            if !window.contains(transmission.opened_at) {
+            if !window.contains(transmission.opened_at)
+                || transmission.crossing(aliases) == Crossing::WithinOneAgent
+            {
                 continue;
             }
             let Ok(judgeable) = transmission.state.judgeable() else {

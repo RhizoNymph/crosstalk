@@ -264,6 +264,7 @@ async fn detection_quality_matches_tally() {
         stored
             .iter()
             .map(|transmission| (transmission, current(transmission.id))),
+        crosstalk_spec::aliases::NoAliases,
     );
     assert_eq!(store.quality(window).await, Ok(expected));
 }
@@ -286,15 +287,16 @@ async fn logs_of_unknown_and_unjudged_transmissions() {
 /// The reference agrees with itself under the harness.
 #[test]
 fn reference_agrees_with_itself_under_the_harness() {
-    let outcome = model::check_transmission_verdicts(pipeline_harness(), MemoryVerdicts::new);
+    let outcome =
+        model::check_transmission_verdicts(pipeline_harness(), MemoryVerdicts::with_agents);
     assert_eq!(outcome, Ok(()));
 }
 
 /// The harness catches a store that publishes nothing.
 #[test]
 fn harness_rejects_a_store_that_publishes_nothing() {
-    let outcome = model::check_transmission_verdicts(pipeline_harness(), |_outbox| {
-        MemoryVerdicts::new(Outbox::none())
+    let outcome = model::check_transmission_verdicts(pipeline_harness(), |agents, _outbox| {
+        MemoryVerdicts::with_agents(agents, Outbox::none())
     });
     assert!(
         matches!(outcome, Err(ModelMismatch::Failed { .. })),
@@ -307,4 +309,47 @@ fn harness_rejects_a_store_that_publishes_nothing() {
 fn the_store_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<MemoryVerdicts>();
+}
+
+/// `flow.quality.cross-agent-only`, at the store: a
+/// transmission whose sender has since been merged into its reader is not
+/// counted, and the unmerge counts it again.
+#[tokio::test]
+async fn quality_leaves_out_transmissions_within_one_agent() {
+    use crate::analysis::aliases::StaticDirectory;
+    use crosstalk_spec::aliases::NoAliases;
+
+    let directory = StaticDirectory::new();
+    let mut store = MemoryVerdicts::with_agents(directory.clone(), Outbox::none());
+    let crossing = transmission(0, 3, &[0], 0, 5);
+    assert_eq!(store.save(crossing.clone()).await, Ok(()));
+    let Some(state) = model::state_between(
+        3,
+        &[0],
+        AgentId::from_ulid(0x0A6E_0003),
+        AgentId::from_ulid(0x0A6E_0002),
+    ) else {
+        panic!("state fixture");
+    };
+    let merged = Transmission {
+        id: transmission_id(1),
+        state,
+        ..crossing.clone()
+    };
+    assert_eq!(store.save(merged.clone()).await, Ok(()));
+    let Ok(window) = TimeWindow::new(at(0), at(50)) else {
+        panic!("window");
+    };
+    let both = DetectionQuality::tally(window, [(&crossing, None), (&merged, None)], NoAliases);
+    assert_eq!(store.quality(window).await, Ok(both.clone()));
+    let Ok(()) = directory.merge(
+        AgentId::from_ulid(0x0A6E_0003),
+        AgentId::from_ulid(0x0A6E_0002),
+    ) else {
+        panic!("merge");
+    };
+    let one = DetectionQuality::tally(window, [(&crossing, None)], NoAliases);
+    assert_eq!(store.quality(window).await, Ok(one));
+    directory.unmerge(AgentId::from_ulid(0x0A6E_0003));
+    assert_eq!(store.quality(window).await, Ok(both));
 }

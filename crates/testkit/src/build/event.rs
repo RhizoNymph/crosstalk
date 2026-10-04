@@ -8,6 +8,7 @@ use std::num::NonZeroU64;
 use crosstalk_spec::aggregates::alert::{Alert, AlertRevision};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::access::Access;
+use crosstalk_spec::derived::flow::channel::Seed;
 use crosstalk_spec::derived::flow::channel::policy::Policy;
 use crosstalk_spec::derived::flow::transmission::{Transmission, TransmissionState};
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
@@ -16,7 +17,7 @@ use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::{ConversationDelta, IngestEvent};
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
 use crosstalk_spec::events::{BusEvent, Envelope};
-use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, EventId};
+use crosstalk_spec::ids::{AgentId, ChannelId, EventId};
 use crosstalk_spec::observed::agent::IdentityEvidence;
 use crosstalk_spec::observed::exchange::Exchange;
 use crosstalk_spec::support::{Timestamp, Watermark};
@@ -40,15 +41,14 @@ pub fn content_matched(content: ContentMatch) -> BusEvent {
     BusEvent::Detect(DetectEvent::ContentMatched(content))
 }
 
-pub fn access_recorded(access: Access, channel: ChannelId) -> BusEvent {
+/// `AccessRecorded`: `channel` is `None` for a resource on no channel.
+pub fn access_recorded(access: Access, channel: Option<ChannelId>) -> BusEvent {
     BusEvent::Detect(DetectEvent::AccessRecorded { access, channel })
 }
 
-pub fn channel_discovered(channel: ChannelId, first_access: AccessId) -> BusEvent {
-    BusEvent::Detect(DetectEvent::ChannelDiscovered {
-        channel,
-        first_access,
-    })
+/// `ChannelDiscovered` for a channel discovered from `seed`.
+pub fn channel_discovered(channel: ChannelId, seed: Seed) -> BusEvent {
+    BusEvent::Detect(DetectEvent::ChannelDiscovered { channel, seed })
 }
 
 /// `TransmissionConfirmed` for a transmission holding content evidence
