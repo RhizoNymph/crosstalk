@@ -1,20 +1,22 @@
 [invariant]
 id = "analysis.projection.point-facts"
-statement = "Each ProjectedPoint carries AgentDirectory::canonical of its transmission's sender and reader at query time, the RouteKind of its route, its topic under the projection's topic version, and its Confirmed::at."
+statement = "Each ProjectedPoint of a stored projection carries AgentDirectory::canonical of its transmission's sender and reader when the sample was read, the RouteKind of its route, its topic under the spec's topic version, and its Confirmed::at."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
-The client colours and links 50,000 points from these fields without a
-lookup per point. A stale pre-merge agent id would colour one agent's
-points in two colours and fail to link them to its graph node; a topic
-from another version would colour by clusters the topic list no longer
-shows.
+The client colours and links up to 100,000 points from these fields
+without a lookup per point. A pre-merge agent id at sample time would
+colour one agent's points in two colours; a topic from another version
+would colour by clusters the version's topic list does not show. The
+facts are frozen at sample time so that every read of the projection is
+identical; a client that needs current canonical agents resolves the
+frame's agent tables through the agent list.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::projected_point_resolves_merged_agents"
-property = "crosstalk::analysis::tests::prop_projected_points_match_transmissions"
+unit = "crosstalk::analysis::tests::sampled_point_resolves_merged_agents"
+property = "crosstalk::analysis::tests::prop_projected_points_match_transmissions_at_sample_time"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

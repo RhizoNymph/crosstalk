@@ -29,28 +29,53 @@
 //! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).
 //! - `TopicCatalog`: `PgTopicCatalog`.
 //! - `SearchIndex`: `PgHybridSearch` (full-text plus pgvector).
-//! - `ProjectionIndex`: `PgProjection` (layout coordinates stored beside the
-//!   embeddings).
+//! - `ProjectionStore`: `PgProjectionStore` (jobs, and frames as `bytea` in
+//!   the binary layout of [`crate::aggregates::projection::frame`]).
+//! - `ProjectionSource`: `PgProjectionSource` (reads a fit's sample beside
+//!   the embeddings).
+//! - `LayoutFitter`: `UmapLayout` (seeded, single-threaded, so deterministic).
 //! - `AlertRuleEval`: one per [`AlertRuleKind`].
 //!
 //! Search and projection take the same [`TopologyFilter`] as the topology
 //! graph and apply it as [`TopologyFilter::admits`] defines, resolving agents
-//! (the transmission's and the filter's) through `AgentDirectory` at query
-//! time, so the views link.
+//! (the transmission's and the filter's) through `AgentDirectory`, so the
+//! views link. Both resolve the filter's topic-model version with
+//! [`TopicVersionSelector::resolve`] against the catalog's history (see
+//! [`crate::aggregates::filter`]).
+//!
+//! **Projection jobs.** The surface records a queued [`ProjectionInfo`]
+//! (`ProjectionStore::enqueue`). A fitter loop claims the oldest queued job
+//! (`claim`, which makes it `Fitting` under a lease), reads its sample
+//! (`ProjectionSource::sample`), lays it out (`LayoutFitter::fit`), builds
+//! the frame with [`ProjectionFrame::from_points`] and stores it
+//! (`complete`, frame and `Ready` status in one transaction). A
+//! [`FitFailure`] from the sample or the layout is recorded with `fail`; any
+//! other error leaves the job to be requeued when its lease lapses. One fit
+//! runs at a time per fitter.
 
 use crate::aggregates::alert::{
     AlertDraft, AlertRuleKind, KindChanged, RuleStatus, TriageOutcome, WatchedTopics,
 };
 #[cfg(doc)]
 use crate::aggregates::alert::{AlertRuleDef, ContentRule, TopicWatch};
-use crate::aggregates::filter::TopologyFilter;
-use crate::aggregates::projection::{Projection, ProjectionLimit};
+use crate::aggregates::edge::RouteKind;
+#[cfg(doc)]
+use crate::aggregates::filter::TopicVersionSelector;
+use crate::aggregates::filter::{TopologyFilter, VersionUnavailable};
+use crate::aggregates::projection::frame::ProjectionFrame;
+use crate::aggregates::projection::{
+    FitFailure, InvalidTransition, Projection, ProjectionInfo, ProjectionParams, ProjectionSpec,
+    ProjectionStatusKind,
+};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::policy::Policy;
 use crate::events::Envelope;
-use crate::ids::{AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
-use crate::support::{NonBlank, Similarity, TimeWindow};
+use crate::ids::{
+    AgentId, AlertRuleId, ChannelId, OperatorId, ProjectionId, TopicId, TransmissionId,
+};
+use crate::paging::{Page, PageRequest, ProjectionList, SearchList, TopicList};
+use crate::support::{NonBlank, Similarity, TimeWindow, Timestamp, Watermark};
 
 pub trait Embedder {
     fn model(&self) -> EmbeddingModel;
@@ -87,13 +112,28 @@ pub trait TopicCatalog {
     /// centroid (ties to the lower id). `None` while `from` has no successor
     /// whose fit has returned.
     async fn lineage(&self, from: TopicModelVersion) -> Result<Option<TopicLineage>, CatalogError>;
+
+    /// `version`'s topics, newest id first. Any version whose fit has
+    /// returned (ready, active or superseded) can be read: the catalog keeps
+    /// every version's topics. Fails with `StillFitting` for a fitting one.
+    async fn topics(
+        &self,
+        version: TopicModelVersion,
+        page: &PageRequest<TopicList>,
+    ) -> Result<Page<Topic, TopicList>, CatalogError>;
 }
 
+/// A query as the index runs it. The surface builds it from the operator's
+/// text, embedding that text with the current model for the semantic and
+/// hybrid modes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchQuery {
-    Text(String),
+    Text(NonBlank),
     Semantic(Embedding),
-    Hybrid { text: String, embedding: Embedding },
+    Hybrid {
+        text: NonBlank,
+        embedding: Embedding,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,42 +143,131 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-/// Hits in descending score, and the topic-model version the filter's
-/// topics were evaluated under (the active one at query time).
+/// One page of hits, in descending (score, `TransmissionId`), and the
+/// topic-model version the filter's topics were evaluated under: the one
+/// the first page resolved, pinned by the cursor for every later page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchResults {
     pub topic_version: TopicModelVersion,
-    pub hits: Vec<SearchHit>,
+    pub page: Page<SearchHit, SearchList>,
 }
 
 pub trait SearchIndex {
     /// Hits on confirmed transmissions whose `Confirmed::at` lies in `window`
-    /// (when given) and that `filter` admits, at most `limit` of them. The
-    /// filter is applied before ranking and truncation, so a filtered query
-    /// returns the best `limit` admitted hits, not the admitted part of the
-    /// best `limit` hits.
+    /// (when given) and that `filter` admits, a page at a time. The filter is
+    /// applied before ranking, so every page holds admitted hits only and a
+    /// full traversal lists every admitted hit once, in rank order. A hit's
+    /// score depends only on the query, the embedding model and the
+    /// transmission (the hybrid score is the mean of the normalized text
+    /// rank and the cosine similarity), so keyset paging on (score, id) is
+    /// stable under concurrent indexing. The first page resolves the
+    /// filter's topic version and rejects topics outside it; the cursor pins
+    /// that version and the query's embedding model.
     async fn query(
         &self,
         query: &SearchQuery,
         window: Option<TimeWindow>,
         filter: &TopologyFilter,
-        limit: u32,
+        page: &PageRequest<SearchList>,
     ) -> Result<SearchResults, SearchError>;
 }
 
-/// The 2-D layout of transmission embeddings. See
-/// [`crate::aggregates::projection`] for layouts, tokens and sampling.
-pub trait ProjectionIndex {
-    /// The current layout's points for transmissions confirmed in `window`
-    /// that `filter` admits, sampled down to `limit`. Points carry canonical
-    /// agents resolved at query time. Before the first topic-model fit there
-    /// is no layout and the projection is empty.
-    async fn project(
+/// Projection jobs and their stored frames. Reads and `enqueue` fail with
+/// [`ProjectionStoreError`]; the fitter's calls with [`ProjectionJobError`]. See
+/// [`crate::aggregates::projection`] for the lifecycle, sampling and
+/// retention.
+pub trait ProjectionStore {
+    /// At most this many jobs are queued or fitting at once; `enqueue`
+    /// beyond it is `QueueFull`.
+    const MAX_PENDING: u32 = 16;
+
+    /// Record a job made with [`ProjectionInfo::queued`]. Idempotent on its
+    /// id: enqueuing the same info again changes nothing.
+    async fn enqueue(&mut self, job: ProjectionInfo) -> Result<(), ProjectionStoreError>;
+
+    /// Make the oldest queued job `Fitting` as of `at` under a lease, and
+    /// return it. `None` when nothing is queued.
+    async fn claim(&mut self, at: Timestamp) -> Result<Option<ProjectionInfo>, ProjectionJobError>;
+
+    /// Store `frame` and make the job `Ready` in one transaction. The fit's
+    /// watermark, matching and point counts are the frame header's.
+    async fn complete(
+        &mut self,
+        id: ProjectionId,
+        frame: ProjectionFrame,
+        at: Timestamp,
+    ) -> Result<(), ProjectionJobError>;
+
+    async fn fail(
+        &mut self,
+        id: ProjectionId,
+        failure: FitFailure,
+        at: Timestamp,
+    ) -> Result<(), ProjectionJobError>;
+
+    /// Return to `Queued` every fitting job whose lease lapsed before `now`.
+    async fn requeue_lapsed(&mut self, now: Timestamp) -> Result<u32, ProjectionJobError>;
+
+    /// Drop the frame of every ready projection fitted more than the frame
+    /// retention before `now`, making it `Expired`.
+    async fn expire(&mut self, now: Timestamp) -> Result<u32, ProjectionJobError>;
+
+    async fn info(&self, id: ProjectionId) -> Result<Option<ProjectionInfo>, ProjectionStoreError>;
+
+    /// Every job, newest id first.
+    async fn list(
         &self,
-        window: TimeWindow,
-        filter: &TopologyFilter,
-        limit: ProjectionLimit,
-    ) -> Result<Projection, ProjectionError>;
+        page: &PageRequest<ProjectionList>,
+    ) -> Result<Page<ProjectionInfo, ProjectionList>, ProjectionStoreError>;
+
+    /// A ready projection's job record and stored frame, identical on every
+    /// read until it expires.
+    async fn projection(&self, id: ProjectionId) -> Result<Projection, ProjectionStoreError>;
+}
+
+/// One sampled transmission, as a fit reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleRow {
+    pub transmission: TransmissionId,
+    /// Canonical when the sample was read.
+    pub from: AgentId,
+    pub to: AgentId,
+    pub route: RouteKind,
+    /// Under the spec's topic version; `None` for an outlier.
+    pub topic: Option<TopicId>,
+    pub confirmed_at: Timestamp,
+    /// From the spec's embedding model.
+    pub embedding: Embedding,
+}
+
+/// What a fit lays out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sample {
+    /// When the sample was read.
+    pub watermark: Watermark,
+    /// Transmissions admitted before sampling.
+    pub matching: u64,
+    /// At most the spec's sample size, in ascending sample-key order.
+    pub rows: Vec<SampleRow>,
+}
+
+pub trait ProjectionSource {
+    /// The sample of `spec` as of now: every transmission confirmed in its
+    /// window that its pinned filter admits and that has an embedding from
+    /// its model, reduced to the sample size by smallest sample key.
+    async fn sample(&self, spec: &ProjectionSpec) -> Result<Sample, SampleError>;
+}
+
+/// UMAP to two dimensions, cosine metric.
+pub trait LayoutFitter {
+    /// One coordinate pair per embedding, in the same order. Deterministic:
+    /// the same embeddings in the same order with the same params (seed
+    /// included) give the same coordinates, bit for bit.
+    fn fit(
+        &self,
+        embeddings: &[Embedding],
+        params: ProjectionParams,
+    ) -> Result<Vec<[f32; 2]>, FitFailure>;
 }
 
 /// What a rule may look up while evaluating, beyond the event itself.
@@ -258,20 +387,76 @@ pub enum TopicError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogError {
-    Store { reason: String },
+    Store {
+        reason: String,
+    },
     UnknownVersion(TopicModelVersion),
     StillFitting(TopicModelVersion),
+    /// A cursor the catalog did not issue, or issued for another version.
+    InvalidCursor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
-    Store { reason: String },
-    BadQuery { reason: String },
+    Store {
+        reason: String,
+    },
+    /// The query's embedding is not from the index's model: the model
+    /// changed after the surface embedded the text, or during a traversal.
+    WrongModel {
+        index: EmbeddingModel,
+        query: EmbeddingModel,
+    },
+    Version(VersionUnavailable),
+    /// The filter lists topics that are not in the resolved version.
+    TopicsNotInVersion {
+        version: TopicModelVersion,
+        topics: Vec<TopicId>,
+    },
+    InvalidCursor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectionError {
-    Store { reason: String },
+pub enum ProjectionStoreError {
+    Store {
+        reason: String,
+    },
+    Unknown(ProjectionId),
+    /// Queued or fitting.
+    NotReady {
+        projection: ProjectionId,
+        status: ProjectionStatusKind,
+    },
+    Failed {
+        projection: ProjectionId,
+        failure: FitFailure,
+    },
+    /// Its frame was dropped after the retention period.
+    NotRetained(ProjectionId),
+    /// [`ProjectionStore::MAX_PENDING`] jobs are already queued or fitting.
+    QueueFull,
+    InvalidCursor,
+}
+
+/// Why a fitter's call on a job failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionJobError {
+    Store {
+        reason: String,
+    },
+    Unknown(ProjectionId),
+    /// `complete` or `fail` on a job not in a state that allows it, or a
+    /// frame that does not belong to the job.
+    Transition(InvalidTransition),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SampleError {
+    Store {
+        reason: String,
+    },
+    /// Fitting this spec cannot succeed; recorded as the job's failure.
+    Failed(FitFailure),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

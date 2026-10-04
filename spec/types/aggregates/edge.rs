@@ -145,6 +145,7 @@ pub struct WeightedEdge {
 pub struct TopologyGraph {
     pub window: TimeWindow,
     pub weighting: Weighting,
+    /// The version the filter's selector resolved to.
     pub topic_version: TopicModelVersion,
     pub edges: Vec<WeightedEdge>,
 }
@@ -199,8 +200,8 @@ pub struct EdgeTransmission {
 /// One page of the transmissions behind an edge, newest confirmation first.
 ///
 /// Every page of one traversal evaluates topics (the filter's and each row's)
-/// under the same `topic_version`, the version active when the first page
-/// was served; the cursor pins it. Read with no apply in between, a full
+/// under the same `topic_version`, the version the first page resolved the
+/// filter's selector to; the cursor pins it. Read with no apply in between, a full
 /// traversal for an aligned window lists exactly the transmissions
 /// `EdgeStore::graph` counts into that edge for the same window and filter.
 #[derive(Debug, Clone, PartialEq, Eq)]

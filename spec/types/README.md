@@ -41,8 +41,10 @@ spec/types/
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
-│   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
+│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── projection/
+│   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
+│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked, remap)
@@ -59,11 +61,12 @@ spec/types/
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, set_label), AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator, TransmissionReview
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
-│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, audit), OperatorAction, ActionKind, OperatorActions, AlertSink
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
+│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down), EdgeError, EdgeQueryError
+│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, projections, audit), QueryError, ConflictKind, InputError, OperatorAction, ActionKind, OperatorActions, AlertSink
 │   └── l8_surface/
-│       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
+│       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
+│       ├── query_errors.rs From impls: each store error to one QueryError
 │       ├── live.rs        LiveFeed, LiveUpdate, UpdateKinds, LiveScope, LiveCursor, FeedWindow, LiveConfig
 │       └── audit.rs       AuditLog, AuditRecord (checked), AuditOutcome, AuditFilter
 └── tests/                 tests for the invariants checked at runtime
@@ -77,9 +80,12 @@ spec/types/
   `NonEmpty<ContentMatch>`. A channel declared before traffic and a
   discovered or promoted channel have different detection enums. Only a
   watched-topic rule can be stale.
-- **Opaque newtypes for server-issued values.** Cursors and projection
-  tokens have private fields; clients only hand them back. A cursor's
-  list is a type parameter, so one list's cursor does not fit another.
+- **Opaque newtypes for server-issued values.** Cursors have private
+  fields; clients only hand them back. A cursor's list is a type
+  parameter, so one list's cursor does not fit another.
+- **Errors are typed end to end.** Each store's error enum maps to
+  `QueryError` through one `From` impl, so adding a variant forces a
+  decision about what the UI sees.
 - **Checked constructors for the rest.** When an invariant spans values
   (a content match's reader is not its origin agent; every match in a
   confirmed transmission has one sender), the type has private fields and a

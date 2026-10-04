@@ -38,11 +38,14 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
-      topic sizes and lineage, search, alert rules and their management),
-      L7 topology (edge aggregation per time window, graphs and time
-      series), L8 surface (query API with cursor-paginated lists and linked
-      views sharing one filter, UI, operator actions with one permission
-      each, append-only audit log, SSE live feed, alert sinks).
+      topic sizes and lineage, paged search, stored projection jobs fitted
+      in the background, alert rules and their management), L7 topology
+      (edge aggregation per time window, graphs and time series), L8
+      surface (query API with cursor-paginated lists, linked views sharing
+      one filter and one resolved topic-model version, typed query errors,
+      stored projections served as a columnar binary frame, UI, operator
+      actions with one permission each, append-only audit log, SSE live
+      feed, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -60,8 +63,10 @@ Overview:
     lineage, and evaluates alert rules → L7 aggregates edges and announces
     topic-version activation back to L6 → L8 serves topology, time series,
     topic history, search, projections, lists and alerts, with the graph,
-    search, projection and edge drill-down all filtered by one
-    TopologyFilter, pages the audit log like any other list, and streams
+    series, search, projection and edge drill-down all filtered by one
+    TopologyFilter under one resolved (or pinned) topic-model version, runs
+    projection fits as background jobs whose stored frames read back
+    exactly, pages the audit log like any other list, and streams
     new alerts and changed edges, channels and
     policies to the UI over SSE (resumable by cursor, with a resync marker
     when a cursor is too old). Operator actions flow back down: policy
@@ -78,7 +83,9 @@ Features Index:
       (including clients, upstreams and credentials), derived inferences,
       aggregates (including time series and topic history), bus events and
       per-layer interfaces (including the query surface's paginated lists,
-      shared view filter and projection, the SSE live feed, the audit log,
+      shared view filter and topic-version resolution, typed query errors,
+      stored projections and their columnar frame, the SSE live feed, the
+      audit log,
       channel policy history and operator actions with their permissions),
       with tests for the invariants checked at runtime and one TOML file per
       invariant in spec/invariants. Harness and server wire behavior it is

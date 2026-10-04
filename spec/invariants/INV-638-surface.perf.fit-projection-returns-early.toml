@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.perf.fit-projection-returns-early"
+statement = "QueryApi::fit_projection returns within 200 ms at p99 for any sample size, without waiting for the sample to be read or laid out."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+A 100,000-point UMAP takes minutes; holding an HTTP request open that long
+times out proxies and blocks a worker. The call only validates, resolves
+the version and records the job; the fit runs in the background. The
+figure is a proposed initial threshold.
+"""
+
+[evidence]
+bench = "crosstalk::surface::bench::fit_projection_accept_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

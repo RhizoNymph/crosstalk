@@ -12,6 +12,16 @@
 //! graph's [`TopologyGraph::total`], and grouped by edge each series sums to
 //! that edge's stat in the graph.
 //!
+//! **Topic version.** Graph, series and edge-transmission queries read the
+//! buckets and contributions of one version: the filter's selector resolved
+//! with [`TopicVersionSelector::resolve`] against the `TopicCatalog`'s
+//! history, with `retained` true for the versions whose buckets this store
+//! still holds (the active one and the one before it). `Current` is the
+//! catalog's active version; the store activates a version before the
+//! catalog marks it active, so that version is always retained here. A
+//! filter listing topics outside the resolved version fails with
+//! `TopicsNotInVersion`. Every response reports the resolved version.
+//!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
@@ -20,10 +30,13 @@ use std::num::NonZeroU64;
 use crate::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
+#[cfg(doc)]
+use crate::aggregates::filter::TopicVersionSelector;
+use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::{Classification, Route};
-use crate::ids::{AgentId, TransmissionId};
+use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
@@ -50,27 +63,28 @@ pub trait EdgeStore {
     /// previous one are dropped after a switch.
     async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError>;
 
+    /// Fails with `UnalignedWindow` for a window not on bucket boundaries.
     async fn graph(
         &self,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<TopologyGraph, EdgeError>;
+    ) -> Result<TopologyGraph, EdgeQueryError>;
 
     /// The applied contributions behind one edge: those `graph` counts into
     /// the edge (`from`, `to`, `route`) for the same window and filter, one
     /// row per transmission, newest `Confirmed::at` first. Served from the
     /// stored contributions, so the window need not be bucket-aligned. The
-    /// first page pins the active topic-model version into its cursor; if
-    /// that version's contributions are dropped mid-traversal, the next page
-    /// fails with `InvalidCursor`.
+    /// first page resolves the filter's topic version and its cursor pins
+    /// it; if that version's contributions are dropped mid-traversal, the
+    /// next page fails with `Version(NotRetained)`.
     async fn transmissions(
         &self,
         edge: &EdgeSelector,
         window: TimeWindow,
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
-    ) -> Result<EdgeTransmissionPage, EdgeError>;
+    ) -> Result<EdgeTransmissionPage, EdgeQueryError>;
 
     /// The width of every bucket in this store. Graph windows and series
     /// grids must be aligned to it.
@@ -78,19 +92,29 @@ pub trait EdgeStore {
 
     /// One series per group of `grouping`, one value per grid point: the
     /// stat under `weighting` summed over that step, counted exactly as
-    /// [`EdgeStore::graph`] counts it over the step's window. Fails with
-    /// `BucketWidthMismatch` when the grid was built for another width.
+    /// [`EdgeStore::graph`] counts it over the step's window, under the same
+    /// resolved topic version (grouped by topic, one series per topic of
+    /// that version). Fails with `BucketWidthMismatch` when the grid was
+    /// built for another width.
     async fn series(
         &self,
         grid: SeriesGrid,
         weighting: Weighting,
         grouping: SeriesGrouping,
         filter: &TopologyFilter,
-    ) -> Result<TopologySeries, EdgeError>;
+    ) -> Result<TopologySeries, EdgeQueryError>;
 }
 
+/// Why `apply` or `activate` failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeError {
+    Store { reason: String },
+    SelfEdge,
+}
+
+/// Why a graph, series or edge-transmission query failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeQueryError {
     Store {
         reason: String,
     },
@@ -101,8 +125,13 @@ pub enum EdgeError {
         store: BucketWidth,
         grid: BucketWidth,
     },
-    SelfEdge,
-    /// A cursor the store did not issue, issued for another edge, window or
-    /// filter, or pinning a topic-model version whose contributions are gone.
+    Version(VersionUnavailable),
+    /// The filter lists topics that are not in the resolved version.
+    TopicsNotInVersion {
+        version: TopicModelVersion,
+        topics: Vec<TopicId>,
+    },
+    /// A cursor the store did not issue, or issued for another edge, window
+    /// or filter.
     InvalidCursor,
 }

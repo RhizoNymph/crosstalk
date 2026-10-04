@@ -1,14 +1,14 @@
-//! Filters and requests for the surface's list and projection queries.
+//! Filters, requests and pages for the surface's list and search queries.
 //!
 //! List filters follow [`AlertFilter`](super::AlertFilter): an empty list
 //! does not restrict, and each filter's `matches` is its definition.
 
 use crate::aggregates::alert::{AlertRuleDef, RuleStatus};
-use crate::aggregates::filter::TopologyFilter;
-use crate::aggregates::projection::{ProjectionLimit, ProjectionToken};
+use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::derived::flow::channel::Channel;
 use crate::observed::agent::{Agent, AgentState};
-use crate::support::TimeWindow;
+use crate::paging::{Page, TopicList};
+use crate::support::NonBlank;
 
 use super::PolicyKind;
 
@@ -76,13 +76,28 @@ impl AlertRuleFilter {
     }
 }
 
-/// What `QueryApi::projection` returns points for.
+/// How `QueryApi::search` matches its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchMode {
+    /// Full-text only.
+    Text,
+    /// The text is embedded with the current model; vector similarity only.
+    Semantic,
+    /// Both, scored as the mean of the two.
+    Hybrid,
+}
+
+/// A search as an operator asks for it. The surface embeds the text itself,
+/// so a client never sends a vector and never needs to know the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectionRequest {
-    pub window: TimeWindow,
-    pub filter: TopologyFilter,
-    pub limit: ProjectionLimit,
-    /// The layout of points the client already holds, when it is adding to
-    /// them (a wider window, a relaxed filter). `None` for a fresh load.
-    pub layout: Option<ProjectionToken>,
+pub struct SearchRequest {
+    pub mode: SearchMode,
+    pub text: NonBlank,
+}
+
+/// One page of a version's topics, and that version.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopicPage {
+    pub version: TopicModelVersion,
+    pub page: Page<Topic, TopicList>,
 }

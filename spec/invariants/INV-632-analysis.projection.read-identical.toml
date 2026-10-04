@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.projection.read-identical"
+statement = "Every successful QueryApi::projection call for one projection returns the same job record and a frame whose ProjectionFrame::encode bytes are identical, from the time it became Ready until its frame expires."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+UMAP is randomized and depends on its sample, so recomputing a projection
+on read would move every point and a cited view could not be reproduced.
+The frame is stored once, in its canonical binary form, and served as
+stored; nothing a later merge, verdict or re-fit does changes it.
+"""
+
+[evidence]
+integration = "crosstalk::analysis::integration::projection_reads_are_byte_identical"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.transmissions.pinned-version"
-statement = "Every page of one EdgeStore::transmissions traversal reports and evaluates topics under the topic_version of its first page, even when another version is activated mid-traversal, and once that version's contributions are dropped the next page returns InvalidCursor."
+statement = "Every page of one EdgeStore::transmissions traversal reports and evaluates topics under the topic_version its first page resolved, even when another version is activated mid-traversal, and once that version's contributions are dropped the next page returns Version(NotRetained) rather than InvalidCursor."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -8,8 +8,9 @@ Topic ids are only meaningful within one version. If later pages switched
 to a newly activated version, rows on one list would carry topics from two
 versions and a topic filter would select different transmissions on
 different pages. The cursor pins the version; activation keeps the previous
-version's contributions, so a traversal survives one activation, and fails
-cleanly rather than silently changing meaning after a second.
+version's contributions, so a traversal survives one activation. After a
+second it fails with the typed reason, so the client restarts under Current
+instead of treating its cursor as corrupt.
 """
 
 [evidence]
