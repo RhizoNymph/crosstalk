@@ -41,7 +41,7 @@ spec/types/
 │   ├── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
 │   └── confidential.rs    compile-time checks: DeploymentSecret and KeyedHasher never serialize, clone or compare
 ├── observed/              facts from the wire
-│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
+│   ├── client.rs          IngressMode (incl. Replay { corpus }), CorpusId, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
 │   ├── message.rs         Message (decoded only under its body's hash), MessageBody (role-shaped; serde in its encoding's shape), parts (Reasoning::Visible and ToolCall with their signatures, ToolOutcome with Unknown), MediaBlob (checked: hash of its bytes), CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store; their JSON appears only in a NormalizedExchange, in process)
 │   ├── message/
 │   │   ├── encoding.rs    the canonical encoding of a body (encode, decode: exactly the bytes encode writes, DecodeError) and its hash (hash, hash_bytes, message)
@@ -60,7 +60,7 @@ spec/types/
 │   ├── provenance/
 │   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan; on the wire only SpanLocation, RelaySource
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
-│   │   └── matching.rs    ContentMatch (checked, also when decoded), MatchKind, Codec, Carrier
+│   │   └── matching.rs    ContentMatch (checked, also when decoded), MatchKind, Codec (incl. JsonString, YamlString), Carrier, CarrierKind
 │   └── flow/
 │       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps; a WireRequest)
 │       ├── access.rs      Access, AccessOp (a write's spans include self-relayed sources), WriteOutcome (Delivered, Rejected, Unknown; pairs), Extraction
@@ -107,10 +107,10 @@ spec/types/
 │   ├── l3_reconstruction/
 │   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   │   └── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
-│   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex (every call measuring retention takes now), SemanticMatcher
+│   ├── l4_provenance.rs   Segmenter, Decoder (strict UTF-8, one string codec per chain), Fingerprinter, FingerprintIndex (every call measuring retention takes now), SpanIndex (record, batch spans: IndexedSpan with exchange, author as recorded, location), SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor (ExtractedOp with write outcomes), ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; write outcomes, shared upstream source; detection follows resolution
 │   ├── l5_flow/
-│   │   ├── channels.rs    ChannelTraffic (discover, add_resource, record_access, set_detection, confirm), DetectionUpdate, TrafficError; ChannelReads (channel by id, filtered channel pages)
+│   │   ├── channels.rs    ChannelTraffic (discover, add_resource, record_access, set_detection, confirm), DetectionUpdate, TrafficError; ChannelReads (channel by id, filtered channel pages); AccessStore (batch accesses with their resources), AccessReadError
 │   │   ├── transmissions.rs TransmissionStore (save, transmission), TransmissionStoreError
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention; publishes TopicVersionDropped), SearchIndex, ProjectionStore (FrameMismatch), ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage (suppressions at a time), AlertRuleStore; SearchHit and SearchResults are its only wire types

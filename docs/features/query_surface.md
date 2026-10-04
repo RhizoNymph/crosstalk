@@ -401,13 +401,15 @@ its `RouteKind` and `QualityMatch`, under `genuine`, `false_detection` or
 
 | `QualityMatch` | `genuine` | `false_detection` |
 | --- | --- | --- |
-| `Content(class)`: confirmed, by its strongest match | true positive | false positive |
+| `Content { class, carrier }`: confirmed, by its strongest match's class and carrier kind | true positive | false positive |
 | `Suspected`: access evidence only | missed so far | correctly not confirmed |
 | `Discarded`: expired | false negative | true negative |
 
 A confirmed transmission with several matches counts under the strongest
 `MatchClass` (`Exact`, `Normalized`, `Decoded`, `Semantic`, in that
-order): it is as credible as its best evidence. State and verdict are both
+order): it is as credible as its best evidence. The row also names that
+match's `CarrierKind` (the first match of the strongest class, in stored
+order), so precision reads per carrier. State and verdict are both
 read at query time. Rows are unique per key, never all zero, and ordered
 (`DetectionQuality::new`).
 
@@ -781,7 +783,7 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view, and topic-version resolution | `TopologyFilter` (`admits`, `admits_access`, `topics_outside`, `pinned`), `FilterSubject`, `AccessSubject`, `TopicVersionSelector` (`resolve`), `VersionUnavailable`, `FalseDetections` |
 | `spec/types/aggregates/projection/mod.rs` | Stored projection jobs | `ProjectionLimit`, `ProjectionParams` (checked), `ProjectionSpec`, `FitFailure`, `Fitted`, `ProjectionStatus`, `ProjectionInfo` (checked, with transitions), `ProjectedPoint`, `PointRoute` (`of`, `from_parts`, `kind`, `channel`), `FrameRetention` (`expires_at`), `Projection` (checked) |
 | `spec/types/aggregates/projection/frame.rs` | The columnar projection frame and its binary layout | `ProjectionFrame` (checked; `from_points`, `encode`, `decode`), `FrameHeader`, `FrameTables`, `FrameColumns`, `InvalidFrame` (incl. `ChannelRouteMismatch`), `FrameDecodeError` (incl. `NonZeroReserved`), `MAGIC`, `FORMAT` (2), `HEADER_LEN` (80), `RESERVED_AT`, `OUTLIER`, `NO_CHANNEL` |
-| `spec/types/aggregates/quality.rs` | Verdicts tallied against the detector's calls | `MatchClass` (`strongest`), `QualityMatch`, `QualityRow`, `DetectionQuality` (checked, `tally`), `InvalidQuality` |
+| `spec/types/aggregates/quality.rs` | Verdicts tallied against the detector's calls | `MatchClass` (`strongest`, `strongest_match`), `QualityMatch` (`Content { class, carrier }`), `QualityRow`, `DetectionQuality` (checked, `tally`), `InvalidQuality` |
 | `spec/types/aggregates/retention.rs` | Retention of topic-model versions | `RetentionPolicy` (checked: `protected`, `to_drop`; on the wire only in `ConfigChange::SetTopicRetention`), `Pin`, `Retention`, `PinChange`, `PinError`, `DropError`, `TopicVersionHistory::pin`, `unpin`, `mark_dropped` |
 | `spec/types/aggregates/watermark.rs` | When a bucket is final | `PipelineFrontier`, `Watermark::settled`, `finalizes`, `advance`, `Watermarked`; re-exports `Watermark` |
 | `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` (`promotion`) |

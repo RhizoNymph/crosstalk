@@ -116,7 +116,9 @@ canonical; an edge row is an `EdgeSelector`, so never a self-edge; a
 transmission row keeps a transmission whose two agents have since merged,
 with equal ends. `verdict_rows(transmission, log)` builds one row per
 record with the transmission's route kind and detector call
-(`QualityMatch`), so the export reproduces `DetectionQuality::tally`.
+(`QualityMatch`, whose `Content` names its class and carrier kind; the
+digest encodes the carrier after the class), so the export reproduces
+`DetectionQuality::tally`.
 
 **Transmission rows are the surface's.** A `TransmissionRow` is the
 `TransmissionSummary` that `transmissions_by_id` lists for the

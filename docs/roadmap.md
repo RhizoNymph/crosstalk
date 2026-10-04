@@ -369,7 +369,7 @@ with the same seeded world loaded into the memory stores.
 - [ ] `ActionRequest::into_action`, then `act`, then the audit record, inverting exactly (`AuditOutcome`).
 - [ ] The live feed: an epoch and sequence cursor, resync, heartbeat and `end`.
 - [ ] Export: plan, stream, seal and trailer, plus the audit record.
-- [ ] Implement the surface invariants (INV-362–383, 393–513, and the wave-2 and gap-list-3 ranges) and their implementation evidence.
+- [ ] Implement the surface invariants (INV-362–383, 393–513, and the wave-2 and gap-list-3 ranges) and their implementation evidence, and INV-971 (evidence in every transmission state, through the batch reads `SpanIndex::spans` and `AccessStore::accesses`).
 - [ ] Port the UI fixture's world generator into `testkit`, so the UI and the gateway share one synthetic world.
 
 ---
@@ -393,7 +393,9 @@ clock)`, and split the capture stage so a pre-normalized exchange can enter
 through `Pipeline::ingest(NormalizedExchange, at)`. `ingest` stores the blobs,
 then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
 `Role::of`) drives the real layers through it on dataset corpora under sim
-time. Depends on P3; P4 and P5 consume it.
+time. Depends on P3; P4 and P5 consume it. Ingested exchanges carry
+`IngressMode::Replay { corpus: CorpusId }`, which the proxy never produces
+(INV-972) and L3 keeps apart from live agents and other corpora (INV-973).
 
 ## P4 Identity and provenance (parallel)
 
@@ -404,7 +406,7 @@ streams from testkit without waiting for P3.
 - [ ] `IdentityResolver`: identity evidence scoped to credential and account; harness claims are never evidence.
 - [ ] `AgentDirectory` on Postgres: merges, unmerge restoring `prior`, vetoes and the merge log. It is model-tested against `crosstalk-memory`.
 - [ ] `Threader`: conversations, including WebSocket increment resolution.
-- [ ] Implement INV-139–190 and the merge and claim invariants.
+- [ ] Implement INV-139–190 and the merge and claim invariants, and INV-973 (replayed corpora attribute and merge only within their corpus).
 - [ ] Fixtures (read in place, never copy dataset bytes into the repo):
   - AI Village Claude Code stream: `~/Data/ai/agents/ai-village/claude_code_messages.jsonl.gz` and `claude_code_sessions.jsonl.gz`. It has 940 compact_boundary records in one resumed session; group into calls by `content.message.id`; the schema is in `SCHEMA.md` there.
   - lmcache interleaved re-runs: `~/Data/ai/agents/lmcache/data/train-0000{0..4}-of-00005.parquet`. In session `wildclaw__01_Productivity_Flow_task_1_arxiv_digest__claude`, two re-runs interleave under one session id.
@@ -413,7 +415,7 @@ streams from testkit without waiting for P3.
 - [ ] `Segmenter`, the `Decoder`s (codecs and carriers), and `Fingerprinter` (winnowing).
 - [ ] `FingerprintIndex` on Postgres (or an in-memory shard).
 - [ ] Publish `ContentMatched`. The semantic matcher is a stub until P6.2 provides embeddings.
-- [ ] Implement INV-191–235, and from the eval spec PR INV-953 (escape-folded `Normalized`), INV-954 (decoder and fingerprinter input is part text only) and INV-955 (strict UTF-8 decoding).
+- [ ] Implement INV-191–235, and from the eval spec PR (`docs/features/eval_gaps.md`) INV-953 and INV-964 (the `JsonString` and `YamlString` codecs, one level per chain), INV-954 (decoder and fingerprinter input is part text only), INV-955 (strict UTF-8 decoding) and INV-965–967 (`SpanIndex::record` and the batch read `SpanIndex::spans`, authors as recorded).
 - [ ] Escape-folded matching against AgentDojo: `~/Data/ai/agents/agentdojo/runs/<pipeline>/<suite>/<user_task>/<attack>/<injection_task>.json`. The `injections` field holds the exact text; the slots are in `src/agentdojo/data/suites/<suite>/environment.yaml`. 49% of slots need YAML/JSON un-escaping, 26% whitespace folding, and 9% are exact.
 
 ## P5 L5 flow (milestone M2)
@@ -426,6 +428,7 @@ streams from testkit without waiting for P3.
   - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown at `CorrelationTiming::write_settles_at` (INV-956..960).
   - Self-relayed spans count in `Write.spans` (INV-961, 962).
   - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream, INV-963).
+  - `AccessStore::accesses`, the batch read of accesses with their resources (INV-968, 969).
 - [ ] Implement INV-236–290 plus the promotion and verdict ranges.
 - [ ] **M2 demo script:** two Claude Code agents and a local wiki MCP server, through the gateway. Assert the discovered channel and the confirmed transmission.
 

@@ -38,11 +38,26 @@ pub enum IngressMode {
     /// the gateway intercepted TLS for `host`. Only allowlisted hosts are
     /// intercepted; everything else is tunnelled untouched.
     ForwardProxy { host: Host },
+    /// Not live traffic: an exchange of a recorded dataset `corpus`,
+    /// normalized elsewhere and entered through the pipeline's ingest
+    /// (`Pipeline::ingest`, whose callers set it). The proxy never produces
+    /// it (`ingress.mode.never-replay`). L3 keeps a corpus's agents apart
+    /// from live agents and from every other corpus's
+    /// (`reconstruct.identity.replay-within-corpus`).
+    Replay { corpus: CorpusId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RouteName(pub String);
+
+/// A replayed dataset, by name (for example `agentdojo-v1.2` or
+/// `swe-smith-trajectories`), as the caller of `Pipeline::ingest` names
+/// it. Exchanges replayed under one corpus id are one population for
+/// identity resolution; two names are two corpora.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CorpusId(pub String);
 
 /// A configured upstream, by name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

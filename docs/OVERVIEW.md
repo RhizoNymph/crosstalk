@@ -175,10 +175,12 @@ Overview:
     channel it superseded, in an optional window that never changes which
     rows are listed); promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
-    channel names; transmission rows by id; the evidence page, which cuts
-    excerpts of both sides of each content match from the blob store's
-    bodies through the spans' and matches' locations (a body content
-    retention dropped is reported, not an error); and the overview's
+    channel names; transmission rows by id; the evidence page, which reads
+    span records (L4's SpanIndex::spans) and accesses with their resources
+    (L5's AccessStore::accesses) in batches, in every transmission state,
+    and cuts excerpts of both sides of each content match from the blob
+    store's bodies through the spans' and matches' locations (a body
+    content retention dropped is reported, not an error); and the overview's
     counts. Exports stream one dataset between a header naming the
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
@@ -538,8 +540,9 @@ Features Index:
       evidence lookup behind resolve, AgentLifecycle, ClaimStore,
       ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
       with cutoff, retention measured from the now each call is given, and
-      shards), MemoryChannels (ChannelRegistry, ChannelTraffic,
-      ChannelReads and ChannelDirectory: lookups, declarations, policy
+      shards; SpanIndex, the span records read in batches), MemoryChannels
+      (ChannelRegistry, ChannelTraffic, ChannelReads, AccessStore and
+      ChannelDirectory: lookups, declarations, policy
       history, promotion by promotion::plan and its coverage, supersession,
       resource use, traffic writes and stored channels) and MemoryVerdicts
       (TransmissionStore and TransmissionVerdicts); state sits behind a std
@@ -663,7 +666,7 @@ Features Index:
     doc: docs/features/spec_primitives.md
   eval_gaps:
     description: >
-      Detection rules from evaluating on real agent datasets (INV-950..963):
+      Detection rules from evaluating on real agent datasets (INV-950..973):
       ToolOutcome::Unknown for protocols without a failure flag; write
       outcomes (AccessOp::Write carries WriteOutcome Delivered, Rejected or
       Unknown, classified per known tool), with a writing call held until
@@ -674,16 +677,26 @@ Features Index:
       write confirms; a ToolResult match on a resource its sender never
       wrote is a shared upstream source and keeps the transmission
       Suspected; ToolCall::signature hashed and never part text; decoders
-      and the fingerprinter read part text only, decode strictly as UTF-8,
-      and normalization folds one level of JSON or YAML escapes.
+      and the fingerprinter read part text only and decode strictly as
+      UTF-8, and string serialisation is undone by two codecs
+      (Codec::JsonString, Codec::YamlString, one level per chain). Batch
+      reads shared by evaluation, the evidence page, the conversation view
+      and the UI's world seed: SpanIndex::spans (span records with their
+      author as recorded) and AccessStore::accesses (accesses with their
+      resources), so evidence exists in every transmission state;
+      CarrierKind splits quality rows by carrier; IngressMode::Replay {
+      corpus: CorpusId } marks replayed datasets, which L3 keeps apart.
     entry_points:
       - spec/types/derived/flow/access.rs
       - spec/types/derived/flow/evidence.rs
       - spec/types/derived/flow/timing.rs
       - spec/types/interfaces/l5_flow.rs
       - spec/types/interfaces/l4_provenance.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/derived/provenance/matching.rs
       - spec/types/observed/message.rs
-    depends_on: [type_spec, spec_primitives, wire_contract]
+      - spec/types/observed/client.rs
+    depends_on: [type_spec, spec_primitives, wire_contract, read_models]
     doc: docs/features/eval_gaps.md
   gateway:
     description: >

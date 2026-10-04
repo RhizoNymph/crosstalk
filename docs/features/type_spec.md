@@ -147,9 +147,12 @@ The types follow data through the stack:
    its character boundaries, so the surface can cut evidence excerpts from
    the stored bodies. Decoders and the fingerprinter read part text only,
    never ids, signatures or opaque reasoning; a decoder yields text only
-   when the decoded bytes are valid UTF-8; and fingerprinting folds one
-   level of JSON or YAML string escapes along with whitespace and case
-   (`MatchKind::Normalized`). See [eval_gaps.md](eval_gaps.md).
+   when the decoded bytes are valid UTF-8; and the string codecs
+   (`Codec::JsonString`, `Codec::YamlString`) undo one level of string
+   serialisation. The consumer records each originated span it indexes
+   with `SpanIndex::record`, and `SpanIndex::spans` reads a batch of
+   records back (exchange, author as recorded, location). See
+   [eval_gaps.md](eval_gaps.md).
 6. **L5 flow.** `ResourceExtractor`s turn tool calls and results into
    `ExtractedAccess`es. A write carries its `WriteOutcome` (`Delivered`,
    `Rejected`, `Unknown`), classified per known tool from the result's
@@ -403,7 +406,7 @@ The types follow data through the stack:
 | `spec/types/ids/mint.rs` | The ULID generator ([spec_primitives.md](spec_primitives.md)) | `UlidGenerator` (`next_ulid`, `mint`, `next_at`, `mint_at`), `RandomSource`, `SeededRandom` (`new`, `from_entropy`), `UlidExhausted`, `ulid_millis`, `MAX_ULID_MILLIS` |
 | `spec/types/ids/secret.rs` | The deployment secret and the keyed hasher ([spec_primitives.md](spec_primitives.md)) | `DeploymentSecret` (`new`, `from_hex`, `version`; `InvalidSecret`), `KeyedHasher` (`new`, `rotating`, `credential`, `account`; `InvalidRotation`), `SecretDigests` |
 | `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `QueryText` (checked: trimmed, non-empty, at most `MAX` characters, line breaks allowed; `InvalidQueryText`), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `Clock` (the injected wall clock, `now`; `SystemClock` reads the OS clock; see [sim.md](sim.md)), `TimeWindow`, `ByteRange`, `Blake3` (`of`, `to_hex`, `from_hex`, `InvalidHex`), `hex`, `from_hex`, `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
-| `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
+| `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode` (incl. `Replay { corpus }`), `CorpusId`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message` (`new`; decoded only with its body's hash, `MessageHashMismatch`), `MessageBody` (serde in its encoding's shape), `Role`, `AssistantPart`, `UserPart`, `Reasoning` (`Visible { text, signature }`, `Opaque`), `Media`, `MediaBlob` (checked: hash of its bytes; `InvalidMediaBlob`), `ToolCall` (with its hashed `signature`), `ToolArguments`, `CanonicalJson`, `ToolResult`, `ToolOutcome` (`Success`, `Error`, `Unknown`), `Unknown`, `PartRef` |
 | `spec/types/observed/message/encoding.rs`, `encoding/mirror.rs` | The canonical encoding of a body and its hash ([spec_primitives.md](spec_primitives.md)) | `encode`, `decode` (`DecodeError`), `hash`, `hash_bytes`, `message` |
 | `spec/types/observed/message/json.rs`, `json/` | JSON with exact numbers; canonical text ([spec_primitives.md](spec_primitives.md)) | `Json`, `Number`, `JsonError`, `canonicalize`, `MAX_DEPTH`, `MAX_EXPONENT_DIGITS` |
@@ -415,7 +418,7 @@ The types follow data through the stack:
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
-| `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec`, `Carrier`, `InvalidMatch` |
+| `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec` (incl. the string codecs `JsonString`, `YamlString`), `Carrier` (`kind`), `CarrierKind`, `InvalidMatch` |
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern` (`matches`, `overlaps`), `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp` (a write's spans and `outcome`), `WriteOutcome` (`pairs`), `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess` (refuses a rejected write), `InvalidCoAccess` (incl. `RejectedWrite`) |
@@ -432,7 +435,7 @@ The types follow data through the stack:
 | `spec/types/aggregates/alert/mod.rs` | Alerts | `AlertSubject`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState` (`kind`, `is_active`), `AlertStateKind` (`ALL`, `is_active`; re-exported by L8), `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge`, `rename` and `resolve` (over derived evidence), `EvidenceDeriver`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError`, and in `l3_reconstruction/lifecycle.rs` `AgentLifecycle` (`NewAgent`, `AgentOrigin`, `Advance`, `AgentLifecycleError`) (L3); `ChannelDirectory`, `ChannelRegistry::declare`, `set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use`, in `l5_flow/channels.rs` `ChannelTraffic` (`DetectionUpdate`, `TrafficError`) and `ChannelReads`, in `l5_flow/transmissions.rs` `TransmissionStore` (`TransmissionStoreError`) (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), in `l6_analysis/lifecycle.rs` `TopicLifecycle` (`StoredAssignment`, `CatalogActivation`, `TopicLifecycleError`), in `l6_analysis/corpus.rs` `SearchCorpus` (`IndexedTransmission`, `CorpusError`), in `l6_analysis/alerts.rs` `AlertRuleMaintenance`, `AlertActions` (`AlertActionError`) and `AlertReads` (`AlertReadError`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `version_ready`, `activate` (`Activation`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `NodeFacts` (`AgentFacts`, `ChannelFacts`), `WatermarkRead`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge`, `rename` and `resolve` (over derived evidence), `EvidenceDeriver`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError`, and in `l3_reconstruction/lifecycle.rs` `AgentLifecycle` (`NewAgent`, `AgentOrigin`, `Advance`, `AgentLifecycleError`) (L3); `SpanIndex` (`record`, batch `spans`; `IndexedSpan`, `SpanIndexError`) (L4); `ChannelDirectory`, `ChannelRegistry::declare`, `set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use`, in `l5_flow/channels.rs` `ChannelTraffic` (`DetectionUpdate`, `TrafficError`), `ChannelReads` and `AccessStore` (batch `accesses` with their resources; `AccessReadError`), in `l5_flow/transmissions.rs` `TransmissionStore` (`TransmissionStoreError`) (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), in `l6_analysis/lifecycle.rs` `TopicLifecycle` (`StoredAssignment`, `CatalogActivation`, `TopicLifecycleError`), in `l6_analysis/corpus.rs` `SearchCorpus` (`IndexedTransmission`, `CorpusError`), in `l6_analysis/alerts.rs` `AlertRuleMaintenance`, `AlertActions` (`AlertActionError`) and `AlertReads` (`AlertReadError`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `version_ready`, `activate` (`Activation`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `NodeFacts` (`AgentFacts`, `ChannelFacts`), `WatermarkRead`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`, `encoding/` (the message encoding and canonical JSON: pinned vectors in `tests/golden/encoding/`, round trips, the exact-inverse decode, RFC 8785), `secrets.rs` (keyed digests, rotation overlaps, a secret never shown), `minting.rs` (ULID monotonicity and uniqueness); the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
 | `spec/types/tests/send.rs`, `tests/send/{pipeline,detection,surface}.rs` | Compile-time check that every async trait method's future is `Send` and every associated stream or handle `Send + 'static`: an uninhabited `Dummy` implementing each trait with `async fn`, and one check function generic over each trait | `Dummy`, `assert_send`, `assert_send_static`, `arg` (test-only) |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
@@ -523,12 +526,14 @@ The types follow data through the stack:
   (`canonical.opaque.outside-part-text`, `provenance.decode.part-text-input`).
   A decoder yields text only when the decoded bytes are valid UTF-8, never
   by lossy conversion (`provenance.decode.strict-utf8`).
-- `MatchKind::Normalized` folds one level of JSON or YAML string escapes
-  as well as whitespace and case, on both sides: a span serialised into a
-  string literal in a reader's tool result matches as `Exact` or
-  `Normalized` (`provenance.match.escape-folded-normalized`; on AgentDojo
-  only 9% of injected strings reach tool output byte for byte, and 49%
-  need escapes undone).
+- Undoing string serialisation is decoding: a span serialised into a JSON
+  string or YAML scalar in a reader's tool result matches as
+  `Decoded([JsonString])` or `Decoded([YamlString])` (or `Exact` or
+  `Normalized` when nothing was escaped), one level only
+  (`provenance.match.string-serialised-decoded`,
+  `provenance.decode.one-string-level`; on AgentDojo only 9% of injected
+  strings reach tool output byte for byte, and 49% need escapes undone).
+  `Normalized` stays whitespace and case.
 - Read-side matching scans only a delta's `new_inputs`, `new_system` and
   output, never re-sent history, so one received message yields one
   match per span, not one per later call

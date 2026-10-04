@@ -36,7 +36,8 @@
 //! | `AccessKind` | `u8`: write 0, read 1 |
 //! | `Verdict` | `u8`: genuine 0, false detection 1 |
 //! | `MatchClass` | `u8`: exact 0, normalized 1, decoded 2, semantic 3 |
-//! | `QualityMatch` | `u8`: content 0 then its class, suspected 1, discarded 2 |
+//! | `CarrierKind` | `u8`: tool result 0, user turn 1, system prompt 2, reader output 3 |
+//! | `QualityMatch` | `u8`: content 0 then its class and its carrier kind, suspected 1, discarded 2 |
 //! | `TransmissionStateKind` | `u8`: confirmed 0, classified 1, aggregated 2 (a row is never in another state) |
 //! | `TopicUnder` | `u8`: topic 0 then its id, outlier 1, unassigned 2 |
 //! | `MessageHash` | its 32 digest bytes |
@@ -52,6 +53,7 @@ use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::derived::flow::verdict::Verdict;
+use crate::derived::provenance::matching::CarrierKind;
 use crate::interfaces::l8_surface::excerpt::Excerpted;
 use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crate::support::{Blake3, TimeWindow, Timestamp};
@@ -262,9 +264,13 @@ fn verdict_row(row: &VerdictRow, out: &mut Vec<u8>) {
     id(row.transmission.as_ulid(), out);
     out.push(route_code(row.route_kind));
     match row.call {
-        QualityMatch::Content(match_class) => {
+        QualityMatch::Content {
+            class: match_class,
+            carrier,
+        } => {
             out.push(0);
             out.push(class(match_class));
+            out.push(carrier_code(carrier));
         }
         QualityMatch::Suspected => out.push(1),
         QualityMatch::Discarded => out.push(2),
@@ -288,6 +294,15 @@ fn class(class: MatchClass) -> u8 {
         MatchClass::Normalized => 1,
         MatchClass::Decoded => 2,
         MatchClass::Semantic => 3,
+    }
+}
+
+fn carrier_code(carrier: CarrierKind) -> u8 {
+    match carrier {
+        CarrierKind::ToolResult => 0,
+        CarrierKind::UserTurn => 1,
+        CarrierKind::SystemPrompt => 2,
+        CarrierKind::ReaderOutput => 3,
     }
 }
 

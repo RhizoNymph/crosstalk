@@ -10,6 +10,25 @@ use std::num::NonZeroU32;
 use crate::support::{NonEmpty, Similarity};
 use crate::wire::Rejected;
 
+/// One decoding step a `Decoder` undoes. On the wire, snake_case strings.
+///
+/// **String codecs.** `JsonString` and `YamlString` undo one level of
+/// string serialisation: text a tool returned inside a JSON string literal
+/// or a YAML scalar. Serialisation is how most text reaches a reader
+/// through a tool result (an API's JSON, a YAML file, an MCP payload in a
+/// string field): on AgentDojo, of 51,714 injected strings that reach a
+/// tool output, 9% appear byte for byte, 26% need whitespace folding and
+/// 49% need string escapes undone. Each string codec's decoder yields, for
+/// every literal or scalar it finds whose value differs from its source
+/// text, a `Decoded` whose `source` is the byte range of the literal's or
+/// scalar's content (inside its quotes, or its block's content lines) and
+/// whose `text` is its value. A literal that breaks its grammar (an
+/// unknown escape, an unpaired surrogate, a raw control character in a JSON
+/// string) yields nothing. A decoded chain holds at most one string codec
+/// (`provenance.decode.one-string-level`): unescaping twice would turn an
+/// escaped backslash followed by `n` into a line break and change the
+/// text. Nested serialisation (a JSON document inside a JSON string) is not
+/// undone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Codec {
@@ -18,6 +37,29 @@ pub enum Codec {
     UrlEncoding,
     /// NFKC normalization, confusable folding, zero-width character removal.
     UnicodeNormalization,
+    /// One level of JSON string unescaping, RFC 8259 section 7. A literal
+    /// runs from a `"` outside any earlier literal, scanning left to right,
+    /// to the next `"` not escaped by a backslash, and holds no raw control
+    /// character (U+0000 to U+001F). Its value replaces `\"`, `\\`, `\/`,
+    /// `\b`, `\f`, `\n`, `\r`, `\t` and `\uXXXX` (a UTF-16 surrogate
+    /// pair as one scalar value) with the characters they denote; any other
+    /// escape, or an unpaired surrogate, makes the literal yield nothing.
+    JsonString,
+    /// One level of YAML scalar unescaping and folding, YAML 1.2.2:
+    /// double-quoted flow scalars (section 7.3.1: the escapes `\0`, `\a`,
+    /// `\b`, `\t`, `\<TAB>`, `\n`, `\v`, `\f`, `\r`, `\e`, `\<space>`,
+    /// `\"`, `\/`, `\\`, `\N`, `\_`, `\L`, `\P`, `\xXX`, `\uXXXX`,
+    /// `\UXXXXXXXX`; an escaped line break drops the break and the next
+    /// line's leading white space; other line breaks fold as in section
+    /// 6.5), single-quoted flow scalars (section 7.3.2: `''` is one `'`,
+    /// line breaks fold as in section 6.5) and folded block scalars
+    /// (section 8.1.3, `>`: the indentation is removed and lines fold as in
+    /// section 6.5, more-indented lines kept). An unknown escape makes the
+    /// scalar yield nothing. Literal block scalars (`|`) and plain scalars
+    /// differ from their text only in indentation and line breaks, which
+    /// whitespace normalization already folds, so they match as
+    /// `Normalized` and this codec leaves them alone.
+    YamlString,
 }
 
 /// How the reader's text had to be transformed before it matched.
@@ -30,11 +72,10 @@ pub enum Codec {
 )]
 pub enum MatchKind {
     Exact,
-    /// Matched after whitespace and case normalization and after one level
-    /// of JSON or YAML string escapes was folded (`\n`, `\"`, `\\`,
-    /// `\uXXXX`, YAML line continuations and folded newlines), applied
-    /// alike to the span's text and the reader's
-    /// (`provenance.match.escape-folded-normalized`).
+    /// Matched after whitespace and case normalization. Undoing string
+    /// escapes is decoding, not normalization: a span serialised into a
+    /// JSON string or YAML scalar matches as `Decoded([JsonString])` or
+    /// `Decoded([YamlString])` (`provenance.match.string-serialised-decoded`).
     Normalized,
     /// Matched after decoding, in the order the codecs were applied.
     Decoded(NonEmpty<Codec>),
@@ -61,6 +102,32 @@ pub enum Carrier {
     /// The reader's own output (text or tool-call arguments) contains it,
     /// although none of the reader's visible inputs did: the reader received
     /// it through something the gateway does not see.
+    ReaderOutput,
+}
+
+impl Carrier {
+    /// The carrier without its tool call.
+    pub fn kind(&self) -> CarrierKind {
+        match self {
+            Self::ToolResult(_) => CarrierKind::ToolResult,
+            Self::UserTurn => CarrierKind::UserTurn,
+            Self::SystemPrompt => CarrierKind::SystemPrompt,
+            Self::ReaderOutput => CarrierKind::ReaderOutput,
+        }
+    }
+}
+
+/// Where matched text sat, without its parameters: what quality rows and
+/// filters group by (`Carrier::kind`, `DirectCarrier::kind`). On the wire,
+/// snake_case strings.
+///
+/// [`DirectCarrier::kind`]: crate::derived::flow::transmission::DirectCarrier::kind
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CarrierKind {
+    ToolResult,
+    UserTurn,
+    SystemPrompt,
     ReaderOutput,
 }
 

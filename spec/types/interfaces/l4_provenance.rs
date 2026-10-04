@@ -17,22 +17,35 @@
 //! window (the provenance consumer passes the time of the exchange it is
 //! scanning), so a replay scans with the frequencies it scanned with.
 //!
+//! **Span locations.** The provenance consumer records every originated span
+//! it indexes with [`SpanIndex::record`] (where it sits and who wrote it,
+//! [`IndexedSpan`]), and [`SpanIndex::spans`] reads a batch of them back.
+//! The surface's evidence page cuts a sender's excerpt through it
+//! (`ContentMatch` names only the origin span's id), and evaluation, the
+//! conversation view and the UI's world seed read span locations and
+//! authors through the same batch read. The record outlives eviction:
+//! spans are never deleted, only their fingerprints.
+//!
 //! Implementations:
 //! - `Segmenter`: `NovelRunSegmenter`.
 //! - `Decoder`: `UnicodeNormalizer`, `Base64Decoder`, `HexDecoder`,
 //!   `UrlDecoder`.
 //! - `Fingerprinter`: `Winnowing`.
-//! - `FingerprintIndex`: `PgFingerprintIndex`, `ShardedMemIndex`.
+//! - `FingerprintIndex`, `SpanIndex`: `PgFingerprintIndex`,
+//!   `ShardedMemIndex` (one store implements both).
 //! - `SemanticMatcher`: `EmbeddingSimilarityMatcher`, an optional second
 //!   stage for paraphrase that produces `MatchKind::Semantic`.
 
+use std::collections::BTreeMap;
+
 use crate::aggregates::topic::Embedding;
+use crate::batch::IdBatch;
 use crate::derived::provenance::fingerprint::{
     Fingerprint, FingerprintHit, PositionedFingerprint, WinnowParams,
 };
 use crate::derived::provenance::matching::Codec;
 use crate::derived::provenance::span::{Origin, OriginatedSpan, SpanLocation};
-use crate::ids::SpanId;
+use crate::ids::{AgentId, ExchangeId, SpanId};
 use crate::observed::message::Message;
 use crate::support::{ByteRange, Similarity, Timestamp};
 
@@ -61,7 +74,11 @@ pub trait Decoder {
     fn codec(&self) -> Codec;
 
     /// Every substring of `text` this codec can decode, decoded. Decoders run
-    /// repeatedly on their own output, up to a fixed depth.
+    /// repeatedly on their own output, up to a fixed depth, except that a
+    /// chain holds at most one string codec (`Codec::JsonString`,
+    /// `Codec::YamlString`): their decoders never run on a string codec's
+    /// output (`provenance.decode.one-string-level`). A string codec's
+    /// semantics are on [`Codec`].
     ///
     /// Decoding is strict: a substring yields a [`Decoded`] only when the
     /// bytes it decodes to are valid UTF-8, and `Decoded::text` is exactly
@@ -76,10 +93,9 @@ pub trait Decoder {
 pub trait Fingerprinter {
     fn params(&self) -> WinnowParams;
 
-    /// Fingerprints of `text` after whitespace and case normalization and
-    /// folding one level of JSON or YAML string escapes (see
-    /// `MatchKind::Normalized`). `text` is always part text, or decoded
-    /// part text: never a tool-call id, a signature or opaque reasoning
+    /// Fingerprints of `text` after whitespace and case normalization.
+    /// `text` is always part text, or decoded part text: never a tool-call
+    /// id, a signature or opaque reasoning
     /// (`provenance.decode.part-text-input`).
     fn fingerprints(&self, text: &str) -> Vec<PositionedFingerprint>;
 }
@@ -128,6 +144,69 @@ pub trait FingerprintIndex {
         spans: &[SpanId],
         now: Timestamp,
     ) -> impl Future<Output = Result<(), IndexError>> + Send;
+}
+
+/// Where an indexed span sits and who wrote it, as recorded: the exchange
+/// whose response holds it, the agent whose output it is, and its location
+/// (the message and part, `location.part`, and the byte range of that
+/// part's text, `location.range`). [`SpanLocation`] itself stays the
+/// part-and-range pair a `ContentMatch`'s `read_at` also uses.
+///
+/// `author` is the span's agent as recorded (`Span::agent`, the agent its
+/// exchange was attributed to). It is never resolved through merges: a
+/// later merge or unmerge changes no record, and readers resolve it to the
+/// canonical agent through `AgentDirectory`, as every stored agent id is
+/// (`provenance.span-index.author-as-recorded`).
+///
+/// [`Span::agent`]: crate::derived::provenance::span::Span::agent
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IndexedSpan {
+    pub exchange: ExchangeId,
+    pub author: AgentId,
+    pub location: SpanLocation,
+}
+
+impl IndexedSpan {
+    /// The record [`SpanIndex::record`] keeps for `span`.
+    pub fn of(span: &OriginatedSpan) -> Self {
+        let span = span.span();
+        Self {
+            exchange: span.exchange,
+            author: span.agent,
+            location: span.location,
+        }
+    }
+}
+
+/// The originated spans' records, written once and read back in batches.
+pub trait SpanIndex {
+    /// Record where `span` sits and who wrote it ([`IndexedSpan::of`]). The
+    /// provenance consumer records every originated span it indexes.
+    /// Idempotent: a span id already recorded keeps its first record and
+    /// nothing changes, so a redelivered delta records nothing new.
+    fn record(
+        &mut self,
+        span: &OriginatedSpan,
+    ) -> impl Future<Output = Result<(), SpanIndexError>> + Send;
+
+    /// The records of the spans in `ids`, read in one snapshot, each as it
+    /// was recorded whatever has happened since: eviction drops a span's
+    /// fingerprints, not its record, and merges change no stored author
+    /// (`provenance.span-index.spans-as-recorded`). An id never recorded (a
+    /// relayed or common span, an unknown id) is absent from the map, so
+    /// the map's keys are a subset of `ids`
+    /// (`provenance.span-index.keys-within-batch`); the batch is at most
+    /// `IdBatch::MAX` ids by construction.
+    fn spans(
+        &self,
+        ids: &IdBatch<SpanId>,
+    ) -> impl Future<Output = Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError>> + Send;
+}
+
+/// Why a span read failed; a retry may succeed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpanIndexError {
+    Store { reason: String },
 }
 
 /// A candidate paraphrase: an originated span whose embedding is close to a

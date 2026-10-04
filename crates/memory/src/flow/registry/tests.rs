@@ -796,6 +796,50 @@ async fn writes_of_every_outcome_are_recorded_and_listed() {
     assert!(rows[0].readers().is_empty());
 }
 
+/// `flow.access-store.accesses-as-recorded` and
+/// `flow.access-store.keys-within-batch`: each recorded access reads back
+/// as recorded, its write outcome included, with its stored resource;
+/// ids never recorded are left out.
+#[tokio::test]
+async fn accesses_read_back_in_batches_with_their_resources() {
+    use crosstalk_spec::batch::IdBatch;
+    use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
+    use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
+    use std::collections::BTreeMap;
+    let (mut registry, _events) = registry().await;
+    discover(&mut registry, 0, 0).await;
+    let rejected = Access {
+        id: AccessId::from_ulid(41),
+        agent: access_agent(1),
+        exchange: crosstalk_spec::ids::ExchangeId::from_ulid(41),
+        resource: model::resource(0).id,
+        at: at(5),
+        via: Extraction::Parsed,
+        op: AccessOp::Write {
+            call: crosstalk_spec::observed::message::PartRef {
+                message: crosstalk_spec::ids::MessageHash::from_digest(
+                    crosstalk_spec::support::Blake3::from_bytes([4; 32]),
+                ),
+                index: 2,
+            },
+            spans: Vec::new(),
+            outcome: WriteOutcome::Rejected,
+        },
+    };
+    let Ok(ids) = IdBatch::new([AccessId::from_ulid(41), AccessId::from_ulid(42)]) else {
+        panic!("batch");
+    };
+    assert_eq!(registry.accesses(&ids).await, Ok(BTreeMap::new()));
+    assert_eq!(registry.record_access(rejected.clone()).await, Ok(()));
+    assert_eq!(
+        registry.accesses(&ids).await,
+        Ok(BTreeMap::from([(
+            rejected.id,
+            (rejected, model::resource(0))
+        )]))
+    );
+}
+
 /// A cursor issued for one channel or window is refused for another.
 #[tokio::test]
 async fn resource_use_refuses_foreign_cursors() {

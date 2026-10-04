@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aliases::Aliases;
 use crate::derived::flow::evidence::CoAccess;
-use crate::derived::provenance::matching::ContentMatch;
+use crate::derived::provenance::matching::{CarrierKind, ContentMatch};
 use crate::ids::{AgentId, ChannelId, TopicId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::{NonEmpty, Timestamp};
@@ -142,6 +142,18 @@ pub enum DirectCarrier {
     UserTurn,
     SystemPrompt,
     ToolResult(ToolName),
+}
+
+impl DirectCarrier {
+    /// The carrier without its tool name. Never `ReaderOutput`: text that
+    /// reached the reader through nothing visible is `Route::Unobserved`.
+    pub fn kind(&self) -> CarrierKind {
+        match self {
+            Self::UserTurn => CarrierKind::UserTurn,
+            Self::SystemPrompt => CarrierKind::SystemPrompt,
+            Self::ToolResult(_) => CarrierKind::ToolResult,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

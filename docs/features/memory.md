@@ -45,8 +45,8 @@ for the one computation double that stamps its output (`FakeTopicModel`'s
 | Store | Spec traits | Module |
 | --- | --- | --- |
 | `MemoryAgents` | `AgentDirectory`, `IdentityResolver` (`merge`, `unmerge`, `rename`, `resolve`), `AgentLifecycle`, `ClaimStore`, `ActivityStore`, `AgentReads` | `reconstruct` |
-| `MemoryFingerprintIndex` | `FingerprintIndex` | `provenance` |
-| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | `flow::registry` |
+| `MemoryFingerprintIndex` | `FingerprintIndex`, `SpanIndex` (span records written by `record`, read in batches by `spans`, kept through eviction) | `provenance` |
+| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `AccessStore`, `ChannelDirectory` | `flow::registry` |
 | `MemoryVerdicts` | `TransmissionStore`, `TransmissionVerdicts` | `flow::verdicts` |
 
 The writes the layer consumers make (P4.1, P5) are spec traits:
@@ -178,7 +178,9 @@ histories, resources (each on one channel) and accesses.
 - `ChannelTraffic`: `discover` creates a channel only for an unstored
   resource whose lookup is `New`; `add_resource` stores a resource on the
   channel its lookup names (any channel for `New`), never on a superseded
-  one; `record_access` needs a stored resource and a new access id, and
+  one; `AccessStore::accesses` reads a batch of recorded accesses with
+  their stored resources, leaving out unknown ids;
+  `record_access` needs a stored resource and a new access id, and
   stores a write whatever its `WriteOutcome`, so a rejected write counts
   as a write in `resource_use` (`flow.access.rejected-write-recorded`;
   pairing is the correlator's, in `crosstalk-flow`);

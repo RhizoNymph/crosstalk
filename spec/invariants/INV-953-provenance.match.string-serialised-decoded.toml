@@ -1,0 +1,34 @@
+[invariant]
+id = "provenance.match.string-serialised-decoded"
+statement = "When an indexed span's text, at least k + w - 1 characters long after normalization, appears in a tool result in another agent's new inputs as the value of one JSON string literal or one YAML double-quoted, single-quoted or folded block scalar, provenance yields a ContentMatch against that span whose kind is MatchKind::Exact or MatchKind::Normalized when the serialised text holds the span's text unchanged up to whitespace and case, and otherwise MatchKind::Decoded([Codec::JsonString]) or MatchKind::Decoded([Codec::YamlString]) respectively."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Text a reader gets through a tool result usually arrives serialised: an
+API returns JSON, a file tool reads YAML or a JSON log, an MCP server wraps
+its payload in a string field. On AgentDojo, of 51,714 injected strings
+that reach a tool output only 9% appear there byte for byte; 26% need
+whitespace folding, and 49% need JSON or YAML string escapes undone:
+\\n, \\t, \\", \\\\, \\/, \\uXXXX (including surrogate pairs), YAML's ''
+inside single quotes, a backslash line continuation together with the
+next line's leading whitespace, and newlines folded to spaces. Matching
+that folds only whitespace and case misses half of what readers receive
+this way.
+
+Undoing string serialisation is decoding: it is a Codec
+(Codec::JsonString, Codec::YamlString, whose decode semantics the Codec
+documentation fixes), so the match records that the text was unescaped,
+and whitespace and case folding stay MatchKind::Normalized
+(provenance.fingerprint.normalization-invariant). Text that needed no
+unescaping still matches Exact or Normalized. Literal block and plain
+YAML scalars differ from their value only in indentation and line breaks,
+so they match as Normalized. One level only
+(provenance.decode.one-string-level).
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::string_serialised_span_matches_decoded"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
