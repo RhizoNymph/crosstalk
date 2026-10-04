@@ -208,7 +208,7 @@ cursors; unordered results (fingerprint hits) as multisets.
 
 | Harness | Store under test is built by | Observes after each step | Also checks on the store under test |
 | --- | --- | --- | --- |
-| `reconstruct::model::check_agent_store(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads`) | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
+| `reconstruct::model::check_agent_store(config, make)`, `check_agent_store_with(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads`), or (`_with`) a future of one, built inside the case's runtime so a Postgres store connects there | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
 | `provenance::model::check_fingerprint_index(config, make)` | `make(IndexConfig) -> S` where `S: FingerprintIndex`; run for a single node and for one of two shards, both stores given the same `now` | `frequency` and `lookup` of every fingerprint | — |
 | `flow::registry::model::check_channel_registry(config, make)` | `make(MemoryAgents, IdSequence, Outbox) -> S` where `S: ChannelStore` (`ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory`) | every channel (a full `ChannelReads::channels` traversal); `channel`, `canonical` and `policy_history` of every id; `lookup` of every locator; a full `resource_use` traversal of every channel | declared patterns disjoint; policy is the history's current; supersession one step, to a declared channel |
 | `flow::verdicts::model::check_transmission_verdicts(config, make)` | `make(Outbox) -> S` where `S: VerdictStore` (`TransmissionVerdicts + TransmissionStore`) | every log and every stored transmission; the all-time quality | `set` never changes the stored transmission |
@@ -248,7 +248,7 @@ caught (the harness returns `ModelMismatch::Failed`).
 | `crates/memory/src/reconstruct/table.rs` | L3 state and operations | (crate) `AgentTable` |
 | `crates/memory/src/reconstruct/store.rs` | L3 trait impls, `AgentLifecycle` included | — |
 | `crates/memory/src/reconstruct/resolve.rs` | The lookup behind `resolve`; the client context's evidence | `context_evidence` |
-| `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
+| `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `check_agent_store_with`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
 | `crates/memory/src/reconstruct/tests/` | L3 reference tests | — |
 | `crates/memory/src/provenance/index.rs` | The fingerprint index | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
 | `crates/memory/src/provenance/model.rs` | L4 harness | `check_fingerprint_index`, `IndexOp`, `configs` |
