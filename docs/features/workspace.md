@@ -21,7 +21,8 @@ P1.2 and P0.5.
 - Any implementation. Every crate under `crates/` started as an empty
   library whose crate doc says what it will implement; the per-layer
   roadmap items fill them (`crosstalk-transport`: [transport](transport.md);
-  `crosstalk-canonical`: [canonical](canonical.md)).
+  `crosstalk-canonical`: [canonical](canonical.md); `crosstalk-gateway`:
+  [gateway](gateway.md)).
 - The UI (`ui/`), which is excluded from the workspace and keeps its own
   package and lock.
 - CI configuration. `scripts/check.sh` is what CI runs once it exists.
@@ -73,7 +74,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde, serde_json and blake3 from the workspace pins, and proptest as its dev-dependency |
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing; `crates/testkit/Cargo.toml`: see `docs/features/testkit.md`; `crates/memory/Cargo.toml`: below) |
 | `crates/memory/Cargo.toml` | Adds `blake3`, `proptest`, `serde_json`, `thiserror`, `tokio` (`sync`, `rt`, `macros`) and `tracing` from the workspace pins: the reference stores and their exported property harnesses |
-| `crates/gateway/Cargo.toml` | Adds the `crosstalk` binary and a `serde_json` dev-dependency for the architecture test |
+| `crates/gateway/Cargo.toml` | The `crosstalk` binary; depends on the layer crates `canonical`, `ingress`, `transport` and on `store`, plus `bytes`, `http-body-util`, `hyper` (client, http1, server), `hyper-util` (tokio), `serde`, `serde_json`, `thiserror`, `tokio` (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), `tracing` and `tracing-subscriber` (env-filter, fmt, json, std, which bring in `matchers`, `regex-automata`, `aho-corasick`, `tracing-serde` and `valuable`); dev: `crosstalk-sim`, `crosstalk-testkit`, `tempfile`; see [gateway.md](gateway.md) |
 | `crates/sim/Cargo.toml` | Adds `thiserror`, `tracing` and `tokio` with `macros`, `rt`, `sync`, `time` and `test-util` (paused time); see [sim.md](sim.md) |
 | `crates/ingress/Cargo.toml` | The proxy's pins: `blake3`, `bytes`, `flate2 = "=1.1.10"`, `http-body-util`, `hyper` (client, http1, server), `hyper-rustls = "=0.27.10"` (no default features; http1, ring, tls12, webpki-tokio), `hyper-util` (client-legacy, http1, tokio), `serde`, `serde_json`, `thiserror`, `tokio`, `tracing`, `zstd = "=0.13.3"` (no default features); dev: `crosstalk-sim`, `crosstalk-testkit`, `proptest`, `tower-service = "=0.3.3"`, `tracing-subscriber = "=0.3.23"` (fmt, std); see [ingress.md](ingress.md) |
 
@@ -244,7 +245,7 @@ any error.
 | `Cargo.lock` | The workspace lock | — |
 | `rust-toolchain.toml` | Pinned nightly and its components | — |
 | `crates/*/Cargo.toml`, `crates/*/src/lib.rs` | One library per layout entry, with its crate doc; empty until its roadmap item fills it (`sim`: [sim.md](sim.md)) | crates `crosstalk_<dir>` |
-| `crates/gateway/src/main.rs` | The placeholder `crosstalk` binary | `main` |
+| `crates/gateway/src/main.rs` | The `crosstalk` binary ([gateway](gateway.md)) | `main` |
 | `crates/gateway/tests/architecture.rs` | The dependency rule over `cargo metadata` | `Role`, `DepKind`, `Edge`, `Violation`, `check`, `violations` (test-local) |
 | `scripts/check.sh` | Every workspace check, stopping at the first failure | — |
 | `scripts/inv_check.py` | The invariant validator | `Repo`, `TestTally`, `check`, `check_paths`, `main` |

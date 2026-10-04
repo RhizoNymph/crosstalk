@@ -32,7 +32,8 @@ store is a separate async step through the spec's `BlobStore`.
   WebSocket increments: roadmap P8. Their invariant evidence stays pending.
 - The capture task: receiving `RawExchange`s from L0, calling `store`, and
   publishing `ExchangeCaptured` only after it succeeds
-  (`canonical.capture.blobs-before-event`, roadmap P3).
+  (`canonical.capture.blobs-before-event`): the gateway's capture stage
+  ([gateway](gateway.md), roadmap P3).
 - The encoding, canonical JSON, credential hashing, deployment secrets and
   ULID generation: the spec's ([spec_primitives](spec_primitives.md)),
   with their invariants' evidence (`canonical.encoding.*`,
@@ -229,7 +230,8 @@ Implementation evidence in this crate now passes for: INV-47, 51, 59
 and the new `canonical.usage.cache-writes-reported` and
 `canonical.reasoning.signature-verbatim`. INV-49, 50, 53–56, 58, 59's
 property and 60 are the spec's now ([spec_primitives](spec_primitives.md)).
-Pending: INV-48 (the capture task, P3), 57 (cross-node secret agreement,
+INV-48's evidence moved to the gateway, where the capture task lives, and
+passes there ([gateway](gateway.md)). Pending: 57 (cross-node secret agreement,
 L0), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
 
 ## Gaps found
