@@ -7,7 +7,7 @@
 //! (`reconstruct.thread.serializable`), and a second call for an exchange
 //! returns the first call's outcome and changes nothing
 //! (`reconstruct.thread.rethread-idempotent`). The decision itself is
-//! shared ([`super::plan`]), so the stores differ only in how they read and
+//! shared (`plan`), so the stores differ only in how they read and
 //! write.
 //!
 //! Every conversation keeps its messages in order, system turns included,
@@ -111,12 +111,19 @@ pub trait ConversationStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<TranscriptEntry>, ThreadError>> + Send;
 
     /// The ids of every stored conversation, ascending.
-    fn conversations(&self) -> impl Future<Output = Result<Vec<ConversationId>, ThreadError>> + Send;
+    fn conversations(
+        &self,
+    ) -> impl Future<Output = Result<Vec<ConversationId>, ThreadError>> + Send;
 }
 
 /// [`crosstalk_spec::observed::conversation::ConversationOrigin`] as stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub(crate) enum StoredOrigin {
     Root,
     Fork {
@@ -130,7 +137,12 @@ pub(crate) enum StoredOrigin {
 
 /// [`ThreadOutcome`] as stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub(crate) enum StoredOutcome {
     Starts {
         conversation: ConversationId,

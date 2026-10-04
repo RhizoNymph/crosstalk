@@ -12,9 +12,9 @@ use crosstalk_spec::observed::message::Role;
 use proptest::test_runner::TestCaseError;
 
 use super::script::{Harness, Op, Step};
+use crate::tests::support::MemoryThreader;
 use crate::thread::store::outcome_conversation;
 use crate::thread::{ConversationStore, MemoryConversations};
-use crate::tests::support::MemoryThreader;
 
 /// The conversations stored before a step.
 pub(crate) type Snapshot = BTreeMap<ConversationId, Conversation>;
@@ -122,9 +122,15 @@ impl Oracle {
         let at = |what: &str| format!("step {index}: {what}: {outcome:?}");
         // delta.names-outcome-conversation, delta.output-is-response,
         // delta.agent-is-attributed.
-        check(delta.conversation == conversation, || at("delta names another conversation"))?;
-        check(delta.output == step.output, || at("delta output is not the response"))?;
-        check(delta.agent == step.agent, || at("delta agent is not the attributed agent"))?;
+        check(delta.conversation == conversation, || {
+            at("delta names another conversation")
+        })?;
+        check(delta.output == step.output, || {
+            at("delta output is not the response")
+        })?;
+        check(delta.agent == step.agent, || {
+            at("delta agent is not the attributed agent")
+        })?;
         let ours: Vec<(&ConversationId, &Conversation)> = before
             .iter()
             .filter(|(_, stored)| cluster.contains(&stored.agent))
@@ -147,37 +153,53 @@ impl Oracle {
                 let stored = before
                     .get(&conversation)
                     .ok_or_else(|| TestCaseError::fail(at("extends an unstored conversation")))?;
-                check(cluster.contains(&stored.agent), || at("extends another cluster's conversation"))?;
+                check(cluster.contains(&stored.agent), || {
+                    at("extends another cluster's conversation")
+                })?;
                 // thread.extends-stored-prefix
-                check(r.starts_with(&stored.messages), || at("extends a history that is not a prefix"))?;
+                check(r.starts_with(&stored.messages), || {
+                    at("extends a history that is not a prefix")
+                })?;
                 // thread.extends-longest-prefix-match
                 check(Some(stored.messages.len()) == longest_prefix, || {
                     at(&format!("not the longest prefix ({longest_prefix:?})"))
                 })?;
                 // delta.new-inputs-are-request-suffix
-                check(delta.new_inputs == r[stored.messages.len()..], || at("new inputs are not the suffix"))?;
+                check(delta.new_inputs == r[stored.messages.len()..], || {
+                    at("new inputs are not the suffix")
+                })?;
                 // delta.new-system-when-changed
                 let previous = self.last_system.get(&conversation).copied().flatten();
                 let expected = request.system.filter(|system| Some(*system) != previous);
-                check(delta.new_system == expected, || at("new_system is not the changed system"))?;
+                check(delta.new_system == expected, || {
+                    at("new_system is not the changed system")
+                })?;
             }
             other => {
                 check(longest_prefix.is_none(), || {
-                    at(&format!("a stored history of {longest_prefix:?} messages is a prefix"))
+                    at(&format!(
+                        "a stored history of {longest_prefix:?} messages is a prefix"
+                    ))
                 })?;
                 check(fresh, || at("a new conversation reuses a stored id"))?;
                 // delta.new-system-when-changed: a new conversation's first.
-                check(delta.new_system == request.system, || at("first new_system"))?;
+                check(delta.new_system == request.system, || {
+                    at("first new_system")
+                })?;
                 match other {
                     ThreadOutcome::Compacts { predecessor, .. } => {
                         let stored = before.get(predecessor).ok_or_else(|| {
                             TestCaseError::fail(at("compacts an unstored conversation"))
                         })?;
                         // thread.link-targets-exist
-                        check(cluster.contains(&stored.agent), || at("predecessor of another cluster"))?;
+                        check(cluster.contains(&stored.agent), || {
+                            at("predecessor of another cluster")
+                        })?;
                         // thread.compaction-needs-content-evidence
                         let echoed = r.first().is_some_and(|first| outputs.contains(first));
-                        check(step.summary.is_some() || echoed, || at("compaction without evidence"))?;
+                        check(step.summary.is_some() || echoed, || {
+                            at("compaction without evidence")
+                        })?;
                         // delta.compaction-excludes-carried-over
                         let expected: Vec<MessageHash> = r
                             .iter()
@@ -195,18 +217,30 @@ impl Oracle {
                         let stored = before.get(parent).ok_or_else(|| {
                             TestCaseError::fail(at("forks an unstored conversation"))
                         })?;
-                        check(cluster.contains(&stored.agent), || at("parent of another cluster"))?;
-                        check(k == lcp(r, &stored.messages), || at("shared prefix is not the lcp"))?;
-                        check(k < stored.messages.len(), || at("shared prefix out of bounds"))?;
-                        check(request.has_assistant(k, &outputs), || at("no assistant message shared"))?;
-                        check(Some(k) == best_fork, || at(&format!("parent not maximal ({best_fork:?})")))?;
+                        check(cluster.contains(&stored.agent), || {
+                            at("parent of another cluster")
+                        })?;
+                        check(k == lcp(r, &stored.messages), || {
+                            at("shared prefix is not the lcp")
+                        })?;
+                        check(k < stored.messages.len(), || {
+                            at("shared prefix out of bounds")
+                        })?;
+                        check(request.has_assistant(k, &outputs), || {
+                            at("no assistant message shared")
+                        })?;
+                        check(Some(k) == best_fork, || {
+                            at(&format!("parent not maximal ({best_fork:?})"))
+                        })?;
                         check(delta.new_inputs == r[k..], || at("fork new inputs"))?;
                     }
                     ThreadOutcome::Starts { .. } => {
                         check(delta.new_inputs == *r, || at("start new inputs"))?;
                         // thread.fork-or-start
                         check(best_fork.is_none(), || {
-                            at(&format!("starts though a prefix of {best_fork:?} is shared"))
+                            at(&format!(
+                                "starts though a prefix of {best_fork:?} is shared"
+                            ))
                         })?;
                     }
                     ThreadOutcome::Extends { .. } => {}
@@ -229,9 +263,11 @@ impl Oracle {
                 .copied()
                 .filter(|message| !delta.new_inputs.contains(message))
                 .collect::<Vec<_>>(),
-            ThreadOutcome::Extends { .. } => {
-                self.expected.get(&conversation).cloned().unwrap_or_default()
-            }
+            ThreadOutcome::Extends { .. } => self
+                .expected
+                .get(&conversation)
+                .cloned()
+                .unwrap_or_default(),
         };
         let mut history = expected;
         if let ThreadOutcome::Compacts { .. } = outcome {
@@ -248,7 +284,10 @@ impl Oracle {
             .map_err(|error| TestCaseError::fail(format!("{error:?}")))?
             .ok_or_else(|| TestCaseError::fail(at("outcome conversation not stored")))?;
         check(stored.messages == history, || {
-            at(&format!("stored history {:?} is not the deltas' {history:?}", stored.messages))
+            at(&format!(
+                "stored history {:?} is not the deltas' {history:?}",
+                stored.messages
+            ))
         })?;
         let origin = match outcome {
             ThreadOutcome::Starts { .. } => ConversationOrigin::Root,
@@ -269,9 +308,10 @@ impl Oracle {
             },
         };
         check(stored.origin == origin, || at("stored origin"))?;
-        check(stored.agent == before.get(&conversation).map_or(step.agent, |b| b.agent), || {
-            at("stored agent changed")
-        })?;
+        check(
+            stored.agent == before.get(&conversation).map_or(step.agent, |b| b.agent),
+            || at("stored agent changed"),
+        )?;
         self.expected.insert(conversation, history.clone());
         self.last_system.insert(conversation, request.system);
         self.outcomes.push(outcome.clone());

@@ -55,12 +55,11 @@ fn agents(
     let mut agents = BTreeMap::new();
     for (id, parent, state, label_text) in rows {
         let id: AgentId = id_of("agents.id", &id)?;
-        let evidence = NonEmpty::from_vec(held.remove(&id).unwrap_or_default()).ok_or(
-            CodecError::Json {
+        let evidence =
+            NonEmpty::from_vec(held.remove(&id).unwrap_or_default()).ok_or(CodecError::Json {
                 column: "agent_evidence",
                 reason: format!("agent {} holds no evidence", id.ulid_text()),
-            },
-        )?;
+            })?;
         let parent = parent
             .map(|parent| id_of("agents.parent", &parent))
             .transpose()?;
@@ -103,9 +102,7 @@ pub(super) async fn agent(
 }
 
 /// Claim sets from claim rows.
-fn claim_sets(
-    rows: Vec<(String, String, i64)>,
-) -> Result<BTreeMap<AgentId, ClaimSet>, CodecError> {
+fn claim_sets(rows: Vec<(String, String, i64)>) -> Result<BTreeMap<AgentId, ClaimSet>, CodecError> {
     let mut entries: BTreeMap<AgentId, Vec<SeenClaim>> = BTreeMap::new();
     for (agent, claim, last_seen) in rows {
         let claim: HarnessClaim = from_json("claims.claim", &claim)?;
@@ -207,7 +204,13 @@ pub(super) async fn full_table(conn: &mut PgConnection) -> Result<Table, TxFailu
 pub(super) async fn cluster_activity(
     conn: &mut PgConnection,
     id: AgentId,
-) -> Result<(BTreeMap<AgentId, ClaimSet>, Option<crosstalk_spec::support::Timestamp>), TxFailure> {
+) -> Result<
+    (
+        BTreeMap<AgentId, ClaimSet>,
+        Option<crosstalk_spec::support::Timestamp>,
+    ),
+    TxFailure,
+> {
     let (claims_json, last_seen): (String, Option<i64>) = sqlx::query_as(
         "WITH target AS ( \
              SELECT coalesce((SELECT merged_into FROM reconstruct.agents WHERE id = $1), $1) AS canonical \

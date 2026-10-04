@@ -192,10 +192,7 @@ where
     async fn decide<T, F>(&self, decide: F) -> Result<T, ResolveError>
     where
         T: Clone + Send + 'static,
-        F: Fn(&mut Table) -> Result<super::table::Applied<T>, ResolveError>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&mut Table) -> Result<super::table::Applied<T>, ResolveError> + Send + Sync + 'static,
     {
         let decide = Arc::new(decide);
         let (applied, seqs, pointers) = retry_serializable(&self.pool, &self.retry, |conn| {
@@ -243,9 +240,8 @@ where
         let record = self
             .decide(move |table| {
                 table.merge(request, at, || {
-                    ids.next_id(at).map_err(|error| {
-                        ResolveError::from_failure(&StorageFailure::Ids(error))
-                    })
+                    ids.next_id(at)
+                        .map_err(|error| ResolveError::from_failure(&StorageFailure::Ids(error)))
                 })
             })
             .await?;
@@ -280,9 +276,7 @@ where
                 if let Some(stored) = stored {
                     table.agents.insert(agent, stored);
                 }
-                let applied = table
-                    .rename(agent, label, by)
-                    .map_err(TxError::Abort)?;
+                let applied = table.rename(agent, label, by).map_err(TxError::Abort)?;
                 persist(conn, &table, &applied.diff).await.map_err(tx)?;
                 let seqs = outbox(conn, &applied.events).await.map_err(tx)?;
                 Ok((applied, seqs))
@@ -350,12 +344,11 @@ async fn stored_canonical(
     conn: &mut PgConnection,
     id: AgentId,
 ) -> Result<Option<AgentId>, TxFailure> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT coalesce(merged_into, id) FROM reconstruct.agents WHERE id = $1",
-    )
-    .bind(id_text(id))
-    .fetch_optional(&mut *conn)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT coalesce(merged_into, id) FROM reconstruct.agents WHERE id = $1")
+            .bind(id_text(id))
+            .fetch_optional(&mut *conn)
+            .await?;
     Ok(row
         .map(|(canonical,)| super::codec::id_of("agents.merged_into", &canonical))
         .transpose()?)
@@ -372,7 +365,8 @@ where
     where
         F: for<'c> Fn(
                 &'c mut PgConnection,
-            ) -> crosstalk_store::TxFuture<'c, Vec<BusEvent>, AgentLifecycleError>
+            )
+                -> crosstalk_store::TxFuture<'c, Vec<BusEvent>, AgentLifecycleError>
             + Send
             + Sync
             + 'static,
@@ -462,8 +456,8 @@ where
                 let Some((state,)) = row else {
                     return Err(TxError::Abort(AgentLifecycleError::UnknownAgent(agent)));
                 };
-                let state: AgentState = super::codec::from_json("agents.state", &state)
-                    .map_err(|e| tx(e.into()))?;
+                let state: AgentState =
+                    super::codec::from_json("agents.state", &state).map_err(|e| tx(e.into()))?;
                 let next = match (&state, advance) {
                     (AgentState::Registered { .. }, Advance::FirstTraffic { at }) => {
                         AgentState::Provisional { first_seen: at }

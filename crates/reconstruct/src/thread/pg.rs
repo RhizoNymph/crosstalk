@@ -2,8 +2,8 @@
 //! `reconstruct`, migration `0002_conversations`).
 //!
 //! A threading call is one `SERIALIZABLE` transaction, retried on a
-//! serialization failure: the decision ([`super::plan`]) reads through
-//! [`PgReads`] and the write lands in the same transaction, so concurrent
+//! serialization failure: the decision (`plan`) reads through
+//! `PgReads` and the write lands in the same transaction, so concurrent
 //! calls (several consumers, redeliveries racing) leave what some serial
 //! order would (`reconstruct.thread.serializable`).
 
@@ -82,6 +82,14 @@ fn stored_origin(origin: ConversationOrigin) -> StoredOrigin {
     }
 }
 
+/// A conversation's id, history length, head, last system message and
+/// update sequence.
+type HeadRow = (String, i32, Vec<u8>, Option<Vec<u8>>, i64);
+
+/// A transcript row: ordinal, message, role, exchange, history index,
+/// output.
+type EntryRow = (i32, Vec<u8>, String, String, Option<i32>, bool);
+
 fn ids(members: &[AgentId]) -> Vec<String> {
     members.iter().map(|id| id_text(*id)).collect()
 }
@@ -119,11 +127,16 @@ impl ThreadReads for PgReads<'_> {
             .enumerate()
             .map(|(index, chain)| (*chain, index))
             .collect();
-        let rows: Vec<(String, i32, Vec<u8>, Option<Vec<u8>>, i64)> = sqlx::query_as(
+        let rows: Vec<HeadRow> = sqlx::query_as(
             "SELECT id, history_len, head, last_system, updated FROM reconstruct.conversations \
              WHERE head = ANY($1) AND agent = ANY($2)",
         )
-        .bind(chains.iter().map(|chain| digest_bytes(&chain.0)).collect::<Vec<_>>())
+        .bind(
+            chains
+                .iter()
+                .map(|chain| digest_bytes(&chain.0))
+                .collect::<Vec<_>>(),
+        )
         .bind(ids(members))
         .fetch_all(&mut *self.0)
         .await?;
@@ -141,10 +154,9 @@ impl ThreadReads for PgReads<'_> {
                     .map(|bytes| message_hash("conversations.last_system", &bytes))
                     .transpose()?,
             };
-            if best
-                .as_ref()
-                .is_none_or(|(best_len, best_updated, _)| (len, updated) > (*best_len, *best_updated))
-            {
+            if best.as_ref().is_none_or(|(best_len, best_updated, _)| {
+                (len, updated) > (*best_len, *best_updated)
+            }) {
                 best = Some((len, updated, candidate));
             }
         }
@@ -313,7 +325,11 @@ impl ThreadReads for PgReads<'_> {
 }
 
 /// Record `write` for `input`.
-async fn apply(conn: &mut PgConnection, input: &ThreadInput, write: &Write) -> Result<(), TxFailure> {
+async fn apply(
+    conn: &mut PgConnection,
+    input: &ThreadInput,
+    write: &Write,
+) -> Result<(), TxFailure> {
     let (updated,): (i64,) = sqlx::query_as("SELECT nextval('reconstruct.conversation_updates')")
         .fetch_one(&mut *conn)
         .await?;
@@ -401,8 +417,10 @@ async fn apply(conn: &mut PgConnection, input: &ThreadInput, write: &Write) -> R
             roles.push(role_text(new.entry.role).to_owned());
             match new.history {
                 Some((index, chain)) => {
-                    indexes.push(Some(i32::try_from(index).map_err(|_| CodecError::Encode {
-                        reason: "history index beyond the stored range".to_owned(),
+                    indexes.push(Some(i32::try_from(index).map_err(|_| {
+                        CodecError::Encode {
+                            reason: "history index beyond the stored range".to_owned(),
+                        }
                     })?));
                     chains.push(Some(digest_bytes(&chain.0)));
                 }
@@ -485,9 +503,7 @@ impl ConversationStore for PgConversations {
         retry_serializable(&self.pool, &self.retry, |conn| {
             let input = Arc::clone(&input);
             Box::pin(async move {
-                let planned = plan(&mut PgReads(&mut *conn), &input)
-                    .await
-                    .map_err(tx)?;
+                let planned = plan(&mut PgReads(&mut *conn), &input).await.map_err(tx)?;
                 match planned {
                     Planned::Recorded(outcome) => Ok(outcome),
                     Planned::Write(write) => {
@@ -507,12 +523,11 @@ impl ConversationStore for PgConversations {
                 .pool
                 .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 .await?;
-            let row: Option<(String, String)> = sqlx::query_as(
-                "SELECT agent, origin FROM reconstruct.conversations WHERE id = $1",
-            )
-            .bind(id_text(id))
-            .fetch_optional(&mut *tx)
-            .await?;
+            let row: Option<(String, String)> =
+                sqlx::query_as("SELECT agent, origin FROM reconstruct.conversations WHERE id = $1")
+                    .bind(id_text(id))
+                    .fetch_optional(&mut *tx)
+                    .await?;
             let Some((agent, origin)) = row else {
                 return Ok::<_, TxFailure>(None);
             };
@@ -540,7 +555,7 @@ impl ConversationStore for PgConversations {
 
     async fn transcript(&self, id: ConversationId) -> Result<Vec<TranscriptEntry>, ThreadError> {
         let read = async {
-            let rows: Vec<(i32, Vec<u8>, String, String, Option<i32>, bool)> = sqlx::query_as(
+            let rows: Vec<EntryRow> = sqlx::query_as(
                 "SELECT ordinal, message, role, exchange, history_index, output \
                  FROM reconstruct.conversation_entries WHERE conversation = $1 ORDER BY ordinal",
             )

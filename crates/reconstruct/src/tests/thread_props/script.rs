@@ -159,7 +159,14 @@ pub(crate) fn script(mix: Mix, max: usize) -> impl Strategy<Value = Vec<Op>> {
         proptest::collection::vec(op(mix), 1..max),
     )
         .prop_map(|((agent, system, user), mut ops)| {
-            ops.insert(0, Op::Start { agent, system, user });
+            ops.insert(
+                0,
+                Op::Start {
+                    agent,
+                    system,
+                    user,
+                },
+            );
             ops
         })
 }
@@ -237,7 +244,9 @@ impl Harness {
         let n = self.next();
         match ending {
             Ending::Completed => Some(self.entry(Role::Assistant, &format!("answer {n}")).await),
-            Ending::FailedPartial => Some(self.entry(Role::Assistant, &format!("partial {n}")).await),
+            Ending::FailedPartial => {
+                Some(self.entry(Role::Assistant, &format!("partial {n}")).await)
+            }
             Ending::FailedEmpty => None,
         }
     }

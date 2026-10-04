@@ -323,7 +323,10 @@ where
 /// [`check_agent_store`] with a store built asynchronously, inside the
 /// case's runtime: a Postgres store connects (and empties its tables)
 /// there, so its connections live and die with the case.
-pub fn check_agent_store_with<S, F, Fut>(config: HarnessConfig, make: F) -> Result<(), ModelMismatch>
+pub fn check_agent_store_with<S, F, Fut>(
+    config: HarnessConfig,
+    make: F,
+) -> Result<(), ModelMismatch>
 where
     S: AgentStore,
     F: Fn(IdSequence, Outbox) -> Fut,

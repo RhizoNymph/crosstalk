@@ -3,7 +3,7 @@
 //! [`ConversationThreader`] prepares each exchange (the roles of its
 //! request messages from the blob store, its cluster, whether it carries a
 //! summary turn, the scope its response is filed under) and hands a
-//! [`ThreadInput`] to a [`ConversationStore`], which decides ([`plan`]) and
+//! [`ThreadInput`] to a [`ConversationStore`], which decides (`plan`) and
 //! records the outcome in one atomic step. The three strategies the spec
 //! names are the decision's steps: prefix matching (`PrefixThreader`),
 //! increment resolution through stored responses (`ResponsesStateThreader`)
@@ -98,7 +98,8 @@ pub struct ConversationThreader<S, B, D, I> {
 
 impl<S, B, D, I> std::fmt::Debug for ConversationThreader<S, B, D, I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConversationThreader").finish_non_exhaustive()
+        f.debug_struct("ConversationThreader")
+            .finish_non_exhaustive()
     }
 }
 

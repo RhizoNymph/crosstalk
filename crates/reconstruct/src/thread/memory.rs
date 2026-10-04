@@ -3,7 +3,7 @@
 //! reference the Postgres store is model-tested against.
 //!
 //! One `tokio::sync::Mutex` guards the whole state; a threading call takes
-//! it once, decides ([`super::plan`]) and applies the write before
+//! it once, decides (`plan`) and applies the write before
 //! releasing it, so calls are serializable.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -94,11 +94,12 @@ impl State {
             } => {
                 let mut entries: Vec<StoredEntry> = Vec::new();
                 if let Some((parent, k)) = base {
-                    let parent_entries = self.entries.get(&parent).ok_or_else(|| {
-                        StorageFailure::Inconsistent {
-                            reason: format!("fork parent {} is not stored", parent.ulid_text()),
-                        }
-                    })?;
+                    let parent_entries =
+                        self.entries
+                            .get(&parent)
+                            .ok_or_else(|| StorageFailure::Inconsistent {
+                                reason: format!("fork parent {} is not stored", parent.ulid_text()),
+                            })?;
                     for stored in parent_entries {
                         entries.push(*stored);
                         if stored.history.is_some_and(|(index, _)| index + 1 == k) {
@@ -233,12 +234,17 @@ impl ThreadReads for Reads<'_> {
         key: &ResponseKey,
         members: &[AgentId],
     ) -> Result<Option<(ConversationId, u32)>, TxFailure> {
-        Ok(self.0.responses.get(key).copied().filter(|(conversation, _)| {
-            self.0
-                .conversations
-                .get(conversation)
-                .is_some_and(|stored| members.contains(&stored.agent))
-        }))
+        Ok(self
+            .0
+            .responses
+            .get(key)
+            .copied()
+            .filter(|(conversation, _)| {
+                self.0
+                    .conversations
+                    .get(conversation)
+                    .is_some_and(|stored| members.contains(&stored.agent))
+            }))
     }
 
     async fn history(

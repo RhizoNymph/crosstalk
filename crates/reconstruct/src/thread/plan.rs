@@ -359,7 +359,9 @@ pub(crate) async fn plan<R: ThreadReads>(
     if let Some(extension) = reads.extension(members, &history.chains).await? {
         let k = extension.len as usize;
         let tail = history.after(k);
-        let new_system = history.system.filter(|system| Some(*system) != extension.last_system);
+        let new_system = history
+            .system
+            .filter(|system| Some(*system) != extension.last_system);
         let appended = append(&history, k, tail, lead(new_system, tail), input.output)?;
         let conversation = extension.conversation;
         let new_inputs = non_system.get(k..).unwrap_or(&[]).to_vec();
@@ -402,7 +404,13 @@ pub(crate) async fn plan<R: ThreadReads>(
     {
         let shared = k as usize;
         let tail = history.after(shared);
-        let appended = append(&history, shared, tail, lead(history.system, tail), input.output)?;
+        let appended = append(
+            &history,
+            shared,
+            tail,
+            lead(history.system, tail),
+            input.output,
+        )?;
         let conversation = input.conversation;
         let new_inputs = non_system.get(shared..).unwrap_or(&[]).to_vec();
         return Ok(Planned::Write(Box::new(Write {
@@ -461,9 +469,11 @@ async fn compacted<R: ThreadReads>(
         None => false,
     };
     let summary = match input.summary {
-        Some(summary) if non_system.contains(&summary) => {
-            reads.holder(members, &[summary]).await?.is_none().then_some(summary)
-        }
+        Some(summary) if non_system.contains(&summary) => reads
+            .holder(members, &[summary])
+            .await?
+            .is_none()
+            .then_some(summary),
         Some(_) | None => None,
     };
     if !echoed && summary.is_none() {

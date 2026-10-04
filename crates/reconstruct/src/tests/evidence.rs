@@ -78,13 +78,21 @@ fn account_scopes_harness_ids() {
     let account = ids.account();
     meta.client.account = Some(account);
     meta.client.ids.agent = Some("agent-1".to_owned());
-    assert_eq!(scope_of(&meta.client).current, IdentityScope::Account(account));
-    assert!(HeaderEvidence.derive(&meta, &[]).iter().all(|item| matches!(
-        item,
-        IdentityEvidence::HarnessAgent { scope: IdentityScope::Account(a), .. }
-            | IdentityEvidence::HarnessSession { scope: IdentityScope::Account(a), .. }
-            if *a == account
-    )));
+    assert_eq!(
+        scope_of(&meta.client).current,
+        IdentityScope::Account(account)
+    );
+    assert!(
+        HeaderEvidence
+            .derive(&meta, &[])
+            .iter()
+            .all(|item| matches!(
+                item,
+                IdentityEvidence::HarnessAgent { scope: IdentityScope::Account(a), .. }
+                    | IdentityEvidence::HarnessSession { scope: IdentityScope::Account(a), .. }
+                    if *a == account
+            ))
+    );
 }
 
 /// `reconstruct.evidence.scope-precedence`: without an account, a stable
@@ -94,7 +102,10 @@ fn stable_credential_scopes_harness_ids_without_account() {
     let mut ids = Ids::new();
     let meta = meta(&mut ids, Some(CredentialScheme::ApiKey));
     let hash = meta.client.credential.map(|c| c.hash).expect("credential");
-    assert_eq!(scope_of(&meta.client).current, IdentityScope::Credential(hash));
+    assert_eq!(
+        scope_of(&meta.client).current,
+        IdentityScope::Credential(hash)
+    );
     let session = meta.client.ids.session.clone().expect("session");
     assert_eq!(
         HeaderEvidence.derive(&meta, &[]),

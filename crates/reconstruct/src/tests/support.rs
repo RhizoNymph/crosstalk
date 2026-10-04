@@ -5,16 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crosstalk_spec::ids::mint::{SeededRandom, UlidGenerator};
-use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
+use crosstalk_spec::ids::{AgentId, MessageHash};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::interfaces::l3_reconstruction::ThreadError;
 use crosstalk_spec::observed::exchange::{Exchange, ExchangeFailure};
 use crosstalk_spec::observed::message::{MessageBody, encoding};
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_testkit::build::ExchangeBuilder;
-use crosstalk_testkit::build::message::{
-    assistant_text, system_text, tool_result, user_text,
-};
+use crosstalk_testkit::build::message::{assistant_text, system_text, tool_result, user_text};
 use crosstalk_testkit::ids::Ids;
 use crosstalk_testkit::time::T0;
 use crosstalk_transport::blob::MemoryBlobStore;
@@ -125,7 +123,11 @@ impl Scene {
     }
 
     /// A failed full-history exchange, with `partial` if one arrived.
-    pub(crate) fn failed(&mut self, request: Vec<MessageHash>, partial: Option<MessageHash>) -> Exchange {
+    pub(crate) fn failed(
+        &mut self,
+        request: Vec<MessageHash>,
+        partial: Option<MessageHash>,
+    ) -> Exchange {
         let at = self.tick();
         let builder = ExchangeBuilder::new(&mut self.ids)
             .started_at(at)
@@ -150,14 +152,4 @@ impl Scene {
     ) -> MemoryThreader<S> {
         ConversationThreader::new(store, Arc::clone(&self.messages), clusters, ulids(7))
     }
-}
-
-/// An exchange id for a hand-built input.
-pub(crate) fn exchange_id(n: u128) -> ExchangeId {
-    ExchangeId::from_ulid((u128::from(crosstalk_testkit::ids::Ids::TIME_MS) << 80) | 0xE0_0000 | n)
-}
-
-/// A conversation id for a hand-built input.
-pub(crate) fn conversation_id(n: u128) -> ConversationId {
-    ConversationId::from_ulid((u128::from(crosstalk_testkit::ids::Ids::TIME_MS) << 80) | 0xC0_0000 | n)
 }

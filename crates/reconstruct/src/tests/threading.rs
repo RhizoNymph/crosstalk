@@ -200,7 +200,10 @@ async fn failed_exchange_without_partial_response_is_threaded() {
     let a2 = scene.assistant("answer").await;
     let retry = scene.exchange(vec![u, a1, t1], a2);
     let outcome = threader.thread(&retry, agent).await.expect("retry");
-    assert!(matches!(outcome, ThreadOutcome::Extends { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Extends { .. }),
+        "{outcome:?}"
+    );
     assert!(outcome.delta().new_inputs.is_empty());
 }
 
@@ -225,7 +228,10 @@ async fn unknown_previous_response_starts_with_increment() {
         .response(a)
         .build();
     let outcome = threader.thread(&exchange, agent).await.expect("threaded");
-    assert!(matches!(outcome, ThreadOutcome::Starts { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Starts { .. }),
+        "{outcome:?}"
+    );
     assert_eq!(outcome.delta().new_inputs, vec![t, u]);
 }
 
@@ -266,7 +272,10 @@ async fn increment_continues_the_stored_response() {
         .build();
     let outcome = threader.thread(&next, agent).await.expect("increment");
     assert_eq!(conversation(&outcome), root);
-    assert!(matches!(outcome, ThreadOutcome::Extends { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Extends { .. }),
+        "{outcome:?}"
+    );
     assert_eq!(outcome.delta().new_inputs, vec![u2]);
 }
 
@@ -292,7 +301,10 @@ async fn compaction_hint_without_summary_is_not_compaction() {
         .response(a2)
         .build();
     let outcome = threader.thread(&hinted, agent).await.expect("hinted");
-    assert!(matches!(outcome, ThreadOutcome::Starts { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Starts { .. }),
+        "{outcome:?}"
+    );
 }
 
 /// `reconstruct.thread.compaction-needs-content-evidence`: with the hint
@@ -306,7 +318,9 @@ async fn compaction_hint_with_summary_is_compaction() {
     let first = scene.exchange(vec![u], a);
     let before = conversation(&threader.thread(&first, agent).await.expect("first"));
     let (summary, a2) = (
-        scene.user("Summary of the work so far: the task is half done.").await,
+        scene
+            .user("Summary of the work so far: the task is half done.")
+            .await,
         scene.assistant("resuming").await,
     );
     let at = scene.tick();
@@ -344,7 +358,10 @@ async fn mid_conversation_system_turn_continues_and_is_kept_in_order() {
     let root = conversation(&threader.thread(&first, agent).await.expect("first"));
     let second = scene.exchange(vec![s, u, a1, t1, reminder], a2);
     let outcome = threader.thread(&second, agent).await.expect("second");
-    assert!(matches!(outcome, ThreadOutcome::Extends { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Extends { .. }),
+        "{outcome:?}"
+    );
     assert_eq!(conversation(&outcome), root);
     assert_eq!(outcome.delta().new_inputs, vec![t1]);
     assert_eq!(outcome.delta().new_system, Some(reminder));
@@ -450,11 +467,17 @@ async fn interleaved_reruns_thread_as_separate_conversations() {
         let outcome = threader.thread(&exchange, agent).await.expect("threaded");
         match root {
             None => {
-                assert!(matches!(outcome, ThreadOutcome::Starts { .. }), "{outcome:?}");
+                assert!(
+                    matches!(outcome, ThreadOutcome::Starts { .. }),
+                    "{outcome:?}"
+                );
                 *root = Some(conversation(&outcome));
             }
             Some(root) => {
-                assert!(matches!(outcome, ThreadOutcome::Extends { .. }), "{outcome:?}");
+                assert!(
+                    matches!(outcome, ThreadOutcome::Extends { .. }),
+                    "{outcome:?}"
+                );
                 assert_eq!(conversation(&outcome), *root);
             }
         }
@@ -487,7 +510,11 @@ async fn rewritten_early_tool_result_forks_at_the_rewrite() {
         root.get_or_insert(conversation(&outcome));
         assistants.push(output);
         history.push(output);
-        history.push(scene.tool(&format!("c{step}"), &format!("result {step}")).await);
+        history.push(
+            scene
+                .tool(&format!("c{step}"), &format!("result {step}"))
+                .await,
+        );
     }
     // Rewrite the first tool result (history[2]).
     let rewritten = scene.tool("c0", "result 0 [pruned]").await;
@@ -532,7 +559,10 @@ async fn resumed_session_extends_and_compact_boundary_compacts() {
             .thread(&scene.exchange(history.clone(), output), agent)
             .await
             .expect("threaded");
-        assert_eq!(*root.get_or_insert(conversation(&outcome)), conversation(&outcome));
+        assert_eq!(
+            *root.get_or_insert(conversation(&outcome)),
+            conversation(&outcome)
+        );
         history.push(output);
         history.push(scene.tool(&format!("t{step}"), "events").await);
     }
@@ -544,7 +574,10 @@ async fn resumed_session_extends_and_compact_boundary_compacts() {
         .thread(&scene.exchange(history.clone(), output), agent)
         .await
         .expect("resumed");
-    assert!(matches!(outcome, ThreadOutcome::Extends { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ThreadOutcome::Extends { .. }),
+        "{outcome:?}"
+    );
     assert_eq!(Some(conversation(&outcome)), root);
     // Compact boundary.
     let summary = scene

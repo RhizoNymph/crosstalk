@@ -65,8 +65,8 @@ where
             .token()
             .split_once('_')
             .ok_or(AgentReadError::InvalidCursor)?;
-        let last: AgentId =
-            id_of("cursor", id).map_err(|_: super::codec::CodecError| AgentReadError::InvalidCursor)?;
+        let last: AgentId = id_of("cursor", id)
+            .map_err(|_: super::codec::CodecError| AgentReadError::InvalidCursor)?;
         if tag(&self.cursor_key, filter, last) == given {
             Ok(last)
         } else {
@@ -85,9 +85,8 @@ where
         filter: &AgentFilter,
         page: &PageRequest<AgentList>,
     ) -> Result<Page<AgentProfile, AgentList>, AgentReadError> {
-        let binding = json(filter).map_err(|error| {
-            AgentReadError::from_failure(&StorageFailure::Codec(error))
-        })?;
+        let binding = json(filter)
+            .map_err(|error| AgentReadError::from_failure(&StorageFailure::Codec(error)))?;
         let after = page
             .after
             .as_ref()

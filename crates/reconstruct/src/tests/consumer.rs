@@ -5,11 +5,11 @@
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::ids::AgentId;
+use crosstalk_spec::interfaces::l3_reconstruction::IdentityResolver;
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
     AgentLifecycle, AgentOrigin, NewAgent,
 };
-use crosstalk_spec::interfaces::l3_reconstruction::IdentityResolver;
 use crosstalk_spec::observed::agent::{
     Agent, AgentState, IdentityEvidence, MergeAuthor, MergeRequest,
 };
@@ -283,7 +283,13 @@ async fn weak_conflict(rig: &mut Rig) -> (Exchange, AgentId, AgentId) {
         hash: rig.scene.ids.credential(),
     });
     let shared = exchange(rig, &client, "shared prompt").await;
-    let opening = vec![rig.scene.messages.message(shared.request[0]).await.expect("body")];
+    let opening = vec![
+        rig.scene
+            .messages
+            .message(shared.request[0])
+            .await
+            .expect("body"),
+    ];
     let fingerprint = PromptFingerprintEvidence::fingerprint(&opening).expect("fingerprint");
     let (x, y) = (rig.scene.ids.agent(), rig.scene.ids.agent());
     for id in [x, y] {

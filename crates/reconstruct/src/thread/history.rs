@@ -92,11 +92,6 @@ impl History {
         }
     }
 
-    /// The number of non-system messages.
-    pub(crate) fn len(&self) -> usize {
-        self.positions.len()
-    }
-
     /// The non-system messages, in order.
     pub(crate) fn non_system(&self) -> impl Iterator<Item = MessageHash> + '_ {
         self.positions

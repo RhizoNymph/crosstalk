@@ -2,7 +2,7 @@
 //!
 //! One store implements every L3 agent trait over schema `reconstruct`:
 //! `AgentDirectory` (from the in-process copy of the merge table,
-//! [`cache`]), `IdentityResolver` (the merge log with exact unmerges,
+//! `cache`), `IdentityResolver` (the merge log with exact unmerges,
 //! vetoes, renames, and the evidence lookup behind `resolve`),
 //! `AgentLifecycle`, `ClaimStore`, `ActivityStore` and `AgentReads`.
 //!
@@ -10,7 +10,7 @@
 //!   (`crosstalk_store::retry_serializable`), so concurrent merges, and a
 //!   merge racing a resolver merge, leave states some serial order would
 //!   (`reconstruct.agent-merge.serializable`). A merge or unmerge loads the
-//!   agent table into a [`table::Table`], decides there, and writes back
+//!   agent table into a `table::Table`, decides there, and writes back
 //!   what the decision changed.
 //! - **Events** are appended to `reconstruct.outbox` in the transaction
 //!   that makes the change and handed to the [`EventSink`] after the
@@ -28,7 +28,6 @@ mod reads;
 mod resolve;
 pub(crate) mod table;
 mod writes;
-
 
 use std::sync::Arc;
 

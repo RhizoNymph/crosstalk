@@ -29,7 +29,10 @@ pub(crate) struct RecordingBus(pub(crate) Arc<Mutex<Vec<Envelope>>>);
 
 impl RecordingBus {
     pub(crate) fn envelopes(&self) -> Vec<Envelope> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Every `ConversationDelta` published, with its envelope id.
@@ -50,7 +53,10 @@ impl RecordingBus {
         self.envelopes()
             .into_iter()
             .filter(|envelope| {
-                matches!(envelope.event, BusEvent::Ingest(IngestEvent::AgentSeen { .. }))
+                matches!(
+                    envelope.event,
+                    BusEvent::Ingest(IngestEvent::AgentSeen { .. })
+                )
             })
             .map(|envelope| (envelope.id, envelope.event))
             .collect()
@@ -164,7 +170,9 @@ impl Rig {
     pub(crate) fn captured(&mut self, exchange: &Exchange) -> Envelope {
         self.envelopes += 1;
         Envelope {
-            id: EventId::from_ulid(exchange.meta.id.as_ulid() ^ (0xFFFF << 64) ^ u128::from(self.envelopes)),
+            id: EventId::from_ulid(
+                exchange.meta.id.as_ulid() ^ (0xFFFF << 64) ^ u128::from(self.envelopes),
+            ),
             at: exchange.meta.started_at,
             event: BusEvent::Ingest(IngestEvent::ExchangeCaptured(Box::new(exchange.clone()))),
         }

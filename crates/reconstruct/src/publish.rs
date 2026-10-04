@@ -29,10 +29,7 @@ pub enum SinkError {
 
 /// Takes the events a committed write publishes, in order.
 pub trait EventSink: Send + Sync + 'static {
-    fn publish(
-        &self,
-        events: Vec<BusEvent>,
-    ) -> impl Future<Output = Result<(), SinkError>> + Send;
+    fn publish(&self, events: Vec<BusEvent>) -> impl Future<Output = Result<(), SinkError>> + Send;
 }
 
 /// [`EventSink`] onto an [`EventBus`]: each event in its own envelope,

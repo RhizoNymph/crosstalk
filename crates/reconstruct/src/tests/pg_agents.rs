@@ -14,9 +14,7 @@ use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
 use crosstalk_spec::interfaces::l3_reconstruction::{
     AgentDirectory, ClaimStore, IdentityResolver, ResolveError,
 };
-use crosstalk_spec::observed::agent::{
-    AgentState, ClaimSet, MergeAuthor, MergeRequest, MergeVeto,
-};
+use crosstalk_spec::observed::agent::{AgentState, ClaimSet, MergeAuthor, MergeRequest, MergeVeto};
 use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 use crosstalk_testkit::ids::Ids;
 
@@ -41,23 +39,17 @@ fn model_check(test: &str, cases: u32) {
         return;
     };
     let url = db.url().clone();
-    let outcome = check_agent_store_with(
-        HarnessConfig {
-            cases,
-            max_ops: 24,
-        },
-        |ids, outbox| {
-            let url = url.clone();
-            async move {
-                let pool = pool_on(&url).await;
-                truncate(&pool).await;
-                match PgAgents::open(pool, OutboxSink(outbox), SeqIds(ids), CURSOR_KEY).await {
-                    Ok(store) => store,
-                    Err(error) => panic!("store did not open: {error}"),
-                }
+    let outcome = check_agent_store_with(HarnessConfig { cases, max_ops: 24 }, |ids, outbox| {
+        let url = url.clone();
+        async move {
+            let pool = pool_on(&url).await;
+            truncate(&pool).await;
+            match PgAgents::open(pool, OutboxSink(outbox), SeqIds(ids), CURSOR_KEY).await {
+                Ok(store) => store,
+                Err(error) => panic!("store did not open: {error}"),
             }
-        },
-    );
+        }
+    });
     runtime.block_on(close(db));
     if let Err(mismatch) = outcome {
         panic!("{mismatch}");
@@ -160,7 +152,10 @@ async fn pg_rename_refuses_merged_agent() {
     let (a, b, operator) = (ids.agent(), ids.agent(), ids.operator());
     traffic(&mut store, a, 1).await;
     traffic(&mut store, b, 2).await;
-    assert_eq!(store.rename(a, label(0), operator).await, Ok(Change::Applied));
+    assert_eq!(
+        store.rename(a, label(0), operator).await,
+        Ok(Change::Applied)
+    );
     store
         .merge(request(a, b, MergeAuthor::Operator(operator)), at(5))
         .await
@@ -229,11 +224,15 @@ async fn pg_merge_refuses_merged_agents() {
         .expect("merged");
     recorder.take();
     assert_eq!(
-        store.merge(request(a, c, MergeAuthor::Resolver), at(6)).await,
+        store
+            .merge(request(a, c, MergeAuthor::Resolver), at(6))
+            .await,
         Err(ResolveError::AgentMerged { agent: a, into: b })
     );
     assert_eq!(
-        store.merge(request(c, a, MergeAuthor::Resolver), at(6)).await,
+        store
+            .merge(request(c, a, MergeAuthor::Resolver), at(6))
+            .await,
         Err(ResolveError::AgentMerged { agent: a, into: b })
     );
     assert!(recorder.take().is_empty());
@@ -379,11 +378,15 @@ async fn pg_veto_blocks_resolver_merge() {
         &reversal,
     );
     assert_eq!(
-        store.merge(request(a, c, MergeAuthor::Resolver), at(8)).await,
+        store
+            .merge(request(a, c, MergeAuthor::Resolver), at(8))
+            .await,
         Err(ResolveError::AgentMerged { agent: c, into: b })
     );
     assert_eq!(
-        store.merge(request(a, b, MergeAuthor::Resolver), at(8)).await,
+        store
+            .merge(request(a, b, MergeAuthor::Resolver), at(8))
+            .await,
         Err(ResolveError::Vetoed(veto))
     );
     assert!(recorder.take().is_empty());
@@ -411,7 +414,9 @@ async fn pg_operator_merge_clears_veto() {
         .await
         .expect("unmerged");
     assert!(matches!(
-        store.merge(request(a, b, MergeAuthor::Resolver), at(7)).await,
+        store
+            .merge(request(a, b, MergeAuthor::Resolver), at(7))
+            .await,
         Err(ResolveError::Vetoed(_))
     ));
     store

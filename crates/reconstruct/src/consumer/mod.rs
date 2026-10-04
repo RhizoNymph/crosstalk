@@ -5,7 +5,7 @@
 //! 1. Read the request's opening (its messages through the first user
 //!    message) from the blob store and derive the evidence
 //!    (`EvidenceDeriver`); an exchange carrying none is not attributed.
-//! 2. Attribute it ([`attribute`]): resolve, then create, attach, advance
+//! 2. Attribute it (`attribute`): resolve, then create, attach, advance
 //!    or merge.
 //! 3. Record its activity and, when it carries one, its harness claim
 //!    against the attributed agent.
@@ -297,7 +297,11 @@ where
         result
     }
 
-    async fn process(&mut self, exchange: &Exchange, at: Timestamp) -> Result<Handled, ConsumeError> {
+    async fn process(
+        &mut self,
+        exchange: &Exchange,
+        at: Timestamp,
+    ) -> Result<Handled, ConsumeError> {
         let meta = &exchange.meta;
         let opening = self.opening(exchange).await?;
         let Some(evidence) = NonEmpty::from_vec(self.deriver.derive(meta, &opening)) else {

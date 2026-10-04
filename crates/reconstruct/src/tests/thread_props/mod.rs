@@ -236,7 +236,10 @@ async fn continue_response(
         step.exchange.meta.client.clone()
     } else {
         // Another credential: another identity scope.
-        ExchangeBuilder::new(&mut harness.scene.ids).build().meta.client
+        ExchangeBuilder::new(&mut harness.scene.ids)
+            .build()
+            .meta
+            .client
     };
     let builder = ExchangeBuilder::new(&mut harness.scene.ids)
         .started_at(at)
@@ -286,7 +289,10 @@ fn previous_response_matches_only_in_scope() {
             let Some(outcome) = continue_response(&ops, pick, true, false).await? else {
                 return Ok(());
             };
-            prop_assert!(matches!(outcome, ThreadOutcome::Starts { .. }), "{outcome:?}");
+            prop_assert!(
+                matches!(outcome, ThreadOutcome::Starts { .. }),
+                "{outcome:?}"
+            );
             prop_assert_eq!(outcome.delta().new_inputs.len(), 2);
             Ok(())
         },
@@ -381,9 +387,16 @@ fn chained_compaction_excludes_carried_over() {
             ) else {
                 return Ok(());
             };
-            for carried in first.request.iter().filter(|entry| entry.role != Role::System) {
+            for carried in first
+                .request
+                .iter()
+                .filter(|entry| entry.role != Role::System)
+            {
                 if Some(carried.message) != first.summary
-                    && last.request.iter().any(|entry| entry.message == carried.message)
+                    && last
+                        .request
+                        .iter()
+                        .any(|entry| entry.message == carried.message)
                 {
                     prop_assert!(
                         !delta.new_inputs.contains(&carried.message),
