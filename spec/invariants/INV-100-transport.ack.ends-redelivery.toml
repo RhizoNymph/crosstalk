@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.ack.ends-redelivery"
+statement = "Once ack returns Ok for a delivery, the bus never again delivers the envelope from that publish call to that consumer group."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Without this, every handled envelope could come back, and the dedup table
+would carry the whole load. On JetStream ack is a synchronous (double) ack:
+it returns Ok only after the server confirms, so a lost ack surfaces as an
+error the consumer can retry instead of a silent redelivery. A second publish
+of an envelope with the same id is a different publish call and is handled by
+transport.dedup.at-most-once.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::acked_envelope_never_redelivered"
+integration = "crosstalk::transport::integration::jetstream_ack_is_confirmed_by_server"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

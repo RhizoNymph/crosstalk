@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.retry.policy-ordered-backoff"
+statement = "Every RetryPolicy has initial_backoff no greater than max_backoff."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+With initial_backoff above max_backoff the floor and ceiling in
+transport.retry.backoff-floor and transport.retry.backoff-ceiling cannot
+both hold, and clamping a nack's retry_after to initial_backoff..=max_backoff
+would be an empty range. RetryPolicy's fields are private and RetryPolicy::new
+returns InvalidRetryPolicy::InitialAboveMax for such a pair; equal bounds are
+allowed.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l2_transport::RetryPolicy::new"
+unit = "crosstalk_spec::tests::infrastructure::retry_policy_requires_ordered_non_zero_backoff"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

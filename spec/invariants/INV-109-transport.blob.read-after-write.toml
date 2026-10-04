@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.blob.read-after-write"
+statement = "Once put returns Ok on any node, get of the returned hash on every node returns the bytes."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+The consumer of ExchangeCaptured may run on a different node from the
+capture task that stored the messages. An eventually consistent store, or a
+node-local cache, would let a consumer see the event before the bytes and
+read None.
+"""
+
+[evidence]
+integration = "crosstalk::transport::integration::blob_put_visible_from_other_node"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

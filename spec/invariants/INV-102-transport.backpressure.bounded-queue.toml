@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.backpressure.bounded-queue"
+statement = "MpscBus holds at most its configured capacity of undelivered envelopes per consumer group."
+kind = "performance"
+requires = ["dst"]
+rationale = """
+A slow consumer group must not grow memory without bound on a single node.
+Dropping is not an option under at-least-once, so the bound is enforced by
+backpressure on publishers. Publishers are off the proxy hot path, so
+waiting here slows capture, never forwarding.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::mpsc_queue_never_exceeds_capacity"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
