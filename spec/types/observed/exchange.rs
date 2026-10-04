@@ -49,12 +49,16 @@ pub struct ResponseId(pub String);
 pub struct ModelName(pub String);
 
 /// What the proxy knows about an exchange before its body is normalized.
+/// Assembled when the exchange is handed to capture, once its request has
+/// decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeMeta {
     pub id: ExchangeId,
     pub protocol: WireProtocol,
+    /// `Http` or `Sse` from the response head's content type, `WebSocket`
+    /// for a turn on a connection.
     pub transport: Transport,
-    /// Read from the request body by the adapter.
+    /// Read from the request body by the adapter, off the hot path.
     pub model: ModelName,
     pub client: ClientContext,
     pub started_at: Timestamp,
@@ -148,7 +152,11 @@ pub enum ExchangeFailure {
 /// `Forwarded` through `Failed` are proxy-side and in memory only.
 /// `Captured` onward are pipeline states recorded against the exchange id.
 /// A response whose first content and terminal frame arrive in one chunk
-/// passes through `Responding` within that chunk.
+/// passes through `Responding` within that chunk. The request body decodes
+/// concurrently with these stages and never holds them up; an exchange
+/// reaches `Captured` only once its request has decoded. If decoding fails,
+/// the exchange still runs to `Completed` or `Failed`, then leaves the
+/// pipeline counted as uncaptured.
 ///
 /// ```text
 /// Forwarded ─first content─▶ Responding ─terminal frame─▶ Completed ─┐

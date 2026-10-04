@@ -3,10 +3,24 @@
 //! The proxy forwards every request upstream and streams the response back
 //! unchanged: same status, headers (other than hop-by-hop) and bytes,
 //! including `anthropic-*` beta headers and rate-limit headers. Capture never
-//! blocks the client: bytes are teed into a [`ResponseFramer`] or
-//! [`WebSocketTap`] whose events drive the in-flight
-//! [`crate::observed::exchange::ExchangeStage`], and each finished
-//! [`RawExchange`] is handed to the capture task over an in-process channel.
+//! blocks the client, on either side:
+//!
+//! - **Request.** A request is forwarded upstream as soon as it is routed,
+//!   from its head alone ([`UpstreamRouter`], [`ClientIdentifier`],
+//!   [`ProviderAdapter::classify`]). The proxy never waits for its body to
+//!   decode. [`ProviderAdapter::decode_request`], including gzip and zstd
+//!   decompression, runs concurrently on a tee of the body, off the hot path.
+//! - **Response.** Bytes are teed into a [`ResponseFramer`], built from the
+//!   [`ResponseHead`] rather than the request, or a [`WebSocketTap`]. Their
+//!   events drive the in-flight
+//!   [`crate::observed::exchange::ExchangeStage`].
+//!
+//! The decoded request ([`DecodedRequest`]) attaches to the exchange when it
+//! is ready, before or after the response ends. Each finished exchange whose
+//! request decoded becomes a [`RawExchange`], handed to the capture task over
+//! an in-process channel. If decoding fails the exchange has still been
+//! forwarded and relayed in full; it is counted as uncaptured and produces no
+//! `RawExchange`.
 //!
 //! Two ingress modes ([`IngressMode`]):
 //! - **Reverse proxy.** The harness's base URL points at a configured route
@@ -31,7 +45,7 @@ use crate::observed::client::{
     RequestClass, Upstream,
 };
 use crate::observed::exchange::{
-    ConnectionId, Continuation, ExchangeFailure, ExchangeMeta, ModelName, WireProtocol,
+    ConnectionId, Continuation, ExchangeFailure, ExchangeMeta, ModelName, Transport, WireProtocol,
 };
 use crate::support::Timestamp;
 
@@ -106,7 +120,8 @@ pub trait ClientIdentifier {
     fn harness(&self, head: &RequestHead) -> (Option<HarnessClaim>, HarnessIds, RequestClass);
 }
 
-/// What the proxy needs from a request body before forwarding it.
+/// What capture needs from a request body. Decoded off the hot path: the
+/// proxy forwards the request without it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireRequest {
     pub protocol: WireProtocol,
@@ -125,15 +140,25 @@ pub enum ContentEncoding {
     Zstd,
 }
 
+/// A request body that decoded, ready to attach to its exchange.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedRequest {
+    pub wire: WireRequest,
+    /// Decoded request body (or, on a WebSocket, the turn's client frame).
+    pub body: Vec<u8>,
+    /// The encoding the body arrived in, before decoding.
+    pub encoding: ContentEncoding,
+}
+
 /// A finished exchange in provider wire format, as the capture task receives
-/// it.
+/// it. It holds a [`DecodedRequest`], so an exchange whose request failed to
+/// decode never becomes one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawExchange {
+    /// Assembled once the request has decoded: its model comes from
+    /// `request.wire`.
     pub meta: ExchangeMeta,
-    pub continuation: Continuation,
-    /// Decoded request body (or, on a WebSocket, the turn's client frame).
-    pub request_body: Vec<u8>,
-    pub request_encoding: ContentEncoding,
+    pub request: DecodedRequest,
     pub response: RawResponse,
     pub first_chunk_at: Option<Timestamp>,
     pub ended_at: Timestamp,
@@ -164,6 +189,10 @@ pub trait ProviderAdapter {
     /// not captured.
     fn classify(&self, head: &RequestHead) -> Option<EndpointKind>;
 
+    /// Decodes a request body, undoing its `content-encoding` (gzip, zstd)
+    /// first. Runs concurrently with forwarding, on a tee of the body; the
+    /// request is never held for it. A failure leaves the exchange
+    /// uncaptured, never unforwarded.
     fn decode_request(
         &self,
         head: &RequestHead,
@@ -171,11 +200,67 @@ pub trait ProviderAdapter {
         client: &ClientContext,
     ) -> Result<WireRequest, DecodeError>;
 
-    /// A fresh framer for one HTTP or SSE response.
-    fn framer(&self, request: &WireRequest) -> Self::Framer;
+    /// A fresh framer for one HTTP or SSE response, from its head and this
+    /// adapter's protocol. It cannot depend on the decoded request, which may
+    /// not be ready when the response starts.
+    fn framer(&self, head: &ResponseHead) -> Self::Framer;
 
     /// A tap for one WebSocket connection, if the protocol has one.
     fn tap(&self, connection: ConnectionId, client: &ClientContext) -> Option<Self::Tap>;
+}
+
+/// The status and headers of an upstream response, as relayed to the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponseHead {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
+
+impl ResponseHead {
+    /// The first `content-type` header's value. Header names match without
+    /// regard to case.
+    pub fn content_type(&self) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// How the body is framed, from the media type in `content-type`
+    /// (parameters and case ignored).
+    pub fn framing(&self) -> ResponseFraming {
+        let is_event_stream = self.content_type().is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"))
+        });
+        if is_event_stream {
+            ResponseFraming::EventStream
+        } else {
+            ResponseFraming::Whole
+        }
+    }
+}
+
+/// How a response body is framed. Decided by the response, not by the
+/// request's `stream` flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseFraming {
+    /// `text/event-stream`: a server-sent-event stream.
+    EventStream,
+    /// Any other content type, or none: a non-streamed body.
+    Whole,
+}
+
+impl ResponseFraming {
+    /// The exchange's transport.
+    pub fn transport(self) -> Transport {
+        match self {
+            Self::EventStream => Transport::Sse,
+            Self::Whole => Transport::Http,
+        }
+    }
 }
 
 /// Something that happened in a response stream.
@@ -194,10 +279,11 @@ pub trait ResponseFramer {
     fn push(&mut self, chunk: &[u8]) -> Result<Vec<FrameEvent>, FrameError>;
 }
 
-/// Watches one WebSocket connection. Each `response.create` starts a turn;
-/// the turn ends with its terminal server event and yields one exchange.
-/// Turns on one connection are sequential: a `response.create` sent while a
-/// turn is in flight is relayed but fails the earlier turn as
+/// Watches one WebSocket connection. The proxy relays every frame before the
+/// tap sees a copy, so a tap never delays a frame. Each `response.create`
+/// starts a turn; the turn ends with its terminal server event and yields one
+/// exchange. Turns on one connection are sequential: a `response.create` sent
+/// while a turn is in flight is relayed but fails the earlier turn as
 /// `StreamTruncated`, and server frames belong to the turn in flight.
 pub trait WebSocketTap {
     fn client_frame(&mut self, frame: &[u8], at: Timestamp) -> Result<Vec<TurnEvent>, FrameError>;

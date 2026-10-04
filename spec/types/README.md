@@ -46,7 +46,7 @@ spec/types/
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
 │   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
-│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseFramer, WebSocketTap
+│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore, BlobStore
 │   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
@@ -99,6 +99,10 @@ Code Assist) and self-hosted vLLM or SGLang. See
 - **Harness headers are claims.** Session and agent ids count as identity
   evidence only within the credential or account they arrive with; the
   harness name is never evidence.
+- **Requests are forwarded before they are decoded.** Routing and identity
+  read only the head. The body decodes concurrently, off the hot path, and
+  the response framer is chosen from the response head. A request that
+  fails to decode is still forwarded, just not captured.
 - **Only generation is captured.** Token counting, model listing, probes and
   side routes are forwarded and not captured.
 - **Merges are aliases.** Stored records keep their agent ids and readers
