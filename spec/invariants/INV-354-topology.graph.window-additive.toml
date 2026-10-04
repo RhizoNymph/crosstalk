@@ -15,7 +15,7 @@ its own total), so the law is stated over stats only.
 """
 
 [evidence]
-property = "crosstalk_topology::props::graph_stats_add_over_adjacent_windows"
+property = "crosstalk_topology::props::graph::graph_stats_add_over_adjacent_windows"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

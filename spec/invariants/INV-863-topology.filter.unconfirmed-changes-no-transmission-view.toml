@@ -16,8 +16,8 @@ not change when only the channel confirmation filter does.
 unit = [
     "crosstalk_spec::tests::confirmation::unconfirmed_channels_change_no_transmission_view",
 ]
-property = "crosstalk_topology::props::unconfirmed_filter_keeps_transmission_views"
+property = "crosstalk_topology::props::graph::unconfirmed_filter_keeps_transmission_views"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

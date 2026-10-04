@@ -6,7 +6,7 @@
 //! what makes `apply` and `apply_access` idempotent and what the
 //! drill-down and `FalseDetections::Exclude` read.
 //!
-//! - **Writes** ([`write`]) run in `READ COMMITTED` transactions that lock
+//! - **Writes** (`write`) run in `READ COMMITTED` transactions that lock
 //!   the one `state` row first: `FOR SHARE` for an apply, `FOR UPDATE` for
 //!   activation, retention and the watermark. Every apply therefore sees
 //!   the watermark, the active version and the dropped versions as the last
@@ -17,10 +17,10 @@
 //!   `WatermarkAdvanced`, `Changed::Watermark`, and traffic changes) are
 //!   written to `topology.outbox` in the transaction that makes the change,
 //!   and relayed to the bus after commit ([`crate::outbox`]).
-//! - **Reads** ([`read`]) run in one `REPEATABLE READ READ ONLY`
+//! - **Reads** (`read`) run in one `REPEATABLE READ READ ONLY`
 //!   transaction: the watermark first, then the dropped versions, buckets,
 //!   false detections and contributions, all from one snapshot. Rows are
-//!   resolved through the environment and summed in Rust ([`fold`]).
+//!   resolved through the environment and summed in Rust (`fold`).
 
 mod drill;
 mod edge_store;

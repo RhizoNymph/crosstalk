@@ -12,7 +12,7 @@ drill-down agree, and graph-to-series sums keep holding under Exclude.
 """
 
 [evidence]
-property = "crosstalk_topology::tests::prop_exclude_is_include_minus_rejected"
+property = "crosstalk_topology::tests::verdict_props::prop_exclude_is_include_minus_rejected"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

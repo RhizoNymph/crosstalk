@@ -15,4 +15,4 @@ never happened.
 dst = "crosstalk_topology::dst::edge_updated_never_precedes_persisted_apply"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

@@ -12,7 +12,7 @@ from.
 """
 
 [evidence]
-property = "crosstalk_topology::props::edge_series_sum_to_graph_edge_stats"
+property = "crosstalk_topology::props::series::edge_series_sum_to_graph_edge_stats"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

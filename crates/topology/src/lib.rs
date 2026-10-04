@@ -5,7 +5,7 @@
 //!
 //! - [`store::PgEdgeStore`]: the spec's `EdgeStore`, with range-partitioned
 //!   bucket tables in the `topology` schema (decision D3: plain Postgres).
-//! - [`env`]: what the store reads at query time from other layers (the
+//! - [`mod@env`]: what the store reads at query time from other layers (the
 //!   topic catalog, the directories, the node facts).
 //! - [`outbox`]: the events the store decides, committed with the change
 //!   and relayed to the bus after commit, traffic changes coalesced.

@@ -14,8 +14,8 @@ finds that agent's communication instead of returning nothing.
 
 [evidence]
 unit = "crosstalk_topology::tests::agent_filter_resolves_merged_ids"
-property = "crosstalk_topology::props::agent_filter_keeps_edges_touching_listed_agents"
+property = "crosstalk_topology::props::graph::agent_filter_keeps_edges_touching_listed_agents"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

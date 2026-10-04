@@ -628,3 +628,224 @@ async fn drill_cursor_is_bound_to_its_request() {
     assert!(next.is_none());
     db.close().await.expect("drop the database");
 }
+
+/// Properties named under `tests` by their invariants; the driver and the
+/// scene are `crate::props`'.
+mod verdict_props {
+    use std::collections::BTreeMap;
+
+    use crosstalk_memory::model::build::agent;
+    use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
+    use crosstalk_spec::aggregates::filter::FalseDetections;
+    use crosstalk_spec::aggregates::node::GraphNode;
+    use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRevision};
+    use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
+    use crosstalk_spec::interfaces::l7_topology::EdgeStore;
+    use proptest::prelude::*;
+    use proptest::test_runner::TestCaseError;
+
+    use crate::props::{
+        Scene, aligned_window, check, ensure, filter, fold, listed, load, read, scene,
+    };
+    use crate::tests::support::World;
+
+    fn fail(what: impl std::fmt::Debug) -> TestCaseError {
+        TestCaseError::fail(format!("{what:?}"))
+    }
+
+    /// topology.graph.unmerge-splits-edges
+    #[test]
+    fn unmerge_restores_graph() {
+        check(
+            "unmerge_restores_graph",
+            (scene(), aligned_window(), 0u64..5, 0u64..5),
+            async |world: &mut World, (scene, window, from, into): &(Scene, _, u64, u64)| {
+                // Reverting one merge's record with no other change: no
+                // merge before it (an unmerge also restores what was
+                // merged into the source).
+                let scene = Scene {
+                    merges: Vec::new(),
+                    ..scene.clone()
+                };
+                load(world, &scene).await?;
+                let before = read(
+                    world,
+                    *window,
+                    Weighting::Transmissions,
+                    &TopologyFilter::default(),
+                )
+                .await?;
+                if world.directory.merge(agent(*from), agent(*into)).is_err() {
+                    return Ok(());
+                }
+                world.directory.unmerge(agent(*from));
+                let after = read(
+                    world,
+                    *window,
+                    Weighting::Transmissions,
+                    &TopologyFilter::default(),
+                )
+                .await?;
+                ensure(before == after, || format!("{before:?} vs {after:?}"))
+            },
+        );
+    }
+
+    /// topology.verdict.buckets-untouched
+    #[test]
+    fn prop_include_ignores_verdicts() {
+        check(
+            "prop_include_ignores_verdicts",
+            (
+                scene(),
+                aligned_window(),
+                filter(),
+                prop::collection::vec((0u64..14, any::<bool>()), 1..5),
+            ),
+            async |world: &mut World,
+                   (scene, window, filter, judged): &(
+                Scene,
+                _,
+                TopologyFilter,
+                Vec<(u64, bool)>,
+            )| {
+                load(world, scene).await?;
+                let include = TopologyFilter {
+                    false_detections: FalseDetections::Include,
+                    ..filter.clone()
+                };
+                let before = read(world, *window, Weighting::Transmissions, &include).await?;
+                for (n, (index, false_detection)) in judged.iter().enumerate() {
+                    let verdict = if *false_detection {
+                        Verdict::FalseDetection
+                    } else {
+                        Verdict::Genuine
+                    };
+                    let revision = VerdictRevision::new(
+                        std::num::NonZeroU32::new(u32::try_from(n).map_err(fail)? + 2)
+                            .ok_or_else(|| fail("revision"))?,
+                    );
+                    world
+                        .store
+                        .judge(
+                            crosstalk_memory::model::build::transmission(index + 1),
+                            Some(verdict),
+                            revision,
+                        )
+                        .await
+                        .map_err(fail)?;
+                }
+                let after = read(world, *window, Weighting::Transmissions, &include).await?;
+                ensure(before == after, || {
+                    "a verdict changed an Include graph".to_owned()
+                })
+            },
+        );
+    }
+
+    /// topology.verdict.exclude-subtracts
+    #[test]
+    fn prop_exclude_is_include_minus_rejected() {
+        check(
+            "prop_exclude_is_include_minus_rejected",
+            (scene(), aligned_window(), filter()),
+            async |world: &mut World, (scene, window, filter): &(Scene, _, TopologyFilter)| {
+                load(world, scene).await?;
+                let include = TopologyFilter {
+                    false_detections: FalseDetections::Include,
+                    ..filter.clone()
+                };
+                let exclude = TopologyFilter {
+                    false_detections: FalseDetections::Exclude,
+                    ..filter.clone()
+                };
+                let included = read(world, *window, Weighting::Transmissions, &include).await?;
+                let excluded = read(world, *window, Weighting::Transmissions, &exclude).await?;
+                // Include minus the false detections' contributions the rest
+                // of the filter admits: the fold of the scene with every
+                // non-false transmission kept, per edge.
+                let mut expected: BTreeMap<String, (u64, u64)> = listed(&included)
+                    .into_iter()
+                    .map(|edge| (format!("{:?}", (edge.0, edge.1, &edge.2)), (edge.3, edge.4)))
+                    .collect();
+                for (index, one) in scene.sent.iter().enumerate() {
+                    if !scene.false_detections.contains(&index) {
+                        continue;
+                    }
+                    let single = Scene {
+                        sent: vec![*one],
+                        false_detections: Vec::new(),
+                        ..scene.clone()
+                    };
+                    for edge in fold(world, &single, *window, &include) {
+                        let key = format!("{:?}", (edge.0, edge.1, &edge.2));
+                        let entry = expected
+                            .get_mut(&key)
+                            .ok_or_else(|| fail("a false detection outside the graph"))?;
+                        entry.0 -= edge.3;
+                        entry.1 -= edge.4;
+                    }
+                }
+                expected.retain(|_, counts| counts.0 > 0);
+                let got: BTreeMap<String, (u64, u64)> = listed(&excluded)
+                    .into_iter()
+                    .map(|edge| (format!("{:?}", (edge.0, edge.1, &edge.2)), (edge.3, edge.4)))
+                    .collect();
+                ensure(got == expected, || format!("{got:?} vs {expected:?}"))
+            },
+        );
+    }
+
+    /// surface.agent.traffic-matches-topology (the store's side)
+    #[test]
+    fn prop_agent_traffic_equals_graph_node_counts() {
+        check(
+            "prop_agent_traffic_equals_graph_node_counts",
+            (
+                scene(),
+                aligned_window(),
+                prop::collection::vec(0u64..6, 0..4),
+            ),
+            async |world: &mut World, (scene, window, agents): &(Scene, _, Vec<u64>)| {
+                load(world, scene).await?;
+                let listed_agents: Vec<_> = agents.iter().copied().map(agent).collect();
+                let traffic = world
+                    .store
+                    .agent_traffic(*window, &listed_agents)
+                    .await
+                    .map_err(fail)?
+                    .value;
+                let graph = read(
+                    world,
+                    *window,
+                    Weighting::Transmissions,
+                    &TopologyFilter::default(),
+                )
+                .await?;
+                for id in &listed_agents {
+                    let canonical = AgentDirectory::canonical(&world.directory, *id);
+                    let node = graph.nodes().iter().find_map(|node| match node {
+                        GraphNode::Agent(one) if one.id == canonical => {
+                            Some((one.transmissions_in, one.transmissions_out))
+                        }
+                        _ => None,
+                    });
+                    let got = traffic
+                        .get(id)
+                        .map(|one| (one.transmissions_in, one.transmissions_out));
+                    ensure(got == Some(node.unwrap_or((0, 0))), || {
+                        format!("{id:?}: {got:?} vs {node:?}")
+                    })?;
+                }
+                ensure(
+                    traffic.len()
+                        == listed_agents
+                            .iter()
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len(),
+                    || "one entry per listed agent".to_owned(),
+                )
+            },
+        );
+    }
+}

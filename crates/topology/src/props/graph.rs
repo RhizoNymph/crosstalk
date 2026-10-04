@@ -869,3 +869,29 @@ fn channel_topology_accesses_match_buckets() {
         },
     );
 }
+
+/// topology.graph.rejects-unaligned-window: a window is refused exactly
+/// when an end is not a bucket boundary.
+#[test]
+fn graph_accepts_exactly_aligned_windows() {
+    check(
+        "graph_accepts_exactly_aligned_windows",
+        (scene(), 0u64..200, 1u64..200),
+        async |world: &mut World, (scene, start, length): &(Scene, u64, u64)| {
+            load(world, scene).await?;
+            let cut = window(*start, start + length);
+            let aligned = start % 10 == 0 && (start + length) % 10 == 0;
+            let read = world
+                .store
+                .graph(cut, Weighting::Transmissions, &TopologyFilter::default())
+                .await;
+            match read {
+                Ok(_) => ensure(aligned, || format!("{cut:?} accepted")),
+                Err(crosstalk_spec::interfaces::l7_topology::EdgeQueryError::UnalignedWindow) => {
+                    ensure(!aligned, || format!("{cut:?} refused"))
+                }
+                Err(error) => Err(fail(error)),
+            }
+        },
+    );
+}
