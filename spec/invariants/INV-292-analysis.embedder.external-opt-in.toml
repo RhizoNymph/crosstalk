@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.embedder.external-opt-in"
+statement = "Transmission content is sent to an external embedding API only when the deployment's config explicitly selects ApiEmbedder."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Transmissions carry agents' prompts and tool results, which can include
+secrets and customer data. Sending them to a third-party API is a data
+egress decision the operator must make on purpose, so the default and any
+missing or unparseable embedder config resolve to LocalOnnxEmbedder, and
+a failing ApiEmbedder never falls back silently in the other direction or
+retries against a different provider.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::embedder_config_defaults_to_local", "crosstalk::analysis::tests::invalid_embedder_config_is_rejected_not_defaulted"]
+integration = "crosstalk::analysis::tests::local_embedder_makes_no_network_calls"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

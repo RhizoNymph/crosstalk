@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.alert.state-transitions"
+statement = "Every change to an alert's state follows the Alert lifecycle: Open to Acknowledged, Acknowledged to Resolved, or Open or Acknowledged to Suppressed, so Resolved and Suppressed are never left."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "property"]
+rationale = """
+The alert store is the reference for what operators see. Reopening a
+resolved alert, resolving a suppressed one, or resolving without an
+acknowledgement would desynchronize the store from the lifecycle in
+design/lifecycles/cascade.yaml#Alert and from AlertState's documented
+transitions. Illegal actions are rejected with a typed error and leave the
+alert unchanged.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::resolved_alert_rejects_every_action", "crosstalk::analysis::tests::suppressed_alert_rejects_every_action", "crosstalk::analysis::tests::open_alert_cannot_be_resolved_directly"]
+property = "crosstalk::analysis::tests::alert_transitions_agree_with_lifecycle_model"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }
