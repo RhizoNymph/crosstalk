@@ -16,7 +16,8 @@ store is a separate async step through the spec's `BlobStore`.
   by P0.7: [spec_primitives](spec_primitives.md)).
 - Server-sent events parsed from a whole body (`sse`).
 - The Anthropic Messages normalizer (`anthropic`): request bodies (system
-  prompt as a string or blocks, messages, role splitting, tool calls and
+  prompt as a string or blocks, `system` turns inside `messages`, messages,
+  role splitting, tool calls and
   results, thinking, media, cache-control markers, unknown blocks),
   responses whole or streamed (reassembly from SSE events, including
   interleaved deltas, pings, `message_delta` usage and mid-stream errors),
@@ -25,6 +26,9 @@ store is a separate async step through the spec's `BlobStore`.
   each body, the exchange's references, the media blobs, warnings.
 - Storing a normalized exchange's message bodies and media through
   `BlobStore` (`capture::store`).
+- A refused request body's top-level shape (`anthropic::shape`): its keys,
+  the kind of `system`, and each turn's role and content kind, never a
+  value, for the gateway's debug log of a normalize failure.
 
 ## Non-scope
 
@@ -50,7 +54,8 @@ RawExchange ──anthropic::normalize──────────────
   request.body ──json::Json::parse_bytes──▶ request::normalize                  │
       system ─▶ System message first                                            │
       messages[i] ─▶ turn_messages: user turn split into runs (User | Tool),    │
-                      assistant turn one Assistant message                      │
+                      assistant turn one Assistant message,                     │
+                      system turn one System message in place                   │
       blocks ──blocks::{system_part, user_item, assistant_parts}──▶ parts       │
                        (media bytes ─▶ MediaSink, keyed by BLAKE3)              │
   response ──response::read                                                     │
@@ -106,6 +111,25 @@ A user turn becomes one message per maximal run of one canonical role
 (`[tool_result, tool_result, text]` is `Tool` then `User`); a string
 content is one text part; an empty array is one empty `User` message. An
 assistant turn is one `Assistant` message.
+
+### System prompts
+
+The top-level `system` (a string, or an array of blocks; absent or null is
+none) becomes one `System` message, first
+(`canonical.normalize.system-prompt-first`). Claude Code also sends a
+`role: "system"` entry inside `messages` (seen at `messages[1]`, after the
+first user turn), which the upstream accepts. Such a system turn is one
+`System` message at its own position, its content mapped exactly like the
+top-level field (`system_message`: a string is one text part, an array one
+`blocks::system_part` per block, so `cache_control` is dropped and unknown
+blocks are kept and reported). Both are the same input channel for
+provenance. A request may therefore hold several `System` messages, and
+one may come first without a top-level `system`; only the top-level field
+is "the leading System message" of
+`canonical.normalize.request-is-concatenation`. Downstream, every `System`
+message, wherever it sits, is left out of prefix matching
+(`reconstruct.thread.system-change-continues`), and a delta's `new_system`
+is the request's first one (`reconstruct.delta.new-system-when-changed`).
 
 ### Streaming reassembly
 
@@ -173,10 +197,22 @@ order, request first: one `UnknownBlock` per `Unknown` part anywhere
 request, one `OrphanToolResult` per tool result whose call id no earlier
 tool call in the request has. The only `NormalizeError` is a request body
 that is not an Anthropic Messages request (not JSON, not an object, no
-`messages` array, a turn without a `user` or `assistant` role or with
-content neither a string nor an array, a `system` neither a string nor an
-array) or an exchange of another protocol; the response side never fails
-normalization.
+`messages` array, a turn without a `user`, `assistant` or `system` role
+or with content neither a string nor an array, a `system` neither a string
+nor an array) or an exchange of another protocol; the response side never
+fails normalization. Any other role (`developer`, `tool`, ...) is still
+`RequestError::Role`.
+
+### Refused request shapes
+
+A refused exchange persists nothing, so the gateway logs, at debug level,
+`RequestShape::of(body)`: `keys=[..] system=<kind> messages=[role:kind,
+..]`, where a turn's content kind is `string`, `array(<block types>)` or
+another JSON kind. It holds names only: top-level keys, roles and block
+types, each kept only when it is an identifier of at most 48 bytes (ASCII
+letters, digits, `_`, `-`, `.`) and otherwise written as `<N bytes>`, so
+no prompt text or token-shaped secret reaches the log. Headers are never
+read.
 
 ## Files
 
@@ -187,8 +223,9 @@ normalization.
 | `src/sse.rs` | Server-sent events from a whole body | `parse`, `SseEvent`, `SseBody` |
 | `src/assemble.rs` | Building the normalized exchange; warnings; media (private) | — |
 | `src/capture.rs` | Storing bodies and media through `BlobStore` | `store`, `StoreError` |
-| `src/anthropic/mod.rs` | The normalizer | `AnthropicMessages`, `normalize` |
-| `src/anthropic/request.rs` | Request bodies to messages | `RequestError` |
+| `src/anthropic/mod.rs` | The normalizer | `AnthropicMessages`, `normalize`, `RequestShape` |
+| `src/anthropic/request.rs` | Request bodies to messages, `system` turns included | `RequestError` |
+| `src/anthropic/shape.rs` | A refused body's top-level shape, values withheld | `RequestShape`, `MessagesShape`, `TurnShape`, `RoleShape`, `ContentShape`, `Label`, `JsonKind` |
 | `src/anthropic/blocks.rs` | The block mapping (private) | — |
 | `src/anthropic/response.rs` | Outcomes, whole bodies, stop reasons | `stop_reason` |
 | `src/anthropic/stream.rs` | Stream reassembly | — |
@@ -200,7 +237,10 @@ normalization.
 | `tests/golden/anthropic/<case>.json` | Each captured corpus case's normalized exchange | — |
 
 Goldens are rewritten with `CROSSTALK_BLESS=1 cargo test -p
-crosstalk-canonical golden` (review the diff). A golden is the spec's JSON
+crosstalk-canonical golden` (review the diff); where a command may not
+carry an environment prefix (the rbs build shim),
+`cargo test -p crosstalk-canonical --config 'env.CROSSTALK_BLESS="1"'
+golden` does the same. A golden is the spec's JSON
 of the `NormalizedExchange` (`{"exchange", "messages": [{"hash", "body"}],
 "warnings", "media": [{"hash", "bytes"}]}`, each body in its encoding's
 shape, media bytes in hex; [observed](wire/observed.md)); checking also
@@ -220,6 +260,10 @@ reference. The encoding's vectors are the spec's
   invalid request body is an error.
 - Text, opaque reasoning, tool call ids and invalid argument text are kept
   byte for byte.
+- A `system` turn inside `messages` is a `System` message at its position,
+  mapped like the top-level `system`; only an unknown role is refused.
+- A request shape never holds a value: names are kept only as short
+  identifiers.
 - No `unwrap` or `expect` outside tests.
 - The crate is a layer crate: it depends on the spec and third-party
   crates only; testkit and transport are dev-dependencies.

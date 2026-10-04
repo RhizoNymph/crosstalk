@@ -190,7 +190,7 @@ ignoring `http::NOT_RECORDED`.
 | `src/client.rs` | The fake harness | `HarnessClient` (`new`, `prefix`, `idle_timeout`, `send`, `open`), `ResponseStream` (`status`, `headers`, `next`, `collect`), `Next`, `ReceivedChunk`, `BodyEnd`, `CollectedResponse` (`events`, `differences_from`), `ClientError` |
 | `src/tests/` | Builder validity, corpus loading and refusals, SSE framing, upstream round trips and faults | — |
 | `corpus/README.md` | The corpus: synthetic status, formats, cases, how to add redacted captures | — |
-| `corpus/anthropic/messages/*/` | 14 cases | — |
+| `corpus/anthropic/messages/*/` | 15 cases | — |
 
 ## Invariants and constraints
 

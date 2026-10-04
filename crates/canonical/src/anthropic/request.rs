@@ -5,17 +5,20 @@
 //!   null, there is none.
 //! - Each entry of `messages` normalizes on its own, in order
 //!   (`canonical.normalize.request-is-concatenation`): an `assistant` turn
-//!   is one `Assistant` message; a `user` turn becomes one message per
-//!   maximal run of blocks of one canonical role, so `[tool_result,
-//!   tool_result, text]` is a `Tool` message then a `User` message
+//!   is one `Assistant` message; a `system` turn (Claude Code sends one
+//!   inside `messages`, besides the top-level `system`) is one `System`
+//!   message at its own position, its content mapped like the top-level
+//!   `system`; a `user` turn becomes one message per maximal run of blocks
+//!   of one canonical role, so `[tool_result, tool_result, text]` is a
+//!   `Tool` message then a `User` message
 //!   (`canonical.normalize.split-mixed-roles`). A string `content` is one
 //!   text part; an empty array is one message with no parts.
 //!
 //! Only a body that is not an Anthropic Messages request at all is an
 //! error: not JSON, not an object, no `messages` array, a turn that is not
-//! an object with a `user` or `assistant` role and string or array content,
-//! or a `system` that is neither a string nor an array. Blocks the
-//! normalizer does not know are kept as `Unknown` parts.
+//! an object with a `user`, `assistant` or `system` role and string or
+//! array content, or a `system` that is neither a string nor an array.
+//! Blocks the normalizer does not know are kept as `Unknown` parts.
 
 use crosstalk_spec::observed::message::{MessageBody, SystemPart, Text, UserPart};
 use crosstalk_spec::support::NonEmpty;
@@ -36,7 +39,7 @@ pub enum RequestError {
     System,
     #[error("message {index} is not an object with a string `role`")]
     Message { index: usize },
-    #[error("message {index} has role {role:?}, not `user` or `assistant`")]
+    #[error("message {index} has role {role:?}, not `user`, `assistant` or `system`")]
     Role { index: usize, role: String },
     #[error("message {index}'s content is neither a string nor an array of blocks")]
     Content { index: usize },
@@ -58,16 +61,8 @@ pub(crate) fn normalize(
     let mut messages = Vec::with_capacity(turns.len() + 1);
     match request.get("system") {
         None | Some(Json::Null) => {}
-        Some(Json::String(text)) => {
-            messages.push(MessageBody::System(vec![SystemPart::Text(Text(
-                text.clone(),
-            ))]));
-        }
-        Some(Json::Array(blocks)) => {
-            messages.push(MessageBody::System(
-                blocks.iter().map(blocks::system_part).collect(),
-            ));
-        }
+        Some(Json::String(text)) => messages.push(system_message(Content::Text(text))),
+        Some(Json::Array(blocks)) => messages.push(system_message(Content::Blocks(blocks))),
         Some(_) => return Err(RequestError::System),
     }
     for (index, turn) in turns.iter().enumerate() {
@@ -105,6 +100,7 @@ pub(crate) fn turn_messages(
             };
             Ok(vec![MessageBody::Assistant(parts)])
         }
+        "system" => Ok(vec![system_message(content)]),
         other => Err(RequestError::Role {
             index,
             role: other.to_owned(),
@@ -115,6 +111,15 @@ pub(crate) fn turn_messages(
 enum Content<'a> {
     Text(&'a str),
     Blocks(&'a [Json]),
+}
+
+/// A system prompt, top-level or a `system` turn: a string is one text
+/// part, an array one part per block (`blocks::system_part`).
+fn system_message(content: Content<'_>) -> MessageBody {
+    MessageBody::System(match content {
+        Content::Text(text) => vec![SystemPart::Text(Text(text.to_owned()))],
+        Content::Blocks(items) => items.iter().map(blocks::system_part).collect(),
+    })
 }
 
 fn text_block(text: &str) -> Json {
