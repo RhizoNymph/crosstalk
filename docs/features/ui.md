@@ -75,9 +75,16 @@ browser ────────────────────────
   reads it with `@change=$(|e: Event| sig.set(e.target.value))`. Inputs
   arrive as `data-*` attributes bound to signals
   (`:data-highlight=$(sig.get())`) and observed with
-  `attributeChangedCallback`. This uses only Topcoat's typed expression
-  vocabulary: no `raw!` and no reliance on the runtime's event wrapper.
-  Verified in a headless-Chrome spike against Topcoat 0.9.0.
+  `attributeChangedCallback`. Binding and reading use only Topcoat's typed
+  expression vocabulary. The one `raw!` use is keeping the URL current:
+  after setting the signal, the handler rewrites one query key with
+  `history.replaceState` (or, for the time brush, navigates with
+  `location.assign`). Values reach `raw!` as runtime wrappers, so the
+  JavaScript converts them with `String(value)` first.
+- **Shards take the view state as an argument.** A shard's endpoint does
+  not see the page URL, so a page passes `state.to_query()` and the shard
+  re-parses it strictly (`pages::view::state_from_query`) together with
+  its other arguments, then checks permissions itself.
 - **The Backend trait mirrors L8.** Its methods are `QueryApi` and
   `OperatorActions` plus the additions in [The L8 contract](#the-l8-contract).
   Types that exist in `crosstalk-spec` are used directly; the additions are
@@ -101,7 +108,15 @@ scroll position do not.
 - Filter controls are a `GET` form, so changing them navigates and the URL
   is always current.
 - Selections made inside an element update a signal and the URL
-  (`history.replaceState`).
+  (`history.replaceState`); a page load starts the signal from the URL.
+- Page keys (validated per page, never colliding with the shared
+  `from,to,v,w,g,a,c,r,t,x`): topology `sel` (graph selection) and
+  `collapse=1`; explore `q`, `m` (`text|semantic|hybrid`), `p` (projection
+  id), `cb` (colour by `topic|sender|reader|route|channel`), `ps`
+  (projection selection) and `cursor`; topics `ver`; the rule form accepts
+  `topic` to preselect a watched topic. The topology filter form submits
+  `apply=1` with repeated `fa`/`fc`/`fr`/`ft` and `fx`, and the page
+  redirects (303) to the canonical comma-list keys.
 - A view whose topic version is no longer retained shows the typed
   `VersionNotRetained` error rather than silently using another version.
 - Aggregate views show the response's watermark ("final up to 14:05"), so
@@ -112,53 +127,113 @@ scroll position do not.
 Each screen lists the calls it makes. Names in *italics* are additions in
 [The L8 contract](#the-l8-contract).
 
+### Overview (`/`)
+
+Counts for the window (confirmed transmissions and matched bytes, active
+channels, open alerts, unreviewed channels in the review queue), each
+linking to its section; the five heaviest edges, each opening the
+topology with that edge selected; the five newest open alerts; and a link
+into every section carrying the view state. Counts page through the
+lists (at most 20 pages of 500, then "N+").
+
+- Calls: *`timeline`* (one bucket), *`channels`*, `alerts`, `topology`,
+  *`agent_names`*, *`channel_names`*, *`rules`*, *`operators`*.
+
 ### Topology (`/topology`)
 
 The main screen. Nodes are canonical agents sized by volume; sub-agents
-collapse into their parent. Edge width is the edge's share of the
-filtered total; edge colour is the route kind. A mode toggle switches to
-the bipartite view, where channels are nodes between their writers and
-readers, so a hijacked shared resource is visible before anyone reads it.
+collapse into their parent (`collapse=1`). Edge width is the edge's share
+of the filtered total; edge colour is the route kind. A mode toggle (`g`)
+switches to the bipartite view, where channels are nodes between their
+writers and readers, so a hijacked shared resource is visible before
+anyone reads it; a weighting toggle (`w`) switches shares between
+transmissions and matched bytes. The header shows the window, node, edge
+and transmission counts and the watermark.
+
+The filter is a row of dropdowns (agents in the window's unfiltered graph,
+every channel, route kinds, topics of the view's version with `Content`,
+verdicts) with the active values as removable chips. The time brush shows
+the last week (or the view's window if wider) in hourly buckets; brushing
+navigates to the same view with the brushed window.
+
+Selecting in the graph sets the `sel` signal: the graph highlights it, the
+URL's `sel` follows, and the drawer shard re-renders. An edge shows its
+route, transmissions, matched bytes and share, a link filtering to its two
+agents, and the transmissions counted into it, twelve per page with a
+cursor signal (rows link to the evidence page). An agent or channel shows
+a summary card (state, claims, counts; origin, detection, policy) with a
+link to its page and its heaviest edges; with nothing selected, the
+heaviest edges of the view. Listed edges select themselves on click.
 
 - Calls: `topology` (agents mode) or *`channel_topology`* (bipartite),
-  both with *`nodes`* in the response; *`timeline`* for the time brush.
-- Selecting an edge opens a drawer: stats, share, route, and the
-  transmissions on it (*`transmissions(filter)`*). Selecting a node opens
-  the agent or channel page.
+  both with *`nodes`* in the response; *`timeline`* for the time brush;
+  *`transmissions`* (`TransmissionSelector::Edge`), `agent`, `channel`,
+  *`channels`* and `topics` (filter choices), *`agent_names`*,
+  *`channel_names`*.
 
 ### Transmission evidence (`/transmissions/{id}`)
 
-Why the gateway believes this transmission happened. The sender's
-originated text and the reader's input side by side with matched spans
-highlighted, each match labelled with its `MatchKind` (with the decode
-chain, e.g. "base64 → url") and `Carrier`. A co-access timeline shows the
-write, the read and the lag. Suspected transmissions are visibly weaker;
-discarded ones say so.
+Why the gateway believes this transmission happened. The header gives
+sender → reader (with a "show edge" link to the topology), the route in
+words, the state with its data in a callout styled by strength (content
+evidence; access pattern only, dashed amber; discarded, muted; still
+gathering), opened and confirmed times, matched bytes and the topic under
+the current topic version. Each match shows its kind (decode chain spelled
+out, e.g. "decoded base64 → url"; semantic with its score), carrier and
+size, then the sender's originated text and the reader's input side by
+side with the matched part highlighted and elided bytes noted. The
+co-access timeline shows each write → read with agents, times, resource
+and lag. The verdict log (newest first, the one in force marked) and a
+form: genuine, false detection or withdraw, with a note.
 
-- Calls: `transmission`, message bodies for the matched spans, *verdicts*.
-- Actions: *`SetVerdict`* (genuine / false detection, with a note).
+Without `Content` the header still renders (from the transmission list);
+excerpts are replaced by the content-hidden marker and the co-access and
+verdict sections say they need `Content`.
+
+- Calls: *`transmissions`* (`Ids`, for the structure), `transmission`,
+  `topics`, *`agent_names`*, *`channel_names`*, *`operators`*,
+  *`current_topic_version`*, *`now`*.
+- Actions: *`SetVerdict`* (`Triage` and `Content`; offered only on
+  judgeable states, a conflict otherwise).
 
 ### Explore (`/explore`)
 
-Search and the UMAP projection, linked. A query highlights its hits in
-the projection; a lasso in the projection fills the result list. Points
-colour by topic, sender, reader or channel. A topic sidebar lists topics
-with size and trend; "watch" creates a watched-topic rule.
+Search and the UMAP projection, linked. The search form (`q`, `m`) lists
+hits twenty per page with score, route, sender → reader, time and snippet,
+each linking to its evidence; the page's hits are the projection's
+`data-highlight`. Without a projection (`p`) the page offers "Fit
+projection" (neighbours 15, min distance 0.1, seed 42, sample 5,000,
+editable), which posts `action=fit`, stores the projection for the view's
+scope and redirects with `p`; the projection's parameters and fit time are
+shown, a projection fitted for another scope is flagged with a re-fit
+form, and a pending, failed or unknown projection says so. Colour-by is a
+select bound to the element (and `cb`). A point or lasso sets the `ps`
+signal; the results shard shows the point's transmission, or resolves the
+lasso against the stored projection (even-odd point-in-polygon in `f64`
+over the stored `f32` coordinates with the element's bounding-box test, so
+both sides select the same points) and lists those transmissions under
+the projection's own scope, paged. A topic sidebar lists the view
+version's topics by size with a trend sparkline and a "Watch" link to the
+rule form with that topic preselected. Everything here reads content, so
+the page needs `Content` and says so otherwise.
 
-- Calls: `search` (with the shared filter), *`fit_projection`* /
-  *`projection(id)`*, `topics` with *topic stats*.
-- The lasso is sent as a polygon in projection coordinates and resolved
-  server-side against the stored projection, so it is small enough for a
-  signal and the URL.
+- Calls: `search`, *`transmissions`* (`Ids`), *`fit_projection`*,
+  *`projection_job`*, *`projection(id)`*, *`topic_stats`*, `topics`.
 
 ### Topics (`/topics`)
 
-Topics of a model version: label, terms, size, trend, and the mapping to
-the previous version after a re-fit. Pick a version; old versions remain
-viewable while retained.
+A version picker (`ver`, default the view's `v`; pinned and newest marked,
+with topic count and fit time) and a link making the shown version the
+view's. The topics table gives label, top terms with weights,
+transmissions in the window, a trend sparkline and, for the newest
+version, a "Watch" link. For a version with a successor, the remap table
+lists each topic's match in the next version with its similarity,
+unmapped topics first and highlighted, with the watched-topic rules they
+leave stale linked. A version that is not retained shows the typed error
+(409). Needs `Content`.
 
-- Calls: `topics`, *topic stats*, *topic versions and remaps*.
-- Actions: *`CreateRule`* (watch).
+- Calls: *`topic_versions`*, `topics`, *`topic_stats`*,
+  *`topic_remap`*, *`rules`*.
 
 ### Channels (`/channels`, `/channels/{id}`, `/channels/{id}/promote`)
 
@@ -245,8 +320,14 @@ the backend embeds it, so editing the text re-embeds it.
 
 ### Research and pipeline
 
-- **Export** (`/export`): pick dataset, window, filter, topic version and
-  format; content needs `Content`. Calls *`export`*.
+- **Export** (`/export`): pick dataset (a projection by id), topic
+  version and format over the view's window and filter; including content
+  needs `Content` (the checkbox is disabled without it). The backend has no
+  *`export`* yet: a valid post answers 501 with the exact `ExportRequest`
+  that would be sent, an invalid one 422 with the input kept. Below it,
+  *`detection_quality`* for the window as route × match kind with genuine,
+  false detection, unlabelled and precision (genuine over labelled) and a
+  totals row.
 - **Audit** (`/audit`): operator and config actions with actor, a one-line
   description, note, the entry's own subject (linked to its page; merges
   have none and link to the log filtered to them) and outcome (applied,
@@ -378,21 +459,27 @@ Element inputs and outputs (`value`, announced with `change`):
 | `ui/Cargo.toml` | The `crosstalk-ui` package. Pins `topcoat = "=0.9.0"` and every other dependency exactly. |
 | `ui/build.rs`, `ui/styles/app.css` | Tailwind 4.3.3 (checksum-pinned on linux-x64) rendered from classes in `src/`. Route-kind colours are theme tokens shared with the elements. |
 | `ui/config.json` | Listen address, trusted operator, backend choice (`fixture { seed }`). `CROSSTALK_UI_CONFIG` overrides the path. |
-| `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. |
+| `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. Raises `recursion_limit` to 256: pages embedding shards nest component futures past the default depth for the `Send` check. |
 | `ui/src/app.rs` | `backend(cx)`, `caller(cx)`, `operator(cx)`, `can(caller, permission)`. `AppBackend` is the configured backend type. |
 | `ui/src/config.rs` | `Config`, `TrustedOperator` (builds the all-permissions `Caller`), `BackendConfig`. |
 | `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name and say so (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`, `RuleDef`; `alerts`: `Alert`, `AlertState`, `SuppressReason` with `OperatorRejected`; `agents`: `Agent`, `AgentState` whose `Merged` keeps `prior: ActiveAgentState`). Also: `UserRuleSpec` (what an operator submits) beside the stored `UserRule`, `AgentName`, `ChannelName`, `PromotionPreview`, `AgentListFilter`, `ChannelListFilter` (with `window`), `AuditEntry` with `subject` and `AuditOutcome::Applied(ActionOutcome)`. Checked constructors: `TopologyView`, `BipartiteView`, `ProjectionPoints`, `Excerpt`, `AgentLabel`, `RuleName`, `QueryText`, `SearchText`, `ProjectionParams`. Removed when the gateway's types land. |
 | `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures: the present (`now`, `current_topic_version`), graphs, transmissions, content, channels (`channels` with `ChannelListFilter`, `channel`, `channel_resources`, `promotion_preview`), agents (`agents` with `AgentListFilter`, `agent`), names (`agent_names`, `channel_names`), alerts (`alerts`, `alert`), rules, research, pipeline and `act`. |
 | `ui/src/backend/fixture/` | `FixtureBackend::new(seed)`: a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing every `Backend` method with real semantics. `world/` generates it through the spec's and contract's checked constructors: `agents` (cast and merge history), `drafts` and `channels` (channel table, detection from traffic), `traffic` and `states` (transmissions and accesses), `evidence` (matches and excerpts), `topics`, `rules`, `alerts`, `history` (operators, policy decisions, verdicts, audit, dead letters). `store` holds what actions change behind one `tokio::sync::RwLock` (agents keep their pre-merge state in `AgentState::Merged`, the audit log is plain `AuditEntry`s); `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors (`names`: batch names; `promotion`: the plan shared by `promotion_preview` and `PromoteChannel`; `lists`: list filters, and audit subject matching derived from each entry's subject, action, outcome and the merge log); `actions/` applies and audits every action (subject and outcome recorded on the entry; a false-detection verdict suppresses the transmission's active alerts with `OperatorRejected`); `world/topics` also holds the fixture's text embedder (`embed`: theme vectors weighted by vocabulary hits plus hashed word axes), used for `CreateRule`/`UpdateRule` and the generated semantic rules; `text/` holds the message templates and codecs; `rng` is SplitMix64. The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels: declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; a `kv_put` tool only one agent uses (observed); an `s3://agent-scratch` prefix with only suspected traffic (candidate); and `notes.corp.internal/team-a/standup`, superseded by the operator-promoted declared channel `notes.corp.internal/team-a`. Topics: v0 (unfitted), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago); v1's "Engineering chatter" maps to nothing in v2. Rules: the five built-ins, a watched-topic rule on v2 (credentials and agent instructions), a stale v1 rule, a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators: `researcher` (the trusted operator in `config.json`) and `oncall` (view, content, triage); about 60 verdicts (one withdrawn), a few hundred audit entries including two rejected actions, and four dead letters. |
 | `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query). |
-| `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`defaults(cx)`: the default window and topic version from `Backend::now` and `current_topic_version`; async `view_state(cx)`: parse, default, redirect to canonical; async `current_state(cx)` for the layout), one module per screen. |
-| `ui/src/pages/common/` | Shared by the governance pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator and rule names; agent names from one `agent_names` call). |
+| `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`defaults(cx)`: the default window and topic version from `Backend::now` and `current_topic_version`; async `view_state(cx)`: parse, default, redirect to canonical; async `current_state(cx)` for the layout; async `state_from_query(cx, query)`: a shard's view-state argument, parsed strictly), one module per screen. |
+| `ui/src/pages/common/` | Shared by the pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator and rule names; agent names from one `agent_names` call), `transmissions` (`TransmissionRow`, `rows`, `transmission_table`; `route_text`, `ChannelNames` from one `channel_names` call, `summary_name`). |
+| `ui/src/pages/overview/` | `/`: `model` (`load`: tiles, heaviest edges, newest open alerts; `Counter` pages a list to count it), `mod` (the page). |
+| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush and drawer sharing the `sel` signal; `brush_window`, `timeline_src`), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`), `tests`. |
+| `ui/src/pages/transmission/` | `/transmissions/{id}` GET and POST `set-verdict`: `mod` (header, load), `model` (state in words, `Strength`, match kind and carrier labels, `ExcerptView`, co-access views), `sections` (matches side by side, co-access timeline), `verdict` (form, parser, log), `tests`. |
+| `ui/src/pages/explore/` | `/explore` GET and POST `fit`: `mod` (page, `ProjectionPanel`, colour-by and selection signals), `query` (`q`, `m`, `p`, `cb`, `ps`), `lasso` (`Polygon`: parse, even-odd point-in-polygon, `select` over stored points; `ProjectionSelection`), `results` (the `projection_results` shard), `search` (hits, form), `topics` (sidebar, `watch_url`), `fit` (parameters and form), `tests`. |
+| `ui/src/pages/topics/` | `/topics`: `mod` (page, version picker, tables), `model` (`version_tabs`, `topic_rows`, `remap_rows` with stale rules). |
+| `ui/src/pages/export/` | `/export` GET and POST: `mod` (page, form, the "not available yet" outcome), `request` (form → `ExportRequest`, `describe`), `quality` (`quality_lines`, precision, table). |
 | `ui/src/pages/channels/` | `list` (`/channels`), `query` (list keys and toggles), `model` (shape, title, detection in words, decision), `detail` (`/channels/{id}` GET and POST `set-policy`), `sections` (resources, alerts, policy history), `policy` (set-policy form and parser), `promote/` (`patterns`: candidates from the seed and coverage; `mod`: GET and POST `/channels/{id}/promote`; `screen`: the page). |
 | `ui/src/pages/agents/` | `list` (`/agents` with state and claim chips), `query` (`state`, `claims` keys into `AgentListFilter`), `detail` (`/agents/{id}` GET and POST `rename`, `clear-label`, `unmerge`), `actions` (form parsers, `merge_action`), `evidence` (evidence rows, shared and conflicting evidence), `tree` (bounded sub-agent tree, one `agents` call per level), `sections` (merge rows say what an unmerge restores), `merge` (`/agents/{id}/merge` GET and POST). |
-| `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`; `parse_action` shared with the alert page), `detail` (`/alerts/{id}` GET and POST: rule, subject, state, triage forms, audit history), `model` (alert rows), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`; `model`: rule and sink rows; `form`: watched-topic and semantic forms, parsed into `UserRuleSpec`; `edit`: `/alerts/rules/new` and `/alerts/rules/{id}` GET and POST). |
+| `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`; `parse_action` shared with the alert page), `detail` (`/alerts/{id}` GET and POST: rule, subject, state, triage forms, audit history), `model` (alert rows), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`; `model`: rule and sink rows; `form`: watched-topic and semantic forms, parsed into `UserRuleSpec`; `edit`: `/alerts/rules/new` (`?topic=<id>` preselects a topic of the current version) and `/alerts/rules/{id}` GET and POST). |
 | `ui/src/pages/audit/` | `page` (`/audit`), `query` (`op`, `subject`, `span`), `describe` (an action in words and its note), `subject` (subject codes, `mg.` for merges, and links; alerts link to their page). Rows show the entry's own `subject` and link what an applied action created. |
 | `ui/src/pages/pipeline/` | `/pipeline` GET and POST `replay`. |
-| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting (`agent_name`, `agent_name_of` for an `AgentName`), `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state and evidence strength; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`), `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
+| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting (`agent_name`, `agent_name_of` for an `AgentName`), `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state, evidence strength, transmission state and verdict; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`, `segmented`), `sparkline` (inline SVG trend; `points`), formatting helpers `format_time_short`, `format_bytes`, `format_share`, `format_duration`, `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
 | `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body (a fresh world per request), `Session` (one router, so state carries across requests), `world`/`agent_id`/`channel_id` (scenario ids from a same-seed copy), and `cx`/`render` for rendering components. |
 | `ui/src/data/mod.rs` | The data routes' module: route table, `require(caller, permission)` (403). |
 | `ui/src/data/query.rs` | `view_state(cx)`: the strict view-state parse (every required key or 400, never a redirect; same `ViewState::parse` and `pages::view::defaults`). `buckets(cx)`: `buckets=` in 1..=1000, default 96. |
