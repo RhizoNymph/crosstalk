@@ -14,11 +14,32 @@
 //! secret digest `{"key": <secret version>, "digest": "<hex>"}`. Decoding
 //! accepts only those canonical forms. Entity ids are [`WireRequest`]s: a
 //! client names entities by id.
+//!
+//! The primitives that make ids live beside them, so every layer mints and
+//! hashes the same way: [`mint`] (the ULID generator, over the spec's
+//! `Clock` and a [`RandomSource`]) and [`secret`] (the
+//! [`DeploymentSecret`] and the [`KeyedHasher`] that alone makes secret
+//! digests). A message's content id is made by
+//! [`crate::observed::message::encoding`].
+
+pub mod mint;
+pub mod secret;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use mint::{RandomSource, SeededRandom, UlidExhausted, UlidGenerator};
+pub use secret::{DeploymentSecret, InvalidRotation, InvalidSecret, KeyedHasher, SecretDigests};
+
 use crate::support::Blake3;
 use crate::wire::{WireRequest, decode_text};
+
+/// A 128-bit entity id minted as a ULID ([`UlidGenerator::mint`]). Every
+/// entity id type and [`crate::observed::exchange::ConnectionId`] is one.
+pub trait EntityId: Copy {
+    fn from_ulid(raw: u128) -> Self;
+
+    fn as_ulid(self) -> u128;
+}
 
 macro_rules! entity_id {
     ($($(#[$doc:meta])* $name:ident;)*) => {$(
@@ -62,6 +83,16 @@ macro_rules! entity_id {
         }
 
         impl WireRequest for $name {}
+
+        impl EntityId for $name {
+            fn from_ulid(raw: u128) -> Self {
+                Self(raw)
+            }
+
+            fn as_ulid(self) -> u128 {
+                self.0
+            }
+        }
     )*};
 }
 

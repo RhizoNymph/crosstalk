@@ -318,7 +318,7 @@ Patterns the invariants need:
 | --- | --- | --- |
 | `crates/sim/Cargo.toml` | Manifest: `crosstalk-spec`, `thiserror`, `tracing`, `tokio` (`macros`, `rt`, `sync`, `test-util`, `time`) | — |
 | `crates/sim/src/lib.rs` | Crate doc, module list, re-exports | everything below |
-| `crates/sim/src/rng.rs` | Seed, SplitMix64, checked plan values | `Seed`, `SimRng`, `Probability`, `InvalidProbability`, `DurationRange`, `InvalidDurationRange` |
+| `crates/sim/src/rng.rs` | Seed, SplitMix64, checked plan values; `SimRng` is the spec's `RandomSource`, so a `UlidGenerator` draws ids from the run's seed | `Seed`, `SimRng`, `Probability`, `InvalidProbability`, `DurationRange`, `InvalidDurationRange` |
 | `crates/sim/src/clock.rs` | Virtual wall clock | `SimClock`, `ClockStep` |
 | `crates/sim/src/plan.rs` | The typed fault plan | `FaultPlan`, `BusFaults`, `SubjectFaults`, `Timed`, `Reorder`, `InvalidReorder`, `DropFault`, `Redelivery`, `StoreFaults`, `UpstreamFaults`, `StatusFault`, `TruncateFault`, `ErrorStatus`, `InvalidErrorStatus` |
 | `crates/sim/src/bus.rs` | Bus fault wrapper | `FaultyBus`, `FaultySubscription`, `DROPPED_DELIVERY_REASON` |
@@ -329,6 +329,7 @@ Patterns the invariants need:
 | `crates/sim/src/driver.rs` | Runtime, context, failures, seeds, `sim_test` | `Sim`, `SimCtx`, `SimConfig`, `SimReport`, `RunSummary`, `SimFailure`, `FailureCause`, `CheckFailed`, `SimTask`, `TaskFailed`, `SeedSelection`, `SeedEnvError`, `SEED_VAR`, `SEEDS_VAR`, `sim_test`, `sim_test!` |
 | `crates/sim/src/tests/toy_bus.rs` | A toy in-memory `EventBus` (groups, ack, nack, ack timeout) and envelope fixtures | test-only |
 | `crates/sim/src/tests/{rng,clock,driver,bus,store,upstream,every_fault}.rs` | Self-tests: RNG vectors and bounds; clock steps, skew, saturation; determinism by trace hash, seed exploration, failure reports, seed selection, the macro; every bus, store and upstream fault; every `FaultKind` firing | test-only |
+| `crates/sim/src/tests/ids.rs` | The spec's ULID generators under simulation: concurrent generators on skewed node clocks that step back, never minting an id twice (`canonical.ids.ulid-unique`, [spec_primitives](spec_primitives.md)) | test-only |
 | `spec/types/support.rs` | `Clock`, `SystemClock` | |
 | `spec/types/tests/support.rs` | `system_clock_reads_the_wall_clock`, `clock_is_shareable_across_tasks` | |
 | `spec/invariants/INV-X-canonical.clock.injected.toml`, `INV-X-canonical.clock.elapsed-from-monotonic.toml` | The clock invariants (pending numbers) | |

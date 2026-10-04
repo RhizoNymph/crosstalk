@@ -1,0 +1,28 @@
+[invariant]
+id = "canonical.ids.ulid-monotonic"
+statement = "Every ULID a generator mints is greater than every ULID it minted before, whatever its clock reads."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Entity ids sort by creation within a node, and a generator's uniqueness
+rests on never going back: if a clock stepped back (NTP, a skewed node)
+let a generator reuse an earlier millisecond with fresh randomness, it
+could mint an id it had already minted. A reading at or before the last
+id's millisecond therefore takes the last id plus one, carrying into the
+next millisecond when the random part is full, and only a later
+millisecond draws fresh randomness. The unit tests pin the increment, the
+carry and the end of the ULID space; the property runs clocks that repeat
+and step back.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_spec::tests::minting::same_or_earlier_millisecond_increments_the_last_id",
+  "crosstalk_spec::tests::minting::a_full_random_part_carries_and_the_last_ulid_is_the_end",
+]
+property = "crosstalk_spec::tests::minting::ids_increase_whatever_the_clock_reads"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

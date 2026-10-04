@@ -14,7 +14,7 @@ use crosstalk_spec::observed::client::{
 };
 use crosstalk_spec::observed::exchange::{
     ConnectionId, Continuation, Exchange, ExchangeFailure, ExchangeMeta, ExchangeOutcome,
-    ModelName, ResponseId, StopReason, TokenUsage, Transport, WireProtocol,
+    ModelName, ResponseId, StopReason, TokenCounts, TokenUsage, Transport, WireProtocol,
 };
 use crosstalk_spec::observed::message::{Message, MessageBody};
 use crosstalk_spec::support::Timestamp;
@@ -124,12 +124,16 @@ impl ExchangeBuilder {
                 response,
                 response_id: Some(ResponseId(format!("msg_{}", id.ulid_text()))),
                 stop: StopReason::EndTurn,
-                usage: Some(TokenUsage {
+                // Valid counts (no cache count beyond the input), so `ok`
+                // never drops them.
+                usage: TokenUsage::new(TokenCounts {
                     input: 1200,
                     output: 48,
                     cache_read: 0,
+                    cache_write: Some(0),
                     reasoning: None,
-                }),
+                })
+                .ok(),
             },
         }
     }
@@ -406,10 +410,14 @@ impl NormalizedExchangeBuilder {
                 failure,
             } => exchange.failed(failure),
         };
+        // Built bodies name no media bytes the builder could hold: a test
+        // that needs a `Media` part's blob builds the exchange's `media`
+        // itself.
         NormalizedExchange {
             exchange: exchange.build(),
             messages,
             warnings: self.warnings,
+            media: Vec::new(),
         }
     }
 }

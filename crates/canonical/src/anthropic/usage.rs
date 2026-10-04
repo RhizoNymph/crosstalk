@@ -4,27 +4,28 @@
 //! (after the last cache breakpoint), `cache_creation_input_tokens` (written
 //! to the cache) and `cache_read_input_tokens` (read from it). The spec's
 //! `input` is every prompt token, as OpenAI's `prompt_tokens` is, with
-//! `cache_read` the part of it served from the cache:
+//! `cache_read` and `cache_write` the parts of it read from and written to
+//! the cache:
 //!
 //! | `TokenUsage` | Anthropic |
 //! | --- | --- |
 //! | `input` | `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` |
 //! | `output` | `output_tokens` (the last value: `message_delta` counts are cumulative) |
 //! | `cache_read` | `cache_read_input_tokens` |
+//! | `cache_write` | `Some(cache_creation_input_tokens)`: the protocol reports cache writes |
 //! | `reasoning` | `None`: thinking tokens are inside `output_tokens` and not reported apart |
 //!
-//! Cache writes have no field of their own in `TokenUsage`, so they count
-//! only inside `input`. A missing or null cache count is 0. Usage is
-//! `None` when `input_tokens` or `output_tokens` is missing, a count is not
-//! a non-negative integer, or a value does not fit a `u32`.
+//! A missing or null cache count is 0. Usage is `None` when `input_tokens`
+//! or `output_tokens` is missing, a count is not a non-negative integer,
+//! or a value (the prompt total included) does not fit a `u32`.
 //!
 //! A stream's usage is `message_start`'s `message.usage` with each later
 //! `message_delta`'s `usage` fields laid over it, so it equals the whole
 //! response's `usage` (`canonical.normalize.stream-independent`).
 
-use crosstalk_spec::observed::exchange::TokenUsage;
+use crosstalk_spec::observed::exchange::{TokenCounts, TokenUsage};
 
-use crate::json::Json;
+use crosstalk_spec::observed::message::json::Json;
 
 /// The usage counts seen so far.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -84,11 +85,15 @@ impl Usage {
         let cache_creation = optional(self.cache_creation)?;
         let cache_read = optional(self.cache_read)?;
         let total = input.checked_add(cache_creation)?.checked_add(cache_read)?;
-        Some(TokenUsage {
+        // The cache counts are parts of `total`, so the check always
+        // passes once every count fits.
+        TokenUsage::new(TokenCounts {
             input: u32::try_from(total).ok()?,
             output: u32::try_from(output).ok()?,
             cache_read: u32::try_from(cache_read).ok()?,
+            cache_write: Some(u32::try_from(cache_creation).ok()?),
             reasoning: None,
         })
+        .ok()
     }
 }

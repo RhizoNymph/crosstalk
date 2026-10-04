@@ -1,12 +1,13 @@
 //! The canonical encoding of a message body, and the message hash.
 //!
-//! A body's encoding is the canonical JSON text ([`crate::json`]: sorted
+//! A body's encoding is the canonical JSON text ([`super::json`]: sorted
 //! keys, no whitespace, fixed escapes) of its JSON shape:
 //!
 //! | Body or part | JSON |
 //! | --- | --- |
 //! | `MessageBody` | `{"type": "system" \| "user" \| "assistant" \| "tool", "data": [parts]}` (a tool body's parts are its results) |
-//! | `Text` part, `Reasoning::Visible` | `{"type": "text", "data": "<text>"}`, `{"type": "reasoning", "data": {"type": "visible", "data": "<text>"}}` |
+//! | `Text` part | `{"type": "text", "data": "<text>"}` |
+//! | `Reasoning::Visible` | `{"type": "reasoning", "data": {"type": "visible", "data": {"signature": "<signature>" \| null, "text": "<text>"}}}` |
 //! | `Reasoning::Opaque` | `{"type": "reasoning", "data": {"type": "opaque", "data": {"signature": "<payload>"}}}` |
 //! | `Media` | `{"type": "media", "data": {"blob": "<hex>", "kind": "image" \| "audio" \| "document"}}` |
 //! | `Unknown` | `{"type": "unknown", "data": {"kind": "<block type>", "raw": "<canonical JSON text>"}}` |
@@ -21,32 +22,64 @@
 //! (`canonical.message.hash-is-blake3-of-encoding`). [`decode`] accepts only
 //! bytes [`encode`] writes: canonical text of a valid body.
 
-mod wire;
+mod mirror;
 
-use crosstalk_spec::ids::MessageHash;
-use crosstalk_spec::observed::message::{Message, MessageBody};
-use crosstalk_spec::support::Blake3;
+use std::fmt;
 
-use crate::json;
+use super::json::{self, JsonError};
+use super::{Message, MessageBody};
+use crate::ids::MessageHash;
+use crate::support::Blake3;
 
 /// Why bytes are not the canonical encoding of a message body.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
-    #[error("not JSON: {0}")]
-    NotJson(#[from] json::JsonError),
-    #[error("not in canonical form")]
+    /// Not JSON the canonical parser accepts.
+    NotJson(JsonError),
+    /// JSON, but not the canonical text of its value, or not the text
+    /// [`encode`] writes for the body it holds.
     NotCanonical,
-    #[error("not a message body: {reason}")]
+    /// Canonical JSON that is not a message body's shape.
     Shape { reason: String },
-    #[error("a tool message with no result")]
+    /// A tool message with no result.
     EmptyTool,
-    #[error("canonical JSON inside the body is not canonical")]
+    /// Canonical JSON inside the body (arguments, an unknown block's raw
+    /// JSON) that is not canonical.
     NonCanonicalJson,
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotJson(error) => write!(f, "not JSON: {error}"),
+            Self::NotCanonical => f.write_str("not in canonical form"),
+            Self::Shape { reason } => write!(f, "not a message body: {reason}"),
+            Self::EmptyTool => f.write_str("a tool message with no result"),
+            Self::NonCanonicalJson => {
+                f.write_str("canonical JSON inside the body is not canonical")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotJson(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<JsonError> for DecodeError {
+    fn from(error: JsonError) -> Self {
+        Self::NotJson(error)
+    }
 }
 
 /// The canonical encoding of `body`.
 pub fn encode(body: &MessageBody) -> Vec<u8> {
-    let mirror = wire::Body::from(body);
+    let mirror = mirror::Body::from(body);
     // Infallible: the mirror is structs, adjacently tagged enums, strings,
     // string vectors and `MessageHash` (which writes its hex string), with
     // no maps and no numbers. serde_json fails only on non-string map keys
@@ -58,25 +91,32 @@ pub fn encode(body: &MessageBody) -> Vec<u8> {
     canonical.0.into_bytes()
 }
 
-/// The body `bytes` encode, accepting only what [`encode`] writes.
+/// The body `bytes` encode, accepting only what [`encode`] writes: `Ok(body)`
+/// exactly when `encode(&body) == bytes`
+/// (`canonical.encoding.decode-inverts-encode`).
 pub fn decode(bytes: &[u8]) -> Result<MessageBody, DecodeError> {
     let parsed = json::Json::parse_bytes(bytes)?;
     if parsed.canonical_text().as_bytes() != bytes {
         return Err(DecodeError::NotCanonical);
     }
-    let mirror: wire::Body = serde_json::from_slice(bytes).map_err(|error| DecodeError::Shape {
-        reason: error.to_string(),
-    })?;
-    MessageBody::try_from(mirror).map_err(|invalid| match invalid {
-        wire::Invalid::EmptyTool => DecodeError::EmptyTool,
-        wire::Invalid::NonCanonicalJson => DecodeError::NonCanonicalJson,
-    })
+    let mirror: mirror::Body =
+        serde_json::from_slice(bytes).map_err(|error| DecodeError::Shape {
+            reason: error.to_string(),
+        })?;
+    let body = MessageBody::try_from(mirror).map_err(DecodeError::from)?;
+    // Canonical text of a valid body's shape that `encode` would still not
+    // write (an optional field left out, which serde reads as `None`) is
+    // refused: one body, one encoding.
+    if encode(&body) != bytes {
+        return Err(DecodeError::NotCanonical);
+    }
+    Ok(body)
 }
 
 /// The BLAKE3 digest of `bytes` as a message hash: what the blob store keys
 /// `bytes` by.
 pub fn hash_bytes(bytes: &[u8]) -> MessageHash {
-    MessageHash::from_digest(Blake3::from_bytes(*blake3::hash(bytes).as_bytes()))
+    MessageHash::from_digest(Blake3::of(bytes))
 }
 
 /// The hash of `body`: the BLAKE3 digest of its encoding.

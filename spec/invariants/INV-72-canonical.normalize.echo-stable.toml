@@ -12,11 +12,18 @@ re-serialized by the harness in request format (Anthropic tool_use.input as
 a JSON object, with its own key order and whitespace). If the two hashed
 differently, every turn would start a new conversation and originated spans
 would be attributed twice. Canonical JSON arguments and verbatim opaque
-reasoning exist for this property.
+reasoning exist for this property. A thinking block's signature is part of
+the hash: the provider rejects a thinking block whose signature changed, so
+the echo carries the response's signature byte for byte, and the signed
+corpus case's echo hashes like its response while one with another
+signature does not.
 """
 
 [evidence]
-unit = "crosstalk_canonical::tests::recorded_echoes_hash_like_their_responses"
+unit = [
+  "crosstalk_canonical::tests::recorded_echoes_hash_like_their_responses",
+  "crosstalk_canonical::tests::thinking_signatures_echo_like_their_responses",
+]
 property = "crosstalk_canonical::tests::response_and_echo_hash_equal"
 
 [evidence-review]

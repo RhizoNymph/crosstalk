@@ -18,7 +18,7 @@ use crate::observed::client::{
 };
 use crate::observed::exchange::{
     ConnectionId, Continuation, Exchange, ExchangeFailure, ExchangeMeta, ExchangeOutcome,
-    ModelName, ResponseId, StopReason, TokenUsage, Transport, WireProtocol,
+    ModelName, ResponseId, StopReason, TokenCounts, TokenUsage, Transport, WireProtocol,
 };
 use crate::observed::message::{PartRef, ToolCallId, ToolName};
 
@@ -153,12 +153,16 @@ pub(super) fn completed() -> Exchange {
             first_chunk_at: ts("2026-10-04T12:34:57.402118Z"),
             finished_at: ts("2026-10-04T12:35:03.950031Z"),
             stop: StopReason::ToolUse,
-            usage: Some(TokenUsage {
-                input: 18_342,
-                output: 611,
-                cache_read: 16_384,
-                reasoning: None,
-            }),
+            usage: Some(
+                TokenUsage::new(TokenCounts {
+                    input: 18_342,
+                    output: 611,
+                    cache_read: 16_384,
+                    cache_write: Some(1_536),
+                    reasoning: None,
+                })
+                .unwrap_or_else(|error| panic!("{error:?}")),
+            ),
         },
     }
 }
@@ -510,12 +514,21 @@ fn exchanges_refuse_unknown_fields_and_variants() {
     );
     assert_rejected::<Continuation>(r#"{"type": "partial"}"#, "unknown variant `partial`");
     assert_rejected::<TokenUsage>(
-        r#"{"input": 1, "output": 2, "cache_read": 0, "reasoning": null, "cache_write": 0}"#,
-        "unknown field `cache_write`",
+        r#"{"input": 1, "output": 2, "cache_read": 0, "cache_write": 0, "reasoning": null, "cache_creation": 0}"#,
+        "unknown field `cache_creation`",
     );
     assert_rejected::<TokenUsage>(
-        r#"{"input": -1, "output": 2, "cache_read": 0, "reasoning": null}"#,
+        r#"{"input": -1, "output": 2, "cache_read": 0, "cache_write": null, "reasoning": null}"#,
         "invalid value",
+    );
+    // The cache counts are parts of the prompt, and reasoning of the output.
+    assert_rejected::<TokenUsage>(
+        r#"{"input": 10, "output": 2, "cache_read": 6, "cache_write": 5, "reasoning": null}"#,
+        "CachedBeyondInput",
+    );
+    assert_rejected::<TokenUsage>(
+        r#"{"input": 10, "output": 2, "cache_read": 0, "cache_write": null, "reasoning": 3}"#,
+        "ReasoningBeyondOutput",
     );
 }
 

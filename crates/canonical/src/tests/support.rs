@@ -16,7 +16,6 @@ use crosstalk_testkit::corpus::{Case, Endpoint, Expect};
 use crosstalk_testkit::ids::Ids;
 use crosstalk_testkit::time::{T0, millis, secs};
 
-use crate::Normalization;
 use crate::anthropic;
 
 pub const MODEL: &str = "claude-opus-5-5";
@@ -113,7 +112,7 @@ pub fn case(name: &str) -> (Case, RawExchange) {
         .unwrap_or_else(|| panic!("no captured corpus case {name}"))
 }
 
-pub fn normalize(raw: &RawExchange) -> Normalization {
+pub fn normalize(raw: &RawExchange) -> NormalizedExchange {
     anthropic::normalize(raw).unwrap_or_else(|error| panic!("normalizes: {error:?}"))
 }
 

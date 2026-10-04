@@ -9,7 +9,7 @@
 //! | `text` | `Text` (`citations` and `cache_control` dropped) |
 //! | `image`, `document` with a `base64` source | `Media` (the decoded bytes are their own blob) |
 //! | `tool_result` (user turn) | a `ToolResult` (`is_error: true` is `Error`); `content` a string, or `text`, `image` and `document` blocks |
-//! | `thinking` | `Reasoning::Visible` (its `signature` dropped) |
+//! | `thinking` | `Reasoning::Visible`, with its `signature` verbatim (an empty or missing one is `None`) |
 //! | `redacted_thinking` | `Reasoning::Opaque` holding `data` verbatim |
 //! | `tool_use` | `ToolCall`, `Client` |
 //! | `server_tool_use`, `mcp_tool_use` | `ToolCall`, `Server` |
@@ -35,7 +35,7 @@ use crosstalk_spec::observed::message::{
 };
 
 pub(crate) use crate::assemble::MediaSink;
-use crate::json::Json;
+use crosstalk_spec::observed::message::json::Json;
 
 /// A response block as the response delivered it: whole (a non-streamed
 /// body, or a stream's block with its deltas applied), or a tool call whose
@@ -252,8 +252,16 @@ fn assistant_part(
 ) -> AssistantPart {
     let known = match block.kind() {
         Some("text") => text_of(block, "text").map(AssistantPart::Text),
-        Some("thinking") => text_of(block, "thinking")
-            .map(|text| AssistantPart::Reasoning(Reasoning::Visible(text))),
+        Some("thinking") => text_of(block, "thinking").map(|text| {
+            AssistantPart::Reasoning(Reasoning::Visible {
+                text,
+                signature: block
+                    .get("signature")
+                    .and_then(Json::as_str)
+                    .filter(|signature| !signature.is_empty())
+                    .map(str::to_owned),
+            })
+        }),
         Some("redacted_thinking") => block.get("data").and_then(Json::as_str).map(|data| {
             AssistantPart::Reasoning(Reasoning::Opaque {
                 signature: data.to_owned(),

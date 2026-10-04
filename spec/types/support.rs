@@ -254,40 +254,61 @@ impl Blake3 {
         &self.0
     }
 
+    /// The (unkeyed) BLAKE3 digest of `bytes`: what a content id names.
+    /// Secret digests are keyed instead ([`crate::ids::secret::KeyedHasher`]).
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(*blake3::hash(bytes).as_bytes())
+    }
+
     /// 64 lower-case hex digits, most significant byte first.
     pub fn to_hex(&self) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        self.0
-            .iter()
-            .flat_map(|byte| [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]])
-            .map(char::from)
-            .collect()
+        hex(&self.0)
     }
 
     /// The digest `text` names, accepting exactly the text
     /// [`Blake3::to_hex`] writes.
     pub fn from_hex(text: &str) -> Result<Self, InvalidHex> {
-        let bytes = text.as_bytes();
-        if bytes.len() != 64 {
-            return Err(InvalidHex::Length { got: bytes.len() });
+        if text.len() != 64 {
+            return Err(InvalidHex::Length { got: text.len() });
         }
-        let nibble = |index: usize| match bytes[index] {
-            digit @ b'0'..=b'9' => Ok(digit - b'0'),
-            letter @ b'a'..=b'f' => Ok(letter - b'a' + 10),
-            _ => Err(InvalidHex::Character { index }),
-        };
         let mut digest = [0u8; 32];
-        for (index, byte) in digest.iter_mut().enumerate() {
-            *byte = (nibble(2 * index)? << 4) | nibble(2 * index + 1)?;
-        }
+        digest.copy_from_slice(&from_hex(text)?);
         Ok(Self(digest))
     }
 }
 
-/// Why text is not a digest's hex.
+/// `bytes` as lower-case hex, two digits per byte, in order: the wire
+/// form of digests and of raw bytes ([`crate::observed::message::MediaBlob`]).
+pub fn hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    bytes
+        .iter()
+        .flat_map(|byte| [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]])
+        .map(char::from)
+        .collect()
+}
+
+/// The bytes `text` spells, accepting exactly the text [`hex`] writes: an
+/// even number of lower-case hex digits.
+pub fn from_hex(text: &str) -> Result<Vec<u8>, InvalidHex> {
+    let digits = text.as_bytes();
+    if !digits.len().is_multiple_of(2) {
+        return Err(InvalidHex::Length { got: digits.len() });
+    }
+    let nibble = |index: usize| match digits[index] {
+        digit @ b'0'..=b'9' => Ok(digit - b'0'),
+        letter @ b'a'..=b'f' => Ok(letter - b'a' + 10),
+        _ => Err(InvalidHex::Character { index }),
+    };
+    (0..digits.len() / 2)
+        .map(|index| Ok((nibble(2 * index)? << 4) | nibble(2 * index + 1)?))
+        .collect()
+}
+
+/// Why text is not a digest's (or raw bytes') hex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidHex {
-    /// Not 64 bytes.
+    /// Not 64 bytes for a digest; an odd number for raw bytes.
     Length { got: usize },
     /// The byte at `index` is not a lower-case hex digit. Upper case is
     /// refused, so every digest has one text.

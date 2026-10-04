@@ -14,17 +14,17 @@ use crosstalk_spec::observed::message::{
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 
-use crate::encoding;
-use crate::json::{Json, canonicalize};
 use crate::tests::generate::Style;
 use crate::tests::generate::anthropic::{
     GenBlock, GenRequest, GenResponse, GenSystem, GenSystemBlock, GenTurn, GenUserBlock,
     write_event,
 };
-use crate::tests::generate::json::{GenJson, GenNumber, string};
+use crate::tests::generate::json::{GenJson, string};
 use crate::tests::support::{
     START, USER_TURN, normalize, ok, raw, request_bodies, response, response_parts, stop,
 };
+use crosstalk_spec::observed::message::encoding;
+use crosstalk_spec::observed::message::json::{Json, canonicalize};
 
 type Checked = Result<(), TestCaseError>;
 
@@ -118,7 +118,9 @@ pub fn exchange(request: &GenRequest, delivery: &GenDelivery, seed: u64) -> RawE
 
 /// Every hash the exchange names resolves to one of its messages.
 pub fn exchange_hashes_resolve(request: &GenRequest, delivery: &GenDelivery, seed: u64) -> Checked {
-    let exchange = normalize(&exchange(request, delivery, seed)).exchange;
+    let exchange = normalize(&exchange(request, delivery, seed));
+    // The spec's own check: hashes, references and media, all at once.
+    prop_assert_eq!(exchange.check(), Ok(()));
     let hashes: Vec<_> = exchange
         .messages
         .iter()
@@ -144,7 +146,7 @@ pub fn exchange_hashes_resolve(request: &GenRequest, delivery: &GenDelivery, see
 /// Every message's hash is the BLAKE3 of its encoding.
 pub fn hashes_match_encoding(request: &GenRequest, delivery: &GenDelivery, seed: u64) -> Checked {
     let normalization = normalize(&exchange(request, delivery, seed));
-    for message in &normalization.exchange.messages {
+    for message in &normalization.messages {
         let bytes = encoding::encode(&message.body);
         prop_assert_eq!(
             *message.hash.digest().as_bytes(),
@@ -153,8 +155,8 @@ pub fn hashes_match_encoding(request: &GenRequest, delivery: &GenDelivery, seed:
     }
     for media in &normalization.media {
         prop_assert_eq!(
-            *media.hash.digest().as_bytes(),
-            *blake3::hash(&media.bytes).as_bytes()
+            *media.hash().digest().as_bytes(),
+            *blake3::hash(media.bytes()).as_bytes()
         );
     }
     Ok(())
@@ -162,7 +164,7 @@ pub fn hashes_match_encoding(request: &GenRequest, delivery: &GenDelivery, seed:
 
 /// The response or partial response is always an assistant message.
 pub fn response_is_assistant(request: &GenRequest, delivery: &GenDelivery, seed: u64) -> Checked {
-    let exchange = normalize(&exchange(request, delivery, seed)).exchange;
+    let exchange = normalize(&exchange(request, delivery, seed));
     if let Some(message) = response(&exchange) {
         prop_assert!(matches!(message.body, MessageBody::Assistant(_)));
     }
@@ -217,14 +219,14 @@ pub fn continuation_carried(
         seed,
     );
     raw.request.harness.continuation = continuation.clone();
-    prop_assert_eq!(normalize(&raw).exchange.exchange.continuation, continuation);
+    prop_assert_eq!(normalize(&raw).exchange.continuation, continuation);
     Ok(())
 }
 
 /// Every Unknown part has an UnknownBlock warning of its kind: as many
 /// warnings of each kind as parts.
 pub fn unknown_parts_warned(request: &GenRequest, delivery: &GenDelivery, seed: u64) -> Checked {
-    let exchange = normalize(&exchange(request, delivery, seed)).exchange;
+    let exchange = normalize(&exchange(request, delivery, seed));
     let mut parts: Vec<String> = Vec::new();
     let mut add = |unknown: &Unknown| parts.push(unknown.kind.clone());
     let mut bodies = request_bodies(&exchange);
@@ -292,7 +294,7 @@ pub fn for_each_unknown(body: &MessageBody, visit: &mut impl FnMut(&Unknown)) {
 /// normalized alone, concatenated in order.
 pub fn request_message_by_message(request: &GenRequest, seed: u64) -> Checked {
     let empty = GenDelivery::Garbage(Transport::Http, Vec::new());
-    let whole = request_bodies(&normalize(&exchange(request, &empty, seed)).exchange);
+    let whole = request_bodies(&normalize(&exchange(request, &empty, seed)));
     let rest: Vec<MessageBody> = match (&request.system, whole.first()) {
         (GenSystem::Absent, _) => whole.clone(),
         (_, Some(MessageBody::System(_))) => whole[1..].to_vec(),
@@ -309,9 +311,7 @@ pub fn request_message_by_message(request: &GenRequest, seed: u64) -> Checked {
             turns: vec![turn.clone()],
         };
         let seed = seed.wrapping_add(u64::try_from(at).unwrap_or(0) + 1);
-        alone.extend(request_bodies(
-            &normalize(&exchange(&single, &empty, seed)).exchange,
-        ));
+        alone.extend(request_bodies(&normalize(&exchange(&single, &empty, seed))));
     }
     prop_assert_eq!(rest, alone);
     Ok(())
@@ -334,7 +334,7 @@ pub fn split_preserves_blocks(blocks: &[GenUserBlock], seed: u64) -> Checked {
         turns: vec![GenTurn::User(blocks.to_vec())],
     };
     let empty = GenDelivery::Garbage(Transport::Http, Vec::new());
-    let bodies = request_bodies(&normalize(&exchange(&request, &empty, seed)).exchange);
+    let bodies = request_bodies(&normalize(&exchange(&request, &empty, seed)));
     let expected: Vec<(bool, Item)> = blocks
         .iter()
         .map(|block| match block {
@@ -379,7 +379,7 @@ pub fn split_preserves_blocks(blocks: &[GenUserBlock], seed: u64) -> Checked {
 }
 
 fn completed_response(raw: &RawExchange) -> Result<(MessageBody, ExchangeOutcome), TestCaseError> {
-    let exchange = normalize(raw).exchange;
+    let exchange = normalize(raw);
     let body = response(&exchange)
         .map(|message| message.body.clone())
         .ok_or_else(|| TestCaseError::fail("no response"))?;
@@ -404,7 +404,7 @@ pub fn transport_independent(response: &GenResponse, seed: u64) -> Checked {
 pub fn echo_hashes_equal(response: &GenResponse, seed: u64) -> Checked {
     let mut style = Style::new(seed);
     let streamed = raw(USER_TURN, Transport::Sse, ok(&response.stream(&mut style)));
-    let exchange = normalize(&streamed).exchange;
+    let exchange = normalize(&streamed);
     let ExchangeOutcome::Completed { response: hash, .. } = exchange.exchange.outcome else {
         return Err(TestCaseError::fail("the stream completes"));
     };
@@ -416,7 +416,7 @@ pub fn echo_hashes_equal(response: &GenResponse, seed: u64) -> Checked {
         ],
     };
     let echo = exchange_of(&next, &mut style);
-    let echoed = normalize(&echo).exchange.exchange.request;
+    let echoed = normalize(&echo).exchange.request;
     prop_assert_eq!(echoed.get(2), Some(&hash));
     Ok(())
 }
@@ -429,7 +429,7 @@ fn exchange_of(request: &GenRequest, style: &mut Style) -> RawExchange {
 /// in every part list.
 pub fn unknown_blocks_canonical(request: &GenRequest, seed: u64) -> Checked {
     let mut style = Style::new(seed);
-    let exchange = normalize(&exchange_of(request, &mut style)).exchange;
+    let exchange = normalize(&exchange_of(request, &mut style));
     let mut got: Vec<Unknown> = Vec::new();
     for body in request_bodies(&exchange) {
         for_each_unknown(&body, &mut |unknown| got.push(unknown.clone()));
@@ -518,14 +518,14 @@ pub fn opaque_preserved(data: &str, seed: u64) -> Checked {
         raw(USER_TURN, Transport::Sse, ok(&response.stream(&mut style))),
         raw(USER_TURN, Transport::Http, ok(&response.whole(&mut style))),
     ] {
-        prop_assert_eq!(response_parts(&normalize(&raw).exchange), expected.clone());
+        prop_assert_eq!(response_parts(&normalize(&raw)), expected.clone());
     }
     let echo = GenRequest {
         system: GenSystem::Absent,
         turns: vec![GenTurn::Assistant(vec![block])],
     };
     prop_assert_eq!(
-        request_bodies(&normalize(&exchange_of(&echo, &mut style)).exchange),
+        request_bodies(&normalize(&exchange_of(&echo, &mut style))),
         vec![MessageBody::Assistant(expected)]
     );
     Ok(())
@@ -550,7 +550,7 @@ pub fn text_preserved(text: &str, seed: u64) -> Checked {
             GenTurn::Assistant(vec![GenBlock::Text(text.to_owned())]),
         ],
     };
-    let bodies = request_bodies(&normalize(&exchange_of(&request, &mut style)).exchange);
+    let bodies = request_bodies(&normalize(&exchange_of(&request, &mut style)));
     let want = Text(text.to_owned());
     prop_assert_eq!(
         &bodies[0],
@@ -585,10 +585,13 @@ pub fn text_preserved(text: &str, seed: u64) -> Checked {
     };
     let raw = raw(USER_TURN, Transport::Sse, ok(&response.stream(&mut style)));
     prop_assert_eq!(
-        response_parts(&normalize(&raw).exchange),
+        response_parts(&normalize(&raw)),
         vec![
             AssistantPart::Text(want.clone()),
-            AssistantPart::Reasoning(Reasoning::Visible(want)),
+            AssistantPart::Reasoning(Reasoning::Visible {
+                text: want,
+                signature: None,
+            }),
         ]
     );
     Ok(())
@@ -619,7 +622,7 @@ pub fn arguments_by_parse(text: &str, seed: u64) -> Checked {
     for (name, data) in stop("tool_use") {
         event(name, data, &mut style);
     }
-    let parts = response_parts(&normalize(&raw(USER_TURN, Transport::Sse, ok(&events))).exchange);
+    let parts = response_parts(&normalize(&raw(USER_TURN, Transport::Sse, ok(&events))));
     let [AssistantPart::ToolCall(call)] = parts.as_slice() else {
         return Err(TestCaseError::fail(format!("one call: {parts:?}")));
     };
@@ -653,14 +656,12 @@ pub fn server_results_paired(blocks: &[GenBlock], seed: u64) -> Checked {
         system: GenSystem::Absent,
         turns: vec![GenTurn::Assistant(blocks.to_vec())],
     };
-    let mut messages = request_bodies(&normalize(&exchange_of(&request, &mut style)).exchange);
+    let mut messages = request_bodies(&normalize(&exchange_of(&request, &mut style)));
     for raw in [
         raw(USER_TURN, Transport::Sse, ok(&response.stream(&mut style))),
         raw(USER_TURN, Transport::Http, ok(&response.whole(&mut style))),
     ] {
-        messages.push(MessageBody::Assistant(response_parts(
-            &normalize(&raw).exchange,
-        )));
+        messages.push(MessageBody::Assistant(response_parts(&normalize(&raw))));
     }
     let expected_results = blocks
         .iter()
@@ -705,7 +706,7 @@ pub fn failed_bytes_never_fail(
 ) -> Checked {
     let mut style = Style::new(seed);
     let body = request.render(&mut style);
-    let reference = request_bodies(&normalize(&raw(&body, Transport::Http, ok("{}"))).exchange);
+    let reference = request_bodies(&normalize(&raw(&body, Transport::Http, ok("{}"))));
     let failed = raw(
         &body,
         transport,
@@ -716,9 +717,8 @@ pub fn failed_bytes_never_fail(
     );
     let normalization = crate::anthropic::normalize(&failed)
         .map_err(|error| TestCaseError::fail(format!("{error:?}")))?;
-    prop_assert_eq!(request_bodies(&normalization.exchange), reference);
-    let ExchangeOutcome::Failed { failure: got, .. } = normalization.exchange.exchange.outcome
-    else {
+    prop_assert_eq!(request_bodies(&normalization), reference);
+    let ExchangeOutcome::Failed { failure: got, .. } = normalization.exchange.outcome else {
         return Err(TestCaseError::fail("failed"));
     };
     prop_assert_eq!(got, failure);
@@ -744,64 +744,14 @@ pub fn unparseable_keeps_request(transport: Transport, body: &[u8]) -> Checked {
         },
     ));
     let unparseable = matches!(
-        normalization.exchange.exchange.outcome,
+        normalization.exchange.outcome,
         ExchangeOutcome::Failed {
             partial_response: None,
             failure: ExchangeFailure::UnparseableResponse,
             ..
         }
     );
-    prop_assert!(
-        unparseable,
-        "outcome {:?}",
-        normalization.exchange.exchange.outcome
-    );
-    prop_assert_eq!(normalization.exchange.exchange.request.len(), 1);
-    Ok(())
-}
-
-/// Any spelling of a value (member order, whitespace, escapes, number
-/// forms) has one canonical text: the value's.
-pub fn canonical_ignores_formatting(value: &GenJson, seeds: (u64, u64)) -> Checked {
-    let one = value.render(&mut Style::new(seeds.0));
-    let two = value.render(&mut Style::new(seeds.1));
-    let canonical =
-        canonicalize(&one).map_err(|error| TestCaseError::fail(format!("{one}: {error}")))?;
-    prop_assert_eq!(
-        &canonical,
-        &canonicalize(&two).map_err(|error| TestCaseError::fail(format!("{two}: {error}")))?
-    );
-    prop_assert_eq!(&canonical, &value.value().canonical());
-    // Canonical text is a fixed point.
-    prop_assert_eq!(&canonicalize(&canonical.0).ok(), &Some(canonical.clone()));
-    Ok(())
-}
-
-/// Integers far beyond 2^53, either sign, keep their exact value through
-/// canonical text, and their digits while they have at most 21.
-pub fn large_integer_exact(negative: bool, digits: &str, seed: u64) -> Checked {
-    let number = GenNumber {
-        negative,
-        digits: digits.to_owned(),
-        exponent: 0,
-    };
-    let spelled = number.spell(&mut Style::new(seed));
-    let canonical =
-        canonicalize(&spelled).map_err(|error| TestCaseError::fail(error.to_string()))?;
-    let reparsed =
-        Json::parse(&canonical.0).map_err(|error| TestCaseError::fail(error.to_string()))?;
-    prop_assert_eq!(reparsed, Json::Number(number.value()));
-    if digits.len() <= 21 {
-        let sign = if negative { "-" } else { "" };
-        prop_assert_eq!(canonical.0, format!("{sign}{digits}"));
-    }
-    Ok(())
-}
-
-/// Decoding a body's encoding gives the body back.
-pub fn encoding_round_trip(body: &MessageBody) -> Checked {
-    let bytes = encoding::encode(body);
-    let decoded = encoding::decode(&bytes);
-    prop_assert_eq!(decoded.as_ref(), Ok(body));
+    prop_assert!(unparseable, "outcome {:?}", normalization.exchange.outcome);
+    prop_assert_eq!(normalization.exchange.request.len(), 1);
     Ok(())
 }

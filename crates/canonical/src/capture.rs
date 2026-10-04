@@ -11,8 +11,8 @@
 use crosstalk_spec::ids::MessageHash;
 use crosstalk_spec::interfaces::l2_transport::{BlobError, BlobStore};
 
-use crate::assemble::Normalization;
-use crate::encoding;
+use crosstalk_spec::interfaces::l1_canonical::NormalizedExchange;
+use crosstalk_spec::observed::message::encoding;
 
 /// Why a normalized exchange's bodies are not all stored.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -26,23 +26,23 @@ pub enum StoreError {
     },
 }
 
-/// Puts every message body and media blob of `normalization` into `blobs`,
+/// Puts every message body and media blob of `normalized` into `blobs`,
 /// in order, stopping at the first failure.
 pub async fn store<B: BlobStore>(
     blobs: &B,
-    normalization: &Normalization,
+    normalized: &NormalizedExchange,
 ) -> Result<(), StoreError> {
-    let exchange = normalization.exchange.exchange.meta.id;
-    for message in &normalization.exchange.messages {
+    let exchange = normalized.exchange.meta.id;
+    for message in &normalized.messages {
         put(blobs, message.hash, &encoding::encode(&message.body)).await?;
     }
-    for media in &normalization.media {
-        put(blobs, media.hash, &media.bytes).await?;
+    for media in &normalized.media {
+        put(blobs, media.hash(), media.bytes()).await?;
     }
     tracing::debug!(
         exchange = %exchange.ulid_text(),
-        messages = normalization.exchange.messages.len(),
-        media = normalization.media.len(),
+        messages = normalized.messages.len(),
+        media = normalized.media.len(),
         "exchange bodies stored"
     );
     Ok(())

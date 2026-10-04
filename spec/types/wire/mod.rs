@@ -241,7 +241,7 @@ where
 /// the spec takes no dependency for it: when `$ty` implements a listed
 /// trait, `AmbiguousIfImpl<_>` has two candidate impls for it and inference
 /// fails. In textual scope for the submodules declared below it; the
-/// assertions live in [`authority`].
+/// assertions live in [`authority`] and [`confidential`].
 macro_rules! assert_not_impl {
     ($ty:ty: $($tr:path),+ $(,)?) => {
         const _: fn() = || {
@@ -260,5 +260,6 @@ macro_rules! assert_not_impl {
 }
 
 pub mod authority;
+pub mod confidential;
 pub mod duration;
 pub mod time;

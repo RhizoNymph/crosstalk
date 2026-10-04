@@ -23,7 +23,11 @@ fn request(system: &str, messages: &str) -> String {
 }
 
 fn bodies(system: &str, messages: &str) -> Vec<MessageBody> {
-    request_bodies(&normalize(&raw(&request(system, messages), Transport::Http, ok("{}"))).exchange)
+    request_bodies(&normalize(&raw(
+        &request(system, messages),
+        Transport::Http,
+        ok("{}"),
+    )))
 }
 
 fn result(id: &str, content: &str) -> ToolResult {
@@ -54,7 +58,7 @@ pub fn top_level_system_prompt_becomes_first_message() {
     );
     // The system field may follow the messages in the body.
     let late = r#"{"messages":[{"role":"user","content":"hi"}],"system":"Be brief.","model":"m"}"#;
-    let late = request_bodies(&normalize(&raw(late, Transport::Http, ok("{}"))).exchange);
+    let late = request_bodies(&normalize(&raw(late, Transport::Http, ok("{}"))));
     assert_eq!(
         late[0],
         MessageBody::System(vec![SystemPart::Text(text("Be brief."))])
@@ -130,7 +134,7 @@ pub fn unknown_block_kept_in_place() {
         Transport::Http,
         ok("{}"),
     ));
-    let bodies = request_bodies(&normalization.exchange);
+    let bodies = request_bodies(&normalization);
     let unknown = |kind: &str, raw: &str| Unknown {
         kind: kind.to_owned(),
         raw: CanonicalJson(raw.to_owned()),
@@ -166,7 +170,6 @@ pub fn unknown_block_kept_in_place() {
         ])
     );
     let kinds: Vec<&NormalizeWarning> = normalization
-        .exchange
         .warnings
         .iter()
         .filter(|warning| matches!(warning, NormalizeWarning::UnknownBlock { .. }))
@@ -192,7 +195,7 @@ const ORPHAN: &str = r#"[
 /// reported, never an error.
 pub fn orphan_tool_result_warns_and_is_kept() {
     let normalization = normalize(&raw(&request("", ORPHAN), Transport::Http, ok("{}")));
-    let bodies = request_bodies(&normalization.exchange);
+    let bodies = request_bodies(&normalization);
     assert_eq!(
         bodies[1],
         MessageBody::Tool(
@@ -204,7 +207,7 @@ pub fn orphan_tool_result_warns_and_is_kept() {
         )
     );
     assert_eq!(
-        normalization.exchange.warnings,
+        normalization.warnings,
         vec![NormalizeWarning::OrphanToolResult {
             call_id: "toolu_compacted".to_owned()
         }]
@@ -214,9 +217,7 @@ pub fn orphan_tool_result_warns_and_is_kept() {
         {"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"r"}]},
         {"role":"assistant","content":[{"type":"tool_use","id":"x","name":"Read","input":{}}]}
     ]"#;
-    let warnings = normalize(&raw(&request("", later), Transport::Http, ok("{}")))
-        .exchange
-        .warnings;
+    let warnings = normalize(&raw(&request("", later), Transport::Http, ok("{}"))).warnings;
     assert_eq!(
         warnings,
         vec![NormalizeWarning::OrphanToolResult {
@@ -235,9 +236,9 @@ pub fn increment_tool_results_do_not_warn() {
     };
     increment.request.harness.continuation = continuation.clone();
     let normalization = normalize(&increment);
-    assert!(normalization.exchange.warnings.is_empty());
-    assert_eq!(normalization.exchange.exchange.continuation, continuation);
-    assert_eq!(request_bodies(&normalization.exchange).len(), 2);
+    assert!(normalization.warnings.is_empty());
+    assert_eq!(normalization.exchange.continuation, continuation);
+    assert_eq!(request_bodies(&normalization).len(), 2);
 }
 
 /// Text keeps edge whitespace, NFD sequences, controls and escapes
@@ -253,7 +254,7 @@ pub fn text_with_edge_whitespace_and_nfd_kept() {
         Transport::Http,
         ok("{}"),
     ));
-    let bodies = request_bodies(&normalization.exchange);
+    let bodies = request_bodies(&normalization);
     assert_eq!(
         bodies[0],
         MessageBody::System(vec![SystemPart::Text(text(decoded))])
@@ -287,7 +288,7 @@ pub fn text_with_edge_whitespace_and_nfd_kept() {
     ]);
     let streamed = normalize(&raw(&request("", "[]"), Transport::Sse, ok(&stream)));
     assert_eq!(
-        response_parts(&streamed.exchange),
+        response_parts(&streamed),
         vec![AssistantPart::Text(text(decoded))]
     );
 }
@@ -318,7 +319,7 @@ pub fn dialect_tool_call_ids_kept_verbatim() {
             let mut exchange = raw(&request("", &messages), Transport::Http, ok(&response));
             exchange.request.harness.dialect = dialect;
             let normalization = normalize(&exchange);
-            let bodies = request_bodies(&normalization.exchange);
+            let bodies = request_bodies(&normalization);
             let MessageBody::Assistant(parts) = &bodies[0] else {
                 panic!("assistant first");
             };
@@ -327,12 +328,11 @@ pub fn dialect_tool_call_ids_kept_verbatim() {
             };
             assert_eq!(call.id, ToolCallId(id.to_owned()));
             assert_eq!(bodies[1], MessageBody::Tool(NonEmpty::new(result(id, "x"))));
-            let AssistantPart::ToolCall(answer) = &response_parts(&normalization.exchange)[0]
-            else {
+            let AssistantPart::ToolCall(answer) = &response_parts(&normalization)[0] else {
                 panic!("a call in the response");
             };
             assert_eq!(answer.id, ToolCallId(id.to_owned()));
-            assert!(normalization.exchange.warnings.is_empty());
+            assert!(normalization.warnings.is_empty());
         }
     }
 }

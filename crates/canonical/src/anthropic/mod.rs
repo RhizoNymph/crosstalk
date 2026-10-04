@@ -25,23 +25,13 @@ use crosstalk_spec::interfaces::l1_canonical::{NormalizeError, NormalizedExchang
 use crosstalk_spec::observed::client::Dialect;
 use crosstalk_spec::observed::exchange::WireProtocol;
 
-use crate::assemble::{self, MediaSink, Normalization};
+use crate::assemble::{self, MediaSink};
 
 pub use request::RequestError;
 
 /// The normalizer for [`WireProtocol::AnthropicMessages`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AnthropicMessages;
-
-impl AnthropicMessages {
-    /// Normalizes `raw`, returning the media blobs its messages reference
-    /// along with the normalized exchange. `Err` only when the request body
-    /// is not an Anthropic Messages request (or the exchange is not of this
-    /// protocol); the response never fails normalization.
-    pub fn normalize_with_media(&self, raw: &RawExchange) -> Result<Normalization, NormalizeError> {
-        normalize(raw)
-    }
-}
 
 impl Normalizer for AnthropicMessages {
     fn protocol(&self) -> WireProtocol {
@@ -55,12 +45,15 @@ impl Normalizer for AnthropicMessages {
     }
 
     fn normalize(&self, raw: &RawExchange) -> Result<NormalizedExchange, NormalizeError> {
-        normalize(raw).map(|normalization| normalization.exchange)
+        normalize(raw)
     }
 }
 
-/// Normalizes one Anthropic Messages exchange.
-pub fn normalize(raw: &RawExchange) -> Result<Normalization, NormalizeError> {
+/// Normalizes one Anthropic Messages exchange: the exchange, its messages,
+/// the media bytes they name and the warnings. `Err` only when the request
+/// body is not an Anthropic Messages request (or the exchange is not of
+/// this protocol); the response never fails normalization.
+pub fn normalize(raw: &RawExchange) -> Result<NormalizedExchange, NormalizeError> {
     if raw.meta.protocol != WireProtocol::AnthropicMessages
         || raw.request.harness.protocol != WireProtocol::AnthropicMessages
     {

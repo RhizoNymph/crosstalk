@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.normalized.decode-checked"
+statement = "Decoding a NormalizedExchange refuses one with a message whose hash is not its body's, a message held twice, a hash the exchange names but no message has, a message the exchange does not name, or media that is out of hash order, missing a blob a Media part names, holding a blob none names, or whose bytes are not its hash's."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A NormalizedExchange is what L1 writes to the blob store before it
+announces the exchange; the goldens that pin it are decoded back, and a
+decoded value with a dangling or forged reference would let a golden pass
+that the store could never serve. Its fields are public, so the check
+(NormalizedExchange::check) runs on decode, and the normalizer's property
+tests run it on every generated exchange.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_spec::tests::wire::observed::normalized::normalized_exchanges_refuse_what_check_refuses",
+  "crosstalk_spec::tests::wire::observed::normalized::check_refuses_a_message_under_another_hash",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

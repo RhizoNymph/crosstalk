@@ -29,8 +29,9 @@ layer crates take it only as a dev-dependency (`docs/features/workspace.md`).
   but only `anthropic/messages` exists.
 - TLS, HTTP/2 and the forward-proxy `CONNECT` path: the fakes speak plain
   HTTP/1.1.
-- Production hashing and canonical encoding: `build::message::content_hash`
-  is a deterministic stand-in, not L1's BLAKE3 over canonical JSON.
+- The canonical encoding itself: `build::message::content_hash` calls the
+  spec's (`crosstalk_spec::observed::message::encoding::hash`), so built
+  hashes are production hashes.
 - Simulation (virtual clock, fault schedules): `crosstalk-sim` (P1.3).
 - In-memory store implementations: `crosstalk-memory` (P2.3).
 
@@ -76,7 +77,10 @@ Ids::seeded(seed) ──&mut──▶ XBuilder::new(&mut ids)   every id allocat
 - `NormalizedExchangeBuilder` takes message bodies, hashes each with
   `content_hash`, keeps each distinct body once, and points the exchange's
   request and response at those hashes: the `NormalizedExchange` invariant
-  holds by construction.
+  holds by construction, and `NormalizedExchange::check` passes for
+  bodies without `Media` parts (its `media` is empty; a test that needs
+  media blobs adds them itself). Its default usage reports no cache reads
+  and `Some(0)` cache writes.
 
 ### Corpus
 

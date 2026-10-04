@@ -1,11 +1,14 @@
 //! Observed facts on the wire: exchanges and their client context
 //! ([`exchange`]), agent identity, harness claims and the merge log
 //! ([`identity`]), and the ingest bus events that carry them, each inside a
-//! full `Envelope` ([`ingest`]). Goldens in `golden/observed/`.
+//! full `Envelope` ([`ingest`]); and the normalized exchange L1 hands its
+//! capture task, in process only ([`normalized`]). Goldens in
+//! `golden/observed/`.
 
 mod exchange;
 mod identity;
 mod ingest;
+mod normalized;
 
 use super::{ULID_A, ULID_B, ULID_C, id};
 use crate::ids::{AgentId, MergeId, MessageHash, OperatorId};

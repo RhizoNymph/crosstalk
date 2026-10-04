@@ -1,119 +1,120 @@
 {
   "exchange": {
-    "continuation": {
-      "type": "full_history"
-    },
     "meta": {
+      "id": "01M3TC5H00000001R000000003",
+      "protocol": "anthropic_messages",
+      "transport": "sse",
+      "model": "claude-opus-5-5",
       "client": {
-        "account": null,
-        "class": "main",
-        "credential": {
-          "hash": {
-            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff",
-            "key": 1
-          },
-          "scheme": "api_key"
-        },
-        "harness": {
-          "family": "claude_code",
-          "user_agent": "claude-cli/2.1.282 (external, cli)",
-          "version": "2.1.282"
-        },
-        "ids": {
-          "agent": null,
-          "parent_agent": null,
-          "session": "01m3tc5h00000001r000000001"
-        },
         "ingress": {
+          "type": "reverse_proxy",
           "data": {
             "route": "anthropic"
-          },
-          "type": "reverse_proxy"
+          }
         },
-        "previous_digests": null,
         "upstream": {
           "id": "anthropic",
           "kind": {
+            "type": "vendor_api",
             "data": {
               "type": "anthropic"
-            },
-            "type": "vendor_api"
+            }
           }
-        }
+        },
+        "credential": {
+          "scheme": "api_key",
+          "hash": {
+            "key": 1,
+            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff"
+          }
+        },
+        "account": null,
+        "previous_digests": null,
+        "harness": {
+          "family": "claude_code",
+          "version": "2.1.282",
+          "user_agent": "claude-cli/2.1.282 (external, cli)"
+        },
+        "ids": {
+          "session": "01m3tc5h00000001r000000001",
+          "agent": null,
+          "parent_agent": null
+        },
+        "class": "main"
       },
-      "id": "01M3TC5H00000001R000000003",
-      "model": "claude-opus-5-5",
-      "protocol": "anthropic_messages",
-      "started_at": "2026-10-01T00:00:00.000000Z",
-      "transport": "sse"
+      "started_at": "2026-10-01T00:00:00.000000Z"
     },
-    "outcome": {
-      "data": {
-        "finished_at": "2026-10-01T00:00:03.000000Z",
-        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
-        "response": "ba4c7c766b6991fdf770095a868e36708366d60015d46f4aa4941d8954ec7114",
-        "response_id": "msg_01ll3IHL1AlC2XvELX0HvlTw",
-        "stop": "end_turn",
-        "usage": {
-          "cache_read": 2950,
-          "input": 2971,
-          "output": 15,
-          "reasoning": null
-        }
-      },
-      "type": "completed"
+    "continuation": {
+      "type": "full_history"
     },
     "request": [
       "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
       "7aa7d7dac3e2dbf09568d50cca554c4744d61d28da7b465dd7698216044093a5"
-    ]
+    ],
+    "outcome": {
+      "type": "completed",
+      "data": {
+        "response": "ba4c7c766b6991fdf770095a868e36708366d60015d46f4aa4941d8954ec7114",
+        "response_id": "msg_01ll3IHL1AlC2XvELX0HvlTw",
+        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
+        "finished_at": "2026-10-01T00:00:03.000000Z",
+        "stop": "end_turn",
+        "usage": {
+          "input": 2971,
+          "output": 15,
+          "cache_read": 2950,
+          "cache_write": 0,
+          "reasoning": null
+        }
+      }
+    }
   },
-  "media": [],
   "messages": [
     {
+      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
       "body": {
+        "type": "system",
         "data": [
           {
-            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;",
-            "type": "text"
+            "type": "text",
+            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;"
           },
           {
-            "data": "You are Claude Code, Anthropic's official CLI for Claude.",
-            "type": "text"
+            "type": "text",
+            "data": "You are Claude Code, Anthropic's official CLI for Claude."
           },
           {
-            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>",
-            "type": "text"
+            "type": "text",
+            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>"
           }
-        ],
-        "type": "system"
-      },
-      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105"
+        ]
+      }
     },
     {
+      "hash": "7aa7d7dac3e2dbf09568d50cca554c4744d61d28da7b465dd7698216044093a5",
       "body": {
+        "type": "user",
         "data": [
           {
-            "data": "Find where the request log is parsed. Report file paths only.",
-            "type": "text"
+            "type": "text",
+            "data": "Find where the request log is parsed. Report file paths only."
           }
-        ],
-        "type": "user"
-      },
-      "hash": "7aa7d7dac3e2dbf09568d50cca554c4744d61d28da7b465dd7698216044093a5"
+        ]
+      }
     },
     {
+      "hash": "ba4c7c766b6991fdf770095a868e36708366d60015d46f4aa4941d8954ec7114",
       "body": {
+        "type": "assistant",
         "data": [
           {
-            "data": "The request log is parsed in src/log/parse.rs.",
-            "type": "text"
+            "type": "text",
+            "data": "The request log is parsed in src/log/parse.rs."
           }
-        ],
-        "type": "assistant"
-      },
-      "hash": "ba4c7c766b6991fdf770095a868e36708366d60015d46f4aa4941d8954ec7114"
+        ]
+      }
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "media": []
 }

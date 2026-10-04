@@ -20,7 +20,7 @@ fn whole(content: &str, stop_reason: &str) -> RawResponse {
 }
 
 fn stop_of(raw: &crosstalk_spec::interfaces::l0_ingress::RawExchange) -> StopReason {
-    match normalize(raw).exchange.exchange.outcome {
+    match normalize(raw).exchange.outcome {
         ExchangeOutcome::Completed { stop, .. } => stop,
         other => panic!("completed: {other:?}"),
     }
@@ -36,13 +36,13 @@ pub fn error_status_normalizes_to_upstream_failure() {
             partial_response,
             failure,
             ..
-        } = &normalization.exchange.exchange.outcome
+        } = &normalization.exchange.outcome
         else {
             panic!("{name} failed");
         };
         assert_eq!(*failure, ExchangeFailure::Upstream { status });
         assert_eq!(*partial_response, None);
-        assert!(!normalization.exchange.exchange.request.is_empty());
+        assert!(!normalization.exchange.request.is_empty());
     }
     // Even an error status whose body looks like a message.
     let body = whole(r#"[{"type":"text","text":"not output"}]"#, "end_turn");
@@ -55,21 +55,21 @@ pub fn error_status_normalizes_to_upstream_failure() {
         RawResponse::Complete { status: 503, body },
     ));
     assert!(matches!(
-        normalization.exchange.exchange.outcome,
+        normalization.exchange.outcome,
         ExchangeOutcome::Failed {
             partial_response: None,
             failure: ExchangeFailure::Upstream { status: 503 },
             ..
         }
     ));
-    assert_eq!(normalization.exchange.messages.len(), 1, "only the request");
+    assert_eq!(normalization.messages.len(), 1, "only the request");
 }
 
 /// A failed exchange keeps its whole request whatever its partial bytes
 /// hold: garbage, cut events, invalid UTF-8.
 pub fn failed_exchange_keeps_request_with_bad_partial_body() {
     let (_, reference) = case("tool_result_followup");
-    let expected = request_bodies(&normalize(&reference).exchange);
+    let expected = request_bodies(&normalize(&reference));
     let partials: [&[u8]; 4] = [
         b"",
         b"\xff\xfe garbage",
@@ -91,9 +91,9 @@ pub fn failed_exchange_keeps_request_with_bad_partial_body() {
                     partial_body: partial.to_vec(),
                 };
                 let normalization = normalize(&raw);
-                assert_eq!(request_bodies(&normalization.exchange), expected);
+                assert_eq!(request_bodies(&normalization), expected);
                 assert!(matches!(
-                    normalization.exchange.exchange.outcome,
+                    normalization.exchange.outcome,
                     ExchangeOutcome::Failed { partial_response: None, failure: f, .. } if f == failure
                 ));
             }
@@ -121,7 +121,7 @@ pub fn garbled_200_body_is_unparseable_failure() {
     for (transport, body) in cases {
         let normalization = normalize(&raw(USER_TURN, transport, ok(body)));
         assert_eq!(
-            normalization.exchange.exchange.outcome,
+            normalization.exchange.outcome,
             ExchangeOutcome::Failed {
                 partial_response: None,
                 first_chunk_at: Some(crosstalk_testkit::time::millis(400)),
@@ -130,7 +130,7 @@ pub fn garbled_200_body_is_unparseable_failure() {
             },
             "{body}"
         );
-        assert_eq!(normalization.exchange.exchange.request.len(), 1);
+        assert_eq!(normalization.exchange.request.len(), 1);
     }
 }
 
@@ -193,11 +193,11 @@ pub fn redacted_thinking_kept_verbatim() {
     let expected = vec![AssistantPart::Reasoning(Reasoning::Opaque {
         signature: payload.to_owned(),
     })];
-    assert_eq!(response_parts(&normalization.exchange), expected);
+    assert_eq!(response_parts(&normalization), expected);
     let echo = format!(
         r#"{{"model":"m","messages":[{{"role":"user","content":"hi"}},{{"role":"assistant","content":[{block}]}}]}}"#
     );
-    let echoed = request_bodies(&normalize(&raw(&echo, Transport::Http, ok("{}"))).exchange);
+    let echoed = request_bodies(&normalize(&raw(&echo, Transport::Http, ok("{}"))));
     assert_eq!(echoed[1], MessageBody::Assistant(expected));
 }
 
@@ -214,7 +214,7 @@ const SEARCH: &str = r#"[
 /// a harness's tool is `Client`.
 pub fn server_tool_use_marked_server() {
     let normalization = normalize(&raw(USER_TURN, Transport::Http, whole(SEARCH, "tool_use")));
-    let executions: Vec<(String, ToolExecution)> = response_parts(&normalization.exchange)
+    let executions: Vec<(String, ToolExecution)> = response_parts(&normalization)
         .into_iter()
         .filter_map(|part| match part {
             AssistantPart::ToolCall(call) => Some((call.id.0, call.execution)),
@@ -234,9 +234,11 @@ pub fn server_tool_use_marked_server() {
 /// A web search result follows its call as a `ServerToolResult` naming it;
 /// a result with no earlier server call is kept as `Unknown`.
 pub fn anthropic_web_search_result_follows_its_call() {
-    let parts = response_parts(
-        &normalize(&raw(USER_TURN, Transport::Http, whole(SEARCH, "tool_use"))).exchange,
-    );
+    let parts = response_parts(&normalize(&raw(
+        USER_TURN,
+        Transport::Http,
+        whole(SEARCH, "tool_use"),
+    )));
     let AssistantPart::ServerToolResult(search) = &parts[2] else {
         panic!("a server result: {parts:?}");
     };
@@ -261,14 +263,11 @@ pub fn anthropic_web_search_result_follows_its_call() {
         {"type":"web_search_tool_result","tool_use_id":"toolu_02","content":[]},
         {"type":"web_search_tool_result","tool_use_id":"srvtoolu_01","content":{"type":"web_search_tool_result_error","error_code":"unavailable"}}
     ]"#;
-    let parts = response_parts(
-        &normalize(&raw(
-            USER_TURN,
-            Transport::Http,
-            whole(unpaired, "end_turn"),
-        ))
-        .exchange,
-    );
+    let parts = response_parts(&normalize(&raw(
+        USER_TURN,
+        Transport::Http,
+        whole(unpaired, "end_turn"),
+    )));
     assert!(
         matches!(&parts[0], AssistantPart::Unknown(unknown) if unknown.kind == "web_search_tool_result")
     );
@@ -306,7 +305,7 @@ pub fn malformed_arguments_kept_as_invalid() {
             .chunks(2)
             .map(|pair| (pair[0].as_str(), pair[1].as_str()))
             .collect();
-        let parts = response_parts(&normalize(&streamed(&sse(&pairs))).exchange);
+        let parts = response_parts(&normalize(&streamed(&sse(&pairs))));
         match parts.as_slice() {
             [AssistantPart::ToolCall(call)] => call.arguments.clone(),
             other => panic!("one call: {other:?}"),
@@ -348,7 +347,7 @@ pub fn error_event_keeps_partial_response() {
     for raw in [flagged, complete] {
         let normalization = normalize(&raw);
         assert!(matches!(
-            normalization.exchange.exchange.outcome,
+            normalization.exchange.outcome,
             ExchangeOutcome::Failed {
                 failure: ExchangeFailure::UpstreamErrorEvent,
                 partial_response: Some(_),
@@ -356,7 +355,7 @@ pub fn error_event_keeps_partial_response() {
             }
         ));
         assert_eq!(
-            response(&normalization.exchange).map(|message| &message.body),
+            response(&normalization).map(|message| &message.body),
             Some(&MessageBody::Assistant(vec![AssistantPart::Text(Text(
                 "The build pipeline has three stages:".to_owned()
             ))]))
@@ -375,7 +374,7 @@ pub fn error_event_keeps_partial_response() {
     ]);
     let normalization = normalize(&streamed(&cut));
     assert!(matches!(
-        normalization.exchange.exchange.outcome,
+        normalization.exchange.outcome,
         ExchangeOutcome::Failed {
             failure: ExchangeFailure::StreamTruncated,
             partial_response: Some(_),

@@ -4,16 +4,16 @@
 (`spec/types/interfaces/l1_canonical.rs`) for the Anthropic Messages wire
 protocol and every dialect of it, roadmap item P2.5. It turns a
 `RawExchange` (what the proxy hands capture) into a `NormalizedExchange`:
-the canonical `Exchange`, its messages, and the warnings the spec defines.
+the canonical `Exchange`, its messages, the media bytes they name, and the
+warnings the spec defines.
 Normalization is a set of pure functions; writing the bodies to the blob
 store is a separate async step through the spec's `BlobStore`.
 
 ## Scope
 
-- The canonical encoding of a message body and its `MessageHash` (the
-  BLAKE3 of the encoding, the key the blob store computes), with a strict
-  decoder (`encoding`).
-- JSON with exact numbers and the spec's `CanonicalJson` text (`json`).
+- Hashing every body with the spec's canonical encoding, and reading
+  provider JSON with the spec's exact-number JSON (both moved to the spec
+  by P0.7: [spec_primitives](spec_primitives.md)).
 - Server-sent events parsed from a whole body (`sse`).
 - The Anthropic Messages normalizer (`anthropic`): request bodies (system
   prompt as a string or blocks, messages, role splitting, tool calls and
@@ -22,9 +22,9 @@ store is a separate async step through the spec's `BlobStore`.
   interleaved deltas, pings, `message_delta` usage and mid-stream errors),
   the outcome (stop reason, usage, failures), and the warnings.
 - Assembling the `NormalizedExchange` (`assemble`): hashes, one copy of
-  each body, the exchange's references, warnings.
-- Storing a normalization's message bodies and media through `BlobStore`
-  (`capture::store`).
+  each body, the exchange's references, the media blobs, warnings.
+- Storing a normalized exchange's message bodies and media through
+  `BlobStore` (`capture::store`).
 
 ## Non-scope
 
@@ -33,10 +33,10 @@ store is a separate async step through the spec's `BlobStore`.
 - The capture task: receiving `RawExchange`s from L0, calling `store`, and
   publishing `ExchangeCaptured` only after it succeeds
   (`canonical.capture.blobs-before-event`, roadmap P3).
-- Credential hashing, deployment secrets and ULID generation
-  (`canonical.ids.*`): their evidence names this crate, but L0 and every
-  minting layer need them and layer crates cannot depend on each other,
-  so they belong in the spec or a shared crate (see Gaps).
+- The encoding, canonical JSON, credential hashing, deployment secrets and
+  ULID generation: the spec's ([spec_primitives](spec_primitives.md)),
+  with their invariants' evidence (`canonical.encoding.*`,
+  `canonical.json.*` vectors and properties, `canonical.ids.*`).
 - A fuzz harness (`canonical.normalize.never-panics`): the properties
   feed arbitrary bytes to the response side, but no coverage-guided
   target exists yet.
@@ -60,54 +60,27 @@ RawExchange ──anthropic::normalize──────────────
                                   blocks::assistant_parts ─▶ ResponseRead       │
   assemble::assemble ◀──────────────────────────────────────────────────────────┘
       warnings (unknown blocks, orphan tool results in a full history)
-      MessageSet: encoding::message(body) = { hash: BLAKE3(encode(body)), body }, once each
+      MessageSet: Message::new(body) = { hash: BLAKE3(encode(body)), body }, once each
       Exchange { meta, continuation (copied), request: [hash], outcome }
-  ─▶ Normalization { exchange: NormalizedExchange, media: [MediaBlob] }
+  ─▶ NormalizedExchange { exchange, messages, warnings, media: [MediaBlob] (hash order) }
 
-capture::store(blobs, &normalization)   (async; awaited by the capture task)
+capture::store(blobs, &normalized)   (async; awaited by the capture task)
   for each message: blobs.put(encode(body)) == message.hash, else HashMismatch
   for each media blob: blobs.put(bytes) == hash
 ```
 
-`AnthropicMessages` implements `Normalizer` (its `normalize` returns the
-`NormalizedExchange`), and `normalize_with_media` also returns the media
-bytes, which `NormalizedExchange` has no place for.
+`AnthropicMessages` implements `Normalizer`; its `normalize` returns the
+whole `NormalizedExchange`, media included, which passes the spec's
+`NormalizedExchange::check`.
 
-### The canonical encoding
+### The encoding and canonical JSON
 
-A body's encoding is the canonical JSON text (sorted keys, no whitespace,
-RFC 8785 escapes) of its JSON shape, which follows the wire contract's
-conventions:
-
-| Body or part | JSON |
-| --- | --- |
-| `MessageBody` | `{"type": "system" \| "user" \| "assistant" \| "tool", "data": [parts]}` (a tool body's items are its results) |
-| `Text`, `Reasoning::Visible` | `{"type": "text", "data": "<text>"}`, `{"type": "reasoning", "data": {"type": "visible", "data": "<text>"}}` |
-| `Reasoning::Opaque` | `{"type": "reasoning", "data": {"type": "opaque", "data": {"signature": ".."}}}` |
-| `Media` | `{"type": "media", "data": {"blob": "<hex>", "kind": "image" \| "audio" \| "document"}}` |
-| `Unknown` | `{"type": "unknown", "data": {"kind": "..", "raw": "<canonical JSON text>"}}` |
-| `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": ".."}, "execution": "client" \| "server", "id": "..", "name": ".."}}` |
-| `ToolResult` | `{"call_id": "..", "content": [{"type": "text" \| "media" \| "unknown", "data": ..}], "outcome": "success" \| "error"}` |
-
-Canonical JSON inside a body travels as a string, so its exact numbers
-survive. `decode` accepts only what `encode` writes: canonical bytes of a
-valid body, with canonical inner JSON and a non-empty tool body. The
-pinned vectors are `crates/canonical/tests/golden/encoding/vectors.json`.
-
-### Canonical JSON
-
-`json::Json` keeps numbers as exact decimals (`json::Number`:
-`±digits × 10^exponent`, no leading or trailing zero), so `1`, `1.0` and
-`10e-1` are one value and an id beyond 2^53 keeps every digit. The text is
-RFC 8785's: members sorted by UTF-16 code units, `JSON.stringify`
-escapes, no whitespace; numbers in ECMAScript's `Number::toString` layout
-applied to the exact decimal (plain up to 21 integer digits, `0.000…` down
-to 10^-7, exponential beyond: `1e+30`, `1.5e-7`). The parser is strict
-(RFC 8259, no unpaired surrogate escapes, at most 256 levels, exponents of
-at most 30 digits), and a repeated member keeps its last value as
-`JSON.parse` does. `serde_json` is not used for this because exact numbers
-would need its `arbitrary_precision` feature, which changes number
-handling for every crate in the workspace.
+Both are the spec's (`crosstalk_spec::observed::message::{encoding,
+json}`), documented in [spec_primitives](spec_primitives.md): a body's
+encoding is the canonical JSON of its wire-convention shape, its hash the
+BLAKE3 of that, and `json::Json` keeps numbers exact. The normalizer
+parses provider bodies with `Json::parse_bytes`, writes `CanonicalJson`
+with `Json::canonical`, and hashes with `Message::new`.
 
 ### Block mapping
 
@@ -116,7 +89,7 @@ handling for every crate in the workspace.
 | `text` | `Text` (`citations` dropped) |
 | `image`, `document` with a `base64` source | `Media`; the decoded bytes are their own blob, hashed with BLAKE3 |
 | `tool_result` in a user turn | a `ToolResult` in a `Tool` message: `content` a string, or `text` / `image` / `document` items; `is_error: true` is `Error` |
-| `thinking` | `Reasoning::Visible` (the signature is dropped) |
+| `thinking` | `Reasoning::Visible`, its `signature` verbatim (an empty or missing one is `None`) |
 | `redacted_thinking` | `Reasoning::Opaque { signature: data }`, verbatim |
 | `tool_use` | `ToolCall`, `Client`, arguments the canonical JSON of `input` |
 | `server_tool_use`, `mcp_tool_use` | `ToolCall`, `Server` |
@@ -178,10 +151,12 @@ the proxy recorded none.
 | `input` | `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`: every prompt token, as OpenAI's `prompt_tokens` counts them |
 | `output` | `output_tokens`, the last value (`message_delta` counts are cumulative) |
 | `cache_read` | `cache_read_input_tokens` |
+| `cache_write` | `Some(cache_creation_input_tokens)` |
 | `reasoning` | `None`: thinking tokens are inside `output_tokens` |
 
-Cache writes have no field of their own, so they count only inside
-`input`. A missing or null cache count is 0. Usage is `None` when
+Cache writes count in `input` and are reported apart as `cache_write`
+(`canonical.usage.cache-writes-reported`). A missing or null cache count is
+0. Usage is `None` when
 `input_tokens` or `output_tokens` is missing or any count is not a
 non-negative integer that fits a `u32`. A stream's usage is
 `message_start`'s with each `message_delta`'s fields laid over it.
@@ -206,16 +181,10 @@ normalization.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/canonical/Cargo.toml` | Manifest: spec, base64, blake3, serde, serde_json, thiserror, tracing; dev: testkit, transport (`MemoryBlobStore`), proptest, tokio | — |
-| `src/lib.rs` | Crate doc, modules, re-exports | `AnthropicMessages`, `Normalization`, `MediaBlob`, `store`, `StoreError` |
-| `src/json/mod.rs` | JSON values with exact numbers; canonical text | `Json` (`parse`, `parse_bytes`, `get`, `kind`, `with`, `canonical`), `canonicalize`, `JsonError`, `MAX_DEPTH` |
-| `src/json/number.rs` | Exact decimals and their canonical spelling | `Number` (`as_u64`, `canonical`), `MAX_EXPONENT_DIGITS` |
-| `src/json/parse.rs` | The strict parser | `JsonError` |
-| `src/json/write.rs` | The canonical writer (UTF-16 member order, escapes) | — |
-| `src/encoding/mod.rs` | A body's canonical encoding and hash | `encode`, `decode`, `hash`, `hash_bytes`, `message`, `DecodeError` |
-| `src/encoding/wire.rs` | The serde mirror of the message types (private) | — |
+| `crates/canonical/Cargo.toml` | Manifest: spec, base64, thiserror, tracing; dev: testkit, transport (`MemoryBlobStore`), blake3 (an independent hash oracle), proptest, serde, serde_json, tokio | — |
+| `src/lib.rs` | Crate doc, modules, re-exports | `AnthropicMessages`, `store`, `StoreError` |
 | `src/sse.rs` | Server-sent events from a whole body | `parse`, `SseEvent`, `SseBody` |
-| `src/assemble.rs` | Building the normalization; warnings; media | `Normalization`, `MediaBlob` |
+| `src/assemble.rs` | Building the normalized exchange; warnings; media (private) | — |
 | `src/capture.rs` | Storing bodies and media through `BlobStore` | `store`, `StoreError` |
 | `src/anthropic/mod.rs` | The normalizer | `AnthropicMessages`, `normalize` |
 | `src/anthropic/request.rs` | Request bodies to messages | `RequestError` |
@@ -225,16 +194,18 @@ normalization.
 | `src/anthropic/usage.rs` | The usage mapping | — |
 | `src/tests/mod.rs` | The evidence entry points (`crosstalk_canonical::tests::<name>`) | — |
 | `src/tests/units/`, `src/tests/props.rs` | Unit and property bodies | — |
-| `src/tests/generate/` | Generators: JSON spellings, blocks, turns, requests, whole and streamed responses with random delta cuts, pings, interleaving and CRLF framing, message bodies | — |
+| `src/tests/generate/` | Generators: JSON spellings, blocks, turns, requests, whole and streamed responses with random delta cuts, pings, interleaving and CRLF framing | — |
 | `src/tests/golden.rs`, `src/tests/support.rs` | The golden harness; raw exchanges from bodies and corpus cases | — |
-| `tests/golden/anthropic/<case>.json` | Each captured corpus case's normalization | — |
-| `tests/golden/encoding/vectors.json` | The pinned encodings | — |
+| `tests/golden/anthropic/<case>.json` | Each captured corpus case's normalized exchange | — |
 
 Goldens are rewritten with `CROSSTALK_BLESS=1 cargo test -p
-crosstalk-canonical golden` (review the diff). A normalization golden is
-`{"exchange": <the spec's Exchange JSON>, "messages": [{"hash", "body"}],
-"warnings": [..], "media": [{"hash", "base64"}]}`, each body the message's
-encoding as JSON; checking also decodes the file back.
+crosstalk-canonical golden` (review the diff). A golden is the spec's JSON
+of the `NormalizedExchange` (`{"exchange", "messages": [{"hash", "body"}],
+"warnings", "media": [{"hash", "bytes"}]}`, each body in its encoding's
+shape, media bytes in hex; [observed](wire/observed.md)); checking also
+decodes the file through the spec's serde, which checks every hash and
+reference. The encoding's vectors are the spec's
+(`spec/types/tests/golden/encoding/vectors.json`).
 
 ## Invariants and constraints
 
@@ -248,35 +219,44 @@ encoding as JSON; checking also decodes the file back.
   invalid request body is an error.
 - Text, opaque reasoning, tool call ids and invalid argument text are kept
   byte for byte.
-- No `unwrap` or `expect` outside tests except the two infallible ones in
-  `encoding::encode`, each with its reason.
+- No `unwrap` or `expect` outside tests.
 - The crate is a layer crate: it depends on the spec and third-party
   crates only; testkit and transport are dev-dependencies.
 
-Implementation evidence in this crate now passes for: INV-47, 49, 50, 51,
-59, 60, 61, 62, 67, 68, 69, 70 (property; its OpenAI Chat units are P8),
-72, 73, 74, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 95, 96, 97, 98, 99.
-Pending: INV-48 (the capture task, P3), 53–58 (keyed hashing and ids, see
-Gaps), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
+Implementation evidence in this crate now passes for: INV-47, 51, 59
+(unit), 61, 62, 67, 68, 69, 70 (property; its OpenAI Chat units are P8),
+72, 73, 74, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 95, 96, 97, 98, 99,
+and the new `canonical.usage.cache-writes-reported` and
+`canonical.reasoning.signature-verbatim`. INV-49, 50, 53–56, 58, 59's
+property and 60 are the spec's now ([spec_primitives](spec_primitives.md)).
+Pending: INV-48 (the capture task, P3), 57 (cross-node secret agreement,
+L0), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
 
 ## Gaps found
 
-- **Decoding bodies outside L1.** Consumers in L3, L4 and L8 read message
-  bodies back from the blob store, but the encoding lives here and layer
-  crates cannot depend on each other, and the wire contract keeps the
-  message types free of serde. The decoder (`encoding::decode`) should
-  move into the spec, or a shared crate, before P4.
-- **Media bytes.** `NormalizedExchange` holds no media bytes, though a
-  `Media` part names a blob L1 must store; `Normalization` carries them.
+Closed by P0.7 ([spec_primitives](spec_primitives.md)):
+
+- **Decoding bodies outside L1.** The encoding, its strict decoder and the
+  canonical JSON moved to the spec, byte for byte (the vectors and the
+  corpus goldens passed unchanged against the moved code before the gap
+  fixes below changed them).
+- **Media bytes.** `NormalizedExchange` carries `media: Vec<MediaBlob>`;
+  the `Normalization` wrapper and `normalize_with_media` are gone.
+- **Cache writes.** `TokenUsage::cache_write`.
+- **The thinking signature.** `Reasoning::Visible` keeps it, and it is
+  hashed: echoes carry it unchanged.
+- **Goldens in a local shape.** `NormalizedExchange` has serde; the corpus
+  goldens are its JSON.
+- **`canonical.ids.*` placement.** The keyed hasher, `DeploymentSecret`
+  and the ULID generator are the spec's.
+
+Open:
+
 - **Unrepresentable content.** Media given by URL or Files API id has no
   bytes to hash, so it is kept as `Unknown`; web search results and web
   fetch documents have no `ToolResultContent` variant and are `Unknown`
-  items, so their text is not indexable. `TokenUsage` has no field for
-  cache writes.
+  items, so their text is not indexable.
 - **`cache_control` in `Unknown`.** The spec says an `Unknown` part holds
   the block's canonical JSON; the marker is dropped from it so that echo
   stability and request concatenation hold for messages with unknown
   blocks.
-- **`canonical.ids.*` placement.** The keyed hasher, `DeploymentSecret` and
-  ULID generators are needed by L0 and every minting layer, which cannot
-  depend on this crate.

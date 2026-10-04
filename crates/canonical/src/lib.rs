@@ -4,14 +4,16 @@
 //! Implements [`crosstalk_spec::interfaces::l1_canonical`]:
 //!
 //! - [`AnthropicMessages`] is the [`Normalizer`] for Anthropic Messages, as
-//!   pure functions: a [`RawExchange`] in, a [`NormalizedExchange`] (or a
-//!   [`Normalization`], which adds the media bytes) out, with streaming
+//!   pure functions: a [`RawExchange`] in, a [`NormalizedExchange`] (its
+//!   messages and the media bytes they name included) out, with streaming
 //!   reassembly, tool calls and results, system prompts, cache control and
 //!   thinking blocks.
-//! - [`encoding`] is the canonical encoding of a message body and its
-//!   [`MessageHash`] (BLAKE3 of the encoding, the blob store's key).
-//! - [`json`] parses JSON with exact numbers and writes [`CanonicalJson`].
-//! - [`capture::store`] writes a normalization's bodies through the spec's
+//! - Message bodies are hashed with the spec's canonical encoding
+//!   ([`encoding`]: a [`MessageHash`] is the BLAKE3 of it, the blob
+//!   store's key), and provider JSON is read with the spec's exact-number
+//!   [`json`], which writes [`CanonicalJson`].
+//! - [`capture::store`] writes a normalized exchange's bodies and media
+//!   through the spec's
 //!   [`BlobStore`].
 //!
 //! Normalization reads no clock, randomness or node state and iterates no
@@ -26,17 +28,16 @@
 //! [`NormalizedExchange`]: crosstalk_spec::interfaces::l1_canonical::NormalizedExchange
 //! [`MessageHash`]: crosstalk_spec::ids::MessageHash
 //! [`CanonicalJson`]: crosstalk_spec::observed::message::CanonicalJson
+//! [`encoding`]: crosstalk_spec::observed::message::encoding
+//! [`json`]: crosstalk_spec::observed::message::json
 //! [`BlobStore`]: crosstalk_spec::interfaces::l2_transport::BlobStore
 
 pub mod anthropic;
 mod assemble;
 pub mod capture;
-pub mod encoding;
-pub mod json;
 pub mod sse;
 
 pub use anthropic::AnthropicMessages;
-pub use assemble::{MediaBlob, Normalization};
 pub use capture::{StoreError, store};
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ mod bus;
 mod clock;
 mod driver;
 mod every_fault;
+mod ids;
 mod rng;
 mod store;
 mod toy_bus;

@@ -37,10 +37,12 @@ Overview:
     content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
-    NormalizedExchange, with streaming reassembly, the canonical message
-    encoding and its BLAKE3 hash, exact-number canonical JSON, and a step
-    that stores the bodies through BlobStore (canonical). The other crates
-    are still empty.
+    NormalizedExchange (media bytes included), with streaming reassembly,
+    and a step that stores the bodies through BlobStore (canonical). The
+    primitives several layers share are in the spec (spec_primitives):
+    the canonical message encoding, its BLAKE3 hash and strict decoder,
+    exact-number canonical JSON, the keyed hasher and deployment secret,
+    and the ULID generator. The other crates are still empty.
 
   subsystems:
     spec: >
@@ -416,7 +418,8 @@ Features Index:
       supervises crashed nodes. The run's trace is hashed for determinism,
       and a failure reports its seed and step (CROSSTALK_SIM_SEED reruns
       it, CROSSTALK_SIM_SEEDS sweeps). The spec gained the Clock trait and
-      SystemClock it builds on.
+      SystemClock it builds on; SimRng is the spec's RandomSource, so ULID
+      generators draw from the run's seed.
     entry_points:
       - crates/sim/src/lib.rs
       - crates/sim/src/driver.rs
@@ -432,7 +435,8 @@ Features Index:
       resources, accesses, channels, exchanges, normalized exchanges,
       content matches, co-accesses, transmissions in every state, alerts,
       rules, topic version histories and bus envelopes, each building
-      through the spec's checked constructors; a synthetic Anthropic
+      through the spec's checked constructors (message hashes are the
+      spec's real encoding hash); a synthetic Anthropic
       Messages corpus (request.http, response.http, meta.json per case,
       Claude Code's headers and body shape, streaming and not, tool use,
       thinking, cache control, mid-stream and HTTP errors, non-generation
@@ -537,19 +541,41 @@ Features Index:
       deltas, pings, message_delta usage, partial input_json, an error
       event mid-stream giving the partial response plus the failure), to
       the canonical Exchange, its messages and warnings (unknown blocks,
-      orphan tool results in a full history). The canonical encoding of a
-      message body (canonical JSON of its wire-convention shape) whose
-      BLAKE3 is the MessageHash and the blob store's key, with a strict
-      decoder; JSON with exact numbers and RFC 8785 text; token usage with
-      cache reads inside input; store() writes every body and media blob
-      through BlobStore. Goldens over the testkit corpus, properties over
-      generated requests and streams.
+      orphan tool results in a full history) and the media bytes they
+      name. Bodies are hashed and provider JSON read with the spec's
+      encoding and exact-number JSON (spec_primitives); thinking keeps its
+      signature; token usage reports cache reads and cache writes as parts
+      of input; store() writes every body and media blob through
+      BlobStore. Goldens (the spec's NormalizedExchange JSON) over the
+      testkit corpus, properties over generated requests and streams.
     entry_points:
       - crates/canonical/src/lib.rs
       - crates/canonical/src/anthropic/mod.rs
-      - crates/canonical/src/encoding/mod.rs
-      - crates/canonical/src/json/mod.rs
       - crates/canonical/src/capture.rs
-    depends_on: [type_spec, testkit, transport, workspace]
+    depends_on: [type_spec, spec_primitives, testkit, transport, workspace]
     doc: docs/features/canonical.md
+  spec_primitives:
+    description: >
+      Roadmap P0.7: what several layers must compute identically, moved
+      from crosstalk-canonical into the spec because layer crates cannot
+      depend on each other. The canonical encoding of a message body
+      (canonical JSON of its wire-convention shape, also MessageBody's
+      serde form), its BLAKE3 MessageHash, and a decoder that accepts
+      exactly the bytes encode writes; JSON with exact numbers and RFC 8785
+      text; MediaBlob (media bytes under their hash) and the
+      NormalizedExchange that now carries them, with serde and a check
+      applied on decode; the DeploymentSecret (never serialized, cloned or
+      shown) and the KeyedHasher that alone reads it, with rotation
+      overlaps; the ULID generator over the injected Clock and a
+      RandomSource, monotonic per generator. TokenUsage gained cache_write
+      (checked: cache counts within input) and Reasoning::Visible a hashed
+      signature.
+    entry_points:
+      - spec/types/observed/message/encoding.rs
+      - spec/types/observed/message/json.rs
+      - spec/types/ids/secret.rs
+      - spec/types/ids/mint.rs
+      - spec/types/interfaces/l1_canonical.rs
+    depends_on: [type_spec, wire_contract, sim]
+    doc: docs/features/spec_primitives.md
 ```
