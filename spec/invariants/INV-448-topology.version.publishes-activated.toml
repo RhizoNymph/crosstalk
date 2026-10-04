@@ -1,17 +1,19 @@
 [invariant]
 id = "topology.version.publishes-activated"
-statement = "L7 publishes TopicVersionActivated for a version, naming the version queries read before as previous, exactly once per switch and only after activate has switched graph and series queries to it."
+statement = "L7 publishes TopicVersionActivated for a version, naming the version queries read before as previous, exactly once per switch, only after EdgeStore::activate has switched graph and series queries to it, and never for a version older than the active one."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 The topic catalog marks a version Active, and every older one Superseded,
-from this event. Publishing before the switch would let the UI's version
-list call a version active while graphs still read the previous one;
-not publishing would leave it Ready forever.
+from this event, and the live feed forwards it so clients refetch the
+topology. Publishing before the switch would let the UI's version list
+call a version active while graphs still read the previous one, and a
+client refetching on the event would get the old graph and never be told
+to refetch again; not publishing would leave the version Ready forever.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::activated_published_once_after_switch"
+dst = ["crosstalk::topology::dst::activated_published_once_after_switch", "crosstalk::topology::dst::version_activated_published_after_switch"]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

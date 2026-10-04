@@ -1,20 +1,22 @@
 [invariant]
 id = "surface.query.lists-match-filter"
-statement = "Every item on a page of QueryApi::channels, agents or alert_rules satisfies the request filter's matches, and every dead letter on a page of dead_letters belongs to the requested consumer group when one is named."
+statement = "Every item on a page of QueryApi::channels, agents, alert_rules or audit satisfies the request filter's matches, and every dead letter on a page of dead_letters belongs to the requested consumer group when one is named."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
 An operator working the unreviewed-channel queue or a stale-rule list acts
 on every row shown; a sanctioned channel in the unreviewed list invites a
-wrong decision. The filters' matches methods are the definition, so the SQL
-behind each list is checked against them. Completeness (no matching item is
-missed) is surface.page.traversal-exactly-once.
+wrong decision, and an audit query showing another operator's actions
+misattributes them. The filters' matches methods are the definition, so the
+SQL behind each list is checked against them. Completeness (no matching
+item is missed or repeated across pages, in sort-key order) is
+surface.page.traversal-exactly-once.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::list_filter_cases"
-property = "crosstalk::surface::tests::prop_list_pages_satisfy_filter"
+unit = ["crosstalk::surface::tests::list_filter_cases", "crosstalk_spec::tests::audit::audit_filter_combines_fields_with_and", "crosstalk::surface::tests::audit_pages_newest_first_without_gaps"]
+property = ["crosstalk::surface::tests::prop_list_pages_satisfy_filter", "crosstalk::surface::tests::prop_audit_pages_match_filter_model"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -61,7 +61,8 @@ Overview:
     topic-version activation back to L6 → L8 serves topology, time series,
     topic history, search, projections, lists and alerts, with the graph,
     search, projection and edge drill-down all filtered by one
-    TopologyFilter, and streams new alerts and changed edges, channels and
+    TopologyFilter, pages the audit log like any other list, and streams
+    new alerts and changed edges, channels and
     policies to the UI over SSE (resumable by cursor, with a resync marker
     when a cursor is too old). Operator actions flow back down: policy
     changes and channel promotion to L5, which records every policy
@@ -77,10 +78,10 @@ Features Index:
       (including clients, upstreams and credentials), derived inferences,
       aggregates (including time series and topic history), bus events and
       per-layer interfaces (including the query surface's paginated lists,
-      shared view filter and projection, the SSE live feed, the audit log
-      and channel policy history), with tests for the invariants checked at
-      runtime and one TOML file per invariant in spec/invariants. Harness and
-      server wire behavior it is
+      shared view filter and projection, the SSE live feed, the audit log,
+      channel policy history and operator actions with their permissions),
+      with tests for the invariants checked at runtime and one TOML file per
+      invariant in spec/invariants. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []

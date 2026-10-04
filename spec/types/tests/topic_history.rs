@@ -5,8 +5,8 @@ use crate::aggregates::edge::EdgeStats;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{
     CompletedFit, DuplicateTopic, FitRecord, InvalidHistory, InvalidLineage, InvalidLineageEntry,
-    InvalidVersionInfo, LineageEntry, LineageLink, RemapError, TopicLineage, TopicSize,
-    TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus, TopicVersionStatusKind,
+    InvalidVersionInfo, LineageEntry, LineageLink, RemapError, TopicLineage, TopicSize, TopicSizes,
+    TopicVersionHistory, TopicVersionInfo, TopicVersionStatus, TopicVersionStatusKind,
 };
 use crate::events::Subject;
 use crate::events::insight::InsightEvent;

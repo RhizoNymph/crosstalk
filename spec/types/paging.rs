@@ -10,6 +10,7 @@
 //! | alert rules | [`AlertRuleList`] | `AlertRuleId` |
 //! | dead letters | [`DeadLetterList`] | (`Envelope::id`, `ConsumerGroup`) |
 //! | transmissions on an edge | [`EdgeTransmissionList`] | (`Confirmed::at`, `TransmissionId`) |
+//! | the audit log | [`AuditList`] | (`AuditRecord::at`, `AuditId`) |
 //!
 //! A [`Cursor`] holds the sort key of the last item served, so the next page
 //! is "the items after that key that match the request" (keyset
@@ -51,6 +52,8 @@ list_marker! {
     DeadLetterList;
     /// `QueryApi::edge_transmissions` and `EdgeStore::transmissions`.
     EdgeTransmissionList;
+    /// `QueryApi::audit` and `AuditLog::query`.
+    AuditList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

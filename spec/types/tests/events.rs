@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use crate::aggregates::alert::{Alert, AlertState, AlertSubject};
+use crate::aggregates::alert::{Alert, AlertRevision, AlertState, AlertSubject};
 use crate::aggregates::edge::{EdgeKey, TopicSlot};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::Policy;
@@ -80,6 +80,17 @@ fn exchange_record() -> Exchange {
             stop: StopReason::EndTurn,
             usage: None,
         },
+    }
+}
+
+fn alert() -> Alert {
+    Alert {
+        id: AlertId::from_ulid(1),
+        rule: AlertRuleId::from_ulid(1),
+        subject: AlertSubject::Channel(channel(1)),
+        raised_at: at(9),
+        occurrences: 1,
+        state: AlertState::Open,
     }
 }
 
@@ -187,18 +198,22 @@ fn sample_events() -> Vec<BusEvent> {
             version: TopicModelVersion(1),
             transmissions: 1,
         }),
+        BusEvent::Insight(InsightEvent::TopicVersionActivated {
+            version: TopicModelVersion(1),
+            previous: TopicModelVersion(0),
+        }),
         BusEvent::Insight(InsightEvent::EdgeUpdated(
             EdgeKey::new(agent(1), agent(2), Route::Unobserved, slot, bucket)
                 .expect("different agents"),
         )),
-        BusEvent::Insight(InsightEvent::AlertOpened(Alert {
-            id: AlertId::from_ulid(1),
-            rule: AlertRuleId::from_ulid(1),
-            subject: AlertSubject::Channel(channel(1)),
-            raised_at: at(9),
-            occurrences: 1,
-            state: AlertState::Open,
-        })),
+        BusEvent::Insight(InsightEvent::AlertOpened(alert())),
+        BusEvent::Insight(InsightEvent::AlertChanged {
+            alert: Alert {
+                occurrences: 2,
+                ..alert()
+            },
+            revision: AlertRevision::OPENED.next().expect("2 fits"),
+        }),
         BusEvent::Insight(InsightEvent::PolicyChanged {
             channel: channel(1),
             policy: Policy::Unreviewed(None),
@@ -236,9 +251,76 @@ fn subjects_name_their_variant() {
             Subject::TransmissionDismissed,
             Subject::TransmissionClassified,
             Subject::TopicVersionReady,
+            Subject::TopicVersionActivated,
             Subject::EdgeUpdated,
             Subject::AlertOpened,
+            Subject::AlertChanged,
             Subject::PolicyChanged,
         ]
     );
+}
+
+/// Every subject, in declaration order. Adding a subject breaks the
+/// exhaustive match in `declared`, which is the reminder to list it here.
+fn every_subject() -> Vec<Subject> {
+    fn declared(subject: Subject) -> Subject {
+        match subject {
+            Subject::ExchangeCaptured
+            | Subject::ConversationDelta
+            | Subject::AgentSeen
+            | Subject::AgentMerged
+            | Subject::AgentUnmerged
+            | Subject::SpanOriginated
+            | Subject::SpanRelayed
+            | Subject::ContentMatched
+            | Subject::AccessRecorded
+            | Subject::ChannelDiscovered
+            | Subject::ChannelCrossAccessed
+            | Subject::DeclaredChannelUnused
+            | Subject::TransmissionConfirmed
+            | Subject::TransmissionSuspected
+            | Subject::TransmissionDismissed
+            | Subject::TransmissionClassified
+            | Subject::TopicVersionReady
+            | Subject::TopicVersionActivated
+            | Subject::EdgeUpdated
+            | Subject::AlertOpened
+            | Subject::AlertChanged
+            | Subject::PolicyChanged => subject,
+        }
+    }
+    [
+        Subject::ExchangeCaptured,
+        Subject::ConversationDelta,
+        Subject::AgentSeen,
+        Subject::AgentMerged,
+        Subject::AgentUnmerged,
+        Subject::SpanOriginated,
+        Subject::SpanRelayed,
+        Subject::ContentMatched,
+        Subject::AccessRecorded,
+        Subject::ChannelDiscovered,
+        Subject::ChannelCrossAccessed,
+        Subject::DeclaredChannelUnused,
+        Subject::TransmissionConfirmed,
+        Subject::TransmissionSuspected,
+        Subject::TransmissionDismissed,
+        Subject::TransmissionClassified,
+        Subject::TopicVersionReady,
+        Subject::TopicVersionActivated,
+        Subject::EdgeUpdated,
+        Subject::AlertOpened,
+        Subject::AlertChanged,
+        Subject::PolicyChanged,
+    ]
+    .into_iter()
+    .map(declared)
+    .collect()
+}
+
+#[test]
+fn samples_cover_every_subject() {
+    let sampled: HashSet<Subject> = sample_events().iter().map(BusEvent::subject).collect();
+    let every: HashSet<Subject> = every_subject().into_iter().collect();
+    assert_eq!(sampled, every);
 }

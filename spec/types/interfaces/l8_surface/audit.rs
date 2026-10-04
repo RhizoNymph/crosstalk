@@ -16,10 +16,9 @@
 //! actions. The per-channel record of policy decisions, including the ones
 //! config makes, is the channel's `PolicyHistory`.
 
-use std::num::NonZeroU32;
-
 use crate::ids::{AuditId, OperatorId};
 use crate::interfaces::l8_surface::{ActionKind, Caller, OperatorAction, Permission, QueryError};
+use crate::paging::{AuditList, Page, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
 /// What an accepted action did.
@@ -218,26 +217,6 @@ impl AuditFilter {
     }
 }
 
-/// The largest page the log returns; larger limits are clamped to it.
-pub const MAX_AUDIT_PAGE: NonZeroU32 = NonZeroU32::new(500).expect("500 is not zero");
-
-/// Records are returned newest first, by `(at, id)`. `before` is the last
-/// record of the previous page, so paging never skips or repeats a record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditQuery {
-    pub filter: AuditFilter,
-    pub before: Option<AuditId>,
-    pub limit: NonZeroU32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AuditPage {
-    /// Newest first, at most `min(limit, MAX_AUDIT_PAGE)`.
-    pub records: Vec<AuditRecord>,
-    /// The `before` of the next page; `None` on the last page.
-    pub next: Option<AuditId>,
-}
-
 /// Append-only storage for audit records. There is no update or delete.
 pub trait AuditLog {
     /// Append one record. Idempotent on `AuditRecord::id`: appending the
@@ -245,7 +224,14 @@ pub trait AuditLog {
     /// is `IdReused`.
     async fn append(&mut self, record: AuditRecord) -> Result<(), AuditError>;
 
-    async fn query(&self, query: &AuditQuery) -> Result<AuditPage, AuditError>;
+    /// The records `filter` matches, a page at a time with the cursors of
+    /// [`crate::paging`]: newest first by `(at, id)`, so records appended
+    /// during a traversal never shift a page.
+    async fn query(
+        &self,
+        filter: &AuditFilter,
+        page: &PageRequest<AuditList>,
+    ) -> Result<Page<AuditRecord, AuditList>, AuditError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +240,6 @@ pub enum AuditError {
         reason: String,
     },
     IdReused(AuditId),
-    /// `before` names no record.
-    UnknownCursor(AuditId),
+    /// A cursor the log did not issue, or issued for another filter.
+    InvalidCursor,
 }

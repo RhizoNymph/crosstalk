@@ -246,7 +246,10 @@ fn alert_rule_filter_matches_staleness_apart_from_status() {
     // A disabled stale rule is still stale.
     assert!(stale_only.matches(&watched(stale.clone(), RuleStatus::Disabled)));
     assert!(stale_only.matches(&watched(stale.clone(), RuleStatus::Enabled)));
-    assert!(!stale_only.matches(&watched(TopicWatch::Current(last.clone()), RuleStatus::Enabled)));
+    assert!(!stale_only.matches(&watched(
+        TopicWatch::Current(last.clone()),
+        RuleStatus::Enabled
+    )));
     let evaluating = AlertRuleFilter {
         statuses: vec![RuleStatus::Enabled],
         stale: Some(false),

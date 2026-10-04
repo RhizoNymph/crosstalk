@@ -16,7 +16,7 @@ spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids
 ├── support.rs             NonEmpty, NonBlank, Timestamp, TimeWindow, ByteRange, Similarity, Share
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked)
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), list markers (incl. AuditList)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
@@ -38,7 +38,7 @@ spec/types/
 │       └── channel/
 │           ├── mod.rs     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed
 │           ├── detection.rs DeclaredDetection, TrafficDetection
-│           └── policy.rs  Policy, PolicyDecision, PolicyHistory (checked), TrafficVerdict
+│           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits

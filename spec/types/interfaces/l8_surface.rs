@@ -22,8 +22,8 @@
 //! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
 //!
-//! **Lists.** Channels, agents, alert rules, dead letters and the
-//! transmissions behind an edge are read a page at a time with the cursors
+//! **Lists.** Channels, agents, alert rules, dead letters, the audit log and
+//! the transmissions behind an edge are read a page at a time with the cursors
 //! of [`crate::paging`], so a traversal is stable under concurrent inserts.
 //! Their filters and request types are in [`lists`].
 //!
@@ -55,11 +55,12 @@ use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::{RuleRequest, SearchQuery, SearchResults};
 use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
 use crate::paging::{
-    AgentList, AlertRuleList, ChannelList, DeadLetterList, EdgeTransmissionList, Page, PageRequest,
+    AgentList, AlertRuleList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
+    PageRequest,
 };
 use crate::support::TimeWindow;
 
-use audit::{ActionEffect, AuditPage, AuditQuery};
+use audit::{ActionEffect, AuditFilter, AuditRecord};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
 
 /// The policy an operator asks for. The surface stamps the author and time
@@ -263,8 +264,14 @@ pub trait QueryApi {
         request: &ProjectionRequest,
     ) -> Result<Projection, QueryError>;
 
-    /// Audit. One page of the audit log, newest first.
-    async fn audit(&self, caller: &Caller, query: &AuditQuery) -> Result<AuditPage, QueryError>;
+    /// Audit. The audit records `filter` matches, newest first by time and
+    /// id (`AuditLog::query`).
+    async fn audit(
+        &self,
+        caller: &Caller,
+        filter: &AuditFilter,
+        page: &PageRequest<AuditList>,
+    ) -> Result<Page<AuditRecord, AuditList>, QueryError>;
 }
 
 /// `OperatorAction` is `PartialEq` but not `Eq`: rule requests hold

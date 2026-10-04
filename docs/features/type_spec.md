@@ -7,9 +7,14 @@
 - The events that cross the bus between layers.
 - The trait each layer of the abstraction stack exposes, and its errors.
 - Tests for invariants enforced by checked constructors.
-- The query surface a frontend reads: paginated lists, the one filter that
-  links the graph, search, projection and edge drill-down, and the
-  projection's points.
+- The query surface a frontend reads: paginated lists (the audit log
+  included), the one filter that links the graph, search, projection and
+  edge drill-down, the projection's points, time series, the topic-model
+  version history and the channel policy history.
+- The live update feed (SSE) and the append-only audit log.
+- Operator actions, each with one required permission: policy, channel
+  promotion, agent merges, unmerges and labels, alert triage, transmission
+  dismissal, alert rule management and dead-letter replay.
 
 ## Non-scope
 
@@ -97,8 +102,7 @@ The types follow data through the stack:
    (ordered by decision time, idempotent on redelivery) while setting the
    channel's policy to the history's current entry in the same transaction.
    A `PolicyChanged` carrying `Unreviewed(None)` holds no decision and is
-   acked without effect.
-   An operator can promote a discovered channel
+   acked without effect. An operator can promote a discovered channel
    (`ChannelRegistry::promote`): it keeps its id, resources, policy and
    `TrafficDetection`, gains a non-overlapping pattern that must match its
    seed, and its origin becomes `Declared` with `DeclaredHistory::Promoted`
@@ -121,8 +125,9 @@ The types follow data through the stack:
    topic rule that is current on the predecessor is carried over with
    `TopicLineage::remap`, which yields its new `TopicWatch` (`Current` under
    the new version, or `Stale` naming the unmapped topics), so the UI's
-   lineage and the rules cannot disagree. `TopicVersionActivated` from L7 makes the version
-   `Active` and every older one `Superseded`. `TopicSizes` count topic
+   lineage and the rules cannot disagree; the rule's `RuleStatus` is left
+   as the operator set it. `TopicVersionActivated { version, previous }`
+   from L7 makes the version `Active` and every older one `Superseded`. `TopicSizes` count topic
    assignments per topic (outliers apart), optionally over a window. The
    `SearchIndex` and the `ProjectionIndex` take a `TopologyFilter` and
    report the topic-model version they evaluated topics under
@@ -171,8 +176,8 @@ The types follow data through the stack:
      the `OperatorAction` value, the time and an `AuditOutcome`: `Applied`,
      `Unchanged`, `Rejected(Rejection)` or `Forbidden`). `Applied` and
      `Unchanged` records are written in the action's transaction. The
-     `AuditLog` is append-only; `QueryApi::audit` pages it newest first with
-     an `AuditFilter` and needs `Permission::Audit`.
+     `AuditLog` is append-only; `QueryApi::audit` reads it as a list (below)
+     with an `AuditFilter` and needs `Permission::Audit`.
    - **Live feed.** A feed writer (consumer group `live`) turns `AlertOpened`,
      `AlertChanged`, `EdgeUpdated`, `ChannelDiscovered`,
      `ChannelCrossAccessed`, `DeclaredChannelUnused`, `PolicyChanged`,
@@ -190,20 +195,23 @@ The types follow data through the stack:
 
 ### Lists and pagination
 
-Channels, agents, alert rules, dead letters and edge transmissions are read
-a `Page` at a time. A `PageRequest<L>` holds a `PageSize` (1 to 500) and,
-after the first page, the `Cursor<L>` from the previous page. `L` is a
-marker per list (`ChannelList`, `AgentList`, `AlertRuleList`,
-`DeadLetterList`, `EdgeTransmissionList`), so a cursor only fits its own
-list. Each list is ordered newest first by a unique sort key that never
-changes (ids, or `(Confirmed::at, TransmissionId)` for an edge), and the
+Channels, agents, alert rules, dead letters, edge transmissions and the
+audit log are read a `Page` at a time. A `PageRequest<L>` holds a
+`PageSize` (1 to 500) and, after the first page, the `Cursor<L>` from the
+previous page. `L` is a marker per list (`ChannelList`, `AgentList`,
+`AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList`),
+so a cursor only fits its own list. Each list is ordered newest first by a
+unique sort key that never changes (ids, `(Confirmed::at, TransmissionId)`
+for an edge, `(AuditRecord::at, AuditId)` for the audit log), and the
 cursor holds the last key served (keyset pagination), so concurrent inserts
 and removals never make a traversal skip or repeat an item. The cursor also
 holds a digest of the request and a MAC; one presented with another request
 is `InvalidCursor`. A page with a next cursor is never empty, so following
 cursors always ends. List filters (`ChannelFilter`, `AgentFilter`,
-`AlertRuleFilter`, in `l8_surface/lists.rs`) are defined by their `matches`
-methods; empty lists do not restrict.
+`AlertRuleFilter`, in `l8_surface/lists.rs`, and `AuditFilter`) are defined
+by their `matches` methods; empty lists do not restrict. `AlertRuleFilter`
+selects on the operator-set `RuleStatus` and, separately, on staleness, so
+a stale-rule list includes disabled stale rules.
 
 ### Linked views
 
@@ -253,7 +261,7 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
-| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList` |
+| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
@@ -282,7 +290,7 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
-| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditQuery`, `AuditPage`, `MAX_AUDIT_PAGE` |
+| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
 | `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
@@ -400,9 +408,15 @@ exactly `min(matching, limit)` points, none twice, all finite.
   enabled and current; updating is the only way out of stale; a rule keeps
   its kind; operators create and edit content rules only. Once a disable
   returns, the rule has no active alerts and triage opens none for it.
-- Every operator action names one permission: Govern for identity, policy
-  and alert rules; Triage for alerts and dismissals; Operate for the
-  pipeline. The surface stamps author and time from the caller.
+- Every operator action names one permission
+  (`OperatorAction::required_permission`, one exhaustive match): Govern for
+  identity, policy and alert rules; Triage for alerts and dismissals;
+  Operate for the pipeline. View, Content and Audit are read permissions
+  that no action needs. The surface stamps author and time from the
+  caller, and `ActionKind` and the audit log cover every action.
+- L7 publishes `TopicVersionActivated { version, previous }` exactly once
+  per switch, only after `EdgeStore::activate` has switched graph and
+  series queries, and never for a version older than the active one.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges.
 - Every linked view (graph, search, projection, edge drill-down) applies
   one `TopologyFilter` as `TopologyFilter::admits` defines, with agents
@@ -418,8 +432,8 @@ exactly `min(matching, limit)` points, none twice, all finite.
 - A `Projection` holds exactly `min(matching, limit)` points with a limit of
   1 to 50,000, no transmission twice and finite coordinates. Within one
   `ProjectionToken` points never move or change topic.
-- Lists of dead letters need Operate; edge drill-down rows carry no message
-  content and need View.
+- Lists of dead letters need Operate and the audit log needs Audit; edge
+  drill-down rows carry no message content and need View.
 - A `SeriesStep` is a whole number of buckets (`SeriesStep::new`). A
   `SeriesGrid` starts on a bucket boundary and is a whole number of steps,
   at most `SeriesGrid::MAX_POINTS` (`SeriesGrid::new`). A `TopologySeries`

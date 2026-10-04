@@ -2,11 +2,12 @@ use crate::derived::flow::channel::policy::PolicyKind;
 use crate::ids::{AlertId, AuditId, EventId, OperatorId};
 use crate::interfaces::l2_transport::ConsumerGroup;
 use crate::interfaces::l8_surface::audit::{
-    ActionEffect, AuditFilter, AuditOutcome, AuditRecord, InvalidAuditRecord, MAX_AUDIT_PAGE,
-    OutcomeKind, Rejection,
+    ActionEffect, AuditFilter, AuditOutcome, AuditRecord, InvalidAuditRecord, OutcomeKind,
+    Rejection,
 };
 use crate::interfaces::l8_surface::{ActionKind, Caller, OperatorAction, Permission, QueryError};
 use crate::observed::agent::{MergeAuthor, MergeRequest};
+use crate::paging::PageSize;
 use crate::support::TimeWindow;
 use crate::tests::fixtures::{agent, at, channel};
 
@@ -231,5 +232,6 @@ fn audit_filter_combines_fields_with_and() {
 
 #[test]
 fn audit_page_is_capped() {
-    assert_eq!(MAX_AUDIT_PAGE.get(), 500);
+    // The audit log pages like every other list.
+    assert_eq!(PageSize::MAX, 500);
 }
