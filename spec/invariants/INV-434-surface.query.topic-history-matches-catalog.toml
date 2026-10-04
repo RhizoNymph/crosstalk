@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.topic-history-matches-catalog"
-statement = "For a Caller with View, QueryApi topic_versions, topic_sizes and topic_lineage return exactly what TopicCatalog returns, with a missing topic_sizes version resolved to the history's active version, UnknownVersion mapped to NotFound and StillFitting to BadRequest."
+statement = "For a Caller with View, QueryApi topic_versions and topic_lineage return exactly what TopicCatalog returns, and topic_sizes returns what TopicCatalog::sizes returns as a Watermarked value whose watermark EdgeStore::watermark returned before the catalog was read, with a missing topic_sizes version resolved to the history's active version, UnknownVersion mapped to NotFound, StillFitting to Conflict(TopicVersionFitting) and VersionNotRetained to VersionNotRetained with the same version."
 kind = "domain"
 property = "model-based"
 requires = ["property"]
@@ -9,6 +9,8 @@ The catalog is the single record of versions, sizes and lineage. Passing
 it through unchanged keeps the UI's version list, size charts and lineage
 in step with what alert rules were remapped from. Resolving a missing
 version to the active one makes the default view the version graphs read.
+Sizes come from L6, so the surface attaches L7's watermark, read first,
+to say which part of them is final.
 """
 
 [evidence]

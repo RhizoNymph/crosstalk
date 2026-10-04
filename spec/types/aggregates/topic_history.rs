@@ -17,6 +17,10 @@
 //! Version 0, the unfitted model, is active from the start and was never fit.
 //! A fit that fails leaves no version behind; its number is not reused.
 //!
+//! **Retention.** Each version also records whether its data is still kept
+//! and whether an operator pinned it ([`Retention`]); see
+//! [`crate::aggregates::retention`].
+//!
 //! **Lineage.** Fits run one at a time. When a fit returns, its topics are
 //! compared by centroid with the topics of the version before it in the
 //! history, its predecessor. The [`TopicLineage`] from the predecessor holds, for each of
@@ -29,6 +33,7 @@ use std::collections::HashSet;
 
 use crate::aggregates::alert::{TopicWatch, WatchedTopics};
 use crate::aggregates::edge::EdgeStats;
+use crate::aggregates::retention::Retention;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::TopicId;
 use crate::support::{NonEmpty, Similarity, TimeWindow, Timestamp};
@@ -106,16 +111,20 @@ impl TopicVersionStatus {
     }
 }
 
-/// One version and its status.
+/// One version, its status and its retention.
 ///
-/// Built only through [`TopicVersionInfo::new`]: version 0 is unfitted and
-/// has been active, every other version was fitted, a version is superseded
-/// only by a newer one, and its timestamps never go backwards (started,
-/// fitted, ready, activated, superseded).
+/// Built only through [`TopicVersionInfo::new`] (retained, unpinned) and
+/// [`TopicVersionInfo::with_retention`]: version 0 is unfitted and has been
+/// active, every other version was fitted, a version is superseded only by a
+/// newer one, and its timestamps never go backwards (started, fitted, ready,
+/// activated, superseded, dropped). Only a superseded version is dropped, a
+/// fitting version is never pinned, and a pin is no earlier than the
+/// version became ready.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopicVersionInfo {
     version: TopicModelVersion,
     status: TopicVersionStatus,
+    retention: Retention,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +137,10 @@ pub enum InvalidVersionInfo {
     UnfittedNeverActivated,
     SupersededByOlder,
     TimestampsOutOfOrder,
+    /// A fitting version with a pin.
+    PinnedWhileFitting,
+    /// A dropped version that is not superseded.
+    DroppedNotSuperseded,
 }
 
 impl TopicVersionInfo {
@@ -172,7 +185,54 @@ impl TopicVersionInfo {
         if times.windows(2).any(|pair| pair[0] > pair[1]) {
             return Err(InvalidVersionInfo::TimestampsOutOfOrder);
         }
-        Ok(Self { version, status })
+        Ok(Self {
+            version,
+            status,
+            retention: Retention::UNPINNED,
+        })
+    }
+
+    /// Like [`TopicVersionInfo::new`], with `retention` instead of retained
+    /// and unpinned.
+    pub fn with_retention(
+        version: TopicModelVersion,
+        status: TopicVersionStatus,
+        retention: Retention,
+    ) -> Result<Self, InvalidVersionInfo> {
+        let info = Self::new(version, status)?;
+        match (status, retention) {
+            (TopicVersionStatus::Fitting { .. }, Retention::Retained { pin: Some(_) }) => {
+                return Err(InvalidVersionInfo::PinnedWhileFitting);
+            }
+            (TopicVersionStatus::Superseded { superseded_at, .. }, Retention::Dropped { at })
+                if at < superseded_at =>
+            {
+                return Err(InvalidVersionInfo::TimestampsOutOfOrder);
+            }
+            (TopicVersionStatus::Superseded { .. }, Retention::Dropped { .. }) => {}
+            (_, Retention::Dropped { .. }) => {
+                return Err(InvalidVersionInfo::DroppedNotSuperseded);
+            }
+            (_, Retention::Retained { pin: Some(pin) }) => {
+                let ready = match status {
+                    TopicVersionStatus::Ready { fit }
+                    | TopicVersionStatus::Active {
+                        fit: FitRecord::Fitted(fit),
+                        ..
+                    }
+                    | TopicVersionStatus::Superseded {
+                        fit: FitRecord::Fitted(fit),
+                        ..
+                    } => Some(fit.ready_at),
+                    _ => None,
+                };
+                if ready.is_some_and(|ready| pin.at < ready) {
+                    return Err(InvalidVersionInfo::TimestampsOutOfOrder);
+                }
+            }
+            (_, Retention::Retained { pin: None }) => {}
+        }
+        Ok(Self { retention, ..info })
     }
 
     pub fn version(&self) -> TopicModelVersion {
@@ -181,6 +241,10 @@ impl TopicVersionInfo {
 
     pub fn status(&self) -> &TopicVersionStatus {
         &self.status
+    }
+
+    pub fn retention(&self) -> Retention {
+        self.retention
     }
 
     /// When the fit returned. `None` for version 0 and while fitting.
@@ -293,6 +357,18 @@ impl TopicVersionHistory {
 
     pub fn get(&self, version: TopicModelVersion) -> Option<&TopicVersionInfo> {
         self.versions.iter().find(|info| info.version == version)
+    }
+
+    /// Replace `version`'s retention. Callers have checked the change is
+    /// valid for its status (see `retention.rs`).
+    pub(crate) fn set_retention(&mut self, version: TopicModelVersion, retention: Retention) {
+        if let Some(info) = self
+            .versions
+            .iter_mut()
+            .find(|info| info.version == version)
+        {
+            info.retention = retention;
+        }
     }
 }
 

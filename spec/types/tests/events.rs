@@ -29,6 +29,7 @@ use crate::observed::exchange::{
 };
 use crate::support::NonEmpty;
 use crate::support::TimeWindow;
+use crate::support::Watermark;
 
 use crate::tests::fixtures::{
     access, agent, at, channel, content_match, exchange, message, read_access, resource, span,
@@ -211,6 +212,10 @@ fn sample_events() -> Vec<BusEvent> {
             version: TopicModelVersion(1),
             previous: TopicModelVersion(0),
         }),
+        BusEvent::Insight(InsightEvent::TopicVersionDropped {
+            version: TopicModelVersion(0),
+        }),
+        BusEvent::Insight(InsightEvent::WatermarkAdvanced(Watermark(at(9)))),
         BusEvent::Insight(InsightEvent::EdgeUpdated(
             EdgeKey::new(agent(1), agent(2), Route::Unobserved, slot, bucket)
                 .expect("different agents"),
@@ -263,6 +268,8 @@ fn subjects_name_their_variant() {
             Subject::TransmissionClassified,
             Subject::TopicVersionReady,
             Subject::TopicVersionActivated,
+            Subject::TopicVersionDropped,
+            Subject::WatermarkAdvanced,
             Subject::EdgeUpdated,
             Subject::AlertOpened,
             Subject::AlertChanged,
@@ -296,6 +303,8 @@ fn every_subject() -> Vec<Subject> {
             | Subject::TransmissionClassified
             | Subject::TopicVersionReady
             | Subject::TopicVersionActivated
+            | Subject::TopicVersionDropped
+            | Subject::WatermarkAdvanced
             | Subject::EdgeUpdated
             | Subject::AlertOpened
             | Subject::AlertChanged
@@ -323,6 +332,8 @@ fn every_subject() -> Vec<Subject> {
         Subject::TransmissionClassified,
         Subject::TopicVersionReady,
         Subject::TopicVersionActivated,
+        Subject::TopicVersionDropped,
+        Subject::WatermarkAdvanced,
         Subject::EdgeUpdated,
         Subject::AlertOpened,
         Subject::AlertChanged,

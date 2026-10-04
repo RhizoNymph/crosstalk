@@ -38,13 +38,14 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
-      topic sizes and lineage, search, alert rules and their management),
-      L7 topology (edge aggregation per time window, graphs and time
-      series), L8 surface (query API with cursor-paginated lists and linked
-      views sharing one filter, UI, operator directory with a trusted
-      single-user mode, operator actions with one permission each,
-      operator verdicts on transmissions and the detection quality they
-      measure, append-only audit log of operator actions and config
+      topic sizes, lineage, pins and retention of old versions, search,
+      alert rules and their management), L7 topology (edge aggregation per
+      time window, graphs and time series, and the watermark before which
+      every bucket is final), L8 surface (query API with cursor-paginated
+      lists and linked views sharing one filter, UI, operator directory
+      with a trusted single-user mode, operator actions with one permission
+      each, operator verdicts on transmissions and the detection quality
+      they measure, append-only audit log of operator actions and config
       changes, an id-only SSE live feed, alert sinks).
 
   data_flow: >
@@ -61,8 +62,13 @@ Overview:
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions, records topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and announces
-    topic-version activation back to L6 → L8 serves topology, time series,
-    topic history, search, projections, lists and alerts, with the graph,
+    topic-version activation back to L6, which then drops versions its
+    retention policy no longer keeps (TopicVersionDropped, after which L7
+    deletes their buckets); L7 also advances a watermark from the
+    correlator's ticks and the oldest unprocessed input and publishes each
+    advance → L8 serves topology, time series,
+    topic history, search, projections, lists and alerts (every aggregate
+    with the watermark read before it), with the graph,
     search, projection and edge drill-down all filtered by one
     TopologyFilter, pages the audit log like any other list, and streams
     id-only change events to the UI over SSE: every store publishes a
@@ -78,7 +84,8 @@ Overview:
     transmissions to L5's verdict log, beside the detector's state, which
     publishes VerdictSet (L6 suppresses the alerts of a false detection;
     L6 and L7 views can exclude false detections at query time); agent merges,
-    exact unmerges and display labels to L3; alert rule management to L6.
+    exact unmerges and display labels to L3; alert rule management and
+    topic-version pins to L6.
     Every action call is recorded in the audit log with its outcome, and
     so is every change a config load makes.
 
@@ -87,7 +94,8 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams and credentials), derived inferences,
-      aggregates (including time series and topic history), bus events and
+      aggregates (including time series, topic history, topic-version
+      retention and the watermark that marks buckets final), bus events and
       per-layer interfaces (including the query surface's paginated lists,
       shared view filter and projection, the id-only SSE live feed, the
       audit log of operator and config changes, the operator directory and

@@ -25,6 +25,7 @@
 //! "who did what, when, to what, and what came of it" across everything.
 
 use crate::aggregates::alert::AlertRuleKind;
+use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::ids::{
@@ -56,6 +57,8 @@ pub enum AuditSubject {
     Transmission(TransmissionId),
     Merge(MergeId),
     Operator(OperatorId),
+    /// A topic-model version an operator pinned or unpinned.
+    TopicVersion(TopicModelVersion),
 }
 
 /// What an operator call came to: the exact result `act` returned, split so

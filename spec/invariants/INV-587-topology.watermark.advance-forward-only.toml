@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.watermark.advance-forward-only"
+statement = "Watermark::advance returns the settled watermark exactly when it is later than the exposed one, and None otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The exposed watermark is a promise already given to clients: buckets
+before it are final. It may only move forward, and an advance is a strict
+increase, which is what WatermarkAdvanced reports.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::watermark::advance_only_moves_forward"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

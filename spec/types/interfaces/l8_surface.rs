@@ -6,7 +6,8 @@
 //! to L3's identity resolver; channel promotion and transmission dismissal go
 //! to L5 (`ChannelRegistry::promote`, `TransmissionReview::dismiss`), and so
 //! do verdicts on transmissions (`TransmissionVerdicts::set`); alert rule
-//! management goes to L6's `AlertRuleStore`. Every action names its
+//! management goes to L6's `AlertRuleStore`; topic-version pins go to L6's
+//! `TopicCatalog` (`pin`, `unpin`). Every action names its
 //! permission ([`OperatorAction::required_permission`]), checked before any
 //! effect. Wherever an action records an author or time, the surface stamps
 //! them from the authenticated caller and the time it accepted the action;
@@ -42,6 +43,17 @@
 //! the others to the same transmissions. Each response reports the
 //! topic-model version its topics are under; responses with different
 //! versions are not linkable and the client re-queries.
+//!
+//! **Watermarks.** `topology`, `series`, `edge_transmissions` and
+//! `topic_sizes` return their result [`Watermarked`]: with L7's watermark,
+//! read before the data. Everything in the result before the watermark is
+//! final ([`crate::aggregates::watermark`]). `watermark` returns the current
+//! one, and the feed reports each advance.
+//!
+//! **Retention.** A topic-model version that retention has dropped
+//! ([`crate::aggregates::retention`]) is `VersionNotRetained` wherever its
+//! buckets or assignments would be read; its history entry, topics, lineage
+//! and all-time sizes stay readable.
 
 pub mod audit;
 pub mod lists;
@@ -59,6 +71,7 @@ use crate::aggregates::quality::DetectionQuality;
 use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
+use crate::aggregates::watermark::{Watermark, Watermarked};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
@@ -123,7 +136,8 @@ pub enum Permission {
     /// from message text) and projections.
     Content,
     /// Identity and policy: channel policy and promotion, agent merges,
-    /// unmerges and labels, and alert rules (what the gateway alerts on).
+    /// unmerges and labels, alert rules (what the gateway alerts on), and
+    /// topic-version pins (what history the gateway keeps).
     Govern,
     /// Work alerts: acknowledge, resolve, and dismiss the suspected
     /// transmissions they are about. Judge transmissions: set and withdraw
@@ -221,6 +235,8 @@ pub enum AlertStateKind {
 /// Every method checks the caller's permission first and returns
 /// `Forbidden` without reading anything when it is missing. List methods
 /// return `InvalidCursor` for a cursor issued for a different request.
+/// `EdgeError::VersionNotRetained` and `CatalogError::VersionNotRetained`
+/// become `VersionNotRetained` with the same version.
 pub trait QueryApi {
     /// View.
     async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
@@ -272,6 +288,9 @@ pub trait QueryApi {
     async fn alerts(&self, caller: &Caller, filter: &AlertFilter)
     -> Result<Vec<Alert>, QueryError>;
 
+    /// View. L7's exposed watermark (`EdgeStore::watermark`).
+    async fn watermark(&self, caller: &Caller) -> Result<Watermark, QueryError>;
+
     /// View.
     async fn topology(
         &self,
@@ -279,7 +298,7 @@ pub trait QueryApi {
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<TopologyGraph, QueryError>;
+    ) -> Result<Watermarked<TopologyGraph>, QueryError>;
 
     /// View. The transmissions `topology` counts into one of its edges for
     /// the same window and filter (`EdgeStore::transmissions`): ids, times,
@@ -292,7 +311,7 @@ pub trait QueryApi {
         window: TimeWindow,
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
-    ) -> Result<EdgeTransmissionPage, QueryError>;
+    ) -> Result<Watermarked<EdgeTransmissionPage>, QueryError>;
 
     /// View. Exactly [`EdgeStore::series`]; a grid for another bucket width
     /// is `InvalidInput(BucketWidthMismatch)`, like an unaligned graph window.
@@ -305,19 +324,22 @@ pub trait QueryApi {
         weighting: Weighting,
         grouping: SeriesGrouping,
         filter: &TopologyFilter,
-    ) -> Result<TopologySeries, QueryError>;
+    ) -> Result<Watermarked<TopologySeries>, QueryError>;
 
     /// View.
     async fn topic_versions(&self, caller: &Caller) -> Result<TopicVersionHistory, QueryError>;
 
     /// View. `None` is the active version. An unknown version is
-    /// `NotFound`; a fitting one is `Conflict(TopicVersionFitting)`.
+    /// `NotFound`; a fitting one is `Conflict(TopicVersionFitting)`. A
+    /// dropped version answers without a window with its frozen all-time
+    /// sizes, and with a window `VersionNotRetained`. The watermark is read
+    /// from L7 before the catalog.
     async fn topic_sizes(
         &self,
         caller: &Caller,
         version: Option<TopicModelVersion>,
         window: Option<TimeWindow>,
-    ) -> Result<TopicSizes, QueryError>;
+    ) -> Result<Watermarked<TopicSizes>, QueryError>;
 
     /// View. The lineage from `from` to its successor; `None` while it has
     /// none. An unknown version is `NotFound`.
@@ -469,6 +491,20 @@ pub enum OperatorAction {
         group: ConsumerGroup,
         id: EventId,
     },
+    /// Keep `version`'s data whatever the retention policy
+    /// (`TopicCatalog::pin`), stamped with the caller and the acceptance
+    /// time. `Applied` when it pins, `Unchanged` when already pinned;
+    /// `NotFound` for an unknown version, `Conflict(TopicVersionFitting)` for
+    /// a fitting one and `Conflict(TopicVersionDropped)` for a dropped one.
+    PinTopicVersion {
+        version: TopicModelVersion,
+    },
+    /// Remove `version`'s pin (`TopicCatalog::unpin`); retention may then
+    /// drop it. `Applied` when it was pinned, `Unchanged` otherwise (a
+    /// dropped version included); `NotFound` for an unknown version.
+    UnpinTopicVersion {
+        version: TopicModelVersion,
+    },
 }
 
 /// Which action, without its arguments. The audit log filters on it.
@@ -487,6 +523,8 @@ pub enum ActionKind {
     UpdateAlertRule,
     SetAlertRuleStatus,
     ReplayDeadLetter,
+    PinTopicVersion,
+    UnpinTopicVersion,
 }
 
 impl OperatorAction {
@@ -505,13 +543,16 @@ impl OperatorAction {
             Self::UpdateAlertRule { .. } => ActionKind::UpdateAlertRule,
             Self::SetAlertRuleStatus { .. } => ActionKind::SetAlertRuleStatus,
             Self::ReplayDeadLetter { .. } => ActionKind::ReplayDeadLetter,
+            Self::PinTopicVersion { .. } => ActionKind::PinTopicVersion,
+            Self::UnpinTopicVersion { .. } => ActionKind::UnpinTopicVersion,
         }
     }
 
     /// The permission the caller must hold, checked before any effect; a
-    /// caller without it gets `Forbidden`. Govern for identity, policy and
-    /// rules, Triage for alerts and verdicts, Operate for the pipeline. No
-    /// action needs View, Content or Audit, which are read permissions.
+    /// caller without it gets `Forbidden`. Govern for identity, policy,
+    /// rules and topic-version pins, Triage for alerts and verdicts, Operate
+    /// for the pipeline. No action needs View, Content or Audit, which are
+    /// read permissions.
     ///
     /// `SetVerdict` needs Triage alone, not Content as well: it reveals no
     /// content (its outcome and the records it writes hold no message text),
@@ -527,7 +568,9 @@ impl OperatorAction {
             | Self::PromoteChannel { .. }
             | Self::CreateAlertRule { .. }
             | Self::UpdateAlertRule { .. }
-            | Self::SetAlertRuleStatus { .. } => Permission::Govern,
+            | Self::SetAlertRuleStatus { .. }
+            | Self::PinTopicVersion { .. }
+            | Self::UnpinTopicVersion { .. } => Permission::Govern,
             Self::Acknowledge { .. }
             | Self::Resolve { .. }
             | Self::DismissTransmission { .. }
@@ -562,6 +605,9 @@ impl OperatorAction {
             Self::CreateAlertRule { id: rule, .. }
             | Self::UpdateAlertRule { rule, .. }
             | Self::SetAlertRuleStatus { rule, .. } => vec![AuditSubject::Rule(*rule)],
+            Self::PinTopicVersion { version } | Self::UnpinTopicVersion { version } => {
+                vec![AuditSubject::TopicVersion(*version)]
+            }
             Self::ReplayDeadLetter { .. } => Vec::new(),
         }
     }
@@ -616,9 +662,10 @@ pub enum QueryError {
 }
 
 /// Why an operator action was refused. A strict subset of what a query can
-/// fail with: an action takes no cursor, reads no projection and pins no
-/// version, so those variants cannot be returned (or recorded in the audit
-/// log) for one.
+/// fail with: an action takes no cursor, reads no projection and reads no
+/// version's buckets, so those variants cannot be returned (or recorded in
+/// the audit log) for one. Pinning a dropped version is
+/// `Conflict(TopicVersionDropped)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionError {
     Store { reason: String },
@@ -649,8 +696,10 @@ pub enum ConflictKind {
     /// A verdict on a transmission whose state does not take one
     /// (`Detected`, `AwaitingContent`).
     TransmissionNotJudgeable { transmission: TransmissionId },
-    /// Querying a topic-model version that is still being fitted.
+    /// Querying or pinning a topic-model version that is still being fitted.
     TopicVersionFitting { version: TopicModelVersion },
+    /// Pinning a topic-model version whose data retention has dropped.
+    TopicVersionDropped { version: TopicModelVersion },
 }
 
 /// A request that is invalid whatever the state.

@@ -37,6 +37,19 @@
 //! The correlator chooses routes in the precedence order documented on
 //! `Route`, using the `AgentDirectory` and agent parent links for
 //! `Delegation`.
+//!
+//! **Timing.** The correlator is configured with a [`CorrelationTiming`]: it
+//! pairs a write and a read within `correlation_window`, opens a channel
+//! transmission `AwaitingContent` until `window_closes_at(read.at)`, keeps it
+//! `Suspected` until `expires_at(since)`, and opens a pending tool-result
+//! match as `Direct(ToolResult)` at `window_closes_at` of its exchange's
+//! time. So every confirmation it emits while processing an input has a
+//! `Confirmed::at` no earlier than the input's event time or its last tick
+//! minus `settle_after`, whichever is earlier; L7's watermark depends on it.
+//! Each shard records the last tick it processed, which L7 reads as
+//! `PipelineFrontier::ticked_through`.
+//!
+//! [`CorrelationTiming`]: crate::derived::flow::timing::CorrelationTiming
 
 pub mod verdicts;
 

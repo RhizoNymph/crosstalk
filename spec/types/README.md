@@ -34,6 +34,7 @@ spec/types/
 │       ├── resource.rs    Resource, Locator, ResourcePattern
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
+│       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
 │       ├── transmission.rs Transmission, Route, TransmissionState, DiscardReason, Dismissal, Confirmed
 │       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
 │       └── channel/
@@ -45,16 +46,18 @@ spec/types/
 │   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
 │   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
 │   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
+│   ├── retention.rs       RetentionPolicy (checked, to_drop), Pin, Retention, pin/unpin/mark_dropped on TopicVersionHistory
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked, remap)
+│   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
+│   ├── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
 │   └── alert.rs           AlertRule, TopicWatch, ContentRule, AlertRuleDef, RuleStatus, AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (any store, for the live feed)
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed, VerdictSet)
-│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
@@ -64,9 +67,9 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator, TransmissionReview
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
-│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit, operators), OperatorAction (subjects), ActionKind, OperatorActions, AlertSink
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
+│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down, judge, drop_version, watermark), FrontierSource
+│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit, operators, watermark), OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink
 │   └── l8_surface/
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
 │       ├── live.rs        LiveFeed, UiEvent (id only), LiveCursor, FeedWindow (checked), LiveConfig (checked)

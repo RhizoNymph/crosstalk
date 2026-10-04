@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.retention.activate-drops-nothing"
+statement = "EdgeStore::activate removes no bucket and no stored contribution of any topic-model version."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Retention is decided by the topic catalog, which knows pins and the
+policy; L7 does not. Deleting on activation, as before, would drop a
+version an operator pinned or the policy keeps.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::activate_keeps_every_version"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

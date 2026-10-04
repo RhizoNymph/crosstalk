@@ -60,6 +60,8 @@ pub enum Subject {
     TransmissionClassified,
     TopicVersionReady,
     TopicVersionActivated,
+    TopicVersionDropped,
+    WatermarkAdvanced,
     EdgeUpdated,
     AlertOpened,
     AlertChanged,

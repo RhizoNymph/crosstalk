@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.watermark.read-before-data"
+statement = "Every Watermarked result of EdgeStore graph, series or transmissions carries the watermark exposed when its read began, and its data counts every contribution applied to a bucket ending at or before that watermark."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Reading the watermark after the data could pair a watermark with data
+older than it, and the client would treat stale values as final. Reading
+it first is safe: buckets before it no longer change, so the data read
+afterwards holds their final values.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::results_carry_watermark_read_first"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

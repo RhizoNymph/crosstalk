@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.query.version-not-retained-mapped"
+statement = "QueryApi returns QueryError::VersionNotRetained with the same version whenever L7 returns EdgeError::VersionNotRetained or the catalog returns CatalogError::VersionNotRetained."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI treats VersionNotRetained as "this version is gone, switch to the
+current one", which differs from a store failure (retry) or NotFound.
+Mapping it unchanged keeps that signal.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::version_not_retained_passes_through"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
