@@ -119,7 +119,21 @@ The types follow data through the stack:
   mints, rewrites or strips credentials. Raw credentials are hashed with a
   keyed BLAKE3 and never stored.
 - Only `EndpointKind::Generation` requests produce exchanges.
-- Forward-proxy mode intercepts TLS only for allowlisted hosts.
+- Forward-proxy mode intercepts TLS only for hosts on an
+  `InterceptAllowlist`, which can never contain a vendor auth host. An
+  unrouted reverse-proxy request is answered locally with 421.
+- Credential and account digests are keyed BLAKE3 tagged with the
+  `SecretVersion` that computed them; rotation overlaps two versions.
+- A `RetryPolicy` has a non-zero initial backoff no greater than its
+  maximum; exhausted deliveries are dead-lettered, never redelivered on
+  their own.
+- Identity scope is the account, else a stable credential, else the
+  upstream; a session id resolves only to the session's main agent.
+  Response-id lookups for increments stay within upstream and scope.
+- A transmission opened and confirmed in one step has a `NonChannelRoute`.
+- `TransmissionClassified` carries its `ClassificationCause`; content alert
+  rules evaluate only first confirmations, so re-fits never re-raise
+  alerts.
 - Harness headers are claims: session and agent ids count as identity
   evidence only within their `IdentityScope`, and the harness name never
   does. Rotating credentials and prompt fingerprints never establish an

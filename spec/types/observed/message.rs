@@ -1,8 +1,9 @@
 //! Canonical messages, independent of provider wire format.
 //!
 //! The role is encoded in the body variant, so a message can only hold parts
-//! that role can produce: tool calls only in assistant messages, tool results
-//! only in tool messages. Normalizers split provider messages that mix them
+//! that role can produce: tool calls only in assistant messages, and tool
+//! results only in tool messages or, for server-executed tools, in the
+//! assistant message that made the call. Normalizers split provider messages that mix them
 //! (Anthropic puts `tool_result` blocks inside user turns) into one canonical
 //! message per role, in their original order.
 //!
@@ -21,7 +22,7 @@ pub struct Message {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageBody {
-    System(Vec<Text>),
+    System(Vec<SystemPart>),
     User(Vec<UserPart>),
     Assistant(Vec<AssistantPart>),
     Tool(NonEmpty<ToolResult>),
@@ -48,6 +49,12 @@ impl MessageBody {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Text(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemPart {
+    Text(Text),
+    Unknown(Unknown),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserPart {
@@ -109,8 +116,10 @@ pub struct ToolCallId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ToolName(pub String);
 
-/// JSON text in canonical form (RFC 8785): sorted keys, no insignificant
-/// whitespace, canonical numbers and escapes. Two semantically equal JSON
+/// JSON text in canonical form: RFC 8785 (sorted keys, no insignificant
+/// whitespace, canonical escapes), except that a number is written as its
+/// exact decimal value rather than through an IEEE double, so integers beyond
+/// 2^53 (ids in tool arguments) keep every digit. Two semantically equal JSON
 /// values have the same canonical text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalJson(pub String);

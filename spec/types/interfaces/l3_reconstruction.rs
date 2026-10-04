@@ -19,7 +19,13 @@
 //!
 //! An increment exchange whose previous response the gateway never saw (it
 //! was sent around the proxy) is threaded as `Starts` holding only its
-//! increment, so its inputs are still scanned.
+//! increment, so its inputs are still scanned. A `previous_response_id`
+//! resolves only to a response stored under the same upstream and identity
+//! scope; anything else counts as unseen, so a forged id cannot attach one
+//! caller's turn to another's conversation.
+//!
+//! Deltas and other records carry the agent the exchange was attributed to,
+//! not its canonical agent; readers resolve through `AgentDirectory`.
 
 use crate::events::ingest::ConversationDelta;
 use crate::ids::{AgentId, ConversationId};

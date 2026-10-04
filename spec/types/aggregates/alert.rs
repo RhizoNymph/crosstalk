@@ -48,11 +48,13 @@ pub enum AlertRule {
     SanctionedUnused,
     /// A transmission was left with access-pattern evidence only.
     SuspectedTransmission,
-    /// Topic ids only mean something within one topic-model version. On a
-    /// re-fit, each topic is remapped to the new version's topic whose
-    /// centroid is most similar, if that similarity reaches
-    /// `remap_threshold`; a rule with any topic left unmapped becomes
-    /// [`RuleStatus::Stale`] instead of silently watching the wrong topics.
+    /// Topic ids only mean something within one topic-model version. When a
+    /// new version becomes ready (`TopicVersionReady`), each topic is
+    /// remapped to the new version's topic whose centroid is most similar, if
+    /// that similarity reaches `remap_threshold`; a rule with any topic left
+    /// unmapped becomes [`RuleStatus::Stale`] instead of silently watching the
+    /// wrong topics. Remapping at that moment switches the rule in step with
+    /// new confirmations' classifications.
     WatchedTopic {
         version: TopicModelVersion,
         topics: NonEmpty<TopicId>,
@@ -90,7 +92,8 @@ pub enum RuleStatus {
     Enabled,
     Disabled,
     /// A watched-topic rule that could not be remapped after a re-fit. It
-    /// evaluates nothing until an operator updates it.
+    /// evaluates nothing until an operator updates it. Its active alerts stay
+    /// active: they were valid when raised.
     Stale,
 }
 

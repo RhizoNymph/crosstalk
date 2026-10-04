@@ -21,8 +21,9 @@ use crate::support::Timestamp;
 pub enum DeclaredDetection {
     /// No traffic yet, and the idle window has not closed.
     AwaitingTraffic,
-    /// No traffic by the time the idle window closed. Raises
-    /// `SanctionedUnused` when the channel's policy is sanctioned.
+    /// No traffic by the time the idle window closed. Flow publishes
+    /// `DeclaredChannelUnused` whatever the policy; the `SanctionedUnused`
+    /// alert rule (L6) checks whether the policy is sanctioned.
     Unused {
         since: Timestamp,
     },

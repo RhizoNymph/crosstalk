@@ -55,7 +55,9 @@ impl Embedding {
 }
 
 /// One fit of the topic model. Topic ids are only meaningful within the fit
-/// that produced them; a re-cluster produces a new version.
+/// that produced them; a re-cluster produces a new version. Version 0 is the
+/// unfitted model: active from the start, it classifies every transmission
+/// as an outlier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopicModelVersion(pub u32);
 
@@ -66,6 +68,9 @@ pub struct Topic {
     pub label: String,
     /// Top c-TF-IDF terms, highest weight first.
     pub terms: Vec<(String, f32)>,
+    /// The mean of its members' embeddings, normalized. Used to remap
+    /// watched topics across versions.
+    pub centroid: Embedding,
     pub fitted_at: Timestamp,
 }
 

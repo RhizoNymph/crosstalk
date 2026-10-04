@@ -24,6 +24,10 @@
 //! **Policy.** A channel-routed transmission is judged by the channel policy
 //! in force when it was confirmed.
 //!
+//! **Discarded is final.** Content evidence that arrives after a suspected
+//! transmission was discarded opens a new transmission through the normal
+//! path; the discarded one is never revived.
+//!
 //! The sender is unknown until content evidence arrives, so it lives inside
 //! [`Confirmed`], not on the transmission itself.
 
@@ -61,6 +65,25 @@ pub enum Route {
     /// The reader's own output contains the sender's text, but none of the
     /// reader's visible inputs did: a channel the gateway cannot see.
     Unobserved,
+}
+
+/// A route that needs no channel: what a transmission opened and confirmed
+/// in one step can have.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NonChannelRoute {
+    Delegation(DelegationDirection),
+    Direct(DirectCarrier),
+    Unobserved,
+}
+
+impl From<NonChannelRoute> for Route {
+    fn from(route: NonChannelRoute) -> Self {
+        match route {
+            NonChannelRoute::Delegation(direction) => Route::Delegation(direction),
+            NonChannelRoute::Direct(carrier) => Route::Direct(carrier),
+            NonChannelRoute::Unobserved => Route::Unobserved,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

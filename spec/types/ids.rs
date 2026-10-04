@@ -90,21 +90,37 @@ macro_rules! secret_digest {
         $(#[$doc])*
         ///
         /// A BLAKE3 keyed with the deployment's secret, so a stored digest
-        /// cannot be used to confirm a guessed value.
+        /// cannot be used to confirm a guessed value. It records which version
+        /// of the secret computed it.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(Blake3);
+        pub struct $name {
+            key: SecretVersion,
+            digest: Blake3,
+        }
 
         impl $name {
-            pub const fn from_keyed_digest(digest: Blake3) -> Self {
-                Self(digest)
+            pub const fn from_keyed_digest(key: SecretVersion, digest: Blake3) -> Self {
+                Self { key, digest }
+            }
+
+            pub const fn key(&self) -> SecretVersion {
+                self.key
             }
 
             pub const fn digest(&self) -> &Blake3 {
-                &self.0
+                &self.digest
             }
         }
     )*};
 }
+
+/// A version of the deployment secret that keys [`CredentialHash`] and
+/// [`AccountHash`]. Every node loads the same versions. On rotation the new
+/// version becomes current while the previous one stays loaded for an overlap
+/// period, during which the proxy computes both digests so identity resolution
+/// can link evidence across the change. The secret itself is never logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SecretVersion(pub u16);
 
 secret_digest! {
     /// A credential (API key, OAuth access token, exchanged token, server

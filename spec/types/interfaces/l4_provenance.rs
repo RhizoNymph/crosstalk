@@ -9,9 +9,9 @@
 //! agent's output that none of its visible inputs contained is a match with
 //! carrier `ReaderOutput`, evidence of a channel the gateway cannot see.
 //!
-//! A fingerprint's frequency is the number of live (unexpired) spans of any
-//! origin whose text contains it. Fingerprints above the cutoff are
-//! boilerplate.
+//! A fingerprint's frequency is the number of distinct texts (spans of any
+//! origin, and scanned input parts) containing it that were observed within
+//! the retention period. Fingerprints above the cutoff are boilerplate.
 //!
 //! Implementations:
 //! - `Segmenter`: `NovelRunSegmenter`.
@@ -22,6 +22,7 @@
 //! - `SemanticMatcher`: `EmbeddingSimilarityMatcher`, an optional second
 //!   stage for paraphrase that produces `MatchKind::Semantic`.
 
+use crate::aggregates::topic::Embedding;
 use crate::derived::provenance::fingerprint::{
     Fingerprint, FingerprintHit, PositionedFingerprint, WinnowParams,
 };
@@ -29,7 +30,7 @@ use crate::derived::provenance::matching::Codec;
 use crate::derived::provenance::span::{Origin, OriginatedSpan, SpanLocation};
 use crate::ids::SpanId;
 use crate::observed::message::Message;
-use crate::support::{ByteRange, Similarity};
+use crate::support::{ByteRange, Similarity, Timestamp};
 
 /// A span before it has an id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +85,14 @@ pub trait FingerprintIndex {
     /// are boilerplate: not indexed, and ignored on lookup.
     async fn frequency(&self, fingerprint: Fingerprint) -> Result<u64, IndexError>;
 
+    /// Count every fingerprint of a scanned text toward `frequency`,
+    /// whether or not it is indexed. Observations age out after retention.
+    async fn observe(
+        &mut self,
+        fingerprints: &[Fingerprint],
+        at: Timestamp,
+    ) -> Result<(), IndexError>;
+
     /// Remove the fingerprints of expired spans.
     async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
 }
@@ -98,11 +107,21 @@ pub struct SemanticHit {
 }
 
 pub trait SemanticMatcher {
+    /// Only originated spans can be stored.
+    async fn insert(
+        &mut self,
+        span: &OriginatedSpan,
+        embedding: Embedding,
+    ) -> Result<(), IndexError>;
+
     async fn lookup(
         &self,
         text: &str,
         threshold: Similarity,
     ) -> Result<Vec<SemanticHit>, IndexError>;
+
+    /// Remove expired spans.
+    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,12 +11,23 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ChannelId, TransmissionId};
 use crate::support::Timestamp;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassificationCause {
+    /// The transmission was just confirmed.
+    Confirmation,
+    /// A re-fit re-classified an existing transmission.
+    Refit,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InsightEvent {
     /// Published once per transmission per topic-model version: on
     /// confirmation under the current version, and again for every
-    /// transmission when a re-fit produces a new version.
+    /// transmission when a re-fit produces a new version. Content alert rules
+    /// (WatchedTopic, SemanticQuery) evaluate only `Confirmation`, so a re-fit
+    /// never re-raises alerts about history.
     TransmissionClassified {
+        cause: ClassificationCause,
         transmission: TransmissionId,
         from: AgentId,
         to: AgentId,
@@ -26,9 +37,11 @@ pub enum InsightEvent {
         classification: Classification,
     },
     /// Every transmission has been classified under `version`; readers may
-    /// switch to it.
+    /// switch to it once they have applied `transmissions` classifications
+    /// under it.
     TopicVersionReady {
         version: TopicModelVersion,
+        transmissions: u64,
     },
     EdgeUpdated(EdgeKey),
     AlertOpened(Alert),

@@ -39,7 +39,8 @@ pub struct Caller {
 pub enum Permission {
     /// Topology, channels, alerts: no message content.
     View,
-    /// Transmission content, search, projections.
+    /// Transmission content, search, topics (their labels and terms come
+    /// from message text) and projections.
     Content,
     /// Policy changes and agent merges.
     Govern,
@@ -47,6 +48,8 @@ pub enum Permission {
     Triage,
 }
 
+/// Empty `states` means every state. `channel` keeps alerts whose subject is
+/// that channel or a transmission routed through it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AlertFilter {
     pub states: Vec<AlertStateKind>,

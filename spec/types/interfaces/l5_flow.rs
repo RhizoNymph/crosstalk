@@ -24,7 +24,7 @@ use crate::derived::flow::access::{Access, AccessKind, Extraction};
 use crate::derived::flow::channel::policy::{Policy, PolicyAuthor};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
-use crate::derived::flow::transmission::{Confirmed, Route};
+use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AgentId, ChannelId, TransmissionId};
 use crate::observed::message::{ToolCall, ToolResult};
@@ -90,7 +90,7 @@ pub enum TransmissionUpdate {
     OpenConfirmed {
         transmission: TransmissionId,
         to: AgentId,
-        route: Route,
+        route: NonChannelRoute,
         confirmed: Confirmed,
     },
     /// A later match from the same sender to the same reader exchange.

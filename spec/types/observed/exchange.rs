@@ -137,6 +137,8 @@ pub enum ExchangeFailure {
     },
     /// The upstream sent an error event inside a 2xx stream.
     UpstreamErrorEvent,
+    /// A complete 2xx response whose body the normalizer could not parse.
+    UnparseableResponse,
     ClientDisconnected,
     Timeout,
 }
