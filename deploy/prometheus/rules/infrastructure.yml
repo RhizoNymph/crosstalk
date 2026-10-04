@@ -1,0 +1,261 @@
+# Infrastructure alerts for the single-machine compose deployment.
+#
+# There is no Alertmanager: these alerts only surface in the Prometheus UI
+# (/alerts) and in Grafana (Alerting > Alert rules, data source "Prometheus",
+# plus the "Rule evaluation" panel on the crosstalk / infrastructure
+# dashboard). Nothing pages anyone.
+#
+# Metric sources: node-exporter v1.12 (job node, --path.rootfs=/host, so the
+# host root filesystem is mountpoint "/"), cAdvisor v0.60 (job cadvisor, docker
+# labels exported as container_label_*), postgres-exporter v0.20.1 (job
+# postgres), Loki 3.7 (job loki), Alloy 1.20 (job alloy).
+#
+# The disk rules watch "/" only: the Postgres named volume and the blob store
+# bind mount live there by default. If either is moved to another filesystem,
+# widen the mountpoint matcher.
+
+groups:
+  - name: crosstalk-infra
+    rules:
+      # ---------------------------------------------------------------- host
+      - alert: HostDiskWillFillIn12h
+        expr: |
+          (
+            predict_linear(node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"}[6h], 12 * 3600) < 0
+          )
+          and
+          (
+            node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"}
+              / node_filesystem_size_bytes{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"} < 0.40
+          )
+          and
+          node_filesystem_readonly{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"} == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk on {{ $labels.instance }} will fill within 12h"
+          description: >-
+            At the 6h trend, {{ $labels.mountpoint }} ({{ $labels.device }}) on
+            {{ $labels.instance }} runs out of space within 12 hours. It holds the
+            Postgres volume and the blob store. Currently
+            {{ with printf "node_filesystem_avail_bytes{job='node',instance='%s',mountpoint='%s',device='%s'}" $labels.instance $labels.mountpoint $labels.device | query }}{{ . | first | value | humanize1024 }}B{{ end }}
+            free.
+
+      - alert: HostDiskAbove85Percent
+        expr: |
+          100 * (
+            1 - node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"}
+                / node_filesystem_size_bytes{job="node", mountpoint="/", fstype!~"rootfs|tmpfs"}
+          ) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk on {{ $labels.instance }} is {{ $value | humanize }}% full"
+          description: >-
+            {{ $labels.mountpoint }} ({{ $labels.device }}) on {{ $labels.instance }}
+            is {{ $value | humanize }}% used. Postgres and the blob store share this
+            filesystem; Postgres stops accepting writes when it is full.
+
+      - alert: HostMemoryAbove90Percent
+        expr: |
+          100 * (1 - node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"}) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.instance }} memory is {{ $value | humanize }}% used"
+          description: >-
+            MemAvailable on {{ $labels.instance }} has been below 10% of MemTotal
+            for 10 minutes ({{ $value | humanize }}% used). Expect OOM kills; check
+            the per-service memory panel.
+
+      - alert: HostHighCpu
+        expr: |
+          100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{job="node", mode="idle"}[5m]))) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.instance }} CPU is {{ $value | humanize }}% busy"
+          description: >-
+            Average CPU busy across all cores on {{ $labels.instance }} has been above
+            90% for 15 minutes ({{ $value | humanize }}%).
+
+      # ---------------------------------------------------------- containers
+      # cAdvisor gives each container start a new series (the docker
+      # `restartcount` label changes), so take the newest start time per
+      # service and count how often it moved.
+      - alert: ContainerRestarting
+        expr: |
+          changes(
+            max by (container_label_com_docker_compose_service) (
+              container_start_time_seconds{container_label_com_docker_compose_project="crosstalk"}
+            )[15m:30s]
+          ) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Service {{ $labels.container_label_com_docker_compose_service }} restarted {{ $value }} times in 15m"
+          description: >-
+            The {{ $labels.container_label_com_docker_compose_service }} container has
+            started {{ $value }} times in the last 15 minutes (crash loop or repeated
+            OOM kill). Check its logs in the Logs row of the infrastructure dashboard.
+
+      - alert: ContainerOomKilled
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            increase(container_oom_events_total{container_label_com_docker_compose_project="crosstalk"}[15m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Service {{ $labels.container_label_com_docker_compose_service }} hit an OOM kill"
+          description: >-
+            {{ $value | humanize }} OOM event(s) in the last 15 minutes for
+            {{ $labels.container_label_com_docker_compose_service }}. Raise its memory
+            limit or find the leak.
+
+      # absent() only says something when cAdvisor itself is being scraped;
+      # a dead cAdvisor is reported by ScrapeTargetDown instead.
+      - alert: ContainerDown
+        expr: |
+          (
+            absent(container_start_time_seconds{container_label_com_docker_compose_project="crosstalk", container_label_com_docker_compose_service="postgres"})
+            or
+            absent(container_start_time_seconds{container_label_com_docker_compose_project="crosstalk", container_label_com_docker_compose_service="crosstalk"})
+          )
+          and on () (up{job="cadvisor"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.container_label_com_docker_compose_service }} has no running container"
+          description: >-
+            cAdvisor reports no container for compose service
+            {{ $labels.container_label_com_docker_compose_service }} in project
+            {{ $labels.container_label_com_docker_compose_project }} for 2 minutes.
+            {{ if eq $labels.container_label_com_docker_compose_service "postgres" }}The gateway cannot persist anything without Postgres.{{ else }}Agents cannot reach the gateway.{{ end }}
+
+      # ------------------------------------------------------------ postgres
+      - alert: PostgresDown
+        expr: pg_up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres is unreachable from postgres-exporter ({{ $labels.instance }})"
+          description: >-
+            postgres-exporter on {{ $labels.instance }} could not connect to Postgres
+            for 1 minute (pg_up == 0).
+
+      - alert: PostgresConnectionsNearMax
+        expr: |
+          sum by (instance) (pg_stat_database_numbackends{job="postgres"})
+            / on (instance)
+          max by (instance) (pg_settings_max_connections{job="postgres"})
+            > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres {{ $labels.instance }} at {{ $value | humanizePercentage }} of max_connections"
+          description: >-
+            Client backends on {{ $labels.instance }} have used more than 80% of
+            max_connections for 5 minutes ({{ $value | humanizePercentage }}). New
+            connections will be refused at 100%; check pool sizes.
+
+      - alert: PostgresDeadlocks
+        expr: |
+          sum by (instance, datname) (increase(pg_stat_database_deadlocks{job="postgres"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres deadlocks in database {{ $labels.datname }}"
+          description: >-
+            {{ $value | humanize }} deadlock(s) detected in {{ $labels.datname }} on
+            {{ $labels.instance }} in the last 10 minutes.
+
+      # pg_stat_activity_max_tx_duration (default stat_activity collector) is the
+      # age of the oldest open transaction per (datname, state, user, app).
+      # 5 minutes is far longer than any gateway request; tune if the analysis
+      # pipeline legitimately holds longer transactions.
+      - alert: PostgresLongTransaction
+        expr: |
+          max by (instance, datname, state, usename, application_name) (
+            pg_stat_activity_max_tx_duration{job="postgres", state!="idle", backend_type!~"autovacuum.*"}
+          ) > 300
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres transaction open for {{ $value | humanizeDuration }} in {{ $labels.datname }}"
+          description: >-
+            A transaction in state "{{ $labels.state }}" (user {{ $labels.usename }},
+            application "{{ $labels.application_name }}") in {{ $labels.datname }} has
+            been open for {{ $value | humanizeDuration }}. Long transactions block
+            vacuum and hold locks.
+
+      # ---------------------------------------------------- monitoring stack
+      - alert: ScrapeTargetDown
+        expr: up{job!="crosstalk"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.job }} ({{ $labels.instance }}) is down"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.instance }} (job
+            {{ $labels.job }}) for 5 minutes. Panels and alerts that depend on it are
+            blind until it is back.
+
+      # The gateway's metrics listener may not exist yet, so this is a warning.
+      - alert: ScrapeTargetDown
+        expr: up{job="crosstalk"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk metrics endpoint {{ $labels.instance }} is down"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.instance }} (job
+            {{ $labels.job }}) for 5 minutes. If the container is running (see
+            ContainerDown), the ops listener is not serving /metrics.
+
+      - alert: LokiIngestionErrors
+        expr: |
+          sum by (reason) (rate(loki_discarded_samples_total{job="loki"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki is discarding log lines ({{ $labels.reason }})"
+          description: >-
+            Loki has been discarding log lines for 10 minutes, reason
+            "{{ $labels.reason }}" ({{ $value | humanize }} lines/s). Those lines are
+            lost; check Loki limits.
+
+      - alert: AlloyDroppingLogs
+        expr: |
+          sum by (reason) (rate(loki_write_dropped_entries_total{job="alloy"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alloy is dropping log entries before they reach Loki ({{ $labels.reason }})"
+          description: >-
+            Alloy's loki.write has been dropping entries for 10 minutes, reason
+            "{{ $labels.reason }}" ({{ $value | humanize }} entries/s). Check that Loki
+            is up and not rate limiting.
+
+      - alert: PrometheusRuleEvaluationFailures
+        expr: |
+          sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rule group {{ $labels.rule_group }} is failing to evaluate"
+          description: >-
+            {{ $value | humanize }} evaluation failure(s) in {{ $labels.rule_group }}
+            in the last 10 minutes; alerts in that group may never fire.
