@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.index.cutoff-not-returned"
+statement = "FingerprintIndex::lookup returns no hit for a fingerprint whose frequency is above the cutoff at lookup time, including entries inserted while it was below."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A fingerprint can cross the cutoff after some spans containing it were
+indexed. Returning those stale postings would turn boilerplate into content
+matches between unrelated agents. It also bounds the hits one fingerprint
+can return to the cutoff, which keeps lookup fan-out bounded.
+"""
+
+[evidence]
+unit = "crosstalk::provenance::tests::lookup_ignores_fingerprints_that_crossed_cutoff"
+integration = "crosstalk::provenance::integration::pg_lookup_ignores_fingerprints_above_cutoff"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
