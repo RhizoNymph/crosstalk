@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.lineage.remap-function"
+statement = "TopicLineage::remap returns Remapped to the lineage's to version, with each watched topic replaced by its best link's topic in rule order without repeats, when every watched topic's best link reaches the threshold, and otherwise Stale listing exactly the watched topics whose best link is absent or below it."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the remap rule of analysis.rule.watched-remap and
+analysis.rule.watched-stale as one pure function over the lineage. The
+threshold is inclusive, the floor plays no part, and a rule is never
+remapped to a subset of its topics. Two watched topics that went to the
+same new topic are listed once.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::topic_history::remap_follows_best_links_in_rule_order_without_duplicates", "crosstalk_spec::tests::topic_history::remap_threshold_is_inclusive", "crosstalk_spec::tests::topic_history::remap_is_stale_when_any_best_link_is_below_threshold", "crosstalk_spec::tests::topic_history::remap_ignores_the_lineage_floor", "crosstalk_spec::tests::topic_history::remap_is_stale_when_successor_has_no_topics", "crosstalk_spec::tests::topic_history::remap_rejects_other_versions_and_unknown_topics"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.version.active-follows-topology"
+statement = "When the TopicCatalog processes TopicVersionActivated for version v, v becomes Active with activated_at the event's time and every older version not yet Superseded becomes Superseded by v at that time."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Active in the version list must mean what graphs and series read. L7 owns
+that switch and announces it (topology.version.publishes-activated); the
+catalog follows the event rather than deciding on its own, so the UI's
+version list never disagrees with the topic_version on its graphs for
+longer than the event's delivery.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::catalog_follows_version_activated"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

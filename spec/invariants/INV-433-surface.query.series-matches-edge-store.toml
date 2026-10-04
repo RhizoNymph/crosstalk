@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.query.series-matches-edge-store"
+statement = "For a Caller with View, QueryApi::series returns exactly what EdgeStore::series returns for the same grid, weighting, grouping and filter, with BucketWidthMismatch mapped to BadRequest and other store errors to Store."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+L7 computes series so that they add up to its graphs. If the surface
+re-filtered, re-grouped or dropped points, the brush would no longer match
+the graph. Mapping BucketWidthMismatch to BadRequest tells the UI to
+rebuild its grid from the store's bucket width.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_series_matches_in_memory_edge_store"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

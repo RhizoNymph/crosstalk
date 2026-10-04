@@ -38,13 +38,15 @@ spec/types/
 │           └── policy.rs  Policy, Decision, TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), TopicSlot, EdgeStats, TopologyFilter, TopologyGraph
+│   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
+│   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked), Remap
 │   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
-│   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
@@ -52,8 +54,8 @@ spec/types/
 │   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
-│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage
-│   ├── l7_topology.rs     EdgeStore
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, AlertRuleEval, AlertTriage
+│   ├── l7_topology.rs     EdgeStore (graph and series)
 │   └── l8_surface.rs      Caller, QueryApi, OperatorActions, AlertSink
 └── tests/                 tests for the invariants checked at runtime
 ```

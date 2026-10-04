@@ -11,4 +11,6 @@ mod flow;
 mod infrastructure;
 mod observed;
 mod provenance;
+mod series;
 mod support;
+mod topic_history;

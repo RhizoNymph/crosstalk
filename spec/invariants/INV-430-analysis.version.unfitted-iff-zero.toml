@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.version.unfitted-iff-zero"
+statement = "A TopicVersionInfo is unfitted exactly when its version is 0, and version 0 has always been active."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Version 0 is the unfitted model that classifies everything as an outlier
+and is active from the start; no fit produced it, so it has no fit times.
+Every other version came from a fit. TopicVersionInfo::new returns
+VersionZeroFitted, UnfittedNonZero or UnfittedNeverActivated otherwise, so
+the UI never shows a fit time for version 0 or a missing one for any other.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionInfo::new"
+unit = ["crosstalk_spec::tests::topic_history::version_zero_is_unfitted_and_activated", "crosstalk_spec::tests::topic_history::version_zero_cannot_be_fitted", "crosstalk_spec::tests::topic_history::only_version_zero_is_unfitted", "crosstalk_spec::tests::topic_history::unfitted_version_was_always_active"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

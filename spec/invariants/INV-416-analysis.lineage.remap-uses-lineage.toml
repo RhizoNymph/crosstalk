@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.lineage.remap-uses-lineage"
+statement = "When TopicVersionReady for version V is processed, every WatchedTopic rule that is not Stale and whose version is V's predecessor gets exactly the outcome of TopicLineage::remap over the stored lineage from the predecessor to V: version and topics replaced on Remapped, status Stale on Stale."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Deriving the remap from the stored lineage, instead of comparing centroids
+again, means the UI's lineage view and the alert rules cannot disagree
+about what a topic became. Together with analysis.lineage.best-is-argmax
+it implies analysis.rule.watched-remap and analysis.rule.watched-stale.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::watched_rule_remap_reads_stored_lineage"
+property = "crosstalk::analysis::tests::remap_outcome_equals_lineage_remap"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

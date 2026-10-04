@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.query.topic-history-matches-catalog"
+statement = "For a Caller with View, QueryApi topic_versions, topic_sizes and topic_lineage return exactly what TopicCatalog returns, with a missing topic_sizes version resolved to the history's active version, UnknownVersion mapped to NotFound and StillFitting to BadRequest."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The catalog is the single record of versions, sizes and lineage. Passing
+it through unchanged keeps the UI's version list, size charts and lineage
+in step with what alert rules were remapped from. Resolving a missing
+version to the active one makes the default view the version graphs read.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_topic_history_matches_catalog"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

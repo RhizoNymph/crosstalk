@@ -7,12 +7,15 @@
 //!
 //! Implementations:
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
-//!   share) and `ContentExplorer` (search, topics, UMAP).
+//!   share, the time brush and trend lines), `TopicHistory` (versions, sizes,
+//!   lineage) and `ContentExplorer` (search, topics, UMAP).
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
 
 use crate::aggregates::alert::Alert;
 use crate::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
+use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::transmission::Transmission;
 use crate::ids::{AlertId, ChannelId, EventId, OperatorId, TransmissionId};
@@ -38,7 +41,9 @@ pub struct Caller {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Permission {
-    /// Topology, channels, alerts: no message content.
+    /// Topology, series, channels, alerts, and the topic history (versions,
+    /// sizes, lineage): ids, counts, times and similarities, no message
+    /// content and no topic labels or terms.
     View,
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
@@ -82,6 +87,40 @@ pub trait QueryApi {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<TopologyGraph, QueryError>;
+
+    /// Needs [`Permission::View`]. Exactly [`EdgeStore::series`]; a grid
+    /// for another bucket width is `BadRequest`, like an unaligned graph
+    /// window.
+    ///
+    /// [`EdgeStore::series`]: crate::interfaces::l7_topology::EdgeStore::series
+    async fn series(
+        &self,
+        caller: &Caller,
+        grid: SeriesGrid,
+        weighting: Weighting,
+        grouping: SeriesGrouping,
+        filter: &TopologyFilter,
+    ) -> Result<TopologySeries, QueryError>;
+
+    /// Needs [`Permission::View`].
+    async fn topic_versions(&self, caller: &Caller) -> Result<TopicVersionHistory, QueryError>;
+
+    /// Needs [`Permission::View`]. `None` is the active version. An unknown
+    /// version is `NotFound`; a fitting one is `BadRequest`.
+    async fn topic_sizes(
+        &self,
+        caller: &Caller,
+        version: Option<TopicModelVersion>,
+        window: Option<TimeWindow>,
+    ) -> Result<TopicSizes, QueryError>;
+
+    /// Needs [`Permission::View`]. The lineage from `from` to its successor;
+    /// `None` while it has none. An unknown version is `NotFound`.
+    async fn topic_lineage(
+        &self,
+        caller: &Caller,
+        from: TopicModelVersion,
+    ) -> Result<Option<TopicLineage>, QueryError>;
 
     async fn search(
         &self,

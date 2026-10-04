@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.version.timestamps-ordered"
+statement = "A TopicVersionInfo's timestamps never decrease in the order started, fitted, ready, activated, superseded."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The version list is drawn on the same time axis as the series. A version
+activated before it was fitted, or superseded before it was activated,
+would be a corrupt record. TopicVersionInfo::new returns
+TimestampsOutOfOrder otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionInfo::new"
+unit = "crosstalk_spec::tests::topic_history::version_timestamps_never_go_backwards"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

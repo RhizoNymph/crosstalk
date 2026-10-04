@@ -1,0 +1,22 @@
+[invariant]
+id = "topology.series.grid-whole-steps"
+statement = "Every SeriesGrid's window starts on a bucket boundary and is a whole number of steps long, from 1 to SeriesGrid::MAX_POINTS steps."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+With the start aligned and the length a whole number of steps, every point
+covers exactly one step and the window ends on a bucket boundary, so the
+grid's window is a valid graph window and the series and graph over it
+can be compared. A ragged last point would look like a drop in traffic on
+a trend line. The point cap bounds the work and response size of one
+query; a longer window needs a coarser step. SeriesGrid::new returns
+UnalignedStart, PartialStep or TooManyPoints otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::SeriesGrid::new"
+unit = ["crosstalk_spec::tests::series::grid_rejects_unaligned_start", "crosstalk_spec::tests::series::grid_rejects_partial_last_step", "crosstalk_spec::tests::series::grid_bounds_point_count", "crosstalk_spec::tests::series::grid_points_tile_the_window"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

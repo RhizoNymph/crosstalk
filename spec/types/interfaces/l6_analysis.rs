@@ -3,17 +3,29 @@
 //!
 //! `analyze` is triggered by `TransmissionConfirmed`: embed the matched
 //! content, assign a topic, publish `TransmissionClassified`. The clock
-//! triggers periodic re-fits. `alerts` evaluates rules against detect and
-//! insight events and triages the drafts.
+//! triggers periodic re-fits, one at a time. A re-fit records its version as
+//! `Fitting` in the [`TopicCatalog`]; when `TopicModel::fit` returns, the
+//! catalog stores the [`TopicLineage`] from the predecessor (the newest
+//! version that is no longer fitting) to the new version, computed from
+//! centroid similarity. `analyze` then re-classifies every transmission and
+//! publishes `TopicVersionReady`, and the version becomes `Ready`.
+//! `TopicVersionActivated` from L7 makes it `Active` and supersedes the older
+//! versions. `alerts` evaluates rules against detect and insight events and
+//! triages the drafts; on `TopicVersionReady` it remaps every watched-topic
+//! rule on the predecessor with [`TopicLineage::remap`] over the stored
+//! lineage, so a rule becomes `Stale` exactly when the lineage shows a
+//! watched topic without a successor above the rule's threshold.
 //!
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
 //! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).
+//! - `TopicCatalog`: `PgTopicCatalog`.
 //! - `SearchIndex`: `PgHybridSearch` (full-text plus pgvector).
 //! - `AlertRuleEval`: one per [`AlertRuleKind`].
 
 use crate::aggregates::alert::{AlertDraft, AlertRuleKind, TriageOutcome};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
+use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::policy::Policy;
 use crate::events::Envelope;
 use crate::ids::{AlertRuleId, ChannelId, TransmissionId};
@@ -33,6 +45,27 @@ pub trait TopicModel {
     fn fit(&self, embeddings: &[Embedding]) -> Result<(TopicModelVersion, Vec<Topic>), TopicError>;
 
     fn assign(&self, embedding: &Embedding) -> Result<Assignment, TopicError>;
+}
+
+/// The record of topic-model versions, topic sizes and lineage.
+pub trait TopicCatalog {
+    async fn versions(&self) -> Result<TopicVersionHistory, CatalogError>;
+
+    /// Each of `version`'s topics, and its outliers, with the transmissions
+    /// assigned to them under `version`; with a window, only transmissions
+    /// confirmed in it. Every topic of the version is listed once. Fails with
+    /// `StillFitting` for a version that is not ready yet.
+    async fn sizes(
+        &self,
+        version: TopicModelVersion,
+        window: Option<TimeWindow>,
+    ) -> Result<TopicSizes, CatalogError>;
+
+    /// The lineage from `from` to its successor: one entry per topic of
+    /// `from`, whose best link is the successor's topic with the most similar
+    /// centroid (ties to the lower id). `None` while `from` has no successor
+    /// whose fit has returned.
+    async fn lineage(&self, from: TopicModelVersion) -> Result<Option<TopicLineage>, CatalogError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +139,13 @@ pub enum TopicError {
         needed: u32,
         got: u32,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogError {
+    Store { reason: String },
+    UnknownVersion(TopicModelVersion),
+    StillFitting(TopicModelVersion),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

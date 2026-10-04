@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.version.ready-after-event"
+statement = "A version's status in the TopicCatalog becomes Ready only once TopicVersionReady for it has been published, with ready_at the time of that event."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Ready promises that every transmission is classified under the version and
+watched-topic rules have been remapped to it (analysis.lineage.remap-uses-lineage).
+Marking it earlier would let the UI offer sizes and lineage for a version
+whose classifications are still incomplete.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::version_ready_only_after_version_ready_event"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

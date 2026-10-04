@@ -37,9 +37,10 @@ Overview:
       index, content matching) and L5 flow detection (resource extraction,
       channel registry, write/read correlation into transmissions).
     insight: >
-      L6 analysis (embeddings, topics, search, alert rules), L7 topology
-      (edge aggregation per time window), L8 surface (query API, UI, operator
-      actions, alert sinks).
+      L6 analysis (embeddings, topics, the topic-model version history with
+      topic sizes and lineage, search, alert rules), L7 topology (edge
+      aggregation per time window, graphs and time series), L8 surface
+      (query API, UI, operator actions, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -53,8 +54,10 @@ Overview:
     spans (ContentMatched); L5 turns tool calls into accesses, resolves
     channels and correlates cross-agent accesses and content matches into
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
-    classifies transmissions and evaluates alert rules → L7 aggregates
-    edges → L8 serves topology, search and alerts. Operator actions flow
+    classifies transmissions, records topic-model versions and their
+    lineage, and evaluates alert rules → L7 aggregates edges and announces
+    topic-version activation back to L6 → L8 serves topology, time series,
+    topic history, search and alerts. Operator actions flow
     back down: policy changes to L5, agent merges to L3.
 
 Features Index:
@@ -62,8 +65,9 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams and credentials), derived inferences,
-      aggregates, bus events and per-layer interfaces, with tests for the
-      invariants checked at runtime. Harness and server wire behavior it is
+      aggregates (including time series and topic history), bus events and
+      per-layer interfaces, with tests for the invariants checked at runtime
+      and one TOML file per invariant in spec/invariants. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
