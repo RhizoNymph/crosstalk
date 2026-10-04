@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.resource.path-normalization"
+statement = "Two file locators on the same host whose absolute paths are equal after resolving `.` and `..` segments normalize to the same ResourceId."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Agents in different working directories name one shared file differently
+(`/work/a/../shared/notes.md`, `/work/shared/./notes.md`). Without lexical
+resolution the shared file splits into several resources and the writer and
+reader never meet. Resolution is lexical only: the gateway cannot see the
+agent's filesystem, so symlinks are not followed.
+"""
+
+[evidence]
+property = "crosstalk::flow::resource::tests::equivalent_paths_share_resource_id"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

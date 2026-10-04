@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.registry.pattern-normalization"
+statement = "A declared pattern matches exactly the same locators as the same pattern written with a differently cased host or an unresolved path prefix."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+`ResourcePattern::matches` compares against normalized locators with `==`
+and `starts_with`. A config entry naming `Wiki.Example` or
+`/srv/./shared/` would silently match nothing: the sanctioned channel would
+go Unused and its real traffic would be discovered as a new, unreviewed
+channel. `declare` must normalize patterns the same way locators are.
+"""
+
+[evidence]
+property = "crosstalk::flow::registry::tests::declared_pattern_normalized_like_locators"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

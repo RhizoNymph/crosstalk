@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.policy.routed-once"
+statement = "Every confirmed transmission with a Channel route is routed through its channel's policy exactly once."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Policy routing is where confirmed traffic becomes an alert or is dropped.
+Missing it lets unsanctioned traffic through silently; routing it twice (on
+redelivery or restart) raises its alert twice. Delegation, Direct and
+Unobserved transmissions have no channel and are not policy-routed.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::confirmed_routed_once"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

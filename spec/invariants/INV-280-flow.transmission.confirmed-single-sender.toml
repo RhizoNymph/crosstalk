@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.transmission.confirmed-single-sender"
+statement = "Every content match in a Confirmed transmission has the same origin agent."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The sender is known only from content evidence and is taken from the
+matches. Edges are keyed by sender, so a transmission mixing two senders
+would credit one with the other's text. `Confirmed::new` and
+`Confirmed::extend` reject a different origin with
+`MixedMatches::SeveralOrigins`, and the fields are private.
+"""
+
+[evidence]
+type = ["crosstalk_spec::derived::flow::transmission::Confirmed::new", "crosstalk_spec::derived::flow::transmission::Confirmed::extend"]
+unit = ["crosstalk_spec::tests::flow::confirmed_requires_one_origin", "crosstalk_spec::tests::flow::confirmed_takes_sender_from_matches_and_sums_bytes", "crosstalk_spec::tests::flow::confirmed_extend_keeps_one_sender_and_reader"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

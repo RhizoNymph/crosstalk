@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.transmission.confirmed-has-content"
+statement = "A transmission in the Confirmed, Classified or Aggregated state holds at least one content match."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Confirmation means the reader's input contains text the sender originated;
+access patterns alone only make a transmission Suspected. These states hold a
+`Confirmed`, whose content is a `NonEmpty<ContentMatch>` behind private
+fields and the checked constructor, so a confirmation without content
+evidence cannot be built.
+"""
+
+[evidence]
+type = ["crosstalk_spec::derived::flow::transmission::Confirmed", "crosstalk_spec::derived::flow::transmission::TransmissionState"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

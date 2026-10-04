@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.policy.policy-at-confirmation"
+statement = "A channel-routed transmission is judged by the channel policy in force when it was confirmed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Policy changes arrive on the bus and may be processed between confirmation
+and routing. Judging by the confirmation-time policy makes the verdict
+independent of processing lag: sanctioning a channel does not retroactively
+silence traffic that was unsanctioned when it happened.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::policy_change_after_confirmation"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

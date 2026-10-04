@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.correlator.shard-affinity"
+statement = "Every access on a channel and every content match carried by a tool result from that channel are delivered to the same correlator shard."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A correlator runs in one task per shard and sees only its own evidence. If a
+channel's write, read and content match landed on different shards, none
+would see enough to open or confirm the transmission. Sharding by channel
+keeps all evidence for one transmission together.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::channel_evidence_reaches_one_shard"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
