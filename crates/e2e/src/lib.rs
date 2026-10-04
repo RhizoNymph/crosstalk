@@ -9,9 +9,9 @@
 //! - [`capture`]: turns a scripted exchange into the `NormalizedExchange`
 //!   `Pipeline::ingest` takes, through L0's route table, identifier and
 //!   adapter and L1's normalizer.
-//! - [`compose`](mod@compose): the composition the harness drives (a pipeline and a
-//!   surface over one set of stores), shaped like
-//!   `crosstalk_gateway::live::Live`.
+//! - [`compose`](mod@compose): the composition the harness drives,
+//!   `crosstalk_gateway::live::Live` (the pipeline, the layer consumers
+//!   and the surface over one set of stores).
 //! - [`feed`](mod@feed): ingests the scenario in time order, moving the clock.
 //! - [`options`]: the composition's configuration.
 //! - [`read`]: the scenario read back through `QueryApi`, as the UI reads.

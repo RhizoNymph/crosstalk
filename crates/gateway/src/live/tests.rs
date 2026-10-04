@@ -1,0 +1,380 @@
+//! A live process end to end, without the layer consumers: the slots that
+//! run, the outbox onto the bus, the surface relay, the L6 classifier and
+//! the evidence feeder.
+
+use std::num::{NonZeroU32, NonZeroU64};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crosstalk_api::InProcessOptions;
+use crosstalk_memory::analysis::catalog::RetentionPolicy;
+use crosstalk_memory::model::build::test_model;
+use crosstalk_memory::support::ManualClock;
+use crosstalk_spec::aggregates::projection::FrameRetention;
+use crosstalk_spec::aggregates::series::BucketWidth;
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::derived::flow::timing::CorrelationTiming;
+use crosstalk_spec::derived::flow::transmission::{Classification, Route};
+use crosstalk_spec::events::changed::Changed;
+use crosstalk_spec::events::detect::DetectEvent;
+use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
+use crosstalk_spec::events::{BusEvent, Envelope, Subject};
+use crosstalk_spec::ids::{OperatorId, SeededRandom};
+use crosstalk_spec::interfaces::l2_transport::{BlobStore, ConsumerGroup, EventBus, Subscription};
+use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
+use crosstalk_spec::interfaces::l8_surface::export::{
+    ExportFormat, ExportFormats, ExportLimits, GatewayVersion,
+};
+use crosstalk_spec::interfaces::l8_surface::live::{
+    LiveConfig as FeedConfig, LiveFeed, LiveItem, LiveStream, Resume, UiEvent,
+};
+use crosstalk_spec::interfaces::l8_surface::operators::{
+    AccessConfig, OperatorName, RequestIdentity, TrustedOperator,
+};
+use crosstalk_spec::support::Similarity;
+use crosstalk_surface::{EvidenceRecords, SurfaceConfig};
+use crosstalk_testkit::build::{AccessBuilder, ResourceBuilder};
+use crosstalk_testkit::ids::Ids;
+use crosstalk_testkit::time::T0;
+use crosstalk_transport::BusConfig;
+use crosstalk_transport::MpscSubscription;
+use tokio::time::Instant;
+
+use super::{BlobConfig, Live, LiveBlobs, LiveConfig, LiveDrained, Slot, SlotTaken, Stages};
+use crate::live::classify::Classifier;
+use crate::pipeline::Settings;
+
+const MINUTE: u64 = 60_000_000;
+const PATIENCE: Duration = Duration::from_secs(5);
+
+fn surface_options(clock: ManualClock) -> InProcessOptions {
+    let (
+        Ok(formats),
+        Ok(live),
+        Ok(gateway),
+        Ok(threshold),
+        Ok(retention),
+        Ok(floor),
+        Ok(name),
+        Ok(timing),
+    ) = (
+        ExportFormats::new(vec![ExportFormat::Jsonl]),
+        FeedConfig::new(
+            NonZeroU32::MIN.saturating_add(31),
+            Duration::from_secs(15),
+            Duration::from_secs(600),
+        ),
+        GatewayVersion::new("0.1.0-live"),
+        Similarity::new(0.8),
+        RetentionPolicy::new(3),
+        Similarity::new(0.5),
+        OperatorName::new("Live"),
+        CorrelationTiming::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ),
+    )
+    else {
+        panic!("options");
+    };
+    InProcessOptions {
+        clock: Arc::new(clock),
+        seed: 7,
+        surface: SurfaceConfig {
+            export_formats: formats,
+            export_limits: ExportLimits::default(),
+            gateway,
+            default_remap_threshold: threshold,
+            frame_retention: FrameRetention::default(),
+            live,
+        },
+        access: AccessConfig::Trusted(TrustedOperator {
+            id: OperatorId::from_ulid(0x11FE),
+            name,
+        }),
+        bucket_width: BucketWidth::from_micros(NonZeroU64::new(MINUTE).unwrap_or(NonZeroU64::MIN)),
+        timing,
+        retention,
+        lineage_floor: floor,
+        embedding_model: test_model("live"),
+        sinks: Vec::new(),
+        projection_lease: Duration::from_secs(60),
+    }
+}
+
+fn config(blobs: BlobConfig) -> LiveConfig {
+    LiveConfig {
+        surface: surface_options(ManualClock::at(T0)),
+        blobs,
+        bus: BusConfig::default(),
+        pipeline: Settings::default(),
+        id_entropy: SeededRandom::new(7),
+        capture: None,
+    }
+}
+
+async fn start() -> Live {
+    match Live::start(config(BlobConfig::Memory)).await {
+        Ok(live) => live,
+        Err(error) => panic!("start: {error}"),
+    }
+}
+
+async fn observe(live: &Live, subjects: &[Subject]) -> MpscSubscription {
+    match live
+        .stores()
+        .bus
+        .subscribe(
+            subjects,
+            ConsumerGroup("live-test-observer".to_owned()),
+            Settings::default().consumer_retry,
+        )
+        .await
+    {
+        Ok(subscription) => subscription,
+        Err(error) => panic!("subscribe: {error:?}"),
+    }
+}
+
+/// The first envelope on `subscription` that `wanted` accepts.
+async fn first<T>(
+    subscription: &mut MpscSubscription,
+    mut wanted: impl FnMut(&Envelope) -> Option<T>,
+) -> T {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let delivery = match tokio::time::timeout_at(deadline, subscription.next()).await {
+            Ok(Some(Ok(delivery))) => delivery,
+            other => panic!("no matching envelope: {other:?}"),
+        };
+        let found = wanted(&delivery.envelope);
+        if let Err(error) = subscription.ack(delivery.id).await {
+            panic!("ack: {error:?}");
+        }
+        if let Some(found) = found {
+            return found;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_gateway_owned_slots_run_and_the_layer_slots_wait_for_their_crates() {
+    let live = start().await;
+    assert_eq!(
+        live.filled(),
+        [Slot::L6Classify, Slot::Evidence, Slot::SurfaceRelay]
+    );
+    let drained = live.shutdown(Instant::now() + PATIENCE).await;
+    assert_eq!(
+        drained,
+        LiveDrained {
+            capture: true,
+            stages: true
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_slot_is_filled_once() {
+    let live = start().await;
+    let publisher = live.context().publisher.clone();
+    let catalog = live.stores().catalog.clone();
+    let mut stages = Stages::default();
+    assert_eq!(
+        stages.fill(
+            Slot::L6Classify,
+            Classifier::new(catalog.clone(), publisher.clone())
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        stages.fill(Slot::L6Classify, Classifier::new(catalog, publisher)),
+        Err(SlotTaken(Slot::L6Classify))
+    );
+    assert_eq!(stages.filled(), [Slot::L6Classify]);
+    assert!(!stages.unfilled().contains(&Slot::L6Classify));
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
+/// A store-decided event goes outbox, bus, surface relay, live feed.
+#[tokio::test]
+async fn a_store_event_reaches_the_bus_and_the_live_feed() {
+    let live = start().await;
+    let mut observer = observe(&live, &[Subject::Changed]).await;
+    let caller = match live.caller(RequestIdentity::Anonymous).await {
+        Ok(caller) => caller,
+        Err(error) => panic!("caller: {error:?}"),
+    };
+    let mut stream = match live.surface().subscribe(&caller, Resume::Fresh).await {
+        Ok(stream) => stream,
+        Err(error) => panic!("live feed: {error:?}"),
+    };
+
+    let mut ids = Ids::seeded(11);
+    let resource = ResourceBuilder::new(&mut ids)
+        .url("https", "wiki.example", "/live", None)
+        .first_seen(T0)
+        .build();
+    let access = AccessBuilder::new(&mut ids)
+        .by(ids.agent())
+        .on(resource.id)
+        .at(T0)
+        .write()
+        .build();
+    let channel = ids.channel();
+    let mut registry = live.stores().channels.clone();
+    assert_eq!(
+        registry.discover(channel, resource, access.id).await,
+        Ok(())
+    );
+
+    first(&mut observer, |envelope| match &envelope.event {
+        BusEvent::Changed(Changed::Channel(id)) if *id == channel => Some(()),
+        _ => None,
+    })
+    .await;
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        match tokio::time::timeout_at(deadline, stream.next()).await {
+            Ok(Ok(LiveItem::Event {
+                event: UiEvent::ChannelChanged { id },
+                ..
+            })) if id == channel => break,
+            Ok(Ok(_)) => {}
+            other => panic!("live feed: {other:?}"),
+        }
+    }
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
+#[tokio::test]
+async fn a_confirmed_transmission_is_classified_under_the_active_version() {
+    let live = start().await;
+    let mut observer = observe(&live, &[Subject::TransmissionClassified]).await;
+    let mut ids = Ids::seeded(12);
+    let (transmission, from, to, channel) =
+        (ids.transmission(), ids.agent(), ids.agent(), ids.channel());
+    let matched_bytes = NonZeroU64::new(42).unwrap_or(NonZeroU64::MIN);
+    let confirmed = DetectEvent::TransmissionConfirmed {
+        transmission,
+        from,
+        to,
+        route: Route::Channel(channel),
+        at: T0,
+        matched_bytes,
+    };
+    let published = live
+        .context()
+        .publisher
+        .publish(BusEvent::Detect(confirmed))
+        .await;
+    assert!(published.is_ok(), "{published:?}");
+
+    let classified = first(&mut observer, |envelope| match &envelope.event {
+        BusEvent::Insight(event @ InsightEvent::TransmissionClassified { .. }) => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        classified,
+        InsightEvent::TransmissionClassified {
+            cause: ClassificationCause::Confirmation,
+            transmission,
+            from,
+            to,
+            route: Route::Channel(channel),
+            at: T0,
+            matched_bytes,
+            classification: Classification {
+                version: TopicModelVersion(0),
+                topic: None,
+                watched: false,
+            },
+        }
+    );
+    let stored = live
+        .stores()
+        .catalog
+        .assignment(TopicModelVersion(0), transmission);
+    assert_eq!(stored.map(|stored| stored.topic), Some(None));
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
+#[tokio::test]
+async fn an_access_and_its_resource_reach_the_evidence_records() {
+    let live = start().await;
+    let mut ids = Ids::seeded(13);
+    let resource = ResourceBuilder::new(&mut ids)
+        .url("https", "wiki.example", "/evidence", None)
+        .first_seen(T0)
+        .build();
+    let access = AccessBuilder::new(&mut ids)
+        .by(ids.agent())
+        .on(resource.id)
+        .at(T0)
+        .write()
+        .build();
+    let channel = ids.channel();
+    let mut registry = live.stores().channels.clone();
+    assert_eq!(
+        registry
+            .discover(channel, resource.clone(), access.id)
+            .await,
+        Ok(())
+    );
+    assert_eq!(registry.record_access(access.clone()).await, Ok(()));
+    let published = live
+        .context()
+        .publisher
+        .publish(BusEvent::Detect(DetectEvent::AccessRecorded {
+            access: access.clone(),
+            channel,
+        }))
+        .await;
+    assert!(published.is_ok(), "{published:?}");
+
+    let evidence = live.stores().evidence.clone();
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let (Ok(found_access), Ok(found_resource)) = (
+            evidence.access(access.id).await,
+            evidence.resource(resource.id).await,
+        ) else {
+            panic!("evidence read failed");
+        };
+        if let (Some(found_access), Some(found_resource)) = (found_access, found_resource) {
+            assert_eq!(found_access, access);
+            assert_eq!(found_resource, resource);
+            break;
+        }
+        assert!(Instant::now() < deadline, "the evidence was not fed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
+#[tokio::test]
+async fn bodies_can_live_on_the_filesystem() {
+    let Ok(root) = tempfile::tempdir() else {
+        panic!("tempdir");
+    };
+    let live = match Live::start(config(BlobConfig::Fs {
+        root: root.path().join("blobs"),
+    }))
+    .await
+    {
+        Ok(live) => live,
+        Err(error) => panic!("start: {error}"),
+    };
+    assert!(matches!(live.stores().blobs, LiveBlobs::Fs(_)));
+    let blobs = live.pipeline().blobs().clone();
+    let Ok(hash) = blobs.put(b"a body").await else {
+        panic!("put");
+    };
+    let read = live.stores().blobs.get(hash).await;
+    assert_eq!(read, Ok(Some(b"a body".to_vec())));
+    live.shutdown(Instant::now() + PATIENCE).await;
+}

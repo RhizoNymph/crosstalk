@@ -418,11 +418,14 @@ name = "crosstalk-gateway"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "crosstalk-api",
  "crosstalk-canonical",
  "crosstalk-ingress",
+ "crosstalk-memory",
  "crosstalk-sim",
  "crosstalk-spec",
  "crosstalk-store",
+ "crosstalk-surface",
  "crosstalk-testkit",
  "crosstalk-transport",
  "http-body-util",

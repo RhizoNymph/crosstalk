@@ -12,7 +12,7 @@
 
 pub mod in_process;
 
-pub use in_process::{InProcess, InProcessError, InProcessOptions, MemoryStores};
+pub use in_process::{Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores};
 
 #[cfg(test)]
 mod tests;

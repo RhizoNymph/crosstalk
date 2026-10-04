@@ -1,0 +1,53 @@
+//! The two hops between the stores and the bus.
+//!
+//! ```text
+//! stores ── Outbox ──▶ forward_outbox ── Publisher ──▶ bus
+//! bus ── group live-surface-relay ──▶ SurfaceRelay ──▶ InProcess relay (node facts, live feed)
+//! ```
+//!
+//! So a store-decided event (`ChannelDiscovered`, `Changed::*`) reaches
+//! every consumer on the bus, and the surface sees what the layer
+//! consumers publish as well as what the stores do.
+
+use crosstalk_spec::events::{BusEvent, Envelope, Subject};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+
+use super::stage::{DERIVED_SUBJECTS, Publisher, Stage, StageError};
+
+/// Publish every event the stores put in their outbox, in order, stamped
+/// with the clock's reading. Ends when every outbox handle is dropped.
+pub(crate) async fn forward_outbox(mut outbox: UnboundedReceiver<BusEvent>, publisher: Publisher) {
+    while let Some(event) = outbox.recv().await {
+        let subject = event.subject();
+        if let Err(error) = publisher.publish(event).await {
+            tracing::warn!(subject = ?subject, error = %error, "outbox event not forwarded to the bus");
+        }
+    }
+    tracing::debug!("outbox closed; forwarding stopped");
+}
+
+/// The surface relay's stage: hands every derived event to the in-process
+/// surface's relay.
+pub(crate) struct SurfaceRelay {
+    events: UnboundedSender<BusEvent>,
+}
+
+impl SurfaceRelay {
+    pub(crate) fn new(events: UnboundedSender<BusEvent>) -> Self {
+        Self { events }
+    }
+}
+
+impl Stage for SurfaceRelay {
+    fn subjects(&self) -> Vec<Subject> {
+        DERIVED_SUBJECTS.to_vec()
+    }
+
+    async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
+        self.events
+            .send(envelope.event.clone())
+            .map_err(|_| StageError::Reject {
+                reason: "the surface's relay has stopped".to_owned(),
+            })
+    }
+}

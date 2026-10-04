@@ -20,6 +20,7 @@ use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::provenance::span::Span;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, SpanId};
+use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_surface::export::SpecExportSource;
@@ -103,9 +104,11 @@ impl EvidenceRecords for MemoryEvidence {
 }
 
 /// Every reference store, as handles that share state with the surface's:
-/// seed the world through the spec's write traits on these.
+/// seed the world through the spec's write traits on these. `B` is the
+/// blob store evidence excerpts are cut from: in memory by default, or
+/// whatever the composer that hosts the surface stores bodies in.
 #[derive(Clone)]
-pub struct MemoryStores {
+pub struct MemoryStores<B = MemoryBlobStore> {
     pub agents: MemoryAgents,
     pub channels: MemoryChannels<MemoryAgents>,
     pub transmissions: MemoryVerdicts,
@@ -120,13 +123,16 @@ pub struct MemoryStores {
     pub sinks: InMemorySinkRegistry,
     pub bus: MpscBus,
     pub dead_letters: DeadLetters,
-    pub blobs: MemoryBlobStore,
+    pub blobs: B,
     pub evidence: MemoryEvidence,
     pub export: Export,
     pub nodes: NodeCache,
 }
 
-impl SurfaceStores for MemoryStores {
+impl<B> SurfaceStores for MemoryStores<B>
+where
+    B: BlobStore + Send + Sync + 'static,
+{
     type Agents = MemoryAgents;
     type Channels = MemoryChannels<MemoryAgents>;
     type Transmissions = MemoryVerdicts;
@@ -141,7 +147,7 @@ impl SurfaceStores for MemoryStores {
     type Sinks = InMemorySinkRegistry;
     type DeadLetters = DeadLetters;
     type Bus = MpscBus;
-    type Blobs = MemoryBlobStore;
+    type Blobs = B;
     type Evidence = MemoryEvidence;
     type Export = Export;
 
@@ -187,7 +193,7 @@ impl SurfaceStores for MemoryStores {
     fn bus(&self) -> &MpscBus {
         &self.bus
     }
-    fn blobs(&self) -> &MemoryBlobStore {
+    fn blobs(&self) -> &B {
         &self.blobs
     }
     fn evidence(&self) -> &MemoryEvidence {

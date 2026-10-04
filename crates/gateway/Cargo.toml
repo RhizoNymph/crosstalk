@@ -10,9 +10,12 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-api = { path = "../api" }
 crosstalk-canonical = { path = "../canonical" }
 crosstalk-ingress = { path = "../ingress" }
+crosstalk-memory = { path = "../memory" }
 crosstalk-store = { path = "../store" }
+crosstalk-surface = { path = "../surface" }
 crosstalk-transport = { path = "../transport" }
 bytes.workspace = true
 http-body-util.workspace = true
