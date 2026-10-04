@@ -17,5 +17,10 @@
 // code uses it.
 use crosstalk_spec as _;
 
+pub mod flow;
+pub mod pipeline;
+pub mod provenance;
+pub mod reconstruct;
+
 #[cfg(test)]
 mod tests {}

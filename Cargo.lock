@@ -235,6 +235,11 @@ name = "crosstalk-memory"
 version = "0.1.0"
 dependencies = [
  "crosstalk-spec",
+ "proptest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
