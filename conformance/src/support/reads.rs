@@ -189,3 +189,54 @@ pub fn pinned(version: TopicModelVersion) -> TopologyFilter {
         ..TopologyFilter::default()
     }
 }
+
+/// The transmissions behind one edge of a `topology` read, as
+/// `edge_transmissions` pages them for the same window and filter.
+pub async fn edge_rows<B: QueryApi>(
+    b: &B,
+    c: &Caller,
+    edge: &crosstalk_spec::aggregates::edge::WeightedEdge,
+    window: TimeWindow,
+    filter: &TopologyFilter,
+) -> Vec<crosstalk_spec::aggregates::edge::EdgeTransmission> {
+    let selector =
+        crosstalk_spec::aggregates::edge::EdgeSelector::new(edge.from, edge.to, edge.route.clone())
+            .unwrap_or_else(|_| panic!("an edge between two agents: {edge:?}"));
+    collect(200, async |p| {
+        b.edge_transmissions(c, &selector, window, filter, &p)
+            .await
+            .map(|w| w.value.page)
+    })
+    .await
+}
+
+/// Every transmission a `topology` read over `window` under `filter`
+/// counts, read edge by edge with `edge_transmissions`, as rows under the
+/// version the graph resolved; newest id first.
+pub async fn counted<B: QueryApi>(
+    b: &B,
+    c: &Caller,
+    window: TimeWindow,
+    filter: &TopologyFilter,
+) -> Vec<TransmissionSummary> {
+    let topology = graph(b, c, window, Weighting::Transmissions, filter).await;
+    let mut ids = Vec::new();
+    for edge in &topology.edges {
+        ids.extend(
+            edge_rows(b, c, edge, window, filter)
+                .await
+                .into_iter()
+                .map(|r| r.transmission),
+        );
+    }
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    rows(
+        b,
+        c,
+        &ids,
+        TopicVersionSelector::Pinned(topology.topic_version),
+    )
+    .await
+}

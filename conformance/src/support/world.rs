@@ -5,6 +5,9 @@ use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+/// A day in microseconds.
+const DAY: u64 = 24 * 3600 * 1_000_000;
+
 use crate::harness::{Callers, Harness, Knobs, Provision};
 use crate::scenario::{Role, RoleKind, Scenario};
 
@@ -58,6 +61,25 @@ impl<'h, H: Harness> World<'h, H> {
             extent,
             bucket,
         }
+    }
+
+    /// The world of every named scenario.
+    pub async fn everything(harness: &'h H) -> Self {
+        let scenario = crate::scenario::named::everything().unwrap_or_else(|e| panic!("{e}"));
+        Self::open(harness, scenario).await
+    }
+
+    /// One named scenario's world.
+    pub async fn of(
+        harness: &'h H,
+        scenario: Result<Scenario, crate::scenario::ScenarioError>,
+    ) -> Self {
+        Self::open(harness, scenario.unwrap_or_else(|e| panic!("{e}"))).await
+    }
+
+    /// The last day of the extent: the UI's default view.
+    pub fn day(&self) -> TimeWindow {
+        super::windows::tail(self.bucket, self.extent, DAY / self.bucket.as_micros())
     }
 
     /// The id `role` is bound to.

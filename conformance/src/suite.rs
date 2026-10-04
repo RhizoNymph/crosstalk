@@ -53,6 +53,44 @@ macro_rules! suite {
                 registered,
                 everything,
             }
+            graph {
+                topology_is_canonical_with_shares_summing_to_one,
+                edges_count_confirmations_by_their_time,
+                windows_add_up,
+                edge_transmissions_are_exactly_the_edge,
+                the_channel_centred_view_shares_the_topology_edges,
+                agent_filter_matches_after_alias_resolution,
+                channel_filter_follows_supersession,
+                route_and_topic_filters_and_their_conjunction,
+                false_detections_are_subtracted,
+                channel_graph_draws_only_listed_channels,
+                no_view_counts_a_transmission_within_one_agent,
+                agent_nodes_carry_labels_and_claims,
+            }
+            series {
+                series_totals_match_the_graph,
+                grouped_series_sum_to_the_graph_and_its_edges,
+                a_coarser_step_sums_the_finer_points,
+                a_grid_for_another_bucket_width_is_refused,
+                the_overview_counts_the_graph,
+                the_overview_queues_are_the_lists,
+                overview_queues_honour_confirmed_only,
+                watermarked_reads_carry_the_watermark,
+            }
+            refusals {
+                unaligned_windows_are_refused,
+                unknown_topic_versions_are_not_found,
+                dropped_versions_are_not_retained,
+                cursors_are_bound_to_their_request,
+                unknown_ids,
+            }
+            projections {
+                every_fit_is_a_new_job_with_a_reproducible_frame,
+                samples_honour_the_window_and_filter,
+                a_narrower_fit_keeps_what_it_admits_of_a_wider_sample,
+                too_few_points_fail_the_job,
+                jobs_list_newest_first,
+            }
         }
     };
 }
