@@ -95,7 +95,8 @@ fn bodies_golden() {
 fn bodies_refuse_unknown_and_missing_fields() {
     let window = r#"{"start":"2026-10-04T12:00:00.000000Z","end":"2026-10-04T13:00:00.000000Z"}"#;
     let filter = r#"{"agents":[],"channels":[],"route_kinds":[],"topics":[],
-        "topic_version":{"type":"current"},"false_detections":"include"}"#;
+        "topic_version":{"type":"current"},"false_detections":"include",
+        "unconfirmed_channels":"include"}"#;
     assert_rejected::<OverviewBody>(
         &format!(
             r#"{{"window":{window},"filter":{filter},"caller":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}"#

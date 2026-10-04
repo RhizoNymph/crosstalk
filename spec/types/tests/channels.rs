@@ -5,6 +5,7 @@ use crate::aggregates::alert::AlertSubject;
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{AccessSubject, FilterSubject};
 use crate::aliases::{Aliases, NoAliases, Resolve};
+use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -20,7 +21,7 @@ use crate::ids::{AgentId, ChannelId, OperatorId, TopicId};
 use crate::interfaces::l5_flow::{ChannelDirectory, PromoteError, RegistryError};
 use crate::interfaces::l8_surface::{ActionError, ConflictKind, InputError, QueryError};
 use crate::observed::message::ToolName;
-use crate::tests::fixtures::{access, agent, at, channel, resource, transmission};
+use crate::tests::fixtures::{agent, at, channel, resource, transmission};
 
 pub(super) fn url(host: &str, path: &str) -> Locator {
     Locator::Url {
@@ -53,13 +54,15 @@ pub(super) fn host(name: &str) -> Host {
 fn seed(n: u128) -> Seed {
     Seed {
         resource: resource(n),
-        first_access: access(n),
+        first_transmission: transmission(n),
+        opened_at: at(1),
     }
 }
 
-fn observed(n: u128) -> TrafficDetection {
-    TrafficDetection::Observed {
-        first_access: access(n),
+fn first_traffic(n: u128) -> TrafficDetection {
+    TrafficDetection::Active {
+        since: at(n as u64),
+        last_transmission: transmission(n),
     }
 }
 
@@ -68,7 +71,7 @@ fn discovered(id: u128) -> Channel {
         id: channel(id),
         origin: ChannelOrigin::Discovered {
             seed: seed(id),
-            detection: observed(id),
+            detection: first_traffic(id),
         },
         resources: Vec::new(),
         policy: Policy::Unreviewed(None),
@@ -161,7 +164,7 @@ fn superseding_keeps_seed_and_detection() {
         superseded,
         ChannelOrigin::Superseded {
             seed: seed(2),
-            detection: observed(2),
+            detection: first_traffic(2),
             supersession: supersession(1),
         }
     );
@@ -254,8 +257,8 @@ fn detection_kind_follows_each_origin() {
             before(DeclaredDetection::InUse(active.clone())),
             DetectionKind::Active,
         ),
-        (discovered(2).origin, DetectionKind::Observed),
-        (superseded_by(2, 1).origin, DetectionKind::Observed),
+        (discovered(2).origin, DetectionKind::Active),
+        (superseded_by(2, 1).origin, DetectionKind::Active),
         (
             ChannelOrigin::Discovered {
                 seed: seed(2),
@@ -659,6 +662,7 @@ fn access_filter_applies_each_field() {
     let subject = AccessSubject {
         agent: agent(1),
         channel: channel(1),
+        confirmation: Confirmation::Confirmed,
         channel_topics: &topics,
     };
     let resolve = Resolve {
@@ -706,6 +710,7 @@ fn access_on_a_channel_without_topics_fails_any_topic_filter() {
     let subject = AccessSubject {
         agent: agent(1),
         channel: channel(1),
+        confirmation: Confirmation::Confirmed,
         channel_topics: &[],
     };
     let filter = TopologyFilter {
@@ -837,6 +842,7 @@ fn access_admission_ignores_false_detections() {
     let with_topics = AccessSubject {
         agent: agent(1),
         channel: channel(1),
+        confirmation: Confirmation::Confirmed,
         channel_topics: &topics,
     };
     let without_topics = AccessSubject {

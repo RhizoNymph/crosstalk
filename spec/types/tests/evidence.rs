@@ -256,3 +256,25 @@ fn export_content_needs_a_match() {
         );
     }
 }
+
+/// A co-access names the agent that wrote, as the write access was
+/// attributed: the sender a transmission backed only by co-accesses has.
+#[test]
+fn co_access_names_its_writer() {
+    let co_access = CoAccess::new(
+        &write_access(1, agent(4), resource(1), 10),
+        &read_access(2, agent(5), resource(1), 20),
+        Duration::from_secs(60),
+    )
+    .expect("a write, then a read by another agent");
+    assert_eq!(co_access.writer(), agent(4));
+    assert_eq!(co_access.write(), access(1));
+    assert_eq!(co_access.read(), access(2));
+    let json = serde_json::to_value(co_access).expect("a co-access encodes");
+    assert_eq!(
+        json["writer"],
+        serde_json::to_value(agent(4)).expect("an id encodes")
+    );
+    let decoded: CoAccess = serde_json::from_value(json).expect("it decodes back");
+    assert_eq!(decoded, co_access);
+}

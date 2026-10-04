@@ -1,0 +1,28 @@
+[invariant]
+id = "surface.channels.filter-listings"
+statement = "ChannelFilter::matches never keeps a hidden channel, keeps a superseded channel only under OriginFilter::WithSuperseded or Superseded whatever its listings, keeps a channel in force only when its CanonicalOriginKind and its listing kind are listed or their lists are empty and its own detection and policy pass, and so under the default filter keeps every confirmed and unconfirmed channel and every declaration in force and no hidden or superseded one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The channel list must show channels, not resources: a hidden channel
+(every transmission through it now within one merged agent) is in no list.
+Unconfirmed channels are listed by default and marked, so a resource agents
+just started passing text through is not missed while content evidence is
+outstanding; "confirmed only" is the listings without Unconfirmed.
+Declarations without traffic are operator intent and stay listed, apart.
+A superseded channel has no listing of its own (its traffic is its
+superseding channel's), so it is selected by its origin alone.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channel_reads::the_default_filter_lists_every_channel_in_force_and_no_superseded_one",
+    "crosstalk_spec::tests::channel_reads::origin_filter_selects_origins_in_force_and_superseded_channels_by_variant",
+    "crosstalk_spec::tests::channel_reads::channel_filter_combines_origin_detection_and_policy",
+    "crosstalk_spec::tests::confirmation::the_default_filter_lists_channels_and_declarations_but_nothing_hidden",
+    "crosstalk_spec::tests::confirmation::confirmed_only_leaves_out_unconfirmed_channels_and_keeps_declarations",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

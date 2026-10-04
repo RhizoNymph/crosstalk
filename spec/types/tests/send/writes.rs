@@ -6,19 +6,18 @@ use crate::aggregates::alert::rules::AlertRuleDef;
 use crate::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::TopicLineage;
 use crate::derived::flow::access::Access;
-use crate::derived::flow::channel::Channel;
 use crate::derived::flow::resource::Resource;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
 use crate::ids::{
-    AccessId, AlertId, AlertRuleId, ChannelId, ConfigHash, OperatorId, SinkId, TopicId,
+    AlertId, AlertRuleId, ChannelId, ConfigHash, OperatorId, ResourceId, SinkId, TopicId,
     TransmissionId,
 };
-use crate::interfaces::l5_flow::RegistryError;
 use crate::interfaces::l5_flow::channels::{
-    ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+    ChannelReads, ChannelTraffic, ChannelWithTraffic, DetectionUpdate, TrafficError,
 };
 use crate::interfaces::l5_flow::transmissions::{TransmissionStore, TransmissionStoreError};
+use crate::interfaces::l5_flow::{Discovery, RegistryError};
 use crate::interfaces::l6_analysis::RuleError;
 use crate::interfaces::l6_analysis::alerts::{
     AlertActionError, AlertActions, AlertReadError, AlertReads, AlertRuleMaintenance,
@@ -29,6 +28,7 @@ use crate::interfaces::l6_analysis::lifecycle::{
 };
 use crate::interfaces::l8_surface::AlertFilter;
 use crate::interfaces::l8_surface::audit::ConfigChange;
+use crate::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crate::interfaces::l8_surface::lists::{AlertRuleFilter, ChannelFilter};
 use crate::interfaces::l8_surface::operators::{
     AccessConfig, CallerError, Operator, OperatorLoadError, OperatorStore, OperatorStoreError,
@@ -36,7 +36,9 @@ use crate::interfaces::l8_surface::operators::{
 };
 use crate::interfaces::l8_surface::permissions::Caller;
 use crate::interfaces::l8_surface::sinks::{SinkError, SinkInfo, SinkRegistry, SinkRegistryError};
-use crate::paging::{AlertList, AlertRuleList, ChannelList, Page, PageRequest};
+use crate::paging::{
+    AlertList, AlertRuleList, ChannelList, ChannelTransmissionList, Page, PageRequest,
+};
 use crate::support::{Change, Timestamp};
 
 use super::{Dummy, arg, assert_send};
@@ -44,19 +46,10 @@ use super::{Dummy, arg, assert_send};
 // ── L5 flow ────────────────────────────────────────────────────────────
 
 impl ChannelTraffic for Dummy {
-    async fn discover(
-        &mut self,
-        _channel: ChannelId,
-        _resource: Resource,
-        _first_access: AccessId,
-    ) -> Result<(), TrafficError> {
-        match *self {}
-    }
     async fn add_resource(
         &mut self,
-        _channel: ChannelId,
         _resource: Resource,
-    ) -> Result<(), TrafficError> {
+    ) -> Result<Option<ChannelId>, TrafficError> {
         match *self {}
     }
     async fn record_access(&mut self, _access: Access) -> Result<(), TrafficError> {
@@ -69,25 +62,40 @@ impl ChannelTraffic for Dummy {
     ) -> Result<Change, TrafficError> {
         match *self {}
     }
-    async fn confirm(
+    async fn discover(
         &mut self,
         _channel: ChannelId,
+        _resource: ResourceId,
         _transmission: TransmissionId,
         _at: Timestamp,
-    ) -> Result<ChannelId, TrafficError> {
+    ) -> Result<Discovery, TrafficError> {
+        match *self {}
+    }
+    async fn record_transmission(
+        &mut self,
+        _transmission: &Transmission,
+    ) -> Result<Change, TrafficError> {
         match *self {}
     }
 }
 
 impl ChannelReads for Dummy {
-    async fn channel(&self, _id: ChannelId) -> Result<Option<Channel>, RegistryError> {
+    async fn channel(&self, _id: ChannelId) -> Result<Option<ChannelWithTraffic>, RegistryError> {
         match *self {}
     }
     async fn channels(
         &self,
         _filter: &ChannelFilter,
         _page: &PageRequest<ChannelList>,
-    ) -> Result<Page<Channel, ChannelList>, RegistryError> {
+    ) -> Result<Page<ChannelWithTraffic, ChannelList>, RegistryError> {
+        match *self {}
+    }
+    async fn transmissions(
+        &self,
+        _channel: ChannelId,
+        _filter: &ChannelTransmissionFilter,
+        _page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<Page<Transmission, ChannelTransmissionList>, RegistryError> {
         match *self {}
     }
 }
@@ -105,16 +113,17 @@ impl TransmissionStore for Dummy {
 }
 
 fn channel_traffic<T: ChannelTraffic>(x: &mut T, never: &Dummy) {
-    assert_send(x.discover(arg(never), arg(never), arg(never)));
-    assert_send(x.add_resource(arg(never), arg(never)));
+    assert_send(x.add_resource(arg(never)));
     assert_send(x.record_access(arg(never)));
+    assert_send(x.discover(arg(never), arg(never), arg(never), arg(never)));
+    assert_send(x.record_transmission(arg(never)));
     assert_send(x.set_detection(arg(never), arg(never)));
-    assert_send(x.confirm(arg(never), arg(never), arg(never)));
 }
 
 fn channel_reads<T: ChannelReads>(x: &T, never: &Dummy) {
     assert_send(x.channel(arg(never)));
     assert_send(x.channels(arg(never), arg(never)));
+    assert_send(x.transmissions(arg(never), arg(never), arg(never)));
 }
 
 fn transmission_store<T: TransmissionStore>(x: &mut T, never: &Dummy) {

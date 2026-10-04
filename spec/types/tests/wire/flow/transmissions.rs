@@ -154,31 +154,40 @@ fn co_access_golden_carries_the_lag_in_micros() {
 fn co_access_refuses_what_it_can_check_and_other_shapes() {
     let write = ULID_A;
     let read = ULID_C;
+    let writer = ULID_A;
     assert_rejected::<CoAccess>(
-        &format!(r#"{{"write": "{write}", "read": "{write}", "lag_micros": 30250000}}"#),
+        &format!(
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{write}", "lag_micros": 30250000}}"#
+        ),
         "invalid co-access: WrongOperations",
     );
     assert_rejected::<CoAccess>(
-        &format!(r#"{{"write": "{write}", "read": "{read}", "lag_micros": 0}}"#),
+        &format!(
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{read}", "lag_micros": 0}}"#
+        ),
         "invalid co-access: ReadNotAfterWrite",
     );
     assert_rejected::<CoAccess>(
         &format!(
-            r#"{{"write": "{write}", "read": "{read}", "lag": {{"secs": 30, "nanos": 250000000}}}}"#
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{read}", "lag": {{"secs": 30, "nanos": 250000000}}}}"#
         ),
         "unknown field `lag`",
     );
     assert_rejected::<CoAccess>(
-        &format!(r#"{{"write": "{write}", "read": "{read}", "lag_micros": -1}}"#),
+        &format!(
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{read}", "lag_micros": -1}}"#
+        ),
         "invalid value",
     );
     assert_rejected::<CoAccess>(
-        &format!(r#"{{"write": "{write}", "read": "{read}", "lag_micros": 30.25}}"#),
+        &format!(
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{read}", "lag_micros": 30.25}}"#
+        ),
         "invalid type",
     );
     assert_rejected::<CoAccess>(
         &format!(
-            r#"{{"write": "{write}", "read": "{read}", "lag_micros": 1, "resource": "{write}"}}"#
+            r#"{{"write": "{write}", "writer": "{writer}", "read": "{read}", "lag_micros": 1, "resource": "{write}"}}"#
         ),
         "unknown field `resource`",
     );

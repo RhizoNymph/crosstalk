@@ -17,5 +17,6 @@
     "type": "pinned",
     "data": 3
   },
-  "false_detections": "exclude"
+  "false_detections": "exclude",
+  "unconfirmed_channels": "exclude"
 }

@@ -4,6 +4,7 @@ use crate::aggregates::edge::RouteKind;
 use crate::aggregates::quality::{
     DetectionQuality, InvalidQuality, MatchClass, QualityMatch, QualityRow,
 };
+use crate::aliases::NoAliases;
 use crate::derived::flow::transmission::{
     Confirmed, DelegationDirection, Route, Transmission, TransmissionState,
 };
@@ -211,6 +212,7 @@ fn tally_counts_each_judgeable_transmission_once_under_its_verdict() {
     let quality = DetectionQuality::tally(
         window(),
         transmissions.iter().map(|(t, verdict)| (t, *verdict)),
+        NoAliases,
     );
     assert_eq!(
         quality.rows(),
@@ -248,6 +250,6 @@ fn tally_counts_each_judgeable_transmission_once_under_its_verdict() {
 
 #[test]
 fn tally_of_nothing_is_empty() {
-    let quality = DetectionQuality::tally(window(), std::iter::empty());
+    let quality = DetectionQuality::tally(window(), std::iter::empty(), NoAliases);
     assert!(quality.rows().is_empty());
 }
