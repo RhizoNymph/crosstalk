@@ -15,7 +15,8 @@ use crate::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::transmission::Transmission;
-use crate::ids::{AlertId, ChannelId, OperatorId, TransmissionId};
+use crate::ids::{AlertId, ChannelId, EventId, OperatorId, TransmissionId};
+use crate::interfaces::l2_transport::ConsumerGroup;
 use crate::interfaces::l6_analysis::{SearchHit, SearchQuery};
 use crate::observed::agent::MergeRequest;
 use crate::support::TimeWindow;
@@ -46,6 +47,10 @@ pub enum Permission {
     Govern,
     /// Acknowledge and resolve alerts.
     Triage,
+    /// Operate the pipeline: replay dead-lettered deliveries. A replay
+    /// re-runs a consumer on an old event, so it can reopen alerts or
+    /// re-apply stale decisions.
+    Operate,
 }
 
 /// Empty `states` means every state. `channel` keeps alerts whose subject is
@@ -130,6 +135,11 @@ pub enum OperatorAction {
     Resolve {
         alert: AlertId,
         note: Option<String>,
+    },
+    /// Redeliver a dead-lettered envelope to its consumer group.
+    ReplayDeadLetter {
+        group: ConsumerGroup,
+        id: EventId,
     },
 }
 

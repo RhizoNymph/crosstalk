@@ -233,6 +233,10 @@ fn policy_routes_traffic() {
         TrafficVerdict::Raise(AlertRuleKind::UnreviewedTraffic)
     );
     assert_eq!(
+        Policy::Unreviewed(Some(decision.clone())).on_traffic(),
+        TrafficVerdict::Raise(AlertRuleKind::UnreviewedTraffic)
+    );
+    assert_eq!(
         Policy::Unsanctioned(decision.clone()).on_traffic(),
         TrafficVerdict::Raise(AlertRuleKind::UnsanctionedTraffic)
     );
