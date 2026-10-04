@@ -5,7 +5,7 @@
 //! - `collapse=1`: draw sub-agents as their parent.
 //!
 //! The filter form is a `GET` form whose checkbox groups repeat their key
-//! (`fa`, `fc`, `fr`, `ft`, plus `fx` and `apply=1`); the page turns them
+//! (`fa`, `fc`, `fr`, `ft`, plus `fx`, `fu` and `apply=1`); the page turns them
 //! into the shared filter keys and redirects to the canonical URL, so the
 //! address bar always holds the comma-list form.
 
@@ -18,7 +18,7 @@ use crate::pages::common::form::{FormFields, invalid};
 use crate::url::route::decode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
-use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::{FalseDetections, UnconfirmedChannels};
 
 #[query_params]
 pub struct RawTopologyQuery {
@@ -70,6 +70,8 @@ pub mod fields {
     pub const ROUTES: &str = "fr";
     pub const TOPICS: &str = "ft";
     pub const VERDICTS: &str = "fx";
+    /// `all` or `confirmed`: the shared `u` key, "confirmed only".
+    pub const UNCONFIRMED: &str = "fu";
 }
 
 fn ids<T: UlidId + PartialEq>(form: &FormFields, key: &'static str) -> Result<Vec<T>, UiError> {
@@ -107,12 +109,23 @@ pub fn submitted_filter(form: &FormFields) -> Result<Option<ViewFilter>, UiError
             ));
         }
     };
+    let unconfirmed_channels = match form.text(fields::UNCONFIRMED) {
+        None | Some("all") => UnconfirmedChannels::Include,
+        Some("confirmed") => UnconfirmedChannels::Exclude,
+        Some(other) => {
+            return Err(invalid(
+                fields::UNCONFIRMED,
+                format!("unknown channel choice {other:?}"),
+            ));
+        }
+    };
     Ok(Some(ViewFilter {
         agents: ids::<AgentId>(form, fields::AGENTS)?,
         channels: ids::<ChannelId>(form, fields::CHANNELS)?,
         route_kinds,
         topics: ids::<TopicId>(form, fields::TOPICS)?,
         false_detections: verdicts,
+        unconfirmed_channels,
     }))
 }
 
@@ -179,6 +192,18 @@ mod tests {
         );
         assert_eq!(filter.false_detections, FalseDetections::Exclude);
         assert!(filter.channels.is_empty() && filter.topics.is_empty());
+    }
+
+    #[test]
+    fn filter_form_carries_confirmed_only() {
+        let form = FormFields::from_pairs(&[("apply", "1"), ("fu", "confirmed")]);
+        let filter = submitted_filter(&form).expect("parse").expect("submitted");
+        assert_eq!(filter.unconfirmed_channels, UnconfirmedChannels::Exclude);
+        let form = FormFields::from_pairs(&[("apply", "1")]);
+        let filter = submitted_filter(&form).expect("parse").expect("submitted");
+        assert_eq!(filter.unconfirmed_channels, UnconfirmedChannels::Include);
+        let bad = FormFields::from_pairs(&[("apply", "1"), ("fu", "some")]);
+        assert!(submitted_filter(&bad).is_err());
     }
 
     #[test]

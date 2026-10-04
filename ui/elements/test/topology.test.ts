@@ -179,6 +179,20 @@ describe('tooltips and labels', () => {
     expect(lines[1]?.text).toBe('delegation: parent → child');
   });
 
+  it('labels and explains an unconfirmed channel', () => {
+    const model = buildModel(channels(), false);
+    const unconfirmed = model.nodes.find(
+      (n) => n.kind === 'channel' && n.channel.confirmation === 'unconfirmed',
+    );
+    expect(unconfirmed?.label.endsWith('(unconfirmed)')).toBe(true);
+    const lines = unconfirmed === undefined ? [] : nodeTooltip(unconfirmed).map((l) => l.text);
+    expect(lines.some((l) => l.startsWith('unconfirmed:'))).toBe(true);
+    const confirmed = model.nodes.find(
+      (n) => n.kind === 'channel' && n.channel.confirmation === 'confirmed',
+    );
+    expect(confirmed?.label.includes('(unconfirmed)')).toBe(false);
+  });
+
   it('shortens long labels in the middle', () => {
     expect(shortLabel('short')).toBe('short');
     const long = shortLabel('mcp:linear/get_issue:ENG-4411-and-more', 20);

@@ -9,14 +9,16 @@
 //! version a filter pins is always the scope's.
 
 use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
-use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::aggregates::filter::{
+    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
+};
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-/// The filter keys of the view state (`a`, `c`, `r`, `t`, `x`): the spec's
-/// [`TopologyFilter`] without its version, which the scope supplies.
+/// The filter keys of the view state (`a`, `c`, `r`, `t`, `x`, `u`): the
+/// spec's [`TopologyFilter`] without its version, which the scope supplies.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ViewFilter {
     pub agents: Vec<AgentId>,
@@ -24,6 +26,29 @@ pub struct ViewFilter {
     pub route_kinds: Vec<RouteKind>,
     pub topics: Vec<TopicId>,
     pub false_detections: FalseDetections,
+    /// Whether channels whose cross-agent traffic is all unconfirmed count
+    /// (`u`): included and marked by default, left out by "confirmed
+    /// only". Channel lists, the review queue, the channels-mode graph and
+    /// the overview's channel counts honour it.
+    pub unconfirmed_channels: UnconfirmedChannels,
+}
+
+impl ViewFilter {
+    /// Whether "confirmed only" is on.
+    pub fn confirmed_only(&self) -> bool {
+        self.unconfirmed_channels == UnconfirmedChannels::Exclude
+    }
+
+    /// This filter with "confirmed only" switched.
+    pub fn toggle_confirmed_only(&self) -> Self {
+        Self {
+            unconfirmed_channels: match self.unconfirmed_channels {
+                UnconfirmedChannels::Include => UnconfirmedChannels::Exclude,
+                UnconfirmedChannels::Exclude => UnconfirmedChannels::Include,
+            },
+            ..self.clone()
+        }
+    }
 }
 
 impl ViewFilter {
@@ -36,6 +61,7 @@ impl ViewFilter {
             topics: self.topics.clone(),
             topic_version: TopicVersionSelector::Pinned(version),
             false_detections: self.false_detections,
+            unconfirmed_channels: self.unconfirmed_channels,
         }
     }
 }
@@ -139,5 +165,26 @@ mod tests {
         );
         assert_eq!(filter.agents, vec![AgentId::from_ulid(1)]);
         assert_eq!(filter.false_detections, FalseDetections::Exclude);
+    }
+
+    #[test]
+    fn confirmed_only_reaches_the_spec_filter() {
+        let mut scope = Scope {
+            window: TimeWindow::new(at(0), at(5)).expect("window"),
+            topic_version: TopicModelVersion(2),
+            filter: ViewFilter::default(),
+        };
+        assert!(!scope.filter.confirmed_only());
+        assert_eq!(
+            scope.topology_filter().unconfirmed_channels,
+            UnconfirmedChannels::Include
+        );
+        scope.filter = scope.filter.toggle_confirmed_only();
+        assert!(scope.filter.confirmed_only());
+        assert_eq!(
+            scope.topology_filter().unconfirmed_channels,
+            UnconfirmedChannels::Exclude
+        );
+        assert_eq!(scope.filter.toggle_confirmed_only(), ViewFilter::default());
     }
 }

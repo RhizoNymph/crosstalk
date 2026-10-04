@@ -1,9 +1,8 @@
 //! Channel data as the pages show it: what a channel is matched by, its
 //! origin and detection in words, and its policy decisions.
 
-use std::time::Duration;
-
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
@@ -80,11 +79,11 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
             ..
         } => match detection {
             DeclaredDetection::AwaitingTraffic => {
-                return plain("Declared; no traffic yet.".to_owned());
+                return plain("Declared; no cross-agent traffic yet.".to_owned());
             }
             DeclaredDetection::Unused { since } => {
                 return plain(format!(
-                    "Declared; no traffic by the end of its idle window ({}).",
+                    "Declared; no cross-agent traffic by the end of its idle window ({}).",
                     format_time(*since)
                 ));
             }
@@ -98,19 +97,12 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
         | ChannelOrigin::Superseded { detection, .. } => detection,
     };
     match traffic {
-        TrafficDetection::Observed { .. } => {
-            plain("Accessed, but not yet written by one agent and read by another.".to_owned())
-        }
-        TrafficDetection::Candidate { first_cross_access } => plain(format!(
-            "Written by one agent and read by another ({} later); no content match yet.",
-            format_lag(first_cross_access.lag())
-        )),
         TrafficDetection::Active {
             since,
             last_transmission,
         } => DetectionDetail {
             text: format!(
-                "Carrying confirmed transmissions since {}.",
+                "Carrying cross-agent traffic since {}.",
                 format_time(*since)
             ),
             last_transmission: Some(*last_transmission),
@@ -119,9 +111,26 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
             since,
             last_transmission,
         } => DetectionDetail {
-            text: format!("No confirmed transmission since {}.", format_time(*since)),
+            text: format!("No cross-agent transmission since {}.", format_time(*since)),
             last_transmission: Some(*last_transmission),
         },
+    }
+}
+
+/// What a channel's listing means, as its page's banner says it; `None`
+/// for a confirmed channel, which needs no explanation.
+pub fn listing_text(listing: Listing) -> Option<&'static str> {
+    match listing {
+        Listing::Channel(Confirmation::Confirmed) => None,
+        Listing::Channel(Confirmation::Unconfirmed) => Some(
+            "Unconfirmed: every transmission between agents through this channel is suspected (one agent wrote, another read, and no content match confirms it yet). Review them below; the confirmed-only filter leaves this channel out.",
+        ),
+        Listing::Declaration => Some(
+            "Declared, no traffic yet: no transmission between two agents has gone through it. It is listed as a declaration and counts as no channel until one does.",
+        ),
+        Listing::Hidden => Some(
+            "Hidden: every transmission through this channel is now between ids of one agent, merged since. It is in no list, graph or count; unmerging those agents lists it again.",
+        ),
     }
 }
 
@@ -129,20 +138,6 @@ fn plain(text: String) -> DetectionDetail {
     DetectionDetail {
         text,
         last_transmission: None,
-    }
-}
-
-/// A lag in the largest whole unit that keeps it readable.
-pub fn format_lag(lag: Duration) -> String {
-    let secs = lag.as_secs();
-    if secs >= 3600 {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    } else if secs >= 60 {
-        format!("{}m {}s", secs / 60, secs % 60)
-    } else if secs > 0 {
-        format!("{secs}s")
-    } else {
-        format!("{}ms", lag.as_millis())
     }
 }
 
@@ -157,11 +152,12 @@ pub fn decision_text(entry: &PolicyDecision) -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
     use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
     use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
     use crosstalk_spec::derived::flow::channel::{Channel, Declaration, Seed, Supersession};
     use crosstalk_spec::derived::flow::resource::{Host, Resource};
-    use crosstalk_spec::ids::{AccessId, ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
     use crosstalk_spec::interfaces::l8_surface::channels::{
         ChannelActivity, ChannelCounts, ChannelStanding, SupersededInto,
     };
@@ -181,7 +177,7 @@ pub(crate) mod tests {
     fn seed(id: u128) -> Seed {
         Seed {
             resource: ResourceId::from_ulid(id),
-            first_access: AccessId::from_ulid(1),
+            first_transmission: TransmissionId::from_ulid(1),
         }
     }
 
@@ -212,14 +208,20 @@ pub(crate) mod tests {
             resources: Vec::new(),
             policy: Policy::Unreviewed(None),
         };
-        let standing = ChannelStanding::InForce(ChannelActivity::Seen {
-            last: Timestamp::from_micros(1_790_985_000_000_000),
-            counts: ChannelCounts {
-                writers: 2,
-                readers: 3,
-                transmissions: 14,
+        let standing = ChannelStanding::InForce {
+            traffic: CrossTraffic {
+                confirmed: 14,
+                unconfirmed: 0,
             },
-        });
+            activity: ChannelActivity::Seen {
+                last: Timestamp::from_micros(1_790_985_000_000_000),
+                counts: ChannelCounts {
+                    writers: 2,
+                    readers: 3,
+                    transmissions: 14,
+                },
+            },
+        };
         ChannelRow::new(channel, Some(seed_resource(id)), standing).expect("row")
     }
 
@@ -289,7 +291,10 @@ pub(crate) mod tests {
         ChannelRow::new(
             channel,
             None,
-            ChannelStanding::InForce(ChannelActivity::Never),
+            ChannelStanding::InForce {
+                traffic: CrossTraffic::NONE,
+                activity: ChannelActivity::Never,
+            },
         )
         .expect("row")
     }
@@ -311,7 +316,7 @@ pub(crate) mod tests {
         assert_eq!(title(&row), "wiki.example.org/…");
         assert_eq!(
             detection_detail(&row.channel().origin).text,
-            "Declared; no traffic yet."
+            "Declared; no cross-agent traffic yet."
         );
         assert_eq!(
             origin_kind(&row.channel().origin),
@@ -337,16 +342,45 @@ pub(crate) mod tests {
         assert!(
             detail
                 .text
-                .starts_with("Carrying confirmed transmissions since 2026-10-03")
+                .starts_with("Carrying cross-agent traffic since 2026-10-03")
         );
     }
 
+    /// `discovered(id)` whose only cross-agent traffic is `suspected`
+    /// suspected transmissions.
+    pub fn unconfirmed(id: u128, suspected: u64) -> ChannelRow {
+        let row = discovered(id);
+        let ChannelStanding::InForce { activity, .. } = row.standing() else {
+            unreachable!("discovered rows are in force")
+        };
+        let standing = ChannelStanding::InForce {
+            traffic: CrossTraffic {
+                confirmed: 0,
+                unconfirmed: suspected,
+            },
+            activity,
+        };
+        ChannelRow::new(row.channel().clone(), row.seed().cloned(), standing).expect("row")
+    }
+
     #[test]
-    fn lags_use_readable_units() {
-        assert_eq!(format_lag(Duration::from_millis(250)), "250ms");
-        assert_eq!(format_lag(Duration::from_secs(42)), "42s");
-        assert_eq!(format_lag(Duration::from_secs(125)), "2m 5s");
-        assert_eq!(format_lag(Duration::from_secs(7260)), "2h 1m");
+    fn listings_explain_themselves_except_confirmed_channels() {
+        assert_eq!(
+            listing_text(Listing::Channel(Confirmation::Confirmed)),
+            None
+        );
+        for listing in [
+            Listing::Channel(Confirmation::Unconfirmed),
+            Listing::Declaration,
+            Listing::Hidden,
+        ] {
+            assert!(listing_text(listing).is_some(), "{listing:?}");
+        }
+        assert_eq!(
+            unconfirmed(1, 3).listing(),
+            Some(Listing::Channel(Confirmation::Unconfirmed))
+        );
+        assert_eq!(declared(2).listing(), Some(Listing::Declaration));
     }
 
     #[test]

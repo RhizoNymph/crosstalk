@@ -8,6 +8,7 @@ use topcoat::Result;
 use topcoat::view::{View, component, view};
 
 use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 
 /// What a badge's colour says.
@@ -95,8 +96,6 @@ impl Badge for DetectionKind {
         match self {
             Self::AwaitingTraffic => "awaiting traffic",
             Self::Unused => "unused",
-            Self::Observed => "observed",
-            Self::Candidate => "candidate",
             Self::Active => "active",
             Self::Dormant => "dormant",
         }
@@ -105,9 +104,44 @@ impl Badge for DetectionKind {
     fn tone(&self) -> Tone {
         match self {
             Self::AwaitingTraffic | Self::Unused | Self::Dormant => Tone::Muted,
-            Self::Observed => Tone::Neutral,
-            Self::Candidate => Tone::Warn,
             Self::Active => Tone::Info,
+        }
+    }
+}
+
+/// Whether a channel's cross-agent traffic holds a confirmed transmission:
+/// the marker an unconfirmed channel carries wherever it is listed.
+impl Badge for Confirmation {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+
+    fn tone(&self) -> Tone {
+        match self {
+            Self::Confirmed => Tone::Good,
+            Self::Unconfirmed => Tone::Warn,
+        }
+    }
+}
+
+/// Where a channel in force is listed: a channel (by its confirmation), a
+/// declaration with no cross-agent traffic yet, or hidden by a merge.
+impl Badge for Listing {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Channel(confirmation) => confirmation.label(),
+            Self::Declaration => "no traffic yet",
+            Self::Hidden => "hidden",
+        }
+    }
+
+    fn tone(&self) -> Tone {
+        match self {
+            Self::Channel(confirmation) => confirmation.tone(),
+            Self::Declaration | Self::Hidden => Tone::Muted,
         }
     }
 }

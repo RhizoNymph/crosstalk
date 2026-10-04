@@ -15,6 +15,7 @@ use crosstalk_spec::aggregates::series::{
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
@@ -274,12 +275,14 @@ pub fn empty_topology_graph() -> Watermarked<TopologyGraph> {
     })
 }
 
-/// The fixture's channels: id number, origin, detection, policy and what
-/// names them. Each carries traffic, so each is a channels-mode node.
+/// The fixture's channels: id number, origin, detection, confirmation,
+/// policy and what names them. Each carries cross-agent traffic, so each is
+/// a channels-mode node; the pastebin's is all suspected.
 pub(super) fn channel_specs() -> Vec<(
     u128,
     CanonicalOriginKind,
     DetectionKind,
+    Confirmation,
     PolicyKind,
     ChannelShape,
 )> {
@@ -289,6 +292,7 @@ pub(super) fn channel_specs() -> Vec<(
             1,
             CanonicalOriginKind::DeclaredBeforeTraffic,
             DetectionKind::Active,
+            Confirmation::Confirmed,
             PolicyKind::Sanctioned,
             ChannelShape::Pattern(ResourcePattern::PathPrefix {
                 host: None,
@@ -298,7 +302,8 @@ pub(super) fn channel_specs() -> Vec<(
         (
             2,
             CanonicalOriginKind::Discovered,
-            DetectionKind::Candidate,
+            DetectionKind::Active,
+            Confirmation::Unconfirmed,
             PolicyKind::Unreviewed,
             ChannelShape::Seed(Locator::Url {
                 scheme: "https".to_owned(),
@@ -311,6 +316,7 @@ pub(super) fn channel_specs() -> Vec<(
             3,
             CanonicalOriginKind::Discovered,
             DetectionKind::Active,
+            Confirmation::Confirmed,
             PolicyKind::Unsanctioned,
             ChannelShape::Seed(Locator::Mcp {
                 server: "linear".to_owned(),
@@ -321,7 +327,8 @@ pub(super) fn channel_specs() -> Vec<(
         (
             4,
             CanonicalOriginKind::Promoted,
-            DetectionKind::Observed,
+            DetectionKind::Dormant,
+            Confirmation::Confirmed,
             PolicyKind::Unreviewed,
             ChannelShape::Pattern(ResourcePattern::UrlPrefix {
                 host: host("github.com"),
@@ -336,23 +343,27 @@ pub fn channel_names() -> ChannelNames {
     ChannelNames::from_pairs(
         channel_specs()
             .into_iter()
-            .map(|(n, _, _, _, shape)| (channel_id(n), shape_name(&shape))),
+            .map(|(n, _, _, _, _, shape)| (channel_id(n), shape_name(&shape))),
     )
 }
 
 fn channel_nodes() -> Vec<GraphNode> {
     channel_specs()
         .into_iter()
-        .map(|(n, origin_kind, detection_kind, policy_kind, shape)| {
-            GraphNode::Channel(ChannelNode {
-                id: channel_id(n),
-                label: None,
-                origin_kind,
-                detection_kind,
-                policy_kind,
-                locator_summary: NonBlank::new(&shape_name(&shape)).expect("names are not blank"),
-            })
-        })
+        .map(
+            |(n, origin_kind, detection_kind, confirmation, policy_kind, shape)| {
+                GraphNode::Channel(ChannelNode {
+                    id: channel_id(n),
+                    label: None,
+                    origin_kind,
+                    detection_kind,
+                    confirmation,
+                    policy_kind,
+                    locator_summary: NonBlank::new(&shape_name(&shape))
+                        .expect("names are not blank"),
+                })
+            },
+        )
         .collect()
 }
 

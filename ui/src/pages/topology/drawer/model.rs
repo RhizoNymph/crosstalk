@@ -35,6 +35,7 @@ use crate::pages::view::state_from_query;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::PageRequest;
@@ -129,6 +130,9 @@ pub struct ChannelPanel {
     pub url: String,
     pub origin: CanonicalOriginKind,
     pub detection: DetectionKind,
+    /// Where the channel is listed (a confirmed or unconfirmed channel, a
+    /// declaration without traffic, hidden); `None` when superseded.
+    pub listing: Option<Listing>,
     pub policy: PolicyKind,
     /// Counted in the view's window; a superseded channel's on its channel
     /// in force.
@@ -375,6 +379,7 @@ pub async fn load(
                     url: channel_url(canonical, &state),
                     origin: origin_kind(&channel.origin),
                     detection: channel.origin.detection_kind(),
+                    listing: row.listing(),
                     policy: channel.policy.kind(),
                     activity: Activity::of(&row),
                     edges: listed(cx, caller, &view, |e| e.route == Route::Channel(canonical))

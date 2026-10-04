@@ -69,6 +69,38 @@ async fn topology_answers_both_modes() {
 }
 
 #[tokio::test]
+async fn channels_mode_marks_unconfirmed_channels_and_confirmed_only_drops_them() {
+    let channel_nodes = |body: &serde_json::Value| -> Vec<serde_json::Value> {
+        body["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .filter(|n| n["kind"] == "channel")
+            .cloned()
+            .collect()
+    };
+    let week = "from=2026-09-26T00:00:00Z&to=2026-10-03T00:00:00Z&v=2&w=tx&g=channels";
+    let all = json(&get(&format!("/data/topology?{week}")).await);
+    let nodes = channel_nodes(&all);
+    assert!(nodes.iter().any(|n| n["confirmation"] == "unconfirmed"));
+    assert!(
+        nodes.iter().all(|n| !n["name"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("scratch/notes")),
+        "a resource one agent uses is no channel"
+    );
+    let confirmed = json(&get(&format!("/data/topology?{week}&u=confirmed")).await);
+    let kept = channel_nodes(&confirmed);
+    assert!(kept.iter().all(|n| n["confirmation"] == "confirmed"));
+    assert_eq!(
+        kept.len() + 1,
+        nodes.len(),
+        "only the unconfirmed channel goes"
+    );
+}
+
+#[tokio::test]
 async fn a_dropped_topic_version_is_a_400_naming_it() {
     let dropped = VIEW.replace("v=2", "v=0");
     let reply = get(&format!("/data/topology?{dropped}&g=agents")).await;

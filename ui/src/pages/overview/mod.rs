@@ -17,7 +17,7 @@ use crate::components::form::{LINK, SECTION, SECTION_TITLE};
 use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
-    data_table, empty_state, error_panel, format_time, href, kind_badge, route_badge,
+    data_table, empty_state, error_panel, filter_chip, format_time, href, kind_badge, route_badge,
 };
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
@@ -78,8 +78,13 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
         .collect();
     let alerts_url = href("/alerts", &state, &[]);
     let topology_url = href("/topology", &state, &[]);
+    let confirmed_only = state.scope.filter.confirmed_only();
+    let mut toggled = state.clone();
+    toggled.scope.filter = state.scope.filter.toggle_confirmed_only();
+    let confirmed_only_href = href("/", &toggled, &[]);
     Ok(view! {
-        live_watch(tokens: "alert channel watermark".to_owned())
+        // A merge or unmerge can hide a channel or list it again.
+        live_watch(tokens: "alert channel agent watermark".to_owned())
         <header class="mb-4">
             <h1 class="text-lg font-semibold">"Overview"</h1>
             <p class="text-sm text-zinc-500">
@@ -87,6 +92,10 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
                 (final_up_to)
                 "."
             </p>
+            <div class="mt-2 flex items-center gap-2 text-xs">
+                <span class="text-zinc-500">"Channels:"</span>
+                filter_chip(label: "confirmed only", href: confirmed_only_href, active: confirmed_only)
+            </div>
         </header>
         match loaded {
             Err(error) => {
@@ -94,7 +103,7 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
                 error_panel(error: &error)
             },
             Ok(summary) => {
-                <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
                     for tile in summary.tiles {
                         stat_tile(tile: tile)
                     }

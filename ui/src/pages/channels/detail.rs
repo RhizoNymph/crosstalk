@@ -1,9 +1,12 @@
-//! `/channels/{id}`: one channel's origin, detection, policy, resources,
-//! alerts and policy history, counted in the view's window. Posting
-//! `set-policy` changes its policy.
+//! `/channels/{id}`: one channel's origin, detection, confirmation, policy,
+//! suspected transmissions, resources, alerts and policy history, counted
+//! in the view's window. An unconfirmed, declared-only or hidden channel
+//! says so in a banner. Posting `set-policy` changes its policy; posting
+//! `set-verdict` records a verdict on one of its suspected transmissions.
 
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
+use crosstalk_spec::derived::flow::channel::confirmation::{CrossTraffic, Listing};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
@@ -17,12 +20,15 @@ use topcoat::router::{StatusCode, page, path_param};
 use topcoat::view::{View, component, view};
 
 use super::list::Activity;
-use super::model::{DetectionDetail, detection_detail, origin_kind, origin_text, title};
+use super::model::{
+    DetectionDetail, detection_detail, listing_text, origin_kind, origin_text, title,
+};
 use super::policy::{self, policy_form};
 use super::sections::{
     PolicyRow, Resources, alerts_section, policy_history_section, policy_rows, resource_rows,
     resources_section,
 };
+use super::suspected::{self, Suspected, suspected_section};
 use crate::app::{backend, caller, can};
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::live::{live_watch, watch_one};
@@ -37,12 +43,13 @@ use crate::pages::common::action::{
     Failure, done, error_for, fields_for, general_error, perform, require, settled, status_of,
 };
 use crate::pages::common::flash::{Flash, flash};
-use crate::pages::common::form::{FormFields, invalid};
+use crate::pages::common::form::{FormFields, id as form_id, invalid};
 use crate::pages::common::links::{channel_url, transmission_url};
 use crate::pages::common::lookup::{OperatorNames, agent_names, operator_names};
 use crate::pages::common::paging::{PAGE_SIZE, page_request};
 use crate::pages::common::rules::rule_names;
 use crate::pages::common::transmissions::ChannelNames;
+use crate::pages::transmission::verdict;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -65,6 +72,8 @@ pub fn channel_path(id: ChannelId) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelForm {
     Policy,
+    /// A verdict button of the suspected transmissions.
+    Verdict,
 }
 
 /// The channel in force that superseded this one, as its banner shows it.
@@ -91,8 +100,26 @@ pub struct Header {
     /// Who decided the policy, when, and their note.
     pub decision: Option<(String, String, Option<String>)>,
     pub superseded: Option<SupersededBanner>,
+    /// Where the channel is listed; `None` when superseded.
+    pub listing: Option<Listing>,
+    /// Cross-agent transmissions over all time; `None` when superseded.
+    pub traffic: Option<CrossTraffic>,
     /// Counted in the view's window.
     pub activity: Activity,
+}
+
+impl Header {
+    /// What the banner under the header says about the listing, if
+    /// anything.
+    pub fn listing_banner(&self) -> Option<&'static str> {
+        self.listing.and_then(listing_text)
+    }
+
+    /// Whether the page lists suspected transmissions: in force with
+    /// unconfirmed cross-agent traffic.
+    pub fn has_suspected(&self) -> bool {
+        self.traffic.is_some_and(|traffic| traffic.unconfirmed > 0)
+    }
 }
 
 /// The header of `row`. `channels` names the channel in force a
@@ -126,6 +153,8 @@ pub fn header(
             by: operators.name(s.by()),
             at: format_time(s.at()),
         }),
+        listing: row.listing(),
+        traffic: row.traffic(),
         activity: Activity::of(row),
     }
 }
@@ -136,6 +165,8 @@ pub fn header(
 pub struct Abilities {
     pub set_policy: bool,
     pub promote: bool,
+    /// Record verdicts on its suspected transmissions.
+    pub judge: bool,
 }
 
 pub fn abilities(caller: &Caller, header: &Header) -> Abilities {
@@ -144,6 +175,7 @@ pub fn abilities(caller: &Caller, header: &Header) -> Abilities {
     Abilities {
         set_policy: govern && live,
         promote: govern && live && header.discovered,
+        judge: can(caller, Permission::Triage),
     }
 }
 
@@ -151,6 +183,8 @@ struct Loaded {
     header: Header,
     abilities: Abilities,
     resources: std::result::Result<Resources, UiError>,
+    /// `None` when it has no unconfirmed traffic.
+    suspected: Option<std::result::Result<Suspected, UiError>>,
     alerts: std::result::Result<Vec<AlertRow>, UiError>,
     history: std::result::Result<Vec<PolicyRow>, UiError>,
 }
@@ -209,6 +243,11 @@ async fn load(
     let channels = crate::pages::common::transmissions::channel_names(cx, caller, in_force).await;
     let header = header(&row, &operators, &channels, state);
     let resources = resources(cx, caller, id, state).await;
+    let suspected = if header.has_suspected() {
+        Some(suspected::load(cx, caller, id, &channel_path(id), state).await)
+    } else {
+        None
+    };
 
     let rules = rule_names(cx, caller).await;
     let filter = AlertFilter {
@@ -241,6 +280,7 @@ async fn load(
         header,
         abilities,
         resources,
+        suspected,
         alerts,
         history,
     }))
@@ -273,6 +313,21 @@ async fn channel_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
                 Err(error) => Failure::new(Some(ChannelForm::Policy), error, fields),
             }
         }
+        Some("set-verdict") => {
+            let result = match form_id(&fields, "transmission")
+                .and_then(|transmission| verdict::parse(transmission, &fields))
+            {
+                Ok((action, flash)) => perform(cx, action).await.map(|outcome| (outcome, flash)),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok((outcome, flash)) => {
+                    let flash = settled(&outcome, flash);
+                    return Err(done(&channel_path(id), &state, &[], flash));
+                }
+                Err(error) => Failure::new(Some(ChannelForm::Verdict), error, fields),
+            }
+        }
         _ => Failure::new(None, invalid("action", "unknown action"), fields),
     };
     Ok(view! { channel_page(id: id, state: state, flash: None, failure: Some(failure)) })
@@ -294,6 +349,7 @@ async fn channel_page(
     // caller cannot use the form) still shows its error.
     let any_error = failure.as_ref().map(|f| f.error.clone());
     let policy_error = error_for(failure.as_ref(), ChannelForm::Policy);
+    let verdict_error = error_for(failure.as_ref(), ChannelForm::Verdict);
     let policy_fields = fields_for(failure.as_ref(), ChannelForm::Policy);
     let list_url = href("/channels", &state, &[]);
     let action_url = href(&channel_path(id), &state, &[]);
@@ -306,7 +362,8 @@ async fn channel_page(
 
     // A promotion names every channel it superseded, so this id is enough;
     // the page also lists alerts about the channel.
-    let watch = format!("{} alert", watch_one("channel", id));
+    // A merge can hide the channel; a verdict changes a suspected row.
+    let watch = format!("{} alert agent verdict", watch_one("channel", id));
     Ok(view! {
         if let Some(status) = failed_status {
             (status)
@@ -337,7 +394,11 @@ async fn channel_page(
             Ok(Some(loaded)) => {
                 let header = loaded.header;
                 let abilities = loaded.abilities;
-                let top_error = general.or(if abilities.set_policy { None } else { policy_error.clone() });
+                let top_error = general
+                    .or(if abilities.set_policy { None } else { policy_error.clone() })
+                    .or(verdict_error.clone());
+                let listing_banner = header.listing_banner();
+                let verdict_action = abilities.judge.then(|| action_url.clone());
                 let last_transmission = header
                     .detection_detail
                     .last_transmission
@@ -350,6 +411,9 @@ async fn channel_page(
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">
                         kind_badge(value: header.origin)
                         kind_badge(value: header.detection)
+                        if let Some(listing) = header.listing {
+                            kind_badge(value: listing)
+                        }
                         kind_badge(value: header.policy)
                     </div>
                     <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
@@ -374,6 +438,11 @@ async fn channel_page(
                         <a class="font-medium underline" href=(banner.url)>(banner.name)</a>
                         ", promoted by " (banner.by) " at " (banner.at) ". "
                         "This channel takes no new resources; its traffic and resources are counted on the channel in force."
+                    </div>
+                }
+                if let Some(text) = listing_banner {
+                    <div class="mb-4 rounded border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                        (text)
                     </div>
                 }
                 if let Some(flash) = flash {
@@ -415,6 +484,9 @@ async fn channel_page(
                         }
                     </div>
                 </section>
+                if let Some(rows) = loaded.suspected {
+                    suspected_section(rows: rows, verdict_action: verdict_action)
+                }
                 resources_section(resources: loaded.resources)
                 alerts_section(rows: loaded.alerts, inbox_url: inbox_url)
                 policy_history_section(rows: loaded.history, audit_url: audit_url)
@@ -479,7 +551,8 @@ mod tests {
             abilities,
             Abilities {
                 set_policy: false,
-                promote: false
+                promote: false,
+                judge: false,
             },
             "a superseded channel takes no actions"
         );
@@ -497,14 +570,16 @@ mod tests {
             abilities(&caller(vec![Permission::View]), &header),
             Abilities {
                 set_policy: false,
-                promote: false
+                promote: false,
+                judge: false,
             }
         );
         assert_eq!(
             abilities(&caller(vec![Permission::View, Permission::Govern]), &header),
             Abilities {
                 set_policy: true,
-                promote: true
+                promote: true,
+                judge: false,
             }
         );
     }
@@ -581,6 +656,110 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains(label.as_str()), "{label:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_channel_lists_its_suspected_transmissions_for_review() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::pages::topology::tests::fixture_state;
+        use crate::testing::channel_id;
+
+        let s3 = channel_id(ChannelKey::S3Handoff);
+        let url = format!("/channels/{}?{}", s3.to_ulid(), fixture_state().to_query());
+        let reply = get(&url).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply
+                .body
+                .contains("Unconfirmed: every transmission between agents")
+        );
+        assert!(reply.body.contains("Suspected transmissions"));
+        assert!(
+            reply.body.contains("value=\"set-verdict\""),
+            "verdict buttons"
+        );
+        assert!(reply.body.contains("False detection"));
+        assert!(
+            reply.body.contains("/transmissions/"),
+            "each links its evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_verdict_posted_from_the_channel_page_is_recorded() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::pages::topology::tests::fixture_state;
+        use crate::testing::{Session, channel_id, operator, world};
+        use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+        use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+        use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+        use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+
+        let s3 = channel_id(ChannelKey::S3Handoff);
+        let page = world()
+            .channel_transmissions(
+                &operator().caller(),
+                s3,
+                &ChannelTransmissionFilter {
+                    confirmation: Some(Confirmation::Unconfirmed),
+                },
+                TopicVersionSelector::Current,
+                &crate::pages::common::paging::first(PAGE_SIZE),
+            )
+            .await
+            .expect("suspected");
+        let judgeable = page
+            .page
+            .items()
+            .iter()
+            .find(|row| row.summary().state.kind() == TransmissionStateKind::Suspected)
+            .expect("a suspected transmission")
+            .summary()
+            .id;
+        let session = Session::new();
+        let url = format!("/channels/{}?{}", s3.to_ulid(), fixture_state().to_query());
+        let reply = session
+            .post(
+                &url,
+                &format!(
+                    "action=set-verdict&transmission={}&verdict=false-detection",
+                    judgeable.to_ulid()
+                ),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        let location = reply.location.expect("redirect");
+        assert!(location.contains("flash=verdict-recorded"), "{location}");
+        let shown = session.get(&location).await;
+        assert!(shown.body.contains("Verdict recorded."));
+        assert!(shown.body.contains("false detection"));
+        let bad = session
+            .post(&url, "action=set-verdict&transmission=nope&verdict=genuine")
+            .await;
+        assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn hidden_and_declared_channels_say_why() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::pages::topology::tests::fixture_state;
+        use crate::testing::channel_id;
+
+        let page =
+            |id: ChannelId| format!("/channels/{}?{}", id.to_ulid(), fixture_state().to_query());
+        let hidden = get(&page(channel_id(ChannelKey::SelfNotes))).await;
+        assert_eq!(hidden.status, StatusCode::OK, "{}", hidden.body);
+        assert!(
+            hidden
+                .body
+                .contains("Hidden: every transmission through this channel")
+        );
+        let declared = get(&page(channel_id(ChannelKey::DesignDocs))).await;
+        assert_eq!(declared.status, StatusCode::OK);
+        assert!(declared.body.contains("Declared, no traffic yet:"));
+        assert!(!declared.body.contains("Suspected transmissions"));
+        let wiki = get(&page(channel_id(ChannelKey::HijackedWiki))).await;
+        assert!(!wiki.body.contains("Unconfirmed:"));
     }
 
     #[tokio::test]
