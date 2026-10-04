@@ -1,0 +1,22 @@
+[invariant]
+id = "provenance.index.no-text"
+statement = "The FingerprintIndex never receives or stores span or input text."
+kind = "confidentiality"
+requires = ["type", "integration"]
+rationale = """
+The index is the most widely replicated provenance store (one partition
+per shard). Keeping text out of it confines message content to the blob
+store, which has its own access control and retention. The trait's insert
+takes an OriginatedSpan (ids, location, agent, exchange and state, no text)
+and PositionedFingerprints, and lookup takes PositionedFingerprints, so no
+text crosses the interface; the integration test checks the Postgres schema
+holds none either.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l4_provenance::FingerprintIndex"
+integration = "crosstalk::provenance::integration::pg_index_schema_has_no_text_columns"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.match.bytes-within-read"
+statement = "Every ContentMatch's matched_bytes is at most the byte length of its read_at range."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The reader cannot have received more bytes than the range it read, and a
+zero-byte match is no evidence at all. matched_bytes is a NonZeroU32
+measured on the reader's side, and ContentMatch::new returns
+Err(InvalidMatch::ExceedsReadRange) when it exceeds read_at's length.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::provenance::matching::ContentMatch::new"
+unit = ["crosstalk_spec::tests::provenance::content_match_rejects_more_bytes_than_read", "crosstalk_spec::tests::provenance::content_match_accepts_whole_read_range"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

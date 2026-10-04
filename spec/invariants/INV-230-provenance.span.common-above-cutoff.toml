@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.span.common-above-cutoff"
+statement = "A SpanDraft is classified Common only if every one of its fingerprints has an index frequency above the cutoff."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Common spans are never indexed, so misclassifying novel text as Common
+silently hides it from detection. The definition on Origin::Common pins the
+rule: boilerplate is text whose every fingerprint is already widespread. One
+rare fingerprint makes the span something an agent could have originated or
+relayed.
+"""
+
+[evidence]
+unit = "crosstalk::provenance::tests::span_with_one_rare_fingerprint_is_not_common"
+property = "crosstalk::provenance::props::common_spans_have_only_frequent_fingerprints"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }
