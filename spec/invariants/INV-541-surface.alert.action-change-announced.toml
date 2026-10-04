@@ -12,7 +12,7 @@ this notification.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::acknowledge_announces_alert_change"
+dst = "crosstalk_surface::dst::actions::acknowledge_announces_alert_change"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

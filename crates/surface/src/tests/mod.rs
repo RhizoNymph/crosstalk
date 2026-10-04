@@ -13,6 +13,7 @@ mod export;
 pub(crate) mod fakes;
 mod live;
 mod nodes;
+mod outcomes;
 mod permissions;
 mod props;
 mod reads;

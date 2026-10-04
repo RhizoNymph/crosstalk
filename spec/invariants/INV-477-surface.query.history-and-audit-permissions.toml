@@ -13,9 +13,9 @@ so it needs View, like QueryApi::channel.
 """
 
 [evidence]
-unit = ["crosstalk_surface::tests::audit_query_without_audit_forbidden", "crosstalk_surface::tests::policy_history_without_view_forbidden"]
+unit = ["crosstalk_surface::tests::permissions::audit_query_without_audit_forbidden", "crosstalk_surface::tests::permissions::policy_history_without_view_forbidden"]
 integration = "crosstalk_surface::integration::history_and_audit_routes_enforce_permissions"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

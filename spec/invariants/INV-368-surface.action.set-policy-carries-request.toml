@@ -15,9 +15,9 @@ indistinguishable from never having been reviewed.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::set_policy_event_matches_request"
-property = "crosstalk_surface::tests::prop_set_policy_event_matches_request"
+unit = "crosstalk_surface::tests::actions::set_policy_event_matches_request"
+property = "crosstalk_surface::tests::props::actions::prop_set_policy_event_matches_request"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

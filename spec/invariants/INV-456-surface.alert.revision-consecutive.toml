@@ -16,9 +16,9 @@ surface.action.alert-concurrent-single-transition.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::alert_revisions_consecutive_across_triage_and_actions"
+dst = "crosstalk_surface::dst::actions::alert_revisions_consecutive_across_triage_and_actions"
 integration = "crosstalk_surface::integration::alert_revision_compare_and_set_postgres"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

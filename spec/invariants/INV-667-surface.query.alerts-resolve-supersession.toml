@@ -13,10 +13,10 @@ from the wiki's own alert list.
 [evidence]
 unit = [
     "crosstalk_spec::tests::channels::alert_subjects_resolve_channels_and_agents",
-    "crosstalk_surface::tests::alert_filter_resolves_superseded_channels",
+    "crosstalk_surface::tests::reads::alert_filter_resolves_superseded_channels",
 ]
 integration = "crosstalk_surface::tests::pg_alerts_after_promotion"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

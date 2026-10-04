@@ -10,7 +10,7 @@ needs Govern.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::sinks_query_needs_govern"
+unit = "crosstalk_surface::tests::permissions::sinks_query_needs_govern"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

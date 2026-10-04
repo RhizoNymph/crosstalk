@@ -25,7 +25,11 @@ Overview:
     unchanged and every generation exchange is normalized, its bodies
     stored, ExchangeCaptured published and the exchange persisted
     (gateway). L2's in-process bus and blob store (transport) are
-    implemented; L3 to L8 are not started. The data
+    implemented; L3 to L7 are not started. The L8 surface service
+    (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
+    the graphs' node facts, generic over the spec's store traits) is
+    implemented and runs in process over the reference stores through
+    crosstalk-api's InProcess (surface_service). The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -114,9 +118,12 @@ Overview:
       and trailer manifest; alert sinks; and the HTTP binding of all of it:
       one route per query, action kind and the live feed, a status for
       every error, and the caller taken from a bearer token or session
-      cookie only).
+      cookie only). crosstalk-surface implements the L8 service over the
+      spec's store traits (surface_service).
     serve: >
-      Crates crosstalk-api (the HTTP and SSE server for the L8 surface),
+      Crates crosstalk-api (the HTTP and SSE server for the L8 surface;
+      today InProcess, the surface over the reference stores in one
+      process),
       crosstalk-client (the L8 traits over HTTP, for the UI) and
       crosstalk-gateway (the crosstalk binary: config, wiring, process
       roles, the ops listener, graceful shutdown; today the single-node
@@ -403,6 +410,38 @@ Features Index:
       - spec/types/interfaces/l8_surface/http/auth.rs
     depends_on: [query_surface, read_models, export, wire_contract]
     doc: docs/features/http_api.md
+  surface_service:
+    description: >
+      crosstalk-surface, L8 (P2.6). Surface<S: SurfaceStores>, generic over
+      the spec's L3 to L8 store traits (one associated type per store
+      group): every QueryApi method with its permission checked first,
+      watermark-first reads, paging and a keyed-MAC cursor for
+      transmission rows by id, typed errors through the spec's From
+      impls; OperatorActions::act (one store write stamped with the
+      caller and the accept time, then exactly one OperatorRecord whose
+      AuditOutcome inverts to the returned result) and Surface::request;
+      the live feed (a writer task owning the epoch's log, bounded
+      per-stream buffers that end lagging streams, resume and resync,
+      heartbeats, session ends, a bus consumer that appends before it
+      acks); export (refusals, plan, limits, header, sealed BLAKE3 rows,
+      trailer, Started/Ended/Abandoned audit) with SpecExportSource
+      planning rows from the spec's read traits; and NodeCache, the spec's
+      NodeFacts, kept by NodeFeeder from L3's and L5's events and rebuilt
+      from the stores on start. crosstalk-api's InProcess builds it over
+      the reference stores with a relay from their outbox to the node
+      facts and the feed. The HTTP server (P7.1) is not part of it.
+    entry_points:
+      - crates/surface/src/lib.rs
+      - crates/surface/src/service.rs
+      - crates/surface/src/stores.rs
+      - crates/surface/src/query/mod.rs
+      - crates/surface/src/actions/mod.rs
+      - crates/surface/src/live/mod.rs
+      - crates/surface/src/export/mod.rs
+      - crates/surface/src/nodes/mod.rs
+      - crates/api/src/in_process/mod.rs
+    depends_on: [query_surface, read_models, export, memory, transport, sim, testkit, workspace]
+    doc: docs/features/surface_service.md
   store:
     description: >
       crosstalk-store, the Postgres infrastructure layer crates build on

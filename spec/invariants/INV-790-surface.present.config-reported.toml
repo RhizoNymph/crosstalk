@@ -15,9 +15,9 @@ the behaviour cannot disagree.
 
 [evidence]
 unit = [
-    "crosstalk_surface::tests::present_reports_the_default_remap_threshold",
-    "crosstalk_surface::tests::present_reports_the_frame_retention",
+    "crosstalk_surface::tests::reads::present_reports_the_default_remap_threshold",
+    "crosstalk_surface::tests::reads::present_reports_the_frame_retention",
 ]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -14,9 +14,9 @@ Refused and forbidden calls are recorded too
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::successful_actions_are_audited"
+unit = "crosstalk_surface::tests::actions::successful_actions_are_audited"
 integration = "crosstalk_surface::integration::audit_record_committed_with_action"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

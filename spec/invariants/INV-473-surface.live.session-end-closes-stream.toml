@@ -12,7 +12,7 @@ last cursor.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::revoked_session_ends_live_stream"
+dst = "crosstalk_surface::dst::live::revoked_session_ends_live_stream"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
