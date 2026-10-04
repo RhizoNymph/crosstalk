@@ -24,9 +24,12 @@ Overview:
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
-    of spec plus one empty library per implementation crate under crates/
+    of spec plus one library per implementation crate under crates/
     (crosstalk-<dir>), with the dependency rule between them enforced by an
     architecture test and every check run by scripts/check.sh (workspace).
+    crosstalk-store (Postgres pool, per-layer migrations, extensions, typed
+    errors, serializable retries, test databases) is implemented (store);
+    the other crates are still empty.
 
   subsystems:
     spec: >
@@ -86,8 +89,11 @@ Overview:
       crosstalk-gateway (the crosstalk binary: config, wiring, process
       roles). The only crates allowed to depend on layer crates.
     support: >
-      Crates crosstalk-store (Postgres pool, per-layer migrations, test
-      database), crosstalk-memory (in-memory reference stores),
+      Crates crosstalk-store (Postgres through sqlx: the pool configured
+      from DATABASE_URL, one schema and one migrations table per layer,
+      the vector and pg_trgm extensions, classified errors, serializable
+      transaction retries, and a database-per-test harness gated on
+      TEST_DATABASE_URL), crosstalk-memory (in-memory reference stores),
       crosstalk-sim (deterministic simulation) and crosstalk-testkit
       (builders, recorded corpus, fake upstreams). Layer crates may depend
       on store; memory, sim and testkit are their dev-dependencies only.
@@ -370,4 +376,30 @@ Features Index:
       - spec/types/interfaces/l8_surface/http/auth.rs
     depends_on: [query_surface, read_models, export, wire_contract]
     doc: docs/features/http_api.md
+  store:
+    description: >
+      crosstalk-store, the Postgres infrastructure layer crates build on
+      (roadmap P1.5, decision D2: sqlx 0.9 with runtime-checked queries,
+      no TLS compiled in). StoreConfig reads DATABASE_URL from the
+      environment and pool sizing from structured config; Store::connect
+      opens a PgPool. Each layer owns a schema named after it and embeds
+      crates/<layer>/migrations with sqlx::migrate!; migrate() runs them in
+      that schema with its own "<layer>"._sqlx_migrations table, so layers
+      never collide on versions. ensure_extensions creates vector and
+      pg_trgm (TimescaleDB stays out pending D3). classify maps sqlx errors
+      to DbFailure (unique, foreign-key and check violations, retryable
+      serialization failures and deadlocks, connection loss, pool timeout)
+      for layers to map into spec errors; retry_serializable runs a
+      SERIALIZABLE transaction with bounded, backed-off retries. TestDb
+      creates a fresh database per test from TEST_DATABASE_URL and drops it
+      on close or drop; tests skip with a printed reason when the variable
+      is unset, and scripts/test-db.sh starts a disposable Postgres 18 with
+      pgvector.
+    entry_points:
+      - crates/store/src/lib.rs
+      - crates/store/src/migrate.rs
+      - crates/store/src/test_db.rs
+      - scripts/test-db.sh
+    depends_on: [workspace]
+    doc: docs/features/store.md
 ```

@@ -10,3 +10,14 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
