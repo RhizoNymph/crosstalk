@@ -3,7 +3,7 @@
 //! Each item is numbered as in "The L8 contract" in `docs/features/ui.md`.
 //! Names and shapes are the ones the UI asks the gateway for. Types that
 //! replace a spec type of the same name (`TopologyFilter`, `OperatorAction`,
-//! `QueryError`) say so. When the gateway's types land, this module is
+//! `QueryError`, `Alert`, `AgentState`, …) say so. When the gateway's types land, this module is
 //! deleted and its users import those instead.
 
 pub mod actions;
