@@ -273,6 +273,7 @@ their writes and reads; each with its policy badge; heaviest first). A
 thin bar under each row is its volume against the list's heaviest. Each
 list has a filter box (client-side, case-insensitive over name, id,
 parent, claimed harness and policy) with a live "n of N" count.
+An unconfirmed channel's row carries the channel list's "unconfirmed" badge (`Confirmation`'s `Badge`, in the row's `ct-row-badge` size), which the filter also matches; it only occurs in channels mode (agents-mode edges are confirmed transmissions, so a channel behind one is confirmed), and under confirmed only (`u=confirmed`) the list drops it exactly as the graph does.
 
 Each row is a button (`value` = the item's selection value,
 `agent:<ulid>` or `channel:<ulid>`) whose click does exactly what clicking
