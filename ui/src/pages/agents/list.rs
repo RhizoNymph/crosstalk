@@ -96,7 +96,7 @@ async fn agents_get(cx: &Cx) -> Result<impl View> {
     let state = view_state(cx).await?;
     let parsed = query_params::<RawAgentQuery>(cx)
         .map_err(|e| invalid("query", e))
-        .and_then(|raw| AgentQuery::parse(&raw));
+        .and_then(AgentQuery::parse);
     let query = parsed.clone().unwrap_or_default();
     let listing = match parsed {
         Ok(query) => load(cx, &query, &state).await,

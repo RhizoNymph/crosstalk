@@ -3,13 +3,10 @@
 //! Locators identify resources, not message content, so these names are
 //! shown with `View`. A trailing `*` marks a prefix pattern.
 
-use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 
-use crate::components::short_id;
-use crate::contract::channels::{ChannelName, ChannelSummary};
+use crate::contract::channels::ChannelName;
 use crate::contract::graph::{ChannelNode, ChannelShape};
-use crate::url::ulid::UlidId;
 
 /// A locator as one line: host and path for URLs, the path for files, the
 /// server and tool for MCP resources.
@@ -69,16 +66,6 @@ pub fn channel_node_name(node: &ChannelNode) -> String {
 /// A batch-looked-up channel's name.
 pub fn channel_name(name: &ChannelName) -> String {
     shape_name(&name.shape)
-}
-
-/// A channel list row's name: the declared pattern, else the seed resource,
-/// else the id's tail.
-pub fn channel_summary_name(summary: &ChannelSummary) -> String {
-    match (&summary.channel.origin, &summary.seed) {
-        (ChannelOrigin::Declared { pattern, .. }, _) => pattern_name(pattern),
-        (ChannelOrigin::Discovered { .. }, Some(seed)) => locator_name(&seed.locator),
-        (ChannelOrigin::Discovered { .. }, None) => short_id(summary.channel.id.to_ulid()),
-    }
 }
 
 #[cfg(test)]

@@ -50,25 +50,6 @@ pub enum ActiveAgentState {
     Established { since: Timestamp },
 }
 
-impl ActiveAgentState {
-    pub fn kind(self) -> AgentStateKind {
-        match self {
-            Self::Registered { .. } => AgentStateKind::Registered,
-            Self::Provisional { .. } => AgentStateKind::Provisional,
-            Self::Established { .. } => AgentStateKind::Established,
-        }
-    }
-
-    /// When the agent entered this state.
-    pub fn since(self) -> Timestamp {
-        match self {
-            Self::Registered { at } => at,
-            Self::Provisional { first_seen } => first_seen,
-            Self::Established { since } => since,
-        }
-    }
-}
-
 /// Replaces `crosstalk_spec::observed::agent::AgentState`: `Merged` keeps
 /// the state the agent had before the merge, which an unmerge restores.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,7 +218,6 @@ mod tests {
             let state = AgentState::from(active);
             assert_eq!(state.active(), Some(active));
             assert!(!state.is_merged());
-            assert_eq!(active.since(), at);
         }
         let merged = AgentState::Merged {
             into: AgentId::from_ulid(2),
@@ -247,9 +227,5 @@ mod tests {
         };
         assert_eq!(merged.active(), None);
         assert!(merged.is_merged());
-        assert_eq!(
-            ActiveAgentState::Established { since: at }.kind(),
-            AgentStateKind::Established
-        );
     }
 }
