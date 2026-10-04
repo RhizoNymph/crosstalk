@@ -4,8 +4,11 @@
 #   bash deploy/run.sh init   # writes deploy/.env with generated secrets
 #   bash deploy/run.sh up     # builds and starts everything
 #
-# Only the proxy is published beyond localhost (agents on other hosts point
-# their base URL at it); every other published port binds 127.0.0.1.
+# The proxy is published on CROSSTALK_PROXY_BIND (default 0.0.0.0: agents on
+# other hosts point their base URL at it). Every other published port binds
+# CROSSTALK_BIND (default 127.0.0.1; set it to the host's tailnet IP or
+# 0.0.0.0 to reach the API, UI, Grafana, Prometheus, Alloy and Postgres from
+# other machines).
 # node-exporter is the exception that is not published: it listens on the
 # host network at 0.0.0.0:19100 so Prometheus can reach it. See
 # docs/infrastructure.md for the layout and docs/features/deploy.md for the
@@ -74,7 +77,7 @@ services:
       - pgdata:/var/lib/postgresql
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - 127.0.0.1:${POSTGRES_PORT:-5432}:5432
+      - ${CROSSTALK_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "crosstalk", "-d", "crosstalk"]
       interval: 5s
@@ -114,8 +117,8 @@ services:
       # Agents connect here: ANTHROPIC_BASE_URL=http://<host-ip>:<CROSSTALK_PROXY_PORT>/anthropic
       # 8081 is the L8 API; the gateway binds it once the HTTP API (P7.1) exists.
       - ${CROSSTALK_PROXY_BIND:-0.0.0.0}:${CROSSTALK_PROXY_PORT:-8080}:8080
-      - 127.0.0.1:${CROSSTALK_API_PORT:-8081}:8081
-      - 127.0.0.1:${CROSSTALK_OPS_PORT:-9464}:9464
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_API_PORT:-8081}:8081
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_OPS_PORT:-9464}:9464
     # One socket per agent stream plus one upstream each, and the pool.
     ulimits:
       nofile:
@@ -146,7 +149,7 @@ services:
     volumes:
       - ./config/ui.json:/etc/crosstalk/ui.json:ro
     ports:
-      - 127.0.0.1:${CROSSTALK_UI_PORT:-3000}:3000
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_UI_PORT:-3000}:3000
     depends_on:
       crosstalk:
         condition: service_started
@@ -168,7 +171,7 @@ services:
       - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus:/prometheus
     ports:
-      - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+      - ${CROSSTALK_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090
     extra_hosts:
       - host.docker.internal:host-gateway
 
@@ -188,7 +191,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana:/var/lib/grafana
     ports:
-      - 127.0.0.1:${GRAFANA_PORT:-3001}:3000
+      - ${CROSSTALK_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000
     depends_on:
       - prometheus
       - loki
@@ -217,7 +220,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - alloy:/var/lib/alloy/data
     ports:
-      - 127.0.0.1:${ALLOY_PORT:-12345}:12345
+      - ${CROSSTALK_BIND:-127.0.0.1}:${ALLOY_PORT:-12345}:12345
     depends_on:
       - loki
 
