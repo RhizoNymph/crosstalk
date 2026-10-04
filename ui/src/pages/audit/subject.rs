@@ -7,7 +7,7 @@ use crate::contract::MergeId;
 
 use crate::components::short_id;
 use crate::contract::research::AuditSubject;
-use crate::pages::common::links::{agent_url, channel_url, rule_url, transmission_url};
+use crate::pages::common::links::{alert_url, agent_url, channel_url, rule_url, transmission_url};
 use crate::url::ulid::{InvalidUlid, UlidId};
 use crate::url::view_state::ViewState;
 
@@ -63,7 +63,10 @@ pub fn subject_link(subject: AuditSubject, state: &ViewState) -> (String, Option
             format!("rule {}", short_id(id.to_ulid())),
             Some(rule_url(id, state)),
         ),
-        AuditSubject::Alert(id) => (format!("alert {}", short_id(id.to_ulid())), None),
+        AuditSubject::Alert(id) => (
+            format!("alert {}", short_id(id.to_ulid())),
+            Some(alert_url(id, state)),
+        ),
         AuditSubject::Merge(id) => (format!("merge {}", short_id(id.to_ulid())), None),
     }
 }
@@ -105,5 +108,7 @@ mod tests {
         assert_eq!(url, None);
         let (_, url) = subject_link(AuditSubject::Rule(AlertRuleId::from_ulid(5)), &state());
         assert!(url.is_some_and(|u| u.starts_with("/alerts/rules/")));
+        let (_, url) = subject_link(AuditSubject::Alert(AlertId::from_ulid(5)), &state());
+        assert!(url.is_some_and(|u| u.starts_with("/alerts/00000000000000000000000005?")));
     }
 }

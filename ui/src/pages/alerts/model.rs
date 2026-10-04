@@ -4,7 +4,7 @@ use crosstalk_spec::interfaces::l8_surface::AlertStateKind;
 
 use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::components::{format_time, short_id};
-use crate::pages::common::links::alert_subject;
+use crate::pages::common::links::{alert_subject, alert_url};
 use crate::pages::common::lookup::{OperatorNames, RuleNames};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -22,6 +22,8 @@ pub struct AlertRow {
     /// The full id, for action forms.
     pub id: String,
     pub short: String,
+    /// The alert's own page.
+    pub url: String,
     pub state: AlertStateKind,
     /// Who moved the alert to its state and when, or why it was suppressed.
     pub state_detail: String,
@@ -59,6 +61,7 @@ impl AlertRow {
         Self {
             id: alert.id.to_ulid(),
             short: short_id(alert.id.to_ulid()),
+            url: alert_url(alert.id, state),
             state: alert.state.kind(),
             state_detail,
             note,

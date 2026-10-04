@@ -1,7 +1,7 @@
 //! URLs of entity pages, carrying the view state.
 
 use crosstalk_spec::aggregates::alert::AlertSubject;
-use crosstalk_spec::ids::{AgentId, AlertRuleId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, TransmissionId};
 
 use crate::components::href;
 use crate::url::ulid::UlidId;
@@ -17,6 +17,10 @@ pub fn agent_url(id: AgentId, state: &ViewState) -> String {
 
 pub fn transmission_url(id: TransmissionId, state: &ViewState) -> String {
     href(&format!("/transmissions/{}", id.to_ulid()), state, &[])
+}
+
+pub fn alert_url(id: AlertId, state: &ViewState) -> String {
+    href(&format!("/alerts/{}", id.to_ulid()), state, &[])
 }
 
 pub fn rule_url(id: AlertRuleId, state: &ViewState) -> String {

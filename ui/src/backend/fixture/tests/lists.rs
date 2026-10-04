@@ -578,3 +578,28 @@ async fn names_resolve_aliases_and_supersession_in_one_call() {
         })
     );
 }
+
+#[tokio::test]
+async fn one_alert_reads_by_id() {
+    use crosstalk_spec::ids::AlertId;
+
+    let b = shared();
+    let c = researcher();
+    let listed = b
+        .alerts(&c, &AlertFilter::default(), &first(1))
+        .await
+        .expect("alerts")
+        .items
+        .remove(0);
+    assert_eq!(
+        b.alert(&c, listed.id).await.expect("read"),
+        Some(listed.clone())
+    );
+    assert_eq!(b.alert(&c, AlertId::from_ulid(1)).await, Ok(None));
+    assert_eq!(
+        b.alert(&caller(&[]), listed.id).await.err(),
+        Some(QueryError::Forbidden {
+            missing: Permission::View
+        })
+    );
+}

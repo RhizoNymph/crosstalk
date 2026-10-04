@@ -12,7 +12,7 @@ use std::future::Future;
 
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
@@ -212,6 +212,13 @@ pub trait Backend: Send + Sync + 'static {
         filter: &AlertFilter,
         page: &PageRequest,
     ) -> impl Future<Output = Result<Page<Alert>>> + Send;
+
+    /// One alert by id (item 25).
+    fn alert(
+        &self,
+        caller: &Caller,
+        id: AlertId,
+    ) -> impl Future<Output = Result<Option<Alert>>> + Send;
 
     fn rules(&self, caller: &Caller) -> impl Future<Output = Result<Vec<RuleDef>>> + Send;
 

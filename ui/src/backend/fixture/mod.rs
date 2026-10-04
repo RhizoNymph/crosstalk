@@ -27,7 +27,7 @@ use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
@@ -324,6 +324,12 @@ impl Backend for FixtureBackend {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::alerts(ctx, filter, page))
             .await
+    }
+
+    async fn alert(&self, caller: &Caller, id: AlertId) -> Result<Option<Alert>> {
+        require(caller, Permission::View)?;
+        let state = self.state.read().await;
+        Ok(state.alerts.iter().find(|a| a.id == id).cloned())
     }
 
     async fn rules(&self, caller: &Caller) -> Result<Vec<RuleDef>> {
