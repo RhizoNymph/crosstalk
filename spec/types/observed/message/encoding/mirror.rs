@@ -124,6 +124,7 @@ pub(super) struct CallItem {
     name: String,
     arguments: ArgumentsItem,
     execution: ExecutionItem,
+    signature: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -171,6 +172,7 @@ pub(super) enum ContentItem {
 pub(super) enum OutcomeItem {
     Success,
     Error,
+    Unknown,
 }
 
 /// What the mirror holds that no message body can: a `Tool` body with no
@@ -275,6 +277,7 @@ impl From<&ToolCall> for CallItem {
                 ToolExecution::Client => ExecutionItem::Client,
                 ToolExecution::Server => ExecutionItem::Server,
             },
+            signature: call.signature.clone(),
         }
     }
 }
@@ -295,6 +298,7 @@ impl From<&ToolResult> for ResultItem {
             outcome: match result.outcome {
                 ToolOutcome::Success => OutcomeItem::Success,
                 ToolOutcome::Error => OutcomeItem::Error,
+                ToolOutcome::Unknown => OutcomeItem::Unknown,
             },
         }
     }
@@ -416,6 +420,7 @@ impl TryFrom<CallItem> for ToolCall {
                 ExecutionItem::Client => ToolExecution::Client,
                 ExecutionItem::Server => ToolExecution::Server,
             },
+            signature: item.signature,
         })
     }
 }
@@ -442,6 +447,7 @@ impl TryFrom<ResultItem> for ToolResult {
             outcome: match item.outcome {
                 OutcomeItem::Success => ToolOutcome::Success,
                 OutcomeItem::Error => ToolOutcome::Error,
+                OutcomeItem::Unknown => ToolOutcome::Unknown,
             },
         })
     }

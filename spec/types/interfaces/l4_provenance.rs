@@ -62,13 +62,25 @@ pub trait Decoder {
 
     /// Every substring of `text` this codec can decode, decoded. Decoders run
     /// repeatedly on their own output, up to a fixed depth.
+    ///
+    /// Decoding is strict: a substring yields a [`Decoded`] only when the
+    /// bytes it decodes to are valid UTF-8, and `Decoded::text` is exactly
+    /// those bytes, never a lossy conversion
+    /// (`provenance.decode.strict-utf8`). Decoded binary (a signature, an
+    /// encrypted blob, compressed data) therefore never becomes text to
+    /// fingerprint, a span or a match. `text` is always part text, or a
+    /// `Decoded` produced from part text (`provenance.decode.part-text-input`).
     fn decode(&self, text: &str) -> Vec<Decoded>;
 }
 
 pub trait Fingerprinter {
     fn params(&self) -> WinnowParams;
 
-    /// Fingerprints of `text` after whitespace and case normalization.
+    /// Fingerprints of `text` after whitespace and case normalization and
+    /// folding one level of JSON or YAML string escapes (see
+    /// `MatchKind::Normalized`). `text` is always part text, or decoded
+    /// part text: never a tool-call id, a signature or opaque reasoning
+    /// (`provenance.decode.part-text-input`).
     fn fingerprints(&self, text: &str) -> Vec<PositionedFingerprint>;
 }
 

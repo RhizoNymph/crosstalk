@@ -712,6 +712,7 @@ async fn resource_use_includes_superseded_and_sums_aliases() {
                 crosstalk_spec::derived::flow::access::AccessOp::Write {
                     call: part,
                     spans: Vec::new(),
+                    outcome: crosstalk_spec::derived::flow::access::WriteOutcome::Delivered,
                 }
             } else {
                 crosstalk_spec::derived::flow::access::AccessOp::Read { result: part }
@@ -742,6 +743,57 @@ async fn resource_use_includes_superseded_and_sums_aliases() {
     assert_eq!(rows[0].readers()[0].accesses.get(), 2);
     assert_eq!(rows[1].resource().id, model::resource(0).id);
     assert_eq!(rows[1].writers()[0].agent, access_agent(0));
+}
+
+/// `flow.access.rejected-write-recorded`, at the store: a write is stored
+/// and counted whatever its outcome, so a rejected write still lists its
+/// agent as a writer of the resource, beside a delivered and an unknown one.
+#[tokio::test]
+async fn writes_of_every_outcome_are_recorded_and_listed() {
+    use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
+    let (mut registry, _events) = registry().await;
+    discover(&mut registry, 0, 0).await;
+    let outcomes = [
+        WriteOutcome::Rejected,
+        WriteOutcome::Delivered,
+        WriteOutcome::Unknown,
+    ];
+    for (n, outcome) in (1u128..).zip(outcomes) {
+        let access = Access {
+            id: AccessId::from_ulid(n),
+            agent: access_agent(0),
+            exchange: crosstalk_spec::ids::ExchangeId::from_ulid(n),
+            resource: model::resource(0).id,
+            at: at(5),
+            via: Extraction::Structured,
+            op: AccessOp::Write {
+                call: crosstalk_spec::observed::message::PartRef {
+                    message: crosstalk_spec::ids::MessageHash::from_digest(
+                        crosstalk_spec::support::Blake3::from_bytes([1; 32]),
+                    ),
+                    index: 0,
+                },
+                spans: Vec::new(),
+                outcome,
+            },
+        };
+        assert_eq!(registry.record_access(access).await, Ok(()));
+    }
+    let Ok(window) = TimeWindow::new(at(0), at(100)) else {
+        panic!("window");
+    };
+    let Ok(pages) = model::traverse(&registry, channel(0), window, 10).await else {
+        panic!("resource use");
+    };
+    let rows: Vec<_> = pages.into_iter().flat_map(|(_, rows)| rows).collect();
+    assert_eq!(rows.len(), 1);
+    let written: u64 = rows[0]
+        .writers()
+        .iter()
+        .map(|writer| writer.accesses.get())
+        .sum();
+    assert_eq!(written, 3);
+    assert!(rows[0].readers().is_empty());
 }
 
 /// A cursor issued for one channel or window is refused for another.

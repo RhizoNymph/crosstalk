@@ -89,6 +89,46 @@
 //! and channel rows, and the canonical channel's policy judges the traffic,
 //! so its detection is the one that records it.
 //!
+//! **Write outcomes.** A write is recorded only once its outcome is final
+//! ([`WriteOutcome`]): the flow consumer holds a tool call that writes
+//! until the call's result arrives (normally in the writer's next request
+//! of the conversation; in the same response for a server tool) and then
+//! extracts it with the result, or, at the first tick at or after
+//! `CorrelationTiming::write_settles_at` of the call's exchange time, with
+//! none, which makes the write `Unknown`
+//! (`flow.correlator.write-held-until-outcome`). A result arriving after
+//! that changes nothing: an access is recorded once. Every write is then
+//! recorded and published as `AccessRecorded` whatever its outcome
+//! (`flow.access.rejected-write-recorded`): an attempted write is a signal
+//! in itself, and it counts as a write in resource use and access buckets.
+//! The correlator pairs `Delivered` and `Unknown` writes, `Unknown` at lower
+//! confidence (its outcome, as an access's `Extraction` is), and never a
+//! `Rejected` one: `CoAccess::new` refuses it
+//! (`flow.coaccess.write-not-rejected`), and a content match is never
+//! attributed to it.
+//!
+//! **Which write a match came through.** A write's spans are the originated
+//! spans in its arguments plus the writer's own earlier spans it relays
+//! (`AccessOp::Write`), so a retry after a rejected write carries the
+//! rejected write's spans. A content match on such a span links to every
+//! write holding it; the rejected ones are left out by their outcome.
+//!
+//! **Shared upstream source.** A `ToolResult` content match whose reader's
+//! call yielded an access on a resource, while the match's origin agent
+//! has no write on that resource whose outcome pairs (`Delivered` or
+//! `Unknown`, made before the read), is evidence that both agents quote one
+//! upstream source (a repository file both read), not of a transmission:
+//! it confirms nothing, and a channel transmission it would have confirmed
+//! stays `AwaitingContent` and then `Suspected` on its co-access evidence
+//! (`flow.route.shared-upstream-stays-suspected`). A tool result whose call
+//! yielded no access is unaffected: it opens `Direct(ToolResult)` as
+//! before (`flow.route.tool-result-without-access`). In SWE trajectory
+//! corpora about 14.5% of an agent's novel shingles reappear in another
+//! task on the same repository because both quote the same file, yet only
+//! 0.18% of trajectory pairs share 20 or more of them; a per-agent-pair
+//! minimum of shared spans is a possible later configuration knob if
+//! evaluation shows this rule insufficient.
+//!
 //! **Timing.** The correlator is configured with a [`CorrelationTiming`]: it
 //! pairs a write and a read within `correlation_window`, opens a channel
 //! transmission `AwaitingContent` until `window_closes_at(read.at)`, keeps it
@@ -107,7 +147,7 @@ pub mod transmissions;
 pub mod verdicts;
 
 use crate::aggregates::access::ResourceUsePage;
-use crate::derived::flow::access::{Access, AccessKind, Extraction};
+use crate::derived::flow::access::{Access, AccessKind, Extraction, WriteOutcome};
 use crate::derived::flow::channel::Declaration;
 use crate::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
@@ -124,9 +164,26 @@ use crate::support::{NonEmpty, TimeWindow, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedAccess {
-    pub kind: AccessKind,
+    pub op: ExtractedOp,
     pub locator: Locator,
     pub via: Extraction,
+}
+
+/// An extracted access's operation: a write carries its outcome, a read
+/// none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractedOp {
+    Write(WriteOutcome),
+    Read,
+}
+
+impl ExtractedOp {
+    pub fn kind(self) -> AccessKind {
+        match self {
+            Self::Write(_) => AccessKind::Write,
+            Self::Read => AccessKind::Read,
+        }
+    }
 }
 
 pub trait ResourceExtractor {
@@ -136,6 +193,15 @@ pub trait ResourceExtractor {
     /// Accesses implied by one call. `result` is present once the harness has
     /// sent it back (in the next request, or in the same response for
     /// server-side tools); reads are only recorded with a result.
+    ///
+    /// Each write's [`WriteOutcome`] (`flow.extract.write-outcome-classified`):
+    /// `Unknown` without a result (the consumer calls `extract` without one
+    /// only once the write's settle window has closed); `Rejected` for a
+    /// result whose `ToolOutcome` is `Error`; otherwise what the tool's
+    /// content rule reads from the result's content (`Delivered` or
+    /// `Rejected`, for a tool that reports refusal in its text, such as a
+    /// message tool refusing an over-length message), or, for a tool with no
+    /// content rule, `Delivered` for `Success` and `Unknown` for `Unknown`.
     fn extract(
         &self,
         call: &ToolCall,

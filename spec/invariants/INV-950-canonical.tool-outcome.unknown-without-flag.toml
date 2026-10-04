@@ -1,0 +1,32 @@
+[invariant]
+id = "canonical.tool-outcome.unknown-without-flag"
+statement = "Normalizer::normalize sets a ToolResult's outcome to ToolOutcome::Error when the wire protocol's failure marker says the result failed, to ToolOutcome::Success when the protocol carries such a marker and it does not, and to ToolOutcome::Unknown for every result of a protocol whose tool results carry no failure marker, whatever the result's content says."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+L5 decides whether a write reached its resource from the result's outcome
+(flow.extract.write-outcome-classified). A normalizer that read Success
+into a protocol with no failure flag would make every write through an
+OpenAI Chat harness look delivered, including the ones the tool refused, so
+an attempted exfiltration that failed would pair with later reads as if it
+had succeeded. Unknown says what the wire says: nothing.
+
+Anthropic Messages carries a marker on every tool result: is_error (false
+when absent) on a client tool_result, and is_error or an error-typed
+content block (`*_error`) on a server tool's result. Its results are
+therefore Success or Error, never Unknown, and the current mapping
+(crates/canonical/src/anthropic/blocks.rs, outcome) stays. OpenAI Chat
+`tool` messages have no failure field, so each is Unknown. Reading a
+refusal out of a result's text belongs to L5, per known tool, not to L1:
+L1 does not know what a tool's text means.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_canonical::tests::anthropic_tool_results_take_their_outcome_from_is_error",
+    "crosstalk_canonical::tests::openai_chat_tool_results_are_unknown",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -54,7 +54,7 @@
     "outcome": {
       "type": "completed",
       "data": {
-        "response": "59fa8195b4e11c03483e9cc2a13bd77c2e2a87aaaf609a5f050ddb5d4eb5207b",
+        "response": "81749b7fd2ed920a841bbd451456c7aa548056bad8ef3b4da7ab3e86581206b4",
         "response_id": "msg_01GzfIDFAaT1lZ2WDn0wXwnI",
         "first_chunk_at": "2026-10-01T00:00:00.400000Z",
         "finished_at": "2026-10-01T00:00:03.000000Z",
@@ -103,7 +103,7 @@
       }
     },
     {
-      "hash": "59fa8195b4e11c03483e9cc2a13bd77c2e2a87aaaf609a5f050ddb5d4eb5207b",
+      "hash": "81749b7fd2ed920a841bbd451456c7aa548056bad8ef3b4da7ab3e86581206b4",
       "body": {
         "type": "assistant",
         "data": [
@@ -120,7 +120,8 @@
                 "type": "json",
                 "data": "{\"command\":\"git status --short\",\"description\":\"Show working tree status\"}"
               },
-              "execution": "client"
+              "execution": "client",
+              "signature": null
             }
           },
           {
@@ -132,7 +133,8 @@
                 "type": "json",
                 "data": "{\"file_path\":\"/workspace/README.md\"}"
               },
-              "execution": "client"
+              "execution": "client",
+              "signature": null
             }
           }
         ]

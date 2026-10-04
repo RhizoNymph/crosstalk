@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.correlator.unknown-write-pairs"
+statement = "For the same accesses, content matches and ticks, changing one write's WriteOutcome from Delivered to Unknown leaves every TransmissionUpdate the correlator emits unchanged, and changing it to Rejected leaves no emitted CoAccess naming that write."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Unknown is what the gateway records when nothing says whether a write
+reached its resource (no failure flag on the wire and no content rule for
+the tool, or no result before the settle window closed). Most writes
+through OpenAI Chat harnesses are Unknown, so dropping them would blind
+detection there; they pair as Delivered ones do. Their lower confidence is
+carried on the Access itself, as Extraction is
+(flow.access.extraction-recorded): the spec has no numeric confidence or
+weighting scheme, so the outcome is read wherever evidence is weighed and
+the correlator's decisions do not change with it. A rejected write takes
+part in no pairing at all.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlator::tests::write_outcome_changes_only_rejected_pairings"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

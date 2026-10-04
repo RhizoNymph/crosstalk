@@ -32,7 +32,8 @@ fn media(kind: MediaKind, bytes: &[u8]) -> Media {
 
 /// One body per shape: every body variant, every part variant, an
 /// `Unknown` in every part list, both argument variants, a server result,
-/// arguments with integers beyond 2^53, and text that needs escaping.
+/// arguments with integers beyond 2^53, text that needs escaping, a tool
+/// call with and without a signature, and every tool outcome.
 pub fn vectors() -> Vec<(&'static str, MessageBody)> {
     let call = |id: &str, arguments: ToolArguments, execution: ToolExecution| {
         AssistantPart::ToolCall(ToolCall {
@@ -40,6 +41,7 @@ pub fn vectors() -> Vec<(&'static str, MessageBody)> {
             name: ToolName("Read".to_owned()),
             arguments,
             execution,
+            signature: None,
         })
     };
     vec![
@@ -95,6 +97,13 @@ pub fn vectors() -> Vec<(&'static str, MessageBody)> {
                     ToolArguments::Invalid(r#"{"query": "rust"#.to_owned()),
                     ToolExecution::Server,
                 ),
+                AssistantPart::ToolCall(ToolCall {
+                    id: ToolCallId("__thought__CiQB0e2Kb7=".to_owned()),
+                    name: ToolName("read_file".to_owned()),
+                    arguments: ToolArguments::Json(CanonicalJson(r#"{"path":"/b"}"#.to_owned())),
+                    execution: ToolExecution::Client,
+                    signature: Some("CiQB0e2Kb7Zg+u1kQx/==".to_owned()),
+                }),
                 AssistantPart::ServerToolResult(ToolResult {
                     call_id: ToolCallId("srvtoolu_01".to_owned()),
                     content: vec![
@@ -123,6 +132,11 @@ pub fn vectors() -> Vec<(&'static str, MessageBody)> {
                         call_id: ToolCallId("call_0123456789abcdef01234567".to_owned()),
                         content: Vec::new(),
                         outcome: ToolOutcome::Error,
+                    },
+                    ToolResult {
+                        call_id: ToolCallId("call_unflagged".to_owned()),
+                        content: vec![ToolResultContent::Text(text("sent"))],
+                        outcome: ToolOutcome::Unknown,
                     },
                 ])
                 .unwrap_or_else(|| panic!("two results")),

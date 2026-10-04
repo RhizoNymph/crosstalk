@@ -413,7 +413,7 @@ streams from testkit without waiting for P3.
 - [ ] `Segmenter`, the `Decoder`s (codecs and carriers), and `Fingerprinter` (winnowing).
 - [ ] `FingerprintIndex` on Postgres (or an in-memory shard).
 - [ ] Publish `ContentMatched`. The semantic matcher is a stub until P6.2 provides embeddings.
-- [ ] Implement INV-191–235.
+- [ ] Implement INV-191–235, and from the eval spec PR INV-953 (escape-folded `Normalized`), INV-954 (decoder and fingerprinter input is part text only) and INV-955 (strict UTF-8 decoding).
 - [ ] Escape-folded matching against AgentDojo: `~/Data/ai/agents/agentdojo/runs/<pipeline>/<suite>/<user_task>/<attack>/<injection_task>.json`. The `injections` field holds the exact text; the slots are in `src/agentdojo/data/suites/<suite>/environment.yaml`. 49% of slots need YAML/JSON un-escaping, 26% whitespace folding, and 9% are exact.
 
 ## P5 L5 flow (milestone M2)
@@ -422,10 +422,10 @@ streams from testkit without waiting for P3.
 - [ ] `ChannelRegistry` on Postgres: declare, discover, promote and supersede, policy history, and correlator shards keyed by canonical channel (INV-253).
 - [ ] `Correlator`: co-access plus content match gives a transmission. Includes suspected, confirmed, expiry and late confirmation on a canonical channel.
 - [ ] Verdict store.
-- [ ] Write outcomes, from the eval spec PR (crosstalk-rollouts, INV-950..999):
-  - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown when the settle window closes.
-  - Self-relayed spans count in `Write.spans`.
-  - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream).
+- [ ] Write outcomes, from the eval spec PR (crosstalk-rollouts, INV-956..963; `docs/features/eval_gaps.md`):
+  - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown at `CorrelationTiming::write_settles_at` (INV-956..960).
+  - Self-relayed spans count in `Write.spans` (INV-961, 962).
+  - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream, INV-963).
 - [ ] Implement INV-236–290 plus the promotion and verdict ranges.
 - [ ] **M2 demo script:** two Claude Code agents and a local wiki MCP server, through the gateway. Assert the discovered channel and the confirmed transmission.
 
@@ -468,6 +468,7 @@ streams from testkit without waiting for P3.
 - [ ] pi and oh-my-pi.
 - [ ] A forward proxy with TLS interception for allowlisted hosts only, for OAuth subscription backends (Claude Pro/Max, ChatGPT/Codex, Copilot, Gemini Code Assist).
 - [ ] Each one is a corpus plus a normalizer plus framer tests. The ingress invariants are re-run per protocol.
+- [ ] OpenAI Chat tool results are `ToolOutcome::Unknown` (INV-950); Gemini tool-call signatures go to `ToolCall::signature` (INV-951); no opaque blob reaches part text (INV-952).
 
 ## P9 Cluster and operations (after M3)
 - [ ] A NATS JetStream `EventBus` adapter that passes the same conformance and DST suites as the in-process bus.

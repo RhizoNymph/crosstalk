@@ -1,0 +1,35 @@
+[invariant]
+id = "provenance.match.escape-folded-normalized"
+statement = "When an indexed span's text, at least k + w - 1 characters long after normalization, appears in a tool result in another agent's new inputs serialised as one JSON string literal or one YAML scalar of any style that represents it (double-quoted, single-quoted, plain, literal or folded block, with or without escaped line breaks), provenance yields a ContentMatch against that span whose kind is MatchKind::Exact or MatchKind::Normalized."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Text a reader gets through a tool result usually arrives serialised: an
+API returns JSON, a file tool reads YAML or a JSON log, an MCP server wraps
+its payload in a string field. On AgentDojo, of 51,714 injected strings
+that reach a tool output only 9% appear there byte for byte; 26% need
+whitespace folding, and 49% need JSON or YAML string escapes undone:
+\\n, \\t, \\", \\\\, \\/, \\uXXXX (including surrogate pairs), YAML's ''
+inside single quotes, a backslash line continuation together with the
+next line's leading whitespace, and newlines folded to spaces. Matching
+that folds only whitespace and case misses half of what readers receive
+this way.
+
+Serialisation is not concealment, so it belongs to MatchKind::Normalized,
+not to a Codec in MatchKind::Decoded: the fold is applied the same way to
+the span's text and to the reader's text before fingerprinting, as
+whitespace and case are (provenance.fingerprint.normalization-invariant),
+so it costs no extra decode pass and needs no decode-depth budget
+(Fingerprinter::fingerprints and MatchKind::Normalized document it). Text
+that needed no escaping still matches Exact. Only one level of string
+serialisation is folded: undoing escapes twice would turn an escaped
+backslash followed by n into a newline and change the text. Nested
+serialisation (a JSON document inside a JSON string) is out of scope.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::escape_serialised_span_matches_normalized"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

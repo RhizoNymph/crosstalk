@@ -42,7 +42,7 @@ spec/types/
 │   └── confidential.rs    compile-time checks: DeploymentSecret and KeyedHasher never serialize, clone or compare
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
-│   ├── message.rs         Message (decoded only under its body's hash), MessageBody (role-shaped; serde in its encoding's shape), parts (Reasoning::Visible with its signature), MediaBlob (checked: hash of its bytes), CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store; their JSON appears only in a NormalizedExchange, in process)
+│   ├── message.rs         Message (decoded only under its body's hash), MessageBody (role-shaped; serde in its encoding's shape), parts (Reasoning::Visible and ToolCall with their signatures, ToolOutcome with Unknown), MediaBlob (checked: hash of its bytes), CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store; their JSON appears only in a NormalizedExchange, in process)
 │   ├── message/
 │   │   ├── encoding.rs    the canonical encoding of a body (encode, decode: exactly the bytes encode writes, DecodeError) and its hash (hash, hash_bytes, message)
 │   │   ├── encoding/
@@ -63,9 +63,9 @@ spec/types/
 │   │   └── matching.rs    ContentMatch (checked, also when decoded), MatchKind, Codec, Carrier
 │   └── flow/
 │       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps; a WireRequest)
-│       ├── access.rs      Access, AccessOp, Extraction
-│       ├── evidence.rs    Evidence, CoAccess (checked; `lag_micros` on the wire, decode checks two accesses and a positive lag)
-│       ├── timing.rs      CorrelationTiming (checked; config, not wire data): evidence window, suspected TTL, settle_after
+│       ├── access.rs      Access, AccessOp (a write's spans include self-relayed sources), WriteOutcome (Delivered, Rejected, Unknown; pairs), Extraction
+│       ├── evidence.rs    Evidence, CoAccess (checked, never a rejected write; `lag_micros` on the wire, decode checks two accesses and a positive lag)
+│       ├── timing.rs      CorrelationTiming (checked; config, not wire data): evidence window, suspected TTL, settle_after, write_settles_at
 │       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire, confirmed, co_accesses), Confirmed (no sender on the wire; rebuilt on decode)
 │       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked; never a request), VerdictLog (from_records, InvalidVerdictLog; records carry revisions on the wire; never a request), CurrentVerdict
 │       └── channel/
@@ -108,7 +108,7 @@ spec/types/
 │   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   │   └── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex (every call measuring retention takes now), SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
+│   ├── l5_flow.rs         ResourceExtractor (ExtractedOp with write outcomes), ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; write outcomes, shared upstream source; detection follows resolution
 │   ├── l5_flow/
 │   │   ├── channels.rs    ChannelTraffic (discover, add_resource, record_access, set_detection, confirm), DetectionUpdate, TrafficError; ChannelReads (channel by id, filtered channel pages)
 │   │   ├── transmissions.rs TransmissionStore (save, transmission), TransmissionStoreError

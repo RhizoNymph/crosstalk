@@ -83,10 +83,13 @@ Overview:
       as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
-      index, content matching) and L5 flow detection (resource extraction,
-      channel registry with promotion and supersession, write/read
-      correlation into transmissions, and the operator verdict log kept
-      beside each transmission).
+      index, content matching over part text only, strict decoding,
+      escape-folded normalization) and L5 flow detection (resource
+      extraction with write outcomes, channel registry with promotion and
+      supersession, write/read correlation into transmissions, in which
+      rejected writes are recorded but never paired and a match on a
+      resource its sender never wrote stays suspected, and the operator
+      verdict log kept beside each transmission).
     insight: >
       Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
@@ -152,9 +155,10 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on canonical channels (AccessRecorded), resolves
-    channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
+    calls into accesses on canonical channels (AccessRecorded; a write once
+    its result settles its outcome), resolves channels and correlates
+    cross-agent accesses and content matches into transmissions
+    (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions, records topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
@@ -647,8 +651,8 @@ Features Index:
       overlaps; the ULID generator over the injected Clock and a
       RandomSource, monotonic per generator (stamping the clock's reading
       or a given time). TokenUsage gained cache_write
-      (checked: cache counts within input) and Reasoning::Visible a hashed
-      signature.
+      (checked: cache counts within input), Reasoning::Visible a hashed
+      signature, and later ToolCall one too (Gemini's thoughtSignature).
     entry_points:
       - spec/types/observed/message/encoding.rs
       - spec/types/observed/message/json.rs
@@ -657,6 +661,30 @@ Features Index:
       - spec/types/interfaces/l1_canonical.rs
     depends_on: [type_spec, wire_contract, sim]
     doc: docs/features/spec_primitives.md
+  eval_gaps:
+    description: >
+      Detection rules from evaluating on real agent datasets (INV-950..963):
+      ToolOutcome::Unknown for protocols without a failure flag; write
+      outcomes (AccessOp::Write carries WriteOutcome Delivered, Rejected or
+      Unknown, classified per known tool), with a writing call held until
+      its result arrives or CorrelationTiming::write_settles_at passes
+      (then Unknown), every write recorded and only Delivered and Unknown
+      writes paired (CoAccess::new refuses a rejected one); a write's spans
+      include the writer's own relayed spans, so a retry after a rejected
+      write confirms; a ToolResult match on a resource its sender never
+      wrote is a shared upstream source and keeps the transmission
+      Suspected; ToolCall::signature hashed and never part text; decoders
+      and the fingerprinter read part text only, decode strictly as UTF-8,
+      and normalization folds one level of JSON or YAML escapes.
+    entry_points:
+      - spec/types/derived/flow/access.rs
+      - spec/types/derived/flow/evidence.rs
+      - spec/types/derived/flow/timing.rs
+      - spec/types/interfaces/l5_flow.rs
+      - spec/types/interfaces/l4_provenance.rs
+      - spec/types/observed/message.rs
+    depends_on: [type_spec, spec_primitives, wire_contract]
+    doc: docs/features/eval_gaps.md
   gateway:
     description: >
       crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the

@@ -325,6 +325,17 @@ pub struct ToolCall {
     /// upstream. Their results arrive in the response, not in a later
     /// request.
     pub execution: ToolExecution,
+    /// The provider's opaque signature over the call (Gemini's
+    /// `thoughtSignature` on a `functionCall` part), verbatim, which the
+    /// harness must echo back unchanged. `None` when the provider sent none
+    /// or an empty one (Anthropic and OpenAI send none).
+    ///
+    /// Treated as [`Reasoning::Visible`]'s signature is: part of the
+    /// encoding, so of the hash (an echo carries the same signature, so it
+    /// still hashes like its response), and never part of the part's text
+    /// (`canonical.tool-call.signature-verbatim`,
+    /// `canonical.opaque.outside-part-text`).
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,10 +358,23 @@ pub enum ToolResultContent {
     Unknown(Unknown),
 }
 
+/// Whether a tool call succeeded, as the wire protocol flags it.
+///
+/// A normalizer sets `Success` or `Error` only from a failure flag the
+/// protocol carries (Anthropic's `is_error`: `true` is `Error`, absent or
+/// `false` is `Success`), and `Unknown` for a protocol whose tool results
+/// carry no such flag (an OpenAI Chat `tool` message), whatever the
+/// result's text says (`canonical.tool-outcome.unknown-without-flag`).
+/// Reading failure out of a result's text is L5's, per known tool
+/// (`WriteOutcome`).
+///
+/// [`WriteOutcome`]: crate::derived::flow::access::WriteOutcome
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOutcome {
     Success,
     Error,
+    /// The protocol has no failure flag for this result.
+    Unknown,
 }
 
 /// Points at one part of one message, by position in its part list.

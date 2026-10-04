@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use crate::aggregates::node::{AgentNode, CanonicalStateKind, GraphNode};
-use crate::derived::flow::access::{Access, AccessOp, Extraction};
+use crate::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crate::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{
@@ -80,6 +80,16 @@ pub fn content_match(origin_agent: AgentId, reader: AgentId, matched: u32) -> Co
 }
 
 pub fn write_access(id: u128, by: AgentId, on: ResourceId, when: u64) -> Access {
+    write_with_outcome(id, by, on, when, WriteOutcome::Delivered)
+}
+
+pub fn write_with_outcome(
+    id: u128,
+    by: AgentId,
+    on: ResourceId,
+    when: u64,
+    outcome: WriteOutcome,
+) -> Access {
     Access {
         id: access(id),
         agent: by,
@@ -93,6 +103,7 @@ pub fn write_access(id: u128, by: AgentId, on: ResourceId, when: u64) -> Access 
                 index: 0,
             },
             spans: Vec::new(),
+            outcome,
         },
     }
 }

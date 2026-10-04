@@ -145,9 +145,22 @@ The types follow data through the stack:
    a text part's text, visible reasoning, a tool call's argument text, a
    tool result's text contents joined with `TOOL_RESULT_SEPARATOR`), on
    its character boundaries, so the surface can cut evidence excerpts from
-   the stored bodies.
+   the stored bodies. Decoders and the fingerprinter read part text only,
+   never ids, signatures or opaque reasoning; a decoder yields text only
+   when the decoded bytes are valid UTF-8; and fingerprinting folds one
+   level of JSON or YAML string escapes along with whitespace and case
+   (`MatchKind::Normalized`). See [eval_gaps.md](eval_gaps.md).
 6. **L5 flow.** `ResourceExtractor`s turn tool calls and results into
-   `ExtractedAccess`es. The `ChannelRegistry` maps each `Locator` to a known,
+   `ExtractedAccess`es. A write carries its `WriteOutcome` (`Delivered`,
+   `Rejected`, `Unknown`), classified per known tool from the result's
+   `ToolOutcome` and content; the consumer holds a writing call until its
+   result arrives or `CorrelationTiming::write_settles_at` passes (then
+   `Unknown`), and records every write, a rejected one included, but the
+   correlator pairs only `Delivered` and `Unknown` writes. A write's spans
+   include the writer's own earlier spans it relays, so a retry after a
+   rejected write carries them. A `ToolResult` match on a resource its
+   sender never wrote is a shared upstream source and confirms nothing
+   ([eval_gaps.md](eval_gaps.md)). The `ChannelRegistry` maps each `Locator` to a known,
    declared or new channel, and the consumer writes what it saw through
    `ChannelTraffic` (`l5_flow/channels.rs`): `discover` (a channel for a
    `New` locator), `add_resource`, `record_access`, `set_detection`
@@ -391,7 +404,7 @@ The types follow data through the stack:
 | `spec/types/ids/secret.rs` | The deployment secret and the keyed hasher ([spec_primitives.md](spec_primitives.md)) | `DeploymentSecret` (`new`, `from_hex`, `version`; `InvalidSecret`), `KeyedHasher` (`new`, `rotating`, `credential`, `account`; `InvalidRotation`), `SecretDigests` |
 | `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `QueryText` (checked: trimmed, non-empty, at most `MAX` characters, line breaks allowed; `InvalidQueryText`), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `Clock` (the injected wall clock, `now`; `SystemClock` reads the OS clock; see [sim.md](sim.md)), `TimeWindow`, `ByteRange`, `Blake3` (`of`, `to_hex`, `from_hex`, `InvalidHex`), `hex`, `from_hex`, `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
-| `spec/types/observed/message.rs` | Canonical messages | `Message` (`new`; decoded only with its body's hash, `MessageHashMismatch`), `MessageBody` (serde in its encoding's shape), `Role`, `AssistantPart`, `UserPart`, `Reasoning` (`Visible { text, signature }`, `Opaque`), `Media`, `MediaBlob` (checked: hash of its bytes; `InvalidMediaBlob`), `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
+| `spec/types/observed/message.rs` | Canonical messages | `Message` (`new`; decoded only with its body's hash, `MessageHashMismatch`), `MessageBody` (serde in its encoding's shape), `Role`, `AssistantPart`, `UserPart`, `Reasoning` (`Visible { text, signature }`, `Opaque`), `Media`, `MediaBlob` (checked: hash of its bytes; `InvalidMediaBlob`), `ToolCall` (with its hashed `signature`), `ToolArguments`, `CanonicalJson`, `ToolResult`, `ToolOutcome` (`Success`, `Error`, `Unknown`), `Unknown`, `PartRef` |
 | `spec/types/observed/message/encoding.rs`, `encoding/mirror.rs` | The canonical encoding of a body and its hash ([spec_primitives.md](spec_primitives.md)) | `encode`, `decode` (`DecodeError`), `hash`, `hash_bytes`, `message` |
 | `spec/types/observed/message/json.rs`, `json/` | JSON with exact numbers; canonical text ([spec_primitives.md](spec_primitives.md)) | `Json`, `Number`, `JsonError`, `canonicalize`, `MAX_DEPTH`, `MAX_EXPONENT_DIGITS` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
@@ -404,9 +417,9 @@ The types follow data through the stack:
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
 | `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec`, `Carrier`, `InvalidMatch` |
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern` (`matches`, `overlaps`), `Host` |
-| `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
-| `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
-| `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `settle_after`), `InvalidTiming` |
+| `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp` (a write's spans and `outcome`), `WriteOutcome` (`pairs`), `AccessKind`, `Extraction` |
+| `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess` (refuses a rejected write), `InvalidCoAccess` (incl. `RejectedWrite`) |
+| `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `write_settles_at`, `settle_after`), `InvalidTiming` |
 | `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`, `confirmed`, `co_accesses`), `Confirmed`, `Classification` |
 | `spec/types/derived/flow/channel/mod.rs` | Channels, promotion and supersession | `Channel` (`canonical`), `ChannelOrigin` (`promoted`, `superseded`, `seed`, `detection_kind`), `Supersession`, `NotPromotable`, `NotSupersedable`, `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection`, `DetectionKind` |
@@ -502,6 +515,27 @@ The types follow data through the stack:
   returns was dropped by content retention.
 - Every `SpanLocation` L4 records indexes `Message::part_text` of its part
   and starts and ends on that text's character boundaries.
+- Opaque fields are not content. Normalizers keep provider blobs
+  (encrypted or redacted reasoning, reasoning and tool-call signatures,
+  tool-call ids, including Gemini's `__thought__<base64>` ids) out of every
+  part text, and provenance segments, fingerprints and decodes part text
+  only, so changing those fields changes no span or match
+  (`canonical.opaque.outside-part-text`, `provenance.decode.part-text-input`).
+  A decoder yields text only when the decoded bytes are valid UTF-8, never
+  by lossy conversion (`provenance.decode.strict-utf8`).
+- `MatchKind::Normalized` folds one level of JSON or YAML string escapes
+  as well as whitespace and case, on both sides: a span serialised into a
+  string literal in a reader's tool result matches as `Exact` or
+  `Normalized` (`provenance.match.escape-folded-normalized`; on AgentDojo
+  only 9% of injected strings reach tool output byte for byte, and 49%
+  need escapes undone).
+- Read-side matching scans only a delta's `new_inputs`, `new_system` and
+  output, never re-sent history, so one received message yields one
+  match per span, not one per later call
+  (`provenance.match.scans-delta-messages`).
+- A `ToolOutcome` is `Success` or `Error` only from a failure marker the
+  wire protocol carries (Anthropic's `is_error`), and `Unknown` for a
+  protocol without one (OpenAI Chat).
 - An agent always has at least one piece of identity evidence. A merged
   agent's target is never itself and never another merged agent.
 - Only originated spans are fingerprinted and indexed. Common spans are
@@ -515,7 +549,16 @@ The types follow data through the stack:
   matches share one sender and one reader (`Confirmed::new`). The sender is
   known only from that state on.
 - A `CoAccess` joins a write and a later read of one resource by two
-  different agents within the window (`CoAccess::new`).
+  different agents within the window (`CoAccess::new`), and never a
+  `Rejected` write (`InvalidCoAccess::RejectedWrite`). A write is recorded
+  once, with its final `WriteOutcome`, after its result arrived or its
+  settle window closed (then `Unknown`); a rejected write is recorded and
+  never paired, whichever of its result and the read is processed first.
+  `Unknown` writes pair like `Delivered` ones, their lower confidence kept
+  on the access as `Extraction` is.
+- A `ToolResult` content match on a resource its origin agent has no
+  pairing write on confirms no transmission (a shared upstream source); a
+  channel transmission it would have confirmed stays `Suspected`.
 - A transmission is one (reader exchange, sender, route); later matches
   extend it. Route precedence is Delegation, Channel, Direct, Unobserved.
 - No `EdgeKey` is a self-edge (`EdgeKey::new`); every `Embedding` has its
@@ -634,3 +677,24 @@ The types follow data through the stack:
   ([wire_contract.md](wire_contract.md)): it round-trips, a checked type
   decodes only through its constructor, decoding is strict, and a golden
   file pins its JSON.
+
+## Decided design questions
+
+- **Shared upstream source** (decided; formerly open). Two agents can
+  produce the same text without communicating because both quote one
+  resource: in SWE trajectory corpora about 14.5% of one task's novel
+  assistant shingles reappear in a different task on the same repository,
+  because both agents quote the same repository file, yet only 0.18% of
+  trajectory pairs share 20 or more such shingles. A writer that
+  reproduces a file it did not read in this conversation produces an
+  `Originated` span, and a reader of the same file gets a `ToolResult`
+  match from a sender it never heard from. Rule: a `ToolResult` match
+  whose reader's call resolved to a resource, from an origin agent with no
+  write on that resource whose outcome pairs, is evidence of a shared
+  upstream source, not a transmission. It confirms nothing; the
+  transmission stays `Suspected` (`flow.route.shared-upstream-stays-suspected`).
+  A tool result whose call yields no extracted resource keeps opening
+  `Direct(ToolResult)`. The decision is reversible; a per-agent-pair
+  minimum of shared spans is a possible later configuration knob if
+  evaluation shows the rule insufficient. Details in
+  [eval_gaps.md](eval_gaps.md).

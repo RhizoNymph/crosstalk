@@ -178,7 +178,10 @@ histories, resources (each on one channel) and accesses.
 - `ChannelTraffic`: `discover` creates a channel only for an unstored
   resource whose lookup is `New`; `add_resource` stores a resource on the
   channel its lookup names (any channel for `New`), never on a superseded
-  one; `record_access` needs a stored resource and a new access id;
+  one; `record_access` needs a stored resource and a new access id, and
+  stores a write whatever its `WriteOutcome`, so a rejected write counts
+  as a write in `resource_use` (`flow.access.rejected-write-recorded`;
+  pairing is the correlator's, in `crosstalk-flow`);
   `set_detection` returns `Applied` or `Unchanged` and refuses a frozen
   (superseded) channel and `Unused` off `AwaitingTraffic`; `confirm`
   advances the canonical channel's detection to `Active` (keeping `since`
