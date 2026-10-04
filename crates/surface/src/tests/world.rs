@@ -28,7 +28,9 @@ use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrid, SeriesStep};
 use crosstalk_spec::aggregates::topic::Topic;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark};
-use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{
+    Access, AccessKind, AccessOp, Extraction, WriteOutcome,
+};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
@@ -801,6 +803,7 @@ pub fn access(resource: &Resource, agent: AgentId, kind: AccessKind, at: Timesta
             AccessKind::Write => AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             },
             AccessKind::Read => AccessOp::Read { result: part },
         },

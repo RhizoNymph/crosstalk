@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{
+    Access, AccessKind, AccessOp, Extraction, WriteOutcome,
+};
 use crosstalk_spec::derived::flow::evidence::CoAccess;
 use crosstalk_spec::derived::flow::resource::{Locator, Resource};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
@@ -277,6 +279,7 @@ impl Gen<'_> {
             AccessKind::Write => AccessOp::Write {
                 call: evidence::part(&mut self.rng),
                 spans: vec![self.mint.at::<SpanId>(at)?],
+                outcome: WriteOutcome::Delivered,
             },
             AccessKind::Read => AccessOp::Read {
                 result: evidence::part(&mut self.rng),
