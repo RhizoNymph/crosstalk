@@ -8,6 +8,7 @@ pub mod common;
 pub mod explore;
 pub mod overview;
 pub mod pipeline;
+pub mod topics;
 pub mod topology;
 pub mod transmission;
 pub mod view;
