@@ -17,7 +17,7 @@ a re-fit and re-embed complete.
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::assign_rejects_embedding_of_other_model", "crosstalk_analysis::tests::semantic_search_rejects_query_of_other_model", "crosstalk_analysis::tests::semantic_rule_skips_embedding_of_other_model"]
+unit = ["crosstalk_analysis::remote::tests::topics::assign_rejects_embedding_of_other_model", "crosstalk_analysis::tests::semantic_search_rejects_query_of_other_model", "crosstalk_analysis::tests::semantic_rule_skips_embedding_of_other_model"]
 property = "crosstalk_analysis::tests::no_cross_model_scores"
 
 [evidence-review]

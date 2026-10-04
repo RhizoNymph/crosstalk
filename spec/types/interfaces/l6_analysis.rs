@@ -61,8 +61,10 @@
 //! ready or fails, or its frame expires.
 //!
 //! Implementations:
-//! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
-//! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).
+//! - `Embedder`: `OpenAiEmbedder` (an OpenAI-compatible endpoint, decision
+//!   D1).
+//! - `TopicModel`: `SidecarTopicModel` (BERTopic-style: UMAP, HDBSCAN and
+//!   c-TF-IDF in the Python sidecar, decision D1).
 //! - `TopicCatalog`, `TopicLifecycle`: `PgTopicCatalog`.
 //! - `SearchIndex`, `SearchCorpus`: `PgHybridSearch` (full-text plus
 //!   pgvector).
@@ -70,7 +72,8 @@
 //!   the binary layout of [`crate::aggregates::projection::frame`]).
 //! - `ProjectionSource`: `PgProjectionSource` (reads a fit's sample beside
 //!   the embeddings).
-//! - `LayoutFitter`: `UmapLayout` (seeded, single-threaded, so deterministic).
+//! - `LayoutFitter`: `SidecarLayoutFitter` (UMAP in the Python sidecar;
+//!   seeded, single-threaded, so deterministic).
 //! - `AlertRuleEval`: one per [`AlertRuleKind`].
 //! - `AlertTriage`, `AlertRuleStore`, `AlertRuleMaintenance`,
 //!   `AlertActions`, `AlertReads`: `PgAlertStore`, one transaction scope
@@ -92,8 +95,9 @@
 //! (`ProjectionSource::sample`), lays it out (`LayoutFitter::fit`), builds
 //! the frame with [`ProjectionFrame::from_points`] and stores it
 //! (`complete`, frame and `Ready` status in one transaction). A
-//! [`FitFailure`] from the sample or the layout is recorded with `fail`; any
-//! other error leaves the job to be requeued when its lease lapses. One fit
+//! [`FitFailure`] from the sample or the layout ([`LayoutError::Failed`]) is
+//! recorded with `fail`; any other error ([`LayoutError::Backend`] included)
+//! leaves the job to be requeued when its lease lapses. One fit
 //! runs at a time per fitter.
 
 pub mod alerts;
@@ -140,12 +144,31 @@ pub trait Embedder {
     ) -> impl Future<Output = Result<Vec<Embedding>, EmbedError>> + Send;
 }
 
+/// One document of a topic fit: a confirmed transmission's matched content
+/// and its embedding. The text feeds the topics' c-TF-IDF terms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FitDocument<'a> {
+    pub text: &'a str,
+    pub embedding: &'a Embedding,
+}
+
 pub trait TopicModel {
+    /// The version `assign` classifies under: 0 until the first fit
+    /// returns, then the version of the latest successful fit.
     fn version(&self) -> TopicModelVersion;
 
-    /// Fit a new version from scratch. The caller re-assigns every
-    /// transmission afterwards.
-    fn fit(&self, embeddings: &[Embedding]) -> Result<(TopicModelVersion, Vec<Topic>), TopicError>;
+    /// Fit `version` from scratch over `documents` at `at`, and make it the
+    /// current version. `version` is the one the catalog began
+    /// (`TopicLifecycle::begin_fit`); one not above [`TopicModel::version`]
+    /// is `VersionNotNewer`, changing nothing. Every returned topic has
+    /// `version` and `fitted_at = at`. The caller re-assigns every
+    /// transmission afterwards. A `Backend` failure changes nothing.
+    fn fit(
+        &self,
+        version: TopicModelVersion,
+        documents: &[FitDocument<'_>],
+        at: Timestamp,
+    ) -> impl Future<Output = Result<Vec<Topic>, TopicError>> + Send;
 
     fn assign(&self, embedding: &Embedding) -> Result<Assignment, TopicError>;
 }
@@ -393,12 +416,14 @@ pub trait ProjectionSource {
 pub trait LayoutFitter {
     /// One coordinate pair per embedding, in the same order. Deterministic:
     /// the same embeddings in the same order with the same params (seed
-    /// included) give the same coordinates, bit for bit.
+    /// included) give the same coordinates, bit for bit. A deterministic
+    /// refusal is `LayoutError::Failed`, recorded as the job's failure; a
+    /// `Backend` failure leaves the job to be requeued.
     fn fit(
         &self,
         embeddings: &[Embedding],
         params: ProjectionParams,
-    ) -> Result<Vec<[f32; 2]>, FitFailure>;
+    ) -> impl Future<Output = Result<Vec<[f32; 2]>, LayoutError>> + Send;
 }
 
 /// What a rule may look up while evaluating, beyond the event itself.
@@ -552,6 +577,28 @@ pub enum TopicError {
         needed: u32,
         got: u32,
     },
+    /// `fit` of a version that is not above the current one.
+    VersionNotNewer {
+        current: TopicModelVersion,
+        requested: TopicModelVersion,
+    },
+    /// The fitting service failed or could not be reached (a timeout, a
+    /// transport error, a reply that breaks its contract). Not a property
+    /// of the input: a later fit may succeed.
+    Backend {
+        reason: String,
+    },
+}
+
+/// Why [`LayoutFitter::fit`] returned no layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayoutError {
+    /// The fitting service failed or could not be reached. Never recorded
+    /// as a job's failure: the job is requeued when its lease lapses.
+    Backend { reason: String },
+    /// Fitting these embeddings with these params cannot succeed; recorded
+    /// with `ProjectionStore::fail`.
+    Failed(FitFailure),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

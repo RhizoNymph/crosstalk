@@ -12,9 +12,9 @@ meaningless and push rules into the wrong topics or needlessly Stale.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::fit_centroid_is_normalized_member_mean"
-property = "crosstalk_analysis::tests::fit_centroids_match_member_means"
+unit = "crosstalk_analysis::remote::tests::topics::fit_centroid_is_normalized_member_mean"
+property = "crosstalk_analysis::remote::tests::topics::fit_centroids_match_member_means"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

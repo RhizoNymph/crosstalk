@@ -5,10 +5,9 @@
 //!
 //! Roadmap: P6.2 (L6 search and alerts) and P6.3 (L6 topics and projections). A
 //! layer crate: it depends on the spec, never on another layer crate.
+//!
+//! [`remote`] holds the adapters over HTTP services: the topic model and
+//! layout fitter over the Python topics sidecar, and the OpenAI-compatible
+//! embedder.
 
-// Every crate builds on the spec; the dependency is declared before any
-// code uses it.
-use crosstalk_spec as _;
-
-#[cfg(test)]
-mod tests {}
+pub mod remote;

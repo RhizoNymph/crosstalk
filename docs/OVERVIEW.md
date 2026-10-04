@@ -67,7 +67,11 @@ Overview:
     harness (eval): it converts public multi-agent datasets (SALT-NLP
     first) into labelled corpora of spec NormalizedExchanges, scores a
     detector against the labels, and runs both a naive reference matcher
-    and Pipeline::ingest (unscored until detection consumers exist). The
+    and Pipeline::ingest (unscored until detection consumers exist). crosstalk-analysis has
+    L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
+    SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
+    HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint. The
     other crates are still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
@@ -173,8 +177,10 @@ Overview:
     new inputs against other agents' spans (ContentMatched); L5 turns tool
     calls into accesses on canonical channels (AccessRecorded), resolves
     channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
-    classifies transmissions, records topic-model versions and their
+    transmissions (TransmissionConfirmed / Suspected) → L6 embeds (an
+    OpenAI-compatible endpoint) and classifies transmissions (topic fits
+    and projection layouts are computed by the Python topics sidecar over
+    HTTP; assignment to the current topics is local), records topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
@@ -726,6 +732,50 @@ Features Index:
       - scripts/try-claude-code.sh
     depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
     doc: docs/features/gateway.md
+  analysis:
+    description: >
+      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). So far its
+      remote module: SidecarTopicModel (TopicModel: fits the catalog's
+      version over documents at a given time through the sidecar, computes
+      centroids as normalized member means and derives topic ids from the
+      fit time, version and cluster; assigns locally to the nearest
+      centroid above a threshold), SidecarLayoutFitter (LayoutFitter, plus
+      transform onto an existing layout), OpenAiEmbedder (Embedder:
+      batched, ordered by index, normalized, dimension probed, key from an
+      env var and never disclosed), a shared hyper/rustls client with a
+      deadline per call, and typed errors in which only the sidecar's
+      deterministic refusals become TooFewSamples or a FitFailure.
+      Contract-tested against testkit's fake server and the sidecar's own
+      fixture files; ignored live tests run against the real sidecar.
+    entry_points:
+      - crates/analysis/src/remote/mod.rs
+      - crates/analysis/src/remote/sidecar/topics.rs
+      - crates/analysis/src/remote/sidecar/layout.rs
+      - crates/analysis/src/remote/embedder.rs
+    depends_on: [type_spec, topics_sidecar, testkit, workspace]
+    doc: docs/features/analysis.md
+  topics_sidecar:
+    description: >
+      The Python topics sidecar (sidecar/topics, roadmap D1/P6.3): a
+      FastAPI service on port 8090 with /healthz, /v1/topics/fit (UMAP
+      reduction, HDBSCAN clusters renumbered by size, c-TF-IDF terms and
+      labels), /v1/layout/fit and /v1/layout/transform (seeded UMAP to two
+      dimensions, fitted bases in an LRU cache). Contract v1: JSON in the
+      spec's wire conventions, embeddings and coordinates as exact
+      little-endian binary32 hex matrices, adjacently tagged errors mapped
+      to HTTP statuses. Same request bytes give the same response bytes
+      (SeedSequence-seeded UMAP, one thread for BLAS and Numba, a generic
+      Numba target; bit-identity per image and CPU architecture). Pinned
+      with uv; pytest with determinism and golden tests; image
+      deploy/topics.Dockerfile (python slim, non-root).
+    entry_points:
+      - sidecar/topics/src/crosstalk_topics/app.py
+      - sidecar/topics/src/crosstalk_topics/topics.py
+      - sidecar/topics/src/crosstalk_topics/layout.py
+      - sidecar/topics/pyproject.toml
+      - deploy/topics.Dockerfile
+    depends_on: [wire_contract]
+    doc: docs/features/topics_sidecar.md
   deploy:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker

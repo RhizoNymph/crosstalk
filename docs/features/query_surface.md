@@ -438,8 +438,9 @@ once, stored and read back exactly; a cited view always reproduces.
    frame with `ProjectionFrame::from_points` and `complete` stores it with
    the `Ready(Fitted)` status in one transaction. Deterministic problems
    (`FitFailure`: too few points, version or model dropped, a non-finite
-   layout) make the job `Failed`; anything else leaves it to be requeued
-   when its lease lapses.
+   layout) make the job `Failed`; anything else (a store error, or
+   `LayoutError::Backend` when the layout sidecar times out or fails)
+   leaves it to be requeued when its lease lapses.
 3. `projection_status` and `projections` (paged) report jobs.
    `projection(caller, id)` returns a `Projection`: the ready job and its
    frame, identical on every read. Queued or fitting is

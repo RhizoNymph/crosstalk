@@ -195,7 +195,11 @@ The types follow data through the stack:
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
    (`TransmissionClassified`). Re-fits run one at a time. The
-   `TopicCatalog` records a re-fit's version as `Fitting`; when the fit
+   `TopicCatalog` records a re-fit's version as `Fitting`, and
+   `TopicModel::fit` fits that version over the documents (text and
+   embedding) at a time it is given; `TopicError::Backend` and
+   `LayoutError::Backend` are the sidecar's failures, never a recorded
+   `FitFailure` ([topics_sidecar.md](topics_sidecar.md)). When the fit
    returns it stores the `TopicLineage` from the predecessor (the version
    before it in the `TopicVersionHistory`): for each older topic, the new
    topic with the most similar centroid (`LineageEntry::best`, ties to the
