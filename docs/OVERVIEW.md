@@ -131,6 +131,12 @@ Overview:
       crosstalk-sim (deterministic simulation) and crosstalk-testkit
       (builders, recorded corpus, fake upstreams). Layer crates may depend
       on store; memory, sim and testkit are their dev-dependencies only.
+    deploy: >
+      deploy/ (outside the workspace): docker compose on one machine with
+      Postgres, a migrate step, the crosstalk binary as --role all, the UI,
+      and the infrastructure observability stack (Prometheus, Grafana, Loki,
+      Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
+      stored, how they run and how they scale is in docs/infrastructure.md.
 
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
@@ -686,4 +692,22 @@ Features Index:
       - scripts/try-claude-code.sh
     depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
     doc: docs/features/gateway.md
+  deploy:
+    description: >
+      Single-machine deployment: images for the gateway and the UI, a docker
+      compose stack (Postgres 18 with pgvector, pg_trgm and
+      pg_stat_statements; a migrate step; crosstalk serve --role all; the
+      UI), generated secrets in deploy/.env, and infrastructure
+      observability (host, container, Postgres and log metrics, dashboards,
+      alert rules). Defines the contract the crosstalk binary implements:
+      serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
+      endpoints and the config file's top-level keys.
+    entry_points:
+      - deploy/compose.yaml
+      - deploy/run.sh
+      - deploy/crosstalk.Dockerfile
+      - deploy/config/crosstalk.json
+      - docs/infrastructure.md
+    depends_on: [workspace, store, ingress, transport]
+    doc: docs/features/deploy.md
 ```
