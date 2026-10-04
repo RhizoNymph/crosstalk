@@ -10,7 +10,7 @@ text behind each is on its evidence page, which needs Content.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::channel_transmissions_need_view"
+unit = "crosstalk_surface::tests::listing::channel_transmissions_need_view"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

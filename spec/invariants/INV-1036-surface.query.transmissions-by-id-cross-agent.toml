@@ -13,8 +13,8 @@ or a count and its list would disagree.
 
 [evidence]
 unit = "crosstalk_spec::tests::confirmation::transmissions_by_id_omits_transmissions_within_one_agent"
-property = "crosstalk_surface::tests::prop_transmissions_by_id_skip_merged_pairs"
+property = "crosstalk_surface::tests::props::listing::prop_transmissions_by_id_skip_merged_pairs"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
