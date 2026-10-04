@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "claim": {
+        "family": "claude_code",
+        "version": "2.0.14",
+        "user_agent": "claude-cli/2.0.14 (external, cli)"
+      },
+      "last_seen": "2026-10-04T12:34:56.789012Z"
+    },
+    {
+      "claim": {
+        "family": "oh_my_pi",
+        "version": null,
+        "user_agent": "oh-my-pi"
+      },
+      "last_seen": "2026-10-04T12:34:56.789012Z"
+    },
+    {
+      "claim": {
+        "family": "claude_code",
+        "version": "1.0.98",
+        "user_agent": "claude-cli/1.0.98 (external, cli)"
+      },
+      "last_seen": "2026-10-04T12:00:00.000000Z"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "type": "registered",
+    "data": {
+      "at": "2026-10-01T09:00:00.000000Z"
+    }
+  },
+  {
+    "type": "provisional",
+    "data": {
+      "first_seen": "2026-10-04T12:34:56.789012Z"
+    }
+  },
+  {
+    "type": "established",
+    "data": {
+      "since": "2026-10-04T12:40:00.125000Z"
+    }
+  }
+]

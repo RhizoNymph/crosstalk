@@ -11,11 +11,12 @@
 //! exchange's `request` holds only that increment, and its [`Continuation`]
 //! names the response it continues. Reconstruction resolves the full history.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
+use crate::ids::{self, AgentId, ConversationId, ExchangeId, InvalidUlidText, MessageHash};
 use crate::observed::client::ClientContext;
 use crate::support::Timestamp;
+use crate::wire::decode_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,10 +42,43 @@ pub enum Transport {
     WebSocket,
 }
 
-/// A WebSocket connection through the proxy. On the wire, the number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+/// A WebSocket connection through the proxy: a ULID the proxy node mints
+/// when it accepts the upgrade, like every entity id ([`crate::ids`]).
+///
+/// On the wire, its ULID text (`"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"`), never the
+/// bare `u128`: a JSON number cannot carry 128 bits exactly, and the id is
+/// an entity the proxy creates (stored in [`Continuation::Increment`],
+/// compared across nodes), not a digest of content, so it takes the entity
+/// ids' text rather than hex. Not a request: no client names a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(pub u128);
+
+impl ConnectionId {
+    /// The id as ULID text, as [`crate::ids::AgentId::ulid_text`] writes it.
+    pub fn ulid_text(self) -> String {
+        ids::ulid_text(self.0)
+    }
+
+    /// The id `text` names, accepting exactly the text [`Self::ulid_text`]
+    /// writes.
+    pub fn from_ulid_text(text: &str) -> Result<Self, InvalidUlidText> {
+        ids::parse_ulid_text(text).map(Self)
+    }
+}
+
+impl Serialize for ConnectionId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.ulid_text())
+    }
+}
+
+impl<'de> Deserialize<'de> for ConnectionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "ULID text", |text| {
+            Self::from_ulid_text(&text)
+        })
+    }
+}
 
 /// The id a provider assigned to a response (`resp_…`, `msg_…`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

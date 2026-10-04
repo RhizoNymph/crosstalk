@@ -29,21 +29,21 @@ spec/types/
 │   ├── duration.rs        Duration as whole microseconds in a `<what>_micros` field (serde `with` module; micros, UnfitDuration)
 │   └── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
 ├── observed/              facts from the wire
-│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
-│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
+│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
+│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store)
 │   ├── message/
 │   │   └── text.rs        Message::part_text (what a span location indexes), part_count, NoPartText, TOOL_RESULT_SEPARATOR
-│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
-│   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest
+│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ConnectionId (ULID text on the wire), ExchangeStage (in memory, no serde)
+│   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest (checked, stamped: never a WireRequest)
 │   ├── agent/
-│   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases)
-│   │   └── merge.rs       MergeRecord (checked), MergedInto, Reversal, MergeVeto (checked), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
+│   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases; decoding orders the entries and refuses a repeated claim)
+│   │   └── merge.rs       MergeRecord (checked; decodes through new and revert, InvalidMergeRecord), MergedInto, Reversal, MergeVeto (checked; decoding orders the pair), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
-│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan
+│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan; on the wire only SpanLocation, RelaySource
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
-│   │   └── matching.rs    ContentMatch, MatchKind, Codec, Carrier
+│   │   └── matching.rs    ContentMatch (checked, also when decoded), MatchKind, Codec, Carrier
 │   └── flow/
 │       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps; a WireRequest)
 │       ├── access.rs      Access, AccessOp, Extraction
@@ -77,7 +77,7 @@ spec/types/
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
-│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
+│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed (bus payloads; a golden per variant inside an Envelope)
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet); bus payloads inside an Envelope, never requests
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors

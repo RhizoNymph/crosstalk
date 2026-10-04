@@ -27,6 +27,17 @@ unit = [
     "crosstalk_spec::tests::wire::paging::paging_goldens",
     "crosstalk_spec::tests::wire::support::support_goldens",
     "crosstalk_spec::tests::wire::time::timestamp_golden",
+    "crosstalk_spec::tests::wire::observed::exchange::exchanges_golden",
+    "crosstalk_spec::tests::wire::observed::exchange::exchange_enums_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::observed::exchange::client_enums_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::observed::exchange::message_references_golden",
+    "crosstalk_spec::tests::wire::observed::exchange::connection_ids_are_ulid_text",
+    "crosstalk_spec::tests::wire::observed::identity::identity_evidence_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::observed::identity::agents_golden_in_every_state",
+    "crosstalk_spec::tests::wire::observed::identity::merge_log_golden",
+    "crosstalk_spec::tests::wire::observed::identity::claim_sets_golden",
+    "crosstalk_spec::tests::wire::observed::ingest::every_ingest_event_golden_inside_an_envelope",
+    "crosstalk_spec::tests::wire::provenance::provenance_goldens",
 ]
 
 [evidence-review]

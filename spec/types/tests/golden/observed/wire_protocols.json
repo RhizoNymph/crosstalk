@@ -1,0 +1,7 @@
+[
+  "anthropic_messages",
+  "open_ai_chat",
+  "open_ai_responses",
+  "gemini_generate",
+  "gemini_code_assist"
+]

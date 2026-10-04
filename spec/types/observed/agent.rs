@@ -58,8 +58,8 @@ mod claims;
 
 pub use claims::{ClaimSet, DuplicateClaim, SeenClaim};
 pub use merge::{
-    AlreadyReverted, InvalidMergeTransition, MergeConflict, MergeRecord, MergeVeto, MergedInto,
-    Reversal,
+    AlreadyReverted, InvalidMergeRecord, InvalidMergeTransition, MergeConflict, MergeRecord,
+    MergeVeto, MergedInto, Reversal,
 };
 
 /// An operator's display label for an agent: trimmed, non-empty, at most 64

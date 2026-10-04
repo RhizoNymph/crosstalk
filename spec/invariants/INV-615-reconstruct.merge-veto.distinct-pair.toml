@@ -13,7 +13,10 @@ cannot name one agent twice.
 
 [evidence]
 type = "crosstalk_spec::observed::agent::MergeVeto::new"
-unit = "crosstalk_spec::tests::agents::veto_rejects_a_self_pair_and_orders_its_pair"
+unit = [
+    "crosstalk_spec::tests::agents::veto_rejects_a_self_pair_and_orders_its_pair",
+    "crosstalk_spec::tests::wire::observed::identity::merge_vetoes_refuse_a_self_pair_and_order_their_pair",
+]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

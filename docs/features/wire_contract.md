@@ -422,3 +422,98 @@ goldens and rejections as evidence.
   every shape is fixed.
 - The spec's only dependencies are `serde` and `serde_json`, pinned
   exactly; no other crate is added for the wire.
+
+## Observed
+
+The observed facts and provenance on the wire: exchanges and their client
+context, agent identity and the merge log, harness claims, spans' locations,
+content matches, and the ingest bus events that carry them between nodes.
+Areas `observed` and `provenance`.
+
+**Wire data.** Every type below is a response or bus payload; none is a
+`WireRequest` (no client sends observed facts).
+
+- `observed/exchange.rs`: `Exchange`, `ExchangeMeta`, `Continuation`,
+  `ExchangeOutcome`, `ExchangeFailure`, `TokenUsage`, `ConnectionId`,
+  `ResponseId`, `ModelName` and the string enums `WireProtocol`,
+  `Transport`, `StopReason`. `ExchangeStage` is in memory only.
+- `observed/client.rs`: `ClientContext` and everything it holds
+  (`IngressMode`, `Upstream`, `UpstreamKind`, `Vendor`, `InferenceServer`,
+  `CredentialRef`, `CredentialScheme`, `HarnessClaim`, `HarnessFamily`,
+  `HarnessIds`, `RequestClass`, `PreviousDigests`, `RouteName`,
+  `UpstreamId`). `Dialect`, `Stability` and `EndpointKind` are derived in
+  process and get no serde.
+- `observed/agent.rs`, `agent/claims.rs`, `agent/merge.rs`: `Agent`,
+  `AgentState`, `ActiveAgentState`, `IdentityEvidence`, `IdentityScope`,
+  `MergeAuthor`, `MergedInto`, `SeenClaim`, `Reversal`, and the checked
+  `MergeRequest`, `MergeRecord`, `MergeVeto`, `ClaimSet`. `MergeRequest`,
+  `MergeAuthor`, `MergeRecord`, `Reversal` and `MergeVeto` are stamped
+  (`wire/authority.rs`). `MergeConflict`, `AlreadyReverted`,
+  `InvalidMergeTransition`, `RenameMerged` and `Strength` stay in process.
+- `observed/message.rs`: only `PartRef`, `ToolCallId` and `ToolName`. The
+  message bodies live in the blob store and never travel as JSON.
+- `derived/provenance/span.rs`: `SpanLocation`, `RelaySource`. `Span`,
+  `SpanState`, `Origin`, `SpanEvent` and `OriginatedSpan` stay in process.
+- `derived/provenance/matching.rs`: `ContentMatch` (checked), `Carrier`,
+  `MatchKind`, `Codec`.
+- `events/ingest.rs`: `IngestEvent` and `ConversationDelta`.
+- `interfaces/l3_reconstruction*.rs`: nothing. Its traits, `Resolution`,
+  `ThreadOutcome`, `ResolveError` and `AgentReadError` are in process;
+  `ResolveError` reaches the client only as `ConflictKind` and `QueryError`.
+
+**`ConnectionId` is ULID text.** It was a transparent `u128`, a bare JSON
+number that no JavaScript reader holds exactly and that broke the "no bare
+u128" rule. A connection is an entity the proxy node creates when it
+accepts a WebSocket upgrade, and it is stored in
+`Continuation::Increment` and compared across nodes, so it is a ULID
+minted there and travels as the entity ids' 26-character text
+(`ConnectionId::ulid_text`, `from_ulid_text`, through the crate-visible
+helpers in `ids.rs`). Lower-case hex is for content ids and digests, which
+name content; a connection names no content. It is not a `WireRequest`.
+
+**Checked types decode through their constructors.**
+
+| Type | Refused on decode | Normalized on decode |
+| --- | --- | --- |
+| `MergeRequest` | one agent as source and target (`SelfMerge`) | — |
+| `MergeRecord` | a self-merge (`InvalidMergeRecord::SelfMerge`); a second reversal, which needs a repeated `reverted` key (`duplicate field`) | — |
+| `MergeVeto` | an agent paired with itself (`SelfMerge`) | the pair is ordered, lower id in `a` |
+| `ClaimSet` | a claim listed twice, at the same or another time (`DuplicateClaim`) | entries are ordered latest first, ties by family, User-Agent, version |
+| `ContentMatch` | origin agent is the reader (`SelfMatch`); more matched bytes than the read range (`ExceedsReadRange`); zero matched bytes | — |
+
+`MergeRecord` decodes in the order the log builds it: `MergeRequest::new`,
+`MergeRecord::new`, then `MergeRecord::revert` with the stored reversal,
+instead of setting the reversal field by field. Not rechecked, because no
+constructor checks it: that a reversal's `restored` lists agents of the
+record's `repointed` in its order, and that it comes after the merge.
+`Agent`, `AgentState` and `MergedInto` are plain: whether a merged agent's
+target is canonical needs the merge table, which a value cannot see.
+
+**Ingest events in envelopes.** Each `IngestEvent` variant has a golden
+holding a whole `Envelope` (`envelope_<variant>.json`), so the bus framing
+(`id`, `at`, `{"type": "ingest", "data": {"type": <variant>, "data": ..}}`)
+is pinned with each payload; a rename is pinned with a label and cleared.
+The golden names come from an exhaustive match, so a new variant does not
+compile until it has a golden.
+
+**Renamed for the wire.** `CredentialScheme::OAuthAccessToken` became
+`OauthAccessToken` (the Rust guideline writes a contraction as one word),
+so it encodes as `"oauth_access_token"` rather than
+`"o_auth_access_token"`. `OpenAi…` names still encode as `open_ai…`.
+
+**Strictness gap found.** Besides the two alternate spellings above, serde
+decodes a struct from a positional JSON array (`[{"message": ..,
+"index": 0}, {"start": 0, "end": 8}]` is a `SpanLocation`), across the
+crate. It is not an unknown field or variant; the goldens pin the object
+form.
+
+| File | Role |
+| --- | --- |
+| `spec/types/tests/wire/observed/{mod,exchange,identity,ingest}.rs` | Goldens and rejections for exchanges and client context, identity and the merge log, and ingest events in envelopes |
+| `spec/types/tests/wire/provenance.rs` | Goldens and rejections for span locations, relay sources and content matches |
+| `spec/types/tests/golden/observed/`, `golden/provenance/` | The goldens |
+
+Evidence for `canonical.wire.checked-decode`, `goldens-pin-format`,
+`id-encoding`, `round-trip` and `strict-decode`, and for
+`reconstruct.merge-record.revert-once`, `reconstruct.merge-veto.distinct-pair`
+and `reconstruct.claims.distinct-ordered`.

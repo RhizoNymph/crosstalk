@@ -31,6 +31,13 @@ unit = [
     "crosstalk_spec::tests::wire::paging::cursors_refuse_tokens_the_constructor_refuses",
     "crosstalk_spec::tests::wire::paging::pages_refuse_what_the_surface_never_serves",
     "crosstalk_spec::tests::wire::paging::id_batches_normalize_and_refuse_too_many",
+    "crosstalk_spec::tests::wire::observed::identity::merge_requests_refuse_a_self_merge",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_self_merge_and_a_second_reversal",
+    "crosstalk_spec::tests::wire::observed::identity::merge_vetoes_refuse_a_self_pair_and_order_their_pair",
+    "crosstalk_spec::tests::wire::observed::identity::claim_sets_refuse_a_repeated_claim_and_order_their_entries",
+    "crosstalk_spec::tests::wire::observed::identity::agents_refuse_unknown_fields_variants_and_invalid_parts",
+    "crosstalk_spec::tests::wire::provenance::content_matches_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::provenance::provenance_enums_refuse_unknown_and_invalid_variants",
 ]
 
 [evidence-review]

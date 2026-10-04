@@ -133,7 +133,7 @@ pub enum CredentialScheme {
     /// An OAuth access token for a subscription. Refreshed by the harness
     /// directly with the vendor's auth server, so it changes over the life of
     /// one agent.
-    OAuthAccessToken,
+    OauthAccessToken,
     /// A short-lived token minted from another credential (Copilot).
     ExchangedToken,
     /// The static key of a self-hosted server, shared by every caller.
@@ -154,7 +154,7 @@ impl CredentialScheme {
     pub fn stability(self) -> Stability {
         match self {
             Self::ApiKey => Stability::Stable,
-            Self::OAuthAccessToken | Self::ExchangedToken => Stability::Rotating,
+            Self::OauthAccessToken | Self::ExchangedToken => Stability::Rotating,
             Self::ServerKey => Stability::Shared,
         }
     }

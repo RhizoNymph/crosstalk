@@ -1,0 +1,18 @@
+[
+  {
+    "type": "anthropic"
+  },
+  {
+    "type": "open_ai"
+  },
+  {
+    "type": "google"
+  },
+  {
+    "type": "github_copilot"
+  },
+  {
+    "type": "other",
+    "data": "mistral"
+  }
+]

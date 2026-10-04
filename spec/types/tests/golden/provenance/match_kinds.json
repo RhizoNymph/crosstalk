@@ -1,0 +1,19 @@
+[
+  {
+    "type": "exact"
+  },
+  {
+    "type": "normalized"
+  },
+  {
+    "type": "decoded",
+    "data": [
+      "url_encoding",
+      "base64"
+    ]
+  },
+  {
+    "type": "semantic",
+    "data": 0.875
+  }
+]
