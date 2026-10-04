@@ -16,7 +16,8 @@
           "topic_version": {
             "type": "current"
           },
-          "false_detections": "include"
+          "false_detections": "include",
+          "unconfirmed_channels": "include"
         }
       }
     },
@@ -39,7 +40,8 @@
           "type": "pinned",
           "data": 4
         },
-        "false_detections": "include"
+        "false_detections": "include",
+        "unconfirmed_channels": "include"
       },
       "settled": {
         "start": "2026-10-04T00:00:00.000000Z",

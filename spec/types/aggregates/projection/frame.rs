@@ -74,7 +74,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use super::{InvalidProjectionLimit, PointRoute, ProjectedPoint, ProjectionLimit};
+use super::{InvalidProjectionLimit, PointParts, PointRoute, ProjectedPoint, ProjectionLimit};
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ChannelId, ProjectionId, TopicId, TransmissionId};
@@ -188,6 +188,11 @@ pub enum InvalidFrame {
     NonFinite {
         row: usize,
     },
+    /// A point whose sender is its reader: a transmission within one agent,
+    /// which no projection holds.
+    WithinOneAgent {
+        row: usize,
+    },
 }
 
 /// One projection's points, as columns.
@@ -198,7 +203,8 @@ pub enum InvalidFrame {
 /// table (the topic index may also be [`OUTLIER`], the channel index
 /// [`NO_CHANNEL`]); tables are distinct and in order of first use; a point
 /// has a channel exactly when its route kind is `Channel`; no transmission
-/// appears twice; every coordinate is finite.
+/// appears twice; every coordinate is finite; no point's sender is its
+/// reader.
 ///
 /// [`from_points`]: ProjectionFrame::from_points
 /// [`decode`]: ProjectionFrame::decode
@@ -297,6 +303,21 @@ impl ProjectionFrame {
         {
             return Err(InvalidFrame::NonFinite { row });
         }
+        // Both indexes are in range: checked above.
+        let agent = |table: &[AgentId], index: u32| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|index| table.get(index))
+                .copied()
+        };
+        if let Some(row) = columns
+            .sender
+            .iter()
+            .zip(&columns.reader)
+            .position(|(&from, &to)| agent(&tables.senders, from) == agent(&tables.readers, to))
+        {
+            return Err(InvalidFrame::WithinOneAgent { row });
+        }
         Ok(Self {
             header,
             tables,
@@ -318,6 +339,7 @@ impl ProjectionFrame {
         let mut topics = Interner::default();
         let mut channels = Interner::default();
         for point in points {
+            let point = point.parts();
             columns.transmissions.push(point.transmission);
             columns.confirmed_at.push(point.confirmed_at);
             columns.xy.push([point.x.get(), point.y.get()]);
@@ -379,7 +401,8 @@ impl ProjectionFrame {
         let route = PointRoute::from_parts(*self.tables.route_kinds.get(route_index)?, channel)?;
         // Every coordinate of a frame is finite (`InvalidFrame::NonFinite`).
         let [x, y] = *columns.xy.get(row)?;
-        Some(ProjectedPoint {
+        // No point's sender is its reader (`InvalidFrame::WithinOneAgent`).
+        ProjectedPoint::new(PointParts {
             transmission: *columns.transmissions.get(row)?,
             from: lookup(&self.tables.senders, &columns.sender)?,
             to: lookup(&self.tables.readers, &columns.reader)?,
@@ -389,6 +412,7 @@ impl ProjectionFrame {
             x: Finite::new(x).ok()?,
             y: Finite::new(y).ok()?,
         })
+        .ok()
     }
 
     /// Every point, in sample order.

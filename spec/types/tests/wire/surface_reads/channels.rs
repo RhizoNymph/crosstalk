@@ -14,6 +14,7 @@ use super::fixtures::{
 };
 use crate::aggregates::watermark::Watermarked;
 use crate::batch::IdBatch;
+use crate::derived::flow::channel::confirmation::{Confirmation, CrossTraffic};
 use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::promotion::{PromotionRefusal, Registered, coverage};
@@ -21,7 +22,7 @@ use crate::derived::flow::channel::{
     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed, Supersession,
 };
 use crate::derived::flow::resource::{Locator, Resource};
-use crate::ids::{AccessId, ChannelId, ResourceId, TransmissionId};
+use crate::ids::{ChannelId, ResourceId, TransmissionId};
 use crate::interfaces::l5_flow::PromoteError;
 use crate::interfaces::l8_surface::channels::{
     ChannelActivity, ChannelCounts, ChannelName, ChannelRow, ChannelShape, ChannelStanding,
@@ -36,15 +37,16 @@ fn promoted_at() -> Timestamp {
     ts("2026-10-04T10:02:11.000000Z")
 }
 
-/// A channel discovered from `seed`, first accessed by access `first`.
+/// A channel discovered from `seed` by its first cross-agent transmission,
+/// `first`.
 fn discovered(channel: ChannelId, seed: ResourceId, first: &str) -> Channel {
-    let first_access = id(AccessId::from_ulid_text, first);
     Channel {
         id: channel,
         origin: ChannelOrigin::Discovered {
             seed: Seed {
                 resource: seed,
-                first_access,
+                first_transmission: id(TransmissionId::from_ulid_text, first),
+                opened_at: ts("2026-10-04T09:16:40.002513Z"),
             },
             detection: TrafficDetection::Active {
                 since: ts("2026-10-04T09:16:41.250000Z"),
@@ -127,16 +129,46 @@ fn row_in_force() -> ChannelRow {
     ChannelRow::new(
         wiki_channel(),
         Some(page_resource()),
-        ChannelStanding::InForce(ChannelActivity::Seen {
-            last: ts("2026-10-04T11:42:07.531000Z"),
-            counts: ChannelCounts {
-                writers: 1,
-                readers: 2,
-                transmissions: 14,
+        ChannelStanding::InForce {
+            traffic: CrossTraffic {
+                confirmed: 14,
+                unconfirmed: 3,
             },
-        }),
+            activity: ChannelActivity::Seen {
+                last: ts("2026-10-04T11:42:07.531000Z"),
+                counts: ChannelCounts {
+                    writers: 1,
+                    readers: 2,
+                    transmissions: 14,
+                },
+            },
+        },
     )
     .expect("a discovered channel with its seed and activity")
+}
+
+/// The wiki channel while its only cross-agent traffic is a suspected
+/// transmission: listed, marked unconfirmed.
+fn row_unconfirmed() -> ChannelRow {
+    ChannelRow::new(
+        wiki_channel(),
+        Some(page_resource()),
+        ChannelStanding::InForce {
+            traffic: CrossTraffic {
+                confirmed: 0,
+                unconfirmed: 1,
+            },
+            activity: ChannelActivity::Seen {
+                last: ts("2026-10-04T09:16:40.002513Z"),
+                counts: ChannelCounts {
+                    writers: 1,
+                    readers: 1,
+                    transmissions: 0,
+                },
+            },
+        },
+    )
+    .expect("a discovered channel with suspected traffic")
 }
 
 fn row_superseded() -> ChannelRow {
@@ -151,7 +183,10 @@ fn row_never_active() -> ChannelRow {
     ChannelRow::new(
         quiet_channel(),
         None,
-        ChannelStanding::InForce(ChannelActivity::Never),
+        ChannelStanding::InForce {
+            traffic: CrossTraffic::NONE,
+            activity: ChannelActivity::Never,
+        },
     )
     .expect("a declared channel that saw no traffic")
 }
@@ -164,8 +199,14 @@ fn watermark() -> Watermark {
 fn channel_rows_golden_in_every_standing() {
     fn declared(row: ChannelRow) -> ChannelRow {
         match row.standing() {
-            ChannelStanding::InForce(ChannelActivity::Seen { .. })
-            | ChannelStanding::InForce(ChannelActivity::Never)
+            ChannelStanding::InForce {
+                activity: ChannelActivity::Seen { .. },
+                ..
+            }
+            | ChannelStanding::InForce {
+                activity: ChannelActivity::Never,
+                ..
+            }
             | ChannelStanding::Superseded(_) => row,
         }
     }
@@ -176,6 +217,36 @@ fn channel_rows_golden_in_every_standing() {
         &declared(row_never_active()),
     );
     assert_golden(AREA, "channel_row_superseded", &declared(row_superseded()));
+    assert_golden(
+        AREA,
+        "channel_row_unconfirmed",
+        &declared(row_unconfirmed()),
+    );
+}
+
+/// A row's cross-agent traffic and the confirmation it derives.
+#[test]
+fn cross_traffic_and_confirmations_golden() {
+    assert_golden(
+        AREA,
+        "cross_traffic",
+        &CrossTraffic {
+            confirmed: 14,
+            unconfirmed: 3,
+        },
+    );
+    fn declared(confirmation: Confirmation) -> Confirmation {
+        match confirmation {
+            Confirmation::Unconfirmed | Confirmation::Confirmed => confirmation,
+        }
+    }
+    let every = [Confirmation::Unconfirmed, Confirmation::Confirmed].map(declared);
+    assert_golden(AREA, "confirmations", &every.to_vec());
+    assert_rejected::<CrossTraffic>(
+        r#"{"confirmed": 1, "unconfirmed": 0, "hidden": 0}"#,
+        "unknown field `hidden`",
+    );
+    assert_rejected::<Confirmation>(r#""suspected""#, "unknown variant `suspected`");
 }
 
 /// `QueryApi::channel` and `QueryApi::channels`.
@@ -329,17 +400,36 @@ fn channel_rows_are_decoded_through_their_constructor() {
         }),
         "invalid channel row: StandingMismatch",
     );
+    let never = json!({
+        "type": "in_force",
+        "data": {
+            "traffic": {"confirmed": 0, "unconfirmed": 0},
+            "activity": {"type": "never"},
+        },
+    });
     assert_rejected::<ChannelRow>(
         &edited(&row_superseded(), |json| {
-            *field(json, "standing") = json!({"type": "in_force", "data": {"type": "never"}});
+            *field(json, "standing") = never.clone();
         }),
         "invalid channel row: StandingMismatch",
     );
     assert_rejected::<ChannelRow>(
         &edited(&row_in_force(), |json| {
-            *field(json, "standing") = json!({"type": "in_force", "data": {"type": "never"}});
+            *field(json, "standing") = never.clone();
         }),
         "invalid channel row: TrafficWithoutActivity",
+    );
+    assert_rejected::<ChannelRow>(
+        &edited(&row_never_active(), |json| {
+            *field(json, "standing") = json!({
+                "type": "in_force",
+                "data": {
+                    "traffic": {"confirmed": 1, "unconfirmed": 0},
+                    "activity": {"type": "never"},
+                },
+            });
+        }),
+        "invalid channel row: TrafficWithoutDetection",
     );
     assert_rejected::<ChannelRow>(
         &edited(&row_in_force(), |json| {

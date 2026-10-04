@@ -101,9 +101,10 @@ Overview:
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
-      channel registry with promotion and supersession, write/read
-      correlation into transmissions, and the operator verdict log kept
-      beside each transmission).
+      channel registry with promotion and supersession, in which a channel
+      exists only once a transmission between different agents goes
+      through it, write/read correlation into transmissions, and the
+      operator verdict log kept beside each transmission).
     insight: >
       Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
@@ -182,12 +183,16 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on canonical channels (AccessRecorded), resolves
-    channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds (an
-    OpenAI-compatible endpoint) and classifies transmissions (topic fits
-    and projection layouts are computed by the Python topics sidecar over
-    HTTP; assignment to the current topics is local), records topic-model versions and their
+    calls into accesses on resources, on a canonical channel or on none
+    (AccessRecorded), correlates cross-agent accesses and content matches
+    into transmissions (TransmissionConfirmed / Suspected), and discovers
+    a channel from a resource only when the first transmission between
+    two different agents goes through it (ChannelDiscovered, from the
+    registry; a resource only one agent touches is never a channel) → L6
+    embeds (an OpenAI-compatible endpoint) and classifies transmissions
+    (topic fits and projection layouts are computed by the Python topics
+    sidecar over HTTP; assignment to the current topics is local), records
+    topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
@@ -198,10 +203,15 @@ Overview:
     topic history, search, projections, verdicts, detection quality,
     lists, alerts, and the read models: agent rows (L3's profiles joined
     with L7's traffic in the window) and details following merged ids;
-    channel rows (writers and readers from L5's resource use, transmissions
-    from the same graph the overview counts, over the channel and every
-    channel it superseded, in an optional window that never changes which
-    rows are listed); promotion previews (the registry's promotion plan run
+    channel rows (newest created first, each with its cross-agent traffic
+    tallied at the read and the listing that follows from it: a confirmed
+    or unconfirmed channel, a declaration without traffic, or hidden once
+    every transmission through it is within one merged agent; writers and
+    readers from L5's resource use, transmissions from the same graph the
+    overview counts, over the channel and every channel it superseded, in
+    an optional window that never changes which rows are listed); a
+    channel's cross-agent transmissions (the review list of an
+    unconfirmed channel); promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
     channel names; transmission rows by id; the evidence page, which cuts
     excerpts of both sides of each content match from the blob store's
@@ -266,7 +276,8 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams, credentials, the merge log and harness
-      claims), derived inferences (including channel promotion with
+      claims), derived inferences (including channels that exist only
+      once agents communicate through them, channel promotion with
       supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
@@ -279,7 +290,8 @@ Features Index:
       store, the sink registry), so in-memory and Postgres stores
       implement the same traits; a store publishes the events of the
       decisions it takes from the transaction that makes them (the topic
-      catalog owns TopicVersionDropped), and every store method that
+      catalog owns TopicVersionDropped, the channel registry
+      ChannelDiscovered), and every store method that
       depends on the time takes it as an argument (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
@@ -320,10 +332,12 @@ Features Index:
       The rows and pages the UI shows on the query surface: canonical agent
       rows with claims, last seen and windowed traffic, and a detail with
       aliases, children, merges and vetoes that follows merged ids; channel
-      rows with activity or their supersession, the channel list filter,
-      and the promotion preview computed by the promotion's own plan; agent
-      and channel names over one bounded IdBatch; transmission rows by id
-      with a per-state shape; the evidence behind a transmission with
+      rows with their cross-agent traffic, listing and activity or their
+      supersession, newest created first, the channel list filter (listings
+      included), a channel's cross-agent transmissions, and the promotion
+      preview computed by the promotion's own plan; agent and channel names
+      over one bounded IdBatch; transmission rows by id with a per-state
+      shape, never a transmission within one agent; the evidence behind a transmission with
       bounded excerpts; the overview's counts, which agree with the channel
       and agent rows; and one alert by id. An agent's detail finds each
       alias's merge record (when and by whom it was merged).
@@ -335,8 +349,36 @@ Features Index:
       - spec/types/interfaces/l8_surface/evidence.rs
       - spec/types/interfaces/l8_surface/excerpt.rs
       - spec/types/interfaces/l8_surface/overview.rs
-    depends_on: [query_surface, type_spec]
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+    depends_on: [query_surface, type_spec, channel_semantics]
     doc: docs/features/read_models.md
+  channel_semantics:
+    description: >
+      What counts as a channel and as a transmission, applied by every
+      layer. A transmission exists only between different agents
+      (Transmission::crossing, with merges resolved at the read), so one
+      between two ids of a merged agent counts in no filter, graph, row,
+      count, projection, topic size, quality figure, export or alert. A
+      discovered channel exists only once such a transmission goes through
+      a resource on no channel (ChannelTraffic::discover, seeded by the
+      resource and that transmission; the registry publishes
+      ChannelDiscovered, which raises NewChannel); before that a resource
+      is only a resource. A channel's cross-agent traffic, confirmation
+      (Confirmed, or Unconfirmed while all its traffic is suspected) and
+      listing (a channel, a declaration without traffic, or hidden after a
+      merge, which an unmerge undoes) are read, never stored. Unconfirmed
+      channels are listed and drawn marked and can be filtered out
+      (ChannelFilter::listings, TopologyFilter::unconfirmed_channels).
+      Access buckets are kept by resource and resolved to the channel
+      holding it at read time. Channel lists are newest created first.
+    entry_points:
+      - spec/types/derived/flow/channel/confirmation.rs
+      - spec/types/derived/flow/transmission.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+      - crates/memory/src/flow/registry/traffic.rs
+    depends_on: [type_spec, query_surface]
+    doc: docs/features/channel_semantics.md
   export:
     description: >
       QueryApi::export: one dataset (transmissions, edge or access buckets,
@@ -600,19 +642,25 @@ Features Index:
       ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
       with cutoff, retention measured from the now each call is given, and
       shards), MemoryChannels (ChannelRegistry, ChannelTraffic,
-      ChannelReads and ChannelDirectory: lookups, declarations, policy
-      history, promotion by promotion::plan and its coverage, supersession,
-      resource use, traffic writes and stored channels) and MemoryVerdicts
-      (TransmissionStore and TransmissionVerdicts); state sits behind a std
+      ChannelReads and ChannelDirectory: lookups that create nothing,
+      resources on a channel or on none, discovery by a cross-agent
+      transmission, the recorded state of every channel transmission and
+      the cross-agent traffic, listing and order read from it,
+      declarations, policy history, promotion by promotion::plan and its
+      coverage, supersession, resource use) and MemoryVerdicts
+      (TransmissionStore and TransmissionVerdicts, its quality leaving out
+      transmissions within one merged agent); state sits behind a std
       RwLock per store. The insight and surface half (L6 to L8): the topic
       catalog (TopicCatalog and TopicLifecycle: fit lifecycle, lineage,
-      assignments, sizes, pins and retention, publishing its drops), exact
+      assignments, sizes of cross-agent assignments, pins and retention,
+      publishing its drops), exact
       search and projection sampling (SearchIndex, SearchCorpus,
       ProjectionSource), projection jobs with leases and frame retention,
       the alert store (AlertRuleStore, AlertTriage, AlertRuleMaintenance,
       AlertActions, AlertReads) in one transaction scope, the edge store
       computed from stored contributions (activation, watermark, drops,
-      graph, totals, channel-centred graph, drill-down, agent traffic,
+      graph, totals, channel-centred graph drawing listed channels only
+      from access buckets kept by resource, drill-down, agent traffic,
       series), the append-only audit log, the OperatorStore and the
       SinkRegistry, and Fake* doubles of the computational traits. Every
       store shares one id sequence, one mpsc outbox, one cursor book and
@@ -853,8 +901,9 @@ Features Index:
       ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
       anchor and store implementation; ids are ULIDs minted at their
       entity's time. Tests seed the memory stores and assert every scenario
-      through the read traits; four channel-semantics tests wait for that
-      port. The feature doc lists the divergences from the UI fixture and
+      through the read traits, the channel semantics included (discovery
+      at the first cross-agent transmission, the scratch entry on no
+      channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
       the gap list: fixture reads no store or spec trait answers.
     entry_points:
       - crates/world/src/lib.rs

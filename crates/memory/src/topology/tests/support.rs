@@ -4,20 +4,26 @@
 use std::num::NonZeroU64;
 
 use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
+use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
 use crosstalk_spec::derived::flow::transmission::{Classification, Route};
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::insight::ClassificationCause;
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycle;
-use crosstalk_spec::interfaces::l7_topology::{Activation, EdgeContribution, EdgeStore};
-use crosstalk_spec::support::TimeWindow;
+use crosstalk_spec::interfaces::l7_topology::{
+    Activation, ChannelFacts, EdgeContribution, EdgeStore,
+};
+use crosstalk_spec::support::{NonBlank, TimeWindow};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::analysis::aliases::StaticDirectory;
 use crate::analysis::catalog::InMemoryTopicCatalog;
 use crate::analysis::tests::support::fit_ready;
 use crate::model::build::{
-    agent, bucket_width, catalog, timing, topic_id, transmission, ts, window,
+    agent, bucket_width, catalog, channel, resource, timing, topic_id, transmission, ts, window,
 };
 use crate::support::Outbox;
 use crate::topology::env::{Env, StaticNodes};
@@ -167,4 +173,20 @@ pub async fn refit(
         .await
         .unwrap();
     version
+}
+
+/// Resource `r` is held on channel `c`, which is listed as `listing`.
+pub fn hold(world: &World, r: u64, c: u64, listing: Listing) {
+    world.nodes.set_resource(resource(r), Some(channel(c)));
+    world.nodes.set_channel(
+        channel(c),
+        ChannelFacts {
+            label: None,
+            origin: CanonicalOriginKind::Discovered,
+            detection: DetectionKind::Active,
+            policy: PolicyKind::Unreviewed,
+            locator_summary: NonBlank::new(&format!("resource {r}")).unwrap(),
+            listing,
+        },
+    );
 }

@@ -31,6 +31,29 @@ agent read models (`aggregates/agents/`), L7's store interface
   operators and times its node stamped, and a dead letter holds an
   envelope.
 
+## Channel semantics in the topology shapes
+
+- `TopologyFilter` gains `unconfirmed_channels`, an `UnconfirmedChannels`
+  string: `"include"` (the default) or `"exclude"` ("confirmed only"). It
+  narrows the channel-centred view's accesses and channel nodes and the
+  overview's channel queues, and changes no transmission view
+  (`topology.filter.unconfirmed-changes-no-transmission-view`). An unknown
+  value is refused like any unknown variant. Goldens:
+  `topology_filter_default` (`include`), `topology_filter_full`
+  (`exclude`), and every golden that embeds a filter.
+- `ChannelNode` carries `confirmation` (`"confirmed"` or `"unconfirmed"`):
+  only channels listed as channels are drawn, and an unconfirmed one is
+  drawn marked. Goldens: `graph_nodes`, `bipartite_graph`,
+  `bipartite_graph_unread_write`.
+- `AccessEdge` and `AccessContribution` are keyed by the access's
+  `resource`, resolved to the channel holding it at read time; neither is
+  on the wire, so only the drawn `WeightedAccess` (with its canonical
+  channel) is.
+- `TopologyFilter::admits` never admits a subject whose sender and reader
+  are one agent (`topology.filter.cross-agent-only`); `FilterSubject` and
+  `AccessSubject` (which gains the channel's `confirmation`) stay off the
+  wire.
+
 ## Non-scope
 
 No wire root reaches these, so they have no serde: `AccessEdge`, `Edge`,
@@ -116,5 +139,6 @@ and `QueryApi::agent_names` and `channel_names` return
 
 `topology.wire.graph-decode-checked`, `topology.agent-traffic.ordered-keys`,
 `surface.query.name-maps-ordered` and `transport.wire.event-tag-is-subject`;
+the channel-semantics ones above;
 the general wire invariants take the area's goldens and rejections as
 evidence.

@@ -39,6 +39,7 @@
         "co_access": [
           {
             "write": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "writer": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
             "read": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
             "lag_micros": 30250000
           }

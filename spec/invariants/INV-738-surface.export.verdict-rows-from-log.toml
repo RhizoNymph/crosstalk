@@ -9,7 +9,9 @@ Verdicts are the ground truth for measuring the detector. Carrying the
 detector's call (QualityMatch) and route kind on every row lets the
 export reproduce DetectionQuality::tally offline, and exporting every
 record, withdrawals included, keeps the full history rather than the
-current verdict alone.
+current verdict alone. A transmission whose agents have merged into one
+under the export's resolution has no rows, as it has no count
+(flow.quality.cross-agent-only).
 """
 
 [evidence]

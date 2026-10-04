@@ -10,24 +10,29 @@ use crosstalk_spec::derived::flow::channel::promotion::{
 use crosstalk_spec::derived::flow::channel::{
     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed,
 };
+use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{AccessId, ChannelId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l5_flow::{
-    ChannelDirectory, ChannelLookup, ChannelRegistry, PromoteError, RegistryError,
+    ChannelDirectory, ChannelLookup, ChannelRegistry, Discovery, PromoteError, RegistryError,
 };
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::MemoryChannels;
 use super::model::{self, access_agent, channel, decision, directory, locator, pattern, resource};
+use crate::flow::verdicts::model::state_between;
 use crate::model::{HarnessConfig, ModelMismatch};
 use crate::support::{IdSequence, Outbox, drain};
 use crosstalk_spec::interfaces::l5_flow::channels::{
     ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
 };
 use crosstalk_spec::support::Change;
+
+mod traffic;
 
 /// The case count the pipeline harnesses have always run with.
 fn pipeline_harness() -> HarnessConfig {
@@ -53,17 +58,66 @@ async fn registry() -> (Registry, UnboundedReceiver<BusEvent>) {
     (registry, events)
 }
 
-fn first_access(n: u8) -> AccessId {
-    AccessId::from_ulid(0xF1A0_0000 | u128::from(n))
+fn seed_transmission(n: u8) -> TransmissionId {
+    TransmissionId::from_ulid(0xF1A0_0000 | u128::from(n))
 }
 
-/// Discover channel `c` seeded by resource `r`.
+/// Store resource `r` (on whatever channel its lookup names, or none),
+/// unless it is stored already.
+async fn store_resource(registry: &mut Registry, r: u8) {
+    match registry.add_resource(resource(r)).await {
+        Ok(_) | Err(TrafficError::DuplicateResource(_)) => {}
+        Err(error) => panic!("resource {r} refused: {error:?}"),
+    }
+}
+
+/// A transmission `id` opened at `opened` through `routed`, in state
+/// `state` (as numbered by the verdict harness), from agent 1 (agent 3,
+/// merged into agent 2, when `merged`) to agent 2.
+fn routed_transmission(
+    id: TransmissionId,
+    routed: ChannelId,
+    state: u8,
+    merged: bool,
+    opened: u64,
+) -> Transmission {
+    let from = if merged {
+        access_agent(3)
+    } else {
+        access_agent(1)
+    };
+    let Some(state) = state_between(state, &[0], from, access_agent(2)) else {
+        panic!("state fixture");
+    };
+    Transmission {
+        id,
+        to: access_agent(2),
+        route: Route::Channel(routed),
+        opened_at: at(opened),
+        state,
+    }
+}
+
+/// Discover channel `c` from resource `r` by the cross-agent transmission
+/// `seed_transmission(r)` opened at `r` µs, and record that transmission
+/// (awaiting content) as the flow consumer does.
 async fn discover(registry: &mut Registry, c: u8, r: u8) {
+    store_resource(registry, r).await;
     assert_eq!(
         registry
-            .discover(channel(c), resource(r), first_access(r))
+            .discover(
+                channel(c),
+                resource(r).id,
+                seed_transmission(r),
+                at(u64::from(r))
+            )
             .await,
-        Ok(())
+        Ok(Discovery::Created(channel(c)))
+    );
+    let opened = routed_transmission(seed_transmission(r), channel(c), 1, false, u64::from(r));
+    assert_eq!(
+        registry.record_transmission(&opened).await,
+        Ok(Change::Applied)
     );
 }
 
@@ -79,19 +133,27 @@ fn promotion(p: u8, time: u64) -> Promotion {
 
 async fn stored(registry: &Registry, id: ChannelId) -> Channel {
     match registry.channel(id).await {
-        Ok(Some(channel)) => channel,
+        Ok(Some(read)) => read.into_parts().0,
         other => panic!("channel {id:?} not stored: {other:?}"),
     }
 }
 
 // ---- lookups ------------------------------------------------------------------
 
-/// `flow.registry.lookup-precedence`: Known for a stored resource (on its
-/// canonical channel), else Declared for a matching pattern, else New.
+/// `flow.registry.lookup-never-creates`: Known for a resource on a channel
+/// (its canonical channel), else Declared for a matching pattern (a
+/// resource stored on no channel included), else NoChannel; no lookup
+/// creates a channel.
 #[tokio::test]
-async fn lookup_agrees_with_precedence_model() {
+async fn lookup_never_creates_a_channel() {
     let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
+    // Resource 4 is seen before any declaration: it is on no channel.
+    assert_eq!(registry.add_resource(resource(4)).await, Ok(None));
+    assert_eq!(
+        registry.lookup(&locator(4)).await,
+        Ok(ChannelLookup::NoChannel)
+    );
     let Ok(declared) = registry
         .declare(
             pattern(2),
@@ -111,9 +173,19 @@ async fn lookup_agrees_with_precedence_model() {
         registry.lookup(&locator(4)).await,
         Ok(ChannelLookup::Declared(declared))
     );
-    assert_eq!(registry.lookup(&locator(6)).await, Ok(ChannelLookup::New));
-    // A resource stored on the declared channel is Known there.
-    assert_eq!(registry.add_resource(declared, resource(4)).await, Ok(()));
+    assert_eq!(
+        registry.lookup(&locator(6)).await,
+        Ok(ChannelLookup::NoChannel)
+    );
+    let before = model::all_channels(&registry).await;
+    // Looking every locator up creates nothing.
+    for n in 0..model::LOCATORS {
+        assert!(registry.lookup(&locator(n)).await.is_ok());
+    }
+    assert_eq!(model::all_channels(&registry).await, before);
+    // Resource 4, stored on no channel, joins the declared channel on its
+    // next sighting and is Known there.
+    assert_eq!(registry.add_resource(resource(4)).await, Ok(Some(declared)));
     assert_eq!(
         registry.lookup(&locator(4)).await,
         Ok(ChannelLookup::Known(declared))
@@ -136,51 +208,12 @@ async fn lookup_of_superseded_resource_is_known_on_superseder() {
         registry.lookup(&locator(1)).await,
         Ok(ChannelLookup::Known(channel(0)))
     );
+    // A resource of the superseded channel is on a channel: it is stored
+    // once.
     assert_eq!(
-        registry.add_resource(channel(1), resource(2)).await,
-        Err(TrafficError::Superseded {
-            channel: channel(1),
-            by: channel(0)
-        })
+        registry.add_resource(resource(1)).await,
+        Err(TrafficError::DuplicateResource(resource(1).id))
     );
-}
-
-/// `flow.registry.one-channel-per-resource`: a resource is stored once.
-#[tokio::test]
-async fn a_resource_is_stored_on_one_channel() {
-    let (mut registry, _events) = registry().await;
-    discover(&mut registry, 0, 0).await;
-    assert_eq!(
-        registry
-            .discover(channel(1), resource(0), first_access(9))
-            .await,
-        Err(TrafficError::DuplicateResource(resource(0).id))
-    );
-    assert_eq!(
-        registry.add_resource(channel(0), resource(0)).await,
-        Err(TrafficError::DuplicateResource(resource(0).id))
-    );
-}
-
-/// `flow.channel.discovered-seed`, at the store.
-#[tokio::test]
-async fn discovered_channel_seeded_by_first_access() {
-    let (mut registry, _events) = registry().await;
-    discover(&mut registry, 0, 3).await;
-    let channel = stored(&registry, channel(0)).await;
-    assert_eq!(
-        channel.origin,
-        ChannelOrigin::Discovered {
-            seed: Seed {
-                resource: resource(3).id,
-                first_access: first_access(3)
-            },
-            detection: TrafficDetection::Observed {
-                first_access: first_access(3)
-            },
-        }
-    );
-    assert_eq!(channel.policy, Policy::Unreviewed(None));
 }
 
 // ---- declarations and policy ---------------------------------------------------
@@ -400,12 +433,12 @@ async fn promote_applies_plan() {
     assert_eq!(promoted.policy, Recorded::Current);
     let after = stored(&registry, channel(0)).await;
     assert_eq!(after.origin, expected.origin);
-    assert_eq!(after.resources, before[0].resources);
+    assert_eq!(after.resources, before[0].channel().resources);
     assert_eq!(after.policy, promotion(1, 200).decision().policy());
     for (id, origin) in &expected.superseded {
         assert_eq!(stored(&registry, *id).await.origin, *origin);
     }
-    assert_eq!(stored(&registry, channel(2)).await, before[2]);
+    assert_eq!(&stored(&registry, channel(2)).await, before[2].channel());
     let published = drain(&mut events);
     let promoted_events: Vec<&BusEvent> = published
         .iter()
@@ -566,19 +599,32 @@ async fn late_confirmation_on_a_superseded_channel_advances_its_superseder() {
             .await
             .is_ok()
     );
+    // Channel 0 turned dormant before the late confirmation.
+    let dormant = TrafficDetection::Dormant {
+        since: at(250),
+        last_transmission: seed_transmission(0),
+    };
+    assert_eq!(
+        registry
+            .set_detection(channel(0), DetectionUpdate::Traffic(dormant))
+            .await,
+        Ok(Change::Applied)
+    );
     let frozen = stored(&registry, channel(1)).await;
     drain(&mut events);
-    let transmission = TransmissionId::from_ulid(0x7A01);
+    // Channel 1's seed transmission, routed through it before the
+    // promotion, is confirmed (at 20 µs in the fixture) after it.
+    let confirmed = routed_transmission(seed_transmission(1), channel(1), 3, false, 1);
     assert_eq!(
-        registry.confirm(channel(1), transmission, at(300)).await,
-        Ok(channel(0))
+        registry.record_transmission(&confirmed).await,
+        Ok(Change::Applied)
     );
     let promoted = stored(&registry, channel(0)).await;
     assert_eq!(
         promoted.origin.traffic(),
         Some(&TrafficDetection::Active {
-            since: at(300),
-            last_transmission: transmission
+            since: at(20),
+            last_transmission: seed_transmission(1)
         })
     );
     assert_eq!(stored(&registry, channel(1)).await, frozen);
@@ -586,18 +632,23 @@ async fn late_confirmation_on_a_superseded_channel_advances_its_superseder() {
         drain(&mut events),
         vec![BusEvent::Changed(Changed::Channel(channel(0)))]
     );
-    // A second confirmation keeps `since` and names the new transmission.
-    let next = TransmissionId::from_ulid(0x7A02);
+    // A second cross-agent transmission keeps `since` and names itself.
+    let next = routed_transmission(TransmissionId::from_ulid(0x7A02), channel(0), 1, false, 400);
     assert_eq!(
-        registry.confirm(channel(0), next, at(400)).await,
-        Ok(channel(0))
+        registry.record_transmission(&next).await,
+        Ok(Change::Applied)
     );
     assert_eq!(
         stored(&registry, channel(0)).await.origin.traffic(),
         Some(&TrafficDetection::Active {
-            since: at(300),
-            last_transmission: next
+            since: at(20),
+            last_transmission: next.id
         })
+    );
+    // Recording the same state again changes nothing.
+    assert_eq!(
+        registry.record_transmission(&next).await,
+        Ok(Change::Unchanged)
     );
     assert_eq!(
         registry
@@ -633,10 +684,11 @@ async fn channel_changes_announced_after_commit() {
         panic!("declare");
     };
     assert!(announced(drain(&mut events), declared));
-    assert_eq!(registry.add_resource(declared, resource(4)).await, Ok(()));
+    assert_eq!(registry.add_resource(resource(4)).await, Ok(Some(declared)));
     assert!(announced(drain(&mut events), declared));
-    let observed = DetectionUpdate::Traffic(TrafficDetection::Observed {
-        first_access: first_access(4),
+    let observed = DetectionUpdate::Traffic(TrafficDetection::Active {
+        since: at(4),
+        last_transmission: seed_transmission(4),
     });
     assert_eq!(
         registry.set_detection(declared, observed.clone()).await,
@@ -750,8 +802,19 @@ async fn resource_use_refuses_foreign_cursors() {
     let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 6).await;
-    assert_eq!(registry.add_resource(channel(0), resource(7)).await, Ok(()));
-    for (n, r) in [(1u128, 0u8), (2, 7)] {
+    // A discovered channel holds only its seed: promote channel 0 so its
+    // pattern brings in a second resource.
+    assert!(
+        registry
+            .promote(channel(0), promotion(1, 200))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        registry.add_resource(resource(1)).await,
+        Ok(Some(channel(0)))
+    );
+    for (n, r) in [(1u128, 0u8), (2, 1)] {
         let part = crosstalk_spec::observed::message::PartRef {
             message: crosstalk_spec::ids::MessageHash::from_digest(
                 crosstalk_spec::support::Blake3::from_bytes([1; 32]),
@@ -812,7 +875,7 @@ async fn resource_use_refuses_foreign_cursors() {
 /// `flow.registry.declared-patterns-disjoint`,
 /// `flow.policy.current-is-history-latest`,
 /// `flow.channel.supersession-one-step` and
-/// `flow.registry.lookup-precedence` on random histories: the harness runs
+/// `flow.registry.lookup-never-creates` on random histories: the harness runs
 /// the reference against itself, checking those invariants after every
 /// step.
 #[test]
@@ -876,7 +939,6 @@ fn the_registry_is_send_and_sync() {
 /// a time, with the cursor bound to the filter.
 #[tokio::test]
 async fn channel_reads_list_filtered_newest_first() {
-    use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
     use crosstalk_spec::paging::{PageRequest, PageSize};
 
     let (mut registry, _events) = registry().await;
@@ -894,8 +956,10 @@ async fn channel_reads_list_filtered_newest_first() {
     let Ok(Some(superseded)) = registry.channel(channel(1)).await else {
         panic!("channel 1 is stored");
     };
+    assert_eq!(superseded.traffic(), None);
     assert_eq!(
         superseded
+            .channel()
             .origin
             .supersession()
             .map(|supersession| supersession.by),
@@ -915,7 +979,10 @@ async fn channel_reads_list_filtered_newest_first() {
         .unwrap();
     let (items, next) = first.into_parts();
     assert_eq!(
-        items.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        items
+            .iter()
+            .map(|read| read.channel().id)
+            .collect::<Vec<_>>(),
         vec![channel(2)]
     );
     let cursor = next.unwrap();
@@ -948,7 +1015,10 @@ async fn channel_reads_list_filtered_newest_first() {
         .unwrap();
     let (items, next) = second.into_parts();
     assert_eq!(
-        items.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        items
+            .iter()
+            .map(|read| read.channel().id)
+            .collect::<Vec<_>>(),
         vec![channel(0)]
     );
     assert!(next.is_none());
@@ -965,7 +1035,7 @@ async fn channel_reads_list_filtered_newest_first() {
     assert_eq!(
         all.items()
             .iter()
-            .map(|channel| channel.id)
+            .map(|read| read.channel().id)
             .collect::<Vec<_>>(),
         vec![channel(1)]
     );
