@@ -19,7 +19,8 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: workspace scaffolded, implementation not started. The data
+    Status: workspace scaffolded; the L2 blob store (blob_store) is
+    implemented, the other layers are not started. The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -304,4 +305,20 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  blob_store:
+    description: >
+      The L2 content-addressed blob store in crosstalk-transport (P2.2):
+      BlobStore on the filesystem (FsBlobStore: bodies at
+      <root>/<2 hex>/<62 hex> keyed by BLAKE3, written atomically through a
+      synced temporary file, rename and directory sync, rehashed on every
+      read with Corrupt on a mismatch, every operation one spawn_blocking
+      task) and in memory (MemoryBlobStore, for tests and the simulation).
+      Puts are idempotent and safe to race; a missing body is None. No
+      deletion hook: the spec defines no content retention for bodies.
+    entry_points:
+      - crates/transport/src/blob/mod.rs
+      - crates/transport/src/blob/fs/mod.rs
+      - crates/transport/src/blob/memory.rs
+    depends_on: [type_spec, workspace]
+    doc: docs/features/blob_store.md
 ```

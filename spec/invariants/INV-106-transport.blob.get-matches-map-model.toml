@@ -12,9 +12,9 @@ ObjectStoreBlobs are checked against the same model.
 """
 
 [evidence]
-property = "crosstalk_transport::tests::blob_store_matches_map_model"
+property = "crosstalk_transport::blob::tests::blob_store_matches_map_model"
 integration = ["crosstalk_transport::integration::pg_blob_store_matches_map_model", "crosstalk_transport::integration::object_store_blobs_match_map_model"]
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

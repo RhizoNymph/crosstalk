@@ -11,7 +11,7 @@ L1 compare its own canonical hash with the store's.
 """
 
 [evidence]
-property = "crosstalk_transport::tests::put_returns_blake3_of_bytes"
+property = "crosstalk_transport::blob::tests::put_returns_blake3_of_bytes"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
