@@ -1,0 +1,101 @@
+# The demo: crosstalk in front of a fake Anthropic upstream, a shared wiki,
+# and a swarm of simulated agents that talk to each other through it. No
+# real tokens are spent. Layered over compose.yaml:
+#
+#   bash deploy/run.sh demo up                  # the stack + fake-upstream + wiki
+#   bash deploy/run.sh demo run --agents 200    # one swarm run, prints the report
+#   bash deploy/run.sh demo down
+#
+# The swarm is under the `swarm` profile and never restarts, so `up` never
+# starts a 200-agent run by accident. See docs/features/demo.md.
+
+x-demo-logging: &demo-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-demo-image: &demo-image
+  image: crosstalk-demo:dev
+  build:
+    context: ..
+    dockerfile: deploy/demo.Dockerfile
+  logging: *demo-logging
+  environment:
+    RUST_LOG: ${DEMO_LOG:-info}
+  # One socket per in-flight agent request.
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+
+services:
+  # The gateway reads the demo config: the same as config/crosstalk.json
+  # but with the Anthropic route's upstream at the fake upstream. Volumes
+  # merge by container path, so only the config mount changes.
+  migrate:
+    volumes:
+      - ./demo/crosstalk.demo.json:/etc/crosstalk/crosstalk.json:ro
+
+  crosstalk:
+    volumes:
+      - ./demo/crosstalk.demo.json:/etc/crosstalk/crosstalk.json:ro
+    depends_on:
+      fake-upstream:
+        condition: service_healthy
+
+  fake-upstream:
+    <<: *demo-image
+    command:
+      - upstream
+      - --listen
+      - 0.0.0.0:8070
+      - --seed
+      - ${DEMO_UPSTREAM_SEED:-7}
+      - --words
+      - ${DEMO_WORDS:-40..160}
+      - --first-byte-ms
+      - ${DEMO_FIRST_BYTE_MS:-300..1500}
+      - --stream-ms
+      - ${DEMO_STREAM_MS:-1000..10000}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crosstalk-demo", "healthcheck", "--url", "http://127.0.0.1:8070/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wiki:
+    <<: *demo-image
+    command: [wiki, --listen, 0.0.0.0:8090]
+    restart: unless-stopped
+    ports:
+      # Browse what the agents wrote: GET /pages, GET /pages/<name>.
+      - ${CROSSTALK_BIND:-127.0.0.1}:${DEMO_WIKI_PORT:-8090}:8090
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crosstalk-demo", "healthcheck", "--url", "http://127.0.0.1:8090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One run per `run.sh demo run [swarm options]`; the options replace the
+  # empty command and land after the fixed in-network URLs.
+  swarm:
+    <<: *demo-image
+    profiles: [swarm]
+    entrypoint:
+      - /usr/local/bin/crosstalk-demo
+      - swarm
+      - --gateway
+      - http://crosstalk:8080/anthropic
+      - --wiki
+      - http://wiki:8090
+    command: []
+    restart: "no"
+    depends_on:
+      crosstalk:
+        condition: service_healthy
+      wiki:
+        condition: service_healthy
+      fake-upstream:
+        condition: service_healthy

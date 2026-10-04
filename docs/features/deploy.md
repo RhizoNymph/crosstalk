@@ -138,6 +138,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/grafana/dashboards/infrastructure.json` | Host, containers, Postgres, logs and monitoring-stack panels, plus a crosstalk-process row. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
+| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). |
 
 ## Store tests against the compose Postgres
 

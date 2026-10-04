@@ -120,6 +120,22 @@ what grow.
 Only the proxy binds beyond localhost; the API, UI, Grafana, Prometheus and
 Postgres bind 127.0.0.1 (reach them over SSH forwarding, or change the bind).
 
+## Demo and load testing
+
+`deploy/compose.demo.yaml` layers a token-free demo over the stack. A fake
+Anthropic upstream (`fake-upstream`) answers deterministically, with
+realistic first-byte waits and 1–10 s streams. A shared in-memory wiki
+(`wiki`) is the channel. A swarm of simulated agents (`swarm`, profile
+`swarm`, never restarted) drives 100–200 concurrent conversations through
+`crosstalk:8080`. Its agents write wiki pages with the model's words and
+read each other's pages back as tool results. The gateway reads
+`deploy/demo/crosstalk.demo.json`, which points the Anthropic route at the
+fake upstream. `bash deploy/run.sh demo up`, then `demo run [--agents N
+...]`, prints throughput, client-observed latency percentiles and the
+expected cross-agent transmissions. Watch the stack in the usual Grafana
+dashboards meanwhile. `demo down` stops it. Details and knobs:
+`docs/features/demo.md`.
+
 ## Observability (infrastructure)
 
 | Signal | Source | Where |

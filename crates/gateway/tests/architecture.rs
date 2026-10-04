@@ -9,10 +9,13 @@
 //!    it may use `transport` as a dev-dependency (an in-process bus for its
 //!    tests);
 //! 2. `memory`, `sim` and `testkit` are only ever dev-dependencies of a
-//!    layer crate, never normal or build dependencies.
+//!    layer crate, never normal or build dependencies;
+//! 3. a layer crate never depends on a tool crate (`demo`: the load
+//!    generator and demo swarm) under any dependency kind.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api` and
-//! `client` compose layer crates.
+//! `client` compose layer crates. Tool crates are unrestricted in what they
+//! depend on (`demo` takes `testkit` as a normal dependency).
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -104,12 +107,30 @@ impl TestSupport {
     }
 }
 
+/// Tool crates: binaries beside the product (load generators, demos).
+/// Nothing in a layer depends on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Tool {
+    Demo,
+}
+
+impl Tool {
+    const ALL: [Tool; 1] = [Tool::Demo];
+
+    fn dir(self) -> &'static str {
+        match self {
+            Tool::Demo => "demo",
+        }
+    }
+}
+
 /// What a crate is, as far as the dependency rule cares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Role {
     Layer(Layer),
     Composer(Composer),
     TestSupport(TestSupport),
+    Tool(Tool),
     /// `crosstalk-spec`, `crosstalk-store`, or a crate outside the workspace:
     /// anyone may depend on it.
     Open,
@@ -129,6 +150,9 @@ impl Role {
         }
         if let Some(t) = TestSupport::ALL.into_iter().find(|t| t.dir() == dir) {
             return Role::TestSupport(t);
+        }
+        if let Some(t) = Tool::ALL.into_iter().find(|t| t.dir() == dir) {
+            return Role::Tool(t);
         }
         Role::Open
     }
@@ -159,6 +183,8 @@ enum Violation {
     LayerOnComposer { edge: Edge },
     /// `memory`, `sim` or `testkit` is a non-dev dependency of a layer crate.
     TestSupportNotDev { edge: Edge },
+    /// A layer crate depends on a tool crate.
+    LayerOnTool { edge: Edge },
 }
 
 impl fmt::Display for Violation {
@@ -174,6 +200,7 @@ impl fmt::Display for Violation {
                 "test-support crate is a non-dev dependency of a layer crate",
                 edge,
             ),
+            Violation::LayerOnTool { edge } => ("layer crate depends on a tool crate", edge),
         };
         write!(f, "{what}: {} -> {} ({:?})", e.from, e.to, e.kind)
     }
@@ -191,6 +218,7 @@ fn check(edge: &Edge) -> Option<Violation> {
         Role::TestSupport(_) if edge.kind != DepKind::Dev => {
             Some(Violation::TestSupportNotDev { edge: edge.clone() })
         }
+        Role::Tool(_) => Some(Violation::LayerOnTool { edge: edge.clone() }),
         Role::TestSupport(_) | Role::Open => None,
     }
 }
@@ -332,6 +360,7 @@ fn workspace_has_every_crate_the_rule_names() -> Result<(), MetadataError> {
         .map(Layer::dir)
         .chain(Composer::ALL.into_iter().map(Composer::dir))
         .chain(TestSupport::ALL.into_iter().map(TestSupport::dir))
+        .chain(Tool::ALL.into_iter().map(Tool::dir))
         .chain(["store", "spec"]);
     for dir in expected {
         let name = format!("crosstalk-{dir}");
@@ -453,6 +482,39 @@ fn test_support_is_only_a_dev_dependency_of_layers() {
 }
 
 #[test]
+fn layer_on_tool_is_refused_for_every_kind() {
+    for from in Layer::ALL {
+        for to in Tool::ALL {
+            for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+                let e = edge(from.dir(), to.dir(), kind);
+                assert_eq!(check(&e), Some(Violation::LayerOnTool { edge: e.clone() }));
+            }
+        }
+    }
+}
+
+#[test]
+fn tools_may_use_test_support_and_layers() {
+    for from in Tool::ALL {
+        let targets = TestSupport::ALL
+            .into_iter()
+            .map(TestSupport::dir)
+            .chain(Layer::ALL.into_iter().map(Layer::dir))
+            .chain(["store", "spec"]);
+        for to in targets {
+            for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+                assert_eq!(
+                    check(&edge(from.dir(), to, kind)),
+                    None,
+                    "{} -> {to}",
+                    from.dir()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn layers_may_use_spec_store_and_third_party_crates() {
     for from in Layer::ALL {
         for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
@@ -527,6 +589,7 @@ fn roles_classify_by_package_name() {
         Role::of("crosstalk-testkit"),
         Role::TestSupport(TestSupport::Testkit)
     );
+    assert_eq!(Role::of("crosstalk-demo"), Role::Tool(Tool::Demo));
     assert_eq!(Role::of("crosstalk-store"), Role::Open);
     assert_eq!(Role::of("crosstalk-spec"), Role::Open);
     assert_eq!(Role::of("flow"), Role::Open);
