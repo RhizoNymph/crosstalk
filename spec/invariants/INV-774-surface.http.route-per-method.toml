@@ -24,9 +24,9 @@ unit = [
     "crosstalk_spec::tests::wire::http::routes::every_route_is_listed_once_at_its_index",
     "crosstalk_spec::tests::wire::http::routes::route_table_golden",
 ]
-integration = "crosstalk_api::integration::every_route_is_served"
+integration = "crosstalk_api::http::integration::routes::every_route_is_served"
 
 [evidence-review]
 type = { agent = "true", human = "false" }
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

@@ -19,8 +19,8 @@ unit = [
     "crosstalk_spec::tests::wire::http::auth::a_401_challenges_for_a_bearer_token",
     "crosstalk_spec::tests::wire::http::auth::auth_errors_golden_with_every_reason",
 ]
-integration = "crosstalk_api::integration::requests_without_a_caller_are_401_and_unaudited"
+integration = "crosstalk_api::http::integration::auth::requests_without_a_caller_are_401_and_unaudited"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

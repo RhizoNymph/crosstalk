@@ -459,6 +459,27 @@ Features Index:
       - spec/types/interfaces/l8_surface/http/auth.rs
     depends_on: [query_surface, read_models, export, wire_contract]
     doc: docs/features/http_api.md
+  http_server:
+    description: >
+      crosstalk-api's HTTP server (roadmap P7.1): the http_api binding
+      served with axum 0.8 over any QueryApi + OperatorActions + LiveFeed.
+      The router is registered from Route::all(), and every request is
+      authenticated first (bearer token or session cookie, then the
+      operator directory on a watch channel), so even an unserved path
+      without a caller is a 401. Paths, queries and bodies are read with
+      the spec's readers and decode_request; id batches, selections,
+      excerpt windows and action requests go through their checked
+      constructors, with 422 for a refusal. Errors are answered with
+      their status and wire JSON. GET /live is SSE resumed from
+      Last-Event-ID or cursor, the projection frame is cached by its
+      BLAKE3 ETag, and POST /exports streams JSONL with the trailer last.
+      Every other response is no-store. HttpApi::new(surface, Auth,
+      HttpConfig).router() plus serve(bind(api.listen)) is what the
+      gateway's --role api mounts. Tested against a fake surface with
+      requests and responses from the wire goldens.
+    entry_points: [crates/api/src/http/mod.rs, crates/api/src/http/routes.rs]
+    depends_on: [http_api, query_surface, wire_contract]
+    doc: docs/features/http_server.md
   store:
     description: >
       crosstalk-store, the Postgres infrastructure layer crates build on

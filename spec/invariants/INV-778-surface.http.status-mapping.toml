@@ -24,9 +24,9 @@ unit = [
     "crosstalk_spec::tests::wire::http::status::statuses_tell_the_cases_apart",
     "crosstalk_spec::tests::wire::http::status::status_codes_are_distinct",
 ]
-integration = "crosstalk_api::integration::errors_answer_with_their_status_and_json"
+integration = "crosstalk_api::http::integration::errors::errors_answer_with_their_status_and_json"
 
 [evidence-review]
 type = { agent = "true", human = "false" }
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

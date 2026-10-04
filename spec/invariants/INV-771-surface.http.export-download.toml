@@ -19,8 +19,11 @@ unit = [
     "crosstalk_spec::tests::wire::http::export::the_file_is_named_by_dataset_and_export_id",
     "crosstalk_spec::tests::wire::http::export::errors_before_the_stream_are_statuses",
 ]
-integration = "crosstalk_api::integration::export_streams_with_trailer_after_a_mid_stream_failure"
+integration = [
+    "crosstalk_api::http::integration::export::export_streams_with_trailer_after_a_mid_stream_failure",
+    "crosstalk_api::http::integration::serve::an_export_that_cannot_end_with_its_trailer_is_cut",
+]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

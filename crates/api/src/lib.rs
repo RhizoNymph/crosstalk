@@ -6,6 +6,8 @@
 //! Roadmap: P7.1 (HTTP API server). A composition crate: it may depend on layer
 //! crates.
 
+pub mod http;
+
 // Every crate builds on the spec; the dependency is declared before any
 // code uses it.
 use crosstalk_spec as _;

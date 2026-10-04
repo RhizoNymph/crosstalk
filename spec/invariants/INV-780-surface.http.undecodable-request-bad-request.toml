@@ -24,8 +24,8 @@ unit = [
     "crosstalk_spec::tests::wire::http::request::bodies_must_be_json_where_the_route_takes_one",
     "crosstalk_spec::tests::wire::http::status::an_undecodable_request_is_a_bad_request",
 ]
-integration = "crosstalk_api::integration::undecodable_requests_are_400_and_unaudited"
+integration = "crosstalk_api::http::integration::routes::undecodable_requests_are_400_and_unaudited"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }
