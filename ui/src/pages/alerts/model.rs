@@ -2,8 +2,8 @@
 
 use crosstalk_spec::interfaces::l8_surface::AlertStateKind;
 
-use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::components::{format_time, short_id};
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::pages::common::links::{alert_subject, alert_url};
 use crate::pages::common::lookup::{OperatorNames, RuleNames};
 use crate::url::ulid::UlidId;

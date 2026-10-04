@@ -8,10 +8,10 @@ use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
-use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditOutcome, AuditedAction};
@@ -102,15 +102,17 @@ async fn audit_entries_name_their_subject_and_what_they_created() {
     let b = fresh();
     let c = researcher();
     let (cc6, cc5) = (agent(&b, "cc6"), agent(&b, "cc5"));
-    let ActionOutcome::Merged(id) = b.act(&c, merge(&b, "cc6", "cc5")).await.expect("merge")
-    else {
+    let ActionOutcome::Merged(id) = b.act(&c, merge(&b, "cc6", "cc5")).await.expect("merge") else {
         panic!("a merge")
     };
     {
         let state = b.state.read().await;
         let last = state.audit.last().expect("entry");
         assert_eq!(last.subject, Some(AuditSubject::Agent(cc6)));
-        assert_eq!(last.outcome, AuditOutcome::Applied(ActionOutcome::Merged(id)));
+        assert_eq!(
+            last.outcome,
+            AuditOutcome::Applied(ActionOutcome::Merged(id))
+        );
     }
     b.act(&c, OperatorAction::Unmerge { merge: id })
         .await
@@ -140,7 +142,10 @@ async fn audit_entries_name_their_subject_and_what_they_created() {
             .collect();
         assert_eq!(ours.len(), 2, "{subject:?}");
         assert!(ours.contains(&Some(AuditSubject::Merge(id))), "{subject:?}");
-        assert!(ours.contains(&Some(AuditSubject::Agent(cc6))), "{subject:?}");
+        assert!(
+            ours.contains(&Some(AuditSubject::Agent(cc6))),
+            "{subject:?}"
+        );
     }
 }
 

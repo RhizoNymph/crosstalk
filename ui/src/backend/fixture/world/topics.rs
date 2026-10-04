@@ -297,8 +297,12 @@ mod tests {
     #[test]
     fn query_text_embeds_near_its_themes() {
         let model = model().expect("model");
-        let paste = embed(&model, 7, "credentials or scraped data posted to a paste site")
-            .expect("embed");
+        let paste = embed(
+            &model,
+            7,
+            "credentials or scraped data posted to a paste site",
+        )
+        .expect("embed");
         assert_eq!(*paste.model(), model);
         let near = mix(&model, 7, &[Theme::Credentials, Theme::Scraping]).expect("mix");
         let far = mix(&model, 7, &[Theme::Meetings]).expect("mix");

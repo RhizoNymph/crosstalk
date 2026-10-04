@@ -288,8 +288,14 @@ mod tests {
         assert!(reply.body.contains("Review queue"));
         let reply = get(&format!("/channels?{state}&tab=review&origin=discovered")).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("wiki.example.org"), "the hijacked wiki awaits review");
-        let reply = get(&format!("/channels?{state}&origin=discovered&detection=awaiting")).await;
+        assert!(
+            reply.body.contains("wiki.example.org"),
+            "the hijacked wiki awaits review"
+        );
+        let reply = get(&format!(
+            "/channels?{state}&origin=discovered&detection=awaiting"
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No channels match these filters."));
     }

@@ -210,15 +210,27 @@ mod tests {
             channel_id(ChannelKey::WikiTalk),
         );
         let session = Session::new();
-        let url = format!("/channels/{}/promote?{}", wiki.to_ulid(), state().to_query());
+        let url = format!(
+            "/channels/{}/promote?{}",
+            wiki.to_ulid(),
+            state().to_query()
+        );
         // Pattern 2 is the `/wiki` prefix, which covers the talk page too.
         let reply = session.get(&format!("{url}&pattern=2")).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains("Also supersedes <strong>1</strong>"));
-        assert!(reply.body.contains(&crate::components::short_id(talk.to_ulid())));
+        assert!(
+            reply
+                .body
+                .contains(&crate::components::short_id(talk.to_ulid()))
+        );
         assert!(reply.body.contains("covered"));
         let reply = session.get(&format!("{url}&pattern=0")).await;
-        assert!(reply.body.contains("No other discovered channel is covered."));
+        assert!(
+            reply
+                .body
+                .contains("No other discovered channel is covered.")
+        );
         let reply = session.post(&url, "pattern=2&policy=unsanctioned").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
         let declared = reply.location.expect("location");

@@ -361,9 +361,13 @@ pub(crate) mod tests {
 
         let c = operator().caller();
         let all = world()
-            .agents(&c, &Default::default(), &crate::contract::lists::PageRequest::first(
-                std::num::NonZeroU32::new(1000).expect("limit"),
-            ))
+            .agents(
+                &c,
+                &Default::default(),
+                &crate::contract::lists::PageRequest::first(
+                    std::num::NonZeroU32::new(1000).expect("limit"),
+                ),
+            )
             .await
             .expect("agents")
             .items;
@@ -372,9 +376,18 @@ pub(crate) mod tests {
             .find(|a| a.parent.is_some())
             .expect("a sub-agent");
         let parent = child.parent.expect("parent");
-        let reply = get(&format!("/agents/{}?{}", parent.to_ulid(), state().to_query())).await;
+        let reply = get(&format!(
+            "/agents/{}?{}",
+            parent.to_ulid(),
+            state().to_query()
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(!reply.body.contains("No sub-agents."));
-        assert!(reply.body.contains(&agent_name(child)), "{}", agent_name(child));
+        assert!(
+            reply.body.contains(&agent_name(child)),
+            "{}",
+            agent_name(child)
+        );
     }
 }

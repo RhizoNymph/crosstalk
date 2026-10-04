@@ -4,12 +4,12 @@ use crosstalk_spec::derived::flow::transmission::TransmissionState;
 use crosstalk_spec::ids::{AlertId, EventId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 
-use crate::contract::alerts::AlertState;
 use crate::backend::Result;
 use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
+use crate::contract::alerts::AlertState;
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
 

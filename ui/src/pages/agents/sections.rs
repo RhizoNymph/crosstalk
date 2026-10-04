@@ -50,7 +50,15 @@ pub fn active_text(state: ActiveAgentState) -> String {
 pub fn state_text(state: &AgentState, operators: &OperatorNames) -> String {
     match (state.active(), state) {
         (Some(active), _) => active_text(active),
-        (None, AgentState::Merged { into, at, by, prior }) => format!(
+        (
+            None,
+            AgentState::Merged {
+                into,
+                at,
+                by,
+                prior,
+            },
+        ) => format!(
             "merged into {} at {} by {}; before: {}",
             short_id(into.to_ulid()),
             format_time(*at),

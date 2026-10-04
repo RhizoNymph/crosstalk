@@ -17,9 +17,9 @@ use crate::components::{
     PageLinks, data_table, empty_state, error_panel, filter_chip, format_time, href, page_header,
     pagination, short_id, state_inputs,
 };
+use crate::contract::actions::ActionOutcome;
 use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
-use crate::contract::actions::ActionOutcome;
 use crate::contract::research::{AuditEntry, AuditOutcome, AuditSubject};
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
@@ -323,7 +323,12 @@ mod tests {
             subject: Some(AuditSubject::Rule(AlertRuleId::from_ulid(7))),
             outcome: AuditOutcome::Applied(ActionOutcome::Applied),
         };
-        let row = audit_row(&entry, &OperatorNames::default(), &AuditQuery::default(), &state());
+        let row = audit_row(
+            &entry,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
         assert_eq!(row.outcome, Ok(None));
         let (label, page, _) = row.subject.expect("subject");
         assert_eq!(label, "rule …000007");
@@ -341,7 +346,12 @@ mod tests {
             outcome: AuditOutcome::Applied(ActionOutcome::ChannelPromoted(ChannelId::from_ulid(8))),
             ..entry
         };
-        let row = audit_row(&promoted, &OperatorNames::default(), &AuditQuery::default(), &state());
+        let row = audit_row(
+            &promoted,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
         let (label, url) = row.outcome.expect("applied").expect("created");
         assert_eq!(label, "declared channel …000008");
         assert!(url.starts_with("/channels/00000000000000000000000008"));
@@ -353,11 +363,20 @@ mod tests {
         .expect("request");
         let merged = AuditEntry {
             action: AuditedAction::Operator(OperatorAction::MergeAgents(request)),
-            subject: Some(AuditSubject::Agent(crosstalk_spec::ids::AgentId::from_ulid(1))),
-            outcome: AuditOutcome::Applied(ActionOutcome::Merged(crate::contract::MergeId::from_ulid(9))),
+            subject: Some(AuditSubject::Agent(
+                crosstalk_spec::ids::AgentId::from_ulid(1),
+            )),
+            outcome: AuditOutcome::Applied(ActionOutcome::Merged(
+                crate::contract::MergeId::from_ulid(9),
+            )),
             ..promoted
         };
-        let row = audit_row(&merged, &OperatorNames::default(), &AuditQuery::default(), &state());
+        let row = audit_row(
+            &merged,
+            &OperatorNames::default(),
+            &AuditQuery::default(),
+            &state(),
+        );
         let (label, url) = row.outcome.expect("applied").expect("created");
         assert_eq!(label, "merge …000009");
         assert!(url.contains("subject=mg.00000000000000000000000009"));
@@ -369,7 +388,10 @@ mod tests {
         let reply = get(&format!("/audit?{q}&span=all")).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(!reply.body.contains("No audit entries match these filters."));
-        let reply = get(&format!("/audit?{q}&span=all&op=01J9ZQ3W8D00000000000000ZZ")).await;
+        let reply = get(&format!(
+            "/audit?{q}&span=all&op=01J9ZQ3W8D00000000000000ZZ"
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No audit entries match these filters."));
         let reply = get(&format!(

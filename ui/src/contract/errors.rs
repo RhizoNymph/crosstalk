@@ -49,8 +49,5 @@ pub enum ConflictKind {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InputError {
     #[error("{field}: {reason}")]
-    Field {
-        field: &'static str,
-        reason: String,
-    },
+    Field { field: &'static str, reason: String },
 }

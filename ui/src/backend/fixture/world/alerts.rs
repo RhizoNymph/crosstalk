@@ -8,13 +8,13 @@ use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId};
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, OperatorRuleStatus, RuleStatus};
 
 use super::channels::{

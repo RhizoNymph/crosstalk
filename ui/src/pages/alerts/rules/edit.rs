@@ -446,8 +446,16 @@ mod tests {
         let rules = session.get(&back).await;
         assert_eq!(rules.status, StatusCode::OK);
         assert!(rules.body.contains("Keys in chat"));
-        assert!(rules.body.contains("\u{201c}api keys pasted in chat\u{201d}"));
-        assert!(rules.body.contains("similarity ≥ 0.72 under fixture-minilm-16"));
+        assert!(
+            rules
+                .body
+                .contains("\u{201c}api keys pasted in chat\u{201d}")
+        );
+        assert!(
+            rules
+                .body
+                .contains("similarity ≥ 0.72 under fixture-minilm-16")
+        );
         // The edit form starts from the stored text and saves a new one.
         let edit = edit_url_of(&rules.body, "Keys in chat");
         let form = session.get(&edit).await;

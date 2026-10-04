@@ -19,10 +19,10 @@ use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };

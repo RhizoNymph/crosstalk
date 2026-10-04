@@ -36,10 +36,10 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
 
 use super::{Backend, Result};
-use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
@@ -62,9 +62,9 @@ use queries::{Ctx, require};
 use store::State;
 use world::World;
 
-pub use world::GenError;
 #[cfg(test)]
 pub use world::ChannelKey;
+pub use world::GenError;
 
 #[derive(Debug)]
 pub struct FixtureBackend {
@@ -333,7 +333,8 @@ impl Backend for FixtureBackend {
         ids: &[ChannelId],
     ) -> Result<HashMap<ChannelId, ChannelName>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::names::channels(ctx, ids))).await
+        self.read(|ctx| Ok(queries::names::channels(ctx, ids)))
+            .await
     }
 
     async fn alerts(

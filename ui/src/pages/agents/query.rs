@@ -154,9 +154,11 @@ mod tests {
 
     #[test]
     fn codes_parse_and_render_back() {
-        let query =
-            AgentQuery::parse(&raw(Some("provisional,established"), Some("pi,oh-my-pi,pi")))
-                .expect("parse");
+        let query = AgentQuery::parse(&raw(
+            Some("provisional,established"),
+            Some("pi,oh-my-pi,pi"),
+        ))
+        .expect("parse");
         assert_eq!(
             query.states,
             vec![AgentStateKind::Provisional, AgentStateKind::Established]

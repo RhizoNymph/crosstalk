@@ -5,10 +5,10 @@ use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::ids::{AlertRuleId, ChannelId, TransmissionId};
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::backend::fixture::store::State;
 use crate::contract::AuditId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::contract::research::{Actor, AuditEntry, AuditOutcome, AuditSubject, AuditedAction};
 
 pub fn is_active(alert: &Alert) -> bool {

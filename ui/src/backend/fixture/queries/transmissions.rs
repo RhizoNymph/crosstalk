@@ -187,7 +187,10 @@ fn text_hits(lower: &[String], needle: &str) -> (usize, Option<(usize, usize)>) 
 /// Each theme's terms and label words: what a semantic query is compared
 /// with.
 fn vocabularies() -> Vec<HashSet<String>> {
-    Theme::ALL.iter().map(|theme| text::vocabulary(*theme)).collect()
+    Theme::ALL
+        .iter()
+        .map(|theme| text::vocabulary(*theme))
+        .collect()
 }
 
 /// A deterministic stand-in for embedding similarity: the share of query

@@ -357,7 +357,8 @@ mod tests {
             Some(invalid("text", "required"))
         );
         let long = "x".repeat(QueryText::MAX_CHARS + 1);
-        let too_long = FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
+        let too_long =
+            FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
         assert_eq!(
             parse_semantic(&too_long, &[]).err(),
             Some(invalid(

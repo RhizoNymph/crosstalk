@@ -80,14 +80,7 @@ mod tests {
         let at = Timestamp::from_micros(0);
         assert!(AlertState::Open.is_active());
         assert!(AlertState::Acknowledged { by, at }.is_active());
-        assert!(
-            !AlertState::Resolved {
-                by,
-                at,
-                note: None
-            }
-            .is_active()
-        );
+        assert!(!AlertState::Resolved { by, at, note: None }.is_active());
         let rejected = AlertState::Suppressed {
             at,
             reason: SuppressReason::OperatorRejected,

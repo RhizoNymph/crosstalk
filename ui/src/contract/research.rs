@@ -244,7 +244,9 @@ pub enum Actor {
 pub enum AuditedAction {
     Operator(OperatorAction),
     /// A change applied from configuration, described by the gateway.
-    Config { summary: String },
+    Config {
+        summary: String,
+    },
 }
 
 /// What became of an audited action. An applied operator action carries

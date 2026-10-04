@@ -12,18 +12,18 @@ use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::support::TimeWindow;
 
-use crate::contract::alerts::Alert;
 use crate::backend::Result;
 use crate::backend::fixture::world::confirmed;
+use crate::contract::MergeId;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
 use crate::contract::errors::QueryError;
 use crate::contract::graph::route_kind;
 use crate::contract::lists::{Page, PageRequest};
-use crate::contract::MergeId;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
     QualityRow,
@@ -138,7 +138,11 @@ fn keeps(filter: &AgentListFilter, summary: &AgentSummary) -> bool {
         })
 }
 
-pub fn agents(ctx: &Ctx, filter: &AgentListFilter, page: &PageRequest) -> Result<Page<AgentSummary>> {
+pub fn agents(
+    ctx: &Ctx,
+    filter: &AgentListFilter,
+    page: &PageRequest,
+) -> Result<Page<AgentSummary>> {
     let counts = summaries::global_counts(ctx);
     // Parents name canonical agents; an alias asks for its canonical agent.
     let filter = AgentListFilter {

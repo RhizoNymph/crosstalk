@@ -16,13 +16,13 @@ use super::sections::{
     HistoryRow, ResourceRow, alerts_section, history_rows, history_section, resource_rows,
     resources_section,
 };
-use crate::contract::alerts::Alert;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{
     empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header, short_id,
 };
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
 use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
@@ -503,7 +503,12 @@ mod tests {
             .values()
             .find_map(|n| n.label.clone())
             .expect("a labelled agent uses the wiki");
-        let reply = get(&format!("/channels/{}?{}", wiki.to_ulid(), state().to_query())).await;
+        let reply = get(&format!(
+            "/channels/{}?{}",
+            wiki.to_ulid(),
+            state().to_query()
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains(label.as_str()), "{label:?}");
     }

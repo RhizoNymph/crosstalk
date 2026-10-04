@@ -6,8 +6,8 @@ use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::researcher;
-use crate::contract::alerts::AlertState;
 use crate::contract::actions::OperatorAction;
+use crate::contract::alerts::AlertState;
 use crate::contract::errors::{ConflictKind, QueryError};
 
 pub fn agent(b: &FixtureBackend, key: &str) -> AgentId {

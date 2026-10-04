@@ -17,12 +17,12 @@ use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use crate::contract::alerts::AlertState;
 use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crate::contract::alerts::AlertState;
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
@@ -270,7 +270,13 @@ fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
             agent,
             label: Some(label),
         };
-        operator_action(state, at, OPERATOR_RESEARCHER, action, ActionOutcome::Applied);
+        operator_action(
+            state,
+            at,
+            OPERATOR_RESEARCHER,
+            action,
+            ActionOutcome::Applied,
+        );
     }
     Ok(())
 }
@@ -286,13 +292,13 @@ fn triage(state: &mut State) {
                 Some((*by, *at, OperatorAction::Acknowledge { alert: a.id }))
             }
             AlertState::Resolved { by, at, note } => Some((
-                    *by,
-                    *at,
-                    OperatorAction::Resolve {
-                        alert: a.id,
-                        note: note.clone(),
-                    },
-                )),
+                *by,
+                *at,
+                OperatorAction::Resolve {
+                    alert: a.id,
+                    note: note.clone(),
+                },
+            )),
             _ => None,
         })
         .collect();

@@ -11,8 +11,8 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permis
 use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, researcher, shared, week, window};
-use crate::contract::agents::AgentState;
 use crate::backend::Backend;
+use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::errors::QueryError;
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
@@ -554,7 +554,10 @@ async fn names_resolve_aliases_and_supersession_in_one_call() {
     assert_eq!(names.len(), 2, "unknown ids are left out");
     let canonical = b.agent(&c, alias).await.expect("read").expect("agent");
     assert_eq!(names[&alias].id, canonical.summary.id);
-    assert_ne!(names[&alias].id, alias, "an alias is named by its canonical agent");
+    assert_ne!(
+        names[&alias].id, alias,
+        "an alias is named by its canonical agent"
+    );
     assert_eq!(names[&alias].label, canonical.summary.label);
     assert_eq!(names[&plain].id, plain);
 

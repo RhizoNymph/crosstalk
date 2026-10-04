@@ -7,11 +7,12 @@ use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
 use topcoat::view::{View, view};
 
+use super::query::{AgentQuery, FAMILIES, RawAgentQuery, STATES};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
+use crate::components::badge::Badge;
 use crate::components::form::{FACET, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
-use crate::components::badge::Badge;
 use crate::components::{
     PageLinks, agent_name, claim_badge, data_table, empty_state, error_panel, family_name,
     filter_chip, format_time, href, kind_badge, page_header, pagination, short_id,
@@ -19,7 +20,6 @@ use crate::components::{
 use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
 use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
-use super::query::{AgentQuery, FAMILIES, RawAgentQuery, STATES};
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::agent_url;

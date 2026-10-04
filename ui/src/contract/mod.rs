@@ -51,4 +51,3 @@ contract_id! {
     /// An audit log entry (item 12).
     AuditId;
 }
-

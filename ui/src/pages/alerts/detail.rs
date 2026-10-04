@@ -291,9 +291,16 @@ mod tests {
         let back = reply.location.expect("location");
         assert!(back.starts_with(&format!("/alerts/{}?", id.to_ulid())));
         let reply = session.get(&back).await;
-        assert!(reply.body.contains(">acknowledged</span>"), "{}", reply.body);
+        assert!(
+            reply.body.contains(">acknowledged</span>"),
+            "{}",
+            reply.body
+        );
         assert!(!reply.body.contains(">Acknowledge</button>"));
-        assert!(reply.body.contains("acknowledged alert"), "history lists it");
+        assert!(
+            reply.body.contains("acknowledged alert"),
+            "history lists it"
+        );
         let reply = session.post(&url, "action=resolve&note=handled").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER);
         let reply = session.get(&url).await;
@@ -302,7 +309,11 @@ mod tests {
         // Resolving again is a conflict, shown on the page.
         let reply = session.post(&url, "action=resolve").await;
         assert_eq!(reply.status, StatusCode::CONFLICT);
-        assert!(reply.body.contains("the alert is not in a state that allows this"));
+        assert!(
+            reply
+                .body
+                .contains("the alert is not in a state that allows this")
+        );
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@ use crate::contract::MergeId;
 
 use crate::components::short_id;
 use crate::contract::research::AuditSubject;
-use crate::pages::common::links::{alert_url, agent_url, channel_url, rule_url, transmission_url};
+use crate::pages::common::links::{agent_url, alert_url, channel_url, rule_url, transmission_url};
 use crate::url::ulid::{InvalidUlid, UlidId};
 use crate::url::view_state::ViewState;
 
