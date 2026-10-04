@@ -20,7 +20,8 @@ Overview:
     HTTP, SSE and WebSocket.
 
     Status: design. The data model is specified in spec/types; the operator
-    UI (ui/) runs against a fixture backend until the gateway exists.
+    UI (ui/) runs on the spec's L8 traits, implemented by a fixture backend
+    until the gateway exists.
 
   subsystems:
     ingest: >
@@ -63,9 +64,15 @@ Overview:
     ui: >
       The operator web UI (crosstalk-ui, Topcoat): server-rendered pages
       plus custom elements for the topology graph and UMAP projection
-      (WebGL) and the time brush (SVG), fed by the UI's own /data/ routes.
-      Reads and acts only through L8, behind a Backend trait with a fixture
-      implementation for development.
+      (WebGL), the time brush (SVG) and the live-update listener, fed by
+      the UI's own /data/ routes. Reads, acts and subscribes only through
+      the spec's L8 traits (QueryApi, OperatorActions, LiveFeed), called on
+      one concrete backend type (a deterministic fixture implementing them
+      until the gateway exists), plus two documented gap traits for what
+      the spec does not expose yet (the bucket width and the present; the
+      export formats a backend writes). Callers come from the spec's
+      operator directory in trusted mode; view windows are bucket-aligned
+      and every linked view pins the URL's topic version.
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -129,8 +136,11 @@ Overview:
     topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes and
     every export (refused, or started and then ended or abandoned).
-    The operator UI renders L8's reads, with view state in the URL, and
-    sends every operator action through L8.
+    The operator UI renders L8's reads (QueryApi), with view state in the
+    URL (a bucket-aligned window and a pinned topic version), sends every
+    operator action through OperatorActions::act, downloads exports as
+    JSON Lines, and re-renders a page's region when the live feed (SSE from
+    LiveFeed) names something the page shows.
 
 Features Index:
   type_spec:
@@ -151,18 +161,31 @@ Features Index:
   ui:
     description: >
       Operator web UI: an overview, topology (agents or bipartite with
-      channels) with an edge drawer, transmission evidence with verdicts, search and UMAP exploration, topics (with version pins), channels,
-      agents, alerts and rules, export, audit and pipeline. Defines the L8
-      additions it needs.
+      channels) with an edge drawer, transmission evidence with verdicts,
+      search and UMAP exploration, topics (with version pins), channels
+      with promotion, agents with merges, alerts and rules, export (JSON
+      Lines downloads), audit and pipeline, kept current by the SSE live
+      feed. Reads and acts through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed) with a deterministic fixture
+      implementation; what the spec lacks is two documented gap traits
+      (ui/src/contract: bucket width and present, export formats).
     entry_points:
       - ui/src/main.rs
+      - ui/src/app.rs
+      - ui/src/backend/fixture/surface.rs
+      - ui/src/contract/mod.rs
+      - ui/src/pages/mod.rs
+      - ui/src/pages/view.rs
       - ui/src/data/mod.rs
+      - ui/src/data/live.rs
       - ui/src/pages/topology/mod.rs
       - ui/src/pages/explore/mod.rs
+      - ui/src/pages/export/mod.rs
       - ui/elements/src/ct-topology.ts
       - ui/elements/src/ct-projection.ts
       - ui/elements/src/ct-timebrush.ts
-    depends_on: [type_spec]
+      - ui/elements/src/ct-live.ts
+    depends_on: [query_surface, read_models, export, type_spec]
     doc: docs/features/ui.md
   query_surface:
     description: >
