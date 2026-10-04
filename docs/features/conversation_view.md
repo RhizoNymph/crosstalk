@@ -271,14 +271,18 @@ pass unchanged.
 - Spec invariants this view relies on: INV-1000..1029 (proposed in
   `docs/handoff/conversation-view-spec.md`).
 
-## Recommendations taken (for the user to confirm)
+## Decisions
 
-1. Turns paged by index window of 20, not cursor, so turn links are
-   citeable.
-2. No live updates in v1; a refresh link on the head.
-3. The agents list gets no new column in v1; the agent page header and
+Decided by the user:
+
+1. No live updates in v1; a refresh link on the head.
+2. The agents list gets no new column in v1; the agent page header and
    drawer carry the link.
-4. Carried-over messages on a compaction's first turn are shown, folded.
-5. **Pending the user:** replayed conversations are shown, labelled
-   "replayed: <corpus>", with a `replay` filter defaulting to include
-   (the alternatives were hiding them by default or not labelling them).
+3. Carried-over messages on a compaction's first turn are shown, folded.
+4. Replayed conversations are shown, labelled "replayed: <corpus>", with a
+   `replay` filter that includes them by default.
+
+Design choice, not yet put to the user:
+
+5. Turns paged by index window of 20, not cursor, so turn links are
+   citeable.

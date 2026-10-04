@@ -937,14 +937,14 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 
 ## Open questions (recommendations in bold)
 
-0. **Replayed conversations** (the user's decision, pending).
-   **Recommend showing them, labelled "replayed: <corpus>" on the row,
-   head and each turn, with a filter (`ReplayFilter`, default `Include`).**
-   The alternatives were hiding them by default or showing them unlabelled.
+0. **Replayed conversations: decided by the user.** They are shown,
+   labelled "replayed: <corpus>" on the row, head and each turn, with a
+   filter (`ReplayFilter`, default `Include`).
 
-1. **Live updates.** Conversations grow on every exchange. `Changed`
-   announces neither agent activity nor turns. **Recommend: no new
-   `Changed` variant in this addition**; the UI re-reads the head on demand.
+1. **Live updates: decided by the user, none in v1.** Conversations grow
+   on every exchange, and `Changed` announces neither agent activity nor
+   turns. No new `Changed` variant is added; the UI re-reads the head on
+   demand.
    A `Changed::Conversation(id)` coalesced by the feed can follow if
    follow mode wants it.
 2. **`ConversationTraffic` cost.** **Recommend computing it on read** at
@@ -952,5 +952,6 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 3. **Common spans.** Boilerplate spans are left out of `spans`.
    **Recommend leaving them out**; a count can be added if investigators ask.
 4. **Text of carried-over messages.** They are repeated on the compaction's
-   first turn so the boundary shows what survived; **recommend keeping
-   them** (flagged), since the summary alone hides what was kept.
+   first turn so the boundary shows what survived. **Decided by the user:
+   kept, flagged, and shown folded**, since the summary alone hides what
+   was kept.
