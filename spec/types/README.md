@@ -111,20 +111,30 @@ Code Assist) and self-hosted vLLM or SGLang. See
 ## Mapping from the lifecycle definition
 
 `design/lifecycles/cascade.yaml` (next to the repository) simulates these
-lifecycles. Some of its states exist only to work around the simulator, and
-some of its events are in-process here rather than on the bus:
+lifecycles, with scenarios for channel discovery, sanctioned and unused
+channels, suspected transmissions, delegation, direct relays, late content,
+policy resets and topic re-fits. The model agrees with these types on
+behaviour; the rows below are where it represents something differently,
+either to work around the simulator or because the types keep it in-process:
 
 | Cascade | Here |
 | --- | --- |
-| `Agent.unseen` | `AgentState::Registered` (declared in config); agents first seen in traffic start `Provisional` |
+| `Agent.registered` | `AgentState::Registered`. Scenarios pre-declare every agent, so one first seen in traffic starts `registered` there and `Provisional` here |
 | `Channel.undiscovered` | no record: a channel exists once declared or discovered |
 | `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` |
 | `Channel.observed` … `dormant` | `TrafficDetection` |
-| `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic` |
+| `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic`; `unreviewed.never_reviewed` / `unreviewed.reset` are `Unreviewed(None)` / `Unreviewed(Some(_))`; its `unused` trigger is the `SanctionedUnused` rule's policy check |
+| `ChannelSanctioned` | `PolicyChanged { policy: Sanctioned(_) }`; other policy changes are applied by the policy transition alone |
 | `Alert.fired` / `deduplicated` | `AlertDraft` / `TriageOutcome::Deduplicated` |
+| `Alert.subjectKind` / `subject` | `AlertSubject`: the channel for new-channel, traffic and sanctioned-unused alerts, the transmission for suspected-transmission and content alerts |
+| `ContentRule` machine | `AlertRuleDef` with `WatchedTopic` / `SemanticQuery` and `RuleStatus` `Enabled` / `Stale` (`Disabled` and `RuleDisabled` suppression are not modelled) |
+| `TopicModel` machine, `TopicModelRefitted` | the analyze consumer's in-process fit; `TopicVersionReady` is the bus event |
 | `ResponseCompleted`, `ExchangeFailed`, `ExchangeNormalized` | in-process on the proxy node (`RawExchange`, `NormalizedExchange`) |
-| `Transmission.fromAgent` field | `Confirmed::from()`, known only once confirmed |
-| `Channel` `confirm` from `observed` or `dormant` | only `Candidate` → `Active`; `Dormant` returns through `Candidate` on a cross access |
-| `Alert` dedup into an `open` alert | dedup into an active (open or acknowledged) alert |
-| `sanctioned_unused` on every unused declared channel | the `SanctionedUnused` rule checks the policy |
-| suppress all alerts on a sanctioned channel | suppress only alerts whose subject is the channel |
+| `ContentMatched` / `DelegationMatched` / `DirectMatched` / `OutputMatched`, selected by `Exchange` stand-in fields | one `ContentMatched` carrying a `Carrier`; the correlator chooses the route (delegation direction and the direct carrier are not modelled) |
+| `TransmissionClassified` / `TransmissionReclassified` | `TransmissionClassified { cause: Confirmation \| Refit }` |
+| no sender field; `originAgent` in the confirming match's payload | `Confirmed::from()`, known only once confirmed |
+| `Transmission.aggregated` is not final (re-fits loop through it) | `Aggregated` is final; a re-fit records a new `TopicAssignment` |
+| a late `match` is dropped in `discarded` | late content opens a new transmission; the simulator only shows this for content from a later exchange |
+| a confirmation on an `active` channel is dropped | it updates `TrafficDetection::Active::last_transmission` |
+| no correlator buffering | a tool-result match whose call yields no access opens `Direct(ToolResult)` when its window closes |
+| guarded triggers take their first guard (`Span.classify`, `Agent.evidence`) | the guard is decided by the data: a reader-output span is `Relayed`, and an agent is `Established` only with corroborating evidence |
