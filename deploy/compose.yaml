@@ -229,8 +229,11 @@ services:
     command:
       - --path.rootfs=/host
       - --web.listen-address=${NODE_EXPORTER_LISTEN:-0.0.0.0:9100}
+    # Read-only bind without rslave: rslave needs / to be a shared mount,
+    # which rootless and snap Docker do not provide. Filesystems mounted
+    # after the container starts are not seen until it restarts.
     volumes:
-      - /:/host:ro,rslave
+      - /:/host:ro
 
   # Per-container metrics (labelled with the compose service).
   cadvisor:
