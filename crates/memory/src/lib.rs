@@ -17,5 +17,10 @@
 // code uses it.
 use crosstalk_spec as _;
 
+pub mod analysis;
+pub mod model;
+pub mod surface;
+pub mod topology;
+
 #[cfg(test)]
 mod tests {}

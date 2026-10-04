@@ -304,4 +304,24 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  memory:
+    description: >
+      crosstalk-memory, the in-memory reference implementation of every
+      stateful store trait (roadmap P2.3) and a model-based property harness
+      per trait that the Postgres stores reuse. Insight and surface half
+      (L6–L8): the topic catalog (fit lifecycle, lineage, assignments, sizes,
+      pins and retention), exact search and projection sampling, projection
+      jobs with leases and frame retention, alert rules and triage in one
+      transaction scope, the edge store computed from stored contributions
+      (activation, watermark, drops, graph, totals, channel-centred graph,
+      drill-down, agent traffic, series), the append-only audit log, the
+      operator directory's store and the sink registry; Fake* doubles of the
+      computational traits.
+    entry_points:
+      - crates/memory/src/analysis/mod.rs
+      - crates/memory/src/topology/mod.rs
+      - crates/memory/src/surface/mod.rs
+      - crates/memory/src/model/mod.rs
+    depends_on: [type_spec, query_surface, workspace]
+    doc: docs/features/memory.md
 ```
