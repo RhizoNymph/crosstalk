@@ -109,7 +109,7 @@ impl ReferenceSearch {
     pub fn new(model: EmbeddingModel) -> Result<Self, LifecycleError> {
         let config =
             search_catalog_config().ok_or(LifecycleError::UnknownVersion(TopicModelVersion(0)))?;
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(ts(0)));
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(ts(0)));
         let catalog = InMemoryTopicCatalog::new(config, clock, ts(0))?;
         let directory = StaticDirectory::new();
         let index = InMemorySearchIndex::new(catalog.clone(), directory.clone(), model);

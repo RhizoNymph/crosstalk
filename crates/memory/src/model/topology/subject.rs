@@ -100,7 +100,7 @@ impl ReferenceEdges {
             retention: RetentionPolicy::new(3).map_err(|error| format!("{error:?}"))?,
             lineage_floor: similarity(0.5).ok_or("floor")?,
         };
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(ts(0)));
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(ts(0)));
         let catalog = InMemoryTopicCatalog::new(catalog_config, clock, ts(0))
             .map_err(|error| error.to_string())?;
         let directory = StaticDirectory::new();

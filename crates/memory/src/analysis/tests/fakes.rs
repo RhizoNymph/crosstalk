@@ -22,7 +22,7 @@ fn topic_model() -> FakeTopicModel {
         2,
         2,
         similarity(0.5).unwrap(),
-        Arc::new(ManualClock::new(ts(9))),
+        Arc::new(ManualClock::at(ts(9))),
     )
 }
 

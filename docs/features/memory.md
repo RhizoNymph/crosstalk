@@ -62,7 +62,7 @@ the Postgres stores implement them too.
 | --- | --- |
 | `State<T>` | `Arc<std::sync::RwLock<T>>` around a store's plain data. Every operation is a pure function over `T` run in one critical section, which is the store's transaction. A `std` lock, not a `tokio` one, because `AgentDirectory::canonical` and `ChannelDirectory::canonical` are synchronous and called from async tasks; no guard is ever held across an `.await`, so every trait future is `Send`. A poisoned lock is recovered (writes check before they change anything) |
 | `Outbox` | The sending half of an unbounded `tokio::sync::mpsc` channel of `BusEvent`s. A store publishes after its critical section ends, so a re-query after any event sees the change. `Outbox::none()` drops events; `drain` empties a receiver |
-| `Clock`, `ManualClock` | The "now" a trait does not pass in: `declare`'s declaration time, the fingerprint index's retention |
+| `Clock`, `ManualClock` | The "now" a trait does not pass in: `declare`'s declaration time, the fingerprint index's retention; the L6–L8 stores use the same pair (re-exported from `analysis::support`) |
 | `IdSequence` | Deterministic increasing ids (`prefix << 64 \| counter`) for ids a store creates (`MergeId`, declared `ChannelId`). Drawn only for accepted operations |
 | `CursorTable<K>` | Page cursors: a token `<list>-<n>` indexes a row holding the request it was issued for and the last key served. An unknown token, or one presented with another request, is `InvalidCursor` |
 | `page_after` | Newest-first keyset paging over an already filtered list |
@@ -406,7 +406,7 @@ harness catches it, so none is vacuous.
 | `analysis/alerts/triage.rs` | `AlertTriage`; acknowledge and resolve | `AlertActionError`, `InMemoryAlertStore::{acknowledge, resolve}` |
 | `analysis/fakes.rs` | Deterministic doubles | `FakeEmbedder`, `FakeTopicModel`, `FakeLayoutFitter`, `FakeRuleContext`, `fake_model` |
 | `analysis/aliases.rs` | Merges and supersessions a test sets | `StaticDirectory`, `Directories`, `AliasError` |
-| `analysis/support.rs` | Clock, id sequences, outbox, similarity | `Clock`, `ManualClock`, `IdSequence`, `Outbox`, `Published`, `similarity` |
+| `analysis/support.rs` | Id sequences, outbox, similarity; re-exports the pipeline's clock | `Clock`, `ManualClock` (from `pipeline`), `IdSequence`, `Outbox`, `Published`, `similarity` |
 | `topology/store.rs` | The edge store's state and writes | `InMemoryEdgeStore`, `EdgeStoreConfig`, `Activation`, `ManualFrontier`, `bucket_of` |
 | `topology/reads.rs` | `EdgeStore` | — |
 | `topology/fold.rs` | The fold, edges, nodes, access edges | `edges`, `nodes`, `route_key`, `kind_index` |

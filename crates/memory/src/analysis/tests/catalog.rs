@@ -21,7 +21,7 @@ use crate::model::build::{
 };
 
 fn new_catalog(keep_last: u32) -> (InMemoryTopicCatalog, ManualClock) {
-    let clock = ManualClock::new(ts(0));
+    let clock = ManualClock::at(ts(0));
     (catalog(keep_last, 0.5, clock.clone()).unwrap(), clock)
 }
 

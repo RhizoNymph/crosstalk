@@ -36,7 +36,7 @@ struct World {
 }
 
 fn world() -> World {
-    let catalog = catalog(3, 0.5, ManualClock::new(ts(0))).unwrap();
+    let catalog = catalog(3, 0.5, ManualClock::at(ts(0))).unwrap();
     let directory = StaticDirectory::new();
     let index = InMemorySearchIndex::new(catalog.clone(), directory.clone(), model());
     World {

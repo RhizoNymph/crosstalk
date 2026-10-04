@@ -78,7 +78,7 @@ pub struct ReferenceCatalog {
 impl ReferenceCatalog {
     /// A reference catalog under `config`, version 0 active at the epoch.
     pub fn new(config: CatalogConfig) -> Result<Self, LifecycleError> {
-        let clock = ManualClock::new(ts(0));
+        let clock = ManualClock::at(ts(0));
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         Ok(Self {
             catalog: InMemoryTopicCatalog::new(config, shared, ts(0))?,

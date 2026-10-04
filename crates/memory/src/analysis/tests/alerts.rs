@@ -45,7 +45,7 @@ pub(super) fn embedder(name: &str) -> FakeEmbedder {
 }
 
 pub(super) fn world_with(embedder: FakeEmbedder) -> World {
-    let clock = ManualClock::new(ts(1_000));
+    let clock = ManualClock::at(ts(1_000));
     let directory = StaticDirectory::new();
     let config = AlertStoreConfig {
         rules: AlertRuleConfig {

@@ -100,7 +100,7 @@ pub struct ReferenceAlerts {
 impl ReferenceAlerts {
     pub fn new(world: AlertWorld) -> Self {
         let directory = StaticDirectory::new();
-        let clock = ManualClock::new(ts(0));
+        let clock = ManualClock::at(ts(0));
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         Self {
             store: InMemoryAlertStore::new(world.config, world.embedder, directory.clone(), shared),

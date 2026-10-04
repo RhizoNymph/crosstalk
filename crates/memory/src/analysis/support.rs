@@ -2,12 +2,12 @@
 //! methods that take no time, deterministic id sequences, the outbox each
 //! store publishes into, and the one similarity function every score uses.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crosstalk_spec::aggregates::topic::Embedding;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::InsightEvent;
-use crosstalk_spec::support::{Similarity, Timestamp};
+use crosstalk_spec::support::Similarity;
 
 /// Locks `mutex`, recovering the state from a poisoned lock. Every store
 /// mutates its state only through methods that leave it consistent before
@@ -16,38 +16,9 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Where a store reads the time for the trait methods that do not take
-/// one (`AlertTriage`'s suppressions, `TopicCatalog::unpin`'s retention).
-pub trait Clock: Send + Sync {
-    fn now(&self) -> Timestamp;
-}
-
-/// A clock the test sets. Starts where it is built and never moves on its
-/// own.
-#[derive(Debug, Clone)]
-pub struct ManualClock {
-    now: Arc<Mutex<Timestamp>>,
-}
-
-impl ManualClock {
-    pub fn new(start: Timestamp) -> Self {
-        Self {
-            now: Arc::new(Mutex::new(start)),
-        }
-    }
-
-    /// Set the time. A clock may be set backwards; the stores never assume
-    /// it is monotone.
-    pub fn set(&self, at: Timestamp) {
-        *lock(&self.now) = at;
-    }
-}
-
-impl Clock for ManualClock {
-    fn now(&self) -> Timestamp {
-        *lock(&self.now)
-    }
-}
+/// The clock every reference store reads (`AlertTriage`'s suppressions,
+/// `TopicCatalog::unpin`'s retention): the one the pipeline stores share.
+pub use crate::pipeline::{Clock, ManualClock};
 
 /// A deterministic sequence of 128-bit ULID values for the ids a store
 /// assigns: `base + 1`, `base + 2`, … The base puts every value outside the
