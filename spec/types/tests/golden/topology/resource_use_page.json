@@ -1,0 +1,46 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "channel": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+    "window": {
+      "start": "2026-10-04T12:00:00.000000Z",
+      "end": "2026-10-04T13:00:00.000000Z"
+    },
+    "page": {
+      "items": [
+        {
+          "resource": {
+            "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+            "locator": {
+              "type": "url",
+              "data": {
+                "scheme": "https",
+                "host": "wiki.example",
+                "path": "/team/plan",
+                "query": null
+              }
+            },
+            "first_seen": "2026-10-04T09:15:42.000000Z"
+          },
+          "writers": [
+            {
+              "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+              "accesses": 3
+            }
+          ],
+          "readers": [
+            {
+              "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+              "accesses": 1
+            },
+            {
+              "agent": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+              "accesses": 1
+            }
+          ]
+        }
+      ],
+      "next": null
+    }
+  }
+}

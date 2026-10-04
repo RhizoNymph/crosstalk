@@ -115,7 +115,7 @@ fn alert() -> Alert {
 }
 
 /// One event of every variant.
-fn sample_events() -> Vec<BusEvent> {
+pub(crate) fn sample_events() -> Vec<BusEvent> {
     let bucket = TimeWindow::new(at(0), at(60)).expect("non-empty");
     let slot = TopicSlot {
         version: TopicModelVersion(1),
@@ -311,7 +311,7 @@ fn subjects_name_their_variant() {
 
 /// Every subject, in declaration order. Adding a subject breaks the
 /// exhaustive match in `declared`, which is the reminder to list it here.
-fn every_subject() -> Vec<Subject> {
+pub(crate) fn every_subject() -> Vec<Subject> {
     fn declared(subject: Subject) -> Subject {
         match subject {
             Subject::ExchangeCaptured
@@ -389,7 +389,7 @@ fn samples_cover_every_subject() {
 /// One change notification of every `Changed` variant: the feed's only
 /// source. Adding a variant breaks the exhaustive match in `declared`,
 /// which is the reminder to sample it here.
-fn every_change() -> Vec<Changed> {
+pub(crate) fn every_change() -> Vec<Changed> {
     fn declared(changed: Changed) -> Changed {
         match changed {
             Changed::Alert(_)

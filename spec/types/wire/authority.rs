@@ -39,6 +39,8 @@
 //! | `AlertRuleDef` | creator, time | 2 |
 //! | `Alert`, `AlertState` | who acknowledged or resolved, when | 2 |
 //! | `Envelope` (every bus event) | node, time | 2 |
+//! | `BusEvent` | operators and times of the events that carry them | 2 |
+//! | `DeadLetter` | holds an `Envelope` | 2 |
 //! | `Supersession`, `SupersededInto` | the promotion's time (and operator) | 2 |
 //! | `Policy` | holds a `Decision` | 2 |
 //! | `Retention` | holds a `Pin` | 2 |
@@ -112,7 +114,8 @@ use crate::derived::flow::channel::policy::{
 use crate::derived::flow::channel::promotion::Promotion;
 use crate::derived::flow::channel::{Declaration, Supersession};
 use crate::derived::flow::verdict::{TransmissionVerdict, VerdictLog};
-use crate::events::Envelope;
+use crate::events::{BusEvent, Envelope};
+use crate::interfaces::l2_transport::DeadLetter;
 use crate::interfaces::l8_surface::audit::{
     AuditEntry, ConfigChange, ConfigRecord, OperatorRecord,
 };
@@ -154,6 +157,8 @@ assert_not_impl!(AlertRuleDef: WireRequest);
 assert_not_impl!(Alert: WireRequest);
 assert_not_impl!(AlertState: WireRequest);
 assert_not_impl!(Envelope: WireRequest);
+assert_not_impl!(BusEvent: WireRequest);
+assert_not_impl!(DeadLetter: WireRequest);
 assert_not_impl!(Supersession: WireRequest);
 assert_not_impl!(SupersededInto: WireRequest);
 assert_not_impl!(Policy: WireRequest);

@@ -56,25 +56,25 @@ spec/types/
 │           ├── detection.rs DeclaredDetection, TrafficDetection (a superseded channel's is frozen), DetectionKind
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── access.rs          AccessEdge (not wire), WeightedAccess, BipartiteGraph (checked; wire form BipartiteParts), ResourceUse (checked), ResourceUsePage
 │   ├── agents/
-│   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details
-│   │   └── filter.rs      AgentFilter (matches, text_matches), AgentText
+│   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details (responses)
+│   │   └── filter.rs      AgentFilter (a WireRequest; matches, text_matches), AgentText
 │   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
-│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTotals (of), EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked; a WireRequest), Weighting (a WireRequest), TopicSlot, EdgeStats, TopologyGraph (with nodes; check, decoded through it), EdgeTotals (of), EdgeTransmissionPage
+│   ├── filter.rs          TopologyFilter (shared by every linked view; a WireRequest): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve; a WireRequest), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
 │   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
 │   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
 │   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
 │   ├── retention.rs       RetentionPolicy (checked, to_drop), Pin, Retention, pin/unpin/mark_dropped on TopicVersionHistory
-│   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
+│   ├── series.rs          BucketWidth, SeriesStep (checked), SeriesGrid (checked; a WireRequest), SeriesGrouping (a WireRequest), TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
-│   └── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
+│   └── watermark.rs       PipelineFrontier (not wire), Watermark::settled, Watermarked
 ├── events/                what crosses the bus
-│   ├── mod.rs             Envelope, BusEvent, Subject
+│   ├── mod.rs             Envelope, BusEvent (never requests: the node stamps them), Subject (a string, the event tag)
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
@@ -82,7 +82,7 @@ spec/types/
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
-│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
+│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
 │   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
@@ -91,7 +91,7 @@ spec/types/
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic as a BTreeMap, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
 │   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/
 │       ├── permissions.rs Caller (built only by the directory; never serialized), Permission, PermissionSet
