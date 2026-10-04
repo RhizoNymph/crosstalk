@@ -87,7 +87,12 @@ pub struct FilterSubject<'a> {
     /// outlier or a transmission not classified under that version.
     pub topic: Option<TopicId>,
     /// Whether the transmission's latest operator verdict is
-    /// `FalseDetection`.
+    /// `FalseDetection`, as the view's copy of current verdicts holds it at
+    /// query time ([`CurrentVerdict::is_false_detection`]). Verdicts are
+    /// never stored in aggregates, so a verdict changed after aggregation
+    /// counts from the next query on.
+    ///
+    /// [`CurrentVerdict::is_false_detection`]: crate::derived::flow::verdict::CurrentVerdict::is_false_detection
     pub false_detection: bool,
 }
 

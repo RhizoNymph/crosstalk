@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.verdict.filter-subject-from-copy"
+statement = "FilterSubject::false_detection is true exactly when the view's CurrentVerdict for the transmission exists and holds FalseDetection, so FalseDetections::Exclude drops exactly those transmissions and Include drops none."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A withdrawn verdict, a Genuine verdict and no verdict at all must all
+count as detector output; only a current FalseDetection is left out. Every
+linked view derives the flag the same way, so the graph, search, the
+projection and the drill-down exclude the same transmissions.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::verdicts::only_a_current_false_detection_is_a_false_detection",
+    "crosstalk_spec::tests::verdicts::exclude_filter_follows_the_verdict_copy",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

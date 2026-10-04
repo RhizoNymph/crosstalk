@@ -42,7 +42,8 @@ Overview:
       L7 topology (edge aggregation per time window, graphs and time
       series), L8 surface (query API with cursor-paginated lists and linked
       views sharing one filter, UI, operator actions with one permission
-      each, append-only audit log, SSE live feed, alert sinks).
+      each, operator verdicts on transmissions and the detection quality
+      they measure, append-only audit log, SSE live feed, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -67,7 +68,10 @@ Overview:
     when a cursor is too old). Operator actions flow back down: policy
     changes and channel promotion to L5, which records every policy
     decision in the channel's policy history; transmission dismissal
-    through L5's correlator (L6 then suppresses its alert); agent merges,
+    through L5's correlator (L6 then suppresses its alert); verdicts on
+    transmissions to L5's verdict log, beside the detector's state, which
+    publishes VerdictSet (L6 suppresses the alerts of a false detection;
+    L6 and L7 views can exclude false detections at query time); agent merges,
     exact unmerges and display labels to L3; alert rule management to L6.
     Every action call is recorded in the audit log with its outcome.
 
@@ -79,7 +83,8 @@ Features Index:
       aggregates (including time series and topic history), bus events and
       per-layer interfaces (including the query surface's paginated lists,
       shared view filter and projection, the SSE live feed, the audit log,
-      channel policy history and operator actions with their permissions),
+      channel policy history, operator actions with their permissions, and
+      operator verdicts with the detection quality report),
       with tests for the invariants checked at runtime and one TOML file per
       invariant in spec/invariants. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.

@@ -5,7 +5,10 @@
 //! accesses), `ContentMatched` (confirms transmissions), the clock (evidence
 //! windows and idle windows close) and `PolicyChanged`. The surface calls
 //! it directly to promote a discovered channel (`ChannelRegistry::promote`)
-//! and to dismiss a suspected transmission (`TransmissionReview::dismiss`).
+//! and to dismiss a suspected transmission (`TransmissionReview::dismiss`),
+//! and records operator verdicts on transmissions through
+//! [`verdicts::TransmissionVerdicts`], which publishes `VerdictSet`. A
+//! verdict never changes a transmission's state.
 //!
 //! Policy: the flow consumer turns each `PolicyChanged` into a
 //! [`PolicyDecision`] and records it with [`ChannelRegistry::set_policy`].
@@ -28,6 +31,8 @@
 //! The correlator chooses routes in the precedence order documented on
 //! `Route`, using the `AgentDirectory` and agent parent links for
 //! `Delegation`.
+
+pub mod verdicts;
 
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
 use crate::derived::flow::channel::policy::{

@@ -1,0 +1,28 @@
+[invariant]
+id = "flow.verdict.log-append-only"
+statement = "A VerdictLog only grows by appending, the record at index i has revision i + 1, withdrawing a verdict appends a record whose verdict is None, and VerdictLog::current is the last record's verdict."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Verdicts double as ground-truth labels for measuring the detector, so
+every judgement, including a changed mind, must stay readable. The log has
+no edit or remove, its revisions are its positions, so they are
+consecutive by construction, and the latest record wins whatever the
+records' times say.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::derived::flow::verdict::VerdictLog",
+    "crosstalk_spec::derived::flow::verdict::VerdictLog::record",
+]
+unit = [
+    "crosstalk_spec::tests::verdicts::empty_log_has_no_verdict_and_no_revision",
+    "crosstalk_spec::tests::verdicts::log_appends_with_consecutive_revisions_and_latest_wins",
+    "crosstalk_spec::tests::verdicts::log_rejects_another_transmissions_record",
+    "crosstalk_spec::tests::verdicts::revision_counts_from_one",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.triage.rejected-subject-opens-nothing"
+statement = "While triage's verdict copy holds FalseDetection for a transmission, every draft whose subject is that transmission is triaged as OperatorRejected and opens or deduplicates into no alert, however drafts and the VerdictSet interleave."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A draft evaluated before the verdict can reach triage after it. Without a
+check at triage it would open an alert about a transmission the operator
+just rejected. Triage reads its copy in the open's transaction, and the
+suppression runs in the copy update's, so whichever comes first, no
+active alert is left. After a withdrawal, drafts open alerts again.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::dst_rejected_subject_opens_nothing"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

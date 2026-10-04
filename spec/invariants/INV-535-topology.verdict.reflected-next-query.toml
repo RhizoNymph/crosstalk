@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.verdict.reflected-next-query"
+statement = "A graph, series or transmissions query that starts after EdgeStore::judge has returned Ok evaluates FalseDetections::Exclude with that verdict or a newer one, whether the transmission was applied before or after the verdict."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A verdict can arrive long after aggregation, or before the transmission
+is classified and applied. Either way the next query must reflect it,
+with nothing to rebuild, so the operator sees the edge shrink right after
+judging.
+"""
+
+[evidence]
+dst = "crosstalk::topology::tests::dst_judge_then_query"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -12,6 +12,21 @@
 //! graph's [`TopologyGraph::total`], and grouped by edge each series sums to
 //! that edge's stat in the graph.
 //!
+//! **Verdicts are subtracted at query time.** Buckets hold detector output
+//! only: a verdict never rewrites a bucket, so it never makes a settled
+//! bucket unsettled and an `Include` query never depends on verdicts. The
+//! store also consumes `VerdictSet` ([`EdgeStore::judge`]) into its own copy
+//! of each transmission's current verdict. A query with
+//! `FalseDetections::Exclude` reads the buckets as an `Include` query would
+//! and subtracts the stored contributions of the transmissions it holds as
+//! `FalseDetection` that the rest of the filter admits, per edge and step,
+//! in one snapshot; the drill-down skips their rows. A verdict that changes
+//! after aggregation is therefore reflected by the next query that starts
+//! after `judge` returns, in every window, with nothing to rebuild.
+//! Verdicts are operator judgement, not detector data: an `Exclude` result
+//! is as of the verdicts the store held when it ran and has no settling
+//! point.
+//!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
@@ -23,6 +38,7 @@ use crate::aggregates::edge::{
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::{Classification, Route};
+use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
 use crate::ids::{AgentId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
@@ -44,6 +60,17 @@ pub trait EdgeStore {
     /// bucket it landed in, or `SelfEdge` if sender and reader are the same
     /// agent.
     async fn apply(&mut self, contribution: &EdgeContribution) -> Result<EdgeKey, EdgeError>;
+
+    /// Record `transmission`'s verdict at `revision` in the store's verdict
+    /// copy (`CurrentVerdict::observe`), whether or not the transmission has
+    /// been applied yet. Changes no bucket. Idempotent, and a revision not
+    /// newer than the one held is `Stale` and changes nothing.
+    async fn judge(
+        &mut self,
+        transmission: TransmissionId,
+        verdict: Option<Verdict>,
+        revision: VerdictRevision,
+    ) -> Result<Observed, EdgeError>;
 
     /// Switch queries to `version` once its buckets are complete. Ignores a
     /// version older than the active one. Buckets of versions older than the

@@ -52,6 +52,7 @@ pub enum Subject {
     TransmissionConfirmed,
     TransmissionSuspected,
     TransmissionDismissed,
+    VerdictSet,
     TransmissionClassified,
     TopicVersionReady,
     TopicVersionActivated,

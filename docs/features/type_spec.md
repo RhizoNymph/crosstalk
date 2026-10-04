@@ -11,10 +11,14 @@
   included), the one filter that links the graph, search, projection and
   edge drill-down, the projection's points, time series, the topic-model
   version history and the channel policy history.
+- Operator verdicts on transmissions (`Genuine`, `FalseDetection`), kept
+  beside the detector's state as an append-only log, and the detection
+  quality report that tallies them against the detector's calls.
 - The live update feed (SSE) and the append-only audit log.
 - Operator actions, each with one required permission: policy, channel
   promotion, agent merges, unmerges and labels, alert triage, transmission
-  dismissal, alert rule management and dead-letter replay.
+  dismissal, transmission verdicts, alert rule management and dead-letter
+  replay.
 
 ## Non-scope
 
@@ -111,6 +115,9 @@ The types follow data through the stack:
    correlator shard (`Correlator::on_dismiss`), so it is ordered with late
    matches, and the transmission becomes `Discarded` with
    `DiscardReason::Dismissed`; `TransmissionDismissed` is published.
+   An operator verdict (`TransmissionVerdicts::set`) is appended to the
+   transmission's `VerdictLog` without touching its state, and
+   `VerdictSet` is published (see Verdicts below).
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
    (`TransmissionClassified`). Re-fits run one at a time. The
@@ -135,7 +142,11 @@ The types follow data through the stack:
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), or drops as `RuleInactive` when the rule stopped
    evaluating, and suppresses on sanctioning, rule disabling or
-   `TransmissionDismissed`. Every stored change to an alert bumps its
+   `TransmissionDismissed`, and on a `VerdictSet` holding `FalseDetection`
+   suppresses every active alert about that transmission
+   (`SuppressReason::OperatorRejected`), after which triage opens nothing
+   about it (`TriageOutcome::OperatorRejected`) while that verdict is
+   current. Every stored change to an alert bumps its
    `AlertRevision` and publishes `AlertChanged`. Operators manage rules
    through `AlertRuleStore`: create and update content rules from a
    `RuleRequest` (a watched-topic request must name the current topic-model
@@ -156,11 +167,14 @@ The types follow data through the stack:
    `EdgeStore::transmissions` lists the contributions behind one edge
    (`EdgeSelector`) from the same stored rows, a page at a time
    (`EdgeTransmissionPage`), with the first page's topic version pinned in
-   the cursor.
+   the cursor. Buckets hold detector output only; the store keeps a copy
+   of current verdicts (`EdgeStore::judge`) and subtracts false detections
+   at query time when the filter excludes them.
 9. **L8 surface.** `QueryApi` serves channels, policy histories, agents,
    alert rules, dead letters, alerts, the topology, series, the topic
    history (versions, sizes, lineage), the transmissions behind an edge,
-   search, transmissions, topics, projections and the audit log to an
+   search, transmissions, topics, projections, verdict logs, detection
+   quality and the audit log to an
    authenticated `Caller` with `Permission`s (View for structure, Content
    for anything derived from message text, Operate for dead letters, Audit
    for the audit log). Series and the topic history need `View`: they carry
@@ -168,7 +182,8 @@ The types follow data through the stack:
    behind `Content`. `OperatorActions::act` checks
    `OperatorAction::required_permission` before any effect, then publishes
    `PolicyChanged` or forwards the action down the stack: merges, unmerges
-   and labels to L3, channel promotion and transmission dismissal to L5,
+   and labels to L3, channel promotion, transmission dismissal and
+   verdicts to L5,
    alert rule management to L6; acknowledging and resolving an alert
    publishes `AlertChanged`. It stamps every author and time from the
    caller and returns an `ActionEffect`. `AlertSink`s deliver alerts.
@@ -228,6 +243,7 @@ under the response's topic version) and keeps it when
 | `channels` | its route is `Channel(c)` with `c` listed; other routes never match |
 | `route_kinds` | `RouteKind::from(route)` is listed |
 | `topics` | its topic under the response's version is listed; outliers and unclassified transmissions never match |
+| `false_detections` | `Include` (the default) always; `Exclude` unless the view's copy of the transmission's current verdict is `FalseDetection` |
 
 Empty lists do not restrict and non-empty fields combine with AND. The
 window is separate and always tested against `Confirmed::at`. For the graph
@@ -236,6 +252,81 @@ for the projection each point, and for the drill-down each row. Every
 response reports its topic-model version; a client links two responses only
 when the versions agree, and a filter holding an old version's topic ids
 matches nothing.
+
+### Verdicts and detection quality
+
+A verdict (`derived/flow/verdict.rs`) is an operator's judgement of a
+transmission, `Genuine` or `FalseDetection`, on a separate axis from
+`TransmissionState`. The detector's output is never changed, so verdicts
+are ground-truth labels for measuring the detector.
+
+1. **Action.** `OperatorAction::SetVerdict { transmission, verdict, note }`
+   needs `Triage` (not `Content` as well: the action reveals no text, and
+   the text to judge from is behind the `Content` queries). `verdict: None`
+   withdraws. The surface stamps the caller and time and calls
+   `TransmissionVerdicts::set` (L5).
+2. **State check.** Only a judgeable state takes a verdict:
+   `TransmissionState::judgeable` gives `Judgeable::Suspected`,
+   `Discarded` (the detector's negative call, so `Genuine` there is a false
+   negative) or `Confirmed` (for `Confirmed`, `Classified`, `Aggregated`).
+   `Detected` and `AwaitingContent` are `NotJudgeable`, which the surface
+   returns as `Conflict(TransmissionNotJudgeable)`; an unknown transmission
+   is `NotFound`. `TransmissionVerdict::new` takes the transmission and
+   runs the check, so a record for an unjudgeable state cannot be built.
+   Every state after a judgeable one is judgeable, so verdicts need no
+   ordering with the correlator.
+3. **Log.** The record is appended to the transmission's `VerdictLog`
+   (append-only; withdrawal appends a `None` record). The record at index
+   `i` has `VerdictRevision` `i + 1` and the last record is the current
+   verdict. A request whose verdict is already current appends nothing and
+   returns `Unchanged`; otherwise `Applied`, and one `VerdictSet
+   { transmission, verdict, revision, by, at }` is written to the outbox
+   in the same transaction.
+4. **Readers.** Triage, the edge store, search and the projection each
+   keep a `CurrentVerdict` per transmission from `VerdictSet`;
+   `CurrentVerdict::observe` keeps the highest revision, so redelivery and
+   reordering never roll a verdict back.
+   - **Alerts.** A newer `FalseDetection` suppresses every active alert
+     whose subject is the transmission, of any rule
+     (`SuppressReason::OperatorRejected`). While it is current, triage
+     returns `TriageOutcome::OperatorRejected` for drafts about it. A
+     `Genuine` verdict or a withdrawal reopens nothing.
+   - **Linked views.** `FilterSubject::false_detection` is
+     `CurrentVerdict::is_false_detection` of the view's copy, read at query
+     time.
+   - **Edge store.** Verdicts are subtracted at query time, not stored as
+     a bucket dimension. Buckets hold detector output only, so a verdict
+     never rewrites a bucket or unsettles a settled one, and an `Include`
+     query never depends on verdicts. With `Exclude`, a graph or series
+     reads the buckets and subtracts the stored contributions of the
+     transmissions its copy holds as `FalseDetection` (and the rest of the
+     filter admits); the drill-down skips their rows. A verdict changed
+     after aggregation shows in the next query after `EdgeStore::judge`
+     returns, in every window, with nothing to rebuild. An `Exclude`
+     result is as of the verdicts the store held when it ran: operator
+     judgement has no settling point.
+5. **Queries.** `QueryApi::verdicts` returns a transmission's log and
+   `QueryApi::detection_quality(window)` a `DetectionQuality`
+   (`aggregates/quality.rs`), both with `View`: ids, verdicts, notes,
+   counts, route kinds and match classes, no message text.
+
+`DetectionQuality::tally` is the reference definition. It counts each
+transmission whose `opened_at` (every state has it and none changes it) is
+in the window and whose state is judgeable, once, in the `QualityRow` of
+its `RouteKind` and `QualityMatch`, under `genuine`, `false_detection` or
+`unlabeled` (never judged or withdrawn) by its current verdict:
+
+| `QualityMatch` | `genuine` | `false_detection` |
+| --- | --- | --- |
+| `Content(class)`: confirmed, by its strongest match | true positive | false positive |
+| `Suspected`: access evidence only | missed so far | correctly not confirmed |
+| `Discarded`: expired | false negative | true negative |
+
+A confirmed transmission with several matches counts under the strongest
+`MatchClass` (`Exact`, `Normalized`, `Decoded`, `Semantic`, in that
+order): it is as credible as its best evidence. State and verdict are both
+read at query time. Rows are unique per key, never all zero, and ordered
+(`DetectionQuality::new`).
 
 ### Projection
 
@@ -275,23 +366,26 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
 | `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
+| `spec/types/derived/flow/verdict.rs` | Operator verdicts beside the detector's state | `Verdict`, `Judgeable`, `NotJudgeable`, `TransmissionState::judgeable`, `TransmissionVerdict` (checked), `VerdictRevision`, `VerdictLog` (checked append), `VerdictRecorded`, `CurrentVerdict` (`observe`, `is_false_detection`), `Observed` |
 | `spec/types/derived/flow/channel/mod.rs` | Channels and promotion | `Channel`, `ChannelOrigin` (`promoted`), `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
 | `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph`, `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
 | `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
+| `spec/types/aggregates/quality.rs` | Verdicts tallied against the detector's calls | `MatchClass` (`strongest`), `QualityMatch`, `QualityRow`, `DetectionQuality` (checked, `tally`), `InvalidQuality` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo`, `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
-| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
+| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
-| `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
+| `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`, `VerdictSet`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `AlertTriage::transmission_judged` (L6); `EdgeStore::judge` (L7); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, `QueryApi::verdicts` and `detection_quality`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`, incl. `SetVerdict`), `ActionKind` (L8) |
+| `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions; `verdicts.rs`, `quality.rs` for verdicts and detection quality) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -380,6 +474,24 @@ exactly `min(matching, limit)` points, none twice, all finite.
 - Only a suspected transmission can be discarded, by expiry or by an
   operator's dismissal; a dismissal and a late match on it are ordered in
   the correlator shard, so exactly one applies.
+- A verdict never changes a transmission's state. Only `Suspected`,
+  `Discarded` and the confirmed states take one
+  (`TransmissionState::judgeable`, `TransmissionVerdict::new`), and every
+  state after a judgeable one is judgeable. A `VerdictLog` is append-only
+  with revisions equal to positions; the last record is current, and a
+  repeat of the current verdict appends nothing. Each appended record
+  publishes one `VerdictSet`; readers keep the highest revision
+  (`CurrentVerdict::observe`).
+- A current `FalseDetection` verdict suppresses the transmission's active
+  alerts (`OperatorRejected`) and keeps triage from opening new ones;
+  withdrawing it reopens nothing.
+- Verdicts are never stored in edge buckets. `FalseDetections::Exclude` is
+  `Include` minus the contributions of transmissions whose current verdict
+  is `FalseDetection`, in graphs, series and drill-down alike.
+- `DetectionQuality` counts each judgeable transmission opened in the
+  window once, by route kind, strongest match class (or suspected,
+  discarded) and current verdict (`DetectionQuality::tally`); rows are
+  unique and never all zero.
 - Confirmed traffic on a channel raises an alert unless its policy is
   sanctioned (`Policy::on_traffic`).
 - Every policy decision, config or operator, is kept in the channel's
@@ -410,7 +522,8 @@ exactly `min(matching, limit)` points, none twice, all finite.
   returns, the rule has no active alerts and triage opens none for it.
 - Every operator action names one permission
   (`OperatorAction::required_permission`, one exhaustive match): Govern for
-  identity, policy and alert rules; Triage for alerts and dismissals;
+  identity, policy and alert rules; Triage for alerts, dismissals and
+  verdicts;
   Operate for the pipeline. View, Content and Audit are read permissions
   that no action needs. The surface stamps author and time from the
   caller, and `ActionKind` and the audit log cover every action.
@@ -433,7 +546,8 @@ exactly `min(matching, limit)` points, none twice, all finite.
   1 to 50,000, no transmission twice and finite coordinates. Within one
   `ProjectionToken` points never move or change topic.
 - Lists of dead letters need Operate and the audit log needs Audit; edge
-  drill-down rows carry no message content and need View.
+  drill-down rows carry no message content and need View, as do verdict
+  logs and detection quality.
 - A `SeriesStep` is a whole number of buckets (`SeriesStep::new`). A
   `SeriesGrid` starts on a bucket boundary and is a whole number of steps,
   at most `SeriesGrid::MAX_POINTS` (`SeriesGrid::new`). A `TopologySeries`

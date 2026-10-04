@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.action.set-verdict-needs-triage"
+statement = "SetVerdict, with a verdict or a withdrawal, requires Triage alone: a caller holding Triage without Content may act, and a caller holding View and Content without Triage is Forbidden with Triage missing."
+kind = "domain"
+property = "postcondition"
+requires = ["type", "unit"]
+rationale = """
+Judging is triage work. Content is not also required: the action reveals
+no message text (its outcome, record and event hold none), reading the
+text to judge from is gated by the Content queries, and one permission
+per action keeps AuditRecord's Forbidden check exact. A Triage-only
+operator can still judge suspected transmissions from their structure.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::OperatorAction::required_permission"
+unit = [
+    "crosstalk_spec::tests::verdicts::set_verdict_needs_triage_alone",
+    "crosstalk_spec::tests::verdicts::set_verdict_audit_records_follow_triage",
+    "crosstalk_spec::tests::verdicts::not_judgeable_round_trips_through_the_audit_log",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

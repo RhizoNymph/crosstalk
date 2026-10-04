@@ -14,7 +14,10 @@
 //!
 //! `alerts` evaluates rules against detect and insight events and triages
 //! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned) and
-//! `TransmissionDismissed`. On `TopicVersionReady` it carries every current
+//! `TransmissionDismissed`, and on `VerdictSet` keeps its copy of the
+//! transmission's current verdict ([`CurrentVerdict`]) and suppresses the
+//! transmission's active alerts when it is `FalseDetection`
+//! ([`AlertTriage::transmission_judged`]). On `TopicVersionReady` it carries every current
 //! watched-topic rule on the predecessor over with [`TopicLineage::remap`]
 //! over the stored lineage, which yields the rule's new [`TopicWatch`]: it
 //! becomes [`TopicWatch::Stale`] exactly when the lineage shows a watched
@@ -36,7 +39,9 @@
 //! Search and projection take the same [`TopologyFilter`] as the topology
 //! graph and apply it as [`TopologyFilter::admits`] defines, resolving agents
 //! (the transmission's and the filter's) through `AgentDirectory` at query
-//! time, so the views link.
+//! time, so the views link. `analyze` also keeps a [`CurrentVerdict`] per
+//! transmission from `VerdictSet`, from which each hit's and point's
+//! `FilterSubject::false_detection` is read at query time.
 
 use crate::aggregates::alert::{
     AlertDraft, AlertRuleKind, KindChanged, RuleStatus, TriageOutcome, WatchedTopics,
@@ -48,6 +53,9 @@ use crate::aggregates::projection::{Projection, ProjectionLimit};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::policy::Policy;
+#[cfg(doc)]
+use crate::derived::flow::verdict::CurrentVerdict;
+use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::events::Envelope;
 use crate::ids::{AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
 use crate::support::{NonBlank, Similarity, TimeWindow};
@@ -160,7 +168,9 @@ pub trait AlertRuleEval {
 pub trait AlertTriage {
     /// Opens, deduplicates, or returns `RuleInactive` when the draft's rule
     /// no longer evaluates ([`AlertRuleDef::evaluates`], read in the same
-    /// transaction).
+    /// transaction), or `OperatorRejected` when the draft's subject is a
+    /// transmission whose current verdict in triage's copy is
+    /// `FalseDetection` (read in the same transaction).
     async fn triage(&mut self, draft: AlertDraft) -> Result<TriageOutcome, TriageError>;
 
     /// Suppress the active alerts whose subject is `channel`.
@@ -175,6 +185,21 @@ pub trait AlertTriage {
     async fn transmission_dismissed(
         &mut self,
         transmission: TransmissionId,
+    ) -> Result<u32, TriageError>;
+
+    /// Record `transmission`'s verdict at `revision` in triage's copy
+    /// ([`CurrentVerdict::observe`]). When the revision is newer and the
+    /// verdict is `FalseDetection`, suppress every active alert whose
+    /// subject is `transmission`, whatever its rule, with reason
+    /// `OperatorRejected`, in the same transaction. A stale revision, a
+    /// `Genuine` verdict and a withdrawal suppress nothing and reopen
+    /// nothing. Triggered by `VerdictSet`; returns how many alerts it
+    /// suppressed.
+    async fn transmission_judged(
+        &mut self,
+        transmission: TransmissionId,
+        verdict: Option<Verdict>,
+        revision: VerdictRevision,
     ) -> Result<u32, TriageError>;
 }
 

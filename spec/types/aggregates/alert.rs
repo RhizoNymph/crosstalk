@@ -12,6 +12,14 @@
 //! active alerts. Dismissing a suspected transmission suppresses its
 //! `SuspectedTransmission` alerts.
 //!
+//! A `FalseDetection` verdict on a transmission suppresses every active
+//! alert whose subject is that transmission, whatever its rule, with reason
+//! [`SuppressReason::OperatorRejected`], and while it is the transmission's
+//! current verdict triage opens nothing about it
+//! ([`TriageOutcome::OperatorRejected`]). Withdrawing the verdict, or
+//! replacing it with `Genuine`, reopens nothing: later drafts open alerts
+//! again. A `Genuine` verdict changes no alert.
+//!
 //! Operators create and update content rules ([`ContentRule`]) and enable or
 //! disable any rule. A rule keeps its kind for life. Updating a rule leaves
 //! its alerts as they are.
@@ -19,11 +27,12 @@
 //! ```text
 //! draft ─triage─┬─▶ Open ─acknowledge─▶ Acknowledged ─resolve─▶ Resolved
 //!               │     └──────┬──────────────┘
-//!               │   sanctioned, rule disabled
-//!               │   or transmission dismissed
+//!               │   sanctioned, rule disabled, transmission
+//!               │   dismissed or judged a false detection
 //!               │            ▼
 //!               │       Suppressed
-//!               └─▶ deduplicated into an existing alert
+//!               ├─▶ deduplicated into an existing alert
+//!               └─▶ nothing: rule inactive, or subject judged a false detection
 //! ```
 //!
 //! Every stored change to an alert (a deduplicated occurrence, a
@@ -252,6 +261,10 @@ pub enum TriageOutcome {
     /// the draft was triaged), so nothing was opened. Closes the race between
     /// an evaluation and a disable.
     RuleInactive,
+    /// The draft's subject is a transmission whose current verdict, as
+    /// triage holds it, is `FalseDetection`, so nothing was opened. Closes
+    /// the race between an evaluation and the verdict's suppression.
+    OperatorRejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,7 +290,8 @@ pub enum AlertState {
         note: Option<String>,
     },
     /// The condition stopped being alert-worthy: the channel was sanctioned,
-    /// the rule disabled, or the suspected transmission dismissed.
+    /// the rule disabled, the suspected transmission dismissed, or the
+    /// transmission judged a false detection.
     Suppressed {
         at: Timestamp,
         reason: SuppressReason,
@@ -314,4 +328,7 @@ pub enum SuppressReason {
     RuleDisabled,
     /// An operator dismissed the suspected transmission the alert is about.
     TransmissionDismissed,
+    /// An operator judged the transmission the alert is about a
+    /// `FalseDetection`. A later withdrawal does not reopen the alert.
+    OperatorRejected,
 }
