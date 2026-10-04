@@ -12,10 +12,10 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # node-exporter runs on the host network.
+  # node-exporter runs on the host network, on 9101 (NODE_EXPORTER_LISTEN).
   - job_name: node
     static_configs:
-      - targets: ["host.docker.internal:9100"]
+      - targets: ["host.docker.internal:9101"]
         labels:
           instance: host
 
