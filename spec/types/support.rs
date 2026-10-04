@@ -253,6 +253,78 @@ impl<const MAX: usize> DisplayText<MAX> {
     }
 }
 
+/// At most `MAX` items of a longer list, and how long the whole list is.
+///
+/// A capped list that looks complete invites a wrong decision ("these are all
+/// the resources it covers"), so a sampled list is never a plain `Vec`: the
+/// reader always has `total` and [`Capped::hidden`] beside what is shown.
+/// Built only through [`Capped::new`] (`shown.len() <= MAX`, `total >=
+/// shown.len()`) and [`Capped::first`]. The order of `shown` is the
+/// producer's, stated where the sample is returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capped<T, const MAX: usize> {
+    shown: Vec<T>,
+    total: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidCapped {
+    TooMany { max: usize, got: usize },
+    TotalBelowShown { total: u64, shown: usize },
+}
+
+impl<T, const MAX: usize> Capped<T, MAX> {
+    pub const MAX: usize = MAX;
+
+    pub fn new(shown: Vec<T>, total: u64) -> Result<Self, InvalidCapped> {
+        if shown.len() > MAX {
+            return Err(InvalidCapped::TooMany {
+                max: MAX,
+                got: shown.len(),
+            });
+        }
+        if total < len(shown.len()) {
+            return Err(InvalidCapped::TotalBelowShown {
+                total,
+                shown: shown.len(),
+            });
+        }
+        Ok(Self { shown, total })
+    }
+
+    /// The first `MAX` of `items`, with `total` the length of all of them.
+    pub fn first(items: Vec<T>) -> Self {
+        let total = len(items.len());
+        let mut shown = items;
+        shown.truncate(MAX);
+        Self { shown, total }
+    }
+
+    /// The items shown: at most `MAX`.
+    pub fn shown(&self) -> &[T] {
+        &self.shown
+    }
+
+    /// How many items the whole list has.
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// How many items are not shown: `total - shown().len()`.
+    pub fn hidden(&self) -> u64 {
+        self.total - len(self.shown.len())
+    }
+
+    /// Whether every item is shown.
+    pub fn is_complete(&self) -> bool {
+        self.hidden() == 0
+    }
+}
+
+fn len(n: usize) -> u64 {
+    u64::try_from(n).unwrap_or(u64::MAX)
+}
+
 /// Whether an accepted request changed stored state. The surface reports
 /// `Applied` as `ActionOutcome::Applied` and `Unchanged` as
 /// `ActionOutcome::Unchanged`.

@@ -34,6 +34,13 @@
 //!   sink has a [`SinkId`]; an alert is delivered to the sinks its rule
 //!   lists, and `QueryApi::sinks` reports each sink's last delivery.
 //!
+//! **Channels.** `channels` lists [`ChannelRow`]s (the stored channel, its
+//! seed resource, and either its activity or its supersession), and
+//! `channel` returns one as the head of a channel page; `channel_names`
+//! names channel ids in batches; `promotion_preview` shows what
+//! `PromoteChannel` would do, computed by the same `promotion::plan`
+//! ([`channels`]).
+//!
 //! **Lists.** Channels, agents, alert rules, alerts, dead letters, the audit
 //! log, the transmissions behind an edge, search hits, the topics of a
 //! version and stored projections are read a page at a time with the
@@ -63,7 +70,8 @@
 //! `Conflict(ChannelSuperseded)`, naming the channel to act on instead.
 //!
 //! **Watermarks.** `topology`, `channel_topology`, `series`,
-//! `edge_transmissions`, `channel_resources` and `topic_sizes` return their
+//! `edge_transmissions`, `channel_resources`, `channel`, `channels` and
+//! `topic_sizes` return their
 //! result [`Watermarked`]: with L7's watermark (`EdgeStore::watermark`),
 //! read before the data. They all count by event time (`Confirmed::at`,
 //! `Access::at`), so everything in the result before the watermark is final
@@ -89,12 +97,14 @@
 
 pub mod actions;
 pub mod audit;
+pub mod channels;
 pub mod errors;
 pub mod lists;
 pub mod live;
 pub mod operators;
 pub mod query_errors;
 
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
@@ -109,8 +119,8 @@ use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::aggregates::watermark::{Watermark, Watermarked};
-use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
+use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
 use crate::ids::{ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
@@ -125,6 +135,7 @@ use crate::paging::{
 use crate::support::{TimeWindow, Timestamp};
 
 use audit::{AuditEntry, AuditFilter};
+use channels::{ChannelName, ChannelRow, PromotionPreview};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage};
 use operators::Operator;
 
@@ -166,8 +177,9 @@ impl Caller {
 pub enum Permission {
     /// Topology (agent-centred and channel-centred, with node metadata and
     /// harness claims), series, the transmissions behind an edge (ids, times,
-    /// byte counts and topic ids), channels, a channel's resources and who
-    /// used them, channel policy history, agents, alert
+    /// byte counts and topic ids), channels (rows, names and promotion
+    /// previews), a channel's resources and who used them, channel policy
+    /// history, agents, alert
     /// rules, alerts and the topic history (versions, sizes, lineage): ids,
     /// counts, times and similarities, no message content and no topic
     /// labels or terms. Also verdict logs and detection quality.
@@ -281,8 +293,18 @@ pub enum AlertStateKind {
 /// return `InvalidCursor` for a cursor the surface did not issue or issued
 /// for a different request.
 pub trait QueryApi {
-    /// View.
-    async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
+    /// View. The channel stored under `id` as a [`ChannelRow`], the head of
+    /// the channel page: a superseded id answers with its own record and its
+    /// supersession (the UI's banner to the channel in force), not with the
+    /// channel it resolves to. Counts are over `window` (all time when
+    /// `None`), as for a `channels` row. `None` for an unknown channel. The
+    /// watermark is read from L7 before the registry.
+    async fn channel(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        window: Option<TimeWindow>,
+    ) -> Result<Option<Watermarked<ChannelRow>>, QueryError>;
 
     /// View. Every policy decision recorded for the channel, config and
     /// operator alike, oldest first; its last entry is the channel's current
@@ -293,13 +315,62 @@ pub trait QueryApi {
         channel: ChannelId,
     ) -> Result<Option<PolicyHistory>, QueryError>;
 
-    /// View. Newest channel first.
+    /// View. A page of the channels `filter` matches
+    /// ([`ChannelFilter::matches`]; superseded channels only when its origin
+    /// filter asks for them), newest channel first, each as a
+    /// [`ChannelRow`]. A row in force counts its writers, readers and
+    /// transmissions in `filter.window` (all time when `None`) over itself
+    /// and every channel it superseded, exactly as
+    /// [`ChannelCounts::tally`](channels::ChannelCounts::tally) of a full
+    /// `channel_resources` traversal of the same channel and window; a
+    /// superseded row carries its supersession and no counts. The window
+    /// never changes which channels are listed, and the cursor binds it with
+    /// the rest of the filter. The watermark is read from L7 before the
+    /// registry, as for `channel_resources`.
     async fn channels(
         &self,
         caller: &Caller,
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
-    ) -> Result<Page<Channel, ChannelList>, QueryError>;
+    ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError>;
+
+    /// View. For each id asked for that the registry knows, keyed by that
+    /// id, the name of the channel it resolves to through
+    /// `ChannelDirectory` (a superseded id is named by its channel in
+    /// force): the channel's id and its pattern or seed locator. Unknown ids
+    /// are left out. More than [`ChannelName::MAX_BATCH`] ids is
+    /// `InvalidInput(TooManyIds)`, reading nothing. Exactly
+    /// [`channels::resolve_names`] over the registered channels.
+    async fn channel_names(
+        &self,
+        caller: &Caller,
+        ids: &[ChannelId],
+    ) -> Result<HashMap<ChannelId, ChannelName>, QueryError>;
+
+    /// View. What `PromoteChannel { channel, pattern, .. }` would do if the
+    /// caller sent it now: the surface builds the declaration the action
+    /// would record (the caller's operator, the time it accepted this
+    /// request, `pattern`), reads `ChannelRegistry::promotion_coverage`,
+    /// which runs the same `promotion::plan` over the same stored channels
+    /// that `promote` would, and returns
+    /// [`PromotionPreview::from_registry`] of it. The coverage is over every
+    /// resource the channel and the channels it would supersede have held,
+    /// not a window. A refusal maps as the action's does: superseded, not
+    /// discovered and overlapping patterns are a preview with that
+    /// `conflict()`; an unknown channel is `NotFound` and a pattern that
+    /// misses the seed `InvalidInput(PatternMissesSeed)`.
+    ///
+    /// View, not Govern: the preview changes nothing and shows only
+    /// structure View already shows (channel ids, resources and their
+    /// locators, declared patterns through `channels`), so a reviewer
+    /// without Govern can prepare a promotion for someone who has it. The
+    /// action itself needs Govern.
+    async fn promotion_preview(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        pattern: &ResourcePattern,
+    ) -> Result<PromotionPreview, QueryError>;
 
     /// View. Every stored agent, merged ones included (their state names
     /// their canonical agent). Newest agent first.

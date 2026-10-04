@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.query.channel-reads-need-view"
+statement = "QueryApi::channel, channel_names and promotion_preview return Forbidden with missing View, reading nothing, when the caller lacks View."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+They show channel ids, patterns, seed locators, resources and counts: the
+structure View covers, with no message text. The preview needs View, not
+Govern: it changes nothing and shows nothing View does not already show
+through channels and channel_resources, so a reviewer without Govern can
+prepare a promotion for an operator who has it; PromoteChannel itself still
+needs Govern.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::channel_reads_without_view_forbidden"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

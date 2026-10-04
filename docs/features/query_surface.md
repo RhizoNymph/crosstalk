@@ -17,6 +17,10 @@ that produces the data is in [type_spec.md](type_spec.md).
   channel-centred topology, series, search, edge drill-down, projection
   fits), the topic history, stored projections and their columnar frame,
   verdict logs and detection quality, and every aggregate's watermark.
+- Channel read models: list rows (seed resource, then activity counted in
+  an optional window or the supersession), the channel list filter, batch
+  channel names, and the promotion preview computed by the same plan as
+  the promotion.
 - Typed errors: `QueryError` and `ActionError`, and how every store error
   behind a query or an action maps to one.
 - Operator actions, each with one required permission: channel policy and
@@ -64,8 +68,8 @@ Every query and action checks one `Permission` before reading or changing
 anything, and returns `Forbidden { missing }` without effect when the
 caller lacks it. View is structure: ids, counts, times, similarities, the
 topology (agent-centred and channel-centred, with node metadata and
-harness claims), series, edge drill-down rows, channels and their
-resources, policy histories, agents, rules, alerts, the topic history,
+harness claims), series, edge drill-down rows, channels (rows, names and
+promotion previews) and their resources, policy histories, agents, rules, alerts, the topic history,
 verdict logs and detection quality; no message text and no topic labels.
 Content is anything derived from message text: transmissions, search,
 topics, projections and their jobs. Govern is identity, policy, rules and
@@ -134,7 +138,7 @@ query that reads it (`events/changed.rs` has the full table):
 | `Changed` | Published by, after | `UiEvent` | Re-query |
 | --- | --- | --- | --- |
 | `Agent(AgentId)` | L3: creation, state change, merge (source, target, repointed agents), unmerge (source, former target, restored agents), rename | `AgentChanged` | `agents` |
-| `Channel(ChannelId)` | L5: discovery, declaration, new resource, detection change, recorded policy decision; a promotion announces the promoted channel and every channel it superseded (`Changed::promotion`) | `ChannelChanged` | `channel`, `policy_history`, `channel_resources` |
+| `Channel(ChannelId)` | L5: discovery, declaration, new resource, detection change, recorded policy decision; a promotion announces the promoted channel and every channel it superseded (`Changed::promotion`) | `ChannelChanged` | `channel`, `channels`, `channel_names`, `policy_history`, `channel_resources`, an open `promotion_preview` |
 | `Verdict(TransmissionId)` | L5 verdict store: a verdict set or withdrawn | `VerdictChanged` | `verdicts`, `detection_quality`, views excluding false detections |
 | `Alert(AlertId)` | L6 triage (open, deduplicate, suppress), L8 acknowledge and resolve | `AlertChanged` | `alerts` |
 | `Rule(AlertRuleId)` | L6 rule store: create, update, enable or disable, turning stale | `RuleChanged` | `alert_rules` |
@@ -187,7 +191,8 @@ version history, topic sizes, a lineage, a graph, a series) are not paged.
 A page with a next cursor is never empty, so following cursors always ends.
 List filters (`ChannelFilter`, `AgentFilter`, `AlertRuleFilter`, in
 `l8_surface/lists.rs`, and `AuditFilter`) are defined by their `matches`
-methods; empty lists do not restrict. `AlertRuleFilter` selects on the
+methods; empty lists do not restrict. `ChannelFilter`'s `window` is not
+part of its match (see [Channel rows](#channel-rows-names-and-the-promotion-preview)). `AlertRuleFilter` selects on the
 operator-set `RuleStatus` and, separately, on staleness, so a stale-rule
 list includes disabled stale rules.
 
@@ -334,8 +339,13 @@ for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError` and
 `BusError` (the dead-letter list); for actions `PromotionRefusal`,
 `PromoteError` and `RuleError` (rule management; enabling a stale rule is
-`Conflict(RuleStale)`, since only `UpdateRule` can retarget it). The edge
-store's writes fail with `EdgeError`, which never reaches a query.
+`Conflict(RuleStale)`, since only `UpdateRule` can retarget it). The
+promotion preview reads `PromoteError` through that same action mapping
+(`PromotionPreview::from_registry`), keeping conflicts as its answer and
+converting the rest with `QueryError::from`, so it adds no mapping of its
+own. `InputError::TooManyIds` is a batch lookup over its cap
+(`channel_names`). The edge store's writes fail with `EdgeError`, which
+never reaches a query.
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
@@ -460,7 +470,8 @@ and `Changed::Watermark` (for the feed), at most one per recompute and in
 steady state one per bucket width. Once `W` is exposed, no bucket of an
 activated, retained version ending at or before `W` changes. Every
 aggregate response (`TopologyGraph`, `BipartiteGraph`, `TopologySeries`,
-`TopicSizes`, `EdgeTransmissionPage`, `ResourceUsePage`) is `Watermarked`
+`TopicSizes`, `EdgeTransmissionPage`, `ResourceUsePage`, a page of
+`ChannelRow`s and one `ChannelRow`) is `Watermarked`
 with `EdgeStore::watermark` read before its data: accesses and
 transmissions are both keyed by event time, so L7's watermark is a sound,
 conservative bound for the access buckets and L5's resource use too. A
@@ -531,12 +542,118 @@ window (merged aliases summed, most accesses first). A superseded channel
 answers for its superseding channel, named in the `ResourceUsePage`, whose
 resources include those of every channel it superseded.
 
+### Channel rows, names and the promotion preview
+
+`l8_surface/channels.rs` holds what the channel list, the channel page and
+the promotion page read.
+
+**Rows.** `QueryApi::channels(caller, filter, page)` returns a
+`Watermarked` page of `ChannelRow`s, newest channel first, and
+`QueryApi::channel(caller, id, window)` one row as the head of the channel
+page (a superseded id answers with its own record and supersession, which
+the page shows as a banner to the channel in force). `ChannelRow::new`
+(checked) holds:
+
+| Part | Content |
+| --- | --- |
+| `channel()` | the stored `Channel` under its own id |
+| `seed()` | its seed `Resource`, present exactly when the channel has a seed |
+| `standing()` | `InForce(ChannelActivity)` when the channel is in force, `Superseded(SupersededInto { into, by, at })` exactly when it is superseded, with its own supersession |
+
+`ChannelActivity` is `Never` (no access and no transmission ever; refused
+for a channel whose detection shows traffic) or `Seen { last, counts }`.
+`last` is the latest `Access::at` of its resources or `Confirmed::at` of a
+transmission routed through it, over all time. `ChannelCounts { writers,
+readers, transmissions }` is counted in the filter's window (all time when
+`None`): writers and readers are `ChannelCounts::tally` of a full
+`channel_resources` traversal of the same channel and window (distinct
+canonical agents), transmissions the confirmed transmissions whose route
+resolves to the channel, by `Confirmed::at` (detector output: the list has
+no verdict choice). A channel in force counts itself and every channel it
+superseded.
+
+A superseded row shows **no counts and no last activity**. Accesses to a
+superseded channel's resources and transmissions routed through it resolve
+to its superseding channel and are counted on that row, so frozen counts on
+the superseded row would count them twice whenever a list is summed, and
+would look like live activity on a channel that takes none. Its
+`SupersededInto` names where they are: `into` (the channel in force), `by`
+(the operator, taken by `SupersededInto::of` from the superseding channel's
+promotion declaration) and `at`.
+
+**Filter.** `ChannelFilter { origin, detections, policies, window }`:
+
+| Field | Keeps a channel when |
+| --- | --- |
+| `origin: OriginFilter` | `InForce(kinds)` (the default): it is in force and its `CanonicalOriginKind` is listed, or `kinds` is empty. `WithSuperseded(kinds)`: the same, or it is superseded. `Superseded`: it is superseded |
+| `detections` | its own `detection_kind()` is listed (a superseded channel's is frozen) |
+| `policies` | its own current policy kind is listed (a superseded channel takes no decisions) |
+| `window` | always: it changes the counts on each row, never which rows are listed or a row's `last` |
+
+The superseded choice is one `OriginFilter` value rather than a list of
+origins plus a flag, so "superseded only, but exclude superseded" cannot
+be asked. The page cursor binds the whole filter, window included. The
+watermark is read from L7 before the registry, as for `channel_resources`,
+and the UI re-queries rows on `Watermark` as well as `ChannelChanged`.
+
+**Names.** `QueryApi::channel_names(caller, ids)` (View) returns
+`HashMap<ChannelId, ChannelName>`: for each id the registry knows, keyed by
+that id, the `ChannelName { id, shape }` of the channel it resolves to
+through `ChannelDirectory`, where `id` is the channel in force and `shape`
+is `ChannelShape::Pattern` (declared, before traffic or promoted) or
+`Seed(Locator)` (discovered). Unknown ids are left out and repeats answered
+once. More than `ChannelName::MAX_BATCH` (500, one full page) ids is
+`InvalidInput(TooManyIds { max, got })`, reading nothing.
+`channels::resolve_names` is the reference.
+
+**Promotion preview.** `QueryApi::promotion_preview(caller, channel,
+pattern)` shows what `PromoteChannel { channel, pattern, .. }` would do if
+sent now:
+
+1. The surface builds the `Declaration` the action would record (the
+   caller's operator, the time it accepted this request, the pattern) and
+   calls `ChannelRegistry::promotion_coverage(channel, &declaration)`.
+2. The registry runs `promotion::coverage` over the channels `promote`
+   would plan over, in one snapshot, changing nothing. `coverage` is
+   `promotion::plan` (the same function `promote` runs, now taking the
+   declaration instead of the whole `Promotion`, since it never reads the
+   policy) plus a `PromotionCoverage`: the plan's superseded channels,
+   complete, and every resource the channel and those channels hold (seed
+   and stored resources, all time), each counted once, split into
+   `covered` (the pattern matches its locator) and `uncovered`. Each side
+   is a `CappedResources` (`Capped<Resource, COVERAGE_CAP>`, 200): its
+   newest resources (highest id first), at most 200, and the exact
+   `total()` of that side, so the UI can show "and `hidden()` more". A
+   `Capped` is never a bare list: `Capped::new` refuses more than its cap
+   or a total below what it shows, so a capped list cannot pass for a
+   complete one (`is_complete()`). Uncovered resources stay with the
+   channel they are stored on, which resolves to the promoted one; new
+   resources outside the pattern will not join.
+3. `PromotionPreview::from_registry` maps the result. A refusal goes
+   through the same `ActionError::from` as the action's: a `Conflict`
+   (`ChannelSuperseded`, `ChannelNotDiscovered`, `PatternOverlaps`) is an
+   answer, a preview whose `conflict()` is that kind and which has no
+   resource samples (`None`, not empty samples, which would read as a
+   pattern matching nothing) and no superseded channels; `NotFound` (unknown channel), `InvalidInput(PatternMissesSeed)`
+   and `Store` are the query's error. `ConflictKind` has no
+   `PatternMissesSeed`, and a pattern that misses the seed is wrong
+   whatever the state, so it stays an input error, as for the action.
+
+The preview's accessors are the UI's fields: `covered_resources()` and
+`uncovered_resources()` (`Option<&CappedResources>`), `superseded_channels()`
+(a complete `SupersededChannels`, exactly what
+`ActionOutcome::ChannelPromoted` would report) and `conflict()`. It needs View, not Govern: it changes nothing and shows only
+structure View already shows (ids, locators, declared patterns), so a
+reviewer without Govern can prepare a promotion for an operator who has it;
+the action needs Govern.
+
 ### Promotion and supersession
 
 `OperatorAction::PromoteChannel { channel, pattern, policy, note }` (Govern)
 becomes a `Promotion` (pattern and policy decision, both authored by the
 caller at the accept time) and `ChannelRegistry::promote`, which follows
-`promotion::plan`:
+`promotion::plan` for the promotion's declaration (the promotion preview
+runs the same plan; see above):
 
 1. Refusals, in order: unknown channel (`NotFound`); superseded
    (`Conflict(ChannelSuperseded { channel, by })`); already declared
@@ -574,7 +691,7 @@ policy.
 | `spec/types/aliases.rs` | Read-time resolution of merged agents and superseded channels | `Aliases`, `Resolve`, `NoAliases` |
 | `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`, `SearchList`, `TopicList`, `ProjectionList`, `AuditList`, `ResourceUseList` |
 | `spec/types/derived/flow/verdict.rs` | Operator verdicts beside the detector's state | `Verdict`, `Judgeable`, `NotJudgeable`, `TransmissionState::judgeable`, `TransmissionVerdict` (checked), `VerdictRevision`, `VerdictLog` (checked append), `VerdictRecorded`, `CurrentVerdict` (`observe`, `is_false_detection`), `Observed` |
-| `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses | `Promotion` (checked), `Registered`, `plan`, `PromotionPlan`, `PromotionRefusal` |
+| `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses, and what it would cover | `Promotion` (checked), `Registered`, `plan` (takes the `Declaration`), `PromotionPlan`, `PromotionRefusal`, `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/aggregates/access.rs` | Access buckets, the channel-centred graph and resource use | `AccessEdge`, `WeightedAccess`, `BipartiteParts`, `BipartiteGraph` (checked), `InvalidBipartite`, `AgentAccesses`, `ResourceUse` (checked), `ResourceUsePage` |
 | `spec/types/aggregates/node.rs` | Graph nodes | `GraphNode`, `NodeId`, `AgentNode`, `ChannelNode`, `CanonicalStateKind`, `CanonicalOriginKind`, `InvalidNodes`, `TopologyGraph::check_nodes` |
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view, and topic-version resolution | `TopologyFilter` (`admits`, `admits_access`, `topics_outside`, `pinned`), `FilterSubject`, `AccessSubject`, `TopicVersionSelector` (`resolve`), `VersionUnavailable`, `FalseDetections` |
@@ -587,13 +704,14 @@ policy.
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
 | `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi`, `OperatorActions`, `Caller` (built only by the directory), `Permission`, `PermissionSet`, `AlertFilter`, `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError`; re-exports the action and error types |
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind`, `InputError` |
-| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind`, `InputError` (incl. `TooManyIds`) |
+| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`, `MAX_BATCH`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
+| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError` (to `ActionError`) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `channel_reads.rs` (channel rows and counts, the channel filter, names, the promotion preview's agreement with promotion) | — |
 
 ## Invariants and constraints
 
@@ -603,6 +721,31 @@ policy.
   never return a superseded channel. Routes, filters, alert subjects, graph
   nodes, edges and access buckets resolve through supersession at read
   time; nothing stored is rewritten.
+- A `ChannelRow` carries exactly its channel's seed resource, is
+  superseded exactly when its channel is (with its own supersession and the
+  promoting operator), and then carries no counts or last activity; a
+  channel whose detection shows traffic is never shown as never active
+  (`ChannelRow::new`, `SupersededInto::of`). A row in force counts writers
+  and readers as `ChannelCounts::tally` of a full `channel_resources`
+  traversal of the same channel and window, over itself and every channel
+  it superseded.
+- `ChannelFilter::matches` never reads the window, so filters differing
+  only in window list the same channels; the default lists every channel
+  in force and no superseded one.
+- `channel_names` keys each known id asked for to the name of the channel
+  it resolves to (never a superseded channel), leaves unknown ids out and
+  refuses more than `ChannelName::MAX_BATCH` ids with
+  `InvalidInput(TooManyIds)`.
+- In one registry state, `promotion_preview` and `PromoteChannel` agree:
+  both run `promotion::plan` over the same stored channels, the preview's
+  `superseded_channels()` equals the action's `ChannelPromoted` superseded
+  channels, its `conflict()` is the action's `Conflict`, and its error is
+  the action's `NotFound` or `InvalidInput`. Coverage partitions every
+  resource the channel and the channels it would supersede hold by the
+  pattern, each once; each side shows at most `COVERAGE_CAP` (200) of
+  its newest resources with its exact total (`Capped`), while superseded
+  channels are always complete. The preview needs View and changes
+  nothing.
 - A verdict never changes a transmission's state. Only `Suspected`,
   `Discarded` and the confirmed states take one
   (`TransmissionState::judgeable`, `TransmissionVerdict::new`), and every
@@ -710,7 +853,8 @@ policy.
   marks the version dropped, and a query never sees a version half
   deleted.
 - Every `Watermarked` response (`topology`, `channel_topology`, `series`,
-  `edge_transmissions`, `channel_resources`, `topic_sizes`) carries the
+  `edge_transmissions`, `channel_resources`, `channel`, `channels`,
+  `topic_sizes`) carries the
   watermark `EdgeStore::watermark` returned before any of its data was
   read; a stored projection carries the watermark its sample was read
   under.

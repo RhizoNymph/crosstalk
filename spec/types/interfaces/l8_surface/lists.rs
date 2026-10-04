@@ -4,23 +4,80 @@
 //! does not restrict, and each filter's `matches` is its definition.
 
 use crate::aggregates::alert::{AlertRuleDef, RuleStatus};
+use crate::aggregates::node::CanonicalOriginKind;
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::derived::flow::channel::Channel;
+use crate::derived::flow::channel::detection::DetectionKind;
 use crate::observed::agent::{Agent, AgentState};
 use crate::paging::{Page, TopicList};
-use crate::support::NonBlank;
+use crate::support::{NonBlank, TimeWindow};
 
 use super::PolicyKind;
 
-/// Keeps channels whose current policy kind is listed.
+/// Which channels `QueryApi::channels` lists, and over what window it
+/// counts their activity.
+///
+/// [`ChannelFilter::matches`] is the definition of which channels are
+/// listed: `origin`, then `detections` (each channel's own
+/// [`ChannelOrigin::detection_kind`], frozen for a superseded one) and
+/// `policies` (each channel's own current policy kind; a superseded one
+/// takes no decisions, so its last one stays), combined with AND. Empty
+/// lists do not restrict. `window` is not part of the match: it changes the
+/// counts on each row, never which rows are listed.
+///
+/// [`ChannelOrigin::detection_kind`]: crate::derived::flow::channel::ChannelOrigin::detection_kind
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChannelFilter {
+    pub origin: OriginFilter,
+    pub detections: Vec<DetectionKind>,
     pub policies: Vec<PolicyKind>,
+    /// The window writers, readers and transmissions are counted in
+    /// (`Access::at`, `Confirmed::at`); `None` counts all of them. Never
+    /// restricts the rows, and never changes a row's last activity.
+    pub window: Option<TimeWindow>,
+}
+
+/// Which origins a channel list keeps, superseded channels included or not.
+///
+/// One value instead of a list of origins and a separate superseded flag,
+/// so "superseded channels only, but exclude superseded channels" cannot be
+/// asked. Origin kinds apply to channels in force only: a superseded channel
+/// was always discovered, and is selected by its variant alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OriginFilter {
+    /// Channels in force whose origin kind is listed (every origin when
+    /// empty), and no superseded channel. The default.
+    InForce(Vec<CanonicalOriginKind>),
+    /// The same channels in force, and every superseded channel.
+    WithSuperseded(Vec<CanonicalOriginKind>),
+    /// Superseded channels only.
+    Superseded,
+}
+
+impl Default for OriginFilter {
+    fn default() -> Self {
+        Self::InForce(Vec::new())
+    }
+}
+
+impl OriginFilter {
+    pub fn matches(&self, channel: &Channel) -> bool {
+        match (self, CanonicalOriginKind::of(&channel.origin)) {
+            (Self::InForce(kinds) | Self::WithSuperseded(kinds), Some(kind)) => {
+                kinds.is_empty() || kinds.contains(&kind)
+            }
+            (Self::Superseded, Some(_)) | (Self::InForce(_), None) => false,
+            (Self::WithSuperseded(_) | Self::Superseded, None) => true,
+        }
+    }
 }
 
 impl ChannelFilter {
     pub fn matches(&self, channel: &Channel) -> bool {
-        self.policies.is_empty() || self.policies.contains(&channel.policy.kind())
+        let by_detection = self.detections.is_empty()
+            || self.detections.contains(&channel.origin.detection_kind());
+        let by_policy = self.policies.is_empty() || self.policies.contains(&channel.policy.kind());
+        self.origin.matches(channel) && by_detection && by_policy
     }
 }
 

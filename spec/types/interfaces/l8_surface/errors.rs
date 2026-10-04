@@ -134,6 +134,12 @@ pub enum InputError {
     /// Text the embedding model cannot embed because it is longer than the
     /// model's context: a search's text, or a semantic rule's query.
     QueryTooLong,
+    /// A batch lookup naming more ids than one call takes (`channel_names`
+    /// takes at most [`ChannelName::MAX_BATCH`]). `got` counts every id
+    /// asked for, repeats included.
+    ///
+    /// [`ChannelName::MAX_BATCH`]: super::channels::ChannelName::MAX_BATCH
+    TooManyIds { max: usize, got: usize },
 }
 
 impl From<ActionError> for QueryError {

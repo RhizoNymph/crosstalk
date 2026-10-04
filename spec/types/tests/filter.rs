@@ -168,6 +168,7 @@ fn channel_filter_matches_policy_kind() {
     let reset = declared_channel(Policy::Unreviewed(Some(decision)));
     let filter = ChannelFilter {
         policies: vec![PolicyKind::Unreviewed],
+        ..ChannelFilter::default()
     };
     assert!(filter.matches(&reset));
     assert!(!filter.matches(&sanctioned));
