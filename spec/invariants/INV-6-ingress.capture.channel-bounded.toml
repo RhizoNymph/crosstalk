@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.capture.channel-bounded"
+statement = "The capture channel from the proxy to the capture task never holds more than its configured capacity of RawExchanges."
+kind = "performance"
+requires = ["type"]
+rationale = """
+If the capture task falls behind, an unbounded channel turns that backlog
+into unbounded proxy memory and eventually kills the hot path. A fixed
+capacity is what makes "full" a state the proxy can react to by dropping
+capture instead of the client.
+"""
+
+[evidence]
+type = "crosstalk::ingress::capture::CaptureSender"
+
+[evidence-review]
+type = { agent = "false", human = "false" }

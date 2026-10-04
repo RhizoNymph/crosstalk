@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.decode.no-forwarding-latency"
+statement = "Request decoding adds at most 1 ms at p99 to the time from routing an HTTP generation request to sending its first byte, and to sending its last body byte, upstream, compared with the same proxy with decoding disabled, for identity, gzip and zstd bodies up to the maximum decoded size."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+ingress.forwarding.never-waits-on-decode rules out waiting on the decoder;
+this bounds what is left: the tee copy and any contention between the decode
+task and the forward path for CPU or the body stream. Measuring the last
+body byte as well as the first catches a decoder that slows the upload of a
+large history without delaying its start. The 1 ms figure is a starting
+threshold to be confirmed against measurements, as for
+ingress.capture.added-latency-bound.
+"""
+
+[evidence]
+bench = "crosstalk::ingress::benches::decode_overhead_on_forwarding_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

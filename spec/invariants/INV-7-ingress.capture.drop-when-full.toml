@@ -1,0 +1,15 @@
+[invariant]
+id = "ingress.capture.drop-when-full"
+statement = "When the capture channel is full, the proxy discards that exchange's RawExchange instead of waiting for capacity."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Capture is best effort; serving the client is not. Waiting on a full
+channel would couple client latency to the slowest downstream consumer.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::full_capture_channel_drops_without_blocking"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

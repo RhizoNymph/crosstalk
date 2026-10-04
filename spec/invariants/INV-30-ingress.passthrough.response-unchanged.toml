@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.passthrough.response-unchanged"
+statement = "The client receives the upstream response's status, headers and body bytes unchanged, including anthropic-*, rate-limit, retry-after and x-should-retry headers and SSE pings, except hop-by-hop headers."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+The harness must see the upstream's real answer. Its status and retry
+headers drive retries and backoff, its rate-limit headers drive Claude
+Code's usage display and throttling, pings keep idle streams alive, and
+its body is the model output. Any change makes the gateway visible to the
+agent and can alter its behaviour, contaminating what the gateway measures.
+"""
+
+[evidence]
+property = "crosstalk::ingress::tests::passthrough::response_relayed_unchanged"
+integration = "crosstalk::ingress::tests::integration::response_relayed_unchanged_live"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

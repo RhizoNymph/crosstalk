@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.routing.intercept-allowlisted-only"
+statement = "The proxy terminates TLS for a forward-proxy CONNECT only when the target host is on the interception allowlist."
+kind = "confidentiality"
+requires = ["unit", "property"]
+rationale = """
+Intercepting TLS means reading traffic the user sent to a third party.
+Only hosts the operator has explicitly allowlisted (for example the
+Copilot inference host, which pi cannot redirect) may be decrypted;
+UpstreamRouter::intercept returning None must mean the proxy never sees
+plaintext for that connection.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::routing::intercept_only_allowlisted_hosts"
+property = "crosstalk::ingress::tests::routing::intercept_agrees_with_allowlist"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

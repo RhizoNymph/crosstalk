@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.stage.legal-transitions"
+statement = "The proxy moves an exchange's ExchangeStage only along Forwarded to Responding, Responding to Completed, Forwarded to Failed and Responding to Failed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Completed and Failed are the proxy's terminal stages: everything after them
+belongs to other layers. A stage that goes backwards or leaves a terminal
+stage would hand a half-finished exchange to capture or capture one twice.
+A response whose first content and terminal frame share a chunk passes
+through Responding within that chunk.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::stage_transitions_follow_exchange_machine"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
