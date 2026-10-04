@@ -16,4 +16,4 @@ node identity or hash-map iteration order.
 property = "crosstalk_canonical::tests::normalize_is_deterministic"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

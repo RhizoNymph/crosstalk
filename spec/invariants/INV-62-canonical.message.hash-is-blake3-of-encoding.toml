@@ -17,4 +17,4 @@ digest for every message of generated exchanges.
 property = "crosstalk_canonical::tests::normalized_hashes_match_encoding"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

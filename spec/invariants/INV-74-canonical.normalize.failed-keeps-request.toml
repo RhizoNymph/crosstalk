@@ -18,5 +18,5 @@ unit = "crosstalk_canonical::tests::failed_exchange_keeps_request_with_bad_parti
 property = "crosstalk_canonical::tests::failed_response_bytes_never_fail_normalization"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

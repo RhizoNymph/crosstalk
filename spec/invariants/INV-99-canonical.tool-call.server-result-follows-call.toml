@@ -17,5 +17,5 @@ unit = "crosstalk_canonical::tests::anthropic_web_search_result_follows_its_call
 property = "crosstalk_canonical::tests::server_results_pair_with_earlier_server_calls"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

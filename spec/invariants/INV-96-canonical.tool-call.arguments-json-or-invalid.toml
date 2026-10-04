@@ -18,5 +18,5 @@ unit = "crosstalk_canonical::tests::malformed_arguments_kept_as_invalid"
 property = "crosstalk_canonical::tests::arguments_classified_by_parse"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

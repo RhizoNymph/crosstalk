@@ -1,0 +1,163 @@
+{
+  "exchange": {
+    "continuation": {
+      "type": "full_history"
+    },
+    "meta": {
+      "client": {
+        "account": null,
+        "class": "main",
+        "credential": {
+          "hash": {
+            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff",
+            "key": 1
+          },
+          "scheme": "api_key"
+        },
+        "harness": {
+          "family": "claude_code",
+          "user_agent": "claude-cli/2.1.282 (external, cli)",
+          "version": "2.1.282"
+        },
+        "ids": {
+          "agent": null,
+          "parent_agent": null,
+          "session": "01m3tc5h00000001r000000001"
+        },
+        "ingress": {
+          "data": {
+            "route": "anthropic"
+          },
+          "type": "reverse_proxy"
+        },
+        "previous_digests": null,
+        "upstream": {
+          "id": "anthropic",
+          "kind": {
+            "data": {
+              "type": "anthropic"
+            },
+            "type": "vendor_api"
+          }
+        }
+      },
+      "id": "01M3TC5H00000001R000000003",
+      "model": "claude-opus-5-5",
+      "protocol": "anthropic_messages",
+      "started_at": "2026-10-01T00:00:00.000000Z",
+      "transport": "sse"
+    },
+    "outcome": {
+      "data": {
+        "finished_at": "2026-10-01T00:00:03.000000Z",
+        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
+        "response": "803ea0a73c957142b7bce2ae29dcb79e3ee8649dab331a7664f55bfae52e9f8f",
+        "response_id": "msg_014ibrsy7iGs55e1kO1ueMQX",
+        "stop": "end_turn",
+        "usage": {
+          "cache_read": 3871,
+          "input": 4023,
+          "output": 24,
+          "reasoning": null
+        }
+      },
+      "type": "completed"
+    },
+    "request": [
+      "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
+      "21b7c4947d24598b108675789f3c6a8431c3e78b07ff318d103828f8086458c8",
+      "3726ec518f9c535028e4ab6e2ff498fe73266ff69a40a4754726300f377c4aaa",
+      "9544b190895b318006e102661da51328122f23b4857d2069167432c1bc4c5feb"
+    ]
+  },
+  "media": [],
+  "messages": [
+    {
+      "body": {
+        "data": [
+          {
+            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;",
+            "type": "text"
+          },
+          {
+            "data": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "type": "text"
+          },
+          {
+            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>",
+            "type": "text"
+          }
+        ],
+        "type": "system"
+      },
+      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "Read notes/plan.md and summarize it.",
+            "type": "text"
+          }
+        ],
+        "type": "user"
+      },
+      "hash": "21b7c4947d24598b108675789f3c6a8431c3e78b07ff318d103828f8086458c8"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "I'll read the plan first.",
+            "type": "text"
+          },
+          {
+            "data": {
+              "arguments": {
+                "data": "{\"file_path\":\"/workspace/notes/plan.md\"}",
+                "type": "json"
+              },
+              "execution": "client",
+              "id": "toolu_016FdvOnXciSbMA2YzruhO7J",
+              "name": "Read"
+            },
+            "type": "tool_call"
+          }
+        ],
+        "type": "assistant"
+      },
+      "hash": "3726ec518f9c535028e4ab6e2ff498fe73266ff69a40a4754726300f377c4aaa"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "call_id": "toolu_016FdvOnXciSbMA2YzruhO7J",
+            "content": [
+              {
+                "data": "     1\t# Plan\n     2\t\n     3\t1. Parse the request log.\n     4\t2. Index every span.\n     5\t3. Report matches per channel.\n",
+                "type": "text"
+              }
+            ],
+            "outcome": "success"
+          }
+        ],
+        "type": "tool"
+      },
+      "hash": "9544b190895b318006e102661da51328122f23b4857d2069167432c1bc4c5feb"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "The plan has three steps: parse the request log, index every span, and report matches per channel.",
+            "type": "text"
+          }
+        ],
+        "type": "assistant"
+      },
+      "hash": "803ea0a73c957142b7bce2ae29dcb79e3ee8649dab331a7664f55bfae52e9f8f"
+    }
+  ],
+  "warnings": []
+}

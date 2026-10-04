@@ -1,0 +1,143 @@
+{
+  "exchange": {
+    "continuation": {
+      "type": "full_history"
+    },
+    "meta": {
+      "client": {
+        "account": null,
+        "class": "main",
+        "credential": {
+          "hash": {
+            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff",
+            "key": 1
+          },
+          "scheme": "api_key"
+        },
+        "harness": {
+          "family": "claude_code",
+          "user_agent": "claude-cli/2.1.282 (external, cli)",
+          "version": "2.1.282"
+        },
+        "ids": {
+          "agent": null,
+          "parent_agent": null,
+          "session": "01m3tc5h00000001r000000001"
+        },
+        "ingress": {
+          "data": {
+            "route": "anthropic"
+          },
+          "type": "reverse_proxy"
+        },
+        "previous_digests": null,
+        "upstream": {
+          "id": "anthropic",
+          "kind": {
+            "data": {
+              "type": "anthropic"
+            },
+            "type": "vendor_api"
+          }
+        }
+      },
+      "id": "01M3TC5H00000001R000000003",
+      "model": "claude-opus-5-5",
+      "protocol": "anthropic_messages",
+      "started_at": "2026-10-01T00:00:00.000000Z",
+      "transport": "http"
+    },
+    "outcome": {
+      "data": {
+        "finished_at": "2026-10-01T00:00:03.000000Z",
+        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
+        "response": "59fa8195b4e11c03483e9cc2a13bd77c2e2a87aaaf609a5f050ddb5d4eb5207b",
+        "response_id": "msg_01GzfIDFAaT1lZ2WDn0wXwnI",
+        "stop": "tool_use",
+        "usage": {
+          "cache_read": 3810,
+          "input": 3822,
+          "output": 118,
+          "reasoning": null
+        }
+      },
+      "type": "completed"
+    },
+    "request": [
+      "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
+      "7b9694d761a4d7bdda718b175dc3e40135cea6651b929410a2e2fe4db006e996"
+    ]
+  },
+  "media": [],
+  "messages": [
+    {
+      "body": {
+        "data": [
+          {
+            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;",
+            "type": "text"
+          },
+          {
+            "data": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "type": "text"
+          },
+          {
+            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>",
+            "type": "text"
+          }
+        ],
+        "type": "system"
+      },
+      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "Check the git status and read the README.",
+            "type": "text"
+          }
+        ],
+        "type": "user"
+      },
+      "hash": "7b9694d761a4d7bdda718b175dc3e40135cea6651b929410a2e2fe4db006e996"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "I'll check both at once.",
+            "type": "text"
+          },
+          {
+            "data": {
+              "arguments": {
+                "data": "{\"command\":\"git status --short\",\"description\":\"Show working tree status\"}",
+                "type": "json"
+              },
+              "execution": "client",
+              "id": "toolu_01L9p4EYt4t2eyAL6ZF1IK8G",
+              "name": "Bash"
+            },
+            "type": "tool_call"
+          },
+          {
+            "data": {
+              "arguments": {
+                "data": "{\"file_path\":\"/workspace/README.md\"}",
+                "type": "json"
+              },
+              "execution": "client",
+              "id": "toolu_01pTUZaQ0Ok8iRUWqARb6Yk2",
+              "name": "Read"
+            },
+            "type": "tool_call"
+          }
+        ],
+        "type": "assistant"
+      },
+      "hash": "59fa8195b4e11c03483e9cc2a13bd77c2e2a87aaaf609a5f050ddb5d4eb5207b"
+    }
+  ],
+  "warnings": []
+}

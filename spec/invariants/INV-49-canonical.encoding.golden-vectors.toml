@@ -20,4 +20,4 @@ any such change fail CI on every target.
 unit = "crosstalk_canonical::tests::golden_encodings_match_pinned_bytes"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

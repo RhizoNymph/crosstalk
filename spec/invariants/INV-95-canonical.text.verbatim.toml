@@ -17,5 +17,5 @@ unit = "crosstalk_canonical::tests::text_with_edge_whitespace_and_nfd_kept"
 property = "crosstalk_canonical::tests::text_parts_preserve_strings"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

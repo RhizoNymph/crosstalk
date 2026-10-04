@@ -20,5 +20,5 @@ unit = "crosstalk_canonical::tests::unknown_block_kept_in_place"
 property = "crosstalk_canonical::tests::unknown_blocks_round_trip_as_canonical_json"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

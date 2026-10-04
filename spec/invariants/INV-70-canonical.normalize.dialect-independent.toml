@@ -25,4 +25,4 @@ property = "crosstalk_canonical::tests::normalization_independent_of_dialect"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

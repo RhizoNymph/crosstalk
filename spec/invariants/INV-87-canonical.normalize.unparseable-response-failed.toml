@@ -17,5 +17,5 @@ unit = "crosstalk_canonical::tests::garbled_200_body_is_unparseable_failure"
 property = "crosstalk_canonical::tests::unparseable_success_bodies_keep_request"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

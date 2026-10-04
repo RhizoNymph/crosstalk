@@ -16,5 +16,5 @@ unit = "crosstalk_canonical::tests::redacted_thinking_kept_verbatim"
 property = "crosstalk_canonical::tests::opaque_reasoning_bytes_preserved"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

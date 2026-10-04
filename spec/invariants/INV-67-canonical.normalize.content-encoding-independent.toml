@@ -16,4 +16,4 @@ compressed or not.
 property = "crosstalk_canonical::tests::normalization_ignores_request_encoding"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

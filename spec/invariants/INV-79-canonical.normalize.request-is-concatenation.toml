@@ -17,4 +17,4 @@ provider message; the composition law is concatenation.
 property = "crosstalk_canonical::tests::request_normalizes_message_by_message"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
