@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The HTTP client for the crosstalk L8 surface, used by the operator UI."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

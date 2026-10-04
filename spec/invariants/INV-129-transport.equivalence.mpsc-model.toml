@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.equivalence.mpsc-model"
+statement = "On a single node, for any sequence of subscribe, publish, next, ack, nack and replay calls in which no ack timeout expires, JetStreamBus yields to each consumer group the same multiset of (envelope, attempt) deliveries and the same dead letters as MpscBus."
+kind = "domain"
+property = "model-based"
+requires = ["integration"]
+rationale = """
+MpscBus is the reference model: simple, in-process and fully simulated in
+DST, so most of L2's behaviour, including retry budgets and dead-lettering,
+is checked there. This equivalence carries those results over to JetStream.
+Compared per group as a multiset because neither bus promises an order or
+which consumer of a group receives a delivery. It also fixes the start
+position of a new group: like MpscBus, JetStream delivers only envelopes
+published after the group subscribed, with no backfill.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::jetstream_matches_mpsc_model"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

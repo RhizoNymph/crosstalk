@@ -18,11 +18,20 @@
 //! PolicyChanged (bus) ───┘                              (ordered by Decision::at)
 //! ```
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::AlertRuleKind;
 use crate::ids::OperatorId;
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Policy {
     /// `None` when never reviewed; `Some` when an operator reset it.
     Unreviewed(Option<Decision>),
@@ -30,14 +39,21 @@ pub enum Policy {
     Unsanctioned(Decision),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Decision {
     pub by: PolicyAuthor,
     pub at: Timestamp,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PolicyAuthor {
     Config,
     Operator(OperatorId),
@@ -46,7 +62,8 @@ pub enum PolicyAuthor {
 /// Which of the three policies, without the decision behind it. This is
 /// what an operator asks for (`OperatorAction::SetPolicy`); the surface
 /// stamps the author and time from the authenticated caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PolicyKind {
     Unreviewed,
     Sanctioned,
@@ -88,7 +105,8 @@ impl Policy {
 /// A policy with the decision that set it: one entry of a
 /// [`PolicyHistory`]. Unlike [`Policy`], it cannot be `Unreviewed(None)`, so
 /// every entry names its author and time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PolicyDecision {
     pub kind: PolicyKind,
     pub decision: Decision,
@@ -137,7 +155,8 @@ impl TryFrom<Policy> for PolicyDecision {
 /// Ordering by decision time, not by arrival, makes the current policy
 /// independent of bus delivery order: a decision that arrives after a later
 /// one is kept in its place and does not become current.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawPolicyHistory")]
 pub struct PolicyHistory {
     entries: Vec<PolicyDecision>,
 }
@@ -159,6 +178,22 @@ pub enum InvalidHistory {
     OutOfOrder { index: usize },
     /// The entry at `index` equals an earlier entry.
     Duplicate { index: usize },
+}
+
+/// [`PolicyHistory`]'s entries, decoded without the checks. Decoding goes
+/// through [`PolicyHistory::from_entries`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawPolicyHistory {
+    entries: Vec<PolicyDecision>,
+}
+
+impl TryFrom<RawPolicyHistory> for PolicyHistory {
+    type Error = Rejected<InvalidHistory>;
+
+    fn try_from(raw: RawPolicyHistory) -> Result<Self, Self::Error> {
+        Self::from_entries(raw.entries).map_err(|error| Rejected::new("policy history", error))
+    }
 }
 
 /// Whether `entries`, which are in time order, already hold `decision`.

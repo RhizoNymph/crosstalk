@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.timestamps.stage-order"
+statement = "For every RawExchange, meta.started_at is at most first_chunk_at when it is set, and both are at most ended_at."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Correlation windows, edge time buckets and the write-before-read test for
+transmissions compare these times. Wall clocks step backwards under NTP,
+so the proxy derives them from one wall-clock reading plus a monotonic
+clock to keep the order the events actually had.
+"""
+
+[evidence]
+dst = "crosstalk_ingress::tests::sim::stage_times_monotone_under_clock_steps"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

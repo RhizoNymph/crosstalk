@@ -8,7 +8,6 @@ use crate::aggregates::alert::{
 };
 use crate::aggregates::edge::{EdgeKey, TopicSlot};
 use crate::aggregates::topic::TopicModelVersion;
-use crate::derived::flow::channel::Seed;
 use crate::derived::flow::channel::policy::{Policy, PolicyKind};
 use crate::derived::flow::channel::promotion::Promotion;
 use crate::derived::flow::evidence::CoAccess;
@@ -40,7 +39,7 @@ use crate::support::TimeWindow;
 use crate::support::Watermark;
 
 use crate::tests::fixtures::{
-    agent, at, channel, content_match, exchange, message, read_access, resource, span,
+    access, agent, at, channel, content_match, exchange, message, read_access, resource, span,
     transmission, write_access,
 };
 
@@ -116,7 +115,7 @@ fn alert() -> Alert {
 }
 
 /// One event of every variant.
-fn sample_events() -> Vec<BusEvent> {
+pub(crate) fn sample_events() -> Vec<BusEvent> {
     let bucket = TimeWindow::new(at(0), at(60)).expect("non-empty");
     let slot = TopicSlot {
         version: TopicModelVersion(1),
@@ -168,7 +167,7 @@ fn sample_events() -> Vec<BusEvent> {
         }),
         BusEvent::Detect(DetectEvent::AccessRecorded {
             access: write_access(1, agent(1), resource(1), 1),
-            channel: Some(channel(1)),
+            channel: channel(1),
         }),
         BusEvent::Detect(DetectEvent::ContentMatched(content_match(
             agent(1),
@@ -177,10 +176,7 @@ fn sample_events() -> Vec<BusEvent> {
         ))),
         BusEvent::Detect(DetectEvent::ChannelDiscovered {
             channel: channel(1),
-            seed: Seed {
-                resource: resource(1),
-                first_transmission: transmission(1),
-            },
+            first_access: access(1),
         }),
         BusEvent::Detect(DetectEvent::ChannelCrossAccessed {
             channel: channel(1),
@@ -315,7 +311,7 @@ fn subjects_name_their_variant() {
 
 /// Every subject, in declaration order. Adding a subject breaks the
 /// exhaustive match in `declared`, which is the reminder to list it here.
-fn every_subject() -> Vec<Subject> {
+pub(crate) fn every_subject() -> Vec<Subject> {
     fn declared(subject: Subject) -> Subject {
         match subject {
             Subject::ExchangeCaptured
@@ -393,7 +389,7 @@ fn samples_cover_every_subject() {
 /// One change notification of every `Changed` variant: the feed's only
 /// source. Adding a variant breaks the exhaustive match in `declared`,
 /// which is the reminder to sample it here.
-fn every_change() -> Vec<Changed> {
+pub(crate) fn every_change() -> Vec<Changed> {
     fn declared(changed: Changed) -> Changed {
         match changed {
             Changed::Alert(_)

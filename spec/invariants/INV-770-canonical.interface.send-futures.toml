@@ -1,0 +1,74 @@
+[invariant]
+id = "canonical.interface.send-futures"
+statement = "Every async trait method in the spec's interfaces returns a Send future, and every associated stream or per-connection handle type is Send + 'static."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Implementations run on tokio's multi-threaded runtime, which moves a task's
+future between worker threads, so tokio::spawn and axum handlers require
+Send futures. A native `async fn` in a trait promises nothing about Send:
+code generic over the trait (a UI or client generic over QueryApi, a
+consumer loop generic over EventBus) cannot prove its futures Send without
+return-type notation, and compiles only against one concrete type the
+compiler can see through. So each method is declared in its desugared form,
+`fn ...(...) -> impl Future<Output = T> + Send`, which implementations still
+satisfy by writing `async fn`. The streams and handles a task keeps across
+awaits or hands to another task (EventBus::Subscription, LiveFeed::Stream,
+QueryApi::ExportRows, ExportSource::Rows, ProviderAdapter::Framer and Tap)
+are bounded Send + 'static for the same reason. RuleContext is Sync because
+AlertRuleEval::evaluate borrows a context into its Send future. The traits
+do not require Self: Send + Sync; a host that shares an implementation
+across tasks adds those bounds itself.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::interfaces::l0_ingress::ProviderAdapter",
+    "crosstalk_spec::interfaces::l2_transport::EventBus",
+    "crosstalk_spec::interfaces::l2_transport::Subscription",
+    "crosstalk_spec::interfaces::l2_transport::DeadLetterStore",
+    "crosstalk_spec::interfaces::l2_transport::BlobStore",
+    "crosstalk_spec::interfaces::l3_reconstruction::ClaimStore",
+    "crosstalk_spec::interfaces::l3_reconstruction::IdentityResolver",
+    "crosstalk_spec::interfaces::l3_reconstruction::Threader",
+    "crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads",
+    "crosstalk_spec::interfaces::l3_reconstruction::agents::ActivityStore",
+    "crosstalk_spec::interfaces::l4_provenance::FingerprintIndex",
+    "crosstalk_spec::interfaces::l4_provenance::SemanticMatcher",
+    "crosstalk_spec::interfaces::l5_flow::ChannelRegistry",
+    "crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts",
+    "crosstalk_spec::interfaces::l6_analysis::Embedder",
+    "crosstalk_spec::interfaces::l6_analysis::TopicCatalog",
+    "crosstalk_spec::interfaces::l6_analysis::SearchIndex",
+    "crosstalk_spec::interfaces::l6_analysis::ProjectionStore",
+    "crosstalk_spec::interfaces::l6_analysis::ProjectionSource",
+    "crosstalk_spec::interfaces::l6_analysis::RuleContext",
+    "crosstalk_spec::interfaces::l6_analysis::AlertRuleEval",
+    "crosstalk_spec::interfaces::l6_analysis::AlertTriage",
+    "crosstalk_spec::interfaces::l6_analysis::AlertRuleStore",
+    "crosstalk_spec::interfaces::l7_topology::EdgeStore",
+    "crosstalk_spec::interfaces::l7_topology::FrontierSource",
+    "crosstalk_spec::interfaces::l8_surface::QueryApi",
+    "crosstalk_spec::interfaces::l8_surface::OperatorActions",
+    "crosstalk_spec::interfaces::l8_surface::live::LiveFeed",
+    "crosstalk_spec::interfaces::l8_surface::live::LiveStream",
+    "crosstalk_spec::interfaces::l8_surface::audit::AuditLog",
+    "crosstalk_spec::interfaces::l8_surface::sinks::AlertSink",
+    "crosstalk_spec::interfaces::l8_surface::export::stream::ExportStream",
+    "crosstalk_spec::interfaces::l8_surface::export::stream::RowSource",
+    "crosstalk_spec::interfaces::l8_surface::export::stream::ExportSource",
+]
+unit = [
+    "crosstalk_spec::tests::send::pipeline::l0_ingress_handles_are_send_and_static",
+    "crosstalk_spec::tests::send::pipeline::l2_transport_futures_are_send",
+    "crosstalk_spec::tests::send::pipeline::l3_reconstruction_futures_are_send",
+    "crosstalk_spec::tests::send::pipeline::l4_provenance_futures_are_send",
+    "crosstalk_spec::tests::send::detection::l5_flow_futures_are_send",
+    "crosstalk_spec::tests::send::detection::l6_analysis_futures_are_send",
+    "crosstalk_spec::tests::send::detection::l7_topology_futures_are_send",
+    "crosstalk_spec::tests::send::surface::l8_surface_futures_are_send",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

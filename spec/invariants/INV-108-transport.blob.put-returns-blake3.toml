@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.blob.put-returns-blake3"
+statement = "When put(bytes) returns Ok(h), h is the MessageHash whose digest is the BLAKE3 hash of bytes."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The store computes the key; callers cannot choose it. Every node therefore
+names the same bytes with the same hash, which makes put idempotent and lets
+L1 compare its own canonical hash with the store's.
+"""
+
+[evidence]
+property = "crosstalk_transport::blob::tests::put_returns_blake3_of_bytes"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.edge-updated.after-apply"
+statement = "L7 publishes EdgeUpdated for a key only after the apply that returned that key has returned Ok."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The surface refreshes the graph view when it receives EdgeUpdated. If the
+event could overtake the write (published before apply persisted, or after
+a failed apply), a refresh would read the old stats and the view would
+stay stale until the next unrelated update, or announce a change that
+never happened.
+"""
+
+[evidence]
+dst = "crosstalk_topology::dst::edge_updated_never_precedes_persisted_apply"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

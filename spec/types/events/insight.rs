@@ -1,4 +1,11 @@
 //! Events from analysis (L6), topology (L7) and the surface (L8).
+//!
+//! On the wire, inside an `Envelope`: `{"type": "insight", "data":
+//! {"type": "<variant>", "data": ..}}`. Decoding is strict, so a node that
+//! does not know a variant or field fails the delivery, and the rules and
+//! revisions inside decode through their checks.
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::{Alert, AlertRevision, AlertRuleDef, RuleRevision};
 use crate::aggregates::edge::EdgeKey;
@@ -11,7 +18,8 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ChannelId, TransmissionId};
 use crate::support::{Timestamp, Watermark};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClassificationCause {
     /// The transmission was just confirmed.
     Confirmation,
@@ -19,7 +27,13 @@ pub enum ClassificationCause {
     Refit,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum InsightEvent {
     /// Published once per transmission per topic-model version: on
     /// confirmation under the current version, and again for every

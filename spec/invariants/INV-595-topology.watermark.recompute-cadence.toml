@@ -10,7 +10,7 @@ so in steady state it advances once per bucket.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::watermark_recomputed_every_bucket"
+dst = "crosstalk_topology::dst::watermark_recomputed_every_bucket"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

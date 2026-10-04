@@ -6,14 +6,15 @@ use crate::aggregates::access::{
     AgentAccesses, BipartiteGraph, BipartiteParts, InvalidBipartite, InvalidResourceUse,
     ResourceUse, WeightedAccess,
 };
-use crate::aggregates::edge::{EdgeStats, TopologyGraph, WeightedEdge, Weighting};
+use crate::aggregates::edge::{
+    EdgeStats, InvalidGraph, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
+};
 use crate::aggregates::node::{
     AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode, InvalidNodes,
     NodeId,
 };
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::access::AccessKind;
-use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -29,7 +30,7 @@ use crate::observed::agent::{
 };
 use crate::observed::client::{HarnessClaim, HarnessFamily};
 use crate::support::{NonBlank, Share, TimeWindow, Timestamp};
-use crate::tests::fixtures::{agent, agent_node, at, channel, resource, transmission};
+use crate::tests::fixtures::{access, agent, agent_node, at, channel, resource};
 
 fn n(value: u64) -> NonZeroU64 {
     NonZeroU64::new(value).expect("fixture values are non-zero")
@@ -71,8 +72,7 @@ fn channel_node(id: u128) -> GraphNode {
         id: channel(id),
         label: None,
         origin_kind: CanonicalOriginKind::Discovered,
-        detection_kind: DetectionKind::Active,
-        confirmation: Confirmation::Confirmed,
+        detection_kind: DetectionKind::Observed,
         policy_kind: PolicyKind::Unreviewed,
         locator_summary: NonBlank::new("https://wiki.example/a").expect("not blank"),
     })
@@ -82,14 +82,86 @@ fn window() -> TimeWindow {
     TimeWindow::new(at(0), at(100)).expect("start < end")
 }
 
-fn graph(nodes: Vec<GraphNode>, edges: Vec<WeightedEdge>) -> TopologyGraph {
-    TopologyGraph {
+/// A graph checked by its constructor: `Err` names the rule it breaks.
+fn graph(nodes: Vec<GraphNode>, edges: Vec<WeightedEdge>) -> Result<TopologyGraph, InvalidGraph> {
+    TopologyGraph::new(TopologyGraphParts {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(1),
         nodes,
         edges,
-    }
+    })
+}
+
+/// The constructor's refusal of a graph whose nodes break `error`'s rule.
+fn nodes_err(error: InvalidNodes) -> Result<(), InvalidGraph> {
+    Err(InvalidGraph::Nodes(error))
+}
+
+// The topology graph's checked constructor.
+
+#[test]
+fn a_graph_is_built_only_through_its_checks() {
+    let nodes = || vec![agent_node(1, 1, 3), agent_node(2, 3, 1)];
+    let valid = graph(
+        nodes(),
+        vec![
+            edge(1, 2, Route::Unobserved, 3, 0.75),
+            edge(2, 1, Route::Unobserved, 1, 0.25),
+        ],
+    )
+    .expect("valid graph");
+    assert_eq!(valid.window(), window());
+    assert_eq!(valid.weighting(), Weighting::Transmissions);
+    assert_eq!(valid.topic_version(), TopicModelVersion(1));
+    assert_eq!((valid.nodes().len(), valid.edges().len()), (2, 2));
+    let parts = valid.clone().into_parts();
+    assert_eq!(TopologyGraph::new(parts), Ok(valid));
+}
+
+#[test]
+fn a_graph_refuses_a_self_edge() {
+    assert_eq!(
+        graph(
+            vec![agent_node(1, 0, 1), agent_node(2, 1, 0)],
+            vec![
+                edge(1, 2, Route::Unobserved, 1, 0.5),
+                edge(2, 2, Route::Unobserved, 1, 0.5),
+            ],
+        )
+        .map(drop),
+        Err(InvalidGraph::SelfEdge { index: 1 })
+    );
+}
+
+#[test]
+fn a_graph_refuses_an_edge_twice() {
+    assert_eq!(
+        graph(
+            vec![agent_node(1, 0, 2), agent_node(2, 2, 0)],
+            vec![
+                edge(1, 2, Route::Unobserved, 1, 0.5),
+                edge(1, 2, Route::Unobserved, 1, 0.5),
+            ],
+        )
+        .map(drop),
+        Err(InvalidGraph::DuplicateEdge { index: 1 })
+    );
+}
+
+#[test]
+fn a_graph_refuses_shares_that_are_not_their_stat_over_the_total() {
+    assert_eq!(
+        graph(
+            vec![agent_node(1, 1, 3), agent_node(2, 3, 1)],
+            vec![
+                edge(1, 2, Route::Unobserved, 3, 0.5),
+                edge(2, 1, Route::Unobserved, 1, 0.5),
+            ],
+        )
+        .map(drop),
+        Err(InvalidGraph::Share { index: 0 })
+    );
 }
 
 // Topology graph nodes.
@@ -108,7 +180,7 @@ fn graph_nodes_cover_endpoints_and_their_ancestors() {
         child_of(4, 5, 0, 0),
         agent_node(5, 0, 0),
     ];
-    assert_eq!(graph(nodes, edges).check_nodes(), Ok(()));
+    assert_eq!(graph(nodes, edges).map(drop), Ok(()));
 }
 
 #[test]
@@ -119,9 +191,8 @@ fn agent_nodes_carry_a_typed_label() {
         ..agent_struct(1, 0, 1)
     });
     let edges = vec![edge(1, 2, Route::Unobserved, 1, 1.0)];
-    let graph = graph(vec![labelled, agent_node(2, 1, 0)], edges);
-    assert_eq!(graph.check_nodes(), Ok(()));
-    match &graph.nodes[0] {
+    let graph = graph(vec![labelled, agent_node(2, 1, 0)], edges).expect("valid graph");
+    match &graph.nodes()[0] {
         GraphNode::Agent(node) => assert_eq!(node.label.as_ref(), Some(&planner)),
         GraphNode::Channel(_) => unreachable!("the first node is an agent"),
     }
@@ -129,10 +200,10 @@ fn agent_nodes_carry_a_typed_label() {
 
 #[test]
 fn an_empty_graph_has_no_nodes() {
-    assert_eq!(graph(Vec::new(), Vec::new()).check_nodes(), Ok(()));
+    assert_eq!(graph(Vec::new(), Vec::new()).map(drop), Ok(()));
     assert_eq!(
-        graph(vec![agent_node(1, 0, 0)], Vec::new()).check_nodes(),
-        Err(InvalidNodes::Unexpected(NodeId::Agent(agent(1))))
+        graph(vec![agent_node(1, 0, 0)], Vec::new()).map(drop),
+        nodes_err(InvalidNodes::Unexpected(NodeId::Agent(agent(1))))
     );
 }
 
@@ -140,8 +211,8 @@ fn an_empty_graph_has_no_nodes() {
 fn every_endpoint_needs_a_node() {
     let edges = vec![edge(1, 2, Route::Unobserved, 1, 1.0)];
     assert_eq!(
-        graph(vec![agent_node(1, 0, 1)], edges).check_nodes(),
-        Err(InvalidNodes::Missing(NodeId::Agent(agent(2))))
+        graph(vec![agent_node(1, 0, 1)], edges).map(drop),
+        nodes_err(InvalidNodes::Missing(NodeId::Agent(agent(2))))
     );
 }
 
@@ -154,8 +225,8 @@ fn no_node_appears_twice() {
         agent_node(1, 0, 1),
     ];
     assert_eq!(
-        graph(nodes, edges).check_nodes(),
-        Err(InvalidNodes::Duplicate(NodeId::Agent(agent(1))))
+        graph(nodes, edges).map(drop),
+        nodes_err(InvalidNodes::Duplicate(NodeId::Agent(agent(1))))
     );
 }
 
@@ -163,12 +234,12 @@ fn no_node_appears_twice() {
 fn parents_have_nodes_and_are_never_the_agent() {
     let edges = || vec![edge(1, 2, Route::Unobserved, 1, 1.0)];
     assert_eq!(
-        graph(vec![child_of(1, 1, 0, 1), agent_node(2, 1, 0)], edges()).check_nodes(),
-        Err(InvalidNodes::SelfParent(agent(1)))
+        graph(vec![child_of(1, 1, 0, 1), agent_node(2, 1, 0)], edges()).map(drop),
+        nodes_err(InvalidNodes::SelfParent(agent(1)))
     );
     assert_eq!(
-        graph(vec![child_of(1, 4, 0, 1), agent_node(2, 1, 0)], edges()).check_nodes(),
-        Err(InvalidNodes::MissingParent {
+        graph(vec![child_of(1, 4, 0, 1), agent_node(2, 1, 0)], edges()).map(drop),
+        nodes_err(InvalidNodes::MissingParent {
             agent: agent(1),
             parent: agent(4),
         })
@@ -187,8 +258,8 @@ fn nodes_beyond_endpoints_and_ancestors_are_rejected() {
             ],
             edges()
         )
-        .check_nodes(),
-        Err(InvalidNodes::Unexpected(NodeId::Agent(agent(9))))
+        .map(drop),
+        nodes_err(InvalidNodes::Unexpected(NodeId::Agent(agent(9))))
     );
     // The agent-centred graph has no channel nodes, even for its routes.
     assert_eq!(
@@ -196,8 +267,8 @@ fn nodes_beyond_endpoints_and_ancestors_are_rejected() {
             vec![agent_node(1, 0, 1), agent_node(2, 1, 0), channel_node(1)],
             edges()
         )
-        .check_nodes(),
-        Err(InvalidNodes::Unexpected(NodeId::Channel(channel(1))))
+        .map(drop),
+        nodes_err(InvalidNodes::Unexpected(NodeId::Channel(channel(1))))
     );
 }
 
@@ -210,12 +281,12 @@ fn node_counts_agree_with_edges() {
         ]
     };
     assert_eq!(
-        graph(vec![agent_node(1, 1, 3), agent_node(2, 3, 1)], edges()).check_nodes(),
+        graph(vec![agent_node(1, 1, 3), agent_node(2, 3, 1)], edges()).map(drop),
         Ok(())
     );
     assert_eq!(
-        graph(vec![agent_node(1, 1, 3), agent_node(2, 4, 1)], edges()).check_nodes(),
-        Err(InvalidNodes::Counts(agent(2)))
+        graph(vec![agent_node(1, 1, 3), agent_node(2, 4, 1)], edges()).map(drop),
+        nodes_err(InvalidNodes::Counts(agent(2)))
     );
     // An ancestor that is no endpoint counts nothing.
     let edges = vec![edge(1, 2, Route::Unobserved, 1, 1.0)];
@@ -228,8 +299,8 @@ fn node_counts_agree_with_edges() {
             ],
             edges
         )
-        .check_nodes(),
-        Err(InvalidNodes::Counts(agent(3)))
+        .map(drop),
+        nodes_err(InvalidNodes::Counts(agent(3)))
     );
 }
 
@@ -260,11 +331,10 @@ fn canonical_state_kind_excludes_merged_agents() {
 fn canonical_origin_kind_excludes_superseded_channels() {
     let seed = Seed {
         resource: resource(1),
-        first_transmission: transmission(1),
+        first_access: access(1),
     };
-    let detection = TrafficDetection::Active {
-        since: at(1),
-        last_transmission: transmission(1),
+    let detection = TrafficDetection::Observed {
+        first_access: access(1),
     };
     let declaration = Declaration {
         pattern: ResourcePattern::Host(Host("wiki.example".into())),

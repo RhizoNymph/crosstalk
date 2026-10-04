@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.routing.unrouted-answered-421"
+statement = "A reverse-proxy request that no configured route matches is answered by the proxy with status 421 and is sent to no upstream."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Without a route there is no upstream to forward to, and guessing one from
+the path or a header would send a credential to a host the operator never
+configured. 421 Misdirected Request tells the harness the gateway is the
+wrong place for this request without implying the upstream rejected it.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::routing::unrouted_request_answered_421"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

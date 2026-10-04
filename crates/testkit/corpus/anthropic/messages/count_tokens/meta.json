@@ -1,0 +1,43 @@
+{
+  "description": "Token counting, a non-generation route: forwarded, not captured.",
+  "provenance": {
+    "type": "synthetic",
+    "data": {
+      "sources": [
+        "docs/research/harness-wire-protocols.md",
+        "https://code.claude.com/docs/en/llm-gateway-protocol",
+        "https://platform.claude.com/docs/en/build-with-claude/streaming",
+        "https://platform.claude.com/docs/en/api/errors",
+        "https://platform.claude.com/docs/en/api/rate-limits"
+      ]
+    }
+  },
+  "endpoint": {
+    "type": "token_count"
+  },
+  "credential": {
+    "header": "x-api-key",
+    "scheme": "api_key",
+    "placeholder": "sk-ant-api03-REDACTED"
+  },
+  "harness": {
+    "claim_headers": [
+      "user-agent",
+      "x-app",
+      "x-claude-code-session-id"
+    ],
+    "claim": {
+      "family": "claude_code",
+      "version": "2.1.282",
+      "user_agent": "claude-cli/2.1.282 (external, cli)"
+    },
+    "ids": {
+      "session": "00000000-0000-4000-8000-000000000001",
+      "agent": null,
+      "parent_agent": null
+    },
+    "class": "unknown"
+  },
+  "follows": null,
+  "notes": []
+}

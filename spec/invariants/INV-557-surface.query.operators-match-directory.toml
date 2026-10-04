@@ -11,7 +11,7 @@ history or mislead the reader about who can act now.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::operators_query_returns_directory"
+unit = "crosstalk_surface::tests::operators_query_returns_directory"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

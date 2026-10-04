@@ -1,6 +1,6 @@
 [invariant]
 id = "ingress.capture.decode-attached-at-handoff"
-statement = "The proxy hands off an HTTP exchange's RawExchange only once both its response stream has ended and its request decode has succeeded, in either order, with its request (the DecodedRequest: WireRequest, body and encoding) and meta.model taken from that decode."
+statement = "The proxy hands off an HTTP exchange's RawExchange only once both its response stream has ended and its request decode has succeeded, in either order, with its request (the DecodedRequest: HarnessRequest, body and encoding) and meta.model taken from that decode."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -14,7 +14,7 @@ attaches whenever it is ready, and the stream-end rule
 """
 
 [evidence]
-dst = ["crosstalk::ingress::tests::sim::handoff_waits_for_decode_after_stream_end", "crosstalk::ingress::tests::sim::handoff_waits_for_stream_end_after_decode"]
+dst = ["crosstalk_ingress::tests::sim::handoff_waits_for_decode_after_stream_end", "crosstalk_ingress::tests::sim::handoff_waits_for_stream_end_after_decode"]
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

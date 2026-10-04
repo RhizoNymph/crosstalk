@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.extends-longest-prefix-match"
+statement = "When the non-system stored history of some conversation of the same canonical agent is a prefix of a full-history exchange's non-system request messages, the outcome is Extends of the conversation with the longest such history."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Without this a plain continuation could be classified as a Start or Fork,
+creating a new conversation for every turn and re-scanning the whole history
+as new input. Choosing the longest prefix picks the most recent branch when
+a fork and its parent both match. Matching by canonical agent means a merge
+does not orphan the merged agent's conversations.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::continuation_extends_longest_matching_conversation"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -14,7 +14,7 @@ instead of treating its cursor as corrupt.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::edge_transmission_pages_keep_version_across_activation"
+dst = "crosstalk_topology::dst::edge_transmission_pages_keep_version_across_activation"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

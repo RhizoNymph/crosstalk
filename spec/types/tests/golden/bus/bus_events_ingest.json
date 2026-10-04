@@ -1,0 +1,139 @@
+[
+  {
+    "type": "ingest",
+    "data": {
+      "type": "exchange_captured",
+      "data": {
+        "meta": {
+          "id": "00000000000000000000000001",
+          "protocol": "anthropic_messages",
+          "transport": "sse",
+          "model": "claude",
+          "client": {
+            "ingress": {
+              "type": "reverse_proxy",
+              "data": {
+                "route": "anthropic"
+              }
+            },
+            "upstream": {
+              "id": "anthropic",
+              "kind": {
+                "type": "subscription",
+                "data": {
+                  "type": "anthropic"
+                }
+              }
+            },
+            "credential": null,
+            "account": null,
+            "previous_digests": null,
+            "harness": null,
+            "ids": {
+              "session": null,
+              "agent": null,
+              "parent_agent": null
+            },
+            "class": "main"
+          },
+          "started_at": "1970-01-01T00:00:00.000001Z"
+        },
+        "continuation": {
+          "type": "full_history"
+        },
+        "request": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "outcome": {
+          "type": "completed",
+          "data": {
+            "response": "0202020202020202020202020202020202020202020202020202020202020202",
+            "response_id": null,
+            "first_chunk_at": "1970-01-01T00:00:00.000002Z",
+            "finished_at": "1970-01-01T00:00:00.000003Z",
+            "stop": "end_turn",
+            "usage": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "ingest",
+    "data": {
+      "type": "conversation_delta",
+      "data": {
+        "exchange": "00000000000000000000000001",
+        "agent": "00000000000000000000000001",
+        "conversation": "00000000000000000000000001",
+        "new_inputs": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "new_system": null,
+        "output": null
+      }
+    }
+  },
+  {
+    "type": "ingest",
+    "data": {
+      "type": "agent_seen",
+      "data": {
+        "agent": "00000000000000000000000001",
+        "evidence": {
+          "type": "harness_session",
+          "data": {
+            "scope": {
+              "type": "upstream",
+              "data": "vllm"
+            },
+            "session": "planner"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "ingest",
+    "data": {
+      "type": "agent_merged",
+      "data": {
+        "merge": "00000000000000000000000001",
+        "from": "00000000000000000000000001",
+        "into": "00000000000000000000000002",
+        "repointed": [
+          "00000000000000000000000003"
+        ],
+        "by": {
+          "type": "resolver"
+        }
+      }
+    }
+  },
+  {
+    "type": "ingest",
+    "data": {
+      "type": "agent_unmerged",
+      "data": {
+        "merge": "00000000000000000000000001",
+        "agent": "00000000000000000000000001",
+        "was_into": "00000000000000000000000002",
+        "restored": [
+          "00000000000000000000000003"
+        ],
+        "by": "00000000000000000000000001"
+      }
+    }
+  },
+  {
+    "type": "ingest",
+    "data": {
+      "type": "agent_renamed",
+      "data": {
+        "agent": "00000000000000000000000002",
+        "label": "planner",
+        "by": "00000000000000000000000001"
+      }
+    }
+  }
+]

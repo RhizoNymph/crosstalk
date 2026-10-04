@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.resolve.new-only-for-unknown-evidence"
+statement = "The resolver returns New only when no stored agent holds the exchange's most specific identity evidence."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Returning New when the deciding evidence is already held creates a
+duplicate agent: the same harness shows as two nodes, its outputs found in
+its own later inputs read as agent-to-agent traffic, and later evidence
+for it becomes a spurious Conflict. Less specific evidence held by other
+agents does not prevent New: two harness agents on one shared key are two
+agents.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::new_resolution_only_when_deciding_evidence_unheld"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

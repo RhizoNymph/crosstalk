@@ -19,7 +19,7 @@ transmissions matched would overstate it.
 """
 
 [evidence]
-property = "crosstalk::topology::props::topic_filter_counts_only_listed_topics"
+property = "crosstalk_topology::props::topic_filter_counts_only_listed_topics"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

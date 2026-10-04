@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.filter.route-kind-membership"
+statement = "When a filter's route_kinds list is non-empty, every edge in the graph has a route whose kind is in that list."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Route kinds separate communication through shared resources (Channel) from
+parent and sub-agent handoffs (Delegation), prompt placement by an
+orchestrator or human (Direct) and inferred invisible channels
+(Unobserved). Delegation and Direct traffic is often sanctioned plumbing
+that dwarfs channel traffic, so operators narrow to the kinds they are
+investigating. An empty list does not restrict, so the default filter
+shows every kind. Excluded edges also leave the share denominator, which
+topology.graph.matches-fold-model covers.
+"""
+
+[evidence]
+unit = "crosstalk_topology::tests::route_kind_filter_maps_each_route_variant"
+property = "crosstalk_topology::props::route_kind_filter_keeps_only_listed_kinds"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

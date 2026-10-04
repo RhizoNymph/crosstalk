@@ -14,8 +14,8 @@ correct the request and retry.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::promote_rejections_change_nothing"
-integration = "crosstalk::flow::tests::pg_promote_rejections_change_nothing"
+unit = "crosstalk_flow::tests::promote_rejections_change_nothing"
+integration = "crosstalk_flow::tests::pg_promote_rejections_change_nothing"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

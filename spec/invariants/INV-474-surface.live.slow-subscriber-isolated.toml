@@ -12,7 +12,7 @@ replays from the log, or resyncs if it fell out of retention.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::stalled_stream_lags_without_blocking_others"
+dst = "crosstalk_surface::dst::stalled_stream_lags_without_blocking_others"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

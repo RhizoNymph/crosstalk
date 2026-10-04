@@ -13,7 +13,7 @@ back to exactly the bytes that were forwarded.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::capture::request_body_is_decoded_forwarded_body"
+property = "crosstalk_ingress::tests::capture::request_body_is_decoded_forwarded_body"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

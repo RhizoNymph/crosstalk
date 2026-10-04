@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.http.unauthenticated-401"
+statement = "In authenticated mode a request with no credential, a malformed or unverified one, or a verified one for an operator the directory holds with no permissions or not at all is answered 401 with an AuthError naming which and a WWW-Authenticate bearer challenge, before its route is resolved, reaching no QueryApi, OperatorActions or LiveFeed method and leaving no audit entry; a caller without a route's permission is answered 403, never 401."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+401 and 403 tell a client different things: sign in again, or ask for a
+permission. Answering before the route is resolved means an anonymous
+client learns nothing about which routes or ids exist. The AuthError body
+says whether a credential was missing, invalid, or names an operator
+config does not define (now or ever), without naming that operator.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::auth::authenticated_mode_answers_401_without_a_caller",
+    "crosstalk_spec::tests::wire::http::auth::malformed_credentials_are_refused",
+    "crosstalk_spec::tests::wire::http::auth::unauthorized_is_not_forbidden",
+    "crosstalk_spec::tests::wire::http::auth::a_401_challenges_for_a_bearer_token",
+    "crosstalk_spec::tests::wire::http::auth::auth_errors_golden_with_every_reason",
+]
+integration = "crosstalk_api::integration::requests_without_a_caller_are_401_and_unaudited"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+    "protocol": "anthropic_messages",
+    "transport": "sse",
+    "model": "claude-sonnet-4-5",
+    "client": {
+      "ingress": {
+        "type": "reverse_proxy",
+        "data": {
+          "route": "anthropic"
+        }
+      },
+      "upstream": {
+        "id": "claude-max",
+        "kind": {
+          "type": "subscription",
+          "data": {
+            "type": "anthropic"
+          }
+        }
+      },
+      "credential": {
+        "scheme": "oauth_access_token",
+        "hash": {
+          "key": 2,
+          "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+        }
+      },
+      "account": null,
+      "previous_digests": null,
+      "harness": {
+        "family": "claude_code",
+        "version": "2.0.14",
+        "user_agent": "claude-cli/2.0.14 (external, cli)"
+      },
+      "ids": {
+        "session": "6f1c2a9e-4b7d-4e2a-9c3f-1d8e5b0a7c42",
+        "agent": "planner",
+        "parent_agent": null
+      },
+      "class": "main"
+    },
+    "started_at": "2026-10-04T12:34:56.789012Z"
+  },
+  "continuation": {
+    "type": "full_history"
+  },
+  "request": [
+    "bbc5e661e106c6dcd8dc6dd186454c2fcba3c710fb4d8e71a60c93eaf077f073",
+    "1f58b9145b24d108d7ac38887338b3ea3229833b9c1e418250343f907bfd1047"
+  ],
+  "outcome": {
+    "type": "completed",
+    "data": {
+      "response": "a9f4b3d22a523fdada41c85c175425bcd15b32b4cd0f54d9433accd52d7195a1",
+      "response_id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+      "first_chunk_at": "2026-10-04T12:34:57.402118Z",
+      "finished_at": "2026-10-04T12:35:03.950031Z",
+      "stop": "tool_use",
+      "usage": {
+        "input": 18342,
+        "output": 611,
+        "cache_read": 16384,
+        "cache_write": 1536,
+        "reasoning": null
+      }
+    }
+  }
+}

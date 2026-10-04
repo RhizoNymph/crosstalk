@@ -7,12 +7,7 @@
 //! export starts, and that resolution (and the copy of current verdicts a
 //! `FalseDetections::Exclude` filter reads) holds for the whole export. A
 //! projection point keeps what its frame stored at fit time. Every topic a
-//! row names belongs to the header's topic version. A transmission whose
-//! sender and reader resolve to one agent under that resolution is in no
-//! dataset, as in every view: [`TransmissionRow::new`] refuses it, and
-//! edge, topic and projection rows come from views that drop it. An access
-//! row's channel is the channel holding its resource under that
-//! resolution, listed as a channel, as `channel_topology` draws it.
+//! row names belongs to the header's topic version.
 //!
 //! **Order.** Each dataset's rows are sent in ascending [`RowKey`] order, and
 //! no two rows of one export share a key, so the rows of an export are a
@@ -55,6 +50,8 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::{EdgeSelector, RouteKind};
 use crate::aggregates::projection::{ProjectedPoint, Projection};
 use crate::aggregates::quality::{MatchClass, QualityMatch};
@@ -67,7 +64,8 @@ use crate::interfaces::l8_surface::evidence::{MatchQuotes, TransmissionEvidence}
 use crate::interfaces::l8_surface::summary::{
     Delivery, TopicUnder, TransmissionStateKind, TransmissionSummary,
 };
-use crate::support::{NonEmpty, TimeWindow, Timestamp};
+use crate::support::{Finite, NonEmpty, TimeWindow, Timestamp};
+use crate::wire::Rejected;
 
 use super::digest::encode_route;
 use super::request::ExportDatasetKind;
@@ -76,15 +74,20 @@ use super::request::ExportDatasetKind;
 /// lists for it, resolved with the aliases captured when the export started
 /// and with its topic under the header's version, the strongest class of
 /// its content matches and, when the request includes content, its topic
-/// label and quoted text.
+/// label and quoted text. When its sender and reader have since been merged
+/// they are equal (the topology graph drops such a transmission; the export
+/// lists it).
 ///
 /// Built only through [`TransmissionRow::new`] and [`TransmissionRow::of`],
 /// which take a confirmed summary (`Confirmed`, `Classified` or
 /// `Aggregated`): the dataset holds confirmed transmissions, ordered and
-/// windowed by `Confirmed::at`, so every row has a [`Delivery`]. Its sender
-/// and reader are different agents: a transmission whose two agents have
-/// since merged into one is a transmission nowhere, so it is not a row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// windowed by `Confirmed::at`, so every row has a [`Delivery`].
+///
+/// On the wire, `{"summary": .., "strongest": .., "content": ..}`: the
+/// delivery is the summary's, so it is not written twice, and decoding goes
+/// through [`TransmissionRow::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawTransmissionRow", into = "RawTransmissionRow")]
 pub struct TransmissionRow {
     summary: TransmissionSummary,
     delivery: Delivery,
@@ -98,8 +101,35 @@ pub enum InvalidTransmissionRow {
     /// The transmission is not confirmed, so it has no `Confirmed::at` to
     /// order and window it by.
     NotConfirmed(TransmissionStateKind),
-    /// Its sender and reader resolve to this one agent.
-    WithinOneAgent(AgentId),
+}
+
+/// [`TransmissionRow`]'s wire form: its fields without the delivery, which
+/// [`TransmissionRow::new`] takes from the summary.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTransmissionRow {
+    summary: TransmissionSummary,
+    strongest: MatchClass,
+    content: Option<TransmissionContent>,
+}
+
+impl From<TransmissionRow> for RawTransmissionRow {
+    fn from(row: TransmissionRow) -> Self {
+        Self {
+            summary: row.summary,
+            strongest: row.strongest,
+            content: row.content,
+        }
+    }
+}
+
+impl TryFrom<RawTransmissionRow> for TransmissionRow {
+    type Error = Rejected<InvalidTransmissionRow>;
+
+    fn try_from(raw: RawTransmissionRow) -> Result<Self, Self::Error> {
+        Self::new(raw.summary, raw.strongest, raw.content)
+            .map_err(|error| Rejected::new("transmission row", error))
+    }
 }
 
 impl TransmissionRow {
@@ -111,9 +141,6 @@ impl TransmissionRow {
         let Some(&delivery) = summary.state.delivery() else {
             return Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()));
         };
-        if delivery.from == summary.to {
-            return Err(InvalidTransmissionRow::WithinOneAgent(summary.to));
-        }
         Ok(Self {
             summary,
             delivery,
@@ -165,7 +192,8 @@ impl TransmissionRow {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionContent {
     /// The label of the row's topic; `None` unless the summary's topic is
     /// [`TopicUnder::Topic`].
@@ -202,7 +230,8 @@ impl TransmissionContent {
 
 /// The text of one content match: the evidence page's two excerpts of it,
 /// cut with no context.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MatchText {
     pub class: MatchClass,
     /// The sender's originated text the match covers and the reader's input
@@ -212,7 +241,8 @@ pub struct MatchText {
 }
 
 /// The topic label column of edges and projection points.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct LabelContent {
     /// `None` for an outlier.
     pub topic_label: Option<String>,
@@ -223,7 +253,8 @@ pub struct LabelContent {
 /// `topology` sums them under the export's filter. A pair that resolves to
 /// one agent counts nothing, as in the graph, so the edge is an
 /// [`EdgeSelector`] and never a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EdgeRow {
     pub edge: EdgeSelector,
     /// Under the header's topic version; `None` for outliers.
@@ -236,7 +267,8 @@ pub struct EdgeRow {
 
 /// One access bucket over a canonical agent and channel, as
 /// `channel_topology` sums them under the export's filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AccessRow {
     pub agent: AgentId,
     pub channel: ChannelId,
@@ -249,7 +281,8 @@ pub struct AccessRow {
 /// every one when it lists none) and the admitted transmissions in the
 /// settled window assigned to it, zero included. Outliers are not a topic
 /// and have no row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicRow {
     pub topic: TopicId,
     pub transmissions: u64,
@@ -257,15 +290,19 @@ pub struct TopicRow {
     pub content: Option<TopicContent>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// On the wire, `terms` is an array of `[term, weight]` pairs; a weight is a
+/// finite JSON number ([`Finite`], as in `Topic::terms`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicContent {
     pub label: String,
     /// Top c-TF-IDF terms, highest weight first, as `Topic::terms`.
-    pub terms: Vec<(String, f32)>,
+    pub terms: Vec<(String, Finite)>,
 }
 
 /// One point of a stored projection, as its frame holds it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PointRow {
     /// The point's position in the frame (sample order).
     pub index: u32,
@@ -275,7 +312,8 @@ pub struct PointRow {
 
 /// One verdict record, with the detector's call on its transmission as
 /// `detection_quality` counts it, so the export reproduces that tally.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VerdictRow {
     pub transmission: TransmissionId,
     pub route_kind: RouteKind,
@@ -289,7 +327,13 @@ pub struct VerdictRow {
 }
 
 /// One row of an export. An export's rows are all of its dataset's kind.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportRow {
     /// Boxed: a summary with its quoted content is the largest row.
     Transmission(Box<TransmissionRow>),

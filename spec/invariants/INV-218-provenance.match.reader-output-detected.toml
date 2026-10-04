@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.match.reader-output-detected"
+statement = "Placing another agent's indexed span text of at least k + w - 1 normalized characters in a reader's output, absent from all of the reader exchange's inputs, yields a ContentMatch with carrier ReaderOutput against that span."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+An agent that reproduces another agent's novel text without any visible
+input containing it received that text through something the gateway does
+not proxy: a shared file, a side channel, another gateway. This is the only
+evidence of such channels, so missing it hides them entirely.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::unexplained_output_text_matches_as_reader_output"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

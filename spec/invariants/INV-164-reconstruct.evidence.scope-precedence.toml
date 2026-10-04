@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.evidence.scope-precedence"
+statement = "A harness id's IdentityScope is the exchange's account when it has one, else its credential when that credential is Stable, else its Upstream."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The account outlives any credential, so it is the widest stable context. A
+rotating token is never a scope: scoping to it would change every harness
+id's evidence on each refresh and split the agent. vLLM and SGLang may run
+without a key or with one shared server key, so their callers fall back to
+the upstream, which still keeps ids from different servers apart.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_reconstruct::tests::account_scopes_harness_ids",
+  "crosstalk_reconstruct::tests::stable_credential_scopes_harness_ids_without_account",
+  "crosstalk_reconstruct::tests::rotating_shared_or_no_credential_scopes_to_upstream",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

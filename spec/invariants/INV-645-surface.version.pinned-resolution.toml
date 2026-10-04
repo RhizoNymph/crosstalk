@@ -17,7 +17,7 @@ versions are queryable.
 
 [evidence]
 unit = ["crosstalk_spec::tests::topic_version::pinned_active_or_retained_superseded_version_resolves_to_itself", "crosstalk_spec::tests::topic_version::pinned_version_no_longer_retained_is_not_retained", "crosstalk_spec::tests::topic_version::pinned_version_never_activated_is_refused_whatever_is_retained", "crosstalk_spec::tests::topic_version::pinned_fitting_version_is_fitting", "crosstalk_spec::tests::topic_version::pinned_unknown_version_is_unknown", "crosstalk_spec::tests::query_errors::unavailable_versions_map_by_cause"]
-integration = "crosstalk::surface::integration::linked_views_resolve_pinned_versions"
+integration = "crosstalk_surface::integration::linked_views_resolve_pinned_versions"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

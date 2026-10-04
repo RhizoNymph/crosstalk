@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.capture.added-latency-bound"
+statement = "Capture adds at most 1 ms at p99 to the time between the proxy receiving an upstream chunk or WebSocket frame and relaying it, compared with the same proxy with capture disabled."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+Capture must never be the reason an agent is slow; if it is, operators
+turn the gateway off and the topology goes dark. The bound covers the
+framer or tap and the tee on the hot path, including time to first byte.
+The 1 ms figure is a starting threshold to be confirmed against
+measurements.
+"""
+
+[evidence]
+bench = "crosstalk_ingress::benches::capture_overhead_per_chunk_p99"
+
+[evidence-review]
+bench = { agent = "true", human = "false" }

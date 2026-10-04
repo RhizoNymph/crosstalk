@@ -12,8 +12,8 @@ watched topic with no remap outcome and an unexplained gap in the UI.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::lineage_links_consecutive_versions"
-property = "crosstalk::analysis::tests::lineage_has_entry_per_from_topic"
+unit = "crosstalk_analysis::tests::lineage_links_consecutive_versions"
+property = "crosstalk_analysis::tests::lineage_has_entry_per_from_topic"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

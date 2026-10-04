@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-create.traffic-has-last-seen"
+statement = "After AgentLifecycle::create of an agent with AgentOrigin::Traffic { first_seen }, or AgentLifecycle::advance of a registered agent with Advance::FirstTraffic { at }, ActivityStore::last_seen of that agent is at least first_seen (or at), recorded in the same transaction."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An agent created from traffic, or a registered agent's first exchange,
+must never be listed without a last-seen time: the agents list and the
+detail show it, and a reader between the creation and a separate activity
+write would see an agent that has traffic but was never seen.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::created_from_traffic_is_seen"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

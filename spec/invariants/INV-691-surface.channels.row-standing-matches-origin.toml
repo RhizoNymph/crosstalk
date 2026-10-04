@@ -11,9 +11,8 @@ resources resolve to, and are counted on, the channel that superseded it.
 So a superseded row carries no counts: its supersession names the row that
 does. Taking the operator from the superseding promotion's declaration means
 a row cannot credit a supersession to anyone but the operator who promoted.
-A discovered or promoted channel exists because of a cross-agent
-transmission, which accessed its resource, so showing it as never active
-would be false.
+A discovered or promoted channel exists because of an access, so showing it
+as never active would be false.
 """
 
 [evidence]
@@ -24,6 +23,7 @@ unit = [
     "crosstalk_spec::tests::channel_reads::row_standing_follows_the_channels_origin",
     "crosstalk_spec::tests::channel_reads::a_channel_with_traffic_is_never_listed_as_inactive",
     "crosstalk_spec::tests::channel_reads::superseded_into_names_the_promoting_operator",
+    "crosstalk_spec::tests::wire::surface_reads::channels::channel_rows_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

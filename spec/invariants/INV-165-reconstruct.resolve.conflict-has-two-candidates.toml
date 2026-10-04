@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.resolve.conflict-has-two-candidates"
+statement = "Every Conflict resolution names at least two candidates whose canonical agents differ."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+A conflict means the deciding evidence points at more than one agent. Two
+ids that are aliases of one canonical agent through a merge are the same
+agent, not a conflict; one candidate should have been Known; and a
+candidate list with a single canonical agent would make the chain resolver
+merge an agent into itself. `Conflict::candidates` is only `NonEmpty`, so
+the type does not enforce this.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::conflict_names_two_distinct_canonical_agents"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

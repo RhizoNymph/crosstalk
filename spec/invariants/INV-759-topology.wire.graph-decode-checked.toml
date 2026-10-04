@@ -1,0 +1,25 @@
+[invariant]
+id = "topology.wire.graph-decode-checked"
+statement = "Decoding JSON into a TopologyGraph yields a value only when TopologyGraph::new accepts its parts: no self-edge, no (from, to, route) twice, every share its stat under the weighting over the total of that stat, and nodes as the node rules require; any other graph JSON is a decode error."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+TopologyGraph is a checked type like BipartiteGraph: private fields, built
+only through TopologyGraph::new (topology.graph.checked-construction), and
+its wire form is its parts, decoded through the same constructor. The UI
+and other nodes render and sum a graph from the response alone: a graph
+with a missing node, a repeated edge or shares that do not add up would
+draw wrongly without any error. Decoding through the constructor means the
+JSON cannot carry a graph the server could never build, so the decoding
+side relies on the same rules as the producing side.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::topology::graph::topology_graphs_refuse_what_check_refuses",
+    "crosstalk_spec::tests::wire::topology::graph::topology_graph_goldens",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.action.set-policy-publishes-once"
+statement = "Each SetPolicy call publishes exactly one PolicyChanged event if it returns Ok and none if it returns an error."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+L5 applies PolicyChanged and L6 triage suppresses alerts on newly sanctioned
+channels. A SetPolicy that failed after publishing would change routing
+while telling the operator nothing happened; one that returned Ok without
+publishing would leave the old policy in force. Publishing through the
+transactional outbox ties the event to the call's outcome. Bus redelivery
+after publish is L2's concern.
+"""
+
+[evidence]
+dst = "crosstalk_surface::dst::set_policy_publish_count_under_store_and_bus_faults"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

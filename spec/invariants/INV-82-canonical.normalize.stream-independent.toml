@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.normalize.stream-independent"
+statement = "The same response delivered over Http, Sse or WebSocket normalizes to the same response message."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Whether a harness streams, and over which transport, is a client choice
+that says nothing about content: Codex uses WebSocket by default and falls
+back to SSE. Reassembling SSE deltas or WebSocket server frames (text
+deltas, partial tool-argument JSON, reasoning and signature deltas) must
+produce exactly the message a single complete body would, or the same
+output gets two hashes and provenance splits one agent's output in two.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::recorded_transports_normalize_equal"
+property = "crosstalk_canonical::tests::response_message_independent_of_transport"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

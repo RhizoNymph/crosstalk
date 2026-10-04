@@ -1,0 +1,17 @@
+[invariant]
+id = "provenance.span.relay-source-contains-text"
+statement = "Every Relayed SpanDraft's RelaySource contains the span's text after whitespace and case normalization."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A relay claim is evidence that text flowed from the source to this agent.
+A source that does not contain the text fabricates that edge, and a source
+outside the exchange's inputs names something the agent never saw.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::relayed_span_source_contains_text"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

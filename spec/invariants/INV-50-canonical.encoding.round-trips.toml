@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.encoding.round-trips"
+statement = "Decoding a message body's canonical encoding yields a body equal to the original."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The blob store holds canonical encodings, and every downstream consumer
+(threading, segmentation, extraction) rebuilds Message values by decoding
+them. A lossy or ambiguous encoding would hand consumers a body that differs
+from the one that was hashed, and two distinct bodies sharing an encoding
+would share a hash. Round-tripping rules out both.
+"""
+
+[evidence]
+property = "crosstalk_spec::tests::encoding::encoding_round_trips"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

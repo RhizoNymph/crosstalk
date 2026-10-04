@@ -31,6 +31,7 @@
 //! | `f32` | IEEE 754 bits as `u32` LE |
 //! | `TimeWindow` | start, then end |
 //! | `RouteKind` | `u8` as the projection frame's route code |
+//! | `PointRoute` | its kind's `u8` route code, then for a channel its id |
 //! | `Route` | see [`encode_route`] |
 //! | `AccessKind` | `u8`: write 0, read 1 |
 //! | `Verdict` | `u8`: genuine 0, false detection 1 |
@@ -42,6 +43,8 @@
 //! | `Excerpted` | `u8` 0 then the excerpt's text (string), highlight start and end (`u32`), bytes elided before and after and bytes of highlight cut (`u64`); or `u8` 1 then the dropped body's `MessageHash` |
 //!
 //! [`ExportDatasetKind::code`]: super::request::ExportDatasetKind::code
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::projection::frame::route_code;
@@ -70,8 +73,10 @@ pub trait RowHasher {
     fn finalize(&self) -> Blake3;
 }
 
-/// The digest of an export's rows, as the trailer records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The digest of an export's rows, as the trailer records it. On the wire,
+/// its lower-case hex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ExportDigest(Blake3);
 
 impl ExportDigest {
@@ -231,7 +236,7 @@ fn topic(row: &TopicRow, out: &mut Vec<u8>) {
         len(content.terms.len(), out);
         for (term, weight) in &content.terms {
             string(term, out);
-            float(*weight, out);
+            float(weight.get(), out);
         }
     });
 }
@@ -242,11 +247,14 @@ fn point(row: &PointRow, out: &mut Vec<u8>) {
     id(point.transmission.as_ulid(), out);
     id(point.from.as_ulid(), out);
     id(point.to.as_ulid(), out);
-    out.push(route_code(point.route));
+    out.push(route_code(point.route.kind()));
+    if let Some(channel) = point.route.channel() {
+        id(channel.as_ulid(), out);
+    }
     option(point.topic, out, |topic, out| id(topic.as_ulid(), out));
     time(point.confirmed_at, out);
-    float(point.x, out);
-    float(point.y, out);
+    float(point.x.get(), out);
+    float(point.y.get(), out);
     option(row.content.as_ref(), out, label);
 }
 

@@ -1,0 +1,416 @@
+[
+  {
+    "status": 503,
+    "error": {
+      "type": "store",
+      "data": {
+        "reason": "serialization failure"
+      }
+    }
+  },
+  {
+    "status": 404,
+    "error": {
+      "type": "not_found"
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "type": "forbidden",
+      "data": {
+        "missing": "govern"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "alert_not_active",
+        "data": {
+          "alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "alert_not_acknowledged",
+        "data": {
+          "alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "agent_merged",
+        "data": {
+          "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "merge_already_reverted",
+        "data": {
+          "merge": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "merge_into_self",
+        "data": {
+          "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "canonical": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "channel_superseded",
+        "data": {
+          "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "by": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "channel_not_discovered",
+        "data": {
+          "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "pattern_overlaps",
+        "data": {
+          "existing": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "rule_not_editable",
+        "data": {
+          "rule": "00000000000000000000000001"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "rule_stale",
+        "data": {
+          "rule": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "topic_version_not_current",
+        "data": {
+          "requested": 3,
+          "current": 4
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "transmission_not_judgeable",
+        "data": {
+          "transmission": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "topic_version_fitting",
+        "data": {
+          "version": 5
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "topic_version_dropped",
+        "data": {
+          "version": 1
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "topic_version_not_activated",
+        "data": {
+          "version": 5
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "topics_not_in_version",
+        "data": {
+          "version": 4,
+          "topics": [
+            "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "embedding_model_changed"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "projection_not_ready",
+        "data": {
+          "projection": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+          "status": "fitting"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "projection_failed",
+        "data": {
+          "projection": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+          "failure": {
+            "type": "too_few_points",
+            "data": {
+              "needed": 16,
+              "got": 9
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "status": 429,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "projection_queue_full"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "type": "conflict",
+      "data": {
+        "type": "export_too_large",
+        "data": {
+          "rows": 2000001,
+          "limit": 2000000
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "unaligned_window"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "bucket_width_mismatch"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "pattern_misses_seed"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "unknown_topics"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "unknown_sink",
+        "data": {
+          "sink": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "query_too_long"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "self_merge"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "empty_selection"
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "excerpt_context_too_long",
+        "data": {
+          "max": 2048,
+          "got": 4096
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "too_many_ids",
+        "data": {
+          "max": 1000,
+          "got": 1001
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "unsupported_format",
+        "data": {
+          "format": "parquet"
+        }
+      }
+    }
+  },
+  {
+    "status": 400,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "malformed_request",
+        "data": {
+          "kind": "data",
+          "reason": "unknown field `stats`, expected `states` or `channel` at line 1 column 8"
+        }
+      }
+    }
+  }
+]

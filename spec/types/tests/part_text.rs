@@ -74,7 +74,10 @@ fn text_parts_are_their_text() {
 fn assistant_parts_index_text_reasoning_and_arguments() {
     let assistant = of(MessageBody::Assistant(vec![
         AssistantPart::Text(text("done")),
-        AssistantPart::Reasoning(Reasoning::Visible(text("thinking"))),
+        AssistantPart::Reasoning(Reasoning::Visible {
+            text: text("thinking"),
+            signature: Some("EqNrZpUTd52E==".to_owned()),
+        }),
         AssistantPart::Reasoning(Reasoning::Opaque {
             signature: "sig".into(),
         }),

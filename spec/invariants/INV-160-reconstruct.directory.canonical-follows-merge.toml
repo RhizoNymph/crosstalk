@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.directory.canonical-follows-merge"
+statement = "AgentDirectory::canonical returns a Merged agent's into and returns every other agent id unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Every reader of a stored agent id resolves it through the directory, so this
+is how attribution follows a merge without rewriting records. Together with
+flat merge chains it makes canonical ids never Merged, so a transmission
+between two agents that were later merged becomes a self-edge readers drop.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::canonical_follows_merge_table"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

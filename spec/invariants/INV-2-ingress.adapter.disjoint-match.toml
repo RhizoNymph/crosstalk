@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.adapter.disjoint-match"
+statement = "No RequestHead is classified by more than one registered ProviderAdapter."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+The adapter fixes the wire protocol, the endpoint kind, the decoder and the
+framer. Two adapters claiming one request would make attribution depend on
+registration order, and a request could be decoded with one protocol's
+schema and framed with another's.
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::adapter::classify_predicates_are_disjoint"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

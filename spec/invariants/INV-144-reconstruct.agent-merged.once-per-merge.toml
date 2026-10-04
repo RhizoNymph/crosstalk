@@ -13,7 +13,7 @@ publishing nothing.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_agent_merged_once_per_merge"
+dst = "crosstalk_reconstruct::tests::dst_agent_merged_once_per_merge"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

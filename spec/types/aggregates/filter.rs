@@ -15,14 +15,6 @@
 //! | projection | each point | the point's transmission, at fit time |
 //! | edge transmissions | each row | the row's transmission |
 //!
-//! **Only transmissions between different agents.** `admits` never admits
-//! a subject whose sender and reader are one canonical agent: two ids of
-//! one transmission merged since it was recorded
-//! ([`Crossing::WithinOneAgent`]). So no view counts or lists such a
-//! transmission: graphs and series drop it as a self-edge, and search, the
-//! projection's sample, the edge drill-down and exports, which all filter
-//! through `admits`, leave it out too.
-//!
 //! A subject's agents are canonical (resolved through `AgentDirectory` when
 //! the view is computed; for a stored projection, when it was fitted), and
 //! so are the agents the filter lists. Its route's channel is canonical
@@ -53,12 +45,9 @@
 //! [`TimeWindow::contains`](crate::support::TimeWindow::contains).
 //!
 //! **Accesses.** The channel-centred view (`channel_topology`) also draws
-//! accesses: agent-to-channel reads and writes on channels listed as
-//! channels ([`Listing::Channel`]: with cross-agent traffic, so neither a
-//! resource on no channel, a hidden channel nor a declaration without
-//! traffic), counted whether or not anyone read what was written. Each
-//! access bucket is reduced to an [`AccessSubject`] and kept when
-//! [`TopologyFilter::admits_access`] holds:
+//! accesses: agent-to-channel reads and writes, counted whether or not
+//! anyone read what was written. Each access bucket is reduced to an
+//! [`AccessSubject`] and kept when [`TopologyFilter::admits_access`] holds:
 //!
 //! | Field | Admits an access when |
 //! | --- | --- |
@@ -67,36 +56,27 @@
 //! | `route_kinds` | `Channel` is listed: an access is a channel's traffic |
 //! | `topics` | its channel carries, in the window, a channel-routed confirmed transmission whose topic is listed |
 //! | `false_detections` | always: an access is not a detection; it only narrows which transmissions count for `topics` |
-//! | `unconfirmed_channels` | `Include`, or its channel's confirmation is `Confirmed` |
 //!
 //! An access has no topic of its own, so a topic filter keeps the accesses
 //! of channels the listed topics flowed through, and with them the writes
 //! there that nobody has read yet. The window is tested against
 //! `Access::at` (by bucket, like edges).
-//!
-//! **Unconfirmed channels.** `unconfirmed_channels` decides whether
-//! channels whose cross-agent traffic is all unconfirmed
-//! ([`Confirmation::Unconfirmed`]) count: their accesses and channel nodes
-//! in the channel-centred view, and the channel counts of the overview. It
-//! changes no transmission view: those count confirmed transmissions
-//! between different agents only, and a channel such a transmission is
-//! routed through is confirmed by it.
-//!
-//! [`Listing::Channel`]: crate::derived::flow::channel::confirmation::Listing::Channel
-//! [`Crossing::WithinOneAgent`]: crate::derived::flow::transmission::Crossing::WithinOneAgent
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicVersionHistory, TopicVersionStatus};
 use crate::aliases::Aliases;
-use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId, TopicId};
+use crate::wire::WireRequest;
 
 /// Restricts which transmissions a view shows. Empty lists do not restrict.
 /// Non-empty lists combine with AND across fields; entries within one list
 /// combine with OR. [`TopologyFilter::admits`] is the definition.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopologyFilter {
     /// Keep transmissions whose sender OR reader is one of these (after alias
     /// resolution of both sides).
@@ -116,35 +96,17 @@ pub struct TopologyFilter {
     pub topic_version: TopicVersionSelector,
     /// Whether transmissions an operator judged `FalseDetection` count.
     pub false_detections: FalseDetections,
-    /// Whether channels whose cross-agent traffic is all unconfirmed count
-    /// (see the module docs, "Unconfirmed channels").
-    pub unconfirmed_channels: UnconfirmedChannels,
 }
 
-/// Whether views count channels whose cross-agent traffic is all
-/// unconfirmed ([`Confirmation::Unconfirmed`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum UnconfirmedChannels {
-    /// Counted and drawn like any channel; the UI marks them. The default,
-    /// so a resource agents only just started passing text through is not
-    /// missed while its content evidence is outstanding.
-    #[default]
-    Include,
-    /// Only channels with a confirmed cross-agent transmission count.
-    Exclude,
-}
-
-impl UnconfirmedChannels {
-    /// Whether a channel with `confirmation` counts.
-    pub fn keeps(self, confirmation: Confirmation) -> bool {
-        match (self, confirmation) {
-            (Self::Include, _) | (Self::Exclude, Confirmation::Confirmed) => true,
-            (Self::Exclude, Confirmation::Unconfirmed) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// A request (a linked view's version, `transmissions_by_id`, `topics`):
+/// `{"type": "current"}` or `{"type": "pinned", "data": 3}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TopicVersionSelector {
     /// The catalog's active version when the view is computed; the response
     /// reports which.
@@ -152,6 +114,11 @@ pub enum TopicVersionSelector {
     Current,
     Pinned(TopicModelVersion),
 }
+
+/// A client chooses every field of the shared filter.
+impl WireRequest for TopologyFilter {}
+
+impl WireRequest for TopicVersionSelector {}
 
 /// Why a selector names no version a linked view can be computed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -206,7 +173,8 @@ impl TopicVersionSelector {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FalseDetections {
     /// Detector output as is.
     #[default]
@@ -242,11 +210,8 @@ pub struct FilterSubject<'a> {
 pub struct AccessSubject<'a> {
     /// The canonical agent that read or wrote.
     pub agent: AgentId,
-    /// The canonical channel accessed: the channel in force that holds the
-    /// access's resource at read time, listed as a channel.
+    /// The canonical channel accessed.
     pub channel: ChannelId,
-    /// That channel's confirmation at read time (`Listing::Channel`).
-    pub confirmation: Confirmation,
     /// The topics, under the response's topic-model version, of the
     /// channel-routed confirmed transmissions on `channel` in the window that
     /// the filter's `false_detections` keeps. Outliers and unclassified
@@ -259,12 +224,8 @@ impl TopologyFilter {
     /// agents through the merge aliases (`AgentDirectory::canonical`) and its
     /// listed channels through supersession (`ChannelDirectory::canonical`),
     /// so a listed id that has since been merged away or superseded still
-    /// selects what it became. A subject whose sender and reader are one
-    /// agent is never admitted, whatever the filter.
+    /// selects what it became.
     pub fn admits(&self, subject: &FilterSubject<'_>, aliases: impl Aliases) -> bool {
-        if subject.from == subject.to {
-            return false;
-        }
         let agents = self.agents.is_empty()
             || self
                 .agents
@@ -339,8 +300,7 @@ impl TopologyFilter {
                 .channel_topics
                 .iter()
                 .any(|topic| self.topics.contains(topic));
-        let confirmation = self.unconfirmed_channels.keeps(subject.confirmation);
-        agents && channels && route_kinds && topics && confirmation
+        agents && channels && route_kinds && topics
     }
 
     /// Whether the canonical `channel` is the canonical form of a listed

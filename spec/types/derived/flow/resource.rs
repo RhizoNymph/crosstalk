@@ -10,14 +10,24 @@
 //!   system prompts carry it); when none is known, the access is keyed as
 //!   `Locator::Opaque` on the tool and the path as written.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::ResourceId;
 use crate::observed::message::ToolName;
 use crate::support::Timestamp;
+use crate::wire::WireRequest;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Host(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Locator {
     Url {
         scheme: String,
@@ -42,7 +52,8 @@ pub enum Locator {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Resource {
     pub id: ResourceId,
     pub locator: Locator,
@@ -52,7 +63,13 @@ pub struct Resource {
 /// Matches locators. Used by declared channels, which exist before any of
 /// their resources have been seen. Prefixes match whole path segments only:
 /// `/shared` matches `/shared` and `/shared/x`, not `/shared-other/x`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ResourcePattern {
     Exact(Locator),
     Host(Host),
@@ -60,6 +77,9 @@ pub enum ResourcePattern {
     PathPrefix { host: Option<Host>, prefix: String },
     McpServer(String),
 }
+
+/// A client names the pattern of a promotion and of its preview.
+impl WireRequest for ResourcePattern {}
 
 impl ResourcePattern {
     pub fn matches(&self, locator: &Locator) -> bool {

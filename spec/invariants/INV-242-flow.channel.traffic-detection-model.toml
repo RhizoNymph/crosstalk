@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.channel.traffic-detection-model"
+statement = "Apart from staying in its state, every transition the flow consumer applies to a TrafficDetection is Observed or Dormant to Candidate on a cross access, Candidate to Active on a confirmation, or Active to Dormant on the idle timeout."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+These are the transitions documented in `channel/detection.rs`. Active
+is reached only through a confirmation, so a channel is never shown as
+carrying communication on access patterns alone, and a Dormant channel must
+show a new cross access before it is a candidate again.
+"""
+
+[evidence]
+property = "crosstalk_flow::channel::tests::traffic_detection_transitions"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

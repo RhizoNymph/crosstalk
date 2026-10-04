@@ -13,7 +13,7 @@ agents.
 
 [evidence]
 unit = "crosstalk_spec::tests::channels::route_resolution_changes_only_channels"
-property = "crosstalk::topology::props::superseded_routes_count_on_canonical"
+property = "crosstalk_topology::props::superseded_routes_count_on_canonical"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

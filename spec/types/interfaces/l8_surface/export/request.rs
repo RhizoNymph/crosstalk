@@ -4,16 +4,20 @@
 
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::filter::TopologyFilter;
 use crate::ids::ProjectionId;
 use crate::interfaces::l8_surface::{ConflictKind, Permission};
 use crate::support::TimeWindow;
+use crate::wire::{Rejected, WireRequest};
 
 /// The window and the shared filter of a scoped dataset. The filter's
 /// [`TopicVersionSelector`](crate::aggregates::filter::TopicVersionSelector)
 /// is resolved once, when the export starts, and the header records the
 /// filter pinned to that version for the whole export.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExportScope {
     pub window: TimeWindow,
     pub filter: TopologyFilter,
@@ -27,7 +31,13 @@ pub struct ExportScope {
 /// discarded transmissions, which have no sender or topic for a
 /// [`TopologyFilter`] to test, so they are selected by window alone (by
 /// `Transmission::opened_at`, as `detection_quality` does).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportDataset {
     /// Confirmed transmissions whose `Confirmed::at` lies in the settled
     /// window and that the filter admits.
@@ -52,7 +62,8 @@ pub enum ExportDataset {
 
 /// Which dataset, without its selection. Rows and headers are checked
 /// against it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportDatasetKind {
     Transmissions,
     Edges,
@@ -137,7 +148,8 @@ impl ExportDataset {
 /// How rows are encoded on the wire. The logical rows, their order, the
 /// row count and the digest are the same in either
 /// ([`super::digest`]); only the bytes differ.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportFormat {
     /// One JSON object per line: the header first, then one per row, then
     /// the trailer.
@@ -147,12 +159,93 @@ pub enum ExportFormat {
     Parquet,
 }
 
+/// The formats a gateway writes, in the order its export form offers them
+/// (`Present::export_formats`). A format the gateway does not write is
+/// refused before anything is read ([`ExportFormats::check`]), so a client
+/// that offers only these never meets the refusal.
+///
+/// Built only through [`ExportFormats::new`]: at least one format, none
+/// twice. On the wire, an array of strings, `["jsonl", "parquet"]`, decoded
+/// through the constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "Vec<ExportFormat>", into = "Vec<ExportFormat>")]
+pub struct ExportFormats(Vec<ExportFormat>);
+
+/// Why a list of formats is not an [`ExportFormats`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidExportFormats {
+    Empty,
+    Duplicate(ExportFormat),
+}
+
+/// An export asked for a format the gateway does not write
+/// (`InvalidInput(UnsupportedFormat)` through `QueryError::from`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedFormat {
+    pub format: ExportFormat,
+}
+
+impl TryFrom<Vec<ExportFormat>> for ExportFormats {
+    type Error = Rejected<InvalidExportFormats>;
+
+    fn try_from(formats: Vec<ExportFormat>) -> Result<Self, Self::Error> {
+        Self::new(formats).map_err(|error| Rejected::new("export formats", error))
+    }
+}
+
+impl From<ExportFormats> for Vec<ExportFormat> {
+    fn from(formats: ExportFormats) -> Self {
+        formats.0
+    }
+}
+
+impl ExportFormats {
+    /// The formats in offer order; refuses an empty list and a repeat.
+    pub fn new(formats: Vec<ExportFormat>) -> Result<Self, InvalidExportFormats> {
+        if formats.is_empty() {
+            return Err(InvalidExportFormats::Empty);
+        }
+        for (index, format) in formats.iter().enumerate() {
+            if formats[..index].contains(format) {
+                return Err(InvalidExportFormats::Duplicate(*format));
+            }
+        }
+        Ok(Self(formats))
+    }
+
+    /// In offer order; never empty.
+    pub fn as_slice(&self) -> &[ExportFormat] {
+        &self.0
+    }
+
+    /// The format a form selects by default: the first offered.
+    pub fn first(&self) -> ExportFormat {
+        self.0.first().copied().unwrap_or(ExportFormat::Jsonl)
+    }
+
+    pub fn offers(&self, format: ExportFormat) -> bool {
+        self.0.contains(&format)
+    }
+
+    /// `UnsupportedFormat` for a format not offered. `QueryApi::export`
+    /// runs it after the permission check and before reading anything.
+    pub fn check(&self, format: ExportFormat) -> Result<(), UnsupportedFormat> {
+        if self.offers(format) {
+            Ok(())
+        } else {
+            Err(UnsupportedFormat { format })
+        }
+    }
+}
+
 /// One export request.
 ///
 /// Built only through [`ExportRequest::new`], which refuses
 /// `include_content` for a dataset with no content columns, so a request
-/// never asks for columns that cannot be delivered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// never asks for columns that cannot be delivered. A request, decoded
+/// through it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawExportRequest")]
 pub struct ExportRequest {
     dataset: ExportDataset,
     format: ExportFormat,
@@ -164,6 +257,27 @@ pub enum InvalidExportRequest {
     /// `include_content` for accesses or verdicts.
     NoContentColumns { dataset: ExportDatasetKind },
 }
+
+/// [`ExportRequest`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExportRequest {
+    dataset: ExportDataset,
+    format: ExportFormat,
+    include_content: bool,
+}
+
+impl TryFrom<RawExportRequest> for ExportRequest {
+    type Error = Rejected<InvalidExportRequest>;
+
+    fn try_from(raw: RawExportRequest) -> Result<Self, Self::Error> {
+        Self::new(raw.dataset, raw.format, raw.include_content)
+            .map_err(|error| Rejected::new("export request", error))
+    }
+}
+
+/// A client chooses every field of an export request.
+impl WireRequest for ExportRequest {}
 
 impl ExportRequest {
     pub fn new(

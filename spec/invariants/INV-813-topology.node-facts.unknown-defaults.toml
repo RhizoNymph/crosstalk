@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.node-facts.unknown-defaults"
+statement = "A graph node for a canonical agent NodeFacts::agent returns None for is drawn Provisional, top-level, unlabelled and with no claims, and a channel node for a channel NodeFacts::channel returns None is drawn Discovered, Observed, Unreviewed and summarized by its id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+NodeFacts is a cache kept current from L3's and L5's events, so a graph can
+read an edge whose endpoint the cache has not seen yet. Drawing it with
+fixed, conservative defaults keeps the graph valid (TopologyGraph::new
+accepts it) and deterministic, instead of failing the query or inventing a
+state the agent never had.
+"""
+
+[evidence]
+unit = "crosstalk_topology::tests::unknown_node_facts_draw_defaults"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

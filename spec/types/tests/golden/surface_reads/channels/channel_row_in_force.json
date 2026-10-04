@@ -1,0 +1,53 @@
+{
+  "channel": {
+    "id": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4",
+    "origin": {
+      "type": "discovered",
+      "data": {
+        "seed": {
+          "resource": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+          "first_access": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        },
+        "detection": {
+          "type": "active",
+          "data": {
+            "since": "2026-10-04T09:16:41.250000Z",
+            "last_transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+          }
+        }
+      }
+    },
+    "resources": [],
+    "policy": {
+      "type": "unreviewed",
+      "data": null
+    }
+  },
+  "seed": {
+    "id": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+    "locator": {
+      "type": "url",
+      "data": {
+        "scheme": "https",
+        "host": "wiki.example.com",
+        "path": "/team/release-plan",
+        "query": null
+      }
+    },
+    "first_seen": "2026-10-04T09:15:02.418000Z"
+  },
+  "standing": {
+    "type": "in_force",
+    "data": {
+      "type": "seen",
+      "data": {
+        "last": "2026-10-04T11:42:07.531000Z",
+        "counts": {
+          "writers": 1,
+          "readers": 2,
+          "transmissions": 14
+        }
+      }
+    }
+  }
+}

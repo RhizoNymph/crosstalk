@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.filter.access-admission"
+statement = "TopologyFilter::admits_access admits an access exactly when, for each non-empty field, its canonical agent is the canonical form of a listed agent, its canonical channel is the canonical form of a listed channel, Channel is a listed route kind, and one of its channel's transmission topics in the window is listed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Accesses have no topic of their own. Rather than dropping every access
+under a topic filter, a topic keeps the accesses of channels that topic
+flowed through, so the view still shows who else wrote there. Route kinds
+treat an access as channel traffic.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::access_filter_applies_each_field",
+    "crosstalk_spec::tests::channels::access_on_a_channel_without_topics_fails_any_topic_filter",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

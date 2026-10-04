@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.ids.no-cross-conversion"
+statement = "A value of one id type cannot be used where a different id type is expected."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Every id is a 128-bit ULID or a 32-byte digest, so as bare integers or
+byte arrays an AgentId and a ConversationId, a MessageHash and a
+PromptHash, or a content id and a keyed CredentialHash are interchangeable
+and swapping them type-checks. Each id is its own newtype with no From or
+Into between them, so passing the wrong one is a compile error. The only
+route between two is an explicit two-step through the raw value
+(from_ulid(other.as_ulid()), from_digest(*other.digest())).
+"""
+
+[evidence]
+type = "crosstalk_spec::ids"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

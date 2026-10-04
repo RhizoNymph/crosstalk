@@ -4,30 +4,20 @@
 //! (`QueryApi::promotion_preview`).
 //!
 //! **Rows.** A [`ChannelRow`] is the stored channel, its seed resource, and
-//! its standing: in force with its cross-agent traffic and its activity, or
-//! superseded with who superseded it into which channel. Traffic and
-//! activity belong to the channel in force: accesses to a superseded
-//! channel's resources and transmissions routed through it resolve to its
-//! superseding channel at read time and are counted there. A superseded row
-//! therefore carries no counts and no last activity, so summing a list's
-//! counts never counts an access twice; its supersession names the row that
-//! does carry them.
+//! its standing: in force with its activity, or superseded with who
+//! superseded it into which channel. Activity belongs to the channel in
+//! force: accesses to a superseded channel's resources and transmissions
+//! routed through it resolve to its superseding channel at read time and are
+//! counted there. A superseded row therefore carries no counts and no last
+//! activity, so summing a list's counts never counts an access twice; its
+//! supersession names the row that does carry them.
 //!
 //! ```text
-//! in force:   traffic  = CrossTraffic::tally(every transmission routed through it, merges resolved), all time
-//!             activity = ChannelActivity::Seen { last, counts } over the channel and every channel it superseded
-//!             counts   = ChannelCounts::tally(full channel_resources(channel, window),
-//!                                             ChannelCounts::routed(graph(window, default filter))[channel])
-//! superseded: SupersededInto { into, by, at }, no traffic, no counts
+//! in force:   ChannelActivity::Seen { last, counts } over the channel and every channel it superseded
+//!             counts = ChannelCounts::tally(full channel_resources(channel, window),
+//!                                           ChannelCounts::routed(graph(window, default filter))[channel])
+//! superseded: SupersededInto { into, by, at }, no counts
 //! ```
-//!
-//! **Listings.** A row in force is listed by its [`Listing`], which follows
-//! from its origin and traffic ([`ChannelRow::listing`]): a channel
-//! (confirmed or unconfirmed), a declaration with no cross-agent traffic
-//! yet, or hidden. `channels` never lists a hidden channel; `channel` still
-//! returns its row, so its page can say why it is hidden. Traffic is all
-//! time and so is the listing: whether a channel exists does not depend on
-//! the window a page counts in.
 //!
 //! **Rows and the overview.** A row's `transmissions` is what the topology
 //! graph counts on the channel for the same window under
@@ -38,8 +28,8 @@
 //! default filter and the same window it is the number of rows in force
 //! whose `transmissions` is non-zero. "Active" in the overview is that
 //! count; a row's [`ChannelActivity::Seen`] is wider: any access or
-//! confirmation ever, so a channel whose last transmission is a while ago,
-//! or an unconfirmed one, is `Seen` but not active in the window.
+//! confirmation ever, so a channel written to and never read is `Seen` but
+//! not active.
 //!
 //! **Names.** [`ChannelName`] is what the UI shows for a channel id: the
 //! channel in force and its pattern (declared) or seed locator (discovered).
@@ -56,12 +46,13 @@
 //!
 //! [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::access::ResourceUse;
 use crate::aggregates::edge::TopologyGraph;
 use crate::batch::IdBatch;
-use crate::derived::flow::channel::confirmation::{Confirmation, CrossTraffic, Listing};
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::channel::promotion::{CappedResources, PromotionCoverage, Registered};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, DeclaredHistory, Supersession};
@@ -70,6 +61,7 @@ use crate::derived::flow::transmission::Route;
 use crate::ids::{ChannelId, OperatorId};
 use crate::interfaces::l5_flow::PromoteError;
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 use super::actions::SupersededChannels;
 use super::{ActionError, ConflictKind, QueryError};
@@ -82,34 +74,38 @@ use super::{ActionError, ConflictKind, QueryError};
 /// - the standing is superseded exactly when the channel is, with the
 ///   channel's own supersession (`into` its superseding channel, `at` its
 ///   time);
-/// - a channel whose detection shows traffic is not listed as never active;
-/// - a channel whose stored detection has no traffic (declared, awaiting
-///   traffic or unused) carries no cross-agent traffic: merges only ever
-///   remove crossing transmissions at read time, never add them.
-///
-/// Its [`Listing`] and [`Confirmation`] are derived from its origin and
-/// traffic, never stored beside them, so they cannot disagree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// - a channel whose detection shows traffic is not listed as never active.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawChannelRow")]
 pub struct ChannelRow {
     channel: Channel,
     seed: Option<Resource>,
     standing: ChannelStanding,
 }
 
-/// Whether a channel is in force, with its cross-agent traffic and its
-/// activity, or superseded, with neither of its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether a channel is in force, with its activity, or superseded, with
+/// no activity of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelStanding {
-    InForce {
-        traffic: CrossTraffic,
-        activity: ChannelActivity,
-    },
+    InForce(ChannelActivity),
     Superseded(SupersededInto),
 }
 
 /// The activity of a channel in force: its own and that of every channel it
 /// superseded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelActivity {
     /// No access to any of its resources and no transmission routed
     /// through it, ever: a channel declared before traffic that has seen
@@ -126,7 +122,8 @@ pub enum ChannelActivity {
 }
 
 /// What a channel in force carried within a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelCounts {
     /// Distinct canonical agents that wrote any of its resources.
     pub writers: u64,
@@ -171,7 +168,7 @@ impl ChannelCounts {
     /// [`EdgeTotals::of`]: crate::aggregates::edge::EdgeTotals::of
     pub fn routed(graph: &TopologyGraph) -> HashMap<ChannelId, u64> {
         let mut routed: HashMap<ChannelId, u64> = HashMap::new();
-        for edge in &graph.edges {
+        for edge in graph.edges() {
             if let Route::Channel(channel) = edge.route {
                 let sum = routed.entry(channel).or_default();
                 *sum = sum.saturating_add(edge.stats.transmissions.get());
@@ -192,7 +189,13 @@ fn count(n: usize) -> u64 {
 /// Built only through [`SupersededInto::of`], which takes the operator from
 /// the superseding channel's declaration, so it cannot name anyone but the
 /// promoting operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A response, never a request: `by` and `at` are the promotion's stamps.
+/// Decoding cannot rerun [`SupersededInto::of`], which reads the
+/// superseding channel; `ChannelRow::new` checks `into` and `at` against
+/// the row's own channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SupersededInto {
     into: ChannelId,
     by: OperatorId,
@@ -268,9 +271,25 @@ pub enum InvalidChannelRow {
     StandingMismatch,
     /// A channel whose detection shows traffic, listed as never active.
     TrafficWithoutActivity,
-    /// Cross-agent traffic on a channel whose stored detection has none
-    /// (declared, awaiting traffic or unused).
-    TrafficWithoutDetection,
+}
+
+/// [`ChannelRow`]'s fields, decoded without the checks. Decoding goes
+/// through [`ChannelRow::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawChannelRow {
+    channel: Channel,
+    seed: Option<Resource>,
+    standing: ChannelStanding,
+}
+
+impl TryFrom<RawChannelRow> for ChannelRow {
+    type Error = Rejected<InvalidChannelRow>;
+
+    fn try_from(raw: RawChannelRow) -> Result<Self, Self::Error> {
+        Self::new(raw.channel, raw.seed, raw.standing)
+            .map_err(|error| Rejected::new("channel row", error))
+    }
 }
 
 impl ChannelRow {
@@ -286,13 +305,9 @@ impl ChannelRow {
         match (channel.origin.supersession(), standing) {
             (Some(own), ChannelStanding::Superseded(shown))
                 if shown.into == own.by && shown.at == own.at => {}
-            (None, ChannelStanding::InForce { traffic, activity }) => {
-                let detected = channel.origin.traffic().is_some();
-                if detected && activity == ChannelActivity::Never {
+            (None, ChannelStanding::InForce(activity)) => {
+                if channel.origin.traffic().is_some() && activity == ChannelActivity::Never {
                     return Err(InvalidChannelRow::TrafficWithoutActivity);
-                }
-                if !detected && traffic.confirmation().is_some() {
-                    return Err(InvalidChannelRow::TrafficWithoutDetection);
                 }
             }
             (Some(_), _) | (None, ChannelStanding::Superseded(_)) => {
@@ -304,28 +319,6 @@ impl ChannelRow {
             seed,
             standing,
         })
-    }
-
-    /// The cross-agent traffic of a channel in force; `None` when
-    /// superseded (its traffic is its superseding channel's).
-    pub fn traffic(&self) -> Option<CrossTraffic> {
-        match self.standing {
-            ChannelStanding::InForce { traffic, .. } => Some(traffic),
-            ChannelStanding::Superseded(_) => None,
-        }
-    }
-
-    /// Where the channel is listed: [`Listing::of`] its origin and traffic.
-    /// `None` when superseded.
-    pub fn listing(&self) -> Option<Listing> {
-        self.traffic()
-            .and_then(|traffic| Listing::of(&self.channel.origin, traffic))
-    }
-
-    /// The confirmation of a channel listed as a channel; `None` for a
-    /// declaration without traffic, a hidden channel and a superseded one.
-    pub fn confirmation(&self) -> Option<Confirmation> {
-        self.listing().and_then(Listing::confirmation)
     }
 
     /// The stored channel, as recorded under its own id.
@@ -347,7 +340,7 @@ impl ChannelRow {
     pub fn supersession(&self) -> Option<SupersededInto> {
         match self.standing {
             ChannelStanding::Superseded(supersession) => Some(supersession),
-            ChannelStanding::InForce { .. } => None,
+            ChannelStanding::InForce(_) => None,
         }
     }
 
@@ -355,36 +348,32 @@ impl ChannelRow {
     /// channel's) and for a channel never active.
     pub fn counts(&self) -> Option<ChannelCounts> {
         match self.standing {
-            ChannelStanding::InForce {
-                activity: ChannelActivity::Seen { counts, .. },
-                ..
-            } => Some(counts),
-            ChannelStanding::InForce {
-                activity: ChannelActivity::Never,
-                ..
+            ChannelStanding::InForce(ChannelActivity::Seen { counts, .. }) => Some(counts),
+            ChannelStanding::InForce(ChannelActivity::Never) | ChannelStanding::Superseded(_) => {
+                None
             }
-            | ChannelStanding::Superseded(_) => None,
         }
     }
 
     /// `None` for a superseded channel and for a channel never active.
     pub fn last_activity(&self) -> Option<Timestamp> {
         match self.standing {
-            ChannelStanding::InForce {
-                activity: ChannelActivity::Seen { last, .. },
-                ..
-            } => Some(last),
-            ChannelStanding::InForce {
-                activity: ChannelActivity::Never,
-                ..
+            ChannelStanding::InForce(ChannelActivity::Seen { last, .. }) => Some(last),
+            ChannelStanding::InForce(ChannelActivity::Never) | ChannelStanding::Superseded(_) => {
+                None
             }
-            | ChannelStanding::Superseded(_) => None,
         }
     }
 }
 
 /// What a channel looks like where it is named.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelShape {
     /// A declared channel's pattern (declared before traffic, or promoted).
     Pattern(ResourcePattern),
@@ -396,8 +385,10 @@ pub enum ChannelShape {
 /// returns for each id it knows.
 ///
 /// Built only through [`ChannelName::of`], from a channel in force, so `id`
-/// is never superseded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// is never superseded. Decoding cannot rerun [`ChannelName::of`], which
+/// reads the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelName {
     id: ChannelId,
     shape: ChannelShape,
@@ -450,15 +441,16 @@ impl ChannelName {
 /// channels: for each id of the batch that the registry knows, keyed by
 /// that id, the [`ChannelName`] of the channel it resolves to
 /// (`Channel::canonical`, what `ChannelDirectory::canonical` returns).
-/// Unknown ids are left out. The batch holds each id once and at most
+/// Unknown ids are left out. The map is ordered by id, so it has one
+/// JSON encoding. The batch holds each id once and at most
 /// [`IdBatch::MAX`] of them, so no batch is refused here. A known id whose
 /// channel in force is missing or unnamable is a store fault.
 pub fn resolve_names(
     ids: &IdBatch<ChannelId>,
     registry: &[Registered<'_>],
-) -> Result<HashMap<ChannelId, ChannelName>, QueryError> {
+) -> Result<BTreeMap<ChannelId, ChannelName>, QueryError> {
     let entry = |id: ChannelId| registry.iter().find(|entry| entry.channel.id == id);
-    let mut names = HashMap::new();
+    let mut names = BTreeMap::new();
     for &id in ids.ids() {
         let Some(asked) = entry(id) else { continue };
         let in_force = asked.channel.canonical();
@@ -478,10 +470,54 @@ pub fn resolve_names(
 /// Built only through [`PromotionPreview::from_registry`], so it either
 /// carries the registry's [`PromotionCoverage`] or the conflict a promotion
 /// in the same state would be refused with, never both.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// On the wire, `{"type": "promotes", "data": <PromotionCoverage>}` or
+/// `{"type": "refused", "data": <ConflictKind>}`. A response, never a
+/// request. Decoding cannot rerun [`PromotionPreview::from_registry`], which
+/// takes the registry's answer, but it refuses a conflict that no refused
+/// promotion maps to ([`NotAPromotionConflict`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Outcome", into = "Outcome")]
 pub struct PromotionPreview(Outcome);
 
+/// A refused preview whose conflict is not one `PromoteChannel` is refused
+/// with: only `ChannelSuperseded`, `ChannelNotDiscovered` and
+/// `PatternOverlaps` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotAPromotionConflict(pub ConflictKind);
+
+impl TryFrom<Outcome> for PromotionPreview {
+    type Error = Rejected<NotAPromotionConflict>;
+
+    fn try_from(outcome: Outcome) -> Result<Self, Self::Error> {
+        match outcome {
+            Outcome::Refused(
+                ConflictKind::ChannelSuperseded { .. }
+                | ConflictKind::ChannelNotDiscovered { .. }
+                | ConflictKind::PatternOverlaps { .. },
+            )
+            | Outcome::Promotes(_) => Ok(Self(outcome)),
+            Outcome::Refused(other) => Err(Rejected::new(
+                "promotion preview",
+                NotAPromotionConflict(other),
+            )),
+        }
+    }
+}
+
+impl From<PromotionPreview> for Outcome {
+    fn from(preview: PromotionPreview) -> Self {
+        preview.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 enum Outcome {
     Promotes(PromotionCoverage),
     Refused(ConflictKind),

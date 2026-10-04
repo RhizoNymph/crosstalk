@@ -10,7 +10,7 @@ that can still change.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::watermark_never_decreases_across_restarts"
+dst = "crosstalk_topology::dst::watermark_never_decreases_across_restarts"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

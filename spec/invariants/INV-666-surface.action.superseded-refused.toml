@@ -12,7 +12,7 @@ before PolicyChanged is published.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::actions_on_superseded_channel_conflict"
+unit = "crosstalk_surface::tests::actions_on_superseded_channel_conflict"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

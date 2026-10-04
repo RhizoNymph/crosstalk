@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.access.extraction-recorded"
+statement = "The Extraction stored on an Access equals the one its extractor reported for that access's locator."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Correlation weights evidence by how the locator was found. A URL scanned out
+of free text must not be promoted to Structured, or weak co-accesses would be
+treated as strong evidence. Lower-confidence accesses are kept, not dropped,
+so the confidence is the only thing that tells them apart.
+"""
+
+[evidence]
+unit = "crosstalk_flow::tests::access_keeps_extraction"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

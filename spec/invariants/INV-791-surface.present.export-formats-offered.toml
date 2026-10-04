@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.present.export-formats-offered"
+statement = "An ExportFormats holds at least one format and no format twice, in the order the gateway offers them, and decoding refuses an empty list or a repeat."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The export form offers exactly the formats present lists, first one
+selected. An empty list would leave a form with nothing to submit, and a
+repeat would offer one format twice. Checking it in the type keeps both
+out of every Present the UI decodes.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::request::ExportFormats::new"
+unit = [
+    "crosstalk_spec::tests::export::offered_formats_are_non_empty_and_distinct_in_offer_order",
+    "crosstalk_spec::tests::wire::surface_reads::present::present_refuses_what_its_fields_refuse",
+    "crosstalk_spec::tests::wire::surface_reads::present::present_goldens",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

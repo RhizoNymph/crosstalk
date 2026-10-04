@@ -17,11 +17,19 @@
 //! harness session and agent ids only count as evidence within the scope of a
 //! credential or account (see [`crate::observed::agent`]).
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::resource::Host;
 use crate::ids::{AccountHash, CredentialHash};
 
 /// How the request reached the gateway.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum IngressMode {
     /// The harness's base URL points at the gateway; `route` names the
     /// configured upstream route that matched.
@@ -32,14 +40,22 @@ pub enum IngressMode {
     ForwardProxy { host: Host },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RouteName(pub String);
 
 /// A configured upstream, by name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct UpstreamId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Vendor {
     Anthropic,
     OpenAi,
@@ -48,13 +64,20 @@ pub enum Vendor {
     Other(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InferenceServer {
     Vllm,
     Sglang,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum UpstreamKind {
     /// Pay-per-token API (api.anthropic.com, api.openai.com, …).
     VendorApi(Vendor),
@@ -95,20 +118,22 @@ impl UpstreamKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Upstream {
     pub id: UpstreamId,
     pub kind: UpstreamKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CredentialScheme {
     /// A long-lived API key (`x-api-key`, or `Authorization: Bearer`).
     ApiKey,
     /// An OAuth access token for a subscription. Refreshed by the harness
     /// directly with the vendor's auth server, so it changes over the life of
     /// one agent.
-    OAuthAccessToken,
+    OauthAccessToken,
     /// A short-lived token minted from another credential (Copilot).
     ExchangedToken,
     /// The static key of a self-hosted server, shared by every caller.
@@ -129,7 +154,7 @@ impl CredentialScheme {
     pub fn stability(self) -> Stability {
         match self {
             Self::ApiKey => Stability::Stable,
-            Self::OAuthAccessToken | Self::ExchangedToken => Stability::Rotating,
+            Self::OauthAccessToken | Self::ExchangedToken => Stability::Rotating,
             Self::ServerKey => Stability::Shared,
         }
     }
@@ -137,7 +162,8 @@ impl CredentialScheme {
 
 /// A credential, hashed at the proxy. The raw credential is forwarded
 /// upstream unchanged and never stored, logged or published.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CredentialRef {
     pub scheme: CredentialScheme,
     pub hash: CredentialHash,
@@ -145,14 +171,16 @@ pub struct CredentialRef {
 
 /// The harness the request says it came from. A claim: pi and oh-my-pi send
 /// Claude Code's User-Agent on Claude subscription traffic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct HarnessClaim {
     pub family: HarnessFamily,
     pub version: Option<String>,
     pub user_agent: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HarnessFamily {
     ClaudeCode,
     Codex,
@@ -164,7 +192,8 @@ pub enum HarnessFamily {
 /// Session and agent ids a harness sends (`X-Claude-Code-Session-Id`,
 /// `x-claude-code-agent-id`, `x-claude-code-parent-agent-id`; Codex
 /// `session-id`, `thread-id`, `x-codex-parent-thread-id`; pi `session_id`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct HarnessIds {
     pub session: Option<String>,
     pub agent: Option<String>,
@@ -173,7 +202,8 @@ pub struct HarnessIds {
 
 /// What the harness says this request is for (`x-claude-code-request-class`,
 /// `x-openai-subagent`, compaction markers). A hint, not a fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RequestClass {
     Main,
     Subagent,
@@ -183,14 +213,16 @@ pub enum RequestClass {
 }
 
 /// Digests under the previous secret version during a rotation overlap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PreviousDigests {
     pub credential: Option<CredentialHash>,
     pub account: Option<AccountHash>,
 }
 
 /// Everything known about the caller, from the connection and headers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ClientContext {
     pub ingress: IngressMode,
     pub upstream: Upstream,
@@ -200,7 +232,8 @@ pub struct ClientContext {
     pub account: Option<AccountHash>,
     /// During a secret rotation overlap, the same credential and account
     /// hashed under the previous `SecretVersion`, so identity resolution can
-    /// link evidence across the change. `None` outside an overlap.
+    /// link evidence across the change. `None` unless an overlap is open
+    /// at the exchange's `started_at` (it ends at a configured instant).
     pub previous_digests: Option<PreviousDigests>,
     pub harness: Option<HarnessClaim>,
     pub ids: HarnessIds,

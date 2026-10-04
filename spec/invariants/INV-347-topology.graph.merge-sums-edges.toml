@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.graph.merge-sums-edges"
+statement = "After agent a is merged into agent b, each graph's edge stats equal the pre-merge graph's with a replaced by b, edges that thereby share (from, to, route) summed, and edges between a and b removed."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Merges are recorded as aliases, not rewrites, so the stored buckets do not
+change; only the AgentDirectory does. The graph must therefore re-key at
+read time, and the relation between the graphs before and after a merge
+is fully determined. Shares are excluded: dropping the a-b edges lowers
+the total, so every remaining share renormalizes.
+"""
+
+[evidence]
+property = "crosstalk_topology::props::merge_rekeys_sums_and_drops_edges"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

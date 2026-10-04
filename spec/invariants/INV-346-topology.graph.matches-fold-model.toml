@@ -18,8 +18,8 @@ Shares are compared within float error.
 """
 
 [evidence]
-property = "crosstalk::topology::props::in_memory_graph_matches_fold"
-integration = "crosstalk::topology::integration::timescale_graph_matches_fold"
+property = "crosstalk_topology::props::in_memory_graph_matches_fold"
+integration = "crosstalk_topology::integration::timescale_graph_matches_fold"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

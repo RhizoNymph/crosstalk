@@ -38,27 +38,22 @@
 //!
 //! The sender is unknown until content evidence arrives, so it lives inside
 //! [`Confirmed`], not on the transmission itself.
-//!
-//! **Only between different agents.** A transmission is between two
-//! different agents when it is recorded: `ContentMatch::new` refuses a match
-//! whose reader is its origin agent and `CoAccess::new` a write and read by
-//! one agent. Merges are aliases resolved at read time, so two ids of one
-//! transmission can later resolve to one agent. Such a transmission counts
-//! nowhere: not in a graph, series, search, projection, export, channel's
-//! traffic or count. [`Transmission::crossing`] is the one definition every
-//! reader applies.
 
 use std::num::NonZeroU64;
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aliases::Aliases;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::provenance::matching::ContentMatch;
-use crate::ids::{AccessId, AgentId, ChannelId, TopicId, TransmissionId};
+use crate::ids::{AgentId, ChannelId, TopicId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::{NonEmpty, Timestamp};
+use crate::wire::Rejected;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Transmission {
     pub id: TransmissionId,
     /// The reader.
@@ -68,7 +63,13 @@ pub struct Transmission {
     pub state: TransmissionState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Route {
     /// Through a shared resource: written by the sender, read by the reader
     /// through a tool call the gateway resolved to a channel.
@@ -117,7 +118,8 @@ impl From<NonChannelRoute> for Route {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DelegationDirection {
     /// The parent's task prompt became the child's first user turn.
     ParentToChild,
@@ -125,14 +127,26 @@ pub enum DelegationDirection {
     ChildToParent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DirectCarrier {
     UserTurn,
     SystemPrompt,
     ToolResult(ToolName),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TransmissionState {
     Detected,
     AwaitingContent {
@@ -162,62 +176,6 @@ pub enum TransmissionState {
         at: Timestamp,
         co_access: NonEmpty<CoAccess>,
     },
-}
-
-/// Whether a transmission is between two different agents once merged
-/// agents resolve, as [`Transmission::crossing`] decides it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Crossing {
-    /// `Detected`: no evidence names a sender yet, so it is not traffic.
-    Unknown,
-    /// A sender its evidence names and its reader resolve to two different
-    /// agents: a transmission every reader counts.
-    Crosses,
-    /// Every sender its evidence names resolves to its reader: ids since
-    /// merged into one agent. Counted nowhere; an unmerge can make it cross
-    /// again.
-    WithinOneAgent,
-}
-
-impl Transmission {
-    /// Whether this transmission crosses agents under `aliases`. A
-    /// confirmed (or classified, or aggregated) one crosses when
-    /// `Confirmed::from` and the reader resolve to different agents; one
-    /// backed only by co-access records (`AwaitingContent`, `Suspected`,
-    /// `Discarded`) crosses when the writer of at least one of them
-    /// (`writer` looks the write access up; an unknown access names no
-    /// one) resolves to an agent other than the reader. `Detected` is
-    /// `Unknown`.
-    pub fn crossing(
-        &self,
-        aliases: impl Aliases,
-        writer: impl Fn(AccessId) -> Option<AgentId>,
-    ) -> Crossing {
-        let reader = aliases.agent(self.to);
-        let crosses = |from: AgentId| aliases.agent(from) != reader;
-        let verdict = |any: bool| {
-            if any {
-                Crossing::Crosses
-            } else {
-                Crossing::WithinOneAgent
-            }
-        };
-        match &self.state {
-            TransmissionState::Detected => Crossing::Unknown,
-            TransmissionState::Confirmed(confirmed)
-            | TransmissionState::Classified { confirmed, .. }
-            | TransmissionState::Aggregated { confirmed, .. } => verdict(crosses(confirmed.from())),
-            TransmissionState::AwaitingContent { .. }
-            | TransmissionState::Suspected { .. }
-            | TransmissionState::Discarded { .. } => verdict(
-                self.state
-                    .co_accesses()
-                    .iter()
-                    .filter_map(|co_access| writer(co_access.write()))
-                    .any(crosses),
-            ),
-        }
-    }
 }
 
 /// A transition that applies only to a suspected transmission.
@@ -281,7 +239,12 @@ impl TransmissionState {
 /// [`Confirmed::extend`], which require every match to share one origin
 /// agent (the sender) and one reader. When a reader's input echoes two
 /// writers, that is two transmissions.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// On the wire, `{"content": [..], "co_access": [..], "at": ..}`: the sender
+/// is the content's origin agent, so it is not written separately, and
+/// decoding goes through [`Confirmed::new`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RawConfirmed", into = "RawConfirmed")]
 pub struct Confirmed {
     from: AgentId,
     content: NonEmpty<ContentMatch>,
@@ -293,6 +256,35 @@ pub struct Confirmed {
 pub enum MixedMatches {
     SeveralOrigins,
     SeveralReaders,
+}
+
+/// [`Confirmed`]'s wire form: its fields without the sender, which
+/// [`Confirmed::new`] takes from the content.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawConfirmed {
+    content: NonEmpty<ContentMatch>,
+    co_access: Vec<CoAccess>,
+    at: Timestamp,
+}
+
+impl From<Confirmed> for RawConfirmed {
+    fn from(confirmed: Confirmed) -> Self {
+        Self {
+            content: confirmed.content,
+            co_access: confirmed.co_access,
+            at: confirmed.at,
+        }
+    }
+}
+
+impl TryFrom<RawConfirmed> for Confirmed {
+    type Error = Rejected<MixedMatches>;
+
+    fn try_from(raw: RawConfirmed) -> Result<Self, Self::Error> {
+        Self::new(raw.content, raw.co_access, raw.at)
+            .map_err(|error| Rejected::new("confirmed transmission", error))
+    }
 }
 
 impl Confirmed {
@@ -364,7 +356,8 @@ impl Confirmed {
 }
 
 /// A topic assignment under one topic-model version.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Classification {
     pub version: TopicModelVersion,
     /// `None` when the topic model marks it an outlier.

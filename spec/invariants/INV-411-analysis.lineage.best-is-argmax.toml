@@ -13,8 +13,8 @@ topic became and where a rule moves.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::lineage_best_is_most_similar_centroid"
-property = "crosstalk::analysis::tests::lineage_best_is_argmax_over_centroids"
+unit = "crosstalk_analysis::tests::lineage_best_is_most_similar_centroid"
+property = "crosstalk_analysis::tests::lineage_best_is_argmax_over_centroids"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

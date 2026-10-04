@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.deadletter.record-contents"
+statement = "Every DeadLetter the bus stores names the consumer group whose retries were exhausted, carries the envelope exactly as published, and has attempts equal to that group's RetryPolicy::max_attempts."
+kind = "domain"
+property = "postcondition"
+requires = ["dst"]
+rationale = """
+An operator decides whether to replay from this record, and replay
+redelivers its envelope, so the envelope must be the published one with the
+same Envelope::id for deduplication to work. The group scopes the replay to
+the consumer that failed, not to every group.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::dead_letter_records_group_envelope_and_attempts"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

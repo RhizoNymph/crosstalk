@@ -1,0 +1,15 @@
+{
+  "id": "01J9Z4A1B2C3D4E5F6G7H8J9K0",
+  "at": "2026-10-04T12:35:04.001337Z",
+  "event": {
+    "type": "ingest",
+    "data": {
+      "type": "agent_renamed",
+      "data": {
+        "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "label": null,
+        "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      }
+    }
+  }
+}

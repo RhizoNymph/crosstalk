@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.blob.concurrent-put"
+statement = "A put of bytes that are already stored, or that another put on any node is storing concurrently, returns Ok rather than failing on the existing key."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Identical messages recur across requests and agents, and several proxy nodes
+store them at once. A unique-key violation surfacing as Unavailable would
+make L1 drop or retry an exchange for no reason. In Postgres this is an
+insert that ignores conflicts on the hash.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::concurrent_puts_of_same_bytes_succeed"
+integration = "crosstalk_transport::integration::pg_blob_store_concurrent_identical_puts"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

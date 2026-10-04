@@ -16,11 +16,15 @@
 //! or unmerge changes no stored claim, so an unmerge splits the claims again
 //! on the next read.
 
+use serde::{Deserialize, Serialize};
+
 use crate::observed::client::{HarnessClaim, HarnessFamily};
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 /// One distinct claim and the latest time an exchange carried it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SeenClaim {
     pub claim: HarnessClaim,
     pub last_seen: Timestamp,
@@ -33,7 +37,8 @@ pub struct SeenClaim {
 /// and entries are ordered by `last_seen` descending, ties broken by the
 /// claim's family, then User-Agent, then version, so equal sets compare
 /// equal whatever order they were built in.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawClaimSet")]
 pub struct ClaimSet {
     entries: Vec<SeenClaim>,
 }
@@ -41,6 +46,23 @@ pub struct ClaimSet {
 /// The same claim was listed twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateClaim(pub HarnessClaim);
+
+/// [`ClaimSet`]'s entries, decoded without the check. Decoding goes through
+/// [`ClaimSet::from_entries`], which refuses a repeated claim and orders
+/// the entries.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawClaimSet {
+    entries: Vec<SeenClaim>,
+}
+
+impl TryFrom<RawClaimSet> for ClaimSet {
+    type Error = Rejected<DuplicateClaim>;
+
+    fn try_from(raw: RawClaimSet) -> Result<Self, Self::Error> {
+        Self::from_entries(raw.entries).map_err(|error| Rejected::new("claim set", error))
+    }
+}
 
 impl ClaimSet {
     /// Rebuild a stored set, rejecting a claim listed twice.

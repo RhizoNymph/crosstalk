@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.usage.cache-within-input"
+statement = "Every TokenUsage has cache_read plus cache_write at most input, and reasoning at most output."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+input counts every prompt token and output every generated one; the cache
+counts and the reasoning count are parts of them. Usage with parts larger
+than their whole would make the uncached prompt negative and cost and
+cache-hit figures nonsense. The fields are private and TokenUsage::new,
+which decoding goes through, refuses such counts (summing the cache counts
+in 64 bits, so two large counts cannot wrap past the check).
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::exchange::TokenUsage::new"
+unit = "crosstalk_spec::tests::observed::token_usage_keeps_its_parts_within_their_wholes"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

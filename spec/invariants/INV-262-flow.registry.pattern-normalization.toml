@@ -14,7 +14,7 @@ same way locators are.
 """
 
 [evidence]
-property = "crosstalk::flow::registry::tests::declared_pattern_normalized_like_locators"
+property = "crosstalk_flow::registry::tests::declared_pattern_normalized_like_locators"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

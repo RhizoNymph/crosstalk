@@ -19,7 +19,7 @@ unit = [
     "crosstalk_spec::tests::excerpt::a_dropped_body_is_an_outcome_naming_the_message",
     "crosstalk_spec::tests::excerpt::a_location_that_does_not_fit_its_body_is_an_error",
 ]
-integration = "crosstalk::surface::integration::evidence_after_body_retention"
+integration = "crosstalk_surface::integration::evidence_after_body_retention"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

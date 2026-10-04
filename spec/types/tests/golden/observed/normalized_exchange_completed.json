@@ -1,0 +1,196 @@
+{
+  "exchange": {
+    "meta": {
+      "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "protocol": "anthropic_messages",
+      "transport": "sse",
+      "model": "claude-sonnet-4-5",
+      "client": {
+        "ingress": {
+          "type": "reverse_proxy",
+          "data": {
+            "route": "anthropic"
+          }
+        },
+        "upstream": {
+          "id": "claude-max",
+          "kind": {
+            "type": "subscription",
+            "data": {
+              "type": "anthropic"
+            }
+          }
+        },
+        "credential": {
+          "scheme": "oauth_access_token",
+          "hash": {
+            "key": 2,
+            "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+          }
+        },
+        "account": null,
+        "previous_digests": null,
+        "harness": {
+          "family": "claude_code",
+          "version": "2.0.14",
+          "user_agent": "claude-cli/2.0.14 (external, cli)"
+        },
+        "ids": {
+          "session": "6f1c2a9e-4b7d-4e2a-9c3f-1d8e5b0a7c42",
+          "agent": "planner",
+          "parent_agent": null
+        },
+        "class": "main"
+      },
+      "started_at": "2026-10-04T12:34:56.789012Z"
+    },
+    "continuation": {
+      "type": "full_history"
+    },
+    "request": [
+      "c7837ef8fe0c396bbadbed62ba6385450e5332377839347fd4089d30657c160a",
+      "9beb2e849a939df4d124a1d003d45caaecb1734f60039d46946e8adea4409521",
+      "0df74cbe683683be5d1b33b420c27206681bce7f17ab11c92b4a1009cdec504a"
+    ],
+    "outcome": {
+      "type": "completed",
+      "data": {
+        "response": "ee9c247c5fe7d255efb0a11f4253ac62905cc0d55500c799d7c794648b00a023",
+        "response_id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "first_chunk_at": "2026-10-04T12:34:57.402118Z",
+        "finished_at": "2026-10-04T12:35:03.950031Z",
+        "stop": "tool_use",
+        "usage": {
+          "input": 18342,
+          "output": 611,
+          "cache_read": 16384,
+          "cache_write": 1536,
+          "reasoning": null
+        }
+      }
+    }
+  },
+  "messages": [
+    {
+      "hash": "c7837ef8fe0c396bbadbed62ba6385450e5332377839347fd4089d30657c160a",
+      "body": {
+        "type": "system",
+        "data": [
+          {
+            "type": "text",
+            "data": "You are Claude Code, Anthropic's official CLI for Claude."
+          }
+        ]
+      }
+    },
+    {
+      "hash": "9beb2e849a939df4d124a1d003d45caaecb1734f60039d46946e8adea4409521",
+      "body": {
+        "type": "user",
+        "data": [
+          {
+            "type": "text",
+            "data": "What does this screenshot show?"
+          },
+          {
+            "type": "media",
+            "data": {
+              "kind": "image",
+              "blob": "aaff1535a99cdd3d3e41e25ea6ef55c7b5373722ea588867f02fea01067ff8a8"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "hash": "0df74cbe683683be5d1b33b420c27206681bce7f17ab11c92b4a1009cdec504a",
+      "body": {
+        "type": "tool",
+        "data": [
+          {
+            "call_id": "toolu_01A09q90qw90lq917835lq9",
+            "content": [
+              {
+                "type": "text",
+                "data": "     1\t# Plan\n"
+              },
+              {
+                "type": "media",
+                "data": {
+                  "kind": "document",
+                  "blob": "6acfd1a17aecec804df3cb7ca8d88478f4013de723bd5edd543264a8ce48902c"
+                }
+              }
+            ],
+            "outcome": "success"
+          }
+        ]
+      }
+    },
+    {
+      "hash": "ee9c247c5fe7d255efb0a11f4253ac62905cc0d55500c799d7c794648b00a023",
+      "body": {
+        "type": "assistant",
+        "data": [
+          {
+            "type": "reasoning",
+            "data": {
+              "type": "visible",
+              "data": {
+                "text": "The image is a terminal; read the plan next.",
+                "signature": "EqNrZpUTd52EaHrgdvgOqGkUPnUywNXrBhd6Pd1kulGi=="
+              }
+            }
+          },
+          {
+            "type": "text",
+            "data": "It shows a failing test. Reading the plan."
+          },
+          {
+            "type": "tool_call",
+            "data": {
+              "id": "toolu_01A09q90qw90lq917835lq9",
+              "name": "Read",
+              "arguments": {
+                "type": "json",
+                "data": "{\"file_path\":\"/workspace/notes/plan.md\",\"limit\":1234567890123456789}"
+              },
+              "execution": "client"
+            }
+          },
+          {
+            "type": "unknown",
+            "data": {
+              "kind": "zz_widget",
+              "raw": "{\"type\":\"zz_widget\"}"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "type": "unknown_block",
+      "data": {
+        "kind": "zz_widget"
+      }
+    },
+    {
+      "type": "orphan_tool_result",
+      "data": {
+        "call_id": "toolu_01A09q90qw90lq917835lq9"
+      }
+    }
+  ],
+  "media": [
+    {
+      "hash": "6acfd1a17aecec804df3cb7ca8d88478f4013de723bd5edd543264a8ce48902c",
+      "bytes": "255044462d312e370a"
+    },
+    {
+      "hash": "aaff1535a99cdd3d3e41e25ea6ef55c7b5373722ea588867f02fea01067ff8a8",
+      "bytes": "89504e470d0a1a0a"
+    }
+  ]
+}

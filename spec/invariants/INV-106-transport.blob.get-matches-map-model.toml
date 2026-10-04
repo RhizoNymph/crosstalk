@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.blob.get-matches-map-model"
+statement = "For every store state, a get(h) that returns Ok agrees with looking up h in the grow-only map from BLAKE3 hash to the bytes put so far: Some(bytes) when present and None when absent."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+Covers both exact retrieval and absence, and fixes that blobs are never
+deleted: the interface has no delete, and published events reference blobs
+for as long as the events are retained. Both PgBlobStore and
+ObjectStoreBlobs are checked against the same model.
+"""
+
+[evidence]
+property = "crosstalk_transport::blob::tests::blob_store_matches_map_model"
+integration = ["crosstalk_transport::integration::pg_blob_store_matches_map_model", "crosstalk_transport::integration::object_store_blobs_match_map_model"]
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

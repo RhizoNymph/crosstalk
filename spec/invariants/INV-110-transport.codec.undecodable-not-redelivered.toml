@@ -1,0 +1,22 @@
+[invariant]
+id = "transport.codec.undecodable-not-redelivered"
+statement = "A stored bus message that fails to decode as an Envelope is yielded to its consumer group once as Err(BusError::Decode) and is never redelivered to that group."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+An undecodable message has no Envelope, so it has no DeliveryId to ack or
+nack and cannot become a DeadLetter, which carries an Envelope. Left alone
+it would be redelivered forever and stall the consumer. The bus terminates
+it and reports it once, logged with its stream sequence. This trades the
+message for liveness; it only arises from foreign publishers or version
+skew, since every in-tree publisher encodes with the same codec. MpscBus
+also carries encoded envelopes and decodes strictly on delivery, so it
+follows the same rule: the message is reported once per group and
+terminated, never redelivered or dead-lettered.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::jetstream_terminates_undecodable_message"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

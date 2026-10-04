@@ -18,46 +18,33 @@
 //!
 //! After every committed change to a stored channel (discovery, a
 //! declaration, a new resource, any detection change including turning
-//! dormant, a recorded policy decision) flow publishes `Changed::Channel`
-//! for it; after a promotion, for the promoted channel and every channel it
+//! dormant, a recorded policy decision) the registry publishes
+//! `Changed::Channel` for it; after a promotion, for the promoted channel and every channel it
 //! superseded ([`Changed::promotion`]). A `PolicyChanged` is announced to
 //! the UI only this way, once recorded, never by the surface that published
 //! it. The verdict store publishes `Changed::Verdict` for each appended
-//! verdict record. A merge or unmerge changes no stored channel, though it
-//! can change a channel's confirmation and listing at read time (hiding a
-//! discovered channel or listing it again); the `Changed::Agent` the merge
-//! publishes is what readers re-query channels on.
+//! verdict record.
 //!
 //! [`Changed::promotion`]: crate::events::changed::Changed::promotion
 //!
-//! **Discovery.** A resource is only a resource until a transmission
-//! between two different agents goes through it. Its first sighting looks
-//! the locator up ([`ChannelRegistry::lookup`]); a locator on no channel
-//! and matching no declared pattern is [`ChannelLookup::NoChannel`]: the
-//! access is recorded on the resource alone (`AccessRecorded` with no
-//! channel) and no channel is created, whatever happens on it next, until
-//! the correlator pairs a write by one agent with a later read by another
-//! ([`CoAccess`]) on that resource. That co-access opens a channel
-//! transmission ([`TransmissionUpdate::OpenChannel`] with
-//! [`OpensOn::Resource`]), and the flow consumer then, in one transaction,
-//! creates the discovered channel seeded by the resource and that
-//! transmission ([`ChannelRegistry::discover`]: `Active` since the
-//! transmission opened, `Unreviewed`), stores the transmission routed
-//! through it, and afterwards publishes `ChannelDiscovered` (which raises
-//! `NewChannel`) and `Changed::Channel`. Every channel transmission is
-//! opened this way, by a co-access between two agents, so a channel is
-//! never created by a resource only one agent touches, nor by writes
-//! nobody else reads. Accesses recorded on the resource before discovery
-//! count on the channel from then on, at read time (L7 buckets accesses by
-//! resource). A declared channel's resources are on it from their first
-//! sighting, but it too counts as carrying traffic only once a cross-agent
-//! transmission goes through it (`DeclaredDetection::InUse`).
+//! The flow consumer writes what it sees through
+//! [`channels::ChannelTraffic`] (a discovered channel, a new resource, an
+//! access, a detection change, a confirmation) and stores each transmission
+//! state the correlator decides through
+//! [`transmissions::TransmissionStore`]. It publishes the events of its own
+//! decisions once the write commits: `ChannelDiscovered` (the lookup said
+//! `New`), `AccessRecorded`, `DeclaredChannelUnused` (the idle window
+//! closed), `ChannelCrossAccessed`, `TransmissionConfirmed` and
+//! `TransmissionSuspected` (the correlator's updates). The surface reads
+//! stored channels through [`channels::ChannelReads`].
 //!
 //! Implementations:
 //! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,
 //!   `BashExtractor` (tree-sitter-bash), `FileToolExtractor`, `McpExtractor`,
 //!   `UrlScanFallback`.
-//! - `ChannelRegistry`: `PgChannelRegistry`.
+//! - `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`:
+//!   `PgChannelRegistry`.
+//! - `TransmissionStore`, `TransmissionVerdicts`: `PgTransmissionStore`.
 //! - `Correlator`: `WindowedCorrelator`, which buffers evidence that arrives
 //!   out of order. A content match can be processed before the access that
 //!   opens its transmission, because they come from different consumer
@@ -67,12 +54,10 @@
 //! The correlator chooses routes in the precedence order documented on
 //! `Route`, using the `AgentDirectory` and agent parent links for
 //! `Delegation`. Shards are keyed by canonical channel
-//! (`ChannelDirectory`), or by resource for an access on a resource on no
-//! channel. On `ChannelPromoted` the evidence a shard holds for a
-//! superseded channel moves to the promoted channel's shard, so a write
-//! recorded before a promotion and a read recorded after it still meet;
-//! likewise, when a channel is discovered from a resource, the evidence
-//! held for that resource moves to the new channel's shard.
+//! (`ChannelDirectory`), and on `ChannelPromoted` the evidence a shard holds
+//! for a superseded channel moves to the promoted channel's shard, so a
+//! write recorded before a promotion and a read recorded after it still
+//! meet.
 //!
 //! Promotion (`ChannelRegistry::promote`) follows
 //! [`promotion::plan`](crate::derived::flow::channel::promotion::plan), run
@@ -89,9 +74,9 @@
 //! promotion committed) is a permanent failure: logged at warn with the
 //! channel and its superseding channel, and acked.
 //!
-//! **Detection follows resolution.** A cross-agent transmission, opened or
-//! confirmed, advances the detection of the channel its route resolves to
-//! (`ChannelDirectory::canonical`), never of a superseded one. A transmission opened on a channel before a
+//! **Detection follows resolution.** A confirmation advances the detection
+//! of the channel its route resolves to (`ChannelDirectory::canonical`),
+//! never of a superseded one. A transmission opened on a channel before a
 //! promotion superseded it keeps that channel id in its stored route, and
 //! its content can arrive after the promotion (the `provenance` and `flow`
 //! groups lag independently); when it is confirmed, the flow consumer
@@ -117,14 +102,13 @@
 //!
 //! [`CorrelationTiming`]: crate::derived::flow::timing::CorrelationTiming
 
+pub mod channels;
+pub mod transmissions;
 pub mod verdicts;
-
-use std::collections::HashMap;
 
 use crate::aggregates::access::ResourceUsePage;
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
 use crate::derived::flow::channel::Declaration;
-use crate::derived::flow::channel::confirmation::CrossTraffic;
 use crate::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
 };
@@ -133,7 +117,7 @@ use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
 use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
 use crate::derived::provenance::matching::ContentMatch;
-use crate::ids::{AgentId, ChannelId, ResourceId, TransmissionId};
+use crate::ids::{AgentId, ChannelId, TransmissionId};
 use crate::observed::message::{ToolCall, ToolResult};
 use crate::paging::{PageRequest, ResourceUseList};
 use crate::support::{NonEmpty, TimeWindow, Timestamp};
@@ -166,40 +150,10 @@ pub trait ResourceExtractor {
 pub enum ChannelLookup {
     /// Already a resource of this channel, or of a channel it superseded.
     Known(ChannelId),
-    /// On no channel yet (first sighting, or only ever a resource), and it
-    /// matches a declared channel's pattern: the resource joins that
-    /// channel.
+    /// First sighting, but it matches a declared channel's pattern.
     Declared(ChannelId),
-    /// On no channel and matching no declared pattern: the access is
-    /// recorded on the resource alone. Nothing is created; a channel is
-    /// discovered from the resource only when a cross-agent transmission
-    /// goes through it ([`ChannelRegistry::discover`]).
-    NoChannel,
-}
-
-/// Where a co-access opens its channel transmission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpensOn {
-    /// The canonical channel the resource is on.
-    Channel(ChannelId),
-    /// A resource on no channel: this transmission is the first cross-agent
-    /// transmission through it, and the flow consumer discovers a channel
-    /// from it ([`ChannelRegistry::discover`]) before storing the
-    /// transmission routed through that channel.
-    Resource(ResourceId),
-}
-
-/// What [`ChannelRegistry::discover`] found or made.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Discovery {
-    /// A new discovered channel, seeded by the resource and transmission.
-    /// The caller publishes `ChannelDiscovered` and `Changed::Channel` after
-    /// commit.
-    Created(ChannelId),
-    /// The resource was already on this canonical channel (a concurrent
-    /// discovery, or a declared pattern claimed it): the transmission is
-    /// routed through it and nothing is published for discovery.
-    Existing(ChannelId),
+    /// Matches nothing: the caller creates a discovered channel.
+    New,
 }
 
 /// The supersession table. Every reader of stored channel ids (routes,
@@ -224,56 +178,23 @@ pub struct Promoted {
 }
 
 pub trait ChannelRegistry {
-    /// Where a locator's resource belongs. Creates nothing: a `Declared`
-    /// answer stores the resource on that channel, a `NoChannel` one stores
-    /// the resource on none.
-    async fn lookup(&self, locator: &Locator) -> Result<ChannelLookup, RegistryError>;
-
-    /// Discover a channel from `resource` for `transmission`, the
-    /// cross-agent transmission a co-access opened on it
-    /// ([`OpensOn::Resource`]), opened at `at`. In one transaction: when
-    /// the resource is on no channel, create a discovered channel with
-    /// `Seed { resource, first_transmission: transmission }`, detection
-    /// `Active { since: at, last_transmission: transmission }` and policy
-    /// `Unreviewed(None)`, store the resource on it and return `Created`;
-    /// when it is already on one (a concurrent discovery committed first,
-    /// or a declared pattern claimed it since), change nothing and return
-    /// `Existing` with that channel, canonical. So a resource is on at most
-    /// one channel and one discovery publishes one `ChannelDiscovered`.
-    async fn discover(
-        &mut self,
-        resource: ResourceId,
-        transmission: TransmissionId,
-        at: Timestamp,
-    ) -> Result<Discovery, RegistryError>;
-
-    /// The canonical channel holding each of `resources`, keyed by
-    /// resource; a resource on no channel is absent. What L7 resolves an
-    /// access bucket's resource through at read time.
-    async fn channels_of(
+    fn lookup(
         &self,
-        resources: &[ResourceId],
-    ) -> Result<HashMap<ResourceId, ChannelId>, RegistryError>;
+        locator: &Locator,
+    ) -> impl Future<Output = Result<ChannelLookup, RegistryError>> + Send;
 
-    /// The [`CrossTraffic`] of each listed channel's canonical channel,
-    /// keyed by the id listed: [`CrossTraffic::tally`] over every
-    /// transmission whose stored route resolves to it (through
-    /// `ChannelDirectory`), with agents resolved through `AgentDirectory`
-    /// at the read. A channel's confirmation and listing follow from it
-    /// (`Listing::of`). Unknown channels are absent.
-    async fn cross_traffic(
-        &self,
-        channels: &[ChannelId],
-    ) -> Result<HashMap<ChannelId, CrossTraffic>, RegistryError>;
-
-    /// Declare a channel from config. When `policy` carries a decision, it
-    /// is the first entry of the channel's [`PolicyHistory`].
-    async fn declare(
+    /// Declare a channel from config, as `by` at `at` (the declaration's
+    /// time), under a fresh id the registry assigns. When `policy` carries a
+    /// decision, it is the first entry of the channel's [`PolicyHistory`].
+    /// Publishes `Changed::Channel` for it. `OverlappingDeclaration` when
+    /// the pattern overlaps a declared channel's, changing nothing.
+    fn declare(
         &mut self,
         pattern: ResourcePattern,
         policy: Policy,
         by: PolicyAuthor,
-    ) -> Result<ChannelId, RegistryError>;
+        at: Timestamp,
+    ) -> impl Future<Output = Result<ChannelId, RegistryError>> + Send;
 
     /// Record a decision in the channel's [`PolicyHistory`] and set the
     /// channel's policy to the history's current one, in one transaction.
@@ -281,14 +202,17 @@ pub trait ChannelRegistry {
     /// changes nothing. A decision older than the current one is kept in the
     /// history and returns `Recorded::Superseded`. A superseded channel
     /// takes no decisions: `Superseded { channel, by }`, changing nothing.
-    async fn set_policy(
+    fn set_policy(
         &mut self,
         channel: ChannelId,
         decision: PolicyDecision,
-    ) -> Result<Recorded, RegistryError>;
+    ) -> impl Future<Output = Result<Recorded, RegistryError>> + Send;
 
     /// Every decision recorded for the channel, oldest first.
-    async fn policy_history(&self, channel: ChannelId) -> Result<PolicyHistory, RegistryError>;
+    fn policy_history(
+        &self,
+        channel: ChannelId,
+    ) -> impl Future<Output = Result<PolicyHistory, RegistryError>> + Send;
 
     /// Promote the discovered channel `channel` with `promotion`, as
     /// [`promotion::plan`] decides for `promotion.declaration()` over the
@@ -297,8 +221,8 @@ pub trait ChannelRegistry {
     /// resources and detection unchanged); the promotion's policy decision is
     /// recorded as by [`ChannelRegistry::set_policy`]; every channel the plan
     /// supersedes becomes [`ChannelOrigin::Superseded`] by `channel` at the
-    /// promotion time. Afterwards, lookups of locators on no channel that
-    /// match the pattern return `Declared(channel)`, and lookups of a superseded
+    /// promotion time. Afterwards, lookups of unseen locators that match the
+    /// pattern return `Declared(channel)`, and lookups of a superseded
     /// channel's resources return `Known(channel)`. Publishes one
     /// `ChannelPromoted` after commit.
     ///
@@ -307,11 +231,11 @@ pub trait ChannelRegistry {
     /// [`promotion::plan`]: crate::derived::flow::channel::promotion::plan
     /// [`ChannelOrigin::promoted`]: crate::derived::flow::channel::ChannelOrigin::promoted
     /// [`ChannelOrigin::Superseded`]: crate::derived::flow::channel::ChannelOrigin::Superseded
-    async fn promote(
+    fn promote(
         &mut self,
         channel: ChannelId,
         promotion: Promotion,
-    ) -> Result<Promoted, PromoteError>;
+    ) -> impl Future<Output = Result<Promoted, PromoteError>> + Send;
 
     /// What `promote` would do now for a promotion with `declaration`,
     /// changing nothing: exactly [`promotion::coverage`] over the channels
@@ -323,11 +247,11 @@ pub trait ChannelRegistry {
     /// [`Promoted::superseded`].
     ///
     /// [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
-    async fn promotion_coverage(
+    fn promotion_coverage(
         &self,
         channel: ChannelId,
         declaration: &Declaration,
-    ) -> Result<PromotionCoverage, PromoteError>;
+    ) -> impl Future<Output = Result<PromotionCoverage, PromoteError>> + Send;
 
     /// The resources of `channel`'s canonical channel (its own and those of
     /// every channel it superseded) accessed within `window`, newest
@@ -335,26 +259,23 @@ pub trait ChannelRegistry {
     /// often each accessed it in the window
     /// ([`ResourceUse`](crate::aggregates::access::ResourceUse)). Agents are
     /// resolved through `AgentDirectory`, summing merged aliases.
-    async fn resource_use(
+    fn resource_use(
         &self,
         channel: ChannelId,
         window: TimeWindow,
         page: &PageRequest<ResourceUseList>,
-    ) -> Result<ResourceUsePage, RegistryError>;
+    ) -> impl Future<Output = Result<ResourceUsePage, RegistryError>> + Send;
 }
 
 /// What the correlator decided. The flow consumer applies these to stored
 /// transmissions and publishes the matching events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransmissionUpdate {
-    /// A cross access (a write by one agent, a read by another): wait for
-    /// content evidence. On a resource on no channel, the consumer first
-    /// discovers the channel the transmission is routed through (module
-    /// docs, "Discovery").
+    /// A cross access on a channel: wait for content evidence.
     OpenChannel {
         transmission: TransmissionId,
         to: AgentId,
-        on: OpensOn,
+        channel: ChannelId,
         co_access: CoAccess,
     },
     /// Content evidence on a non-channel route: opens and confirms at once.
@@ -388,14 +309,8 @@ pub enum TransmissionUpdate {
 /// Owns the open-evidence windows. Runs in one task per flow shard and is
 /// fed over a channel, so it takes `&mut self` and does no I/O.
 pub trait Correlator {
-    /// `channel` is the canonical channel the access's resource is on, or
-    /// `None` for a resource on no channel (correlated by the resource).
-    fn on_access(&mut self, access: &Access, channel: Option<ChannelId>)
-    -> Vec<TransmissionUpdate>;
+    fn on_access(&mut self, access: &Access, channel: ChannelId) -> Vec<TransmissionUpdate>;
 
-    /// `channel` is the canonical channel the read's resource is on when
-    /// the match is processed, or `None` when the match was not carried by
-    /// a tool result reading a channel's resource.
     fn on_match(
         &mut self,
         content: &ContentMatch,

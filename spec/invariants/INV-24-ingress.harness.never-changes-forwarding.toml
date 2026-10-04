@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.harness.never-changes-forwarding"
+statement = "Changing a request's harness headers (User-Agent, x-app, session, agent and request-class headers) does not change the upstream it is routed to."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Harness headers are client-controlled and spoofable. If they steered
+routing or rewriting, a harness could pick its own upstream or capture
+path by claiming to be another one, and an impersonating client would be
+treated differently on the wire from the one it imitates.
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::client::harness_headers_do_not_affect_forwarding"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

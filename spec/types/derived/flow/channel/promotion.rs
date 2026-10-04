@@ -22,13 +22,14 @@
 //! matches its seed's locator; the pattern overlaps no other declared
 //! channel's pattern. A refused promotion changes nothing.
 //!
-//! Supersession is decided by seeds. A discovered channel is created by the
-//! first cross-agent transmission through its seed resource, and lookups
-//! add later accesses of that resource to it, so its seed is what it
-//! stands for. Every other discovered channel whose
+//! Supersession is decided by seeds. A discovered channel is created by its
+//! seed resource, and lookups add later accesses of that resource to it, so
+//! its seed is what it stands for. Every other discovered channel whose
 //! seed the pattern matches is superseded; already superseded channels are
 //! never superseded again (their superseding channel's pattern matches
 //! their seed, so the overlap check refuses a pattern that would).
+
+use serde::{Deserialize, Serialize};
 
 use crate::derived::flow::channel::policy::{Decision, PolicyAuthor, PolicyDecision, PolicyKind};
 use crate::derived::flow::channel::{
@@ -37,8 +38,9 @@ use crate::derived::flow::channel::{
 use std::collections::HashSet;
 
 use crate::derived::flow::resource::{Locator, Resource, ResourcePattern};
-use crate::ids::{ChannelId, OperatorId};
+use crate::ids::{ChannelId, OperatorId, ResourceId};
 use crate::support::{Capped, Timestamp};
+use crate::wire::Rejected;
 
 /// One promotion as the surface hands it to flow detection: the pattern and
 /// the policy decision, both authored by the calling operator at the time
@@ -227,11 +229,75 @@ pub type CappedResources = Capped<Resource, COVERAGE_CAP>;
 /// Uncovered resources are not dropped: they stay stored on their channel
 /// (the promoted one, or a superseded one that resolves to it), but no new
 /// resource outside the pattern joins.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A response (inside `PromotionPreview`). Decoding cannot rerun
+/// [`coverage`]: it reads the registry, which the value does not hold. It
+/// checks what the value can know about itself ([`InvalidCoverage`]): no
+/// channel is superseded twice, each sample is newest first with no
+/// resource twice, and no resource is shown on both sides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawPromotionCoverage")]
 pub struct PromotionCoverage {
     superseded: Vec<ChannelId>,
     covered: CappedResources,
     uncovered: CappedResources,
+}
+
+/// Why a decoded coverage is not one [`coverage`] could have built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidCoverage {
+    /// `superseded[index]` repeats an earlier channel.
+    RepeatedChannel { index: usize },
+    /// The covered sample is not in strictly descending id order (newest
+    /// first, each resource once).
+    CoveredNotNewestFirst,
+    /// The same, for the uncovered sample.
+    UncoveredNotNewestFirst,
+    /// A resource shown as both covered and uncovered.
+    CoveredAndUncovered(ResourceId),
+}
+
+/// [`PromotionCoverage`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawPromotionCoverage {
+    superseded: Vec<ChannelId>,
+    covered: CappedResources,
+    uncovered: CappedResources,
+}
+
+impl TryFrom<RawPromotionCoverage> for PromotionCoverage {
+    type Error = Rejected<InvalidCoverage>;
+
+    fn try_from(raw: RawPromotionCoverage) -> Result<Self, Self::Error> {
+        let rejected = |error| Rejected::new("promotion coverage", error);
+        let mut channels = HashSet::new();
+        if let Some(index) = raw.superseded.iter().position(|id| !channels.insert(*id)) {
+            return Err(rejected(InvalidCoverage::RepeatedChannel { index }));
+        }
+        let newest_first =
+            |sample: &CappedResources| sample.shown().windows(2).all(|w| w[0].id > w[1].id);
+        if !newest_first(&raw.covered) {
+            return Err(rejected(InvalidCoverage::CoveredNotNewestFirst));
+        }
+        if !newest_first(&raw.uncovered) {
+            return Err(rejected(InvalidCoverage::UncoveredNotNewestFirst));
+        }
+        let covered: HashSet<ResourceId> = raw.covered.shown().iter().map(|r| r.id).collect();
+        if let Some(both) = raw
+            .uncovered
+            .shown()
+            .iter()
+            .find(|r| covered.contains(&r.id))
+        {
+            return Err(rejected(InvalidCoverage::CoveredAndUncovered(both.id)));
+        }
+        Ok(Self {
+            superseded: raw.superseded,
+            covered: raw.covered,
+            uncovered: raw.uncovered,
+        })
+    }
 }
 
 impl PromotionCoverage {

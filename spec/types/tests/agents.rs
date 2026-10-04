@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use crate::ids::{AgentId, MergeId, OperatorId, PromptHash};
 use crate::observed::agent::{
     ActiveAgentState, Agent, AgentLabel, AgentState, AlreadyReverted, IdentityEvidence,
-    InvalidMergeTransition, MergeAuthor, MergeRecord, MergeRequest, MergeVeto, MergedInto,
-    RenameMerged, Reversal, SelfMerge,
+    InvalidMergeTransition, InvalidReversal, MergeAuthor, MergeRecord, MergeRequest, MergeVeto,
+    MergedInto, RenameMerged, Reversal, SelfMerge,
 };
 use crate::support::{Blake3, Change, NonEmpty};
 use crate::tests::fixtures::{agent, at};
@@ -92,15 +92,69 @@ fn merge_record_takes_its_agents_from_the_request() {
 
 #[test]
 fn a_record_is_reverted_at_most_once() {
-    let mut record = record_with(1, agent(1), agent(2), Vec::new());
+    let mut record = record_with(1, agent(1), agent(2), vec![agent(3)]);
     assert_eq!(record.revert(reversal(vec![agent(3)])), Ok(()));
     assert_eq!(
         record.revert(reversal(Vec::new())),
-        Err(AlreadyReverted {
+        Err(InvalidReversal::AlreadyReverted(AlreadyReverted {
             merge: MergeId::from_ulid(1)
-        })
+        }))
     );
     assert_eq!(record.reverted(), Some(&reversal(vec![agent(3)])));
+}
+
+#[test]
+fn a_reversal_restores_only_agents_the_merge_repointed_in_its_order() {
+    let repointed = vec![agent(3), agent(4), agent(5)];
+    for restored in [
+        Vec::new(),
+        vec![agent(4)],
+        vec![agent(3), agent(5)],
+        repointed.clone(),
+    ] {
+        let mut record = record_with(1, agent(1), agent(2), repointed.clone());
+        assert_eq!(record.revert(reversal(restored.clone())), Ok(()));
+        assert_eq!(record.reverted(), Some(&reversal(restored)));
+    }
+    for (restored, refused) in [
+        (vec![agent(6)], agent(6)),
+        (vec![agent(3), agent(3)], agent(3)),
+        (vec![agent(5), agent(3)], agent(3)),
+        (vec![agent(1)], agent(1)),
+    ] {
+        let mut record = record_with(1, agent(1), agent(2), repointed.clone());
+        assert_eq!(
+            record.revert(reversal(restored)),
+            Err(InvalidReversal::NotRepointed { agent: refused })
+        );
+        assert_eq!(
+            record.reverted(),
+            None,
+            "a refused reversal changes nothing"
+        );
+    }
+}
+
+#[test]
+fn a_reversal_is_not_dated_before_its_merge() {
+    let mut record = record_with(1, agent(1), agent(2), Vec::new());
+    let early = Reversal {
+        at: at(9),
+        ..reversal(Vec::new())
+    };
+    assert_eq!(
+        record.revert(early),
+        Err(InvalidReversal::BeforeMerge {
+            merged: at(10),
+            reverted: at(9)
+        })
+    );
+    assert_eq!(record.reverted(), None);
+    let same_instant = Reversal {
+        at: at(10),
+        ..reversal(Vec::new())
+    };
+    assert_eq!(record.revert(same_instant), Ok(()));
 }
 
 // ── Agent transitions ───────────────────────────────────────────────────────

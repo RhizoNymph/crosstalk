@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.conversation.history-is-delta-concatenation"
+statement = "For a Root or Fork conversation, its stored history without system messages equals its base (empty for Root, the first shared_prefix non-system messages of the parent for Fork), followed by each of its deltas' new_inputs and then output if present, in threading order."
+kind = "domain"
+property = "inductive"
+requires = ["property"]
+rationale = """
+Deltas are the only record downstream layers see. If concatenating them does
+not rebuild the history, a consumer replaying deltas sees messages the
+gateway never scanned or skips ones it did. This also pins down that the
+stored history includes each exchange's response, so the next request's
+echo of that response is not reported as new input. Compactions are left
+out because carried-over messages are excluded from new_inputs wherever
+they sit in the request, yet stay in the stored history; their law is
+reconstruct.conversation.compaction-history.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::conversation_history_is_concatenation_of_deltas"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.reasoning.opaque-verbatim"
+statement = "An encrypted or redacted reasoning block's payload is carried into Reasoning::Opaque byte for byte."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The harness echoes opaque reasoning back unchanged on the next turn. If the
+canonical form altered it (trimmed, re-encoded, dropped), the response and
+its echo would hash differently and threading would lose the conversation.
+The payload is opaque, so no transformation of it can be justified.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::redacted_thinking_kept_verbatim"
+property = "crosstalk_canonical::tests::opaque_reasoning_bytes_preserved"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

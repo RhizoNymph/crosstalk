@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.span.within-output-part"
+statement = "Every SpanDraft that Segmenter::segment returns locates a text-bearing part of the output message it was given, with a range that ends at or before that part's text length in bytes."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Every consumer of a span slices the stored message by its location. A range
+past the end of the part panics or reads another part's bytes, and a span
+whose PartRef names an input message would credit the agent with text it was
+given rather than text it wrote. Media parts and opaque reasoning carry no
+text, so no span may point into them.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::segment_spans_lie_within_output_parts"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

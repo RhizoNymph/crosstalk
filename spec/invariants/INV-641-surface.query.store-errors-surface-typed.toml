@@ -12,7 +12,7 @@ NotFound on its own.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_injected_store_errors_surface_through_from"
+property = "crosstalk_surface::tests::prop_injected_store_errors_surface_through_from"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

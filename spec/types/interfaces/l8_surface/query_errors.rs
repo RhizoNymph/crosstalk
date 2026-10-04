@@ -24,6 +24,12 @@
 //!   naming the channel that superseded it.
 //! - Enabling a stale alert rule is `Conflict(RuleStale)`: the rule needs
 //!   an update, not a retry.
+//! - Acknowledging or resolving an alert that is resolved or suppressed is
+//!   `Conflict(AlertNotActive)`; resolving an open alert is
+//!   `Conflict(AlertNotAcknowledged)`.
+//! - Consumer-side store errors (`AgentLifecycleError`, `TrafficError`,
+//!   `TopicLifecycleError`, `CorpusError`) and the operator store's load and
+//!   caller errors reach no query or action, so none has a mapping here.
 //! - Stored records that cannot be read or do not fit together (a missing
 //!   span, a location outside its body, a corrupt blob) are `Store`, with a
 //!   diagnostic reason. A message body content retention dropped is not an
@@ -40,16 +46,30 @@
 //!   `Conflict(ExportTooLarge)`, from `ExportLimits::check` (not a store
 //!   error). A failure after an export has started is not a `QueryError`:
 //!   the stream's trailer records it (`ExportFailure`).
+//! - Client input the HTTP layer cannot decode as the route's request type
+//!   (`crate::wire::DecodeError`) is `InvalidInput(MalformedRequest)`, for
+//!   a query and for an action alike.
+//! - An export in a format the gateway does not write
+//!   (`ExportFormats::check`) is `InvalidInput(UnsupportedFormat)`.
+//! - A store error that reaches both a query and an action maps to the same
+//!   variant either way, with two exceptions an action cannot meet as a
+//!   query does: a dropped topic-model version is
+//!   `Conflict(TopicVersionDropped)` for an action (pinning reads no
+//!   dropped data) and `VersionNotRetained` for a query, and a cursor error
+//!   reported to an action, which takes no cursor, is a `Store` fault.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
+use crate::aggregates::retention::PinError;
 use crate::batch::TooManyIds;
 use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::{BlobError, BusError};
 use crate::interfaces::l3_reconstruction::ResolveError;
 use crate::interfaces::l3_reconstruction::agents::AgentReadError;
+use crate::interfaces::l5_flow::transmissions::TransmissionStoreError;
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
+use crate::interfaces::l6_analysis::alerts::{AlertActionError, AlertReadError};
 use crate::interfaces::l6_analysis::{
     CatalogError, EmbedError, ProjectionStoreError, RuleError, SearchError,
 };
@@ -57,10 +77,13 @@ use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError, InvalidWindow};
-use crate::interfaces::l8_surface::export::ExportPlanError;
+use crate::interfaces::l8_surface::export::{ExportPlanError, UnsupportedFormat};
+use crate::interfaces::l8_surface::operators::OperatorStoreError;
+use crate::interfaces::l8_surface::sinks::SinkRegistryError;
 use crate::interfaces::l8_surface::summary::InvalidSelection;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
+use crate::wire::DecodeError;
 
 impl From<VersionUnavailable> for QueryError {
     fn from(error: VersionUnavailable) -> Self {
@@ -259,6 +282,94 @@ impl From<VerdictError> for QueryError {
     }
 }
 
+/// For `SetPolicy` (`ChannelRegistry::set_policy`, and the supersession
+/// check through the registry before `PolicyChanged` is published). Each
+/// refusal maps as it does for a query; an action takes no cursor, so a
+/// registry reporting `InvalidCursor` to one is a fault, reported as a
+/// store failure.
+impl From<RegistryError> for ActionError {
+    fn from(error: RegistryError) -> Self {
+        match error {
+            RegistryError::Store { reason } => Self::Store { reason },
+            RegistryError::UnknownChannel(_) => Self::NotFound,
+            RegistryError::OverlappingDeclaration { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+            RegistryError::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            RegistryError::InvalidCursor => Self::Store {
+                reason: "registry cursor error reported to an action".to_owned(),
+            },
+        }
+    }
+}
+
+/// For `SetVerdict` (`TransmissionVerdicts::set`): the same variants the
+/// query mapping gives, so a refused verdict reads the same wherever it is
+/// shown.
+impl From<VerdictError> for ActionError {
+    fn from(error: VerdictError) -> Self {
+        match error {
+            VerdictError::Store { reason } => Self::Store { reason },
+            VerdictError::UnknownTransmission(_) => Self::NotFound,
+            VerdictError::NotJudgeable(transmission) => {
+                Self::Conflict(ConflictKind::TransmissionNotJudgeable { transmission })
+            }
+        }
+    }
+}
+
+/// For `PinTopicVersion` and `UnpinTopicVersion` (`TopicCatalog::pin`,
+/// `unpin`). An action reads no dropped data, so a dropped version is
+/// `Conflict(TopicVersionDropped)`, not `VersionNotRetained` as for a
+/// query; an action takes no cursor, so `InvalidCursor` is a fault,
+/// reported as a store failure.
+impl From<CatalogError> for ActionError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::Store { reason } => Self::Store { reason },
+            CatalogError::UnknownVersion(_) => Self::NotFound,
+            CatalogError::StillFitting(version) => {
+                Self::Conflict(ConflictKind::TopicVersionFitting { version })
+            }
+            CatalogError::VersionNotRetained(version) => {
+                Self::Conflict(ConflictKind::TopicVersionDropped { version })
+            }
+            CatalogError::InvalidCursor => Self::Store {
+                reason: "catalog cursor error reported to an action".to_owned(),
+            },
+        }
+    }
+}
+
+/// For `PinTopicVersion` and `UnpinTopicVersion` refused by the history
+/// itself (`TopicVersionHistory::pin`, `unpin`): the same variants as the
+/// catalog's refusals of the same cases.
+impl From<PinError> for ActionError {
+    fn from(error: PinError) -> Self {
+        match error {
+            PinError::UnknownVersion(_) => Self::NotFound,
+            PinError::Fitting(version) => {
+                Self::Conflict(ConflictKind::TopicVersionFitting { version })
+            }
+            PinError::Dropped { version, .. } => {
+                Self::Conflict(ConflictKind::TopicVersionDropped { version })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::export`: a format the gateway does not write, refused
+/// after the permission check and before anything is read.
+impl From<UnsupportedFormat> for QueryError {
+    fn from(error: UnsupportedFormat) -> Self {
+        Self::InvalidInput(InputError::UnsupportedFormat {
+            format: error.format,
+        })
+    }
+}
+
 /// For `QueryApi::audit` (`AuditLog::query`). A reused id is a write-side
 /// fault the read cannot cause; if a store reports it, it is a store failure.
 impl From<AuditError> for QueryError {
@@ -380,6 +491,66 @@ impl From<TooManyIds> for QueryError {
     }
 }
 
+/// For `Acknowledge` and `Resolve` (`AlertActions`). An unknown alert is
+/// `NotFound`; one no action can leave (resolved or suppressed) is
+/// `Conflict(AlertNotActive)`; resolving one that is still open is
+/// `Conflict(AlertNotAcknowledged)`, which an acknowledgement cures.
+impl From<AlertActionError> for ActionError {
+    fn from(error: AlertActionError) -> Self {
+        match error {
+            AlertActionError::Store { reason } => Self::Store { reason },
+            AlertActionError::UnknownAlert(_) => Self::NotFound,
+            AlertActionError::NotActive(alert) => {
+                Self::Conflict(ConflictKind::AlertNotActive { alert })
+            }
+            AlertActionError::NotAcknowledged(alert) => {
+                Self::Conflict(ConflictKind::AlertNotAcknowledged { alert })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::alert_rules`, `alert_rule`, `alerts`, `alert` and
+/// `present` (`AlertReads`).
+impl From<AlertReadError> for QueryError {
+    fn from(error: AlertReadError) -> Self {
+        match error {
+            AlertReadError::Store { reason } => Self::Store { reason },
+            AlertReadError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::transmission` and the reads that start from stored
+/// transmissions (`TransmissionStore::transmission`).
+impl From<TransmissionStoreError> for QueryError {
+    fn from(error: TransmissionStoreError) -> Self {
+        match error {
+            TransmissionStoreError::Store { reason } => Self::Store { reason },
+        }
+    }
+}
+
+/// For `QueryApi::sinks` (`SinkRegistry::sinks`). A read names no sink, but
+/// the mapping is total: an unknown sink is `NotFound`.
+impl From<SinkRegistryError> for QueryError {
+    fn from(error: SinkRegistryError) -> Self {
+        match error {
+            SinkRegistryError::Store { reason } => Self::Store { reason },
+            SinkRegistryError::UnknownSink(_) => Self::NotFound,
+        }
+    }
+}
+
+/// For `QueryApi::operators` (`OperatorStore::operators`).
+impl From<OperatorStoreError> for QueryError {
+    fn from(error: OperatorStoreError) -> Self {
+        match error {
+            OperatorStoreError::Store { reason } => Self::Store { reason },
+        }
+    }
+}
+
 /// For `QueryApi::agents`, `agent` and `agent_names` (`AgentReads`).
 impl From<AgentReadError> for QueryError {
     fn from(error: AgentReadError) -> Self {
@@ -430,5 +601,24 @@ impl From<InvalidWindow> for QueryError {
             max: error.max,
             got: error.got,
         })
+    }
+}
+
+impl From<DecodeError> for QueryError {
+    fn from(error: DecodeError) -> Self {
+        Self::InvalidInput(malformed(error))
+    }
+}
+
+impl From<DecodeError> for ActionError {
+    fn from(error: DecodeError) -> Self {
+        Self::InvalidInput(malformed(error))
+    }
+}
+
+fn malformed(error: DecodeError) -> InputError {
+    InputError::MalformedRequest {
+        kind: error.kind,
+        reason: error.reason,
     }
 }

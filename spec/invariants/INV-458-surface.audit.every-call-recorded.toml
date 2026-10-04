@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.audit.every-call-recorded"
-statement = "Every OperatorActions::act call that returns Ok or an ActionError other than Store leaves exactly one AuditBody::Operator entry, holding the call's Caller and action and an outcome whose AuditOutcome::result equals what the call returned, and a call that returns Store leaves at most one."
+statement = "Every OperatorActions::act call that returns Ok or an ActionError other than Store leaves exactly one AuditBody::Operator entry, holding a CallerSnapshot of the call's Caller, its action and an outcome whose AuditOutcome::result equals what the call returned, and a call that returns Store leaves at most one."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
@@ -16,8 +16,8 @@ when the log can still be reached.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::every_action_outcome_is_audited", "crosstalk::surface::tests::forbidden_action_is_audited"]
-property = "crosstalk::surface::tests::prop_one_audit_record_per_act_call"
+unit = ["crosstalk_surface::tests::every_action_outcome_is_audited", "crosstalk_surface::tests::forbidden_action_is_audited"]
+property = "crosstalk_surface::tests::prop_one_audit_record_per_act_call"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

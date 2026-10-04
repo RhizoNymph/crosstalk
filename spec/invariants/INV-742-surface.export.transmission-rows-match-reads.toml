@@ -21,7 +21,7 @@ unit = [
     "crosstalk_spec::tests::evidence::export_content_quotes_the_evidence_in_order",
     "crosstalk_spec::tests::evidence::export_content_needs_a_match",
 ]
-integration = "crosstalk::surface::export::tests::transmission_rows_match_rows_by_id_and_evidence"
+integration = "crosstalk_surface::export::tests::transmission_rows_match_rows_by_id_and_evidence"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

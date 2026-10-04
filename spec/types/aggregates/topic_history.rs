@@ -28,8 +28,18 @@
 //! topic at or above the lineage floor. Watched-topic rules are remapped from
 //! it with [`TopicLineage::remap`], so the UI's "topic 12 became 31" and the
 //! alert rules can never disagree.
+//!
+//! **On the wire.** Every type here but [`TopicVersionStatusKind`] and the
+//! errors is a response: [`TopicVersionHistory`] (`topic_versions`),
+//! [`TopicSizes`] (`topic_sizes`) and [`TopicLineage`] (`topic_lineage`).
+//! The checked ones ([`TopicVersionInfo`], [`TopicVersionHistory`],
+//! [`TopicSizes`], [`LineageEntry`], [`TopicLineage`]) decode through their
+//! constructors; a history's active index is not on the wire but found
+//! again from the statuses.
 
 use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::{TopicWatch, WatchedTopics};
 use crate::aggregates::edge::EdgeStats;
@@ -37,9 +47,11 @@ use crate::aggregates::retention::Retention;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::TopicId;
 use crate::support::{NonEmpty, Similarity, TimeWindow, Timestamp};
+use crate::wire::Rejected;
 
 /// What is known about a fit once its version is ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CompletedFit {
     pub started_at: Timestamp,
     /// When `TopicModel::fit` returned; every topic's `fitted_at`.
@@ -51,14 +63,26 @@ pub struct CompletedFit {
 }
 
 /// How a version that has been active came to exist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FitRecord {
     /// Version 0, and only version 0.
     Unfitted,
     Fitted(CompletedFit),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TopicVersionStatus {
     /// The fit is running, or transmissions are being re-classified under
     /// it. No `TopicVersionReady` yet.
@@ -120,7 +144,8 @@ impl TopicVersionStatus {
 /// activated, superseded, dropped). Only a superseded version is dropped, a
 /// fitting version is never pinned, and a pin is no earlier than the
 /// version became ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTopicVersionInfo")]
 pub struct TopicVersionInfo {
     version: TopicModelVersion,
     status: TopicVersionStatus,
@@ -141,6 +166,25 @@ pub enum InvalidVersionInfo {
     PinnedWhileFitting,
     /// A dropped version that is not superseded.
     DroppedNotSuperseded,
+}
+
+/// [`TopicVersionInfo`]'s fields, decoded without the checks. Decoding goes
+/// through [`TopicVersionInfo::with_retention`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopicVersionInfo {
+    version: TopicModelVersion,
+    status: TopicVersionStatus,
+    retention: Retention,
+}
+
+impl TryFrom<RawTopicVersionInfo> for TopicVersionInfo {
+    type Error = Rejected<InvalidVersionInfo>;
+
+    fn try_from(raw: RawTopicVersionInfo) -> Result<Self, Self::Error> {
+        Self::with_retention(raw.version, raw.status, raw.retention)
+            .map_err(|error| Rejected::new("topic version info", error))
+    }
 }
 
 impl TopicVersionInfo {
@@ -271,7 +315,11 @@ impl TopicVersionInfo {
 /// superseded and every newer one is ready or fitting, only the newest may
 /// be fitting, and each superseded version names as `by` the first version
 /// newer than it to be activated, superseded at that activation's time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// On the wire, `{"versions": [..]}`: which version is active follows from
+/// the statuses, and decoding goes through [`TopicVersionHistory::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawTopicVersionHistory", into = "RawTopicVersionHistory")]
 pub struct TopicVersionHistory {
     versions: Vec<TopicVersionInfo>,
     active: usize,
@@ -295,6 +343,30 @@ pub enum InvalidHistory {
     WrongSupersessor {
         version: TopicModelVersion,
     },
+}
+
+/// [`TopicVersionHistory`]'s wire form: its versions, without the index of
+/// the active one, which [`TopicVersionHistory::new`] finds.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopicVersionHistory {
+    versions: Vec<TopicVersionInfo>,
+}
+
+impl From<TopicVersionHistory> for RawTopicVersionHistory {
+    fn from(history: TopicVersionHistory) -> Self {
+        Self {
+            versions: history.versions,
+        }
+    }
+}
+
+impl TryFrom<RawTopicVersionHistory> for TopicVersionHistory {
+    type Error = Rejected<InvalidHistory>;
+
+    fn try_from(raw: RawTopicVersionHistory) -> Result<Self, Self::Error> {
+        Self::new(raw.versions).map_err(|error| Rejected::new("topic version history", error))
+    }
 }
 
 impl TopicVersionHistory {
@@ -374,7 +446,8 @@ impl TopicVersionHistory {
 
 /// How much one topic holds. `None` when no transmission assigned to it was
 /// confirmed in the window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicSize {
     pub topic: TopicId,
     pub stats: Option<EdgeStats>,
@@ -384,15 +457,14 @@ pub struct TopicSize {
 /// that version, counted over every transmission or only those confirmed in
 /// `window`.
 ///
-/// These count topic assignments of transmissions between different agents:
-/// one whose two agents have since merged into one counts nowhere
-/// (`Transmission::crossing`), here as in graphs and series, resolved at the
-/// read. A dropped version's all-time sizes are frozen at its drop, merges
-/// up to then applied, since its assignments are gone.
+/// These count topic assignments, so a transmission between two agents that
+/// were later merged still counts here although graphs and series drop it as
+/// a self-edge.
 ///
 /// Built only through [`TopicSizes::new`], which rejects a topic listed
 /// twice.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTopicSizes")]
 pub struct TopicSizes {
     version: TopicModelVersion,
     window: Option<TimeWindow>,
@@ -402,6 +474,26 @@ pub struct TopicSizes {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DuplicateTopic(pub TopicId);
+
+/// [`TopicSizes`]'s fields, decoded without the check. Decoding goes
+/// through [`TopicSizes::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopicSizes {
+    version: TopicModelVersion,
+    window: Option<TimeWindow>,
+    topics: Vec<TopicSize>,
+    outliers: Option<EdgeStats>,
+}
+
+impl TryFrom<RawTopicSizes> for TopicSizes {
+    type Error = Rejected<DuplicateTopic>;
+
+    fn try_from(raw: RawTopicSizes) -> Result<Self, Self::Error> {
+        Self::new(raw.version, raw.window, raw.topics, raw.outliers)
+            .map_err(|error| Rejected::new("topic sizes", error))
+    }
+}
 
 impl TopicSizes {
     pub fn new(
@@ -443,7 +535,8 @@ impl TopicSizes {
 
 /// A topic of the newer version and how similar its centroid is to the
 /// older topic's.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct LineageLink {
     pub topic: TopicId,
     pub similarity: Similarity,
@@ -463,7 +556,8 @@ impl LineageLink {
 /// order (higher similarity, then lower topic id), `others` follow in that
 /// order, and no topic appears twice. `best` is `None` only when the newer
 /// version has no topics, and then `others` is empty.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawLineageEntry")]
 pub struct LineageEntry {
     topic: TopicId,
     best: Option<LineageLink>,
@@ -477,6 +571,25 @@ pub enum InvalidLineageEntry {
     /// precedes `best`.
     OutOfOrder,
     DuplicateSuccessor(TopicId),
+}
+
+/// [`LineageEntry`]'s fields, decoded without the checks. Decoding goes
+/// through [`LineageEntry::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawLineageEntry {
+    topic: TopicId,
+    best: Option<LineageLink>,
+    others: Vec<LineageLink>,
+}
+
+impl TryFrom<RawLineageEntry> for LineageEntry {
+    type Error = Rejected<InvalidLineageEntry>;
+
+    fn try_from(raw: RawLineageEntry) -> Result<Self, Self::Error> {
+        Self::new(raw.topic, raw.best, raw.others)
+            .map_err(|error| Rejected::new("lineage entry", error))
+    }
 }
 
 impl LineageEntry {
@@ -537,7 +650,8 @@ impl LineageEntry {
 /// of `from`'s topics has at most one entry, and every link in `others` is
 /// at or above `floor`. `floor` is configuration; it bounds what the UI
 /// draws, not what [`TopicLineage::remap`] considers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTopicLineage")]
 pub struct TopicLineage {
     from: TopicModelVersion,
     to: TopicModelVersion,
@@ -561,6 +675,26 @@ pub enum RemapError {
     },
     /// The rule watches a topic the lineage has no entry for.
     UnknownTopic(TopicId),
+}
+
+/// [`TopicLineage`]'s fields, decoded without the checks. Decoding goes
+/// through [`TopicLineage::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopicLineage {
+    from: TopicModelVersion,
+    to: TopicModelVersion,
+    floor: Similarity,
+    entries: Vec<LineageEntry>,
+}
+
+impl TryFrom<RawTopicLineage> for TopicLineage {
+    type Error = Rejected<InvalidLineage>;
+
+    fn try_from(raw: RawTopicLineage) -> Result<Self, Self::Error> {
+        Self::new(raw.from, raw.to, raw.floor, raw.entries)
+            .map_err(|error| Rejected::new("topic lineage", error))
+    }
 }
 
 impl TopicLineage {

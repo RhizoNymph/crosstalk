@@ -10,7 +10,7 @@ serializes them in its store, so exactly one order happens.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::pin_and_drop_never_both_win"
+dst = "crosstalk_analysis::tests::pin_and_drop_never_both_win"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

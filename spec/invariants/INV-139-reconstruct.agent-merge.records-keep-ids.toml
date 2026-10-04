@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-merge.records-keep-ids"
+statement = "Applying a merge changes the agent id of no stored conversation."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Merges are aliases: records keep the id they were written with and readers
+resolve it through the directory. Rewriting records on merge would make a
+merge expensive, lose the audit trail of what was attributed to whom, and
+make a later operator correction impossible to apply cleanly.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::merge_leaves_conversation_agent_ids"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -9,8 +9,8 @@ use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{TopicVersionSelector, VersionUnavailable};
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
-    Fitted, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit, ProjectionParams,
-    ProjectionSpec, ProjectionStatus,
+    Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -30,9 +30,12 @@ use crate::interfaces::l8_surface::export::{
     ExportScope, GatewayVersion, InvalidExportRecord, InvalidExportRequest, InvalidHeader,
     settled_window,
 };
+use crate::interfaces::l8_surface::export::{
+    ExportFormats, InvalidExportFormats, UnsupportedFormat,
+};
 use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionSummary};
 use crate::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
-use crate::support::{TimeWindow, Watermark};
+use crate::support::{Finite, TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 use crate::tests::operators::caller;
 use crate::tests::verdicts::{confirmed, every_state};
@@ -153,11 +156,11 @@ fn point(n: u128, topic: Option<TopicId>) -> ProjectedPoint {
         transmission: transmission(n),
         from: agent(1),
         to: agent(2),
-        route: RouteKind::Unobserved,
+        route: PointRoute::Unobserved,
         topic,
         confirmed_at: at(100),
-        x: 0.25,
-        y: -2.0,
+        x: Finite::new(0.25).expect("finite"),
+        y: Finite::new(-2.0).expect("finite"),
     }
 }
 
@@ -169,7 +172,7 @@ pub(super) fn points() -> Vec<ProjectedPoint> {
     ]
 }
 
-fn projection() -> Projection {
+pub(super) fn projection() -> Projection {
     let points = points();
     let count = u32::try_from(points.len()).expect("small");
     let info = ProjectionInfo::new(
@@ -507,6 +510,53 @@ fn gateway_version_is_not_blank() {
     assert_eq!(
         GatewayVersion::new(" 1.2.3 ").expect("non-blank").as_str(),
         "1.2.3"
+    );
+}
+
+// ── Formats ────────────────────────────────────────────────────────────────
+
+#[test]
+fn offered_formats_are_non_empty_and_distinct_in_offer_order() {
+    assert_eq!(
+        ExportFormats::new(Vec::new()),
+        Err(InvalidExportFormats::Empty)
+    );
+    assert_eq!(
+        ExportFormats::new(vec![
+            ExportFormat::Parquet,
+            ExportFormat::Jsonl,
+            ExportFormat::Parquet
+        ]),
+        Err(InvalidExportFormats::Duplicate(ExportFormat::Parquet))
+    );
+    let both =
+        ExportFormats::new(vec![ExportFormat::Parquet, ExportFormat::Jsonl]).expect("distinct");
+    assert_eq!(
+        both.as_slice(),
+        &[ExportFormat::Parquet, ExportFormat::Jsonl]
+    );
+    assert_eq!(both.first(), ExportFormat::Parquet);
+}
+
+#[test]
+fn a_format_the_gateway_does_not_write_is_refused() {
+    let jsonl = ExportFormats::new(vec![ExportFormat::Jsonl]).expect("one format");
+    assert!(jsonl.offers(ExportFormat::Jsonl));
+    assert_eq!(jsonl.check(ExportFormat::Jsonl), Ok(()));
+    assert!(!jsonl.offers(ExportFormat::Parquet));
+    assert_eq!(
+        jsonl.check(ExportFormat::Parquet),
+        Err(UnsupportedFormat {
+            format: ExportFormat::Parquet
+        })
+    );
+    assert_eq!(
+        QueryError::from(UnsupportedFormat {
+            format: ExportFormat::Parquet
+        }),
+        QueryError::InvalidInput(InputError::UnsupportedFormat {
+            format: ExportFormat::Parquet
+        })
     );
 }
 

@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.deadletter.replay-unknown"
+statement = "replay(group, id) when the store holds no DeadLetter for that group and EventId, including one already replayed, returns Err(BusError::UnknownDeadLetter { group, id }) and delivers nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "dst"]
+rationale = """
+A replay of a letter that was never stored, belongs to another group, or was
+already replayed must be visible to the operator as an error rather than
+silently succeed or enqueue the envelope again. The dst test covers two
+concurrent replays of one letter: exactly one returns Ok.
+"""
+
+[evidence]
+unit = "crosstalk_transport::tests::replay_of_unknown_dead_letter_is_rejected"
+dst = "crosstalk_transport::dst::concurrent_replays_of_one_letter_succeed_once"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

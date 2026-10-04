@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.resolve.most-specific-evidence-decides"
+statement = "Adding, removing or changing identity evidence less specific than an exchange's most specific evidence never changes which agents its Resolution names."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Precedence by `IdentityEvidence::specificity` is what lets one shared API
+key carry several harness agents: the key attaches to each of them but never
+makes them conflict, and the harness agent id decides. Without it, every
+exchange on a shared key or a common system prompt would be a Conflict or
+be attributed to whichever agent saw the key first.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::less_specific_evidence_never_changes_resolved_agents"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

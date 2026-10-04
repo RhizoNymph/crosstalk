@@ -1,12 +1,13 @@
 //! The overview's counts: activity from the graph, queues from the stores.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use crate::aggregates::alert::{Alert, AlertState, AlertSubject, SuppressReason};
-use crate::aggregates::edge::{EdgeStats, EdgeTotals, TopologyGraph, WeightedEdge, Weighting};
-use crate::aggregates::filter::UnconfirmedChannels;
+use crate::aggregates::edge::{
+    EdgeStats, EdgeTotals, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
+};
 use crate::aggregates::topic::TopicModelVersion;
-use crate::derived::flow::channel::confirmation::CrossTraffic;
 use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::{
@@ -14,11 +15,11 @@ use crate::derived::flow::channel::{
 };
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::{DelegationDirection, Route};
-use crate::ids::{AlertId, AlertRuleId, OperatorId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, OperatorId};
 use crate::interfaces::l8_surface::channels::ChannelCounts;
 use crate::interfaces::l8_surface::overview::QueueCounts;
 use crate::support::{Share, TimeWindow};
-use crate::tests::fixtures::{agent, at, channel, channel_row, resource, transmission};
+use crate::tests::fixtures::{access, agent, agent_node, at, channel, resource};
 
 fn count(n: u64) -> NonZeroU64 {
     NonZeroU64::new(n).expect("non-zero")
@@ -33,18 +34,49 @@ fn edge(from: u128, to: u128, route: Route, transmissions: u64, bytes: u64) -> W
             transmissions: count(transmissions),
             matched_bytes: count(bytes),
         },
-        share: Share::new(0.25).expect("in range"),
+        // Replaced by `weighted`, which computes each edge's share.
+        share: Share::new(0.0).expect("in range"),
     }
 }
 
 fn graph(edges: Vec<WeightedEdge>) -> TopologyGraph {
-    TopologyGraph {
-        window: TimeWindow::new(at(0), at(60)).expect("non-empty"),
-        weighting: Weighting::Transmissions,
-        topic_version: TopicModelVersion(3),
-        nodes: Vec::new(),
-        edges,
+    weighted(Weighting::Transmissions, edges)
+}
+
+/// A valid graph of `edges`: each share its stat under `weighting` over the
+/// total, and one node per endpoint with the edges' counts.
+#[allow(clippy::cast_precision_loss)]
+fn weighted(weighting: Weighting, edges: Vec<WeightedEdge>) -> TopologyGraph {
+    let total: u64 = edges
+        .iter()
+        .map(|edge| weighting.stat(edge.stats).get())
+        .sum();
+    let edges: Vec<WeightedEdge> = edges
+        .into_iter()
+        .map(|edge| WeightedEdge {
+            share: Share::new(weighting.stat(edge.stats).get() as f64 / total as f64)
+                .expect("a ratio of counts is in range"),
+            ..edge
+        })
+        .collect();
+    let mut counts: BTreeMap<AgentId, (u64, u64)> = BTreeMap::new();
+    for edge in &edges {
+        let n = edge.stats.transmissions.get();
+        counts.entry(edge.to).or_default().0 += n;
+        counts.entry(edge.from).or_default().1 += n;
     }
+    let nodes = counts
+        .into_iter()
+        .map(|(id, (into, out))| agent_node(id.as_ulid(), into, out))
+        .collect();
+    TopologyGraph::new(TopologyGraphParts {
+        window: TimeWindow::new(at(0), at(60)).expect("non-empty"),
+        weighting,
+        topic_version: TopicModelVersion(3),
+        nodes,
+        edges,
+    })
+    .expect("a valid graph")
 }
 
 #[test]
@@ -77,8 +109,7 @@ fn totals_sum_the_edges_and_count_distinct_channels() {
 fn totals_do_not_depend_on_weighting() {
     let edges = vec![edge(1, 2, Route::Channel(channel(7)), 3, 300)];
     let by_count = graph(edges.clone());
-    let mut by_bytes = graph(edges);
-    by_bytes.weighting = Weighting::MatchedBytes;
+    let by_bytes = weighted(Weighting::MatchedBytes, edges);
     assert_eq!(EdgeTotals::of(&by_count), EdgeTotals::of(&by_bytes));
 }
 
@@ -118,14 +149,13 @@ fn decision() -> Decision {
 fn seed() -> Seed {
     Seed {
         resource: resource(1),
-        first_transmission: transmission(1),
+        first_access: access(1),
     }
 }
 
 fn observed() -> TrafficDetection {
-    TrafficDetection::Active {
-        since: at(1),
-        last_transmission: transmission(1),
+    TrafficDetection::Observed {
+        first_access: access(1),
     }
 }
 
@@ -170,7 +200,7 @@ fn queues_count_open_alerts_only() {
             },
         ),
     ];
-    let counts = QueueCounts::tally(&alerts, |_| true, &[], UnconfirmedChannels::Include);
+    let counts = QueueCounts::tally(&alerts, &[]);
     assert_eq!(counts.open_alerts, 2);
     assert_eq!(counts.unreviewed_channels, 0);
 }
@@ -211,21 +241,7 @@ fn queues_count_unreviewed_channels_that_are_not_superseded() {
         declared,
         superseded,
     ];
-    let rows: Vec<_> = channels
-        .into_iter()
-        .map(|channel| {
-            let traffic = if channel.origin.traffic().is_some() {
-                CrossTraffic {
-                    confirmed: 1,
-                    unconfirmed: 0,
-                }
-            } else {
-                CrossTraffic::NONE
-            };
-            channel_row(channel, traffic)
-        })
-        .collect();
-    let counts = QueueCounts::tally(&[], |_| true, &rows, UnconfirmedChannels::Include);
+    let counts = QueueCounts::tally(&[], &channels);
     assert_eq!(
         counts.unreviewed_channels, 3,
         "never reviewed, reset, declared"
@@ -282,7 +298,7 @@ fn active_channels_are_the_channels_rows_count_transmissions_on() {
         );
         let routed_sum: u64 = routed.values().sum();
         let channel_edges: u64 = graph
-            .edges
+            .edges()
             .iter()
             .filter(|edge| matches!(edge.route, Route::Channel(_)))
             .map(|edge| edge.stats.transmissions.get())

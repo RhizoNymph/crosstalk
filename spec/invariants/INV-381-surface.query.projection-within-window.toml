@@ -14,7 +14,7 @@ Confirmed::at, the same time edges are bucketed by.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_projection_points_within_window"
+property = "crosstalk_surface::tests::prop_projection_points_within_window"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

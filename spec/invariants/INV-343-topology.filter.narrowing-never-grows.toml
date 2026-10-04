@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.filter.narrowing-never-grows"
+statement = "After narrowing a filter, by making an empty agents, channels, route_kinds or topics list non-empty or by removing an entry from such a list that keeps at least one entry, every edge of the resulting graph appears in the original graph with stats at least as large."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+A filter selects transmissions; it never creates them. Empty lists do not
+restrict and non-empty fields combine with AND, so each listed change
+admits a subset of what the original filter admitted. A narrower filter
+may drop edges and, for topic filters, lower an edge's stats, but an edge
+or a count that appears only under the narrower filter means the filter
+joined or re-keyed data rather than selecting it. Shares are excluded:
+they renormalize to the narrower total and can rise.
+"""
+
+[evidence]
+property = "crosstalk_topology::props::narrowed_filter_graph_is_dominated"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

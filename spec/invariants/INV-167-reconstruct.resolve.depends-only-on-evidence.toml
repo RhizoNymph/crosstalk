@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.resolve.depends-only-on-evidence"
+statement = "Two exchanges that carry the same identity evidence resolve to the same Resolution against the same agent store state."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Resolution must be a function of evidence and store state, not of exchange
+ids, timestamps, model names or message content outside the evidence. If it
+were not, replaying a stream or redelivering an exchange could attribute the
+same traffic to different agents, and identity bugs would not reproduce.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::resolution_depends_only_on_evidence_and_store"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

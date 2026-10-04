@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.triage.opened-initial"
+statement = "An alert returned by an Opened triage is Open with one occurrence and carries the draft's rule, subject and raised_at."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The first occurrence is the draft itself, so the count starts at one, not
+zero. Copying raised_at from the draft keeps the alert's time the time of
+the triggering event, which is what replays reproduce.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::tests::opened_alert_copies_draft_and_starts_open"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

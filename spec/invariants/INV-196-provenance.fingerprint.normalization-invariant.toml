@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.fingerprint.normalization-invariant"
+statement = "Changing the case of letters or replacing any whitespace run with another non-empty whitespace run leaves the sequence of fingerprint values that Fingerprinter::fingerprints returns unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Agents and tools reflow and re-case text (markdown rendering, wrapping,
+title-casing). Matching must survive that, and MatchKind::Normalized names
+exactly this class of change. Offsets change with the text; the fingerprint
+values must not.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::fingerprints_ignore_case_and_whitespace"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -4,6 +4,7 @@
 //! ```text
 //! export(caller, request)
 //!   1. permission (request.required_permission()) ── missing ─▶ Forbidden, nothing read
+//!      format (Present::export_formats.check) ── not written ─▶ InvalidInput(UnsupportedFormat)
 //!   2. W = EdgeStore::watermark()
 //!   3. ExportSource::plan(request, W): resolve and pin the topic version, cut the
 //!      window at W, capture agent and channel resolution and verdicts, count rows
@@ -46,10 +47,15 @@
 //! **Format.** The format changes the bytes, not the rows, their order,
 //! their count or their digest, which is defined over a canonical encoding
 //! of the rows ([`digest`]). In JSONL the header is the first line, each
-//! row a line, the trailer the last line. In Parquet the rows fill row
-//! groups in export order and the header and trailer go in the footer's
-//! key-value metadata, which is written on failure too; a file cut off
-//! before its footer cannot be read at all.
+//! row a line, the trailer the last line, each a tagged [`ExportLine`]. In
+//! Parquet the rows fill row groups in export order and the header and
+//! trailer JSON go in the footer's key-value metadata, which is written on
+//! failure too; a file cut off before its footer cannot be read at all
+//! ([`framing`]). A gateway need not write both: it offers the formats it
+//! writes, in order, as `Present::export_formats` ([`ExportFormats`]), and
+//! refuses any other with `InvalidInput(UnsupportedFormat)` right after the
+//! permission check, before anything is read; the refusal is audited like
+//! any other.
 //!
 //! **Permission and audit.** An export needs View, or Content when it
 //! includes content or reads a projection
@@ -60,6 +66,7 @@
 //! cannot be resumed. A client that loses one runs it again.
 
 pub mod digest;
+pub mod framing;
 pub mod manifest;
 pub mod record;
 pub mod request;
@@ -68,14 +75,18 @@ pub mod seal;
 pub mod stream;
 
 pub use digest::{ExportDigest, ROW_DIGEST_CONTEXT, RowHasher};
+pub use framing::{
+    ExportLine, JsonlError, JsonlErrorKind, JsonlExport, PARQUET_HEADER_KEY, PARQUET_TRAILER_KEY,
+    read_jsonl,
+};
 pub use manifest::{
     ExportBasis, ExportEnd, ExportFailure, ExportHeader, ExportHeaderParts, ExportTrailer,
-    GatewayVersion, InvalidHeader, SourceFailure, settled_window,
+    GatewayVersion, InvalidHeader, InvalidTrailer, SourceFailure, settled_window,
 };
 pub use record::{ExportEvent, ExportRecord, InvalidExportRecord};
 pub use request::{
-    ExportDataset, ExportDatasetKind, ExportFormat, ExportLimits, ExportRequest, ExportScope,
-    InvalidExportRequest,
+    ExportDataset, ExportDatasetKind, ExportFormat, ExportFormats, ExportLimits, ExportRequest,
+    ExportScope, InvalidExportFormats, InvalidExportRequest, UnsupportedFormat,
 };
 pub use rows::{ExportRow, RowKey};
 pub use seal::{ExportSealer, Incomplete, RowRefused, verify_export};

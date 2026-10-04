@@ -17,7 +17,7 @@ type = [
     "crosstalk_spec::aggregates::node::CanonicalStateKind",
     "crosstalk_spec::aggregates::node::CanonicalOriginKind",
 ]
-property = "crosstalk::topology::props::graph_nodes_are_canonical"
+property = "crosstalk_topology::props::graph_nodes_are_canonical"
 
 [evidence-review]
 type = { agent = "true", human = "false" }

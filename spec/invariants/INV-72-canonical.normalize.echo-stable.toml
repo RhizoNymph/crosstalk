@@ -1,0 +1,31 @@
+[invariant]
+id = "canonical.normalize.echo-stable"
+statement = "An assistant message normalized from a response and the same message echoed back in a later request's history have the same hash."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Threading recognizes a conversation by finding the previous response's hash
+in the next request's history. The response arrives as provider output
+(often SSE deltas, with tool arguments as partial JSON text) and comes back
+re-serialized by the harness in request format (Anthropic tool_use.input as
+a JSON object, with its own key order and whitespace). If the two hashed
+differently, every turn would start a new conversation and originated spans
+would be attributed twice. Canonical JSON arguments and verbatim opaque
+reasoning exist for this property. A thinking block's signature is part of
+the hash: the provider rejects a thinking block whose signature changed, so
+the echo carries the response's signature byte for byte, and the signed
+corpus case's echo hashes like its response while one with another
+signature does not.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_canonical::tests::recorded_echoes_hash_like_their_responses",
+  "crosstalk_canonical::tests::thinking_signatures_echo_like_their_responses",
+]
+property = "crosstalk_canonical::tests::response_and_echo_hash_equal"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

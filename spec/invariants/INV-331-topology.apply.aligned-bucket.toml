@@ -1,0 +1,25 @@
+[invariant]
+id = "topology.apply.aligned-bucket"
+statement = "apply returns the EdgeKey whose from, to, route and topic slot (classification version and topic) equal the contribution's and whose bucket is the one aligned bucket that contains the contribution's at."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Buckets are fixed-width and aligned to multiples of the width from the
+epoch, so every instant belongs to exactly one bucket. Keying by the
+transmission's own time (not the time L7 processed it) keeps edges stable
+under consumer lag, replay and re-fit rebuilds, and is what lets query
+windows be exact unions of buckets. A boundary instant belongs to the
+bucket it starts, following TimeWindow's half-open convention. Keying by
+the classification's version keeps each topic-model version's buckets
+separate, so a rebuild never mixes into the version queries are reading.
+Agents are stored as attributed, not resolved through merges.
+"""
+
+[evidence]
+unit = "crosstalk_topology::tests::apply_buckets_boundary_instant_into_next_bucket"
+property = "crosstalk_topology::props::apply_returns_aligned_bucket_containing_at"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

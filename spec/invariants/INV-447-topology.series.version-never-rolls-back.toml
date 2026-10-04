@@ -14,7 +14,7 @@ outside this rule.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::series_and_graph_versions_never_roll_back"
+dst = "crosstalk_topology::dst::series_and_graph_versions_never_roll_back"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

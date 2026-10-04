@@ -24,6 +24,8 @@ unit = [
     "crosstalk_spec::tests::evidence::access_detail_rejects_another_resource",
     "crosstalk_spec::tests::evidence::a_detail_for_another_access_is_refused",
     "crosstalk_spec::tests::evidence::the_first_error_stops_assembly",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::transmission_evidence_is_decoded_through_assemble",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::access_details_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

@@ -9,13 +9,10 @@ The overview's "active channels" and the channel list must not tell an
 operator different stories. Both count from the topology graph: the
 overview takes EdgeTotals::of it, the rows take ChannelCounts::routed of it
 under the default filter, and the keys of the second are exactly the
-channels the first counts. The default channel filter lists every listed
-channel in force (confirmed and unconfirmed channels and declarations) and
-no hidden or superseded one: a superseded row carries no counts, and a
-hidden channel, an unconfirmed one or a declaration without traffic has no
-confirmed cross-agent transmission in the graph, so none adds to either
-side. A row's ChannelActivity::Seen is wider (any access ever) and is not
-what active means.
+channels the first counts. The default channel filter lists every channel
+in force and no superseded one, which carries no counts. A row's
+ChannelActivity::Seen is wider (any access ever) and is not what active
+means.
 """
 
 [evidence]
@@ -23,7 +20,7 @@ unit = [
     "crosstalk_spec::tests::overview::active_channels_are_the_channels_rows_count_transmissions_on",
     "crosstalk_spec::tests::overview::rows_count_the_transmissions_the_graph_routes_through_each_channel",
 ]
-integration = "crosstalk::surface::integration::pg_overview_active_channels_match_channel_rows"
+integration = "crosstalk_surface::integration::pg_overview_active_channels_match_channel_rows"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -1,0 +1,7 @@
+{
+  "type": "semantic_query",
+  "data": {
+    "text": "credentials pasted into a shared doc",
+    "threshold": 0.5
+  }
+}

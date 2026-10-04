@@ -11,7 +11,7 @@ whose classifications are still incomplete.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::version_ready_only_after_version_ready_event"
+dst = "crosstalk_analysis::tests::version_ready_only_after_version_ready_event"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

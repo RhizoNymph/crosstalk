@@ -1,0 +1,34 @@
+{
+  "version": 4,
+  "page": {
+    "items": [
+      {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "version": 4,
+        "label": "credentials and deploy keys",
+        "terms": [
+          [
+            "ssh",
+            0.5
+          ],
+          [
+            "deploy",
+            0.25
+          ]
+        ],
+        "centroid": {
+          "model": {
+            "name": "nomic-embed-text-v1.5",
+            "dimension": 2
+          },
+          "values": [
+            0.6,
+            0.8
+          ]
+        },
+        "fitted_at": "2026-10-02T03:00:00.000000Z"
+      }
+    ],
+    "next": null
+  }
+}

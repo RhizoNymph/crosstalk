@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.passthrough.websocket-frames-unchanged"
+statement = "Every WebSocket message is relayed to the other side with the same opcode and payload bytes, in the order it was received, in both directions."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+Codex talks to the Responses API over a WebSocket by default, so for that
+traffic the frames are the request and the response. The handshake is an
+ordinary request covered by ingress.passthrough.request-unchanged; this
+covers what flows after it. Per-message compression is negotiated per hop,
+so equality is on message payloads, not on wire bytes.
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::websocket::messages_relayed_unchanged"
+integration = "crosstalk_ingress::tests::integration::codex_websocket_relayed_unchanged_live"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

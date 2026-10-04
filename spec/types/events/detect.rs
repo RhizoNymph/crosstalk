@@ -1,20 +1,28 @@
 //! Events from provenance (L4) and flow detection (L5).
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::access::Access;
+use crate::derived::flow::channel::Declaration;
 use crate::derived::flow::channel::policy::PolicyDecision;
-use crate::derived::flow::channel::{Declaration, Seed};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::Route;
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::RelaySource;
 use crate::events::Subject;
-use crate::ids::{AgentId, ChannelId, OperatorId, SpanId, TransmissionId};
+use crate::ids::{AccessId, AgentId, ChannelId, OperatorId, SpanId, TransmissionId};
 use std::num::NonZeroU64;
 
 use crate::support::{NonEmpty, Timestamp};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DetectEvent {
     SpanOriginated {
         span: SpanId,
@@ -27,21 +35,16 @@ pub enum DetectEvent {
     ContentMatched(ContentMatch),
     /// An access, with the channel the registry resolved its locator to when
     /// it was recorded: always a canonical channel, since lookups never
-    /// return a superseded one, and `None` for a resource on no channel (a
-    /// resource only, until a cross-agent transmission goes through it). L5
-    /// correlates it; L7 counts it into its resource's access bucket.
+    /// return a superseded one. L5 correlates it; L7 counts it into its
+    /// access bucket.
     AccessRecorded {
         access: Access,
-        channel: Option<ChannelId>,
+        channel: ChannelId,
     },
-    /// A channel no config declared, created by the first cross-agent
-    /// transmission through a resource on no channel
-    /// (`ChannelRegistry::discover`), never by an access alone. Published
-    /// once per discovered channel, after the transaction commits. Raises
-    /// `NewChannel`.
+    /// A channel no config declared. Raises `NewChannel`.
     ChannelDiscovered {
         channel: ChannelId,
-        seed: Seed,
+        first_access: AccessId,
     },
     /// Written by one agent, then read by another. Opens a transmission.
     ChannelCrossAccessed {
@@ -49,8 +52,6 @@ pub enum DetectEvent {
         co_access: CoAccess,
         reader: AgentId,
     },
-    /// A channel declared before traffic saw no cross-agent transmission
-    /// within its idle window.
     DeclaredChannelUnused {
         channel: ChannelId,
         since: Timestamp,

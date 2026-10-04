@@ -12,8 +12,8 @@ view.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::rows_by_id_follow_the_selection"
-integration = "crosstalk::surface::integration::pg_rows_by_id_traversal"
+unit = "crosstalk_surface::tests::rows_by_id_follow_the_selection"
+integration = "crosstalk_surface::integration::pg_rows_by_id_traversal"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.normalize.unknown-block-reported"
+statement = "Every Unknown part in a NormalizedExchange's messages has a NormalizeWarning::UnknownBlock in its warnings naming the same kind."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Unknown blocks are kept rather than failing the exchange, so the warning is
+the only thing that keeps a gap in normalizer coverage from going unnoticed.
+Operators watch UnknownBlock warnings to learn which block types to add, and
+those warnings drive re-normalization once support lands. A kept but
+unreported block would stay opaque to provenance and flow detection forever.
+"""
+
+[evidence]
+property = "crosstalk_canonical::tests::every_unknown_part_is_warned"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

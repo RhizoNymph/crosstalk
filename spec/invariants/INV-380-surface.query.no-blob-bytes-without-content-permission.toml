@@ -13,7 +13,7 @@ formatting message or blob values into error reasons.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_view_responses_contain_no_blob_bytes"
+property = "crosstalk_surface::tests::prop_view_responses_contain_no_blob_bytes"
 lint = "lint:surface-error-reason-no-content"
 
 [evidence-review]

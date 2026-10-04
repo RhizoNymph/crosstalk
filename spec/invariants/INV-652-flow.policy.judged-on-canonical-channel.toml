@@ -12,7 +12,7 @@ policy would raise an unreviewed-traffic alert the operator just answered.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::confirmation_after_supersession_uses_canonical_policy"
+unit = "crosstalk_flow::tests::confirmation_after_supersession_uses_canonical_policy"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

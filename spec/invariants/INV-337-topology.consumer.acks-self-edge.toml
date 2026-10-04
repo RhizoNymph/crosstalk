@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.consumer.acks-self-edge"
+statement = "The topology consumer acks, and never nacks, a TransmissionClassified delivery whose apply returned EdgeError::SelfEdge."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A self-edge is a property of the contribution, not of the store's health:
+retrying it can never succeed. A nack would redeliver it forever, burning
+consumer capacity and, with ordered delivery, stalling the classifications
+behind it. Acking records the rejection as the delivery's final outcome
+(logged at warn with the transmission id). Store errors, by contrast, are
+transient and are nacked for retry.
+"""
+
+[evidence]
+dst = "crosstalk_topology::dst::self_edge_delivery_is_acked_once_and_not_redelivered"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,28 @@
+[invariant]
+id = "surface.http.frame-cache"
+statement = "GET /projections/{id}/frame answers only after QueryApi::projection returned the projection: 200 with the bytes of ProjectionFrame::encode, a strong ETag of their BLAKE3 digest and Cache-Control private, immutable with max-age the whole seconds left until the frame's retention ends (at most a year), or 304 with no body when If-None-Match matches that ETag; a job not ready is 409 ProjectionNotReady, a failed one 409 ProjectionFailed and an expired one 410 ProjectionNotRetained."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A ready frame is identical on every read until it expires, and it can be
+5 MB, so the UI should fetch it once. The digest of the canonical bytes
+is a validator that changes exactly when the bytes do, the format
+version included. Caching ends when retention drops the frame, so a
+cached copy is never served for a frame the server has expired. The
+conditional check comes after the permission and readiness checks, so a
+304 never answers a caller without Content or a frame no longer ready.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::frame::the_etag_is_the_quoted_digest",
+    "crosstalk_spec::tests::wire::http::frame::a_ready_frame_is_cached_until_its_retention_ends",
+    "crosstalk_spec::tests::wire::http::frame::a_matching_if_none_match_is_not_modified",
+    "crosstalk_spec::tests::wire::http::frame::a_frame_not_ready_is_a_conflict_and_an_expired_one_gone",
+]
+integration = "crosstalk_api::integration::frame_is_cached_and_revalidated"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

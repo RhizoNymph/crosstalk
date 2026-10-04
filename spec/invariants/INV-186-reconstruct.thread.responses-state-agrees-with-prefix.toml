@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.responses-state-agrees-with-prefix"
+statement = "Threading an Increment exchange whose previous response is stored gives the same outcome as threading a full-history exchange whose request is the stored history ending at that response followed by the increment."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+Codex's WebSocket turns send only the input added since previous_response_id;
+the rest of the history is implied by the response chain. Threading them
+must give the conversation and new_inputs that prefix threading would give
+had the harness sent the full history over SSE, so one harness's traffic is
+reconstructed the same on either transport.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::increment_threading_agrees_with_full_history_model"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

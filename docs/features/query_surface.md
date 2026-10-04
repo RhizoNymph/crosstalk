@@ -30,6 +30,10 @@ for agents, channels, transmissions and the overview are in
   pins and dead-letter replay.
 - The live feed (SSE): id-only `UiEvent`s telling the UI what to re-query,
   fed by `Changed` notifications from every store.
+- The present: the gateway's clock and the config a client needs before
+  it builds a request (bucket width, export formats, the topic version
+  rules are written against, the default remap threshold, the frame
+  retention), and one alert rule by id.
 - The append-only audit log of operator action calls, config changes and
   exports, filtered by author, subject and time.
 - Read-time resolution of merged agents and superseded channels in every
@@ -41,15 +45,31 @@ for agents, channels, transmissions and the overview are in
 
 - The pipeline that produces what is queried: ingest, detection, analysis
   and aggregation ([type_spec.md](type_spec.md)).
-- The UI itself, HTTP routing and framing, and session verification: a
-  verified session arrives as a `RequestIdentity`.
-- Serialization formats, except the projection frame's binary layout,
-  which is part of the type (`ProjectionFrame::encode` and `decode`), and
-  the canonical row encoding an export's digest is defined over
-  (`ExportRow::encode`).
+- The UI itself, and session verification: a verified session arrives
+  as a `RequestIdentity`.
+- HTTP routing and framing, statuses and credentials: the
+  [HTTP API](http_api.md).
+- The JSON encoding of the surface's types and which of them a client may
+  send: the [wire contract](wire_contract.md). The projection frame's
+  binary layout is part of its type (`ProjectionFrame::encode` and
+  `decode`), and so is the canonical row encoding an export's digest is
+  defined over (`ExportRow::encode`).
 - Undoing a promotion or a supersession.
 
 ## Data and control flow
+
+### Generic clients
+
+A UI or client may be generic over `QueryApi` (and `OperatorActions`,
+`LiveFeed`), rather than written against one concrete backend: a fixture,
+an in-process surface and an HTTP client can then sit behind the same
+code. Every method returns `impl Future<Output = ..> + Send`, and
+`QueryApi::ExportRows` and `LiveFeed::Stream` are `Send + 'static`, so
+generic code can spawn the futures on tokio's multi-threaded runtime and
+move a live stream or an export into its own task. The bound it adds is
+on the backend value it shares, for example
+`Arc<Q>` with `Q: QueryApi + Send + Sync + 'static`. The convention and
+its compile-time check are in [type_spec.md](type_spec.md#conventions-for-the-layer-traits).
 
 ### Callers and permissions
 
@@ -75,7 +95,8 @@ topology (agent-centred and channel-centred, with node metadata and
 harness claims), series, edge drill-down rows, transmission rows by id,
 the overview's counts, channels (rows, names and promotion previews) and
 their resources, policy histories, agents (rows, details and names),
-rules, alerts, the topic history, verdict logs and detection quality; no
+rules (the list and one by id), alerts, the topic history, verdict logs
+and detection quality, and the present (clock and config); no
 message text and no topic labels. Content is anything derived from message
 text: transmissions and their evidence, search, topics, projections and
 their jobs, and exports that include content or read a projection (other
@@ -95,6 +116,16 @@ them), forwards the action to the layer that owns its effect, and returns an
 `kind`, `required_permission` and `subjects` (`l8_surface/actions.rs`)
 match every variant with no wildcard arm.
 
+A client never sends an `OperatorAction`, whose merge holds an author. It
+sends an `ActionRequest` (`l8_surface/actions/request.rs`, a `WireRequest`):
+one variant per action, of the same name and fields, with
+`MergeAgents { from, into }` and no author. The HTTP layer decodes it and
+calls `ActionRequest::into_action(&caller)`, which makes the caller's
+operator the merge's author and moves every other request across
+unchanged; a merge naming one agent twice is `SelfMerge`, returned as
+`InvalidInput(SelfMerge)` without calling `act`. `ActionRequest::of` is the
+inverse, so each action has exactly one request form.
+
 | Action | Permission | Effect | Success | Audit subjects |
 | --- | --- | --- | --- | --- |
 | `SetPolicy { channel, policy, note }` | Govern | publishes `PolicyChanged` (L5 records it); a superseded channel is refused first | `Applied` | the channel |
@@ -102,11 +133,11 @@ match every variant with no wildcard arm.
 | `Unmerge { merge }` | Govern | `IdentityResolver::unmerge` (L3) | `Applied` | the merge |
 | `RenameAgent { agent, label }` | Govern | `IdentityResolver::rename` (L3) | `Applied` / `Unchanged` | the agent |
 | `PromoteChannel { channel, pattern, policy, note }` | Govern | `ChannelRegistry::promote` with a `Promotion` (L5) | `ChannelPromoted { channel, superseded }` | the channel and every channel it superseded |
-| `Acknowledge { alert }`, `Resolve { alert, note }` | Triage | the alert store; publishes `AlertChanged` and `Changed::Alert` | `Applied` / `Unchanged` | the alert |
+| `Acknowledge { alert }`, `Resolve { alert, note }` | Triage | `AlertActions::acknowledge`, `resolve` (L6), which publish `AlertChanged` and `Changed::Alert`; resolving an open alert is `Conflict(AlertNotAcknowledged)`, acting on a resolved or suppressed one `Conflict(AlertNotActive)` | `Applied` / `Unchanged` | the alert |
 | `SetVerdict { transmission, verdict, note }` | Triage | `TransmissionVerdicts::set` (L5) | `Applied` / `Unchanged` | the transmission |
 | `CreateRule { name, rule, sinks }` | Govern | `AlertRuleStore::create` (L6) | `RuleCreated(AlertRuleId)` | the new rule |
-| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` (L6); enabling a stale rule is `Conflict(RuleStale)`, disabling is always allowed | `Applied` / `Unchanged` | the rule |
-| `PinTopicVersion { version }`, `UnpinTopicVersion { version }` | Govern | `TopicCatalog::pin`, `unpin` (L6) | `Applied` / `Unchanged` | the version |
+| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` at the acceptance time (L6); enabling a stale rule is `Conflict(RuleStale)`, disabling is always allowed | `Applied` / `Unchanged` | the rule |
+| `PinTopicVersion { version }`, `UnpinTopicVersion { version }` | Govern | `TopicCatalog::pin`, `unpin` at the acceptance time (L6) | `Applied` / `Unchanged` | the version |
 | `ReplayDeadLetter { group, id }` | Operate | `DeadLetterStore::replay` (L2) | `Applied` | none |
 
 No action needs View, Content or Audit, which are read permissions.
@@ -118,14 +149,17 @@ deliver each alert to the sinks its rule lists.
 ### Audit log
 
 An `AuditEntry { id, at, body }` is either `AuditBody::Operator(OperatorRecord)`
-(the `Caller`, the `OperatorAction` and an `AuditOutcome`:
+(a `CallerSnapshot` of the `Caller`, the `OperatorAction` and an `AuditOutcome`:
 `Succeeded(ActionOutcome)`, `Rejected(Rejection)` or `Forbidden { missing }`,
 the exact inverse of `act`'s result for every outcome and error) or
 `AuditBody::Config(ConfigRecord)` (the loaded config's `ConfigHash`, a
 typed `ConfigChange` and a `ConfigOutcome`) or `AuditBody::Export(ExportRecord)`
-(the `Caller`, the `ExportRequest` and an `ExportEvent`: `Refused` with the
+(a `CallerSnapshot`, the `ExportRequest` and an `ExportEvent`: `Refused` with the
 `QueryError` returned, `Started` with the header, `Ended` with the trailer,
-or `Abandoned`; see [export.md](export.md)). `OperatorRecord::new` makes an
+or `Abandoned`; see [export.md](export.md)). A `CallerSnapshot` is the
+caller's operator and the permissions it held, as plain data: the UI
+decodes audit entries, and what it decodes is a snapshot, never a `Caller`
+that could act. `OperatorRecord::new` makes an
 entry `Forbidden` exactly when its caller lacks the action's permission.
 `AuditEntry::by` derives the author (`Config` or `Operator(id)`) from the
 body, so a config change never poses as an operator action; an export's
@@ -155,7 +189,7 @@ query that reads it (`events/changed.rs` has the full table):
 | `Agent(AgentId)` | L3: creation (and the new agent's canonical parent), state change, merge (source, target, repointed agents), unmerge (source, former target, restored agents), for a merge or unmerge also the agents whose stored parent is one of those and the source's canonical parent, rename; not activity (claims, last seen) | `AgentChanged` | `agents`, `agent`, `agent_names` |
 | `Channel(ChannelId)` | L5: discovery, declaration, new resource, detection change, recorded policy decision; a promotion announces the promoted channel and every channel it superseded (`Changed::promotion`) | `ChannelChanged` | `channel`, `channels`, `channel_names`, `policy_history`, `channel_resources`, an open `promotion_preview`, `overview` |
 | `Verdict(TransmissionId)` | L5 verdict store: a verdict set or withdrawn | `VerdictChanged` | `verdicts`, `detection_quality`, `transmissions_by_id`, views excluding false detections |
-| `Alert(AlertId)` | L6 triage (open, deduplicate, suppress), L8 acknowledge and resolve | `AlertChanged` | `alerts`, `alert`, `overview` |
+| `Alert(AlertId)` | L6 alert store: triage (open, deduplicate, suppress), acknowledge and resolve (`AlertActions`) | `AlertChanged` | `alerts`, `alert`, `overview` |
 | `Rule(AlertRuleId)` | L6 rule store: create, update, enable or disable, turning stale | `RuleChanged` | `alert_rules` |
 | `TopicVersion(TopicModelVersion)` | L6 catalog: ready, active, superseded; pinned, unpinned, dropped | `TopicVersionReady` | `topic_versions`, then topic-scoped queries |
 | `Projection(ProjectionId)` | L6 projection store: a job ready or failed, a frame expired | `ProjectionReady` | `projection_status`, then `projection` |
@@ -175,10 +209,45 @@ it is not showing, and because the stores announce every id a merge,
 unmerge or promotion re-points, a client showing an alias learns it now
 resolves elsewhere and re-queries. `FeedWindow::resume` decides between
 replaying from the `Last-Event-ID` cursor and a `LiveItem::Resync`
-(re-query everything). Streams send heartbeats carrying their newest
-cursor, end with `LiveEnd::Lagged` when their bounded buffer fills, so a
+(re-query everything). Each `LiveItem` is one SSE event named by its
+variant (`LiveItem::event_name`), with its cursor's text as the event id
+and its JSON as the data; a stream's last event is `end` with the
+`LiveEnd` and no id (see `l8_surface/live.rs`). Streams send heartbeats
+carrying their newest cursor, end with `LiveEnd::Lagged` when their bounded buffer fills, so a
 slow client never blocks the feed or other clients, and end with
 `SessionEnded` when the session ends or a config load changes the operator.
+
+### The present
+
+`QueryApi::present(caller)` (View) returns a `Present`
+(`l8_surface/present.rs`): what a client needs before it can build a
+valid request, which no other query gives.
+
+| Field | Is | The client uses it to |
+| --- | --- | --- |
+| `now` | the gateway's wall clock when it answered, never before the watermark | end a default window ("the last 24 hours") at the present, not at the watermark, which trails the newest data by the settling delay |
+| `bucket_width` | `EdgeStore::bucket_width` | snap windows and the time brush to buckets and build `SeriesGrid`s, so no view is refused `UnalignedWindow` or `BucketWidthMismatch` |
+| `export_formats` | the formats `export` writes, in offer order (`ExportFormats`: non-empty, distinct) | offer only those; another is `InvalidInput(UnsupportedFormat)` |
+| `current_rule_version` | the topic-model version the alerts consumer last made current, which `AlertRuleStore::create` and `update` check watched-topic rules against | pick a rule's topics from it; it moves on `TopicVersionReady`, before L7 activates the version, so the active version is not it |
+| `default_remap_threshold` | `AlertRuleConfig::default_remap_threshold` | show what a rule without a threshold takes |
+| `frame_retention_micros` | how long a ready projection's frame is kept after its fit (`FrameRetention`, config `projection.frame_retention_days`) | say when a projection expires: `FrameRetention::expires_at(fitted_at)` |
+
+Only `now` changes between reads; `current_rule_version` changes when the
+alerts consumer handles `TopicVersionReady` (the feed's
+`TopicVersionReady` is the cue to re-read), and the rest change with a
+config load, the retentions audited as `ConfigChange`s. `present` reads
+no buckets, so it is not `Watermarked`. Fields the UI's workaround list
+names that `Present` does not hold answer elsewhere: a merged agent's
+merge time and author are its merge record's (`AgentCluster::merge_of`),
+and a projected point's channel is in the frame (`PointRoute`).
+
+`QueryApi::alert_rule(caller, id)` (View) returns the `AlertRuleDef`
+`alert_rules` lists under `id`, built-in or user, stale or not; rule ids
+are never aliased and no rule is deleted, so `None` means no rule ever
+had the id.
+
+Over HTTP they are `GET /present` and `GET /alert-rules/{id}`
+([HTTP API](http_api.md#route-table)).
 
 ### Lists and pagination
 
@@ -375,9 +444,14 @@ once, stored and read back exactly; a cited view always reproduces.
    `projection(caller, id)` returns a `Projection`: the ready job and its
    frame, identical on every read. Queued or fitting is
    `Conflict(ProjectionNotReady)`, failed is `Conflict(ProjectionFailed)`,
-   expired is `ProjectionNotRetained`, unknown is `NotFound`.
-4. Frames are kept for `projection.frame_retention_days` (default 180)
-   after fitting, then dropped (`Expired`); the job record and its spec are
+   expired is `ProjectionNotRetained`, unknown is `NotFound`. A
+   `Projection` has no JSON form: over HTTP the job record is the JSON
+   `ProjectionInfo` and the frame is `application/octet-stream`
+   (`ProjectionFrame::encode`); the UI joins them with `Projection::new`
+   ([wire/analysis.md](wire/analysis.md#queryapiprojection)).
+4. Frames are kept for `projection.frame_retention_days` (default 180;
+   `FrameRetention`, reported by `present`) after fitting, then dropped
+   (`Expired`); the job record and its spec are
    kept, so a citation still says exactly what was fitted and it can be
    fitted again with the same seed. The catalog keeps every version's
    topics, so a frame's topic ids always resolve to labels.
@@ -388,25 +462,31 @@ transitions (`start`, `requeue`, `complete`, `fail`, `expire`) refuse moves
 outside the lifecycle. `Projection::new` checks that the frame's header
 agrees with the ready job.
 
-Points are frozen at fit time: canonical agents, route kind, topic under
-the pinned version and `Confirmed::at` as they were when the sample was
-read. For two fits with the same seed and sample size, a point sampled by
+Points are frozen at fit time: canonical agents, route (a `PointRoute`:
+the route kind and, for a channel route, the canonical channel), topic
+under the pinned version and `Confirmed::at` as they were when the sample
+was read. A client that needs the channel in force now names the frame's
+channels table with one `channel_names` batch. For two fits with the same seed and sample size, a point sampled by
 the wider one is sampled by any narrower one that still admits it.
 
 **Frame.** A `ProjectionFrame` is the projection as columns: transmission
 ids, confirmation times, packed `f32` x/y pairs, and `u32` indices into
-tables of senders, readers, route kinds and topics (`OUTLIER` for an
-outlier). `ProjectionFrame::new` checks that every column has one entry per
-point, the count is `min(matching, limit)`, indices are in range, tables
-are distinct and in order of first use (so equal points give equal bytes),
-no transmission repeats and coordinates are finite. The binary layout
-(format 1, little-endian) is a 64-byte header (magic `XTPF`, format, table
-lengths, projection id, topic version, count, sample size, watermark,
-matching) followed by the id sections, the `u64` times, the coordinates,
-the four index columns and the route kind bytes, padded to 8 bytes, with
-every section aligned for typed-array views; the full table is in
-`aggregates/projection/frame.rs`. `encode` writes it and `decode` accepts
-exactly what `encode` can produce.
+tables of senders, readers, route kinds, topics (`OUTLIER` for an
+outlier) and channels (`NO_CHANNEL` for a point whose route is not a
+channel). `ProjectionFrame::new` checks that every column has one entry
+per point, the count is `min(matching, limit)`, indices are in range,
+tables are distinct and in order of first use (so equal points give equal
+bytes), a point has a channel exactly when its route kind is `Channel`, no
+transmission repeats and coordinates are finite. The binary layout
+(format 2, little-endian) is an 80-byte header (magic `XTPF`, format,
+table lengths, projection id, topic version, count, sample size,
+watermark, matching, the channels table length, 12 reserved zero bytes)
+followed by the id sections (transmissions, senders, readers, topics,
+channels), the `u64` times, the coordinates, the five index columns and
+the route kind bytes, padded to 8 bytes, with every section aligned for
+typed-array views; the full table is in `aggregates/projection/frame.rs`.
+`encode` writes it and `decode` accepts exactly what `encode` can produce,
+refusing format 1 (which had no channels) and non-zero reserved bytes.
 
 ### Retention and watermarks
 
@@ -426,10 +506,13 @@ version; `RetentionPolicy::to_drop` lists the rest, all superseded. Each
 | topics and lineage | kept | kept |
 | history entry | kept | kept, marked `Dropped` |
 
-The catalog enforces the policy after `TopicVersionActivated`, after an
-unpin and on start: it marks each `to_drop` version dropped (freezing its
-all-time sizes), then publishes `TopicVersionDropped`; only then do L6 and
-L7 delete data. Pins and drops are serialized. `PinTopicVersion` and
+The catalog enforces the policy after `TopicVersionActivated`
+(`TopicLifecycle::mark_active`), after an unpin and when `analyze` starts
+(`TopicCatalog::enforce_retention`): in one transaction it marks each
+`to_drop` version dropped (freezing its all-time sizes), deletes its topic
+assignments and publishes `TopicVersionDropped` from that transaction, so
+the catalog is the event's one publisher; L7 deletes its buckets on the
+event. Pins and drops are serialized. `PinTopicVersion` and
 `UnpinTopicVersion` need Govern. Pinning returns `Unchanged` when already
 pinned, `NotFound` for an unknown version, `Conflict(TopicVersionFitting)`
 for a fitting one (a fit can still fail, and pending versions are kept
@@ -486,43 +569,33 @@ draws, so the UI needs no lookup per node (`aggregates/node.rs`):
   `origin_kind` is a `CanonicalOriginKind` (no superseded origin); `label`
   is `None` until channels carry display labels.
 
+The facts come from `NodeFacts` (`l7_topology.rs`): a synchronous cache
+of L3's and L5's facts the edge store reads inside its own snapshot, like
+the directories. A node it has not seen yet is drawn with fixed defaults
+(an agent provisional, top-level, unlabelled and without claims; a channel
+discovered, observed, unreviewed and summarized by its id)
+(`topology.node-facts.unknown-defaults`).
+
 Which nodes appear: every edge endpoint (in the channel-centred view also
 every access channel and transmission route channel) and every canonical
 ancestor of an agent among them, each once and nothing else, so each
-`parent` names a node in the same response. `TopologyGraph::check_nodes`
-and `BipartiteGraph::new` check this and the counts; canonicity is checked
+`parent` names a node in the same response. `TopologyGraph::new` and
+`BipartiteGraph::new` check this and the counts; canonicity is checked
 at query time.
 
 ### Channel-centred view
 
 Splitting `Route::Channel` edges into A→C→B would show only writes someone
-read, and once a channel exists its writes nobody has read yet matter (a
-hijacked wiki keeps being written to). So accesses have their own aggregate
-(`aggregates/access.rs`): an `AccessEdge { agent, resource, op, bucket,
-accesses }`, bucketed like `EdgeKey` with no topic, maintained by L7 from
-`AccessRecorded` whether or not the resource is on a channel yet. At read
-time each bucket's resource resolves to the channel holding it now
-(`ChannelRegistry::channels_of`), so accesses made before a channel was
-discovered from a resource count on it from then on.
-
-Only channels listed as channels are drawn (`Listing::Channel`, read from
-`ChannelRegistry::cross_traffic`): a channel with a transmission between two
-different agents once merges resolve. A resource on no channel, a hidden
-channel (every transmission through it now within one merged agent) and a
-declaration without cross-agent traffic have neither a node nor access
-edges. Each channel node carries its `Confirmation`; an unconfirmed channel
-(only suspected traffic) is drawn marked, and left out under
-`UnconfirmedChannels::Exclude` ("confirmed only"), the only thing that
-filter field changes in a linked view: transmission views count confirmed
-transmissions between different agents, whose channels are confirmed by
-them.
+read, and the early stage of a hijacked wiki is writes nobody has read yet.
+So accesses have their own aggregate (`aggregates/access.rs`): an
+`AccessEdge { agent, channel, op, bucket, accesses }`, bucketed like
+`EdgeKey` with no topic, maintained by L7 from `AccessRecorded`.
 `QueryApi::channel_topology(caller, window, weighting, filter)` returns a
 `Watermarked<BipartiteGraph { nodes, accesses, transmissions, topic_version }>`:
 
 - `accesses`: access buckets in the window, resolved to canonical agents and
-  to the channel holding each resource, kept when that channel is listed as
-  a channel and by `TopologyFilter::admits_access` (with the channel's
-  confirmation), summed per (agent, channel, op). Each share is its count over all access counts, normalized
+  channels, kept by `TopologyFilter::admits_access`, summed per (agent,
+  channel, op). Each share is its count over all access counts, normalized
   apart from transmissions and independent of the weighting.
 - `transmissions`: exactly `topology`'s edges for the same window, weighting
   and filter.
@@ -630,19 +703,45 @@ one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
 `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`AlertReadError` (rules and alerts), `TransmissionStoreError` (stored
+transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
+(`operators`),
 `BusError` (the dead-letter list), `BlobError` and `EvidenceError` (the
 evidence: every cause is `Store`, its reason naming it), `AgentReadError`
 (agent reads), `ExportPlanError` (planning an export), and the request
 values the surface builds before reading: `TooManyIds` (a name lookup's
 `IdBatch`), `InvalidSelection` (`EmptySelection`, or `TooManyIds` with the
-selection's bound) and `InvalidWindow` (`ExcerptContextTooLong`); for
-actions `PromotionRefusal`,
-`PromoteError`, `RuleError` (rule management; enabling a stale rule is
-`Conflict(RuleStale)`, since only `UpdateRule` can retarget it),
-`ResolveError` (merges, unmerges and renames: `UnknownAgent` and
-`UnknownMerge` to `NotFound`, `AgentMerged`, `MergeIntoSelf` and
-`MergeAlreadyReverted` to the same-named conflicts, a resolver-only
-`Vetoed` to `Store`) and `SelfMerge` (`InvalidInput(SelfMerge)`). The
+selection's bound), `InvalidWindow` (`ExcerptContextTooLong`) and
+`UnsupportedFormat` (an export format outside `present`'s
+`export_formats`: `InvalidInput(UnsupportedFormat)`); for actions, one
+per store behind each action, every refusal named in
+`surface.action.rejections-typed`: `RegistryError` (`SetPolicy`:
+`UnknownChannel` to `NotFound`, `Superseded` to
+`Conflict(ChannelSuperseded)`, `OverlappingDeclaration` to
+`Conflict(PatternOverlaps)`), `PromotionRefusal` and `PromoteError`
+(`PromoteChannel`), `ResolveError` (merges, unmerges and renames:
+`UnknownAgent` and `UnknownMerge` to `NotFound`, `AgentMerged`,
+`MergeIntoSelf` and `MergeAlreadyReverted` to the same-named conflicts, a
+resolver-only `Vetoed` to `Store`), `VerdictError` (`SetVerdict`:
+`UnknownTransmission` to `NotFound`, `NotJudgeable` to
+`Conflict(TransmissionNotJudgeable)`), `RuleError` (rule management;
+enabling a stale rule is `Conflict(RuleStale)`, since only `UpdateRule`
+can retarget it), `AlertActionError` (`Acknowledge`, `Resolve`:
+`UnknownAlert` to `NotFound`, `NotActive` to `Conflict(AlertNotActive)`,
+`NotAcknowledged`, resolving an open alert, to
+`Conflict(AlertNotAcknowledged)`), `CatalogError` and `PinError` (`PinTopicVersion`,
+`UnpinTopicVersion`: unknown to `NotFound`, fitting to
+`Conflict(TopicVersionFitting)`, dropped to
+`Conflict(TopicVersionDropped)`) and `SelfMerge`
+(`InvalidInput(SelfMerge)`). A store error that reaches both a query and
+an action maps to the same variant either way, except a dropped version
+(`VersionNotRetained` for a query, `Conflict(TopicVersionDropped)` for a
+pin) and a cursor error, which an action cannot cause and so reads as
+`Store` (`surface.action.refusals-read-as-queries`); for
+both, `DecodeError`: client input the HTTP layer cannot decode as the
+route's request type (`wire::decode_request`) is
+`InvalidInput(MalformedRequest { kind, reason })`, and never reaches a
+store or the audit log ([wire_contract.md](wire_contract.md)). The
 promotion preview reads `PromoteError` through that same action mapping
 (`PromotionPreview::from_registry`), keeping conflicts as its answer and
 converting the rest with `QueryError::from`, so it adds no mapping of its
@@ -652,7 +751,11 @@ too many ids: `agent_names` and `channel_names` over `IdBatch::MAX`, and
 bound that applied. An export over the configured row limit is
 `Conflict(ExportTooLarge)`; a failure after an export has started is
 recorded in its trailer, not returned. The edge store's writes fail with
-`EdgeError`, which never reaches a query.
+`EdgeError`, which never reaches a query, and so do the consumer-side
+write errors (`AgentLifecycleError`, `TrafficError`,
+`TopicLifecycleError`, `CorpusError`) and the operator store's
+`OperatorLoadError` and `CallerError` (an authentication failure, answered
+by the HTTP binding's `AuthError`).
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
@@ -674,45 +777,41 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/derived/flow/verdict.rs` | Operator verdicts beside the detector's state | `Verdict`, `Judgeable`, `NotJudgeable`, `TransmissionState::judgeable`, `TransmissionVerdict` (checked), `VerdictRevision`, `VerdictLog` (checked append), `VerdictRecorded`, `CurrentVerdict` (`observe`, `is_false_detection`), `Observed` |
 | `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses, and what it would cover | `Promotion` (checked), `Registered`, `plan` (takes the `Declaration`), `PromotionPlan`, `PromotionRefusal`, `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/aggregates/access.rs` | Access buckets, the channel-centred graph and resource use | `AccessEdge`, `WeightedAccess`, `BipartiteParts`, `BipartiteGraph` (checked), `InvalidBipartite`, `AgentAccesses`, `ResourceUse` (checked), `ResourceUsePage` |
-| `spec/types/aggregates/node.rs` | Graph nodes | `GraphNode`, `NodeId`, `AgentNode`, `ChannelNode`, `CanonicalStateKind`, `CanonicalOriginKind`, `InvalidNodes`, `TopologyGraph::check_nodes` |
+| `spec/types/aggregates/node.rs` | Graph nodes | `GraphNode`, `NodeId`, `AgentNode`, `ChannelNode`, `CanonicalStateKind`, `CanonicalOriginKind`, `InvalidNodes`; the node rules `TopologyGraph::new` and `BipartiteGraph::new` run |
 | `spec/types/aggregates/filter.rs` | The filter shared by every linked view, and topic-version resolution | `TopologyFilter` (`admits`, `admits_access`, `topics_outside`, `pinned`), `FilterSubject`, `AccessSubject`, `TopicVersionSelector` (`resolve`), `VersionUnavailable`, `FalseDetections` |
-| `spec/types/aggregates/projection/mod.rs` | Stored projection jobs | `ProjectionLimit`, `ProjectionParams` (checked), `ProjectionSpec`, `FitFailure`, `Fitted`, `ProjectionStatus`, `ProjectionInfo` (checked, with transitions), `ProjectedPoint`, `Projection` (checked) |
-| `spec/types/aggregates/projection/frame.rs` | The columnar projection frame and its binary layout | `ProjectionFrame` (checked; `from_points`, `encode`, `decode`), `FrameHeader`, `FrameTables`, `FrameColumns`, `InvalidFrame`, `FrameDecodeError`, `MAGIC`, `FORMAT`, `OUTLIER` |
+| `spec/types/aggregates/projection/mod.rs` | Stored projection jobs | `ProjectionLimit`, `ProjectionParams` (checked), `ProjectionSpec`, `FitFailure`, `Fitted`, `ProjectionStatus`, `ProjectionInfo` (checked, with transitions), `ProjectedPoint`, `PointRoute` (`of`, `from_parts`, `kind`, `channel`), `FrameRetention` (`expires_at`), `Projection` (checked) |
+| `spec/types/aggregates/projection/frame.rs` | The columnar projection frame and its binary layout | `ProjectionFrame` (checked; `from_points`, `encode`, `decode`), `FrameHeader`, `FrameTables`, `FrameColumns`, `InvalidFrame` (incl. `ChannelRouteMismatch`), `FrameDecodeError` (incl. `NonZeroReserved`), `MAGIC`, `FORMAT` (2), `HEADER_LEN` (80), `RESERVED_AT`, `OUTLIER`, `NO_CHANNEL` |
 | `spec/types/aggregates/quality.rs` | Verdicts tallied against the detector's calls | `MatchClass` (`strongest`), `QualityMatch`, `QualityRow`, `DetectionQuality` (checked, `tally`), `InvalidQuality` |
-| `spec/types/aggregates/retention.rs` | Retention of topic-model versions | `RetentionPolicy` (checked: `protected`, `to_drop`), `Pin`, `Retention`, `PinChange`, `PinError`, `DropError`, `TopicVersionHistory::pin`, `unpin`, `mark_dropped` |
+| `spec/types/aggregates/retention.rs` | Retention of topic-model versions | `RetentionPolicy` (checked: `protected`, `to_drop`; on the wire only in `ConfigChange::SetTopicRetention`), `Pin`, `Retention`, `PinChange`, `PinError`, `DropError`, `TopicVersionHistory::pin`, `unpin`, `mark_dropped` |
 | `spec/types/aggregates/watermark.rs` | When a bucket is final | `PipelineFrontier`, `Watermark::settled`, `finalizes`, `advance`, `Watermarked`; re-exports `Watermark` |
 | `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` (`promotion`) |
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
-| `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (every read, including the read models and `export`), `OperatorActions`, `AlertFilter`, `AlertStateKind`; re-exports the action, error, permission and sink types |
-| `spec/types/interfaces/l8_surface/permissions.rs` | Who is asking and what they may do | `Caller` (built only by the directory), `Permission`, `PermissionSet` |
+| `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (every read, including the read models, `present`, `alert_rule` and `export`), `OperatorActions`, `AlertFilter`; re-exports `AlertStateKind` (from `aggregates::alert`, with `AlertState::kind` and `is_active`), `Present` and the action, error, permission and sink types |
+| `spec/types/interfaces/l8_surface/present.rs` | The gateway's clock and the config a client builds requests with | `Present` (`now`, `bucket_width`, `export_formats`, `current_rule_version`, `default_remap_threshold`, `frame_retention_micros`) |
+| `spec/types/interfaces/l8_surface/permissions.rs` | Who is asking and what they may do | `Caller` (built only by the directory; never serialized), `CallerSnapshot` (checked: `of`, `new`; what an audit record keeps of its caller; wire data, never a request), `NoPermissions`, `Permission`, `PermissionSet` (wire form: an array in `Permission::ALL` order) |
 | `spec/types/interfaces/l8_surface/sinks.rs` | Alert delivery | `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError` |
-| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind` (incl. `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`) |
-| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) |
-| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
-| `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
-| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
+| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`; wire data, never a request), `ActionKind` (`ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` returns), `ActionOutcome` (`subjects`), `SupersededChannels` |
+| `spec/types/interfaces/l8_surface/actions/request.rs` | The action a client sends | `ActionRequest` (a `WireRequest`; `into_action`, `of`, `kind`) |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `AlertNotAcknowledged`, `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `UnsupportedFormat`, `MalformedRequest`) |
+| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode` (default `Hybrid`), `TopicPage` |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`AlertReadError` (rules and alerts), `TransmissionStoreError` (stored
+transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
+(`operators`), `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow`, `UnsupportedFormat` (to `QueryError`), `RegistryError`, `VerdictError`, `CatalogError`, `PinError`, `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
+| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) and its framing | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor` (wire form: its text), `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem` (`event_name`, `cursor`), `LiveEnd` (`EVENT_NAME`), `LiveConfig` (checked) |
+| `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportFormats` (checked; `check` gives `UnsupportedFormat`), `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
+| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked; keeps a `CallerSnapshot`), `ConfigRecord`, `ConfigChange` (incl. `SetSink`, `RemoveSink`, `SetTopicRetention`, `SetFrameRetention`), `ConfigOutcome`, `AuditAuthor`, `AuditSubject` (incl. `Sink`), `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `pattern_overlap.rs`, `graph.rs` (supersession, promotion, pattern overlap, graph nodes, the channel-centred graph); `confirmation.rs` (crossing, listings, unconfirmed channels in the filter, alert visibility, export rows). The read models' tests are listed in [read_models.md](read_models.md), export's in [export.md](export.md) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `action_errors.rs` (the action refusals of the registry, verdict store and catalog); `alerts.rs` (alert state kinds); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `pattern_overlap.rs`, `graph.rs` (supersession, promotion, pattern overlap, graph nodes, the channel-centred graph). The read models' tests are listed in [read_models.md](read_models.md), export's in [export.md](export.md) | — |
 
 ## Invariants and constraints
 
-- A transmission counts only between two different agents
-  (`Transmission::crossing`): `TopologyFilter::admits` never admits one whose
-  ids have merged into one agent, so no linked view, export, topic size,
-  channel count or channel transmission list holds it, and alerts about it
-  are not listed (`AlertSubject::shown`). An unmerge brings it back at the
-  next read.
-- A channel exists once a cross-agent transmission goes through it
-  (`ChannelRegistry::discover`; `NewChannel` fires then); lookups create
-  nothing. Channel lists, the channel-centred graph and the overview's
-  channel counts hold listed channels only: confirmed and unconfirmed
-  channels (unconfirmed ones under `UnconfirmedChannels::Include`, the
-  default) and, apart, declarations without traffic; never a hidden one,
-  which `channel` still returns. `channel_transmissions` lists a channel's
-  cross-agent transmissions (an unconfirmed channel's suspected ones for
-  review) with their senders, for View.
+- Every `QueryApi`, `OperatorActions`, `LiveFeed`, `LiveStream`,
+  `AuditLog`, `AlertSink`, `ExportStream`, `RowSource` and `ExportSource`
+  method returns a `Send` future, and `QueryApi::ExportRows`,
+  `LiveFeed::Stream` and `ExportSource::Rows` are `Send + 'static`
+  (`canonical.interface.send-futures`), so a client can be generic over
+  the surface.
 - Only a discovered channel can be superseded (`ChannelOrigin::superseded`),
   and a superseded one cannot be promoted or take a policy decision.
   Resolution is one step: `canonical(canonical(c)) = canonical(c)`. Lookups
@@ -765,6 +864,13 @@ free-text classification: `Store`'s reason is diagnostic only.
   `Lagged`; it never drops items or blocks others. `FeedWindow`'s floor
   never exceeds its head, and `LiveConfig`'s retention outlasts its
   heartbeat.
+- Every operator action has exactly one request form, the
+  `ActionRequest` variant of the same kind, which holds no stamped field;
+  `ActionRequest::into_action` stamps the caller as a merge's author and
+  refuses a self-merge with `SelfMerge`
+  (`surface.wire.action-request-covers-actions`). Each live item is one
+  SSE event named by its variant, with its cursor's text as the id
+  (`surface.live.sse-frame-matches-item`).
 - Every operator action names one permission
   (`OperatorAction::required_permission`, one exhaustive match): Govern for
   identity, policy, alert rules and topic-version pins; Triage for alerts
@@ -775,13 +881,14 @@ free-text classification: `Store`'s reason is diagnostic only.
 - A graph's nodes are exactly its endpoints (and, in the channel-centred
   view, its access and route channels) plus the canonical ancestors of its
   agents, once each, every parent among them, with agent counts equal to the
-  transmission edges' (`TopologyGraph::check_nodes`, `BipartiteGraph::new`).
+  transmission edges' (`TopologyGraph::new`, `BipartiteGraph::new`). A
+  `TopologyGraph` is built only by `TopologyGraph::new`, so every value
+  keeps its edge, share and node rules (`topology.graph.checked-construction`).
   No node is a merged agent or a superseded channel.
 - A `BipartiteGraph` has distinct access and transmission edges, no
   self-edge, and access and transmission shares each normalized on their
   own (`BipartiteGraph::new`). Its transmissions equal `topology`'s edges for
-  the same arguments; its accesses include writes nobody read on channels
-  listed as channels, and none on a resource on no channel.
+  the same arguments; its accesses include writes nobody read.
 - Every linked view (graph, channel-centred graph, series, search,
   projection fit, edge drill-down) applies one `TopologyFilter` as
   `TopologyFilter::admits` defines (`admits_access` for access edges, which
@@ -799,7 +906,12 @@ free-text classification: `Store`'s reason is diagnostic only.
 - Every query error is a typed `QueryError` and every action error a typed
   `ActionError`, which converts to `QueryError` variant for variant; each
   store error maps to exactly one variant through the one `From` impl per
-  store error type in `query_errors.rs`. Edge store reads fail with
+  store error type in `query_errors.rs`. Every action's refusals have one
+  (`RegistryError`, `PromoteError`, `ResolveError`, `VerdictError`,
+  `RuleError`, `CatalogError`, `PinError`), and a refusal reads the same
+  through either mapping except a dropped version and a cursor error
+  (`surface.action.rejections-typed`,
+  `surface.action.refusals-read-as-queries`). Edge store reads fail with
   `EdgeQueryError` and writes with `EdgeError`.
   A request value the surface builds before reading (an id batch, a
   selection, an excerpt window) that its checked constructor refuses is
@@ -817,9 +929,23 @@ free-text classification: `Store`'s reason is diagnostic only.
   the embedding model; its `Fitted` record the watermark and counts. A
   `ProjectionFrame` holds exactly `min(matching, limit)` points with a
   sample size of 1 to 100,000, consistent column lengths, in-range indices,
-  canonical tables, no transmission twice and finite coordinates; `decode`
+  canonical tables, a channel exactly on channel-routed points, no
+  transmission twice and finite coordinates; `decode`
   accepts exactly what `encode` produces. `ProjectionInfo` timestamps never
   go backwards and transitions follow the job lifecycle.
+- `present` (View) reports the gateway's wall clock (never before the
+  watermark), L7's bucket width, the export formats it writes (non-empty,
+  distinct), the topic version rule writes are checked against, the
+  default remap threshold and the frame retention the store applies
+  (`surface.present.*`). An export in another format is
+  `InvalidInput(UnsupportedFormat)` before anything is read
+  (`surface.export.unsupported-format-refused`). `alert_rule(id)` is the
+  rule `alert_rules` lists under `id`
+  (`surface.query.alert-rule-matches-list`).
+- A config change to a sink records its id, kind and name, never its
+  endpoint (`surface.audit.sink-endpoint-not-recorded`); sink and
+  retention changes are audited like every other config change
+  (`surface.audit.config-sinks-and-retention`).
 - Lists of dead letters need Operate and the audit log needs Audit; edge
   drill-down rows carry no message content and need View, as do verdict
   logs and detection quality.
@@ -845,3 +971,8 @@ free-text classification: `Store`'s reason is diagnostic only.
 - The read models' invariants (agent and channel rows, names, the
   promotion preview, transmission rows, evidence, the overview) are in
   [read_models.md](read_models.md); export's are in [export.md](export.md).
+- Client input is decoded only as a `WireRequest` type
+  (`wire::decode_request`); a `Caller` never serializes, and no record the
+  surface stamps with an author or time is a request. Input that does not
+  decode is `InvalidInput(MalformedRequest)`. The JSON of every type is in
+  [wire_contract.md](wire_contract.md).

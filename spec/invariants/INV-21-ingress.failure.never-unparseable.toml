@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.failure.never-unparseable"
+statement = "The proxy never assigns ExchangeFailure::UnparseableResponse."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "dst"]
+rationale = """
+Failure reasons drive operator diagnosis and tell L1 whether the partial
+body is an error document, a cut-off output or unparseable bytes. When
+causes race (a client gives up because the upstream stalled), the first
+cause is the true one. UnparseableResponse is a normalizer verdict on a
+complete response, so only L1 may assign it.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::failure::each_cause_classified"
+dst = "crosstalk_ingress::tests::sim::first_failure_cause_wins"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

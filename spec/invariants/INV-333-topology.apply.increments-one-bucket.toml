@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.apply.increments-one-bucket"
+statement = "The first apply of a (transmission, classification version) pair raises the returned bucket's transmissions by exactly 1 and its matched_bytes by exactly the contribution's matched_bytes, and changes no other bucket."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Each classification of a transmission must be counted once, in one place.
+Spreading it over several buckets, topic slots or edges, or counting its
+bytes in a bucket other than the one its count went to, would make
+per-window sums disagree with the stored transmissions and break window
+additivity. A bucket that did not exist is created with both counts equal
+to this contribution's, which is why EdgeStats can hold them as non-zero.
+"""
+
+[evidence]
+property = "crosstalk_topology::props::first_apply_increments_only_its_bucket"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

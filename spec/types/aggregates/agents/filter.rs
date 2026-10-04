@@ -32,11 +32,14 @@
 //!
 //! [`ClaimSet`]: crate::observed::agent::ClaimSet
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::node::CanonicalStateKind;
 use crate::aliases::Aliases;
 use crate::ids::AgentId;
 use crate::observed::client::HarnessFamily;
 use crate::support::DisplayText;
+use crate::wire::WireRequest;
 
 use super::AgentProfile;
 
@@ -46,7 +49,8 @@ pub type AgentText = DisplayText<64>;
 
 /// Restricts `QueryApi::agents`. Only canonical agents are rows, so `states`
 /// cannot name `Merged`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentFilter {
     pub states: Vec<CanonicalStateKind>,
     /// Harness families claimed on the agent's exchanges.
@@ -56,6 +60,9 @@ pub struct AgentFilter {
     /// one of these, each resolved through merges first.
     pub parents: Vec<AgentId>,
 }
+
+/// A client chooses every field of the agents filter.
+impl WireRequest for AgentFilter {}
 
 impl AgentFilter {
     /// Whether the canonical agent `profile` describes passes the filter,

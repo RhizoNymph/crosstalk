@@ -13,7 +13,7 @@ be fitted again from its spec alone.
 
 [evidence]
 unit = "crosstalk_spec::tests::projection::spec_pins_the_filter_to_the_resolved_version"
-integration = "crosstalk::surface::integration::fit_projection_records_spec"
+integration = "crosstalk_surface::integration::fit_projection_records_spec"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

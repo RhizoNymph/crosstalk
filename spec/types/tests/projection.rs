@@ -1,16 +1,16 @@
 use std::num::NonZeroU16;
 
-use crate::aggregates::edge::{RouteKind, TopicSlot, TopologyFilter};
+use crate::aggregates::edge::{TopicSlot, TopologyFilter};
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
     FitFailure, Fitted, InvalidParams, InvalidProjectionInfo, InvalidProjectionLimit,
-    InvalidTransition, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    InvalidTransition, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
     ProjectionMismatch, ProjectionParams, ProjectionSpec, ProjectionStatus, ProjectionStatusKind,
 };
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{OperatorId, ProjectionId, TopicId};
-use crate::support::{TimeWindow, Watermark};
+use crate::support::{Finite, TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 
 const VERSION: TopicModelVersion = TopicModelVersion(3);
@@ -80,11 +80,11 @@ fn point(n: u128) -> ProjectedPoint {
         transmission: transmission(n),
         from: agent(1),
         to: agent(2),
-        route: RouteKind::Unobserved,
+        route: PointRoute::Unobserved,
         topic: Some(TopicId::from_ulid(7)),
         confirmed_at: at(10),
-        x: 0.5,
-        y: -1.5,
+        x: Finite::new(0.5).expect("finite"),
+        y: Finite::new(-1.5).expect("finite"),
     }
 }
 

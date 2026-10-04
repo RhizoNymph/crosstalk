@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.overview.counts-defined"
+statement = "QueryApi::overview returns as its activity EdgeStore::totals for its window and filter, and as its queues QueueCounts::tally over every stored alert and channel: the alerts in state Open, and the channels not superseded whose current policy is Unreviewed."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+Open alerts and unreviewed channels are backlogs, not traffic: an alert
+raised last week still waits, so no window narrows them, and they equal
+what the alert list filtered to Open and the channels' review queue show.
+A superseded channel is reviewed through the channel that superseded it,
+so it is not counted twice.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::overview::queues_count_open_alerts_only",
+    "crosstalk_spec::tests::overview::queues_count_unreviewed_channels_that_are_not_superseded",
+]
+integration = "crosstalk_surface::integration::pg_overview_matches_lists"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

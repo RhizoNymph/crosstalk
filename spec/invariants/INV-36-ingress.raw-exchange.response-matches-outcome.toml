@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.raw-exchange.response-matches-outcome"
+statement = "A RawExchange's response is Complete when its exchange ended Completed, and Failed carrying the same ExchangeFailure when it ended Failed."
+kind = "domain"
+property = "postcondition"
+requires = ["dst"]
+rationale = """
+RawResponse is the only record of how the exchange ended that crosses into
+L1. A Complete response for a failed exchange would let a truncated output
+be indexed as a finished one.
+"""
+
+[evidence]
+dst = "crosstalk_ingress::tests::sim::raw_response_variant_matches_final_stage"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

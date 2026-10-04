@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.route.unobserved-reader-output"
+statement = "The correlator assigns the Unobserved route only to content matches whose carrier is ReaderOutput."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Unobserved means the reader produced the sender's text although none of
+its visible inputs held it: a channel the gateway cannot see. Using it for
+content found in an input would hide a route that was in fact observed.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlator::tests::unobserved_only_for_reader_output"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

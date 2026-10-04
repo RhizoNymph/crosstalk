@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.agent-state.established-needs-two-kinds"
+statement = "Every agent in the Established state holds identity evidence of at least two different IdentityEvidence variants, at least one of them Strong."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Established means corroborated, and consumers trust it more than
+Provisional. Repeated evidence of one variant is not corroboration, and weak
+evidence (rotating credentials, which change on every OAuth refresh, and
+prompt fingerprints, which many agents share) cannot establish an agent
+alone: two weak variants together would let one shared system prompt and
+one short-lived token claim an identity.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::established_agents_hold_two_variants_one_strong"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

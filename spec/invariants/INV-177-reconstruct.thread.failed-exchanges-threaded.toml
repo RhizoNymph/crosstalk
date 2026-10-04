@@ -1,0 +1,21 @@
+[invariant]
+id = "reconstruct.thread.failed-exchanges-threaded"
+statement = "Threading a Failed exchange returns a ThreadOutcome whose delta carries its new request inputs, as for a Completed exchange."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A failed exchange's request still carries the tool results and user turns
+the agent read. Skipping failed exchanges would let an agent receive
+another agent's content unobserved whenever the upstream call errors, the
+stream is truncated or the client disconnects.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_reconstruct::tests::failed_exchange_is_threaded",
+  "crosstalk_reconstruct::tests::failed_exchange_without_partial_response_is_threaded",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

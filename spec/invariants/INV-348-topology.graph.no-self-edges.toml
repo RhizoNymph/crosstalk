@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.graph.no-self-edges"
+statement = "No WeightedEdge in a graph has the same agent as from and to."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Stored EdgeKeys are never self-edges, but merges are aliases resolved at
+query time: a transmission between two agents later found to be one agent
+resolves to a self-edge. That is one agent re-reading its own output, not
+communication, so the graph drops it, and it also leaves the share
+denominator. WeightedEdge has public fields, so its type does not enforce
+this.
+"""
+
+[evidence]
+property = "crosstalk_topology::props::graph_has_no_self_edges_after_merges"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

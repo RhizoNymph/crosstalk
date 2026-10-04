@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.merge-record.revert-once"
-statement = "MergeRecord::revert on a record already reverted returns AlreadyReverted and keeps the first reversal, and IdentityResolver::unmerge on such a record returns MergeAlreadyReverted and changes nothing."
+statement = "MergeRecord::revert on a record already reverted returns InvalidReversal::AlreadyReverted and keeps the first reversal, and IdentityResolver::unmerge on such a record returns MergeAlreadyReverted and changes nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]
@@ -15,8 +15,9 @@ the UI can say it was already undone.
 unit = [
     "crosstalk_spec::tests::agents::a_record_is_reverted_at_most_once",
     "crosstalk_spec::tests::agents::a_record_cannot_be_reverted_twice",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_self_merge_and_a_second_reversal",
 ]
-integration = "crosstalk::reconstruct::tests::pg_unmerge_twice_conflicts"
+integration = "crosstalk_reconstruct::tests::pg_unmerge_twice_conflicts"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.one-per-sender"
+statement = "When one reader exchange's content matches have several origin agents, the correlator confirms a separate transmission for each origin agent."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A reader's input can echo two writers. `Confirmed::new` rejects mixed
+origins, so the correlator must partition the matches by origin agent
+instead of failing or dropping all but one sender.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlator::tests::matches_partitioned_by_origin"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

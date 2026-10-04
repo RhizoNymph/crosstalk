@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.delta.chained-compaction-excludes-carried-over"
+statement = "When a Compaction conversation is itself compacted, a message it carried over from its own predecessor that the new request carries again is not in the new Compacts delta's new_inputs."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Long sessions compact repeatedly, and a harness can keep the same recent
+turns through several compactions. Carried-over messages are those whose
+hash is in the predecessor's stored history, and a Compaction conversation's
+stored history includes the messages it carried over itself; if it held
+only its deltas, a message kept through two compactions would count as new
+the second time and its matches would be reported again.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::chained_compaction_excludes_carried_over"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

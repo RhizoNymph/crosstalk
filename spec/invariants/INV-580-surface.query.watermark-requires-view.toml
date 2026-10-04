@@ -10,7 +10,7 @@ under View with the views it qualifies.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::watermark_without_view_forbidden"
+unit = "crosstalk_surface::tests::watermark_without_view_forbidden"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

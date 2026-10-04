@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.match.scans-delta-messages"
+statement = "Provenance looks up every message a ConversationDelta lists in new_inputs, new_system and output."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Every request replays the conversation's history, so scanning it would
+re-match the same read on every turn and inflate transmissions. Skipping
+any listed message loses a carrier: new_inputs carry tool results and user
+turns, new_system makes SystemPrompt matches reachable, and output carries
+ReaderOutput matches.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::lookups_cover_new_inputs_system_and_output", "crosstalk_provenance::tests::replayed_history_is_not_looked_up"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

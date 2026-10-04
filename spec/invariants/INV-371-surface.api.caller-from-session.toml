@@ -1,21 +1,37 @@
 [invariant]
 id = "surface.api.caller-from-session"
-statement = "Every Caller is built by OperatorDirectory::caller from the RequestIdentity of the HTTP request's verified session or token (in trusted mode, the trusted operator), never from request parameters, headers other than the session credential, or the body."
+statement = "Every Caller of an HTTP request is http::auth::authenticate of the Verification of that request's credential alone (its Authorization bearer token or, without that header, its __Host-crosstalk-session cookie), which is OperatorDirectory::caller of the RequestIdentity verified from it (in trusted mode, the trusted operator whatever the request carries); no path segment, query parameter, body field or other header names or changes the caller."
 kind = "domain"
 property = "postcondition"
-requires = ["unit", "integration"]
+requires = ["type", "unit", "integration"]
 rationale = """
 Every permission check and every recorded author (audit entry, policy
 decision, merge request, alert transition) trusts Caller. If any field
 could come from the request itself, a View user could claim Govern or act
 as another operator. Caller's fields are private and only the directory
-builds one (surface.operators.caller-from-directory).
+builds one (surface.operators.caller-from-directory); authenticate takes
+only a Verification, which only the two credential header fields
+(CredentialHeaders) produce, so nothing else in the request can reach it.
+The bearer token wins over the cookie, so a script with a token is not
+redirected by a stray browser cookie, and a credential's Debug hides its
+secret (surface.api.no-raw-credentials). The integration test sends
+operator ids in the path, the query, the body and other headers and
+checks the recorded author is the credential's operator.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::caller_ignores_operator_in_request"
-integration = "crosstalk::surface::integration::forged_operator_field_has_no_effect"
+type = ["crosstalk_spec::interfaces::l8_surface::http::auth::authenticate", "crosstalk_spec::interfaces::l8_surface::http::auth::CredentialHeaders"]
+unit = [
+    "crosstalk_spec::tests::wire::http::auth::the_bearer_token_is_the_credential",
+    "crosstalk_spec::tests::wire::http::auth::authorization_wins_over_the_cookie",
+    "crosstalk_spec::tests::wire::http::auth::no_credential_is_none",
+    "crosstalk_spec::tests::wire::http::auth::verification_becomes_the_directory_identity",
+    "crosstalk_spec::tests::wire::http::auth::authenticated_mode_answers_401_without_a_caller",
+    "crosstalk_spec::tests::wire::http::auth::trusted_mode_ignores_the_credential",
+]
+integration = "crosstalk_api::integration::forged_operator_field_has_no_effect"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

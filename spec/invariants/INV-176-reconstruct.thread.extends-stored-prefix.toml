@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.extends-stored-prefix"
+statement = "For a full-history exchange, an Extends outcome's conversation had, before threading, a stored history whose non-system messages are a prefix of the request's non-system messages."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Extends asserts the request continues the conversation unchanged. If the
+stored history is not a prefix, the harness edited or dropped earlier turns
+and the new_inputs suffix would skip or misplace messages; that case is a
+Fork or Compaction. Increment exchanges are covered through their resolved
+history (see the increment model invariant).
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::extends_requires_stored_prefix"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

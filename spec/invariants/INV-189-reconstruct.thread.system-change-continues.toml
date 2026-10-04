@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.system-change-continues"
+statement = "Changing only the system message of a full-history exchange's request leaves its outcome variant and conversation unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Claude Code's system prompt embeds the date, git status and tool list, so it
+changes within one conversation. If it took part in prefix matching, every
+such change would cut the conversation into a new root and re-scan its whole
+history. The change is reported once as the delta's new_system instead.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::system_change_keeps_outcome_and_conversation"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

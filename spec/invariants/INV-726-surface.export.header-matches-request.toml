@@ -22,6 +22,7 @@ unit = [
     "crosstalk_spec::tests::export::header_with_nothing_settled_plans_no_rows",
     "crosstalk_spec::tests::export::header_rejects_a_watermark_after_its_start",
     "crosstalk_spec::tests::export::projection_header_names_its_projection_and_plans_its_points",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_headers_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

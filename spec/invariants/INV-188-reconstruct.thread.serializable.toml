@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.thread.serializable"
+statement = "Exchanges threaded concurrently produce the same outcomes and stored conversations as threading them one at a time in some order."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Several reconstruct consumers can thread exchanges of one agent at once, and
+parallel sub-agents send requests that extend the same history together.
+Without isolation both would Extend the same conversation from the same
+stored history, and the conversation would hold only one of them.
+"""
+
+[evidence]
+dst = "crosstalk_reconstruct::tests::dst_concurrent_threading_is_serializable"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

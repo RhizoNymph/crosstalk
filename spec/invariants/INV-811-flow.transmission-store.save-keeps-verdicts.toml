@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.transmission-store.save-keeps-verdicts"
+statement = "TransmissionStore::save replaces the stored transmission with its id and leaves that transmission's VerdictLog unchanged, and TransmissionStore::transmission then returns exactly the transmission saved."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The flow consumer saves every state the correlator decides (open, extend,
+confirm, suspect, discard). A verdict is operator judgement kept beside the
+transmission, not detector state, so a later detector update must not
+erase or reset it; the converse, a verdict never changing the stored
+transmission, is flow.verdict.state-untouched.
+"""
+
+[evidence]
+unit = "crosstalk_flow::verdicts::tests::save_keeps_the_verdict_log"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

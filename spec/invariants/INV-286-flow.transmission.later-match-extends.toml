@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.later-match-extends"
+statement = "A content match whose reader exchange, sender and route already have a confirmed transmission produces an Extend update for that transmission."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Later matches carry more of the sender's text to the same reader. Dropping
+them would undercount matched bytes on the edge; opening a new transmission
+would break identity. Extend applies them through `Confirmed::extend`.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlator::tests::later_match_extends_confirmed"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

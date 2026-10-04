@@ -1,0 +1,14 @@
+[
+  {
+    "reason": "no_credential"
+  },
+  {
+    "reason": "invalid_credential"
+  },
+  {
+    "reason": "unknown_operator"
+  },
+  {
+    "reason": "former_operator"
+  }
+]

@@ -18,7 +18,7 @@ unit = [
     "crosstalk_spec::tests::export::settled_window_cuts_at_the_watermark",
     "crosstalk_spec::tests::export::header_with_nothing_settled_plans_no_rows",
 ]
-integration = "crosstalk::surface::export::tests::export_reads_only_before_the_start_watermark"
+integration = "crosstalk_surface::export::tests::export_reads_only_before_the_start_watermark"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

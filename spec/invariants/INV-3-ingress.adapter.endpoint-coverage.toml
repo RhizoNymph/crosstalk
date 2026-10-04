@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.adapter.endpoint-coverage"
+statement = "Adapter classification agrees with the endpoint table: each listed endpoint of each supported wire protocol is classified by that protocol's adapter with the table's EndpointKind."
+kind = "domain"
+property = "model-based"
+requires = ["unit"]
+rationale = """
+Disjointness alone allows an adapter set that classifies nothing. The
+table is the reference model: Anthropic messages and count_tokens, OpenAI
+chat completions and models, Responses over HTTP and WebSocket (including
+Codex's /backend-api/codex/responses and compaction calls), Gemini
+generateContent and Code Assist v1internal:streamGenerateContent. A
+generation endpoint that falls through is a silent coverage gap.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::adapter::endpoint_table_classification"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

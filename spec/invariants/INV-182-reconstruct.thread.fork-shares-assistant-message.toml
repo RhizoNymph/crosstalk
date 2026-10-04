@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.thread.fork-shares-assistant-message"
+statement = "A Forks outcome's shared prefix contains at least one assistant message."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Every conversation of a harness starts with the same system prompt and
+often the same first user turn. Forking on that alone would chain unrelated
+conversations into one tree under whichever came first.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::fork_prefix_contains_assistant_message"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -15,8 +15,8 @@ surface.page.traversal-exactly-once.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::list_filter_cases", "crosstalk_spec::tests::audit::audit_filter_combines_fields_with_and", "crosstalk::surface::tests::audit_pages_newest_first_without_gaps"]
-property = ["crosstalk::surface::tests::prop_list_pages_satisfy_filter", "crosstalk::surface::tests::prop_audit_pages_match_filter_model"]
+unit = ["crosstalk_surface::tests::list_filter_cases", "crosstalk_spec::tests::audit::audit_filter_combines_fields_with_and", "crosstalk_surface::tests::audit_pages_newest_first_without_gaps"]
+property = ["crosstalk_surface::tests::prop_list_pages_satisfy_filter", "crosstalk_surface::tests::prop_audit_pages_match_filter_model"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

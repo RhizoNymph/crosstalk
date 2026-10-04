@@ -9,9 +9,13 @@
 //! agent's output that none of its visible inputs contained is a match with
 //! carrier `ReaderOutput`, evidence of a channel the gateway cannot see.
 //!
-//! A fingerprint's frequency is the number of distinct texts (spans of any
-//! origin, and scanned input parts) containing it that were observed within
-//! the retention period. Fingerprints above the cutoff are boilerplate.
+//! A fingerprint's frequency at `now` is the number of distinct texts
+//! (spans of any origin, and scanned input parts) containing it whose
+//! observation time is within the retention period before `now`
+//! (`now - retention <= at`). Fingerprints above the cutoff are boilerplate.
+//! The index takes `now` as an argument on every call that measures that
+//! window (the provenance consumer passes the time of the exchange it is
+//! scanning), so a replay scans with the frequencies it scanned with.
 //!
 //! Implementations:
 //! - `Segmenter`: `NovelRunSegmenter`.
@@ -69,32 +73,49 @@ pub trait Fingerprinter {
 }
 
 pub trait FingerprintIndex {
-    /// Only originated spans can be indexed.
-    async fn insert(
+    /// Only originated spans can be indexed. A fingerprint that is
+    /// boilerplate at `now` gets no posting.
+    fn insert(
         &mut self,
         span: &OriginatedSpan,
         fingerprints: &[PositionedFingerprint],
-    ) -> Result<(), IndexError>;
+        now: Timestamp,
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
-    async fn lookup(
+    /// The postings of `fingerprints`, leaving out every fingerprint that is
+    /// boilerplate at `now`.
+    fn lookup(
         &self,
         fingerprints: &[PositionedFingerprint],
-    ) -> Result<Vec<FingerprintHit>, IndexError>;
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<FingerprintHit>, IndexError>> + Send;
 
-    /// How many spans contain `fingerprint`. Fingerprints above the cutoff
-    /// are boilerplate: not indexed, and ignored on lookup.
-    async fn frequency(&self, fingerprint: Fingerprint) -> Result<u64, IndexError>;
+    /// How many observed texts contain `fingerprint` at `now`. Fingerprints
+    /// above the cutoff are boilerplate: not indexed, and ignored on lookup.
+    fn frequency(
+        &self,
+        fingerprint: Fingerprint,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u64, IndexError>> + Send;
 
-    /// Count every fingerprint of a scanned text toward `frequency`,
-    /// whether or not it is indexed. Observations age out after retention.
-    async fn observe(
+    /// Count every fingerprint of a text scanned at `at` toward
+    /// `frequency`, whether or not it is indexed, as of `now`: an
+    /// observation already outside the retention period at `now` is not
+    /// kept. Observations age out after retention.
+    fn observe(
         &mut self,
         fingerprints: &[Fingerprint],
         at: Timestamp,
-    ) -> Result<(), IndexError>;
+        now: Timestamp,
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
-    /// Remove the fingerprints of expired spans.
-    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
+    /// Remove the fingerprints of expired spans; observations outside the
+    /// retention period at `now` age out.
+    fn evict(
+        &mut self,
+        spans: &[SpanId],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 }
 
 /// A candidate paraphrase: an originated span whose embedding is close to a
@@ -108,20 +129,20 @@ pub struct SemanticHit {
 
 pub trait SemanticMatcher {
     /// Only originated spans can be stored.
-    async fn insert(
+    fn insert(
         &mut self,
         span: &OriginatedSpan,
         embedding: Embedding,
-    ) -> Result<(), IndexError>;
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
-    async fn lookup(
+    fn lookup(
         &self,
         text: &str,
         threshold: Similarity,
-    ) -> Result<Vec<SemanticHit>, IndexError>;
+    ) -> impl Future<Output = Result<Vec<SemanticHit>, IndexError>> + Send;
 
     /// Remove expired spans.
-    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
+    fn evict(&mut self, spans: &[SpanId]) -> impl Future<Output = Result<(), IndexError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,56 @@
+[
+  {
+    "type": "unaligned_window"
+  },
+  {
+    "type": "bucket_width_mismatch"
+  },
+  {
+    "type": "pattern_misses_seed"
+  },
+  {
+    "type": "unknown_topics"
+  },
+  {
+    "type": "unknown_sink",
+    "data": {
+      "sink": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "query_too_long"
+  },
+  {
+    "type": "self_merge"
+  },
+  {
+    "type": "empty_selection"
+  },
+  {
+    "type": "excerpt_context_too_long",
+    "data": {
+      "max": 2048,
+      "got": 4096
+    }
+  },
+  {
+    "type": "too_many_ids",
+    "data": {
+      "max": 1000,
+      "got": 1001
+    }
+  },
+  {
+    "type": "unsupported_format",
+    "data": {
+      "format": "parquet"
+    }
+  },
+  {
+    "type": "malformed_request",
+    "data": {
+      "kind": "data",
+      "reason": "unknown field `stats`, expected `states` or `channel` at line 1 column 8"
+    }
+  }
+]

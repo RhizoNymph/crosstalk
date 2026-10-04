@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.expiry-discards"
+statement = "On a tick at or after a Suspected transmission's expiry, the correlator moves it to Discarded."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Suspected transmissions hold correlator state. Expiry bounds that state and
+marks that no content evidence arrived; the Discarded record keeps its
+CoAccesses so the decision stays auditable.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlator::tests::expiry_discards_suspected"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

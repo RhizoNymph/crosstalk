@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.media.hash-of-decoded-bytes"
+statement = "A Media part's blob hash is the BLAKE3 digest of the decoded media bytes, not of their base64 or data-URL text."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Providers carry media as base64 in different envelopes (Anthropic source
+blocks, OpenAI data URLs, Gemini inline_data). Hashing the decoded bytes
+gives one image, document or audio clip one id whichever provider carried
+it, so the media part, and the message containing it, hash the same across
+providers and the same file passed between agents is recognized.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::media_hash_is_of_decoded_bytes"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

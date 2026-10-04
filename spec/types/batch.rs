@@ -8,6 +8,16 @@
 //! before calling the lookup. A selection of transmissions to list
 //! (`TransmissionSelection`) is not a name lookup and has its own, larger
 //! bound, but reports going over it with the same `InvalidInput(TooManyIds)`.
+//!
+//! On the wire an [`IdBatch`] is an array of ids, and it is a
+//! [`WireRequest`]. Decoding runs [`IdBatch::new`]: repeats are dropped and
+//! the ids sorted, and more than [`IdBatch::MAX`] distinct ids is a decode
+//! error.
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::wire::{Rejected, WireRequest};
 
 /// Distinct ids, ascending, at most [`IdBatch::MAX`] of them.
 ///
@@ -63,3 +73,20 @@ impl<T: Ord + Copy> IdBatch<T> {
         self.ids.is_empty()
     }
 }
+
+/// The ids, ascending.
+impl<T: Serialize> Serialize for IdBatch<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.ids.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de> + Ord + Copy> Deserialize<'de> for IdBatch<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let ids = Vec::<T>::deserialize(deserializer)?;
+        Self::new(ids).map_err(|error| D::Error::custom(Rejected::new("id batch", error)))
+    }
+}
+
+/// A client asks for the names of a batch of ids.
+impl<T: Serialize + serde::de::DeserializeOwned + Ord + Copy> WireRequest for IdBatch<T> {}

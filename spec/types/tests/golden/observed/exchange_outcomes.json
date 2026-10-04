@@ -1,0 +1,30 @@
+[
+  {
+    "type": "completed",
+    "data": {
+      "response": "a9f4b3d22a523fdada41c85c175425bcd15b32b4cd0f54d9433accd52d7195a1",
+      "response_id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+      "first_chunk_at": "2026-10-04T12:34:57.402118Z",
+      "finished_at": "2026-10-04T12:35:03.950031Z",
+      "stop": "tool_use",
+      "usage": {
+        "input": 18342,
+        "output": 611,
+        "cache_read": 16384,
+        "cache_write": 1536,
+        "reasoning": null
+      }
+    }
+  },
+  {
+    "type": "failed",
+    "data": {
+      "partial_response": "9834a14ab9bcaa0f6a8da71073617eac8f004e596a3fa11d807b84631b825d9d",
+      "first_chunk_at": "2026-10-04T12:34:58.000250Z",
+      "failed_at": "2026-10-04T12:35:10.500000Z",
+      "failure": {
+        "type": "stream_truncated"
+      }
+    }
+  }
+]

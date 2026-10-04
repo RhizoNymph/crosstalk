@@ -10,7 +10,7 @@ to read, and the UI could show a ready version with no lineage.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::lineage_stored_before_version_ready"
+dst = "crosstalk_analysis::tests::lineage_stored_before_version_ready"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

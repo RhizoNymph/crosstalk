@@ -17,6 +17,7 @@ type = [
 unit = [
     "crosstalk_spec::tests::graph::a_stored_claim_set_lists_each_claim_once",
     "crosstalk_spec::tests::graph::claim_ties_are_ordered_deterministically",
+    "crosstalk_spec::tests::wire::observed::identity::claim_sets_refuse_a_repeated_claim_and_order_their_entries",
 ]
 
 [evidence-review]

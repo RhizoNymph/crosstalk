@@ -43,20 +43,41 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{
     TopicVersionHistory, TopicVersionStatus, TopicVersionStatusKind,
 };
 use crate::ids::OperatorId;
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 /// How many versions retention keeps beyond the pinned and pending ones.
 ///
 /// Built only through [`RetentionPolicy::new`], which rejects fewer than
-/// [`RetentionPolicy::MIN_KEEP_LAST`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// [`RetentionPolicy::MIN_KEEP_LAST`]. Config; on the wire only inside the
+/// audit log's `ConfigChange::SetTopicRetention`, as `{"keep_last": 3}`,
+/// decoded through the constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawRetentionPolicy")]
 pub struct RetentionPolicy {
     keep_last: NonZeroU32,
+}
+
+/// [`RetentionPolicy`]'s field, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawRetentionPolicy {
+    keep_last: u32,
+}
+
+impl TryFrom<RawRetentionPolicy> for RetentionPolicy {
+    type Error = Rejected<InvalidRetention>;
+
+    fn try_from(raw: RawRetentionPolicy) -> Result<Self, Self::Error> {
+        Self::new(raw.keep_last).map_err(|error| Rejected::new("retention policy", error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,14 +147,22 @@ impl RetentionPolicy {
 
 /// An operator's pin. The surface stamps `by` and `at` from the
 /// authenticated caller and the time it accepted the action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Pin {
     pub by: OperatorId,
     pub at: Timestamp,
 }
 
-/// Whether a version's data is still kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Whether a version's data is still kept. A response (inside
+/// `TopicVersionInfo`); never a request, since a pin is stamped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Retention {
     Retained {
         pin: Option<Pin>,

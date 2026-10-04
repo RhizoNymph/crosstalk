@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.support.similarity-in-unit-interval"
+statement = "Every Similarity value lies in 0.0..=1.0 and is never NaN."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Similarities are compared against thresholds (near-duplicate matching,
+topic assignment, alert rules). NaN compares false against every threshold,
+so a NaN score would silently pass or fail every rule, and an out-of-range
+score breaks thresholds tuned for 0..=1. The field is private and
+Similarity::new rejects anything outside the closed interval, NaN included.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::Similarity::new"
+unit = [
+  "crosstalk_spec::tests::support::similarity_accepts_closed_unit_interval",
+  "crosstalk_spec::tests::support::similarity_rejects_out_of_range_and_nan",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

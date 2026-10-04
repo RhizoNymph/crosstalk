@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.normalize.tool-use-stop-reason"
+statement = "A completed response that contains a client tool call and was not cut short by a token limit has StopReason::ToolUse, whatever finish reason its dialect reports."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Finish reasons disagree for the same situation: vLLM and the OpenAI
+reference report `stop` for a named tool choice, SGLang reports
+`tool_calls`, Anthropic `tool_use`, Gemini `STOP`. Reconstruction and flow
+detection use ToolUse to expect the tool's result in the next request, so it
+must follow from the response's content, not from the dialect's label.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::tool_call_responses_stop_with_tool_use"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

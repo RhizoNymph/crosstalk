@@ -12,7 +12,7 @@ the operator why the id in the URL is not the one on the page.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::agent_detail_redirects_merged_ids"
+unit = "crosstalk_surface::tests::agent_detail_redirects_merged_ids"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

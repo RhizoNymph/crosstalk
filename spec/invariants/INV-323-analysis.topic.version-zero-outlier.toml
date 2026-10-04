@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.topic.version-zero-outlier"
+statement = "Under TopicModelVersion 0, the unfitted model that is current from the start, every transmission is classified as an outlier."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Analysis must classify transmissions before enough exist to fit, so a
+version is current from the first confirmation. Version 0 has no topics,
+so its only honest answer is Outlier; this also means nothing is watched
+and no watched-topic rule can fire until the first real fit is ready.
+"""
+
+[evidence]
+unit = ["crosstalk_analysis::tests::unfitted_model_has_version_zero", "crosstalk_analysis::tests::version_zero_assigns_outlier"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

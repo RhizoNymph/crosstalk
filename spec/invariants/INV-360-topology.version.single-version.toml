@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.version.single-version"
+statement = "Every graph counts only buckets whose topic slot version equals the graph's topic_version."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+During and after a re-fit, every transmission is counted once per
+topic-model version, so the store holds a full set of buckets for each.
+Reading across versions would double count each transmission and mix topic
+ids that mean different things in different fits. topic_version tells the
+surface which version's topic ids to label the result with.
+"""
+
+[evidence]
+property = "crosstalk_topology::props::graph_reads_one_topic_version"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

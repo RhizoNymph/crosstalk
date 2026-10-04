@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.agent.alias-merge-record-present"
+statement = "Every alias of an AgentCluster has among the cluster's merge records the unreverted record its MergedInto::merge names, with the alias as source, and AgentCluster::merge_of returns that record, so a merged agent's merge time and author are read from it."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The agent page shows when and by whom each alias was merged and offers an
+unmerge of that record. MergedInto names the record and does not copy its
+time and author, so one fact has one home; checking that the cluster holds
+the record makes the lookup total for every alias, instead of a page that
+sometimes cannot say who merged an agent.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::agents::AgentCluster::new"
+unit = [
+    "crosstalk_spec::tests::agent_reads::each_alias_finds_the_record_that_merged_it",
+    "crosstalk_spec::tests::agent_reads::an_alias_without_its_unreverted_merge_record_is_refused",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

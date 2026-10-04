@@ -1,0 +1,24 @@
+[invariant]
+id = "provenance.span-state.legal-transitions"
+statement = "A span's SpanState changes only along Extracted to Originated, Relayed or Common; Originated to Indexed; Indexed or Propagated to Propagated; and Indexed or Propagated to Expired."
+kind = "representation"
+requires = ["type", "unit", "lint"]
+rationale = """
+The lifecycle carries meaning: Common and Relayed are final and never enter
+the index, Expired is final because its fingerprints are gone, and
+Propagated only follows Indexed. SpanState::advance is the only transition
+function; it maps exactly these (state, event) pairs to a next state and
+returns IllegalTransition for every other pair. Span::state is a public
+field, so the lint keeps implementation code from assigning it directly and
+bypassing advance.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::provenance::span::SpanState::advance"
+unit = ["crosstalk_spec::tests::provenance::span_advances_along_the_lifecycle", "crosstalk_spec::tests::provenance::span_rejects_illegal_edges"]
+lint = "lint:span-state-written-only-by-advance"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+lint = { agent = "false", human = "false" }

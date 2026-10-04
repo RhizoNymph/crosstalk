@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.http.responses-not-shared"
+statement = "Every response of the HTTP API carries Cache-Control no-store, except a ready projection frame, which is private, and a 304 for a frame is sent only to a caller QueryApi::projection has just answered with the projection."
+kind = "confidentiality"
+requires = ["integration"]
+rationale = """
+What a response holds depends on the caller's permissions and on live
+state, and one URL serves every operator. A shared cache that stored a
+Content response could hand it to a View caller, and a stored list could
+outlive a merge or a verdict. The frame is the one response worth
+caching, and only in the requesting browser.
+"""
+
+[evidence]
+integration = "crosstalk_api::integration::responses_are_not_stored_by_shared_caches"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

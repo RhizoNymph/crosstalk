@@ -15,7 +15,7 @@ active one and the one before it).
 
 [evidence]
 unit = "crosstalk_spec::tests::topic_version::current_resolves_to_the_active_version"
-integration = "crosstalk::surface::integration::current_selector_follows_catalog_activation"
+integration = "crosstalk_surface::integration::current_selector_follows_catalog_activation"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.json.large-integers-exact"
+statement = "Every number in canonical text L1 produces has exactly the decimal value of the number in the source JSON text, including integers beyond 2^53."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Tool arguments carry large integer ids (database keys, snowflake ids,
+message ids). Passing them through an IEEE double would round them, so the
+canonical arguments would name a different resource than the model asked
+for: flow detection would extract the wrong locator, and provenance would
+miss an id copied verbatim from one agent's output into another's call.
+The property generates integers well beyond 2^53, including negatives, and
+checks the parsed canonical value equals the original exactly.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::snowflake_id_survives_canonicalization"
+property = "crosstalk_spec::tests::encoding::large_integers_round_trip_exactly"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

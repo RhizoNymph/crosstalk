@@ -13,7 +13,7 @@ operators are still working on.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::stale_rule_leaves_active_alerts_active"
+unit = "crosstalk_analysis::tests::stale_rule_leaves_active_alerts_active"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

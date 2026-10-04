@@ -11,7 +11,7 @@ otherwise. Merges and unmerges are rare, so invalidating on them is cheap.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::tests::dst_directory_cache_follows_merges"
+dst = "crosstalk_reconstruct::tests::dst_directory_cache_follows_merges"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

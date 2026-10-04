@@ -1,9 +1,13 @@
 //! Crosstalk type specification.
 //!
 //! These modules are the design contract for the gateway's data model. They
-//! are real Rust, type-checked and tested by `spec/Cargo.toml`, but they are
-//! not part of the gateway's build: implementation crates copy or re-derive
-//! them and add serde, sqlx and thiserror derives as needed.
+//! are real Rust, type-checked and tested by `spec/Cargo.toml`, and they are
+//! the shared boundary crate of the workspace: every implementation crate
+//! depends on them, and layer crates reach each other only through them.
+//! They are also the wire format: the types
+//! serialize to the JSON the gateway, the operator UI and other gateway
+//! nodes exchange, by the conventions in [`wire`], with golden files pinning
+//! each shape. Implementation crates add sqlx and thiserror as needed.
 //!
 //! The model has three tiers, plus the events and interfaces that move data
 //! between them:
@@ -22,7 +26,8 @@
 //! Cross-tier references are always typed ids from [`ids`], never raw strings
 //! or integers. Merged agents and superseded channels are aliases, resolved
 //! at read time through [`aliases`]. List queries page with the opaque
-//! cursors in [`paging`].
+//! cursors in [`paging`]. What a client may send is marked
+//! [`wire::WireRequest`]; what the server stamps never is.
 
 #![allow(async_fn_in_trait)]
 
@@ -36,6 +41,7 @@ pub mod interfaces;
 pub mod observed;
 pub mod paging;
 pub mod support;
+pub mod wire;
 
 #[cfg(test)]
 mod tests;

@@ -11,7 +11,7 @@ judging.
 """
 
 [evidence]
-dst = "crosstalk::topology::tests::dst_judge_then_query"
+dst = "crosstalk_topology::tests::dst_judge_then_query"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

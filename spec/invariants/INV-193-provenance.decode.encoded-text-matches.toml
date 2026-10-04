@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.decode.encoded-text-matches"
+statement = "Encoding an indexed span's text of at least k + w - 1 normalized characters with any sequence of supported codecs, no longer than the maximum decode depth, and placing it in another agent's new input yields a ContentMatch against that span."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Encoding is the cheapest way to hide a transmission from a fingerprint
+matcher, intentionally or because a tool serialized its payload. Every
+codec in Codec, and every chain of them up to the depth bound, must be
+undone before lookup.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::encoded_span_text_still_matches"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

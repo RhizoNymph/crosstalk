@@ -16,7 +16,7 @@ advance, which continues after changes stop, and still converges.
 """
 
 [evidence]
-dst = "crosstalk::reconstruct::dst::agent_changes_announced_after_commit"
+dst = "crosstalk_reconstruct::dst::agent_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

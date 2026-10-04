@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.fork-or-start"
+statement = "A full-history exchange that neither extends nor compacts a conversation is threaded as Forks when its non-system request messages share a prefix containing an assistant message with some conversation of the same canonical agent, and as Starts otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+This is the branch between a new branch and a new root. A retry, whose
+request is a prefix of a stored history, forks rather than starting over,
+so its inputs are not re-scanned. Conversations that share only a system
+prompt and first user turn are separate roots, since every conversation of
+a harness shares those.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::fork_or_start_by_shared_assistant_prefix"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

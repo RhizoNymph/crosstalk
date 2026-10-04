@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.correlator.no-io"
+statement = "The correlator performs no I/O, including reading the system clock."
+kind = "coordination"
+requires = ["type", "lint"]
+rationale = """
+The correlator owns the evidence windows in a single task fed over a
+channel; a blocking call stalls every transmission on its shard. Time comes
+only from access and match timestamps and `on_tick`'s `now`, which keeps it
+deterministic and replayable under simulation. The trait's synchronous,
+infallible signature rules out awaiting I/O but not blocking calls, so a
+lint is also needed.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l5_flow::Correlator"
+lint = "lint:correlator-no-io"
+
+[evidence-review]
+type = { agent = "false", human = "false" }
+lint = { agent = "false", human = "false" }

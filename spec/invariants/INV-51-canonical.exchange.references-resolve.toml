@@ -1,0 +1,18 @@
+[invariant]
+id = "canonical.exchange.references-resolve"
+statement = "Every message hash an Exchange references, in its request or its outcome, is the hash of a message in the same NormalizedExchange's messages."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+L1 writes exactly the messages in NormalizedExchange.messages to the blob
+store. A hash in the Exchange with no body among them would be published in
+ExchangeCaptured with nothing stored under it, and every consumer would fail
+to read that message. The types do not tie the two fields together.
+"""
+
+[evidence]
+property = "crosstalk_canonical::tests::exchange_hashes_resolve_to_messages"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

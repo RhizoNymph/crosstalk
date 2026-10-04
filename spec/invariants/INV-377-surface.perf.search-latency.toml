@@ -11,7 +11,7 @@ response size and snippet fetches from the blob store bounded.
 """
 
 [evidence]
-bench = "crosstalk::surface::bench::search_p99"
+bench = "crosstalk_surface::bench::search_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

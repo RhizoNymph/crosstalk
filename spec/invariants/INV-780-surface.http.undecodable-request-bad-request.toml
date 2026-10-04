@@ -1,0 +1,31 @@
+[invariant]
+id = "surface.http.undecodable-request-bad-request"
+statement = "A request whose path parameter, query string or body is not its route's types (an id segment that is not ULID text, an unknown, repeated or missing required query parameter, a parameter or body that decode_request refuses, a body on a route that takes none, a body over MAX_BODY_BYTES or not application/json) is answered 400 with InvalidInput(MalformedRequest) naming the parameter, and reaches no QueryApi method, OperatorActions::act, LiveFeed or store and leaves no audit entry."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Strict decoding (canonical.wire.strict-decode) protects the JSON; this
+extends it to where the JSON travels, so a misspelt query parameter is
+an error rather than a silently ignored filter, and a malformed id in the
+path is a 400 rather than a 404 that hides the typo. Requiring
+application/json bodies means the forms and text bodies a cross-site page
+can post never reach the decoder. The conversion itself is
+surface.query.undecodable-request-invalid-input.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::request::unknown_and_repeated_query_parameters_are_malformed",
+    "crosstalk_spec::tests::wire::http::request::a_missing_required_parameter_is_malformed_and_an_option_is_none",
+    "crosstalk_spec::tests::wire::http::request::a_query_parameter_of_the_wrong_shape_is_malformed",
+    "crosstalk_spec::tests::wire::http::request::path_segments_are_exactly_the_value_text",
+    "crosstalk_spec::tests::wire::http::request::a_malformed_path_id_is_a_bad_request_not_a_missing_route",
+    "crosstalk_spec::tests::wire::http::request::bodies_must_be_json_where_the_route_takes_one",
+    "crosstalk_spec::tests::wire::http::status::an_undecodable_request_is_a_bad_request",
+]
+integration = "crosstalk_api::integration::undecodable_requests_are_400_and_unaudited"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

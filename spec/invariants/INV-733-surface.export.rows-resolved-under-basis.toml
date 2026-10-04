@@ -13,7 +13,7 @@ reads as of its start, like a linked view reads as of its query.
 """
 
 [evidence]
-integration = "crosstalk::surface::export::tests::export_resolves_once_at_start"
+integration = "crosstalk_surface::export::tests::export_resolves_once_at_start"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.route.precedence"
+statement = "When more than one route applies to a content match, the correlator picks the first applicable route in the order Delegation, Channel, Direct, Unobserved."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A sub-agent's final message returns to its parent as a tool result, so it
+also looks like Direct(ToolResult); a parent's task prompt is also a user
+turn. A fixed precedence makes the route, and so the transmission's identity
+and whether policy applies, deterministic.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlator::tests::route_precedence"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

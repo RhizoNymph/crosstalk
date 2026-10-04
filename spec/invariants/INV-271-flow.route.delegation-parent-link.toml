@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.route.delegation-parent-link"
+statement = "The correlator assigns a Delegation route only when, after resolving both agents through the AgentDirectory, one is the other's parent by Agent.parent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Delegation edges are expected orchestration traffic and are not routed
+through channel policy. Assigning Delegation without a parent link would hide
+real cross-agent communication from policy. Resolving through the directory
+first keeps a merged parent recognized.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlator::tests::delegation_requires_parent_link"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

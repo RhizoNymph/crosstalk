@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.http.routes-unambiguous"
+statement = "Every route's path template is well-formed, no method and path match two routes (every action is the one POST /actions endpoint, told apart by its ActionRequest's type), templates that share a prefix name a parameter at the same position alike, and resolve maps a path with an empty segment or a trailing slash to no route."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+If two templates could match one path, which method answers would depend
+on the router's tie-breaking, and a client could reach a route it did not
+mean to (a literal like /channels/names under /channels/{id} is the usual
+trap). Reads too large for a URL therefore live under /query/..., never
+beside an id template. Path routers such as axum's refuse two parameter
+names at one position, so the table never has them.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::routes::path_templates_are_unique_and_unambiguous",
+    "crosstalk_spec::tests::wire::http::routes::parameters_at_one_position_share_a_name",
+    "crosstalk_spec::tests::wire::http::routes::every_route_places_its_arguments_consistently",
+    "crosstalk_spec::tests::wire::http::routes::paths_resolve_to_their_route_or_none",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

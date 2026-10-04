@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.route.tool-result-without-access"
+statement = "A tool-result content match whose call has yielded no access when its evidence window closes opens one Direct(ToolResult) transmission, unless a Delegation route applies."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The match can be processed before the access that would make it
+channel-routed, so the correlator holds it until the window closes. If no
+access arrives (the tool touches no extracted resource), the content
+evidence must still become a transmission rather than be dropped.
+"""
+
+[evidence]
+dst = "crosstalk_flow::dst::tool_result_without_access_opens_direct"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

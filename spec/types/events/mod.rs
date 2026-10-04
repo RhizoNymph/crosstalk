@@ -20,17 +20,37 @@ pub mod detect;
 pub mod ingest;
 pub mod insight;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::EventId;
 use crate::support::Timestamp;
 
-#[derive(Debug, Clone, PartialEq)]
+/// A bus payload between nodes, never a request: the node stamps its id and
+/// time. On the wire, `{"id": .., "at": .., "event": {"type": "detect",
+/// "data": {"type": "content_matched", "data": {..}}}}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Envelope {
     pub id: EventId,
     pub at: Timestamp,
     pub event: BusEvent,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Every event on the bus, by producing layer. On the wire, two levels of
+/// adjacent tagging: the layer (`ingest`, `detect`, `insight`, `changed`),
+/// then the event, whose tag is its [`Subject`]'s string for every layer
+/// event (`{"type": "detect", "data": {"type": "content_matched", ..}}`);
+/// a change notification's inner tag is the entity kind (`{"type":
+/// "changed", "data": {"type": "channel", "data": ".."}}`), and its subject
+/// is `changed`. A bus payload, never a request: its events carry the
+/// operators and times the producing node stamped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum BusEvent {
     Ingest(ingest::IngestEvent),
     Detect(detect::DetectEvent),
@@ -38,8 +58,11 @@ pub enum BusEvent {
     Changed(changed::Changed),
 }
 
-/// What a consumer subscribes to. One subject per event variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// What a consumer subscribes to. One subject per event variant. On the
+/// wire, a string: the variant in snake_case (`"content_matched"`), the
+/// same text as the event's tag inside its layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Subject {
     ExchangeCaptured,
     ConversationDelta,

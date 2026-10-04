@@ -16,6 +16,7 @@ type = "crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection::
 unit = [
     "crosstalk_spec::tests::summary::a_selection_is_distinct_newest_first",
     "crosstalk_spec::tests::summary::a_selection_is_bounded",
+    "crosstalk_spec::tests::wire::surface_reads::transmissions::transmission_selections_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

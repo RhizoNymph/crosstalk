@@ -8,6 +8,8 @@
 //! refuses a row it stays refused, and its trailer is `Failed` whatever
 //! follows, so a malformed export can never be sealed as complete.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::ExportId;
 
 use super::digest::{ExportDigest, RowHasher, hash_row};
@@ -16,7 +18,13 @@ use super::request::ExportDatasetKind;
 use super::rows::{ExportRow, RowKey};
 
 /// Why the sealer refused a row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum RowRefused {
     /// A row of another dataset than the header's.
     OtherDataset {
