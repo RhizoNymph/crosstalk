@@ -264,7 +264,7 @@ pub async fn promote_page(
                                 <p class="mb-3 text-xs text-zinc-500">"… and " (covered_hidden) " older covered resources."</p>
                             }
                             if uncovered_count > 0 {
-                                <p class="mb-1 text-sm">(uncovered_count) " resources of these channels fall outside the pattern; they stay where they are stored and resolve to this channel, but no new resource outside the pattern will join:"</p>
+                                <p class="mb-1 text-sm">(uncovered_count) (if uncovered_count == 1 { " resource" } else { " resources" }) " of these channels fall outside the pattern; they stay where they are stored and resolve to this channel, but no new resource outside the pattern will join:"</p>
                                 <ul class="mb-3 space-y-1 text-sm">
                                     for locator in preview.uncovered.shown {
                                         <li class="flex items-center gap-2">

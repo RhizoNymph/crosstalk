@@ -258,7 +258,7 @@ async fn rules_page(
                                     <td class=(TD)>
                                         match row.detail.clone() {
                                             Detail::Topics { version, count, labels, remap_threshold } => {
-                                                <div>(count) " topics of version " (version) ", remapped at similarity ≥ " (format!("{remap_threshold:.2}"))</div>
+                                                <div>(count) (if count == 1 { " topic" } else { " topics" }) " of version " (version) ", remapped at similarity ≥ " (format!("{remap_threshold:.2}"))</div>
                                                 match labels {
                                                     Some(labels) => <div class="text-xs text-zinc-600 dark:text-zinc-400">(labels.join(", "))</div>,
                                                     None => content_hidden(),
