@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! act(caller, action) ─permission─┬─ missing ──────────────▶ record Forbidden, no effect
-//!                                 └─ held ─▶ apply ─┬─ Ok ──▶ record Applied / Unchanged
+//!                                 └─ held ─▶ apply ─┬─ Ok ──▶ record Succeeded (Applied, Unchanged, …)
 //!                                                   │         (same transaction as the effect)
 //!                                                   └─ Err ─▶ record Rejected, no effect
 //! ```
@@ -17,40 +17,37 @@
 //! config makes, is the channel's `PolicyHistory`.
 
 use crate::ids::{AuditId, OperatorId};
-use crate::interfaces::l8_surface::{ActionKind, Caller, OperatorAction, Permission, QueryError};
+use crate::interfaces::l8_surface::{
+    ActionError, ActionKind, ActionOutcome, Caller, ConflictKind, InputError, OperatorAction,
+    Permission,
+};
 use crate::paging::{AuditList, Page, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
-/// What an accepted action did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionEffect {
-    /// The action changed state (a decision published, a merge forwarded,
-    /// an alert moved, a dead letter replayed).
-    Applied,
-    /// Accepted, but the state already matched: acknowledging an
-    /// acknowledged alert, or the losing request of a race.
-    Unchanged,
-}
-
-/// Why a permitted action was refused or failed. It had no effect.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Rejection {
-    /// What the action names does not exist.
-    NotFound,
-    /// The request is invalid in the current state, e.g. acknowledging a
-    /// suppressed alert.
-    Invalid { reason: String },
-    /// A store or bus failure; the action's transaction rolled back.
-    Failed { reason: String },
-}
-
+/// What a call recorded in the log came to: the exact result `act`
+/// returned, split so the log can be filtered by kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditOutcome {
-    Applied,
-    Unchanged,
+    Succeeded(ActionOutcome),
+    /// A permitted action that was refused or failed. It had no effect.
     Rejected(Rejection),
     /// The caller lacked the action's required permission.
-    Forbidden,
+    Forbidden {
+        missing: Permission,
+    },
+}
+
+/// Why a permitted action was refused or failed: every `ActionError` except
+/// `Forbidden`, which is its own outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rejection {
+    NotFound,
+    Conflict(ConflictKind),
+    InvalidInput(InputError),
+    /// A store or bus failure; the action's transaction rolled back.
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,45 +59,34 @@ pub enum OutcomeKind {
 }
 
 impl AuditOutcome {
-    /// The outcome recorded for what `OperatorActions::act` returns.
-    ///
-    /// `act` never returns `InvalidCursor` or `StaleProjection` (they belong
-    /// to list and projection queries); should one reach the log it is
-    /// recorded as an invalid request, so [`AuditOutcome::result`] inverts
-    /// this only for the errors `act` can return.
-    pub fn of(result: &Result<ActionEffect, QueryError>) -> Self {
+    /// The outcome recorded for what `OperatorActions::act` returned.
+    pub fn of(result: &Result<ActionOutcome, ActionError>) -> Self {
         match result {
-            Ok(ActionEffect::Applied) => Self::Applied,
-            Ok(ActionEffect::Unchanged) => Self::Unchanged,
-            Err(QueryError::Forbidden) => Self::Forbidden,
-            Err(QueryError::NotFound) => Self::Rejected(Rejection::NotFound),
-            Err(QueryError::BadRequest { reason }) => Self::Rejected(Rejection::Invalid {
+            Ok(outcome) => Self::Succeeded(*outcome),
+            Err(ActionError::Forbidden { missing }) => Self::Forbidden { missing: *missing },
+            Err(ActionError::NotFound) => Self::Rejected(Rejection::NotFound),
+            Err(ActionError::Conflict(kind)) => Self::Rejected(Rejection::Conflict(kind.clone())),
+            Err(ActionError::InvalidInput(input)) => {
+                Self::Rejected(Rejection::InvalidInput(input.clone()))
+            }
+            Err(ActionError::Store { reason }) => Self::Rejected(Rejection::Failed {
                 reason: reason.clone(),
-            }),
-            Err(QueryError::Store { reason }) => Self::Rejected(Rejection::Failed {
-                reason: reason.clone(),
-            }),
-            Err(QueryError::InvalidCursor) => Self::Rejected(Rejection::Invalid {
-                reason: "an operator action takes no cursor".to_owned(),
-            }),
-            Err(QueryError::StaleProjection { .. }) => Self::Rejected(Rejection::Invalid {
-                reason: "an operator action reads no projection".to_owned(),
             }),
         }
     }
 
-    /// What `act` returned for a call recorded with this outcome. The
+    /// What `act` returned for a call recorded with this outcome. The exact
     /// inverse of [`AuditOutcome::of`].
-    pub fn result(&self) -> Result<ActionEffect, QueryError> {
+    pub fn result(&self) -> Result<ActionOutcome, ActionError> {
         match self {
-            Self::Applied => Ok(ActionEffect::Applied),
-            Self::Unchanged => Ok(ActionEffect::Unchanged),
-            Self::Forbidden => Err(QueryError::Forbidden),
-            Self::Rejected(Rejection::NotFound) => Err(QueryError::NotFound),
-            Self::Rejected(Rejection::Invalid { reason }) => Err(QueryError::BadRequest {
-                reason: reason.clone(),
-            }),
-            Self::Rejected(Rejection::Failed { reason }) => Err(QueryError::Store {
+            Self::Succeeded(outcome) => Ok(*outcome),
+            Self::Forbidden { missing } => Err(ActionError::Forbidden { missing: *missing }),
+            Self::Rejected(Rejection::NotFound) => Err(ActionError::NotFound),
+            Self::Rejected(Rejection::Conflict(kind)) => Err(ActionError::Conflict(kind.clone())),
+            Self::Rejected(Rejection::InvalidInput(input)) => {
+                Err(ActionError::InvalidInput(input.clone()))
+            }
+            Self::Rejected(Rejection::Failed { reason }) => Err(ActionError::Store {
                 reason: reason.clone(),
             }),
         }
@@ -108,10 +94,10 @@ impl AuditOutcome {
 
     pub fn kind(&self) -> OutcomeKind {
         match self {
-            Self::Applied => OutcomeKind::Applied,
-            Self::Unchanged => OutcomeKind::Unchanged,
+            Self::Succeeded(ActionOutcome::Unchanged) => OutcomeKind::Unchanged,
+            Self::Succeeded(_) => OutcomeKind::Applied,
             Self::Rejected(_) => OutcomeKind::Rejected,
-            Self::Forbidden => OutcomeKind::Forbidden,
+            Self::Forbidden { .. } => OutcomeKind::Forbidden,
         }
     }
 }
@@ -139,6 +125,9 @@ pub enum InvalidAuditRecord {
     /// Applied, unchanged or rejected, but the caller lacks the required
     /// permission, so the action could not have been attempted.
     AttemptedWithoutPermission { required: Permission },
+    /// `Forbidden`, but naming a permission other than the one the action
+    /// requires.
+    WrongMissingPermission { required: Permission },
 }
 
 impl AuditRecord {
@@ -154,10 +143,13 @@ impl AuditRecord {
         let required = action.required_permission();
         let permitted = caller.has(required);
         match (&outcome, permitted) {
-            (AuditOutcome::Forbidden, true) => {
+            (AuditOutcome::Forbidden { .. }, true) => {
                 Err(InvalidAuditRecord::ForbiddenButPermitted { required })
             }
-            (AuditOutcome::Forbidden, false) => Ok(()),
+            (AuditOutcome::Forbidden { missing }, false) if *missing != required => {
+                Err(InvalidAuditRecord::WrongMissingPermission { required })
+            }
+            (AuditOutcome::Forbidden { .. }, false) => Ok(()),
             (_, false) => Err(InvalidAuditRecord::AttemptedWithoutPermission { required }),
             (_, true) => Ok(()),
         }?;

@@ -254,6 +254,7 @@ fn global_updates_pass_any_filter() {
         channels: vec![channel(9)],
         route_kinds: vec![RouteKind::Direct],
         topics: vec![TopicId::from_ulid(9)],
+        ..TopologyFilter::default()
     };
     assert!(LiveScope::Global.admitted_by(&filter));
     assert!(!edge_scope().admitted_by(&filter));

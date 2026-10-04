@@ -50,6 +50,12 @@ macro_rules! content_id {
 entity_id! {
     /// An agent: whoever is behind a stream of exchanges.
     AgentId;
+    /// One recorded merge, so it can be reverted exactly.
+    MergeId;
+    /// A stored projection (layout of transmission embeddings).
+    ProjectionId;
+    /// A configured alert sink.
+    SinkId;
     /// A threaded conversation reconstructed from exchanges.
     ConversationId;
     /// One request/response round trip through the proxy.

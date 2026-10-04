@@ -210,3 +210,10 @@ impl NonBlank {
         &self.0
     }
 }
+
+/// The time before which every aggregate bucket is final. Late content
+/// matches and suspected-to-confirmed upgrades can still change buckets at or
+/// after it; nothing changes a bucket before it. Every aggregate response
+/// reports one, so a cited view can say what was settled when it was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Watermark(pub Timestamp);

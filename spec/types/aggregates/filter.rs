@@ -30,6 +30,7 @@
 //! [`TimeWindow::contains`](crate::support::TimeWindow::contains).
 
 use crate::aggregates::edge::RouteKind;
+use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId, TopicId};
 
@@ -49,6 +50,29 @@ pub struct TopologyFilter {
     /// version, is one of these. Outliers and unclassified transmissions never
     /// match a non-empty list.
     pub topics: Vec<TopicId>,
+    /// Which topic-model version `topics` and every reported topic refer
+    /// to. `Pinned` makes a view reproducible across re-fits; a pinned
+    /// version that is no longer retained is `VersionNotRetained`.
+    pub topic_version: TopicVersionSelector,
+    /// Whether transmissions an operator judged `FalseDetection` count.
+    pub false_detections: FalseDetections,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TopicVersionSelector {
+    /// The active version at query time; the response reports which.
+    #[default]
+    Current,
+    Pinned(TopicModelVersion),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FalseDetections {
+    /// Detector output as is.
+    #[default]
+    Include,
+    /// Leave out transmissions whose latest verdict is `FalseDetection`.
+    Exclude,
 }
 
 /// One confirmed transmission as every view's filter sees it.
@@ -62,6 +86,9 @@ pub struct FilterSubject<'a> {
     /// The topic under the response's topic-model version; `None` for an
     /// outlier or a transmission not classified under that version.
     pub topic: Option<TopicId>,
+    /// Whether the transmission's latest operator verdict is
+    /// `FalseDetection`.
+    pub false_detection: bool,
 }
 
 impl TopologyFilter {
@@ -87,6 +114,10 @@ impl TopologyFilter {
             || subject
                 .topic
                 .is_some_and(|topic| self.topics.contains(&topic));
-        agents && channels && route_kinds && topics
+        let verdicts = match self.false_detections {
+            FalseDetections::Include => true,
+            FalseDetections::Exclude => !subject.false_detection,
+        };
+        agents && channels && route_kinds && topics && verdicts
     }
 }

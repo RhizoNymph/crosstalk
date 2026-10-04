@@ -1,6 +1,6 @@
 use crate::aggregates::alert::{AlertRule, AlertRuleDef, RuleStatus, TopicWatch, WatchedTopics};
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
-use crate::aggregates::filter::FilterSubject;
+use crate::aggregates::filter::{FalseDetections, FilterSubject, TopicVersionSelector};
 use crate::derived::flow::channel::detection::DeclaredDetection;
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, Declaration, DeclaredHistory};
@@ -33,6 +33,7 @@ fn subject(from: u128, to: u128, route: &Route, topic: Option<TopicId>) -> Filte
         to: agent(to),
         route,
         topic,
+        false_detection: false,
     }
 }
 
@@ -128,6 +129,7 @@ fn non_empty_fields_combine_with_and() {
         channels: vec![channel(1)],
         route_kinds: vec![RouteKind::Channel],
         topics: vec![topic(5)],
+        ..TopologyFilter::default()
     };
     let on_listed = Route::Channel(channel(1));
     assert!(filter.admits(&subject(1, 2, &on_listed, Some(topic(5))), identity));
@@ -256,4 +258,28 @@ fn alert_rule_filter_matches_staleness_apart_from_status() {
     };
     assert!(evaluating.matches(&watched(TopicWatch::Current(last), RuleStatus::Enabled)));
     assert!(!evaluating.matches(&watched(stale, RuleStatus::Enabled)));
+}
+
+#[test]
+fn false_detections_are_kept_unless_excluded() {
+    let route = Route::Channel(channel(1));
+    let mut judged = subject(1, 2, &route, None);
+    judged.false_detection = true;
+    let unjudged = subject(1, 2, &route, None);
+    let include = TopologyFilter::default();
+    assert!(include.admits(&judged, identity));
+    let exclude = TopologyFilter {
+        false_detections: FalseDetections::Exclude,
+        ..TopologyFilter::default()
+    };
+    assert!(!exclude.admits(&judged, identity));
+    assert!(exclude.admits(&unjudged, identity));
+}
+
+#[test]
+fn default_filter_reads_the_current_topic_version() {
+    assert_eq!(
+        TopologyFilter::default().topic_version,
+        TopicVersionSelector::Current
+    );
 }
