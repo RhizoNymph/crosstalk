@@ -32,10 +32,17 @@ async fn second_channel(fixture: &Fixture, scene: &mut Scene) -> ChannelId {
         .build();
     let channel = scene.ids.channel();
     fixture
-        .channel(channel, &resource, scene.a2, minute(1))
+        .channel(
+            &mut scene.ids,
+            channel,
+            &resource,
+            scene.a2,
+            scene.a3,
+            minute(1),
+        )
         .await;
     let read = access(&resource, scene.a3, AccessKind::Read, minute(2));
-    fixture.record(&read, channel).await;
+    fixture.record(&read).await;
     channel
 }
 
@@ -104,7 +111,10 @@ async fn channel_rows_count_resources_and_routed_transmissions() {
         other => panic!("row: {other:?}"),
     };
     match row.value.standing() {
-        ChannelStanding::InForce(ChannelActivity::Seen { last, counts }) => {
+        ChannelStanding::InForce {
+            activity: ChannelActivity::Seen { last, counts },
+            ..
+        } => {
             assert_eq!(
                 counts,
                 ChannelCounts {

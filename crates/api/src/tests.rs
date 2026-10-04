@@ -12,14 +12,16 @@ use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::BucketWidth;
-use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
     AgentLifecycle, AgentOrigin, NewAgent,
 };
+use crosstalk_spec::interfaces::l5_flow::Discovery;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l7_topology::{AccessContribution, EdgeStore, NodeFacts};
 use crosstalk_spec::interfaces::l8_surface::export::{
     ExportFormat, ExportFormats, ExportLimits, GatewayVersion,
@@ -36,7 +38,7 @@ use crosstalk_spec::interfaces::l8_surface::{
 use crosstalk_spec::observed::agent::AgentLabel;
 use crosstalk_spec::support::{NonEmpty, Similarity, TimeWindow, Timestamp};
 use crosstalk_surface::SurfaceConfig;
-use crosstalk_testkit::build::{AccessBuilder, ResourceBuilder};
+use crosstalk_testkit::build::{ResourceBuilder, TransmissionBuilder};
 use crosstalk_testkit::ids::Ids;
 use crosstalk_testkit::time::T0;
 
@@ -112,49 +114,70 @@ async fn in_process_surface_reads_acts_and_announces() {
     };
 
     let mut ids = Ids::seeded(3);
-    let agent = ids.agent();
+    let (agent, reader) = (ids.agent(), ids.agent());
     let mut agents = backend.stores.agents.clone();
-    let created = agents
-        .create(NewAgent {
-            id: agent,
-            evidence: NonEmpty::new(crosstalk_memory::reconstruct::model::evidence(2)),
-            parent: None,
-            origin: AgentOrigin::Traffic { first_seen: T0 },
-            label: None,
-        })
-        .await;
-    assert!(created.is_ok(), "{created:?}");
+    for (id, evidence) in [(agent, 2), (reader, 3)] {
+        let created = agents
+            .create(NewAgent {
+                id,
+                evidence: NonEmpty::new(crosstalk_memory::reconstruct::model::evidence(evidence)),
+                parent: None,
+                origin: AgentOrigin::Traffic { first_seen: T0 },
+                label: None,
+            })
+            .await;
+        assert!(created.is_ok(), "{created:?}");
+    }
     let resource = ResourceBuilder::new(&mut ids)
         .url("https", "wiki.example", "/a", None)
         .first_seen(T0)
         .build();
-    let access = AccessBuilder::new(&mut ids)
-        .by(agent)
-        .on(resource.id)
-        .at(T0)
-        .write()
-        .build();
     let channel = ids.channel();
+    // A write by `agent` that `reader` read: the co-access opens a
+    // transmission, which discovers the channel (what the flow consumer
+    // does).
+    let parts = match TransmissionBuilder::new(&mut ids)
+        .between(agent, reader)
+        .channel(channel)
+        .accesses(|cross| cross.resource(resource.id))
+        .awaiting_content()
+        .build_parts()
+    {
+        Ok(parts) => parts,
+        Err(error) => panic!("transmission: {error:?}"),
+    };
     let mut registry = backend.stores.channels.clone();
-    assert!(
-        registry
-            .discover(channel, resource, access.id)
-            .await
-            .is_ok()
-    );
-    assert!(registry.record_access(access.clone()).await.is_ok());
-    // What the L7 consumer does on `AccessRecorded`.
+    assert_eq!(registry.add_resource(resource.clone()).await, Ok(None));
     let mut edges = backend.stores.edges.clone();
-    let counted = edges
-        .apply_access(&AccessContribution {
-            access: access.id,
-            agent,
-            channel,
-            op: AccessKind::Write,
-            at: access.at,
-        })
-        .await;
-    assert!(counted.is_ok(), "{counted:?}");
+    for access in [&parts.write, &parts.read] {
+        assert!(registry.record_access(access.clone()).await.is_ok());
+        // What the L7 consumer does on `AccessRecorded`.
+        let counted = edges
+            .apply_access(&AccessContribution {
+                access: access.id,
+                agent: access.agent,
+                resource: access.resource,
+                op: access.op.kind(),
+                at: access.at,
+            })
+            .await;
+        assert!(counted.is_ok(), "{counted:?}");
+    }
+    let transmission = &parts.transmission;
+    assert_eq!(
+        registry
+            .discover(
+                channel,
+                resource.id,
+                transmission.id,
+                transmission.opened_at
+            )
+            .await,
+        Ok(Discovery::Created(channel))
+    );
+    let mut transmissions = backend.stores.transmissions.clone();
+    assert!(transmissions.save(transmission.clone()).await.is_ok());
+    assert!(registry.record_transmission(transmission).await.is_ok());
 
     clock.set(Timestamp::from_micros(T0.as_micros() + MINUTE));
     let outcome = backend
@@ -237,5 +260,11 @@ async fn in_process_surface_reads_acts_and_announces() {
         _ => None,
     });
     assert_eq!(agent_label, Some(label));
+    // Its only transmission awaits content: drawn, marked unconfirmed.
+    let confirmation = bipartite.value.nodes().iter().find_map(|node| match node {
+        GraphNode::Channel(node) if node.id == channel => Some(node.confirmation),
+        _ => None,
+    });
+    assert_eq!(confirmation, Some(Confirmation::Unconfirmed));
     backend.shutdown().await;
 }
