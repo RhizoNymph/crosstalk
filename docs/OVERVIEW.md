@@ -808,4 +808,24 @@ Features Index:
       - crates/world/tests/support/mod.rs
     depends_on: [type_spec, memory, transport, workspace]
     doc: docs/features/world.md
+  search_alerts:
+    description: >
+      crosstalk-analysis (crates/analysis, L6, P6.2) on Postgres. PgSearchIndex
+      implements SearchIndex and SearchCorpus (full-text tsvector terms plus
+      pgvector embeddings, scores computed in SQL exactly as the reference,
+      the filter applied in Rust before the page is cut, keyed cursors), and
+      PgProjectionSource samples the same documents. PgAlertStore implements
+      AlertRuleStore, AlertTriage, AlertRuleMaintenance, AlertActions and
+      AlertReads in SERIALIZABLE transactions with an outbox published after
+      commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
+      is the alerts consumer group, built like the gateway pipeline's
+      stages. Model-tested against crosstalk-memory's harnesses.
+    entry_points:
+      - crates/analysis/src/search/mod.rs
+      - crates/analysis/src/alerts/mod.rs
+      - crates/analysis/src/alerts/eval/mod.rs
+      - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/pg/mod.rs
+    depends_on: [type_spec, store, memory, gateway]
+    doc: docs/features/search_alerts.md
 ```

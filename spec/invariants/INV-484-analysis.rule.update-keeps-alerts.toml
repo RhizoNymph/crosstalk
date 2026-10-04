@@ -12,7 +12,7 @@ alerts being worked.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::rule_update_keeps_alerts"
+unit = "crosstalk_analysis::alerts::tests::rules::rule_update_keeps_alerts"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

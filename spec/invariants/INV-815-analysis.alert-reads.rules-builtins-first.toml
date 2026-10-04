@@ -14,7 +14,7 @@ between the two groups.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::rules_list_builtins_first_then_user_rules_newest_first"
+unit = "crosstalk_analysis::alerts::tests::reads::rules_list_builtins_first_then_user_rules_newest_first"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

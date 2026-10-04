@@ -13,9 +13,9 @@ Refit-caused classifications are excluded by analysis.rule.content-rules-confirm
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::watched_topic_drafts_for_listed_topic_of_its_version", "crosstalk_analysis::tests::watched_topic_silent_for_other_version", "crosstalk_analysis::tests::watched_topic_silent_for_other_topic_and_outlier"]
-property = "crosstalk_analysis::tests::watched_topic_drafts_iff_version_and_topic_match"
+unit = ["crosstalk_analysis::alerts::eval::tests::watched_topic_drafts_for_listed_topic_of_its_version", "crosstalk_analysis::alerts::eval::tests::watched_topic_silent_for_other_version", "crosstalk_analysis::alerts::eval::tests::watched_topic_silent_for_other_topic_and_outlier"]
+property = "crosstalk_analysis::alerts::eval::tests::watched_topic_drafts_iff_version_and_topic_match"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

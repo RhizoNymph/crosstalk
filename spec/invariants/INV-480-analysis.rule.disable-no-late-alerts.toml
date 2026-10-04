@@ -14,7 +14,7 @@ user rules alike.
 
 [evidence]
 dst = "crosstalk_analysis::tests::dst_disable_no_late_alerts"
-integration = "crosstalk_analysis::tests::pg_disable_no_late_alerts"
+integration = "crosstalk_analysis::alerts::tests::rules::pg_disable_no_late_alerts"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }
