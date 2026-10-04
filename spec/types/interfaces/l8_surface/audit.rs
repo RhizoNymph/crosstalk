@@ -1,5 +1,6 @@
-//! The audit log: one entry per operator action call, and one per change
-//! config made.
+//! The audit log: one entry per operator action call, one per change
+//! config made, and one or two per export (its refusal, or its start and
+//! its end; see [`super::export::record`]).
 //!
 //! ```text
 //! act(caller, action) ─permission─┬─ missing ──────────────▶ Operator entry: Forbidden, no effect
@@ -29,9 +30,10 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::PolicyAuthor;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::ids::{
-    AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ConfigHash, MergeId, OperatorId,
-    TransmissionId,
+    AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ConfigHash, ExportId, MergeId, OperatorId,
+    ProjectionId, TransmissionId,
 };
+use crate::interfaces::l8_surface::export::ExportRecord;
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
 use crate::interfaces::l8_surface::{
     ActionError, ActionOutcome, Caller, ConflictKind, InputError, OperatorAction, Permission,
@@ -59,6 +61,10 @@ pub enum AuditSubject {
     Operator(OperatorId),
     /// A topic-model version an operator pinned or unpinned.
     TopicVersion(TopicModelVersion),
+    /// An export: its start and its end.
+    Export(ExportId),
+    /// A stored projection an export read.
+    Projection(ProjectionId),
 }
 
 /// What an operator call came to: the exact result `act` returned, split so
@@ -301,6 +307,9 @@ pub struct ConfigRecord {
 pub enum AuditBody {
     Operator(OperatorRecord),
     Config(ConfigRecord),
+    /// An export refused, started, ended or abandoned
+    /// ([`crate::interfaces::l8_surface::export::record`]).
+    Export(ExportRecord),
 }
 
 /// One entry of the audit log.
@@ -317,6 +326,7 @@ impl AuditEntry {
     pub fn by(&self) -> AuditAuthor {
         match &self.body {
             AuditBody::Operator(record) => AuditAuthor::Operator(record.caller().operator()),
+            AuditBody::Export(record) => AuditAuthor::Operator(record.caller().operator()),
             AuditBody::Config(_) => AuditAuthor::Config,
         }
     }
@@ -326,6 +336,7 @@ impl AuditEntry {
         match &self.body {
             AuditBody::Operator(record) => record.subjects(),
             AuditBody::Config(record) => record.change.subjects(),
+            AuditBody::Export(record) => record.subjects(),
         }
     }
 }

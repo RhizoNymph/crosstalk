@@ -22,6 +22,10 @@
 //!   `InvalidCursor`.
 //! - A channel superseded by a promotion is `Conflict(ChannelSuperseded)`,
 //!   naming the channel that superseded it.
+//! - An export whose plan holds more rows than allowed is
+//!   `Conflict(ExportTooLarge)`, from `ExportLimits::check` (not a store
+//!   error). A failure after an export has started is not a `QueryError`:
+//!   the stream's trailer records it (`ExportFailure`).
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
@@ -32,6 +36,7 @@ use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
+use crate::interfaces::l8_surface::export::ExportPlanError;
 
 impl From<VersionUnavailable> for QueryError {
     fn from(error: VersionUnavailable) -> Self {
@@ -216,6 +221,23 @@ impl From<AuditError> for QueryError {
                 reason: format!("audit id reused: {id:?}"),
             },
             AuditError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::export` (`ExportSource::plan`). Nothing was sent, so each
+/// cause maps as it does for the view or read it repeats: a version as for
+/// any linked view, a projection as for `projection`.
+impl From<ExportPlanError> for QueryError {
+    fn from(error: ExportPlanError) -> Self {
+        match error {
+            ExportPlanError::Store { reason } => Self::Store { reason },
+            ExportPlanError::Version(version) => version.into(),
+            ExportPlanError::TopicsNotInVersion { version, topics } => {
+                Self::Conflict(ConflictKind::TopicsNotInVersion { version, topics })
+            }
+            ExportPlanError::UnalignedWindow => Self::InvalidInput(InputError::UnalignedWindow),
+            ExportPlanError::Projection(projection) => projection.into(),
         }
     }
 }

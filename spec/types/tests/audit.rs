@@ -557,7 +557,8 @@ fn every_conflict() -> Vec<ConflictKind> {
             | ConflictKind::EmbeddingModelChanged
             | ConflictKind::ProjectionNotReady { .. }
             | ConflictKind::ProjectionFailed { .. }
-            | ConflictKind::ProjectionQueueFull => kind,
+            | ConflictKind::ProjectionQueueFull
+            | ConflictKind::ExportTooLarge { .. } => kind,
         }
     }
     let version = TopicModelVersion(2);
@@ -610,6 +611,10 @@ fn every_conflict() -> Vec<ConflictKind> {
             failure: FitFailure::NonFiniteLayout,
         },
         ConflictKind::ProjectionQueueFull,
+        ConflictKind::ExportTooLarge {
+            rows: 11,
+            limit: 10,
+        },
     ]
     .into_iter()
     .map(declared)

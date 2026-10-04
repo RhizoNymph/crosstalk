@@ -15,7 +15,7 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, MergeId, ProjectionId, SinkId), BLAKE3 content ids (incl. ConfigHash)
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList)
 ├── observed/              facts from the wire
@@ -76,14 +76,23 @@ spec/types/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi, OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
+│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi (incl. export), OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
 │   └── l8_surface/
 │       ├── actions.rs     OperatorAction (kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
 │       ├── errors.rs      QueryError, ActionError, ConflictKind, InputError
 │       ├── query_errors.rs the From impls: each store error to one QueryError or ActionError
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
-│       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
+│       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
+│       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
+│       │   ├── mod.rs     module docs and re-exports
+│       │   ├── request.rs ExportRequest (checked; required_permission), ExportDataset, ExportScope, ExportFormat, ExportLimits
+│       │   ├── rows.rs    ExportRow and the row of each dataset, RowKey (row order), projection_rows, verdict_rows
+│       │   ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer, ExportEnd, ExportFailure
+│       │   ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)
+│       │   ├── seal.rs    ExportSealer (row checks, the only trailer builder), verify_export, Incomplete
+│       │   ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
+│       │   └── record.rs  ExportRecord (checked), ExportEvent: exports in the audit log
 │       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
 └── tests/                 tests for the invariants checked at runtime, one module per subject
 ```

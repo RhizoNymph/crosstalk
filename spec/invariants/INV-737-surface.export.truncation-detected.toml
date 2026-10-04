@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.export.truncation-detected"
+statement = "verify_export accepts received rows exactly when a trailer is present for the header's export and is Complete, every row passes the sealer's checks, the header's planned count, the trailer's count and the number of rows received are equal, and the rows hash to the trailer's digest."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the reader's side of the manifest. A stream cut off before its
+trailer, a failed export, a dropped, extra, altered or reordered row, or a
+trailer from another export each fail a different check, so no partial or
+tampered copy verifies as complete.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export_stream::verify_accepts_exactly_the_complete_export",
+    "crosstalk_spec::tests::export_stream::a_truncated_export_never_verifies",
+    "crosstalk_spec::tests::export_stream::a_failed_export_never_verifies",
+    "crosstalk_spec::tests::export_stream::verify_rejects_altered_extra_and_misplaced_rows",
+    "crosstalk_spec::tests::export_stream::verify_rejects_another_exports_trailer",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
