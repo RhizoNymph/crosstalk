@@ -165,8 +165,10 @@ impl Ops {
                 encoded(status, &readiness)
             }
             "/metrics" => {
-                let mut response =
-                    Response::new(Full::new(Bytes::from(metrics::render(&self.health()))));
+                let mut response = Response::new(Full::new(Bytes::from(metrics::render(
+                    &self.health(),
+                    &self.pipeline.normalize_failures(),
+                ))));
                 response.headers_mut().insert(
                     CONTENT_TYPE,
                     HeaderValue::from_static(metrics::CONTENT_TYPE),

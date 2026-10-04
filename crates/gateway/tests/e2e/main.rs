@@ -12,7 +12,7 @@ use crosstalk_gateway::log;
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::observed::exchange::{ExchangeFailure, ExchangeOutcome};
-use crosstalk_spec::observed::message::encoding;
+use crosstalk_spec::observed::message::{Role, encoding};
 use crosstalk_testkit::client::{BodyEnd, HarnessClient, Next};
 use crosstalk_testkit::upstream::{FakeUpstream, Fault, Pacing, Reply, Script};
 use crosstalk_transport::blob::FsBlobStore;
@@ -148,6 +148,55 @@ async fn generation_cases_pass_through_unchanged_and_are_captured_once() {
         logged, published,
         "the log holds exactly the published envelopes"
     );
+}
+
+/// Claude Code's system turn (`role: "system"` inside `messages`, besides
+/// the top-level `system`): the client gets the reply unchanged and the
+/// exchange is published, the turn a System message at its own position,
+/// never counted `normalize_failed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_turn_exchange_is_published() {
+    let upstream = FakeUpstream::start(Script::new()).await.expect("upstream");
+    let mut gateway = start(&upstream.base_url(), Options::default()).await;
+    let case = case("system_turn_streaming");
+    upstream
+        .reply_next(Reply::from_case(&case))
+        .await
+        .expect("scripted");
+    let response = gateway
+        .client()
+        .send(&case.request)
+        .await
+        .expect("the gateway answers");
+    assert_eq!(response.differences_from(&case.response), Vec::new());
+
+    let envelope = gateway
+        .next_captured(WAIT)
+        .await
+        .expect("the exchange is published");
+    let captured = exchange(&envelope);
+    let mut roles = Vec::new();
+    for hash in &captured.request {
+        let bytes = gateway
+            .running
+            .blobs()
+            .get(*hash)
+            .await
+            .expect("the blob store reads")
+            .expect("the body is stored");
+        roles.push(encoding::decode(&bytes).expect("a canonical body").role());
+    }
+    assert_eq!(
+        roles,
+        [Role::System, Role::User, Role::System],
+        "the system prompt, the user turn, then the system turn in place"
+    );
+    gateway.settle(1).await;
+    let health = gateway.running.health();
+    assert_eq!(health.capture.captured, 1);
+    assert_eq!(health.pipeline.published, 1);
+    assert_eq!(health.pipeline.normalize_failed, 0);
+    gateway.running.shutdown().await;
 }
 
 /// `canonical.capture.blobs-before-event` (integration): a consumer on the
