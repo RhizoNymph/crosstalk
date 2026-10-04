@@ -1,0 +1,19 @@
+[package]
+name = "crosstalk-gateway"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The crosstalk gateway: configuration, wiring and process roles behind the crosstalk binary."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+
+[[bin]]
+name = "crosstalk"
+path = "src/main.rs"
+
+[dev-dependencies]
+serde_json.workspace = true

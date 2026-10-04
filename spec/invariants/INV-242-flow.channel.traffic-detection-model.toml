@@ -12,7 +12,7 @@ show a new cross access before it is a candidate again.
 """
 
 [evidence]
-property = "crosstalk::flow::channel::tests::traffic_detection_transitions"
+property = "crosstalk_flow::channel::tests::traffic_detection_transitions"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

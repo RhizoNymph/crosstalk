@@ -110,6 +110,29 @@ list of strings: a Rust path for `type`, `unit`, `property`, `fuzz`, `dst`,
 name for `lint`. Paths name
 where the evidence lives, or will live once the implementation exists.
 
+#### Evidence paths
+
+A path starts with the library name of the crate that holds the evidence:
+
+- `crosstalk_spec::...` for evidence in the spec crate: a type or checked
+  constructor (`crosstalk_spec::derived::...`), or a test under
+  `spec/types/tests/` (`crosstalk_spec::tests::<module>::<fn>`);
+- `crosstalk_<crate>::...` for evidence in an implementation crate, where
+  `<crate>` is a directory under `crates/` (package `crosstalk-<crate>`,
+  library `crosstalk_<crate>`). For the layer prefixes above that is the
+  layer's own crate: `crosstalk_ingress`, `crosstalk_canonical`,
+  `crosstalk_transport`, `crosstalk_reconstruct`, `crosstalk_provenance`,
+  `crosstalk_flow`, `crosstalk_analysis`, `crosstalk_topology` and
+  `crosstalk_surface`, for example `crosstalk_surface::tests::foo`.
+
+The old single-crate form `crosstalk::<layer>::...` is not used.
+
+`scripts/inv_check.py` checks every non-`lint` path against this
+convention (the crate must exist under `crates/`), and checks that every
+`crosstalk_spec::tests::<module>::<fn>` path whose review is
+`agent = "true"` names a `fn <fn>` in that module's file
+(`spec/types/tests/<module>.rs` or `<module>/mod.rs`).
+
 ### `[evidence-review]`
 
 One key per entry in `requires`, and no others. Each value is
@@ -120,3 +143,16 @@ One key per entry in `requires`, and no others. Each value is
 - `human = "true"`: a person has done the same.
 
 Evidence that does not exist yet is `{ agent = "false", human = "false" }`.
+
+## Validation
+
+```sh
+python3 scripts/inv_check.py spec/invariants                  # what scripts/check.sh runs
+python3 scripts/inv_check.py spec/invariants --allow-pending  # also accept INV-X-<id>.toml
+python3 scripts/inv_check.py spec/invariants --layer flow     # one layer's prefix only
+```
+
+It checks every file against this page (names, fields, kinds, evidence keys
+and reviews, unique ids and numbers) and the evidence path rules above. Its
+last line is `<files> files, <errors> errors`, and it exits non-zero on any
+error.

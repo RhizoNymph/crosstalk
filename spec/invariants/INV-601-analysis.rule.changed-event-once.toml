@@ -13,7 +13,7 @@ revision and end with the stored rule.
 
 [evidence]
 unit = "crosstalk_spec::tests::rules::rule_revisions_count_up_from_created"
-dst = "crosstalk::analysis::tests::dst_rule_changed_once_per_change"
+dst = "crosstalk_analysis::tests::dst_rule_changed_once_per_change"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

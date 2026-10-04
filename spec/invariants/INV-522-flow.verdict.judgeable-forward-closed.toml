@@ -15,7 +15,7 @@ none.
 
 [evidence]
 unit = "crosstalk_spec::tests::verdicts::judgeability_survives_every_forward_transition"
-property = "crosstalk::flow::tests::prop_judgeable_states_stay_judgeable"
+property = "crosstalk_flow::tests::prop_judgeable_states_stay_judgeable"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

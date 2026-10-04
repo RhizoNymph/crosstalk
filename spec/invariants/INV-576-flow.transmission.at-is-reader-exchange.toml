@@ -13,7 +13,7 @@ whose tool result made the read, so at is the read's time.
 """
 
 [evidence]
-unit = "crosstalk::flow::correlator::tests::confirmed_at_is_reader_exchange_start"
+unit = "crosstalk_flow::correlator::tests::confirmed_at_is_reader_exchange_start"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

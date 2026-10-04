@@ -15,7 +15,7 @@ contains.
 """
 
 [evidence]
-property = "crosstalk::canonical::tests::continuation_carried_through"
+property = "crosstalk_canonical::tests::continuation_carried_through"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

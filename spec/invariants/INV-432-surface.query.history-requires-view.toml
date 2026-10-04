@@ -12,8 +12,8 @@ failure.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::history_endpoints_without_view_forbidden"
-integration = "crosstalk::surface::integration::http_history_routes_enforce_view"
+unit = "crosstalk_surface::tests::history_endpoints_without_view_forbidden"
+integration = "crosstalk_surface::integration::http_history_routes_enforce_view"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

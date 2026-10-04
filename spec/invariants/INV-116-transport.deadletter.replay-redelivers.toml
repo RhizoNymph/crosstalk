@@ -14,8 +14,8 @@ envelope durably before it returns Ok.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::replay_redelivers_to_one_group"
-integration = "crosstalk::transport::integration::jetstream_replay_redelivers_to_one_group"
+dst = "crosstalk_transport::dst::replay_redelivers_to_one_group"
+integration = "crosstalk_transport::integration::jetstream_replay_redelivers_to_one_group"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

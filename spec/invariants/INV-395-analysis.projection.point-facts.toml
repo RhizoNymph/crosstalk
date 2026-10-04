@@ -15,8 +15,8 @@ frame's agent tables through the agent list.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::sampled_point_resolves_merged_agents"
-property = "crosstalk::analysis::tests::prop_projected_points_match_transmissions_at_sample_time"
+unit = "crosstalk_analysis::tests::sampled_point_resolves_merged_agents"
+property = "crosstalk_analysis::tests::prop_projected_points_match_transmissions_at_sample_time"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

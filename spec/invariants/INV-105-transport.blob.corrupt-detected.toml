@@ -12,8 +12,8 @@ read.
 """
 
 [evidence]
-property = "crosstalk::transport::tests::get_detects_corrupted_bytes"
-integration = "crosstalk::transport::integration::pg_blob_store_detects_corrupted_row"
+property = "crosstalk_transport::tests::get_detects_corrupted_bytes"
+integration = "crosstalk_transport::integration::pg_blob_store_detects_corrupted_row"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

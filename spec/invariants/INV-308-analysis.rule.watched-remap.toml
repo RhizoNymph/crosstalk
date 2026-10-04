@@ -18,8 +18,8 @@ then.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::watched_rule_remaps_to_most_similar_centroid", "crosstalk::analysis::tests::watched_rule_keeps_old_version_until_version_ready"]
-property = "crosstalk::analysis::tests::remapped_topics_are_argmax_centroids_of_new_version"
+unit = ["crosstalk_analysis::tests::watched_rule_remaps_to_most_similar_centroid", "crosstalk_analysis::tests::watched_rule_keeps_old_version_until_version_ready"]
+property = "crosstalk_analysis::tests::remapped_topics_are_argmax_centroids_of_new_version"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

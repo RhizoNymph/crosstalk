@@ -11,7 +11,7 @@ consumer.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::hung_sink_does_not_delay_other_sinks"
+dst = "crosstalk_surface::dst::hung_sink_does_not_delay_other_sinks"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -16,8 +16,8 @@ reasoning exist for this property.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::recorded_echoes_hash_like_their_responses"
-property = "crosstalk::canonical::tests::response_and_echo_hash_equal"
+unit = "crosstalk_canonical::tests::recorded_echoes_hash_like_their_responses"
+property = "crosstalk_canonical::tests::response_and_echo_hash_equal"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

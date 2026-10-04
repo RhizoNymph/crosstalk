@@ -12,7 +12,7 @@ Changing the hash is a migration, and the golden vectors make it explicit.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::fingerprints_match_golden_vectors"
+unit = "crosstalk_provenance::tests::fingerprints_match_golden_vectors"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

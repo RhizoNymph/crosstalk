@@ -11,7 +11,7 @@ Framers and taps are side tees: they watch the bytes, they never gate them.
 """
 
 [evidence]
-dst = ["crosstalk::ingress::tests::sim::chunks_relayed_before_next_upstream_read", "crosstalk::ingress::tests::sim::websocket_frames_relayed_before_next_read"]
+dst = ["crosstalk_ingress::tests::sim::chunks_relayed_before_next_upstream_read", "crosstalk_ingress::tests::sim::websocket_frames_relayed_before_next_read"]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

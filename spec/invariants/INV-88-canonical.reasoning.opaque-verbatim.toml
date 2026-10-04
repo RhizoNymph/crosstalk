@@ -12,8 +12,8 @@ The payload is opaque, so no transformation of it can be justified.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::redacted_thinking_kept_verbatim"
-property = "crosstalk::canonical::tests::opaque_reasoning_bytes_preserved"
+unit = "crosstalk_canonical::tests::redacted_thinking_kept_verbatim"
+property = "crosstalk_canonical::tests::opaque_reasoning_bytes_preserved"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

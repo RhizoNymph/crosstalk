@@ -13,7 +13,7 @@ its upstream's.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::adapter::dialect_follows_configured_upstream"
+unit = "crosstalk_ingress::tests::adapter::dialect_follows_configured_upstream"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

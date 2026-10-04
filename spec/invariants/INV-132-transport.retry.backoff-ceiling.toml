@@ -11,7 +11,7 @@ delivery also needs a connected consumer of the group.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::redelivery_available_within_max_backoff"
+dst = "crosstalk_transport::dst::redelivery_available_within_max_backoff"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

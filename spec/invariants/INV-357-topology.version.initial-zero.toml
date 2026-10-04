@@ -14,7 +14,7 @@ no buckets to read until the first fit completed.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::fresh_store_graph_reports_version_zero"
+unit = "crosstalk_topology::tests::fresh_store_graph_reports_version_zero"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

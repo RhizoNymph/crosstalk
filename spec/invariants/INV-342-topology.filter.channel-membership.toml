@@ -17,8 +17,8 @@ edge is kept under a superseded channel's id
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::channel_filter_excludes_non_channel_routes"
-property = "crosstalk::topology::props::channel_filter_keeps_only_listed_channels"
+unit = "crosstalk_topology::tests::channel_filter_excludes_non_channel_routes"
+property = "crosstalk_topology::props::channel_filter_keeps_only_listed_channels"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -14,7 +14,7 @@ paraphrased text can legitimately be longer than the origin span.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::exact_matched_bytes_within_origin_span"
+property = "crosstalk_provenance::props::exact_matched_bytes_within_origin_span"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

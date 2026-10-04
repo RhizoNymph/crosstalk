@@ -12,8 +12,8 @@ and the current policy in one transaction.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::stored_policy_is_history_current"
-integration = "crosstalk::flow::integration::policy_and_history_written_atomically"
+unit = "crosstalk_flow::tests::stored_policy_is_history_current"
+integration = "crosstalk_flow::integration::policy_and_history_written_atomically"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

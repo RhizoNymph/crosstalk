@@ -12,7 +12,7 @@ twice.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::fork_shared_prefix_is_longest_common_prefix"
+property = "crosstalk_reconstruct::tests::fork_shared_prefix_is_longest_common_prefix"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

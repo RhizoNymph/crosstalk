@@ -11,7 +11,7 @@ topology to count the same transmission twice in one slot.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::classified_published_once_per_version_across_redelivery_and_refit"
+dst = "crosstalk_analysis::tests::classified_published_once_per_version_across_redelivery_and_refit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

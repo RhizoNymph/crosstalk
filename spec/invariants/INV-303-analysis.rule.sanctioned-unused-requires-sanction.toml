@@ -12,7 +12,7 @@ unsanctioned declared channel going quiet is not a fault.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::sanctioned_unused_drafts_for_sanctioned_channel", "crosstalk::analysis::tests::sanctioned_unused_silent_for_unreviewed_channel", "crosstalk::analysis::tests::sanctioned_unused_silent_for_unsanctioned_channel"]
+unit = ["crosstalk_analysis::tests::sanctioned_unused_drafts_for_sanctioned_channel", "crosstalk_analysis::tests::sanctioned_unused_silent_for_unreviewed_channel", "crosstalk_analysis::tests::sanctioned_unused_silent_for_unsanctioned_channel"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

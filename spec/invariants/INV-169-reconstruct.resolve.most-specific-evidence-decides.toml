@@ -13,7 +13,7 @@ be attributed to whichever agent saw the key first.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::less_specific_evidence_never_changes_resolved_agents"
+property = "crosstalk_reconstruct::tests::less_specific_evidence_never_changes_resolved_agents"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

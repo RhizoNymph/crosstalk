@@ -12,8 +12,8 @@ verdict appended mid-query from being counted under two verdicts.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_detection_quality_matches_tally"
-integration = "crosstalk::flow::tests::pg_detection_quality_matches_tally"
+property = "crosstalk_surface::tests::prop_detection_quality_matches_tally"
+integration = "crosstalk_flow::tests::pg_detection_quality_matches_tally"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

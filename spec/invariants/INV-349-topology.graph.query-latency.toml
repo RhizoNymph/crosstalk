@@ -14,7 +14,7 @@ be revisited with real traffic.
 """
 
 [evidence]
-bench = "crosstalk::topology::bench::graph_24h_window_10m_transmissions"
+bench = "crosstalk_topology::bench::graph_24h_window_10m_transmissions"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

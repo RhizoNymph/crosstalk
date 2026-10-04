@@ -11,7 +11,7 @@ policy, or invent traffic on a channel nobody used.
 """
 
 [evidence]
-property = "crosstalk::flow::correlator::tests::channel_route_requires_access"
+property = "crosstalk_flow::correlator::tests::channel_route_requires_access"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

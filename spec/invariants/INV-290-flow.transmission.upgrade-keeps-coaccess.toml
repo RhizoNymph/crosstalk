@@ -11,7 +11,7 @@ confirmed transmission without the accesses that explain how the text moved.
 """
 
 [evidence]
-unit = "crosstalk::flow::correlator::tests::upgrade_keeps_coaccess"
+unit = "crosstalk_flow::correlator::tests::upgrade_keeps_coaccess"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

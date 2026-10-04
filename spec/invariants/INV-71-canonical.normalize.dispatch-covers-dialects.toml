@@ -14,7 +14,7 @@ Chat and Responses, and the reference dialect on every protocol.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::every_protocol_dialect_pair_is_handled"
+unit = "crosstalk_canonical::tests::every_protocol_dialect_pair_is_handled"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

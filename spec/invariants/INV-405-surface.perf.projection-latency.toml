@@ -12,7 +12,7 @@ figures are a proposed initial threshold.
 """
 
 [evidence]
-bench = "crosstalk::surface::bench::projection_frame_100k_p99"
+bench = "crosstalk_surface::bench::projection_frame_100k_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

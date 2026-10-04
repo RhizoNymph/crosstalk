@@ -12,7 +12,7 @@ show.
 """
 
 [evidence]
-integration = "crosstalk::topology::integration::timescale_concurrent_applies_same_bucket"
+integration = "crosstalk_topology::integration::timescale_concurrent_applies_same_bucket"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

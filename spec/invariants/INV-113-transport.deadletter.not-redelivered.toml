@@ -10,8 +10,8 @@ own deliveries of the same envelope.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::dead_lettered_envelope_not_redelivered"
-integration = "crosstalk::transport::integration::jetstream_dead_lettered_envelope_not_redelivered"
+dst = "crosstalk_transport::dst::dead_lettered_envelope_not_redelivered"
+integration = "crosstalk_transport::integration::jetstream_dead_lettered_envelope_not_redelivered"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

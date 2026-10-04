@@ -10,7 +10,7 @@ change and only once the change can be read.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::alert_changes_announced_after_commit"
+dst = "crosstalk_analysis::dst::alert_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

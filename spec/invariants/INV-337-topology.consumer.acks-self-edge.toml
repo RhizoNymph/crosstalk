@@ -13,7 +13,7 @@ transient and are nacked for retry.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::self_edge_delivery_is_acked_once_and_not_redelivered"
+dst = "crosstalk_topology::dst::self_edge_delivery_is_acked_once_and_not_redelivered"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

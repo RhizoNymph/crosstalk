@@ -14,7 +14,7 @@ generation endpoint that falls through is a silent coverage gap.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::adapter::endpoint_table_classification"
+unit = "crosstalk_ingress::tests::adapter::endpoint_table_classification"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

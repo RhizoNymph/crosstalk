@@ -16,7 +16,7 @@ reconstruct.conversation.compaction-history.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::conversation_history_is_concatenation_of_deltas"
+property = "crosstalk_reconstruct::tests::conversation_history_is_concatenation_of_deltas"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

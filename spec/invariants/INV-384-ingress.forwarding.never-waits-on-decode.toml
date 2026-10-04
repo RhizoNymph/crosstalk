@@ -15,7 +15,7 @@ request or its response.
 """
 
 [evidence]
-dst = ["crosstalk::ingress::tests::sim::forwarding_proceeds_while_decode_stalled", "crosstalk::ingress::tests::sim::response_relayed_before_decode_finishes"]
+dst = ["crosstalk_ingress::tests::sim::forwarding_proceeds_while_decode_stalled", "crosstalk_ingress::tests::sim::response_relayed_before_decode_finishes"]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

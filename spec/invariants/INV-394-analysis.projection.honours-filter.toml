@@ -12,7 +12,7 @@ is read; the stored projection keeps that result.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::prop_projection_sample_admitted_by_filter"
+property = "crosstalk_analysis::tests::prop_projection_sample_admitted_by_filter"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

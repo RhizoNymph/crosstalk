@@ -12,7 +12,7 @@ values must not.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::fingerprints_ignore_case_and_whitespace"
+property = "crosstalk_provenance::props::fingerprints_ignore_case_and_whitespace"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

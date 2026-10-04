@@ -11,7 +11,7 @@ or a busy channel flaps between Active and Dormant under lag.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::late_confirmation_prevents_dormant"
+dst = "crosstalk_flow::dst::late_confirmation_prevents_dormant"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -13,9 +13,9 @@ stage; counting accesses from their own aggregate shows it.
 [evidence]
 unit = [
     "crosstalk_spec::tests::graph::writes_nobody_read_are_drawn",
-    "crosstalk::topology::tests::channel_topology_counts_unread_writes",
+    "crosstalk_topology::tests::channel_topology_counts_unread_writes",
 ]
-property = "crosstalk::topology::props::channel_topology_accesses_match_buckets"
+property = "crosstalk_topology::props::channel_topology_accesses_match_buckets"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

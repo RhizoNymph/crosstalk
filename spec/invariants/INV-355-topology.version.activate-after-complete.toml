@@ -36,7 +36,7 @@ queries keep the previous version.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::activation_waits_for_ready_count_of_processed_classifications"
+dst = "crosstalk_topology::dst::activation_waits_for_ready_count_of_processed_classifications"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

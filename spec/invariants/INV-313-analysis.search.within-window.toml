@@ -12,8 +12,8 @@ start inclusive and end exclusive, so adjacent windows never share a hit.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::search_window_boundaries_are_half_open"
-integration = "crosstalk::analysis::tests::pg_hybrid_search_respects_window"
+unit = "crosstalk_analysis::tests::search_window_boundaries_are_half_open"
+integration = "crosstalk_analysis::tests::pg_hybrid_search_respects_window"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

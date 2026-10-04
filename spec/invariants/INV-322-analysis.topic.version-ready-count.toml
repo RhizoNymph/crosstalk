@@ -11,7 +11,7 @@ every transmission has a topic in the new version.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::version_ready_count_matches_published_classifications"
+dst = "crosstalk_analysis::tests::version_ready_count_matches_published_classifications"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

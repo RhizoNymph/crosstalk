@@ -13,7 +13,7 @@ rather than reporting a server fault.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_topology_matches_in_memory_edge_store"
+property = "crosstalk_surface::tests::prop_topology_matches_in_memory_edge_store"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

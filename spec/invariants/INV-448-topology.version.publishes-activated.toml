@@ -13,7 +13,7 @@ to refetch again; not publishing would leave the version Ready forever.
 """
 
 [evidence]
-dst = ["crosstalk::topology::dst::activated_published_once_after_switch", "crosstalk::topology::dst::version_activated_published_after_switch"]
+dst = ["crosstalk_topology::dst::activated_published_once_after_switch", "crosstalk_topology::dst::version_activated_published_after_switch"]
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

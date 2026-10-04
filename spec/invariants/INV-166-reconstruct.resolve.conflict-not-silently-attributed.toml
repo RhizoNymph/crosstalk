@@ -14,8 +14,8 @@ Conflict for operator review.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::conflict_without_merge_is_left_for_review",
-  "crosstalk::reconstruct::tests::conflict_attributed_only_with_merge",
+  "crosstalk_reconstruct::tests::conflict_without_merge_is_left_for_review",
+  "crosstalk_reconstruct::tests::conflict_attributed_only_with_merge",
 ]
 
 [evidence-review]

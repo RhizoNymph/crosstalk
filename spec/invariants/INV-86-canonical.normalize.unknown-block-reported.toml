@@ -13,7 +13,7 @@ unreported block would stay opaque to provenance and flow detection forever.
 """
 
 [evidence]
-property = "crosstalk::canonical::tests::every_unknown_part_is_warned"
+property = "crosstalk_canonical::tests::every_unknown_part_is_warned"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

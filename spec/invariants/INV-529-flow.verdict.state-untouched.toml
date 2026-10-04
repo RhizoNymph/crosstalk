@@ -11,7 +11,7 @@ and with it the ability to measure the detector against the labels.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::set_verdict_keeps_transmission_state"
+unit = "crosstalk_flow::tests::set_verdict_keeps_transmission_state"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

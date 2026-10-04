@@ -12,7 +12,7 @@ measurements.
 """
 
 [evidence]
-bench = "crosstalk::ingress::benches::capture_overhead_per_chunk_p99"
+bench = "crosstalk_ingress::benches::capture_overhead_per_chunk_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

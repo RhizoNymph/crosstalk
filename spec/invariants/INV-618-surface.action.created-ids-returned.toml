@@ -12,7 +12,7 @@ made.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::created_ids_are_returned"
+unit = "crosstalk_surface::tests::created_ids_are_returned"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

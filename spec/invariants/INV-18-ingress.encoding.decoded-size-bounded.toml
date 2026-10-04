@@ -13,8 +13,8 @@ the decode loses only its capture.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::encoding::oversized_decode_aborts_capture"
-fuzz = "crosstalk::ingress::fuzz::decode_request_compressed"
+unit = "crosstalk_ingress::tests::encoding::oversized_decode_aborts_capture"
+fuzz = "crosstalk_ingress::fuzz::decode_request_compressed"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

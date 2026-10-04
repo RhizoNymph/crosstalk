@@ -12,7 +12,7 @@ before the version is announced.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::version_ready_only_after_full_reclassification"
+dst = "crosstalk_analysis::tests::version_ready_only_after_full_reclassification"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

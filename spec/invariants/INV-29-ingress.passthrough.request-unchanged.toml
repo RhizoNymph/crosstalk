@@ -16,8 +16,8 @@ Host and hop-by-hop headers (RFC 9110 section 7.6.1) are connection-scoped.
 """
 
 [evidence]
-property = "crosstalk::ingress::tests::passthrough::request_forwarded_unchanged"
-integration = "crosstalk::ingress::tests::integration::request_forwarded_unchanged_live"
+property = "crosstalk_ingress::tests::passthrough::request_forwarded_unchanged"
+integration = "crosstalk_ingress::tests::integration::request_forwarded_unchanged_live"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

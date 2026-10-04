@@ -14,7 +14,7 @@ has no shares and is exempt.
 """
 
 [evidence]
-property = "crosstalk::topology::props::nonempty_graph_shares_sum_to_one"
+property = "crosstalk_topology::props::nonempty_graph_shares_sum_to_one"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

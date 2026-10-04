@@ -15,7 +15,7 @@ order (reconstruct.conversation.compaction-history).
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::compaction_new_inputs_exclude_carried_over"
+property = "crosstalk_reconstruct::tests::compaction_new_inputs_exclude_carried_over"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

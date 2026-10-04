@@ -14,8 +14,8 @@ panics on arbitrary input.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::decode_depth_never_exceeds_max"
-fuzz = "crosstalk::provenance::fuzz::decode_pipeline_arbitrary_input"
+property = "crosstalk_provenance::props::decode_depth_never_exceeds_max"
+fuzz = "crosstalk_provenance::fuzz::decode_pipeline_arbitrary_input"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

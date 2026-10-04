@@ -11,7 +11,7 @@ and it rules out computing topology from raw transmissions at query time.
 """
 
 [evidence]
-bench = "crosstalk::surface::bench::topology_p99"
+bench = "crosstalk_surface::bench::topology_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

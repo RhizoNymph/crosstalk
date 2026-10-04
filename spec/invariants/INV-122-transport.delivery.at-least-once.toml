@@ -15,8 +15,8 @@ transport.equivalence.mpsc-model).
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::every_published_envelope_reaches_every_group"
-integration = "crosstalk::transport::integration::jetstream_delivers_to_disconnected_group_on_reconnect"
+dst = "crosstalk_transport::dst::every_published_envelope_reaches_every_group"
+integration = "crosstalk_transport::integration::jetstream_delivers_to_disconnected_group_on_reconnect"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

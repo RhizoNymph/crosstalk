@@ -13,7 +13,7 @@ backstop.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::own_span_in_input_is_skipped"
+unit = "crosstalk_provenance::tests::own_span_in_input_is_skipped"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

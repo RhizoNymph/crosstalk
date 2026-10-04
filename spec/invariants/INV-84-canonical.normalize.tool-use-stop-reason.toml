@@ -13,7 +13,7 @@ must follow from the response's content, not from the dialect's label.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::tool_call_responses_stop_with_tool_use"
+unit = "crosstalk_canonical::tests::tool_call_responses_stop_with_tool_use"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -13,7 +13,7 @@ text, so no span may point into them.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::segment_spans_lie_within_output_parts"
+property = "crosstalk_provenance::props::segment_spans_lie_within_output_parts"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

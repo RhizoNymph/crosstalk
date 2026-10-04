@@ -13,7 +13,7 @@ new_system instead.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::new_inputs_are_request_suffix"
+property = "crosstalk_reconstruct::tests::new_inputs_are_request_suffix"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

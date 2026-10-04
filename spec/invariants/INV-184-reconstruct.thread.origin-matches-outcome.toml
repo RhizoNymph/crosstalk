@@ -13,9 +13,9 @@ is computed from the wrong parent.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::start_stores_root_origin",
-  "crosstalk::reconstruct::tests::fork_stores_fork_origin",
-  "crosstalk::reconstruct::tests::compaction_stores_link_to_predecessor",
+  "crosstalk_reconstruct::tests::start_stores_root_origin",
+  "crosstalk_reconstruct::tests::fork_stores_fork_origin",
+  "crosstalk_reconstruct::tests::compaction_stores_link_to_predecessor",
 ]
 
 [evidence-review]

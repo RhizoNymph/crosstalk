@@ -11,8 +11,8 @@ tick; none would leave a covert channel unreported.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::window_close_suspects_once"
-unit = "crosstalk::flow::correlator::tests::repeated_ticks_suspect_once"
+dst = "crosstalk_flow::dst::window_close_suspects_once"
+unit = "crosstalk_flow::correlator::tests::repeated_ticks_suspect_once"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

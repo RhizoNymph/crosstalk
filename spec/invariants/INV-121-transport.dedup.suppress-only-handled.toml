@@ -11,7 +11,7 @@ records nothing, so the redelivery reaches consumer logic.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::dedup_never_suppresses_unhandled_id"
+dst = "crosstalk_transport::dst::dedup_never_suppresses_unhandled_id"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

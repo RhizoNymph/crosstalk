@@ -15,8 +15,8 @@ an empty one in the window, lets the UI show a topic that went quiet.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::sizes_match_assignment_count"
-integration = "crosstalk::analysis::integration::pg_sizes_match_assignment_count"
+property = "crosstalk_analysis::tests::sizes_match_assignment_count"
+integration = "crosstalk_analysis::integration::pg_sizes_match_assignment_count"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

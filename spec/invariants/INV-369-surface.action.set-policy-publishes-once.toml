@@ -13,7 +13,7 @@ after publish is L2's concern.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::set_policy_publish_count_under_store_and_bus_faults"
+dst = "crosstalk_surface::dst::set_policy_publish_count_under_store_and_bus_faults"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ make a later operator correction impossible to apply cleanly.
 """
 
 [evidence]
-unit = "crosstalk::reconstruct::tests::merge_leaves_conversation_agent_ids"
+unit = "crosstalk_reconstruct::tests::merge_leaves_conversation_agent_ids"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

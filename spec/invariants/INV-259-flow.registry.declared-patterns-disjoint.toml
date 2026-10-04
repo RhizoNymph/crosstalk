@@ -17,8 +17,8 @@ discovered channel a pattern, refuses one with
 """
 
 [evidence]
-property = "crosstalk::flow::registry::tests::declared_patterns_never_overlap"
-integration = "crosstalk::flow::registry::integration::pg_declare_rejects_overlap"
+property = "crosstalk_flow::registry::tests::declared_patterns_never_overlap"
+integration = "crosstalk_flow::registry::integration::pg_declare_rejects_overlap"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

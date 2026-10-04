@@ -14,7 +14,7 @@ handed to another consumer.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::one_holder_per_envelope_per_group"
+dst = "crosstalk_transport::dst::one_holder_per_envelope_per_group"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

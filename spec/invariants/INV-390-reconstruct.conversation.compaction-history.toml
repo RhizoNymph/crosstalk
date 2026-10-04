@@ -17,7 +17,7 @@ history: the carried-over messages come from the predecessor.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::compaction_history_is_first_request_then_deltas"
+property = "crosstalk_reconstruct::tests::compaction_history_is_first_request_then_deltas"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

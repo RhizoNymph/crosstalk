@@ -1,0 +1,14 @@
+//! L5 flow for crosstalk: resource extraction, the channel registry, the
+//! correlator and the verdict store.
+//!
+//! Implements [`crosstalk_spec::interfaces::l5_flow`].
+//!
+//! Roadmap: P5 (L5 flow). A layer crate: it depends on the spec, never on
+//! another layer crate.
+
+// Every crate builds on the spec; the dependency is declared before any
+// code uses it.
+use crosstalk_spec as _;
+
+#[cfg(test)]
+mod tests {}

@@ -12,8 +12,8 @@ plaintext for that connection.
 """
 
 [evidence]
-unit = "crosstalk::ingress::tests::routing::intercept_only_allowlisted_hosts"
-property = "crosstalk::ingress::tests::routing::intercept_agrees_with_allowlist"
+unit = "crosstalk_ingress::tests::routing::intercept_only_allowlisted_hosts"
+property = "crosstalk_ingress::tests::routing::intercept_agrees_with_allowlist"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

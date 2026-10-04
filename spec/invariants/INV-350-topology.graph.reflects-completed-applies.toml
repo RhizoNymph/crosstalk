@@ -15,8 +15,8 @@ does not yet show the change, and late transmissions would never appear.
 
 [evidence]
 integration = [
-  "crosstalk::topology::integration::timescale_graph_reads_unmaterialized_apply",
-  "crosstalk::topology::integration::timescale_late_contribution_in_materialized_bucket_counts",
+  "crosstalk_topology::integration::timescale_graph_reads_unmaterialized_apply",
+  "crosstalk_topology::integration::timescale_late_contribution_in_materialized_bucket_counts",
 ]
 
 [evidence-review]

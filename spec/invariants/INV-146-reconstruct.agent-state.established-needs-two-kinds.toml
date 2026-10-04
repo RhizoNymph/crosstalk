@@ -14,7 +14,7 @@ one short-lived token claim an identity.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::established_agents_hold_two_variants_one_strong"
+property = "crosstalk_reconstruct::tests::established_agents_hold_two_variants_one_strong"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

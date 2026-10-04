@@ -12,7 +12,7 @@
 //! tests with `CROSSTALK_BLESS=1`:
 //!
 //! ```sh
-//! CROSSTALK_BLESS=1 cargo test --manifest-path spec/Cargo.toml wire
+//! CROSSTALK_BLESS=1 cargo test -p crosstalk-spec wire
 //! git diff spec/types/tests/golden
 //! ```
 //!

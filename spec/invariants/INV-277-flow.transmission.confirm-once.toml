@@ -11,7 +11,7 @@ and its alert are counted once.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::confirm_once_per_transmission"
+dst = "crosstalk_flow::dst::confirm_once_per_transmission"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

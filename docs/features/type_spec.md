@@ -272,7 +272,7 @@ The types follow data through the stack:
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run; its only dependencies are `serde` and `serde_json`, pinned exactly (`spec/Cargo.lock` is committed) | crate `crosstalk-spec` |
+| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run; a workspace member and the boundary crate every implementation crate depends on; its only dependencies are `serde` and `serde_json`, pinned exactly in the root `[workspace.dependencies]` (the root `Cargo.lock` is committed) | crate `crosstalk-spec` |
 | `spec/types/wire/` | The JSON wire contract: conventions, `WireRequest`, `decode_request`, `Rejected`, timestamps' RFC 3339 text, the authority assertions ([wire_contract.md](wire_contract.md)) | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `time`, `authority` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids, and their wire text | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) and `from_ulid_text`, `InvalidUlidText` |

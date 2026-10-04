@@ -13,8 +13,8 @@ the action, would no longer describe what happened.
 
 [evidence]
 unit = [
-    "crosstalk::surface::tests::identity_and_rule_actions_forwarded_unchanged",
-    "crosstalk::surface::tests::new_actions_forwarded_unchanged",
+    "crosstalk_surface::tests::identity_and_rule_actions_forwarded_unchanged",
+    "crosstalk_surface::tests::new_actions_forwarded_unchanged",
 ]
 
 [evidence-review]

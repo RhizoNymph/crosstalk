@@ -19,7 +19,7 @@ unit = [
     "crosstalk_spec::tests::export_stream::equal_rows_give_equal_digests_whatever_the_format",
     "crosstalk_spec::tests::export::projection_rows_are_the_stored_frame_in_order",
 ]
-integration = "crosstalk::surface::export::tests::rerun_at_the_same_watermark_sends_the_same_rows"
+integration = "crosstalk_surface::export::tests::rerun_at_the_same_watermark_sends_the_same_rows"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -15,7 +15,7 @@ contain them.
 
 [evidence]
 lint = "lint:transport-no-payload-in-logs"
-property = "crosstalk::transport::tests::error_values_omit_payload_bytes"
+property = "crosstalk_transport::tests::error_values_omit_payload_bytes"
 
 [evidence-review]
 lint = { agent = "false", human = "false" }

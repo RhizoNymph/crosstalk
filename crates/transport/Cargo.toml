@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-transport"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L2 transport for crosstalk: the in-process event bus with consumer groups, retries and dead letters, and the blob store."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

@@ -11,7 +11,7 @@ clutter the UI with unrelated topics.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::lineage_others_are_topics_above_floor"
+property = "crosstalk_analysis::tests::lineage_others_are_topics_above_floor"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -13,7 +13,7 @@ reads equal to what the agent read.
 """
 
 [evidence]
-property = ["crosstalk::ingress::tests::capture::response_body_matches_received", "crosstalk::ingress::tests::capture::partial_body_includes_bytes_after_frame_error", "crosstalk::ingress::tests::websocket::turn_body_is_its_server_frames"]
+property = ["crosstalk_ingress::tests::capture::response_body_matches_received", "crosstalk_ingress::tests::capture::partial_body_includes_bytes_after_frame_error", "crosstalk_ingress::tests::websocket::turn_body_is_its_server_frames"]
 
 [evidence-review]
 property = { agent = "false", human = "false" }

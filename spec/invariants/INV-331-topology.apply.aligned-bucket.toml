@@ -17,8 +17,8 @@ Agents are stored as attributed, not resolved through merges.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::apply_buckets_boundary_instant_into_next_bucket"
-property = "crosstalk::topology::props::apply_returns_aligned_bucket_containing_at"
+unit = "crosstalk_topology::tests::apply_buckets_boundary_instant_into_next_bucket"
+property = "crosstalk_topology::props::apply_returns_aligned_bucket_containing_at"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

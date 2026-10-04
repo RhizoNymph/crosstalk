@@ -12,7 +12,7 @@ second frame.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::fitter_crash_requeues_job"
+dst = "crosstalk_analysis::dst::fitter_crash_requeues_job"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

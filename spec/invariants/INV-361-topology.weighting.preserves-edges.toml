@@ -13,7 +13,7 @@ under either weighting and neither weighting has reason to drop one.
 """
 
 [evidence]
-property = "crosstalk::topology::props::weighting_changes_only_shares"
+property = "crosstalk_topology::props::weighting_changes_only_shares"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

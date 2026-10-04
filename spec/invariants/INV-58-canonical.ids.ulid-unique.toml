@@ -15,8 +15,8 @@ generators with skewed and repeating clocks.
 """
 
 [evidence]
-property = "crosstalk::canonical::tests::minted_ids_are_distinct"
-dst = "crosstalk::canonical::tests::dst_concurrent_generators_never_collide"
+property = "crosstalk_canonical::tests::minted_ids_are_distinct"
+dst = "crosstalk_canonical::tests::dst_concurrent_generators_never_collide"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

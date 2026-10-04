@@ -14,7 +14,7 @@ pass.
 
 [evidence]
 unit = "crosstalk_spec::tests::export::limits_refuse_more_rows_than_the_maximum"
-integration = "crosstalk::surface::export::tests::oversized_export_is_refused_before_streaming"
+integration = "crosstalk_surface::export::tests::oversized_export_is_refused_before_streaming"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

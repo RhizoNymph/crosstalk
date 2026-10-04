@@ -11,7 +11,7 @@ record of what is retained.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::buckets_deleted_only_on_version_dropped"
+dst = "crosstalk_topology::dst::buckets_deleted_only_on_version_dropped"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

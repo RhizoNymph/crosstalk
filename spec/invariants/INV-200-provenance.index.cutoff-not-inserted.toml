@@ -11,8 +11,8 @@ posting lists without bound and contributes nothing to detection.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::insert_skips_fingerprints_above_cutoff"
-integration = "crosstalk::provenance::integration::pg_insert_skips_fingerprints_above_cutoff"
+unit = "crosstalk_provenance::tests::insert_skips_fingerprints_above_cutoff"
+integration = "crosstalk_provenance::integration::pg_insert_skips_fingerprints_above_cutoff"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

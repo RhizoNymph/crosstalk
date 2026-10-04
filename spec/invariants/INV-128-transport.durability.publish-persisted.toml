@@ -12,7 +12,7 @@ claim.
 """
 
 [evidence]
-integration = "crosstalk::transport::integration::jetstream_publish_survives_restart"
+integration = "crosstalk_transport::integration::jetstream_publish_survives_restart"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

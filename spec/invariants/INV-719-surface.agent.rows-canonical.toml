@@ -15,8 +15,8 @@ lists CanonicalStateKind, so it cannot ask for merged agents.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::agent_rows_are_canonical"
-property = "crosstalk::reconstruct::tests::prop_agent_list_matches_merge_table_model"
+unit = "crosstalk_surface::tests::agent_rows_are_canonical"
+property = "crosstalk_reconstruct::tests::prop_agent_list_matches_merge_table_model"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

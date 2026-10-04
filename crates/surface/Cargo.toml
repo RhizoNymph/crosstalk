@@ -1,0 +1,12 @@
+[package]
+name = "crosstalk-surface"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L8 surface for crosstalk: the query API, operator actions, the live feed and export, generic over the spec's store traits."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }

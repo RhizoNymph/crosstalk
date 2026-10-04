@@ -13,7 +13,7 @@ the layout depends on.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::prop_sample_is_bottom_k_by_seeded_key"
+property = "crosstalk_analysis::tests::prop_sample_is_bottom_k_by_seeded_key"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -12,8 +12,8 @@ can return to the cutoff, which keeps lookup fan-out bounded.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::lookup_ignores_fingerprints_that_crossed_cutoff"
-integration = "crosstalk::provenance::integration::pg_lookup_ignores_fingerprints_above_cutoff"
+unit = "crosstalk_provenance::tests::lookup_ignores_fingerprints_that_crossed_cutoff"
+integration = "crosstalk_provenance::integration::pg_lookup_ignores_fingerprints_above_cutoff"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

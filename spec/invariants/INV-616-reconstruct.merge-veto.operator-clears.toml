@@ -13,7 +13,7 @@ a fresh one.
 
 [evidence]
 unit = "crosstalk_spec::tests::agents::a_veto_stops_the_resolver_until_an_operator_merges"
-integration = "crosstalk::reconstruct::tests::pg_operator_merge_clears_veto"
+integration = "crosstalk_reconstruct::tests::pg_operator_merge_clears_veto"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

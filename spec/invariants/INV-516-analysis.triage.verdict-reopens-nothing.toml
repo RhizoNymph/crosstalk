@@ -12,7 +12,7 @@ is a redelivery and must change nothing.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::verdict_withdrawal_reopens_nothing"
+unit = "crosstalk_analysis::tests::verdict_withdrawal_reopens_nothing"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

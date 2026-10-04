@@ -12,7 +12,7 @@ would keep resolving to the source in that cache, which is now an alias.
 """
 
 [evidence]
-unit = "crosstalk::reconstruct::tests::agent_merged_names_record"
+unit = "crosstalk_reconstruct::tests::agent_merged_names_record"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

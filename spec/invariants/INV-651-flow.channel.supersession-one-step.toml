@@ -14,7 +14,7 @@ alerts disagree depending on how many hops each resolved.
 
 [evidence]
 unit = "crosstalk_spec::tests::channels::supersession_resolves_in_one_step"
-property = "crosstalk::flow::props::channel_canonical_is_idempotent"
+property = "crosstalk_flow::props::channel_canonical_is_idempotent"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

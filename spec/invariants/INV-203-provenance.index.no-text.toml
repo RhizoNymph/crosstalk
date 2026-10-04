@@ -15,7 +15,7 @@ holds none either.
 
 [evidence]
 type = "crosstalk_spec::interfaces::l4_provenance::FingerprintIndex"
-integration = "crosstalk::provenance::integration::pg_index_schema_has_no_text_columns"
+integration = "crosstalk_provenance::integration::pg_index_schema_has_no_text_columns"
 
 [evidence-review]
 type = { agent = "true", human = "false" }

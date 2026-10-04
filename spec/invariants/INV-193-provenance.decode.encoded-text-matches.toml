@@ -12,7 +12,7 @@ undone before lookup.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::encoded_span_text_still_matches"
+property = "crosstalk_provenance::props::encoded_span_text_still_matches"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

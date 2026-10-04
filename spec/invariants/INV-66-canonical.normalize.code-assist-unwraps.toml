@@ -13,8 +13,8 @@ conversation different hashes on a subscription than on the API.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::recorded_code_assist_matches_generate"
-property = "crosstalk::canonical::tests::code_assist_envelope_is_transparent"
+unit = "crosstalk_canonical::tests::recorded_code_assist_matches_generate"
+property = "crosstalk_canonical::tests::code_assist_envelope_is_transparent"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

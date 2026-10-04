@@ -13,7 +13,7 @@ fits again, which reads as data changing.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::prop_projection_sample_survives_narrowing"
+property = "crosstalk_analysis::tests::prop_projection_sample_survives_narrowing"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

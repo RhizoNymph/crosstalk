@@ -18,8 +18,8 @@ so probing for permissions an operator lacks stays visible.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::set_policy_without_govern_has_no_effect", "crosstalk::surface::tests::merge_without_govern_has_no_effect", "crosstalk::surface::tests::alert_action_without_triage_has_no_effect"]
-integration = "crosstalk::surface::integration::forbidden_action_leaves_postgres_and_bus_unchanged"
+unit = ["crosstalk_surface::tests::set_policy_without_govern_has_no_effect", "crosstalk_surface::tests::merge_without_govern_has_no_effect", "crosstalk_surface::tests::alert_action_without_triage_has_no_effect"]
+integration = "crosstalk_surface::integration::forbidden_action_leaves_postgres_and_bus_unchanged"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

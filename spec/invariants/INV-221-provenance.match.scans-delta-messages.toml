@@ -13,7 +13,7 @@ ReaderOutput matches.
 """
 
 [evidence]
-unit = ["crosstalk::provenance::tests::lookups_cover_new_inputs_system_and_output", "crosstalk::provenance::tests::replayed_history_is_not_looked_up"]
+unit = ["crosstalk_provenance::tests::lookups_cover_new_inputs_system_and_output", "crosstalk_provenance::tests::replayed_history_is_not_looked_up"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

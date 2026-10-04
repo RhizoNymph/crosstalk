@@ -14,7 +14,7 @@ to say which part of them is final.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_topic_history_matches_catalog"
+property = "crosstalk_surface::tests::prop_topic_history_matches_catalog"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

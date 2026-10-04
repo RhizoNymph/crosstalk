@@ -12,7 +12,7 @@ matched by provenance; out-of-order evidence is L5's concern.
 """
 
 [evidence]
-dst = "crosstalk::provenance::dst::match_only_against_spans_indexed_before_read"
+dst = "crosstalk_provenance::dst::match_only_against_spans_indexed_before_read"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ numbers unique across everything that ever referenced them.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::failed_fit_removes_its_version"
+unit = "crosstalk_analysis::tests::failed_fit_removes_its_version"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

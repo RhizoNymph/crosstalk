@@ -14,8 +14,8 @@ as a summary turn or Codex's trailing compaction trigger.
 
 [evidence]
 unit = [
-  "crosstalk::reconstruct::tests::compaction_hint_without_summary_is_not_compaction",
-  "crosstalk::reconstruct::tests::compaction_hint_with_summary_is_compaction",
+  "crosstalk_reconstruct::tests::compaction_hint_without_summary_is_not_compaction",
+  "crosstalk_reconstruct::tests::compaction_hint_with_summary_is_compaction",
 ]
 
 [evidence-review]

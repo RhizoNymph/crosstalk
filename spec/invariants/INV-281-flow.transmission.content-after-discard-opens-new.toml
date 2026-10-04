@@ -12,7 +12,7 @@ other match would.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::content_after_discard_opens_new"
+dst = "crosstalk_flow::dst::content_after_discard_opens_new"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

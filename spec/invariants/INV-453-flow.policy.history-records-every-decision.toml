@@ -12,7 +12,7 @@ PolicyHistory::record returns Duplicate for a redelivered decision, so at-least-
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::policy_history_complete_under_redelivery_and_reload"
+dst = "crosstalk_flow::dst::policy_history_complete_under_redelivery_and_reload"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

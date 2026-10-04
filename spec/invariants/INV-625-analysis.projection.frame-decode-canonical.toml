@@ -13,7 +13,7 @@ would let two encodings of one frame exist.
 
 [evidence]
 unit = ["crosstalk_spec::tests::projection_frame::decode_rejects_short_input", "crosstalk_spec::tests::projection_frame::decode_rejects_bad_magic_and_format", "crosstalk_spec::tests::projection_frame::decode_rejects_a_zero_sample_size", "crosstalk_spec::tests::projection_frame::decode_rejects_any_other_length", "crosstalk_spec::tests::projection_frame::decode_rejects_non_zero_padding", "crosstalk_spec::tests::projection_frame::decode_rejects_an_unknown_route_kind", "crosstalk_spec::tests::projection_frame::decode_checks_the_frame_invariants"]
-fuzz = "crosstalk::analysis::fuzz::frame_decode"
+fuzz = "crosstalk_analysis::fuzz::frame_decode"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

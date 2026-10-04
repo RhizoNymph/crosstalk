@@ -11,7 +11,7 @@ a first sighting.
 """
 
 [evidence]
-unit = "crosstalk::flow::channel::tests::declared_first_access_not_discovered"
+unit = "crosstalk_flow::channel::tests::declared_first_access_not_discovered"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ compares against the wrong agent.
 """
 
 [evidence]
-unit = "crosstalk::provenance::tests::origin_agent_taken_from_span"
+unit = "crosstalk_provenance::tests::origin_agent_taken_from_span"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

@@ -14,8 +14,8 @@ still sees one channel per resource.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::concurrent_first_access_one_channel"
-integration = "crosstalk::flow::registry::integration::pg_concurrent_new_lookup"
+dst = "crosstalk_flow::dst::concurrent_first_access_one_channel"
+integration = "crosstalk_flow::registry::integration::pg_concurrent_new_lookup"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

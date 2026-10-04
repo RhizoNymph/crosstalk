@@ -12,8 +12,8 @@ which can only come from a race with the promotion.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::set_policy_on_superseded_channel_refused"
-integration = "crosstalk::flow::tests::pg_set_policy_on_superseded_channel"
+unit = "crosstalk_flow::tests::set_policy_on_superseded_channel_refused"
+integration = "crosstalk_flow::tests::pg_set_policy_on_superseded_channel"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

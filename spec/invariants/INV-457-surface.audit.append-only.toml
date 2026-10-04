@@ -13,7 +13,7 @@ outside the gateway.
 
 [evidence]
 type = "crosstalk_spec::interfaces::l8_surface::audit::AuditLog"
-integration = "crosstalk::surface::integration::audit_table_rejects_update_and_delete"
+integration = "crosstalk_surface::integration::audit_table_rejects_update_and_delete"
 
 [evidence-review]
 type = { agent = "true", human = "false" }

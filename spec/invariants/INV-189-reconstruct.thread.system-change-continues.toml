@@ -12,7 +12,7 @@ history. The change is reported once as the delta's new_system instead.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::system_change_keeps_outcome_and_conversation"
+property = "crosstalk_reconstruct::tests::system_change_keeps_outcome_and_conversation"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

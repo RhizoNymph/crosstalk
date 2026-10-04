@@ -12,7 +12,7 @@ newest' ordering that the switch-over relies on.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::fit_returns_version_above_current", "crosstalk::analysis::tests::first_fit_returns_version_above_unfitted"]
+unit = ["crosstalk_analysis::tests::fit_returns_version_above_current", "crosstalk_analysis::tests::first_fit_returns_version_above_unfitted"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

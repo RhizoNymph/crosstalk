@@ -13,7 +13,7 @@ as performance because it is a quantitative bound on time.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::nack_delays_redelivery"
+dst = "crosstalk_transport::dst::nack_delays_redelivery"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

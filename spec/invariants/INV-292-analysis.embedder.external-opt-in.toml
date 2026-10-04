@@ -13,8 +13,8 @@ retries against a different provider.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::embedder_config_defaults_to_local", "crosstalk::analysis::tests::invalid_embedder_config_is_rejected_not_defaulted"]
-integration = "crosstalk::analysis::tests::local_embedder_makes_no_network_calls"
+unit = ["crosstalk_analysis::tests::embedder_config_defaults_to_local", "crosstalk_analysis::tests::invalid_embedder_config_is_rejected_not_defaulted"]
+integration = "crosstalk_analysis::tests::local_embedder_makes_no_network_calls"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

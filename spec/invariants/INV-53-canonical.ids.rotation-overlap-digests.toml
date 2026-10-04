@@ -15,8 +15,8 @@ hasher returns.
 
 [evidence]
 unit = [
-  "crosstalk::canonical::tests::overlap_yields_current_and_previous_digests",
-  "crosstalk::canonical::tests::after_overlap_only_current_digest",
+  "crosstalk_canonical::tests::overlap_yields_current_and_previous_digests",
+  "crosstalk_canonical::tests::after_overlap_only_current_digest",
 ]
 
 [evidence-review]

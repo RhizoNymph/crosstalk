@@ -15,7 +15,7 @@ published after the group subscribed, with no backfill.
 """
 
 [evidence]
-integration = "crosstalk::transport::integration::jetstream_matches_mpsc_model"
+integration = "crosstalk_transport::integration::jetstream_matches_mpsc_model"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

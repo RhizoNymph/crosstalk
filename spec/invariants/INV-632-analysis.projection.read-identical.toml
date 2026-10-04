@@ -11,7 +11,7 @@ stored; nothing a later merge, verdict or re-fit does changes it.
 """
 
 [evidence]
-integration = "crosstalk::analysis::integration::projection_reads_are_byte_identical"
+integration = "crosstalk_analysis::integration::projection_reads_are_byte_identical"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

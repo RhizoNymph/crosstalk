@@ -14,7 +14,7 @@ group, envelope and attempts.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::dead_letter_last_error_is_final_nack_reason"
+dst = "crosstalk_transport::dst::dead_letter_last_error_is_final_nack_reason"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

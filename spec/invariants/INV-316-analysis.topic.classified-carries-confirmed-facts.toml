@@ -12,8 +12,8 @@ under each version, and versions could not be compared.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::reclassification_keeps_at_and_matched_bytes"
-property = "crosstalk::analysis::tests::classified_fields_match_confirmed"
+unit = "crosstalk_analysis::tests::reclassification_keeps_at_and_matched_bytes"
+property = "crosstalk_analysis::tests::classified_fields_match_confirmed"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

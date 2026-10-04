@@ -12,7 +12,7 @@ after the event see the new policy.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::channel_changes_announced_after_commit"
+dst = "crosstalk_flow::dst::channel_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ the consumer that failed, not to every group.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::dead_letter_records_group_envelope_and_attempts"
+dst = "crosstalk_transport::dst::dead_letter_records_group_envelope_and_attempts"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

@@ -14,8 +14,8 @@ output gets two hashes and provenance splits one agent's output in two.
 """
 
 [evidence]
-unit = "crosstalk::canonical::tests::recorded_transports_normalize_equal"
-property = "crosstalk::canonical::tests::response_message_independent_of_transport"
+unit = "crosstalk_canonical::tests::recorded_transports_normalize_equal"
+property = "crosstalk_canonical::tests::response_message_independent_of_transport"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

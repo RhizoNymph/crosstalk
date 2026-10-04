@@ -15,7 +15,7 @@ it, and is outside this rule.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::redelivered_old_version_ready_does_not_roll_back"
+dst = "crosstalk_topology::dst::redelivered_old_version_ready_does_not_roll_back"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

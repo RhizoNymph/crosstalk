@@ -12,7 +12,7 @@ hands the pending status from input to output without a gap.
 """
 
 [evidence]
-dst = "crosstalk::transport::dst::pipeline_consumers_ack_after_publishing"
+dst = "crosstalk_transport::dst::pipeline_consumers_ack_after_publishing"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

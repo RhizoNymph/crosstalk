@@ -11,7 +11,7 @@ clock to keep the order the events actually had.
 """
 
 [evidence]
-dst = "crosstalk::ingress::tests::sim::stage_times_monotone_under_clock_steps"
+dst = "crosstalk_ingress::tests::sim::stage_times_monotone_under_clock_steps"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

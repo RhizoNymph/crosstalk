@@ -16,8 +16,8 @@ count. The property test checks the index against a reference set of
 """
 
 [evidence]
-property = "crosstalk::provenance::props::frequency_matches_observation_model"
-integration = "crosstalk::provenance::integration::pg_frequency_matches_observation_model"
+property = "crosstalk_provenance::props::frequency_matches_observation_model"
+integration = "crosstalk_provenance::integration::pg_frequency_matches_observation_model"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

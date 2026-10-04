@@ -15,8 +15,8 @@ there would fire on every WebSocket turn; reconstruction resolves those.
 
 [evidence]
 unit = [
-  "crosstalk::canonical::tests::orphan_tool_result_warns_and_is_kept",
-  "crosstalk::canonical::tests::increment_tool_results_do_not_warn",
+  "crosstalk_canonical::tests::orphan_tool_result_warns_and_is_kept",
+  "crosstalk_canonical::tests::increment_tool_results_do_not_warn",
 ]
 
 [evidence-review]

@@ -20,7 +20,7 @@ Activation itself drops nothing
 """
 
 [evidence]
-property = "crosstalk::topology::props::retention_spares_active_previous_and_pending_versions"
+property = "crosstalk_topology::props::retention_spares_active_previous_and_pending_versions"
 
 [evidence-review]
 property = { agent = "false", human = "false" }
