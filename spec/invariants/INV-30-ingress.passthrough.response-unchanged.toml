@@ -17,5 +17,5 @@ property = "crosstalk_ingress::tests::passthrough::response_relayed_unchanged"
 integration = "crosstalk_ingress::tests::integration::response_relayed_unchanged_live"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

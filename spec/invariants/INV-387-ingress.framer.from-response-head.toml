@@ -18,4 +18,4 @@ accurate source (ingress.meta.transport-matches).
 unit = "crosstalk_ingress::tests::framer::framer_chosen_from_protocol_and_response_head"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

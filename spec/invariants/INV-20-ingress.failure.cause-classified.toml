@@ -17,5 +17,5 @@ unit = "crosstalk_ingress::tests::failure::each_cause_classified"
 dst = "crosstalk_ingress::tests::sim::first_failure_cause_wins"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-dst = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

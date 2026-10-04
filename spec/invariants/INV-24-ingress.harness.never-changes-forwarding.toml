@@ -15,4 +15,4 @@ treated differently on the wire from the one it imitates.
 property = "crosstalk_ingress::tests::client::harness_headers_do_not_affect_forwarding"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

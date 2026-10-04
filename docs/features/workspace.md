@@ -73,6 +73,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing; `crates/testkit/Cargo.toml`: see `docs/features/testkit.md`) |
 | `crates/gateway/Cargo.toml` | Adds the `crosstalk` binary and a `serde_json` dev-dependency for the architecture test |
 | `crates/sim/Cargo.toml` | Adds `thiserror`, `tracing` and `tokio` with `macros`, `rt`, `sync`, `time` and `test-util` (paused time); see [sim.md](sim.md) |
+| `crates/ingress/Cargo.toml` | The proxy's pins: `blake3`, `bytes`, `flate2 = "=1.1.10"`, `http-body-util`, `hyper` (client, http1, server), `hyper-rustls = "=0.27.10"` (no default features; http1, ring, tls12, webpki-tokio), `hyper-util` (client-legacy, http1, tokio), `serde`, `serde_json`, `thiserror`, `tokio`, `tracing`, `zstd = "=0.13.3"` (no default features); dev: `crosstalk-sim`, `crosstalk-testkit`, `proptest`, `tower-service = "=0.3.3"`, `tracing-subscriber = "=0.3.23"` (fmt, std); see [ingress.md](ingress.md) |
 
 A crate that needs a new third-party dependency adds its exact pin to
 `[workspace.dependencies]` (matching the UI's pin where they overlap) and

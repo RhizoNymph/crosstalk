@@ -35,7 +35,10 @@ Overview:
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
     consumer groups, retries, dead letters and envelope dedup, and the
     content-addressed blob store (FsBlobStore, MemoryBlobStore)
-    (transport). The other crates are still empty.
+    (transport). crosstalk-ingress has the L0 reverse proxy for Anthropic
+    Messages over HTTP and SSE, handing each generation exchange to a
+    bounded capture channel as a RawExchange (ingress). The other crates
+    are still empty.
 
   subsystems:
     spec: >
@@ -475,4 +478,39 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, wire_contract, workspace]
     doc: docs/features/transport.md
+  ingress:
+    description: >
+      crosstalk-ingress, L0 (P2.4): a hyper 1 reverse proxy for Anthropic
+      Messages over HTTP and SSE. Structured routes map a path prefix (the
+      harness's base URL path) to an upstream by the head alone; no route
+      is a local 421. The credential and account are hashed at once with
+      BLAKE3 keyed by the deployment secret (from an environment variable,
+      with the previous version during a rotation overlap) and the scheme
+      follows the documented rule; harness claims are recorded as sent.
+      Only Generation is captured: the request is forwarded as soon as it
+      is routed, its body teed (bounded) and decoded concurrently (gzip and
+      zstd within a decoded-size bound) by a RequestDecoder; the response
+      is relayed frame by frame through a tee that feeds a framer chosen
+      from the response head (SSE, one JSON body, or an error document) and
+      keeps the bytes (bounded; past the bound the exchange is counted, not
+      captured with a cut body). Stages move only along the legal
+      transitions, the first failure cause wins, times come from one wall
+      reading plus monotonic time, and each exchange whose request decoded
+      is handed off once, after its stream ended, with try_send on the
+      caller's bounded channel; every loss is counted by reason. Hop-by-hop
+      headers are dropped; everything else is forwarded byte for byte.
+      Keyed hashing and exchange ids sit in one module (ids) that the
+      spec's own versions (P0.7) are to replace. Tests run over sockets
+      against testkit's fake upstream and harness, and as crosstalk-sim
+      simulations over in-memory pipes; two ignored timing tests hold the
+      latency budgets.
+    entry_points:
+      - crates/ingress/src/lib.rs
+      - crates/ingress/src/proxy/mod.rs
+      - crates/ingress/src/proxy/relay.rs
+      - crates/ingress/src/adapter/anthropic.rs
+      - crates/ingress/src/framer/mod.rs
+      - crates/ingress/src/config.rs
+    depends_on: [type_spec, workspace, sim, testkit]
+    doc: docs/features/ingress.md
 ```

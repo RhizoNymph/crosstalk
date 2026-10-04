@@ -14,4 +14,4 @@ mark the same response completed on one connection and failed on another.
 property = "crosstalk_ingress::tests::framer::events_independent_of_chunking"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

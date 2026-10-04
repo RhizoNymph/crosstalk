@@ -20,4 +20,4 @@ capture, and is counted uncaptured as a decode error
 dst = "crosstalk_ingress::tests::sim::one_raw_exchange_per_forwarded_exchange"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

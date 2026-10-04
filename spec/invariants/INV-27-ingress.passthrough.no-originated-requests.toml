@@ -15,4 +15,4 @@ harness and the vendor's auth host.
 dst = "crosstalk_ingress::tests::sim::upstream_requests_map_one_to_one_to_client_requests"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

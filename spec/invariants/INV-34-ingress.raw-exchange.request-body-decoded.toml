@@ -17,4 +17,4 @@ the model received.
 property = "crosstalk_ingress::tests::capture::request_body_is_decoded_forwarded_body"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -17,5 +17,5 @@ unit = "crosstalk_ingress::tests::encoding::oversized_decode_aborts_capture"
 fuzz = "crosstalk_ingress::fuzz::decode_request_compressed"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 fuzz = { agent = "false", human = "false" }

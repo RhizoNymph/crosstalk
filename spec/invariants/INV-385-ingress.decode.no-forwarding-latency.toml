@@ -17,4 +17,4 @@ ingress.capture.added-latency-bound.
 bench = "crosstalk_ingress::benches::decode_overhead_on_forwarding_p99"
 
 [evidence-review]
-bench = { agent = "false", human = "false" }
+bench = { agent = "true", human = "false" }

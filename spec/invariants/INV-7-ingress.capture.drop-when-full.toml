@@ -12,4 +12,4 @@ channel would couple client latency to the slowest downstream consumer.
 dst = "crosstalk_ingress::tests::sim::full_capture_channel_drops_without_blocking"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

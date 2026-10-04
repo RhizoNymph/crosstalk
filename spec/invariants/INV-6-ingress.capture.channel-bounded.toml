@@ -14,4 +14,4 @@ capture instead of the client.
 type = "crosstalk_ingress::capture::CaptureSender"
 
 [evidence-review]
-type = { agent = "false", human = "false" }
+type = { agent = "true", human = "false" }

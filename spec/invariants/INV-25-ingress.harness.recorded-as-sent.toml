@@ -15,4 +15,4 @@ the evidence and not on a guess made at the edge.
 unit = "crosstalk_ingress::tests::client::harness_headers_recorded_per_harness_fixture"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

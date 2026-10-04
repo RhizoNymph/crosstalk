@@ -19,8 +19,10 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 blake3 = "=1.8.7"
 bytes = "=1.12.1"
+flate2 = "=1.1.10"
 http-body-util = "=0.1.5"
 hyper = "=1.11.1"
+hyper-rustls = { version = "=0.27.10", default-features = false }
 hyper-util = "=0.1.21"
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -29,4 +31,7 @@ sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "
 tempfile = "=3.27.0"
 thiserror = "=2.0.21"
 tokio = "=1.53.1"
+tower-service = "=0.3.3"
 tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false }
+zstd = { version = "=0.13.3", default-features = false }

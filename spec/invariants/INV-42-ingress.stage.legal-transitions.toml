@@ -15,4 +15,4 @@ through Responding within that chunk.
 dst = "crosstalk_ingress::tests::sim::stage_transitions_follow_exchange_machine"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
