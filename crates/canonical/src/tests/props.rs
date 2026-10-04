@@ -16,8 +16,8 @@ use proptest::test_runner::TestCaseError;
 
 use crate::tests::generate::Style;
 use crate::tests::generate::anthropic::{
-    GenBlock, GenRequest, GenResponse, GenSystem, GenSystemBlock, GenTurn, GenUserBlock,
-    write_event,
+    GenBlock, GenRequest, GenResponse, GenSystem, GenSystemBlock, GenSystemContent, GenTurn,
+    GenUserBlock, write_event,
 };
 use crate::tests::generate::json::{GenJson, string};
 use crate::tests::support::{
@@ -290,8 +290,9 @@ pub fn for_each_unknown(body: &MessageBody, visit: &mut impl FnMut(&Unknown)) {
     }
 }
 
-/// The request after its System message is each provider message
-/// normalized alone, concatenated in order.
+/// The request after the System message its top-level `system` becomes is
+/// each provider message normalized alone, concatenated in order; a
+/// `system` turn is a provider message like any other.
 pub fn request_message_by_message(request: &GenRequest, seed: u64) -> Checked {
     let empty = GenDelivery::Garbage(Transport::Http, Vec::new());
     let whole = request_bodies(&normalize(&exchange(request, &empty, seed)));
@@ -481,6 +482,14 @@ pub fn unknown_blocks_canonical(request: &GenRequest, seed: u64) -> Checked {
             GenTurn::Assistant(blocks) => {
                 for block in blocks {
                     if let GenBlock::Unknown { kind, payload } = block {
+                        push(kind, payload);
+                    }
+                }
+            }
+            GenTurn::System(GenSystemContent::Str(_)) => {}
+            GenTurn::System(GenSystemContent::Blocks(blocks)) => {
+                for block in blocks {
+                    if let GenSystemBlock::Unknown { kind, payload } = block {
                         push(kind, payload);
                     }
                 }

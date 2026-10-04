@@ -70,6 +70,124 @@ pub fn top_level_system_prompt_becomes_first_message() {
     assert_eq!(bodies(r#","system":null"#, turn).len(), 1);
 }
 
+/// A `system` turn inside `messages` (Claude Code sends one) is a System
+/// message at its own position, its content mapped like the top-level
+/// `system`: a string is one text part, blocks one part each, cache
+/// markers dropped and unknown blocks kept and reported. The top-level
+/// prompt stays first.
+pub fn system_turn_stays_in_place() {
+    // A string turn after the first user turn, with a top-level prompt.
+    let messages = r#"[
+        {"role":"user","content":"hi"},
+        {"role":"system","content":"Context: the repo is clean."},
+        {"role":"assistant","content":"ok"},
+        {"role":"user","content":"go"}
+    ]"#;
+    assert_eq!(
+        bodies(r#","system":"Be brief.""#, messages),
+        vec![
+            MessageBody::System(vec![SystemPart::Text(text("Be brief."))]),
+            MessageBody::User(vec![UserPart::Text(text("hi"))]),
+            MessageBody::System(vec![SystemPart::Text(text("Context: the repo is clean."))]),
+            MessageBody::Assistant(vec![AssistantPart::Text(text("ok"))]),
+            MessageBody::User(vec![UserPart::Text(text("go"))]),
+        ]
+    );
+
+    // A block turn: the same mapping as the top-level `system` array.
+    let blocks = r#"[{"type":"text","text":"billing"},{"type":"text","text":"Reminder.","cache_control":{"type":"ephemeral"}},{"type":"zz_sys","v":1}]"#;
+    let turn =
+        format!(r#"[{{"role":"user","content":"hi"}},{{"role":"system","content":{blocks}}}]"#);
+    let normalization = normalize(&raw(
+        &request(&format!(r#","system":{blocks}"#), &turn),
+        Transport::Http,
+        ok("{}"),
+    ));
+    let got = request_bodies(&normalization);
+    let expected = MessageBody::System(vec![
+        SystemPart::Text(text("billing")),
+        SystemPart::Text(text("Reminder.")),
+        SystemPart::Unknown(Unknown {
+            kind: "zz_sys".to_owned(),
+            raw: CanonicalJson(r#"{"type":"zz_sys","v":1}"#.to_owned()),
+        }),
+    ]);
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(got[0], expected, "the top-level prompt");
+    assert_eq!(got[2], expected, "the turn maps like the top-level prompt");
+    assert_eq!(
+        normalization.warnings,
+        vec![
+            NormalizeWarning::UnknownBlock {
+                kind: "zz_sys".to_owned()
+            };
+            2
+        ],
+        "an unknown block in either is reported"
+    );
+    // Same content, same message: one stored body for both.
+    assert_eq!(
+        normalization.exchange.request[0],
+        normalization.exchange.request[2]
+    );
+    // `{}` is no Messages response, so the exchange has no response message.
+    assert_eq!(
+        normalization.messages.len(),
+        2,
+        "the system body once, and the user turn"
+    );
+
+    // No top-level `system`: the turn is the only System message, where
+    // it sits, even first.
+    let first = r#"[{"role":"system","content":"s"},{"role":"user","content":"hi"},{"role":"system","content":[]}]"#;
+    assert_eq!(
+        bodies("", first),
+        vec![
+            MessageBody::System(vec![SystemPart::Text(text("s"))]),
+            MessageBody::User(vec![UserPart::Text(text("hi"))]),
+            MessageBody::System(Vec::new()),
+        ]
+    );
+}
+
+/// A refused body's shape names its keys, roles and content kinds, and
+/// none of its values.
+pub fn request_shape_holds_no_content() {
+    use crate::anthropic::RequestShape;
+    let secret = "sk-ant-api03-SECRET";
+    let body = format!(
+        r#"{{"model":"m","system":[{{"type":"text","text":"{secret}"}}],"messages":[{{"role":"user","content":"{secret}"}},{{"role":"system","content":[{{"type":"text","text":"{secret}"}},{{"v":1}}]}},{{"role":"{secret} weird","content":7}},{{"content":"x"}},3],"{secret} key":1}}"#
+    );
+    let shape = RequestShape::of(body.as_bytes()).to_string();
+    assert_eq!(
+        shape,
+        "keys=[model,system,messages,<23 bytes>] system=array \
+         messages=[user:string,system:array(text,<untyped>),<25 bytes>:number,\
+         <no role>:string,<number>]"
+    );
+    assert!(!shape.contains("SECRET"), "{shape}");
+    // A token-shaped name is withheld by its length.
+    let token = format!("sk-ant-oat01-{}", "A".repeat(80));
+    let body = format!(r#"{{"messages":[{{"role":"{token}","content":""}}]}}"#);
+    assert_eq!(
+        RequestShape::of(body.as_bytes()).to_string(),
+        "keys=[messages] system=absent messages=[<93 bytes>:string]"
+    );
+    assert_eq!(RequestShape::of(b"not json").to_string(), "not json");
+    assert_eq!(
+        RequestShape::of(b"[1]").to_string(),
+        "not an object (array)"
+    );
+    assert_eq!(
+        RequestShape::of(br#"{"messages":{}}"#).to_string(),
+        "keys=[messages] system=absent messages=object"
+    );
+    assert_eq!(
+        RequestShape::of(br#"{"model":"m"}"#).to_string(),
+        "keys=[model] system=absent messages=absent"
+    );
+}
+
 /// A user turn mixing tool results and text becomes one message per
 /// maximal run of one role, in block order.
 pub fn anthropic_user_turn_with_tool_results_splits() {
@@ -346,7 +464,8 @@ pub fn invalid_request_bodies_are_errors() {
         r#"{"model":"m"}"#,
         r#"{"messages":{}}"#,
         r#"{"messages":[{"content":"x"}]}"#,
-        r#"{"messages":[{"role":"system","content":"x"}]}"#,
+        r#"{"messages":[{"role":"developer","content":"x"}]}"#,
+        r#"{"messages":[{"role":"system","content":7}]}"#,
         r#"{"messages":[{"role":"user","content":7}]}"#,
         r#"{"messages":[],"system":7}"#,
     ] {

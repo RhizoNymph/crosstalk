@@ -1,6 +1,6 @@
 [invariant]
 id = "canonical.normalize.system-prompt-first"
-statement = "A wire protocol's top-level system prompt field becomes a single System message at the start of the normalized request."
+statement = "A wire protocol's top-level system prompt field becomes a single System message at the start of the normalized request, and a system turn inside the protocol's message list becomes a System message at its own position."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -12,10 +12,18 @@ message. Placing it as the first canonical message makes the same prompt
 hash the same across protocols, lets identity
 compute PromptHash from the canonical form, and lets provenance see system
 prompts as an input channel between agents.
+
+A system turn inside the message list is a system prompt too: Claude Code
+sends a `role: "system"` entry in Anthropic's `messages` besides the
+top-level `system`, and the upstream accepts it. It stays where the harness
+put it, so the request keeps the provider's order
+(canonical.normalize.request-is-concatenation), and its content maps like
+the top-level field's, so provenance sees it through the same channel.
+Refusing it would drop every such exchange at normalization.
 """
 
 [evidence]
-unit = "crosstalk_canonical::tests::top_level_system_prompt_becomes_first_message"
+unit = ["crosstalk_canonical::tests::top_level_system_prompt_becomes_first_message", "crosstalk_canonical::tests::system_turn_stays_in_place"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -93,7 +93,7 @@ gateway (and the composers beside it). The roles:
 | Role | Crates |
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
-| composition | `api`, `client`, `eval`, `gateway` (`eval` is registered before `crates/eval` exists; the member check does not require it yet) |
+| composition | `api`, `client`, `e2e`, `eval`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
 | test support | `memory`, `sim`, `testkit` |
 | open | `spec`, `store`, and every third-party crate |
 
@@ -101,7 +101,7 @@ The rules, applied to every declared dependency (normal, dev and build,
 including optional and target-specific ones) of every workspace member:
 
 1. A layer crate never depends on another layer crate, nor on `api`,
-   `client`, `eval` or `gateway`, under any kind, except that it may depend on
+   `client`, `e2e`, `eval` or `gateway`, under any kind, except that it may depend on
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
@@ -129,6 +129,9 @@ parses the JSON with `serde_json`.
   `Composer::required` exempts `eval` until `crates/eval` lands (roadmap
   P3.1); `eval_composes_gateway_and_layers_and_is_not_yet_required`
   checks that it is classified as a composer meanwhile.
+- `e2e_composes_gateway_and_layers_and_no_layer_uses_it` checks that
+  `e2e` may depend on the gateway and every layer, and that a layer's
+  dependency on it, of any kind, is `LayerOnComposer`.
 - `every_crate_depends_on_the_spec` fails if a member other than the spec
   lacks a normal dependency on `crosstalk-spec`.
 - The other tests exercise `check` on hand-built edges: every layer pair

@@ -7,6 +7,7 @@ mod dst;
 mod ingest;
 mod raw;
 mod record;
+mod refusals;
 
 crosstalk_sim::sim_test! {
     /// `canonical.capture.blobs-before-event` (dst): every blob an exchange
@@ -43,4 +44,11 @@ crosstalk_sim::sim_test! {
     fn pipeline_concurrent_ingests_keep_ids_monotonic(ctx) {
         ingest::concurrent_ingests_keep_ids_monotonic(ctx).await
     }
+}
+
+/// Refusals are counted by reason and protocol (the `normalize_failed`
+/// series of `/metrics`).
+#[tokio::test]
+async fn refusals_are_counted_by_reason_and_protocol() {
+    refusals::refusals_are_counted_by_reason_and_protocol().await;
 }

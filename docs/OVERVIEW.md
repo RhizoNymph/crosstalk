@@ -162,6 +162,11 @@ Overview:
       unscored until L3 to L5 consume the bus) produces spec Transmissions;
       the scorer aligns them with the labels and reports per dataset,
       route, carrier, match class and tier against regression gates.
+    e2e: >
+      Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
+      scripted two-agent Claude Code scenario as wire traffic, captured
+      through L0 and L1, fed through Pipeline::ingest, and asserted through
+      the L8 surface; the scenario is reusable for demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -638,8 +643,9 @@ Features Index:
     description: >
       crosstalk-canonical, L1 (P2.5). AnthropicMessages, the spec's
       Normalizer for Anthropic Messages in every dialect, as pure
-      functions: the request body (system prompt as a string or blocks,
-      user turns split into maximal runs of one role so tool results
+      functions: the request body (system prompt as a string or blocks
+      first, a role "system" turn inside messages as a System message in
+      place, user turns split into maximal runs of one role so tool results
       become Tool messages, tool calls with canonical JSON arguments,
       thinking and redacted thinking, base64 media as their own blobs,
       cache_control markers dropped, unknown blocks kept and warned) and
@@ -652,8 +658,10 @@ Features Index:
       encoding and exact-number JSON (spec_primitives); thinking keeps its
       signature; token usage reports cache reads and cache writes as parts
       of input; store() writes every body and media blob through
-      BlobStore. Goldens (the spec's NormalizedExchange JSON) over the
-      testkit corpus, properties over generated requests and streams.
+      BlobStore. A refused body's top-level shape (keys, roles, content
+      kinds, never values) for the gateway's debug log. Goldens (the
+      spec's NormalizedExchange JSON) over the testkit corpus, properties
+      over generated requests and streams.
     entry_points:
       - crates/canonical/src/lib.rs
       - crates/canonical/src/anthropic/mod.rs
@@ -739,7 +747,8 @@ Features Index:
       envelope, synced before its ack, to
       <parent of blobs.root>/exchanges/exchange-log.jsonl (a P3 stopgap:
       the spec has no exchange store). The ops listener serves /metrics
-      (Prometheus text), /healthz (counters) and /readyz (database when
+      (Prometheus text; refusals as normalize_failed by fixed reason and
+      protocol codes), /healthz (counters) and /readyz (database when
       configured, migrations, role tasks). SIGINT and SIGTERM stop
       accepting, drain in-flight streams up to a deadline (cutting the
       rest, which are still captured as client_disconnected), drain the
@@ -888,4 +897,29 @@ Features Index:
       - crates/eval/src/datasets/tau2/mod.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
+  e2e_smoke:
+    description: >
+      crosstalk-e2e (a composer): the end-to-end smoke. A deterministic
+      wiki relay scenario as Claude Code HTTP traffic (agent A writes a
+      shared wiki page with a distinctive sentence through Write, agent B
+      reads it through Read and repeats it; two sessions, two API keys),
+      captured through L0's route table, identifier and adapter and L1's
+      normalizer into NormalizedExchanges, fed through Pipeline::ingest in
+      time order, and read back only through QueryApi (agents by session,
+      the A to B channel edge, the confirmed transmission, its evidence,
+      the discovered channel). The composition is shaped like
+      crosstalk_gateway::live::Live and is wired today from InProcess plus
+      a pipeline over its blob store and bus; the assertions needing L3 to
+      L7 are ignored until Live composes them. The scenario and readers are
+      a library, so a UI demo can feed the same traffic into a running
+      Live.
+    entry_points:
+      - crates/e2e/src/lib.rs
+      - crates/e2e/src/scenario/mod.rs
+      - crates/e2e/src/capture.rs
+      - crates/e2e/src/compose.rs
+      - crates/e2e/src/read.rs
+      - crates/e2e/tests/smoke/main.rs
+    depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
+    doc: docs/features/e2e_smoke.md
 ```

@@ -7,13 +7,14 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::config::PipelineConfig;
+use crate::normalize_failure::{FailureCounts, FailureStats, NormalizeFailure};
 
 /// The capture stage's and ingest's counters, shared with the health
 /// endpoint.
 #[derive(Debug, Default)]
 pub struct PipelineStats {
     published: AtomicU64,
-    normalize_failed: AtomicU64,
+    normalize_failed: FailureStats,
     store_failed: AtomicU64,
     store_retries: AtomicU64,
     publish_failed: AtomicU64,
@@ -26,7 +27,8 @@ pub struct PipelineCounts {
     /// Exchanges whose bodies were stored and whose `ExchangeCaptured` was
     /// published.
     pub published: u64,
-    /// Exchanges the normalizer refused (the proxy path only).
+    /// Exchanges the normalizer refused (the proxy path only), whatever
+    /// the reason: the sum of [`PipelineStats::normalize_failures`].
     pub normalize_failed: u64,
     /// Exchanges given up after every blob put attempt failed.
     pub store_failed: u64,
@@ -37,11 +39,12 @@ pub struct PipelineCounts {
     pub publish_failed: u64,
 }
 
-/// One of the counters, named so a caller cannot bump the wrong field.
+/// One of the plain counters, named so a caller cannot bump the wrong
+/// field. Refusals are counted by reason and protocol instead, through
+/// [`PipelineStats::bump_normalize_failed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Counter {
     Published,
-    NormalizeFailed,
     StoreFailed,
     StoreRetries,
     PublishFailed,
@@ -55,7 +58,7 @@ impl PipelineStats {
     pub fn snapshot(&self) -> PipelineCounts {
         PipelineCounts {
             published: self.published.load(Ordering::Relaxed),
-            normalize_failed: self.normalize_failed.load(Ordering::Relaxed),
+            normalize_failed: self.normalize_failed.snapshot().total(),
             store_failed: self.store_failed.load(Ordering::Relaxed),
             store_retries: self.store_retries.load(Ordering::Relaxed),
             publish_failed: self.publish_failed.load(Ordering::Relaxed),
@@ -65,12 +68,21 @@ impl PipelineStats {
     pub(crate) fn bump(&self, counter: Counter) {
         let field = match counter {
             Counter::Published => &self.published,
-            Counter::NormalizeFailed => &self.normalize_failed,
             Counter::StoreFailed => &self.store_failed,
             Counter::StoreRetries => &self.store_retries,
             Counter::PublishFailed => &self.publish_failed,
         };
         field.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Count one refusal under its reason and protocol.
+    pub(crate) fn bump_normalize_failed(&self, failure: NormalizeFailure) {
+        self.normalize_failed.bump(failure);
+    }
+
+    /// The refusals by reason and protocol.
+    pub fn normalize_failures(&self) -> FailureCounts {
+        self.normalize_failed.snapshot()
     }
 }
 

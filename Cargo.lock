@@ -367,6 +367,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "crosstalk-e2e"
+version = "0.1.0"
+dependencies = [
+ "crosstalk-api",
+ "crosstalk-canonical",
+ "crosstalk-gateway",
+ "crosstalk-ingress",
+ "crosstalk-memory",
+ "crosstalk-spec",
+ "crosstalk-surface",
+ "crosstalk-transport",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "crosstalk-eval"
 version = "0.1.0"
 dependencies = [
