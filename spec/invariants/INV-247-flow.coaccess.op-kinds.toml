@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.coaccess.op-kinds"
+statement = "A CoAccess joins a Write access as its write and a Read access as its read."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Two reads of a public page, or two writes to one file, are not a channel
+between two agents; only a write followed by a read can carry the writer's
+content to the reader. `CoAccess::new` rejects anything else with
+`InvalidCoAccess::WrongOperations`, including the two accesses passed in
+swapped order.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::evidence::CoAccess::new"
+unit = ["crosstalk_spec::tests::flow::co_access_rejects_invalid_pairs", "crosstalk_spec::tests::flow::co_access_rejects_read_then_write_order"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

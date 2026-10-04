@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.upgrade-keeps-coaccess"
+statement = "Confirming a Suspected transmission keeps every CoAccess it held in the Confirmed co_access."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The access pattern stays part of the evidence after content arrives: it
+locates the channel and the lag. Dropping it on upgrade would leave the
+confirmed transmission without the accesses that explain how the text moved.
+"""
+
+[evidence]
+unit = "crosstalk::flow::correlator::tests::upgrade_keeps_coaccess"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

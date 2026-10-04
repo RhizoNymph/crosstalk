@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.transmission.content-after-discard-opens-new"
+statement = "Content evidence that arrives after a suspected transmission was discarded opens a new transmission through the normal route selection."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Discarded is final, but late content is still evidence of communication.
+Dropping it would lose a real transmission to consumer lag, while reviving
+the discarded one would confirm on access evidence whose correlator state has
+been released. The new transmission takes its route and identity as any
+other match would.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::content_after_discard_opens_new"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

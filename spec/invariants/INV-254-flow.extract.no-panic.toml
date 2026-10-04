@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.extract.no-panic"
+statement = "ResourceExtractor::extract returns accesses or a typed ExtractError for arbitrary tool call arguments and results, and never panics."
+kind = "domain"
+property = "invariant"
+requires = ["fuzz"]
+rationale = """
+Tool arguments are model-generated and bash commands are parsed with
+tree-sitter, so inputs are adversarial. A panic would take down the flow
+consumer for every agent, and the poisoned delta would be redelivered
+forever.
+"""
+
+[evidence]
+fuzz = "crosstalk::flow::extract::fuzz::extract_arbitrary_call"
+
+[evidence-review]
+fuzz = { agent = "false", human = "false" }

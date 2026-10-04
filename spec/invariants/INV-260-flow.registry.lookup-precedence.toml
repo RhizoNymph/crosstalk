@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.registry.lookup-precedence"
+statement = "ChannelRegistry::lookup agrees with a reference model that returns Known for a resource already on a channel, otherwise Declared for a locator matching a declared pattern, and otherwise New."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+Known wins over Declared so that a declaration added later does not silently
+move a resource, and the history already correlated on it, to another
+channel. Declared wins over New so that traffic on a configured channel is
+never reported as a newly discovered one.
+"""
+
+[evidence]
+property = "crosstalk::flow::registry::tests::lookup_agrees_with_precedence_model"
+integration = "crosstalk::flow::registry::integration::pg_lookup_precedence"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
