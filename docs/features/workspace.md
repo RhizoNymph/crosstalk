@@ -67,10 +67,10 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 
 | File | Role |
 | --- | --- |
-| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*"]`, `exclude = ["ui"]`, `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`) |
+| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*"]`, `exclude = ["ui"]`, `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`; for `crosstalk-testkit`, `bytes = "=1.12.1"`, `http-body-util = "=0.1.5"`, `hyper = "=1.11.1"`, `hyper-util = "=0.1.21"`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"`, `tracing = "=0.1.44"`, each the UI's resolved version) |
 | `Cargo.lock` | The workspace lock. It replaced `spec/Cargo.lock` and resolves the identical third-party versions (serde 1.0.229, serde_core, serde_derive, serde_json 1.0.151, syn 3.0.6, quote, proc-macro2, unicode-ident, itoa, memchr, zmij), with the same checksums |
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde and serde_json from the workspace pins |
-| `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; one dependency, `crosstalk-spec` by path |
+| `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; one dependency, `crosstalk-spec` by path, until its roadmap item adds more (`crates/testkit/Cargo.toml`: see `docs/features/testkit.md`) |
 | `crates/gateway/Cargo.toml` | Adds the `crosstalk` binary and a `serde_json` dev-dependency for the architecture test |
 
 A crate that needs a new third-party dependency adds its exact pin to

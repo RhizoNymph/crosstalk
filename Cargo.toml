@@ -17,5 +17,12 @@ unsafe_code = "forbid"
 # Shared pins. Only what a member uses today; a crate that needs another
 # dependency adds its pin here (exact, `=`, matching the UI where they overlap).
 [workspace.dependencies]
+bytes = "=1.12.1"
+http-body-util = "=0.1.5"
+hyper = "=1.11.1"
+hyper-util = "=0.1.21"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+thiserror = "=2.0.21"
+tokio = "=1.53.1"
+tracing = "=0.1.44"

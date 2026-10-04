@@ -304,4 +304,28 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  testkit:
+    description: >
+      Test support (crosstalk-testkit, roadmap P1.4, a dev-dependency only):
+      deterministic seeded ids and a fixed epoch; builders for agents,
+      resources, accesses, channels, exchanges, normalized exchanges,
+      content matches, co-accesses, transmissions in every state, alerts,
+      rules, topic version histories and bus envelopes, each building
+      through the spec's checked constructors; a synthetic Anthropic
+      Messages corpus (request.http, response.http, meta.json per case,
+      Claude Code's headers and body shape, streaming and not, tool use,
+      thinking, cache control, mid-stream and HTTP errors, non-generation
+      routes) with a loader that checks each case against its metadata; a
+      hyper fake upstream that replays cases with paced event streams and
+      stalls, disconnects, withholds or fails on command and records what
+      it received; and a hyper fake harness client that collects responses
+      chunk by chunk.
+    entry_points:
+      - crates/testkit/src/lib.rs
+      - crates/testkit/src/corpus/anthropic.rs
+      - crates/testkit/src/upstream/mod.rs
+      - crates/testkit/src/client.rs
+      - crates/testkit/corpus/README.md
+    depends_on: [type_spec, workspace]
+    doc: docs/features/testkit.md
 ```
