@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-merged.none-for-repoints"
+statement = "Applying a merge publishes no AgentMerged event for the agents it repoints."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Repointing agents already merged into the source is bookkeeping that keeps
+chains flat. Directory resolution already sends their ids to the new
+target, so an event per repointed agent would announce merges no resolver
+or operator made, and could trigger merge alerts for them.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::repointed_agents_publish_no_agent_merged"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

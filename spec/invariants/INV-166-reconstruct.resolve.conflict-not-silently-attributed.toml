@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.resolve.conflict-not-silently-attributed"
+statement = "The chain resolver attributes an exchange whose evidence points at several agents to one of them only when the same resolution merges every other candidate into that agent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Picking one candidate without recording why would hide an identity
+ambiguity: the other candidates would silently lose traffic, and no
+AgentMerged event would tell downstream readers or operators. The chain
+resolver either records a merge (which publishes AgentMerged) or leaves the
+Conflict for operator review.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::reconstruct::tests::conflict_without_merge_is_left_for_review",
+  "crosstalk::reconstruct::tests::conflict_attributed_only_with_merge",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

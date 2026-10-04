@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.thread.origin-matches-outcome"
+statement = "A conversation created by a Starts, Forks or Compacts outcome is stored with origin Root, Fork with the outcome's parent and shared_prefix, or Compaction with the outcome's predecessor, respectively."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The outcome is published once, but the stored origin is what later queries
+and threading read. If they disagree, a compaction loses the link to its
+predecessor and a fork's base history (and so the delta concatenation law)
+is computed from the wrong parent.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::reconstruct::tests::start_stores_root_origin",
+  "crosstalk::reconstruct::tests::fork_stores_fork_origin",
+  "crosstalk::reconstruct::tests::compaction_stores_link_to_predecessor",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

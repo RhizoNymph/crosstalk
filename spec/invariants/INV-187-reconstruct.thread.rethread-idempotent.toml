@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.rethread-idempotent"
+statement = "Threading an exchange that has already been threaded returns the outcome of its first threading and leaves every stored conversation unchanged."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+ExchangeCaptured is delivered at least once. A second threading that saw
+its own first effect would find the request equal to the stored history and
+emit a different outcome, or append the response again and corrupt the
+history. The key is the exchange id, so this is entity-level idempotence
+owned by reconstruction, not envelope dedup.
+"""
+
+[evidence]
+dst = "crosstalk::reconstruct::tests::dst_rethreading_is_idempotent"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
