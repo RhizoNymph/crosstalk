@@ -399,7 +399,9 @@ pub struct TurnPoint {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SpanPoint {
     pub span: SpanId,
-    /// Canonical `Span::agent`.
+    /// The span's author: the agent recorded when it was indexed
+    /// (`SpanLocation`'s author from `SpanIndex::span`), resolved through
+    /// `AgentDirectory::canonical` at read time. Never stored resolved.
     pub agent: AgentId,
     pub exchange: ExchangeId,
     /// `None` while the exchange is not threaded.
@@ -712,14 +714,14 @@ a fault and becomes `Store`, as `EvidenceError` does.
 | Exchange meta, continuation, outcome, harness claim, ingress | L1: the `Exchange` record (`ExchangeCaptured`) | **Missing:** exchanges only go to a stopgap JSONL log. New `ExchangeReads` (L1 store and read, Postgres behind it), shaped like `NormalizedExchange` without the bodies (they stay in the blob store). |
 | Message bodies, part kinds, `text_bytes`, text | Blob store (`BlobStore::get`, `Message::part_text`) | Exists. Part shapes are computed from the body at read time (View reads bodies but returns no text). |
 | `IncrementHistory` | L3 `ResponsesStateThreader` outcome | **Depends on P4.1:** record on the stored delta whether the increment's previous response resolved. |
-| Output spans and their state | L4 span records | **Missing:** no span read trait. The eval PR adds `SpanIndex::span(SpanId)`; `ProvenanceReads` extends it with `spans_of(exchange)` and the span's agent and state. |
+| Output spans and their state | L4 span records | **Missing:** no span read trait. The eval PR adds `SpanIndex::span(SpanId)`; `ProvenanceReads` extends it with `spans_of(exchange)` and each span's state. |
 | `Inbound` marks | L4 `ContentMatched` by `reader_exchange` | **Missing, asked of P4.2:** `ProvenanceReads::matches_read_in(exchange)` over the match index by reader message (an exchange's messages are known from its record, so either key serves). |
 | `ReadBy`, `span_readers` | L4 `ContentMatched` by `origin` | **Missing, asked of P4.2:** `ProvenanceReads::readers(span, page)` and a count over the match index by origin span. |
 | `TrafficSource`, `Turn::ingress`, `ReplayFilter` | `ClientContext::ingress` (`IngressMode::Replay { corpus }` from the eval PR) | Read from the exchange record. Filtering the list by source needs the conversation table to record its first turn's source (or join to L1). |
 | `ProvenanceStatus` | L4: per-delta completion | **Missing, depends on P4.2:** L4 must record when it committed a delta's spans and matches (one row per exchange). |
 | `TransmissionMark` | L5: the transmission holding a content match | **Missing:** transmissions are read by id only. New `TransmissionStore::holding`, beside the eval PR's `AccessStore::access`. A mark links to the evidence page in every state, `Suspected` and `Discarded` included, which that PR's evidence read covers. |
 | `ConversationTraffic` | L5 + L4 + L3 joined | **Missing:** needs the two lookups above per conversation; a materialized `(conversation, direction, transmission)` table in the surface's read side, or computed per page with the indexes. Acceptable to ship it as two counts recomputed on read at first. |
-| `SpanPoint` | `SpanIndex::span` (exchange, message, part, range) + the span's agent + L3 `locate` | Covered by `SpanIndex` once it also gives the agent (or `ProvenanceReads::spans` does). |
+| `SpanPoint` | `SpanIndex::span` (exchange, message, part, range, recorded author) + `AgentDirectory` + L3 `locate` | Covered: crosstalk-impl is asking the eval PR to put the recorded author in `SpanLocation`. The surface resolves it to the canonical agent at read time, as it does every stored agent id, so a later merge or unmerge shows on the next read. |
 | Claims | `ClientContext::harness` per exchange; `ClaimSet` per conversation | Computed from exchange records; no new store. |
 
 ### New store traits
@@ -828,10 +830,12 @@ pub enum ConversationReadError { Store { reason: String }, InvalidCursor }
 // Extends the eval PR's `SpanIndex` (`span(SpanId) -> Option<SpanLocation>`
 // with exchange, message, PartRef and ByteRange); crosstalk-impl merges the
 // two into one L4 read trait. No second span lookup: `span_points` uses
-// `SpanIndex::span`, and needs the span's agent beside its location
-// (either `SpanIndex` returns it or `spans_of` does).
+// `SpanIndex::span`, whose `SpanLocation` carries the author agent as
+// recorded when the span was indexed. L4 never resolves it; the surface
+// resolves it through `AgentDirectory` at read time.
 pub trait ProvenanceReads: SpanIndex {
-    /// The spans of `exchange`'s output, with their agent and current state.
+    /// The spans of `exchange`'s output, with their recorded author and
+    /// current state.
     fn spans_of(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Vec<Span>, ProvenanceReadError>> + Send;
     /// Every content match whose `reader_exchange` is `exchange`.
@@ -922,10 +926,10 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 | 1019 | `surface.conversation.text-aligns` | For one window, `conversation_text` returns the same turns, and per turn the same messages and parts in the same order, as `conversation_turns`. |
 | 1020 | `surface.conversation.text-slice` | A `PartText` is bytes `from .. from + len` of `Message::part_text`, cut on character boundaries, at most the limit (at least one character when any remain), with the part's full length; mark ranges index the same bytes. |
 | 1021 | `surface.conversation.body-dropped` | A body content retention dropped is `BodyDropped` and the rest of the read is returned. |
-| 1022 | `surface.conversation.locate` | `exchange_turns` maps an exchange to `(c, i)` iff turn `i` of `c` is that exchange; `span_points` names the span's own exchange and that turn. |
+| 1022 | `surface.conversation.locate` | `exchange_turns` maps an exchange to `(c, i)` iff turn `i` of `c` is that exchange; `span_points` names the span's own exchange and that turn, and `AgentDirectory::canonical` of its recorded author as of the read. |
 | 1023 | `provenance.scan.status-after-commit` | A turn is `Scanned` only once L4 has committed every span of its output and every match read in its exchange; until then marks may be partial. |
 | 1024 | `canonical.exchange.store-read` | `ExchangeReads::exchanges` returns each stored exchange as `put` stored it, with `threaded` set iff L3 threaded it there; `list` is (`started_at`, `ExchangeId`) descending, a keyset traversal returns each admitted exchange once, and `conversation` admits exactly the exchanges whose `threaded` names that conversation. |
-| 1025 | `surface.conversation.merge-split` | Merges and unmerges change no stored conversation, turn, span or match; conversation reads follow `AgentDirectory` on the next read. |
+| 1025 | `surface.conversation.merge-split` | Merges and unmerges change no stored conversation, turn, span or match, and every agent id is stored as recorded (a span's author as recorded when it was indexed); conversation reads resolve each through `AgentDirectory` on every read, so the next read follows a merge or unmerge. |
 | 1026 | `surface.conversation.claims-only` | Turn `harness` fields and the head's `claims` come only from `ClientContext::harness`; the head's `ClaimSet` is the union of its turns' claims at their start times. |
 | 1027 | `surface.conversation.increment-unseen` | A turn is `Increment { history: Unseen }` iff its exchange is an increment whose previous response did not resolve; it is turn 0 of a `Root` conversation. |
 | 1028 | `surface.conversation.delegated-from` | `delegated_from` is set iff some transmission routed `Delegation(ParentToChild)` has a reader exchange among the conversation's turns, and names the earliest such turn's. |
