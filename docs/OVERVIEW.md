@@ -78,7 +78,8 @@ Overview:
       roles). The only crates allowed to depend on layer crates.
     support: >
       Crates crosstalk-store (Postgres pool, per-layer migrations, test
-      database), crosstalk-memory (in-memory reference stores),
+      database), crosstalk-memory (in-memory reference stores and the
+      model-based harnesses the Postgres stores reuse; L3 to L5 done),
       crosstalk-sim (deterministic simulation) and crosstalk-testkit
       (builders, recorded corpus, fake upstreams). Layer crates may depend
       on store; memory, sim and testkit are their dev-dependencies only.
@@ -304,4 +305,31 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  memory:
+    description: >
+      crosstalk-memory, the in-memory reference implementation of every
+      stateful spec store, each with a model-based proptest harness that
+      runs random operation sequences on a store under test and on the
+      reference and requires equal results, events and observations. The
+      pipeline half (L3 to L5): MemoryAgents (AgentDirectory, the merge
+      log with exact unmerges and vetoes through IdentityResolver's merge,
+      unmerge and rename, a reference evidence lookup for resolve,
+      ClaimStore, ActivityStore, AgentReads), MemoryFingerprintIndex
+      (FingerprintIndex with cutoff, retention and shards),
+      MemoryChannels (ChannelRegistry and ChannelDirectory: lookups,
+      declarations, policy history, promotion by promotion::plan and its
+      coverage, supersession, resource use) and MemoryVerdicts
+      (TransmissionVerdicts), plus seeding traits for the writes the spec
+      leaves to the layer consumers. State sits behind a std RwLock per
+      store; events go to an mpsc outbox after each commit.
+    entry_points:
+      - crates/memory/src/reconstruct/mod.rs
+      - crates/memory/src/provenance/mod.rs
+      - crates/memory/src/flow/mod.rs
+      - crates/memory/src/reconstruct/model.rs
+      - crates/memory/src/provenance/model.rs
+      - crates/memory/src/flow/registry/model.rs
+      - crates/memory/src/flow/verdicts/model.rs
+    depends_on: [type_spec, workspace]
+    doc: docs/features/memory.md
 ```
