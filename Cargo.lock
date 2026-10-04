@@ -347,6 +347,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "crosstalk-demo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bytes",
+ "crosstalk-spec",
+ "crosstalk-testkit",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "crosstalk-eval"
 version = "0.1.0"
 dependencies = [
