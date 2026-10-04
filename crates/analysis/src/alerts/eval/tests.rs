@@ -681,23 +681,25 @@ fn context_strategy() -> impl Strategy<Value = FakeRuleContext> {
 /// The trigger of each kind.
 fn is_trigger(rule: &AlertRuleDef, event: &BusEvent) -> bool {
     use crosstalk_spec::aggregates::alert::AlertRuleKind as Kind;
-    match (rule.kind(), event) {
-        (Kind::NewChannel, BusEvent::Detect(DetectEvent::ChannelDiscovered { .. }))
-        | (
+    matches!(
+        (rule.kind(), event),
+        (
+            Kind::NewChannel,
+            BusEvent::Detect(DetectEvent::ChannelDiscovered { .. })
+        ) | (
             Kind::UnreviewedTraffic | Kind::UnsanctionedTraffic,
             BusEvent::Detect(DetectEvent::TransmissionConfirmed { .. }),
-        )
-        | (Kind::SanctionedUnused, BusEvent::Detect(DetectEvent::DeclaredChannelUnused { .. }))
-        | (
+        ) | (
+            Kind::SanctionedUnused,
+            BusEvent::Detect(DetectEvent::DeclaredChannelUnused { .. })
+        ) | (
             Kind::SuspectedTransmission,
             BusEvent::Detect(DetectEvent::TransmissionSuspected { .. }),
-        )
-        | (
+        ) | (
             Kind::WatchedTopic | Kind::SemanticQuery,
             BusEvent::Insight(InsightEvent::TransmissionClassified { .. }),
-        ) => true,
-        _ => false,
-    }
+        )
+    )
 }
 
 proptest! {
