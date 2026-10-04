@@ -5,8 +5,11 @@ use crate::derived::flow::resource::Host;
 use crate::derived::flow::transmission::{
     DelegationDirection, DirectCarrier, NonChannelRoute, Route,
 };
-use crate::interfaces::l0_ingress::{AuthHostRejected, InterceptAllowlist};
+use crate::interfaces::l0_ingress::{
+    AuthHostRejected, InterceptAllowlist, ResponseFraming, ResponseHead,
+};
 use crate::interfaces::l2_transport::{InvalidRetryPolicy, RetryPolicy};
+use crate::observed::exchange::Transport;
 
 #[test]
 fn retry_policy_requires_ordered_non_zero_backoff() {
@@ -55,4 +58,56 @@ fn non_channel_routes_convert_without_channel() {
     for (from, to) in cases {
         assert_eq!(Route::from(from), to);
     }
+}
+
+fn response_head(headers: &[(&str, &str)]) -> ResponseHead {
+    ResponseHead {
+        status: 200,
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect(),
+    }
+}
+
+#[test]
+fn event_stream_content_type_frames_as_sse() {
+    let head = response_head(&[("content-type", "text/event-stream")]);
+    assert_eq!(head.framing(), ResponseFraming::EventStream);
+    assert_eq!(head.framing().transport(), Transport::Sse);
+}
+
+#[test]
+fn event_stream_detection_ignores_case_and_parameters() {
+    let head = response_head(&[("Content-Type", "Text/Event-Stream; charset=utf-8")]);
+    assert_eq!(
+        head.content_type(),
+        Some("Text/Event-Stream; charset=utf-8")
+    );
+    assert_eq!(head.framing(), ResponseFraming::EventStream);
+}
+
+#[test]
+fn other_content_types_frame_as_whole_body() {
+    let json = response_head(&[("content-type", "application/json")]);
+    assert_eq!(json.framing(), ResponseFraming::Whole);
+    assert_eq!(json.framing().transport(), Transport::Http);
+    let prefixed = response_head(&[("content-type", "text/event-stream-ish")]);
+    assert_eq!(prefixed.framing(), ResponseFraming::Whole);
+}
+
+#[test]
+fn missing_content_type_frames_as_whole_body() {
+    let head = response_head(&[("x-request-id", "req_1")]);
+    assert_eq!(head.content_type(), None);
+    assert_eq!(head.framing(), ResponseFraming::Whole);
+}
+
+#[test]
+fn framing_reads_the_first_content_type_header() {
+    let head = response_head(&[
+        ("content-type", "application/json"),
+        ("content-type", "text/event-stream"),
+    ]);
+    assert_eq!(head.framing(), ResponseFraming::Whole);
 }

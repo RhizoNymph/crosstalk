@@ -26,11 +26,18 @@ The types follow data through the stack:
    credential (`CredentialRef`), the account (`AccountHash`) and reads the
    harness headers (`HarnessClaim`, `HarnessIds`, `RequestClass`) into a
    `ClientContext`. A `ProviderAdapter` classifies the endpoint
-   (`EndpointKind`): only `Generation` is captured. It decodes a `WireRequest`
-   and supplies a `ResponseFramer` (HTTP, SSE) or a `WebSocketTap` (one per
-   connection, one exchange per turn). `FrameEvent`s drive the in-flight
-   `ExchangeStage`. Each finished exchange becomes a `RawExchange` on an
-   in-process channel.
+   (`EndpointKind`): only `Generation` is captured. All of this reads only
+   the request head, and the request is forwarded upstream as soon as it is
+   routed. `decode_request` (gzip and zstd included) runs concurrently on a
+   tee of the body, off the hot path, and yields a `WireRequest`. When the
+   response head arrives, the adapter builds a `ResponseFramer` from the
+   `ResponseHead` (its content type gives the `ResponseFraming`: SSE or a
+   whole body) and its own protocol; a WebSocket connection gets a
+   `WebSocketTap` instead (one exchange per turn). `FrameEvent`s drive the
+   in-flight `ExchangeStage`. The `DecodedRequest` attaches to the exchange
+   when it is ready, and the finished exchange becomes a `RawExchange` on an
+   in-process channel. If decoding fails, the exchange was still forwarded
+   and relayed, and is counted as uncaptured.
 2. **L1 canonicalization.** A `Normalizer` for the exchange's
    `WireProtocol`, handling its `Dialect`, turns a `RawExchange` into a
    `NormalizedExchange`: an `Exchange` that references messages by
@@ -48,7 +55,12 @@ The types follow data through the stack:
    The `Threader` resolves `Continuation::Increment` exchanges through the
    stored response chain and gives a `ThreadOutcome` holding a
    `ConversationDelta` (new inputs, new system prompt, output), which is
-   published.
+   published. A conversation's stored history is non-system messages only:
+   each delta appends its new inputs and then its output. A compaction's
+   history starts with its first request's non-system messages in request
+   order (carried-over messages included) and that exchange's output, and
+   its first delta's new inputs are those messages minus the ones whose hash
+   is in the predecessor's history.
 5. **L4 provenance.** The `Segmenter` cuts the delta's output into
    `SpanDraft`s classified by `Origin`. Originated spans are fingerprinted
    and inserted into the `FingerprintIndex` (which accepts only an
@@ -119,6 +131,13 @@ The types follow data through the stack:
   mints, rewrites or strips credentials. Raw credentials are hashed with a
   keyed BLAKE3 and never stored.
 - Only `EndpointKind::Generation` requests produce exchanges.
+- A request is forwarded as soon as it is routed; nothing on the hot path
+  waits for its body to decode. Request decoding runs concurrently on a tee
+  of the body, and the response framer is built from the `ResponseHead`
+  and the adapter's protocol, never from the decoded request. A
+  `RawExchange` holds a `DecodedRequest`, so an exchange whose request fails
+  to decode is never captured; it is still forwarded and is counted as
+  uncaptured.
 - Forward-proxy mode intercepts TLS only for hosts on an
   `InterceptAllowlist`, which can never contain a vendor auth host. An
   unrouted reverse-proxy request is answered locally with 421.
@@ -142,6 +161,12 @@ The types follow data through the stack:
   self-merge.
 - Tool arguments are canonical JSON, so an echoed message hashes like the
   original.
+- A conversation's stored history holds non-system messages only. A
+  `Compaction` conversation's history is its first request's non-system
+  messages in request order, carried-over messages included, then that
+  exchange's output, then each later delta's `new_inputs` and output. Its
+  first delta's `new_inputs` are that request's non-system messages minus
+  the carried-over ones (hash in the predecessor's history), in order.
 
 - A message's role is its `MessageBody` variant: tool calls appear only in
   assistant messages, tool results only in tool messages. Normalizers split

@@ -44,7 +44,8 @@ Overview:
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
     L0 routes it to its upstream, hashes the credential, forwards it unchanged
-    and tees the response (or each WebSocket turn) →
+    without waiting for its body to decode, decodes the body concurrently
+    off the hot path, and tees the response (or each WebSocket turn) →
     RawExchange (in-process) → L1 normalizes, writes message bodies to the
     blob store, publishes ExchangeCaptured → L3 resolves the agent and
     threads the conversation, publishes ConversationDelta → L4 indexes the

@@ -42,7 +42,8 @@ pub struct ConversationDelta {
     /// Request messages not seen in this conversation before: tool results
     /// and user turns since the last exchange. Read-side detection scans
     /// these. For an increment exchange, the increment after resolution; for
-    /// a compaction, the messages not carried over from the predecessor.
+    /// a compaction's first exchange, its non-system messages whose hash is
+    /// not in the predecessor's history, in request order.
     pub new_inputs: Vec<MessageHash>,
     /// The system message, when it is new to the conversation (its first
     /// exchange, or the harness changed it).

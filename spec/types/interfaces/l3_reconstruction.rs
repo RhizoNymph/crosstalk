@@ -24,6 +24,19 @@
 //! scope; anything else counts as unseen, so a forged id cannot attach one
 //! caller's turn to another's conversation.
 //!
+//! A conversation's stored history (`Conversation::messages`) holds non-system
+//! messages only. Each `Extends` appends the delta's `new_inputs` and then its
+//! output, if any, so the history stays in the order the next request repeats
+//! it.
+//!
+//! A `Compacts` conversation's history starts with its first request's
+//! non-system messages in request order, carried-over messages included, then
+//! that exchange's output; each later delta's `new_inputs` and then its output
+//! follow. Its first delta's `new_inputs` are that request's non-system
+//! messages minus the carried-over ones (those whose hash is in the
+//! predecessor's stored history), in request order, so read-side detection
+//! scans only what the compaction introduced, such as the summary.
+//!
 //! Deltas and other records carry the agent the exchange was attributed to,
 //! not its canonical agent; readers resolve through `AgentDirectory`.
 

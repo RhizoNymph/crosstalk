@@ -15,7 +15,8 @@ use crate::ids::{AgentId, ConversationId, MessageHash};
 pub struct Conversation {
     pub id: ConversationId,
     pub agent: AgentId,
-    /// The longest history seen so far, in order.
+    /// The longest non-system history seen so far, in order. System messages
+    /// are not stored here; each delta's `new_system` records them.
     pub messages: Vec<MessageHash>,
     pub origin: ConversationOrigin,
 }
@@ -25,18 +26,28 @@ pub enum ConversationOrigin {
     Root,
     /// Shares the first `shared_prefix` non-system messages with `parent`,
     /// then diverges. (System messages are left out of prefix matching, so
-    /// they are left out of this count too.) The shared prefix always includes at least one assistant
-    /// message, so conversations that only share a system prompt and first
-    /// user turn are separate roots. A retry (a request that is a prefix of
-    /// the parent's history) forks with `shared_prefix` equal to the
-    /// request's length.
+    /// they are left out of this count too.) The shared prefix always
+    /// includes at least one assistant message, so conversations that only
+    /// share a system prompt and first user turn are separate roots. A retry
+    /// (a request that is a prefix of the parent's history) forks with
+    /// `shared_prefix` equal to the request's non-system message count.
     Fork {
         parent: ConversationId,
         shared_prefix: u32,
     },
     /// The harness summarized `predecessor` and started over with the
-    /// summary. Messages the new conversation carries over from the
-    /// predecessor (same hash) are not new inputs.
+    /// summary. A message is carried over when its hash is in the
+    /// predecessor's stored history.
+    ///
+    /// The stored history (`messages`) is the first request's non-system
+    /// messages in request order, carried-over ones included, then that
+    /// exchange's output; each later delta's `new_inputs` and then its
+    /// `output` follow. It does not start with the predecessor's history:
+    /// carried-over messages appear where the first request put them.
+    ///
+    /// The first delta's `new_inputs` are that first request's non-system
+    /// messages minus the carried-over ones, in request order. Later deltas
+    /// extend the conversation like any other.
     Compaction {
         predecessor: ConversationId,
     },
