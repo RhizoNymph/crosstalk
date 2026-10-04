@@ -47,13 +47,15 @@ Overview:
       their sinks, triage), L7 topology (edge and access buckets per time
       window, graphs with node metadata, the channel-centred graph, time
       series, and the watermark before which every bucket is final), L8
-      surface (the query API with cursor-paginated lists, channel rows
-      carrying activity or their supersession, batch channel names, a
-      promotion preview computed by the promotion's own plan, linked views
-      sharing one filter and one resolved topic-model version, transmission
-      rows by id with a per-state shape, the evidence behind a transmission
-      with excerpts cut from stored bodies, one alert by id, the overview's
-      counts in one watermarked query, typed query
+      surface (the query API with cursor-paginated lists, canonical agent
+      rows with windowed traffic, agent details that follow merges, batch
+      agent names, channel rows carrying activity or their supersession,
+      batch channel names, a promotion preview computed by the promotion's
+      own plan, linked views sharing one filter and one resolved
+      topic-model version, transmission rows by id with a per-state shape,
+      the evidence behind a transmission with excerpts cut from stored
+      bodies, one alert by id, the overview's counts in one watermarked
+      query, typed query
       and action errors, the operator directory with a trusted single-user
       mode, operator actions with one permission each, the append-only
       audit log of operator actions and config changes, the id-only SSE
@@ -83,10 +85,12 @@ Overview:
     in an optional window that never changes which rows are listed), channel
     names, promotion previews (the registry's promotion plan run without
     effect, so a preview and the promotion agree), series,
-    topic history, search, projections, verdicts, detection quality, lists
-    and alerts. Every aggregate comes back with the watermark read before
-    it; every linked view applies one TopologyFilter under one resolved (or
-    pinned) topic-model version, with merged agents and superseded
+    topic history, search, projections, verdicts, detection quality, lists,
+    agents (canonical rows joining L3's profiles with L7's traffic in the
+    window, details following merged ids, batch names) and alerts. Every
+    aggregate comes back with the watermark read before it; every linked
+    view applies one TopologyFilter under one resolved (or pinned)
+    topic-model version, with merged agents and superseded
     channels resolved at read time; the evidence page cuts excerpts of
     both sides of each content match from the blob store's bodies through
     the spans' and matches' locations (a body content retention dropped is
@@ -104,8 +108,10 @@ Overview:
     discovered channels its pattern covers); verdicts to L5's verdict log,
     beside the detector's state (L6 suppresses a false detection's alerts;
     L6 and L7 views can exclude false detections at query time); merges,
-    unmerges of one merge record and renames to L3; rule management (a
-    stale rule is updated, never re-enabled) and topic-version pins to L6. Every action call is recorded in the audit
+    unmerges of one merge record and renames to L3 (two ids of one cluster
+    are refused as MergeIntoSelf, one id twice never becomes an action);
+    rule management (a stale rule is updated, never re-enabled) and
+    topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes.
 
 Features Index:
@@ -128,9 +134,12 @@ Features Index:
     description: >
       The L8 contract the UI reads and acts through: callers from the
       operator directory (with a trusted single-user mode) and one
-      permission per query and action; paginated lists; transmission rows
-      by id, transmission evidence with bounded excerpts, one alert by id
-      and the overview's counts; linked views
+      permission per query and action; paginated lists; agent read models
+      (canonical rows with claims, last seen and windowed traffic, a
+      detail with aliases, children, merges and vetoes that follows merged
+      ids, batch names, a precise list filter); transmission rows by id,
+      transmission evidence with bounded excerpts, one alert by id and the
+      overview's counts; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
       merged agents and superseded channels resolved at read time; channel
       list rows, the channel list filter, batch channel names and the

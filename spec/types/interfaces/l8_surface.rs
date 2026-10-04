@@ -48,7 +48,17 @@
 //! cursors of [`crate::paging`], so a traversal is stable under concurrent
 //! inserts. Their filters and request types are in [`lists`]. Whole values
 //! with their own invariants (a policy history, the topic version history,
-//! topic sizes, a lineage, a graph, a series grid) are returned whole.
+//! topic sizes, a lineage, a graph, a series grid, an agent's detail) are
+//! returned whole.
+//!
+//! **Agents.** `agents` lists canonical agents only, as
+//! [`AgentRow`]s: label, state, canonical parent, aliases, harness claims
+//! with their last-seen times, when the agent was last seen, and its
+//! transmissions in and out over the query's window, counted as its node in
+//! `topology` for that window. `agent` returns one [`AgentDetail`],
+//! following a merged id to its canonical agent and saying so;
+//! `agent_names` names a batch of ids in one call. See
+//! [`crate::aggregates::agents`].
 //!
 //! **Linked views.** `topology`, `channel_topology`, `series`, `search`,
 //! `edge_transmissions` and `fit_projection` take the same
@@ -74,7 +84,9 @@
 //! `edge_transmissions`, `channel_resources`, `channel`, `channels` and
 //! `topic_sizes` return their
 //! result [`Watermarked`]: with L7's watermark (`EdgeStore::watermark`),
-//! read before the data. They all count by event time (`Confirmed::at`,
+//! read before the data. `agents` and `agent` carry the watermark read
+//! before their traffic counts (`EdgeStore::agent_traffic`); their
+//! identity and activity come from L3 and are not settled by it. They all count by event time (`Confirmed::at`,
 //! `Access::at`), so everything in the result before the watermark is final
 //! ([`crate::aggregates::watermark`]). `watermark` returns the current one,
 //! and the feed reports each advance. A stored projection is not wrapped:
@@ -123,6 +135,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
+use crate::aggregates::agents::{AgentDetail, AgentName, AgentRow};
 use crate::aggregates::alert::{Alert, AlertRuleDef};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
@@ -134,14 +147,14 @@ use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::aggregates::watermark::{Watermark, Watermarked};
+use crate::batch::IdBatch;
 use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AlertId, ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{AgentId, AlertId, ChannelId, OperatorId, ProjectionId, SinkId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
-use crate::observed::agent::Agent;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
@@ -394,14 +407,54 @@ pub trait QueryApi {
         pattern: &ResourcePattern,
     ) -> Result<PromotionPreview, QueryError>;
 
-    /// View. Every stored agent, merged ones included (their state names
-    /// their canonical agent). Newest agent first.
+    /// View. One row per canonical agent `filter` admits
+    /// ([`AgentFilter::matches`]), newest agent first ([`AgentReads::list`]);
+    /// a merged agent is never a row. Each row's traffic is
+    /// [`EdgeStore::agent_traffic`] over `window` for the page's agents, and
+    /// the page carries the watermark that call read before its buckets.
+    /// `window` restricts the counts, never the rows. An unaligned window is
+    /// `InvalidInput(UnalignedWindow)`.
+    ///
+    /// [`AgentReads::list`]: crate::interfaces::l3_reconstruction::agents::AgentReads::list
+    /// [`EdgeStore::agent_traffic`]: crate::interfaces::l7_topology::EdgeStore::agent_traffic
     async fn agents(
         &self,
         caller: &Caller,
         filter: &AgentFilter,
+        window: TimeWindow,
         page: &PageRequest<AgentList>,
-    ) -> Result<Page<Agent, AgentList>, QueryError>;
+    ) -> Result<Watermarked<Page<AgentRow, AgentList>>, QueryError>;
+
+    /// View. The detail of the canonical agent `id` resolves to
+    /// ([`AgentReads::cluster`]): the agent, its aliases, children, merge
+    /// records (reverted ones with their reversal) and vetoes, with its
+    /// traffic in `window` as for `agents`. A merged `id` answers for its
+    /// canonical agent with `AgentLookup::Redirected { from: id }`. `None`
+    /// for an unknown id.
+    ///
+    /// [`AgentReads::cluster`]: crate::interfaces::l3_reconstruction::agents::AgentReads::cluster
+    async fn agent(
+        &self,
+        caller: &Caller,
+        id: AgentId,
+        window: TimeWindow,
+    ) -> Result<Option<Watermarked<AgentDetail>>, QueryError>;
+
+    /// View. The name of each id of `ids` that names a stored agent: its
+    /// canonical agent and that agent's current label, keyed by the id asked
+    /// for, so an alias is named by the agent it was merged into
+    /// ([`AgentReads::names`]). Unknown ids are absent from the map, not
+    /// errors. A batch is at most [`IdBatch::MAX`] distinct ids; a request
+    /// with more is refused before the call as
+    /// `InvalidInput(TooManyIds)` (`QueryError::from(TooManyIds)`). Labels
+    /// change only with `Changed::Agent`, so names are not watermarked.
+    ///
+    /// [`AgentReads::names`]: crate::interfaces::l3_reconstruction::agents::AgentReads::names
+    async fn agent_names(
+        &self,
+        caller: &Caller,
+        ids: &IdBatch<AgentId>,
+    ) -> Result<HashMap<AgentId, AgentName>, QueryError>;
 
     /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
     /// rules newest first. Every rule is listed: none is ever deleted.

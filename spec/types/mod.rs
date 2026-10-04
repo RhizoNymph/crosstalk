@@ -28,6 +28,7 @@
 
 pub mod aggregates;
 pub mod aliases;
+pub mod batch;
 pub mod derived;
 pub mod events;
 pub mod ids;

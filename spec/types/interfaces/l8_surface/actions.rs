@@ -15,10 +15,10 @@ use crate::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, SinkId, TransmissionId,
 };
 use crate::interfaces::l2_transport::ConsumerGroup;
-use crate::observed::agent::{AgentLabel, MergeRequest};
+use crate::observed::agent::{AgentLabel, MergeAuthor, MergeRequest, SelfMerge};
 
 use super::audit::AuditSubject;
-use super::{Permission, PolicyKind};
+use super::{Caller, Permission, PolicyKind};
 
 /// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
 /// similarity thresholds, which are floats.
@@ -29,8 +29,11 @@ pub enum OperatorAction {
         policy: PolicyKind,
         note: Option<String>,
     },
-    /// Built with `MergeAuthor::Operator` of the caller; self-merges cannot
-    /// be expressed. Both agents must be canonical. Returns
+    /// Built with [`OperatorAction::merge_agents`], authored by the caller;
+    /// self-merges cannot be expressed (`InvalidInput(SelfMerge)` while
+    /// building it). Both agents must be canonical and resolve to different
+    /// agents: `Conflict(MergeIntoSelf)` when they already resolve to one,
+    /// else `Conflict(AgentMerged)` for a merged one. Returns
     /// `ActionOutcome::Merged` with the new record's id.
     MergeAgents(MergeRequest),
     /// Revert one merge record exactly (`IdentityResolver::unmerge`).
@@ -139,6 +142,17 @@ pub enum ActionKind {
 }
 
 impl OperatorAction {
+    /// The merge of `from` into `into` the caller asks for, authored by the
+    /// caller's operator. A request naming one agent twice is `SelfMerge`
+    /// and never becomes an action, so it is never sent to `act` or audited;
+    /// the surface returns it as `InvalidInput(SelfMerge)`
+    /// (`ActionError::from(SelfMerge)`). Two different ids of one cluster
+    /// pass here and are refused by L3 (`Conflict(MergeIntoSelf)`).
+    pub fn merge_agents(caller: &Caller, from: AgentId, into: AgentId) -> Result<Self, SelfMerge> {
+        MergeRequest::new(from, into, MergeAuthor::Operator(caller.operator()))
+            .map(Self::MergeAgents)
+    }
+
     pub fn kind(&self) -> ActionKind {
         match self {
             Self::SetPolicy { .. } => ActionKind::SetPolicy,

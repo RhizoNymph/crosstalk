@@ -22,10 +22,20 @@
 //!
 //! After every committed change to a stored agent (creation, a registered
 //! agent from config, a state change, a merge, an unmerge, a rename), L3
-//! publishes `Changed::Agent` for each agent whose `QueryApi::agents` entry
-//! changed: the source, target and every repointed agent of a merge; the
-//! source, its former target and every restored agent of an unmerge; the
-//! renamed agent.
+//! publishes `Changed::Agent` for each agent whose `QueryApi::agents` row or
+//! `QueryApi::agent` detail changed outside its activity: the created agent
+//! and its canonical parent (whose children grew); the source, target and
+//! every repointed agent of a merge; the source, its former target and
+//! every restored agent of an unmerge; for a merge or unmerge also every
+//! agent whose stored parent is one of those (its canonical parent moved)
+//! and the canonical parent of the source (its children changed); the
+//! renamed agent. Activity (harness claims, last-seen times) changes with
+//! every exchange and is not announced: the agent reads are `Watermarked`
+//! and a client refreshes them on each watermark advance.
+//!
+//! The agents list, an agent's detail and batch names are read through
+//! [`agents::AgentReads`]; [`agents::ActivityStore`] keeps when each agent
+//! was last seen.
 //!
 //! Identity resolution uses the most specific evidence present
 //! (`IdentityEvidence::specificity`). Harness ids count only within their
@@ -55,12 +65,15 @@
 //! Deltas and other records carry the agent the exchange was attributed to,
 //! not its canonical agent; readers resolve through `AgentDirectory`.
 
+pub mod agents;
+
 use crate::events::ingest::ConversationDelta;
 use crate::ids::{AgentId, ConversationId, MergeId, OperatorId};
 #[cfg(doc)]
 use crate::observed::agent::Agent;
 use crate::observed::agent::{
-    AgentLabel, ClaimSet, IdentityEvidence, MergeRecord, MergeRequest, MergeVeto, Reversal,
+    AgentLabel, ClaimSet, IdentityEvidence, MergeConflict, MergeRecord, MergeRequest, MergeVeto,
+    Reversal,
 };
 use crate::observed::client::HarnessClaim;
 use crate::observed::exchange::{Exchange, ExchangeMeta};
@@ -124,12 +137,16 @@ pub trait IdentityResolver {
     /// Apply a merge at `at` and publish one `AgentMerged`, following the
     /// procedure in [`crate::observed::agent::merge`]. Returns the record.
     ///
-    /// Refuses, changing nothing and publishing nothing: an unknown agent
-    /// (`UnknownAgent`); a source or target that is merged (`AgentMerged`,
-    /// naming its canonical agent); and a `MergeAuthor::Resolver` request
-    /// between clusters that a [`MergeVeto`] separates (`Vetoed`). A
-    /// `MergeAuthor::Operator` request between such clusters goes ahead and
-    /// deletes every veto that separated them, in the same transaction.
+    /// Refuses, changing nothing and publishing nothing, in this order: an
+    /// unknown agent (`UnknownAgent`); then whatever
+    /// [`MergeRequest::conflict`] finds in the two agents' states
+    /// ([`ResolveError::of_conflict`]): two agents that already resolve to
+    /// one canonical agent (`MergeIntoSelf`), or a source or target that is
+    /// merged (`AgentMerged`, naming its canonical agent); then a
+    /// `MergeAuthor::Resolver` request between clusters that a
+    /// [`MergeVeto`] separates (`Vetoed`). A `MergeAuthor::Operator` request
+    /// between such clusters goes ahead and deletes every veto that
+    /// separated them, in the same transaction.
     async fn merge(
         &mut self,
         request: MergeRequest,
@@ -222,14 +239,36 @@ pub enum ResolveError {
     },
     UnknownAgent(AgentId),
     UnknownMerge(MergeId),
-    /// A merge naming, or a rename of, a merged agent.
+    /// A merge naming, or a rename of, a merged agent. For a merge, only
+    /// when its two agents resolve to different canonical agents.
     AgentMerged {
         agent: AgentId,
         into: AgentId,
     },
+    /// A merge of two different agents that already resolve to one
+    /// canonical agent, `canonical` (`MergeConflict::IntoSelf`).
+    MergeIntoSelf {
+        from: AgentId,
+        into: AgentId,
+        canonical: AgentId,
+    },
     MergeAlreadyReverted(MergeId),
     /// A resolver merge between clusters an operator kept apart.
     Vetoed(MergeVeto),
+}
+
+impl ResolveError {
+    /// The refusal of `request` for `conflict`.
+    pub fn of_conflict(request: &MergeRequest, conflict: MergeConflict) -> Self {
+        match conflict {
+            MergeConflict::IntoSelf { canonical } => Self::MergeIntoSelf {
+                from: request.source(),
+                into: request.target(),
+                canonical,
+            },
+            MergeConflict::Merged { agent, into } => Self::AgentMerged { agent, into },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

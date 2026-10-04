@@ -1,8 +1,10 @@
+use crate::aggregates::agents::{AgentProfile, AgentProfileParts};
 use crate::aggregates::alert::{
     AlertRuleDef, BuiltinRule, ContentRule, RuleName, RuleStatus, TopicWatch, WatchedTopics,
 };
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{FalseDetections, FilterSubject, TopicVersionSelector};
+use crate::aggregates::node::CanonicalStateKind;
 use crate::derived::flow::channel::detection::DeclaredDetection;
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, Declaration, DeclaredHistory};
@@ -12,10 +14,10 @@ use crate::ids::PromptHash;
 use crate::ids::{AgentId, AlertRuleId, TopicId};
 use crate::ids::{MergeId, OperatorId};
 use crate::interfaces::l8_surface::PolicyKind;
-use crate::interfaces::l8_surface::lists::{
-    AgentFilter, AgentStateKind, AlertRuleFilter, ChannelFilter,
+use crate::interfaces::l8_surface::lists::{AgentFilter, AlertRuleFilter, ChannelFilter};
+use crate::observed::agent::{
+    ActiveAgentState, Agent, AgentState, ClaimSet, IdentityEvidence, MergedInto,
 };
-use crate::observed::agent::{ActiveAgentState, Agent, AgentState, IdentityEvidence, MergedInto};
 use crate::support::{Blake3, NonEmpty};
 use crate::tests::fixtures::{agent, at, channel};
 
@@ -196,16 +198,33 @@ fn agent_filter_matches_state_kind() {
         repointed_by: Vec::new(),
     }));
     let live = agent_in(AgentState::Provisional { first_seen: at(1) });
+    let profile_of = |record: &Agent| {
+        record.state.active().ok().map(|state| {
+            AgentProfile::new(AgentProfileParts {
+                id: record.id,
+                label: record.label.clone(),
+                state,
+                parent: None,
+                aliases: Vec::new(),
+                claims: ClaimSet::default(),
+                last_seen: Some(at(1)),
+            })
+            .expect("a top-level agent seen at 1")
+        })
+    };
     let canonical = AgentFilter {
         states: vec![
-            AgentStateKind::Registered,
-            AgentStateKind::Provisional,
-            AgentStateKind::Established,
+            CanonicalStateKind::Registered,
+            CanonicalStateKind::Provisional,
+            CanonicalStateKind::Established,
         ],
+        ..AgentFilter::default()
     };
-    assert!(canonical.matches(&live));
-    assert!(!canonical.matches(&merged));
-    assert!(AgentFilter::default().matches(&merged));
+    let live = profile_of(&live).expect("an active agent has a profile");
+    assert!(canonical.matches(&live, identity));
+    // A merged agent has no profile, so no filter admits it.
+    assert!(profile_of(&merged).is_none());
+    assert!(AgentFilter::default().matches(&live, identity));
 }
 
 #[test]

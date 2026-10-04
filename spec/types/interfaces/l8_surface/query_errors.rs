@@ -28,11 +28,18 @@
 //!   span, a location outside its body, a corrupt blob) are `Store`, with a
 //!   diagnostic reason. A message body content retention dropped is not an
 //!   error: the evidence reports it as `Excerpted::BodyDropped`.
+//! - A merge of one cluster into itself is `InvalidInput(SelfMerge)` when
+//!   the request names one id twice (no state needed) and
+//!   `Conflict(MergeIntoSelf)` when it names two ids that the merge table
+//!   resolves to one agent.
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
+use crate::batch::TooManyIds;
 use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::interfaces::l2_transport::{BlobError, BusError};
+use crate::interfaces::l3_reconstruction::ResolveError;
+use crate::interfaces::l3_reconstruction::agents::AgentReadError;
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::{
@@ -42,6 +49,7 @@ use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
+use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
 
 impl From<VersionUnavailable> for QueryError {
@@ -309,5 +317,65 @@ impl From<EvidenceError> for QueryError {
             },
         };
         Self::Store { reason }
+    }
+}
+
+/// For `MergeAgents`, `Unmerge` and `RenameAgent` (`IdentityResolver`).
+/// `Vetoed` refuses only resolver merges, which no action makes; if a
+/// resolver reports it to the surface it is a fault, reported as a store
+/// failure.
+impl From<ResolveError> for ActionError {
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::Store { reason } => Self::Store { reason },
+            ResolveError::UnknownAgent(_) | ResolveError::UnknownMerge(_) => Self::NotFound,
+            ResolveError::AgentMerged { agent, into } => {
+                Self::Conflict(ConflictKind::AgentMerged { agent, into })
+            }
+            ResolveError::MergeIntoSelf {
+                from,
+                into,
+                canonical,
+            } => Self::Conflict(ConflictKind::MergeIntoSelf {
+                from,
+                into,
+                canonical,
+            }),
+            ResolveError::MergeAlreadyReverted(merge) => {
+                Self::Conflict(ConflictKind::MergeAlreadyReverted { merge })
+            }
+            ResolveError::Vetoed(_) => Self::Store {
+                reason: "resolver veto reported to an operator merge".to_owned(),
+            },
+        }
+    }
+}
+
+/// For a `MergeAgents` request naming one agent twice, refused while the
+/// surface builds the action (`OperatorAction::merge_agents`), before `act`.
+impl From<SelfMerge> for ActionError {
+    fn from(_: SelfMerge) -> Self {
+        Self::InvalidInput(InputError::SelfMerge)
+    }
+}
+
+/// For a batch lookup (`QueryApi::agent_names`) whose ids do not fit an
+/// `IdBatch`.
+impl From<TooManyIds> for QueryError {
+    fn from(error: TooManyIds) -> Self {
+        Self::InvalidInput(InputError::TooManyIds {
+            max: error.max,
+            got: error.got,
+        })
+    }
+}
+
+/// For `QueryApi::agents`, `agent` and `agent_names` (`AgentReads`).
+impl From<AgentReadError> for QueryError {
+    fn from(error: AgentReadError) -> Self {
+        match error {
+            AgentReadError::Store { reason } => Self::Store { reason },
+            AgentReadError::InvalidCursor => Self::InvalidCursor,
+        }
     }
 }

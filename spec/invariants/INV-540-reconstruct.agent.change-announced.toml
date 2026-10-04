@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.agent.change-announced"
-statement = "After every committed change to a stored agent (creation from traffic or config, a state change, a merge, an unmerge, a label set or cleared) L3 publishes Changed::Agent at least once for every agent whose QueryApi::agents entry changed, and never before that change is visible to QueryApi::agents."
+statement = "After every committed change to a stored agent (creation from traffic or config, a state change, a merge, an unmerge, a label set or cleared) L3 publishes Changed::Agent at least once for every agent whose QueryApi::agents row or QueryApi::agent detail changed in anything but its activity (harness claims, last-seen times and transmission counts), which for a merge or unmerge includes the agents its record names (source, target, repointed or restored), every agent whose stored parent is one of those and the canonical parent of the source, and never before that change is visible to those queries."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -8,6 +8,11 @@ The live feed tells the UI to re-query an agent only when L3 says it
 changed. A merge changes two entries and an unmerge changes the agent, its
 former target and every restored agent; announcing fewer leaves a stale
 graph legend. Announcing before the commit is visible lets the client re-query too early and keep the old entry with no further event coming.
+Rows and details show canonical parents and children, so a merge also moves
+the parent shown for the source's sub-agents and the children shown for the
+source's parent. Activity changes with every exchange and is not announced:
+both queries are Watermarked, so a client refreshes it on each watermark
+advance, which continues after changes stop, and still converges.
 """
 
 [evidence]

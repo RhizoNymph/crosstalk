@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.agent.names-batch"
+statement = "QueryApi::agent_names returns one entry for each id of the batch that names a stored agent, merged or not, keyed by that id and holding AgentDirectory::canonical(id) with that agent's current label, and no entry for any other id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+List pages name senders, readers, writers and parents; resolving them one
+call per id makes a page cost a round trip per row. Keying by the id asked
+for lets the caller look names up without knowing about merges, and leaving
+unknown ids out (rather than failing the batch) keeps one stale id from
+blanking a page.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::agent_names_resolve_aliases_and_skip_unknown"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

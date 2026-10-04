@@ -5,6 +5,7 @@
 
 mod fixtures;
 
+mod agent_reads;
 mod agents;
 mod aggregates;
 mod audit;

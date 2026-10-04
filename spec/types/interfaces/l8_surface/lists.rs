@@ -8,11 +8,16 @@ use crate::aggregates::node::CanonicalOriginKind;
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::detection::DetectionKind;
-use crate::observed::agent::{Agent, AgentState};
 use crate::paging::{Page, TopicList};
 use crate::support::{NonBlank, TimeWindow};
 
 use super::PolicyKind;
+
+/// The agents list filter. It lives with the agent read models because L3
+/// applies it ([`AgentReads::list`]).
+///
+/// [`AgentReads::list`]: crate::interfaces::l3_reconstruction::agents::AgentReads::list
+pub use crate::aggregates::agents::filter::{AgentFilter, AgentText};
 
 /// Which channels `QueryApi::channels` lists, and over what window it
 /// counts their activity.
@@ -78,38 +83,6 @@ impl ChannelFilter {
             || self.detections.contains(&channel.origin.detection_kind());
         let by_policy = self.policies.is_empty() || self.policies.contains(&channel.policy.kind());
         self.origin.matches(channel) && by_detection && by_policy
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AgentStateKind {
-    Registered,
-    Provisional,
-    Established,
-    Merged,
-}
-
-impl AgentStateKind {
-    pub fn of(state: &AgentState) -> Self {
-        match state {
-            AgentState::Registered { .. } => Self::Registered,
-            AgentState::Provisional { .. } => Self::Provisional,
-            AgentState::Established { .. } => Self::Established,
-            AgentState::Merged { .. } => Self::Merged,
-        }
-    }
-}
-
-/// Keeps agents whose state kind is listed. A graph legend wants
-/// `[Registered, Provisional, Established]`: the canonical agents.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AgentFilter {
-    pub states: Vec<AgentStateKind>,
-}
-
-impl AgentFilter {
-    pub fn matches(&self, agent: &Agent) -> bool {
-        self.states.is_empty() || self.states.contains(&AgentStateKind::of(&agent.state))
     }
 }
 
