@@ -59,7 +59,8 @@ Overview:
     publishes ExchangeCaptured on MpscBus, and persists each captured
     exchange through a bus consumer to an append-only exchange log, a P3
     stopgap because the spec has no exchange store (gateway). The other
-    crates are still empty.
+    crates are still empty. The phased implementation plan, with its
+    dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
     spec: >
