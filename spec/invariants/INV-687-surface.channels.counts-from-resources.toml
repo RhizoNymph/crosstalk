@@ -23,8 +23,8 @@ unit = [
     "crosstalk_spec::tests::channel_reads::counts_tally_distinct_agents_across_the_channels_resources",
     "crosstalk_spec::tests::overview::rows_count_the_transmissions_the_graph_routes_through_each_channel",
 ]
-property = "crosstalk_surface::tests::prop_channel_rows_agree_with_resources"
+property = "crosstalk_surface::tests::props::channels::prop_channel_rows_agree_with_resources"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

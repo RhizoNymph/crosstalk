@@ -13,7 +13,7 @@ id always answers.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::alert_rule_is_the_listed_rule"
+unit = "crosstalk_surface::tests::reads::alert_rule_is_the_listed_rule"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

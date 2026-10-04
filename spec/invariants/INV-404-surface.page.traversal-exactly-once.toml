@@ -14,9 +14,9 @@ skip.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::list_traversal_exactly_once_under_concurrent_writes"
+dst = "crosstalk_surface::dst::reads::list_traversal_exactly_once_under_concurrent_writes"
 integration = "crosstalk_surface::integration::keyset_pages_postgres_concurrent_inserts"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

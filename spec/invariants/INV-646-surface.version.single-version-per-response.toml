@@ -12,7 +12,7 @@ would then be refused as TopicsNotInVersion.
 """
 
 [evidence]
-property = "crosstalk_surface::tests::prop_response_topics_belong_to_reported_version"
+property = "crosstalk_surface::tests::props::topology::prop_response_topics_belong_to_reported_version"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

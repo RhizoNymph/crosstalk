@@ -25,4 +25,4 @@ property = "crosstalk_surface::props::excerpt_cut_matches_part"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

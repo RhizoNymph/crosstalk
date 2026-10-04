@@ -16,8 +16,8 @@ streamed for it, and auditing it keeps the export log complete.
 unit = [
     "crosstalk_spec::tests::export::a_format_the_gateway_does_not_write_is_refused",
     "crosstalk_spec::tests::action_errors::an_unwritten_export_format_is_invalid_input",
-    "crosstalk_surface::tests::export_refuses_an_unwritten_format_before_reading",
+    "crosstalk_surface::tests::export::export_refuses_an_unwritten_format_before_reading",
 ]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -12,9 +12,9 @@ view.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::rows_by_id_follow_the_selection"
+unit = "crosstalk_surface::tests::content::rows_by_id_follow_the_selection"
 integration = "crosstalk_surface::integration::pg_rows_by_id_traversal"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }
