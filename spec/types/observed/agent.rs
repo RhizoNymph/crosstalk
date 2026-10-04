@@ -29,7 +29,10 @@ use crate::ids::{AccountHash, AgentId, CredentialHash, OperatorId, PromptHash};
 use crate::observed::client::UpstreamId;
 use crate::support::{NonEmpty, Timestamp};
 
-/// The authenticated context a harness id is interpreted in.
+/// The authenticated context a harness id is interpreted in: the exchange's
+/// account if it has one, else its credential if that is stable, else its
+/// upstream (rotating, shared or no credential). Rotating credentials are
+/// never a scope, so a token refresh keeps the scope and with it the agent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IdentityScope {
     Account(AccountHash),
@@ -46,7 +49,9 @@ pub enum IdentityEvidence {
         agent: String,
     },
     /// A harness session id (`X-Claude-Code-Session-Id`, Codex `session-id`,
-    /// pi `session_id`).
+    /// pi `session_id`). Sub-agents share their main agent's session id, so a
+    /// session id resolves only to the session's main agent: the agent in
+    /// that scope holding the session and no `HarnessAgent` evidence.
     HarnessSession {
         scope: IdentityScope,
         session: String,

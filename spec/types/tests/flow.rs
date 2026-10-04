@@ -229,7 +229,7 @@ fn policy_routes_traffic() {
         note: None,
     };
     assert_eq!(
-        Policy::Unreviewed.on_traffic(),
+        Policy::Unreviewed(None).on_traffic(),
         TrafficVerdict::Raise(AlertRuleKind::UnreviewedTraffic)
     );
     assert_eq!(

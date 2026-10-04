@@ -43,7 +43,44 @@ pub struct RequestHead {
     pub headers: Vec<(String, String)>,
 }
 
-/// Resolves where a request goes. Configured, not inferred from bodies.
+/// Hosts the forward proxy may intercept. Built only through
+/// [`InterceptAllowlist::new`], which rejects vendor auth hosts, so OAuth
+/// refresh and token exchange traffic is always tunnelled untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterceptAllowlist(Vec<Host>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthHostRejected(pub Host);
+
+impl InterceptAllowlist {
+    /// Vendor auth hosts that are never intercepted.
+    pub const AUTH_HOSTS: &'static [&'static str] = &[
+        "platform.claude.com",
+        "console.anthropic.com",
+        "auth.openai.com",
+        "github.com",
+        "oauth2.googleapis.com",
+        "accounts.google.com",
+    ];
+
+    pub fn new(hosts: Vec<Host>) -> Result<Self, AuthHostRejected> {
+        match hosts
+            .iter()
+            .find(|host| Self::AUTH_HOSTS.contains(&host.0.as_str()))
+        {
+            Some(host) => Err(AuthHostRejected(host.clone())),
+            None => Ok(Self(hosts)),
+        }
+    }
+
+    pub fn contains(&self, host: &Host) -> bool {
+        self.0.contains(host)
+    }
+}
+
+/// Resolves where a request goes. Configured, not inferred from bodies. A
+/// reverse-proxy request no route matches is answered locally with 421 and
+/// never forwarded.
 pub trait UpstreamRouter {
     /// The upstream for a reverse-proxy request, by route.
     fn route(&self, head: &RequestHead) -> Option<(IngressMode, Upstream)>;
@@ -55,6 +92,12 @@ pub trait UpstreamRouter {
 
 /// Reads the caller's credential, account and harness headers. The raw
 /// credential stays in the proxy's memory only long enough to hash it.
+///
+/// The scheme comes from the header and the token's shape for the upstream
+/// kind: `x-api-key`, and Bearer keys on a vendor API, are `ApiKey`; Bearer
+/// tokens on a subscription upstream (Anthropic `sk-ant-oat…`, ChatGPT and
+/// Google OAuth JWTs) are `OAuthAccessToken`; Copilot's minted tokens are
+/// `ExchangedToken`; the key of a self-hosted server is `ServerKey`.
 pub trait ClientIdentifier {
     fn credential(&self, head: &RequestHead, upstream: &Upstream) -> Option<CredentialRef>;
 
@@ -101,6 +144,9 @@ pub enum RawResponse {
     /// For SSE responses, `body` is the concatenated events; for a WebSocket
     /// turn, the server frames of that turn.
     Complete { status: u16, body: Vec<u8> },
+    /// `partial_body` holds every byte received until the stream ended,
+    /// including bytes after a framing error. The exchange is handed off when
+    /// the stream ends, not at the error.
     Failed {
         failure: ExchangeFailure,
         partial_body: Vec<u8>,
@@ -150,6 +196,9 @@ pub trait ResponseFramer {
 
 /// Watches one WebSocket connection. Each `response.create` starts a turn;
 /// the turn ends with its terminal server event and yields one exchange.
+/// Turns on one connection are sequential: a `response.create` sent while a
+/// turn is in flight is relayed but fails the earlier turn as
+/// `StreamTruncated`, and server frames belong to the turn in flight.
 pub trait WebSocketTap {
     fn client_frame(&mut self, frame: &[u8], at: Timestamp) -> Result<Vec<TurnEvent>, FrameError>;
 

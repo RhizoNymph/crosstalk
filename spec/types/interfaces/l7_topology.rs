@@ -1,7 +1,9 @@
 //! L7 topology: edge aggregation. Consumer group `topology`, triggered by
 //! `TransmissionClassified` (after analysis, so edges can be filtered by
 //! topic) and `TopicVersionReady` (switch queries to the new version's
-//! buckets). Graph queries resolve agents through the `AgentDirectory`.
+//! buckets). Graph queries resolve agents, including the ids named in a
+//! filter, through the `AgentDirectory`. A contribution rejected as a
+//! self-edge is a permanent outcome: its delivery is acked, not retried.
 //!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
@@ -32,7 +34,9 @@ pub trait EdgeStore {
     /// agent.
     async fn apply(&mut self, contribution: &EdgeContribution) -> Result<EdgeKey, EdgeError>;
 
-    /// Switch queries to `version` once its buckets are complete.
+    /// Switch queries to `version` once its buckets are complete. Ignores a
+    /// version older than the active one. Buckets of versions older than the
+    /// previous one are dropped after a switch.
     async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError>;
 
     async fn graph(

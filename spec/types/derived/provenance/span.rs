@@ -38,7 +38,10 @@ pub struct Span {
 pub enum Origin {
     /// Text that was not in the exchange's inputs: this agent wrote it.
     Originated,
-    /// Text copied from the exchange's inputs.
+    /// Text copied from the exchange's inputs, or text that matches another
+    /// agent's indexed span although no visible input contains it (the copy
+    /// came through a channel the gateway cannot see; provenance also emits a
+    /// `ReaderOutput` match for it).
     Relayed(RelaySource),
     /// Boilerplate: every one of its fingerprints is above the frequency
     /// cutoff. Never indexed.
@@ -103,7 +106,8 @@ pub struct IllegalTransition {
 
 impl SpanState {
     /// The only way a span's state changes. Rejects every edge not in the
-    /// lifecycle above.
+    /// lifecycle above, and hits or expiry timestamped before the span was
+    /// indexed.
     pub fn advance(&self, event: SpanEvent) -> Result<SpanState, IllegalTransition> {
         let next = match (self, event) {
             (Self::Extracted, SpanEvent::Classify(Origin::Originated)) => Some(Self::Originated),
@@ -112,26 +116,29 @@ impl SpanState {
             }
             (Self::Extracted, SpanEvent::Classify(Origin::Common)) => Some(Self::Common),
             (Self::Originated, SpanEvent::Index { at }) => Some(Self::Indexed { at }),
-            (Self::Indexed { at: indexed_at }, SpanEvent::Hit { at }) => Some(Self::Propagated {
-                indexed_at: *indexed_at,
-                first_hit_at: at,
-                hits: NonZeroU32::MIN,
-            }),
+            (Self::Indexed { at: indexed_at }, SpanEvent::Hit { at }) if at >= *indexed_at => {
+                Some(Self::Propagated {
+                    indexed_at: *indexed_at,
+                    first_hit_at: at,
+                    hits: NonZeroU32::MIN,
+                })
+            }
             (
                 Self::Propagated {
                     indexed_at,
                     first_hit_at,
                     hits,
                 },
-                SpanEvent::Hit { .. },
-            ) => Some(Self::Propagated {
+                SpanEvent::Hit { at },
+            ) if at >= *indexed_at => Some(Self::Propagated {
                 indexed_at: *indexed_at,
                 first_hit_at: *first_hit_at,
                 hits: hits.saturating_add(1),
             }),
-            (Self::Indexed { .. } | Self::Propagated { .. }, SpanEvent::Expire { at }) => {
-                Some(Self::Expired { at })
-            }
+            (
+                Self::Indexed { at: indexed_at } | Self::Propagated { indexed_at, .. },
+                SpanEvent::Expire { at },
+            ) if at >= *indexed_at => Some(Self::Expired { at }),
             _ => None,
         };
         next.ok_or_else(|| IllegalTransition {

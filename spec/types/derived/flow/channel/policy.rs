@@ -9,7 +9,8 @@ use crate::support::Timestamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Policy {
-    Unreviewed,
+    /// `None` when never reviewed; `Some` when an operator reset it.
+    Unreviewed(Option<Decision>),
     Sanctioned(Decision),
     Unsanctioned(Decision),
 }
@@ -36,7 +37,7 @@ pub enum TrafficVerdict {
 impl Policy {
     pub fn on_traffic(&self) -> TrafficVerdict {
         match self {
-            Self::Unreviewed => TrafficVerdict::Raise(AlertRuleKind::UnreviewedTraffic),
+            Self::Unreviewed(_) => TrafficVerdict::Raise(AlertRuleKind::UnreviewedTraffic),
             Self::Unsanctioned(_) => TrafficVerdict::Raise(AlertRuleKind::UnsanctionedTraffic),
             Self::Sanctioned(_) => TrafficVerdict::Drop,
         }

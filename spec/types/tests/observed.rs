@@ -1,4 +1,4 @@
-use crate::ids::{AccountHash, CredentialHash, PromptHash};
+use crate::ids::{AccountHash, CredentialHash, PromptHash, SecretVersion};
 use crate::observed::agent::{
     IdentityEvidence, IdentityScope, MergeAuthor, MergeRequest, SelfMerge, Strength,
 };
@@ -9,7 +9,7 @@ use crate::support::Blake3;
 use crate::tests::fixtures::agent;
 
 fn credential(byte: u8) -> CredentialHash {
-    CredentialHash::from_keyed_digest(Blake3::from_bytes([byte; 32]))
+    CredentialHash::from_keyed_digest(SecretVersion(1), Blake3::from_bytes([byte; 32]))
 }
 
 fn all_evidence() -> Vec<IdentityEvidence> {
@@ -23,7 +23,10 @@ fn all_evidence() -> Vec<IdentityEvidence> {
             scope,
             session: "s".into(),
         },
-        IdentityEvidence::Account(AccountHash::from_keyed_digest(Blake3::from_bytes([2; 32]))),
+        IdentityEvidence::Account(AccountHash::from_keyed_digest(
+            SecretVersion(1),
+            Blake3::from_bytes([2; 32]),
+        )),
         IdentityEvidence::StableCredential(credential(3)),
         IdentityEvidence::PromptFingerprint(PromptHash::from_digest(Blake3::from_bytes([4; 32]))),
         IdentityEvidence::RotatingCredential(credential(5)),
@@ -110,4 +113,12 @@ fn dialect_follows_upstream() {
     for (kind, dialect) in cases {
         assert_eq!(kind.dialect(), dialect, "{kind:?}");
     }
+}
+
+#[test]
+fn secret_digests_remember_their_key_version() {
+    let old = CredentialHash::from_keyed_digest(SecretVersion(1), Blake3::from_bytes([9; 32]));
+    let new = CredentialHash::from_keyed_digest(SecretVersion(2), Blake3::from_bytes([9; 32]));
+    assert_eq!(old.key(), SecretVersion(1));
+    assert_ne!(old, new);
 }

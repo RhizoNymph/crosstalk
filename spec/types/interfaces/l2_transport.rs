@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use crate::events::{Envelope, Subject};
-use crate::ids::MessageHash;
+use crate::ids::{EventId, MessageHash};
 
 /// Consumers in the same group share deliveries: each event goes to one of
 /// them. Different groups each get every event.
@@ -22,7 +22,8 @@ pub struct DeliveryId(pub u64);
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delivery {
     pub id: DeliveryId,
-    /// 1 on first delivery. Higher after a nack or an ack timeout.
+    /// 1 on first delivery. Higher after a nack or an ack timeout. Restarts
+    /// at 1 when a dead letter is replayed.
     pub attempt: NonZeroU32,
     pub envelope: Envelope,
 }
@@ -32,8 +33,9 @@ pub trait EventBus {
 
     async fn publish(&self, envelope: Envelope) -> Result<(), BusError>;
 
-    /// Every subscription in a group must use the same subject set; a
-    /// different one is rejected with `GroupSubjectMismatch`.
+    /// Every subscription in a group must use the same subject set and retry
+    /// policy; a different one is rejected with `GroupSubjectMismatch` or
+    /// `GroupRetryMismatch`.
     async fn subscribe(
         &self,
         subjects: &[Subject],
@@ -48,15 +50,66 @@ pub trait Subscription {
 
     async fn ack(&mut self, id: DeliveryId) -> Result<(), BusError>;
 
-    async fn nack(&mut self, id: DeliveryId, retry_after: Duration) -> Result<(), BusError>;
+    /// `reason` is what the consumer reports; it becomes the dead letter's
+    /// `last_error` if retries run out.
+    async fn nack(
+        &mut self,
+        id: DeliveryId,
+        retry_after: Duration,
+        reason: String,
+    ) -> Result<(), BusError>;
 }
 
-/// How often a delivery is retried before it is dead-lettered.
+/// How often a delivery is retried before it is dead-lettered, and how long
+/// to wait between attempts. A nack's `retry_after` is clamped to
+/// `initial_backoff..=max_backoff`.
+///
+/// Built only through [`RetryPolicy::new`]: `initial_backoff` is non-zero
+/// and no greater than `max_backoff`. Every subscription in a group uses the
+/// same policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
-    pub max_attempts: NonZeroU32,
-    pub initial_backoff: Duration,
-    pub max_backoff: Duration,
+    max_attempts: NonZeroU32,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidRetryPolicy {
+    ZeroBackoff,
+    InitialAboveMax,
+}
+
+impl RetryPolicy {
+    pub fn new(
+        max_attempts: NonZeroU32,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+    ) -> Result<Self, InvalidRetryPolicy> {
+        if initial_backoff.is_zero() {
+            return Err(InvalidRetryPolicy::ZeroBackoff);
+        }
+        if initial_backoff > max_backoff {
+            return Err(InvalidRetryPolicy::InitialAboveMax);
+        }
+        Ok(Self {
+            max_attempts,
+            initial_backoff,
+            max_backoff,
+        })
+    }
+
+    pub fn max_attempts(&self) -> NonZeroU32 {
+        self.max_attempts
+    }
+
+    pub fn initial_backoff(&self) -> Duration {
+        self.initial_backoff
+    }
+
+    pub fn max_backoff(&self) -> Duration {
+        self.max_backoff
+    }
 }
 
 /// A delivery that exhausted its retries. Kept for an operator to inspect
@@ -72,7 +125,8 @@ pub struct DeadLetter {
 pub trait DeadLetterStore {
     async fn put(&self, letter: DeadLetter) -> Result<(), BusError>;
 
-    async fn replay(&self, group: &ConsumerGroup, id: crate::ids::EventId) -> Result<(), BusError>;
+    /// Redeliver a dead letter to its group and remove it from the store.
+    async fn replay(&self, group: &ConsumerGroup, id: EventId) -> Result<(), BusError>;
 }
 
 pub trait BlobStore {
@@ -85,11 +139,28 @@ pub trait BlobStore {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BusError {
     Disconnected,
-    PublishRejected { reason: String },
+    PublishRejected {
+        reason: String,
+    },
     UnknownDelivery(DeliveryId),
-    Encode { reason: String },
-    GroupSubjectMismatch { group: ConsumerGroup },
-    Decode { reason: String },
+    Encode {
+        reason: String,
+    },
+    GroupSubjectMismatch {
+        group: ConsumerGroup,
+    },
+    GroupRetryMismatch {
+        group: ConsumerGroup,
+    },
+    /// No dead letter for that group and event id (never stored, or already
+    /// replayed).
+    UnknownDeadLetter {
+        group: ConsumerGroup,
+        id: EventId,
+    },
+    Decode {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

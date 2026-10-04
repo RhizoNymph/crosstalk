@@ -180,3 +180,18 @@ fn fingerprint_shard_is_stable() {
 fn single_shard_owns_everything() {
     assert_eq!(Fingerprint(u64::MAX).shard(NonZeroU16::MIN), 0);
 }
+
+#[test]
+fn span_rejects_hits_and_expiry_before_indexing() {
+    let indexed = SpanState::Indexed { at: at(10) };
+    assert!(indexed.advance(SpanEvent::Hit { at: at(9) }).is_err());
+    assert!(indexed.advance(SpanEvent::Expire { at: at(9) }).is_err());
+    let propagated = SpanState::Propagated {
+        indexed_at: at(10),
+        first_hit_at: at(11),
+        hits: NonZeroU32::MIN,
+    };
+    assert!(propagated.advance(SpanEvent::Hit { at: at(9) }).is_err());
+    assert!(propagated.advance(SpanEvent::Expire { at: at(9) }).is_err());
+    assert!(indexed.advance(SpanEvent::Hit { at: at(10) }).is_ok());
+}
