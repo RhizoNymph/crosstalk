@@ -82,7 +82,7 @@ impl TimelinePayload {
 async fn timeline_data(cx: &Cx) -> topcoat::Result<Json<TimelinePayload>> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let buckets = buckets(cx)?;
     let timeline = backend(cx)
         .timeline(&caller, &state.scope, buckets)

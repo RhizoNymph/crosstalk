@@ -1,4 +1,5 @@
-//! Names for ids: operators from `operators`, agents from `agent`.
+//! Names for ids: operators from `operators`, rules from `rules`, agents
+//! from one `agent_names` call.
 
 use std::collections::HashMap;
 
@@ -10,13 +11,10 @@ use topcoat::context::Cx;
 
 use crate::app::backend;
 use crate::backend::Backend;
-use crate::components::{agent_name, short_id};
+use crate::components::{agent_name_of, short_id};
 use crate::contract::research::Actor;
 use crate::contract::rules::RuleAuthor;
 use crate::url::ulid::UlidId;
-
-/// At most this many agents are looked up one by one for a page.
-const AGENT_LOOKUPS: usize = 40;
 
 /// Operator display names. Unknown operators show as a short id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,7 +104,8 @@ pub async fn rule_names(cx: &Cx, caller: &Caller) -> RuleNames {
     }
 }
 
-/// Agent display names, by canonical lookup.
+/// Agent display names, by the id asked for (an alias shows its canonical
+/// agent's name).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentNames(HashMap<AgentId, String>);
 
@@ -124,8 +123,8 @@ impl AgentNames {
     }
 }
 
-/// Names for up to [`AGENT_LOOKUPS`] distinct agents. The list endpoints
-/// return ids only, so each is a separate `agent` read.
+/// Names for every distinct agent in `ids`, in one `agent_names` call. A
+/// failed lookup degrades to short ids rather than failing the page.
 pub async fn agent_names(
     cx: &Cx,
     caller: &Caller,
@@ -134,19 +133,18 @@ pub async fn agent_names(
     let mut wanted: Vec<AgentId> = ids.into_iter().collect();
     wanted.sort_unstable();
     wanted.dedup();
-    let mut names = HashMap::new();
-    for id in wanted.into_iter().take(AGENT_LOOKUPS) {
-        match backend(cx).agent(caller, id).await {
-            Ok(Some(detail)) => {
-                names.insert(id, agent_name(&detail.summary));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::debug!(%error, agent = %id.to_ulid(), "agent name unavailable");
-            }
+    match backend(cx).agent_names(caller, &wanted).await {
+        Ok(names) => AgentNames(
+            names
+                .iter()
+                .map(|(id, name)| (*id, agent_name_of(name)))
+                .collect(),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, agents = wanted.len(), "agent names unavailable");
+            AgentNames::default()
         }
     }
-    AgentNames(names)
 }
 
 #[cfg(test)]

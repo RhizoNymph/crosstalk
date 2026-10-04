@@ -64,6 +64,25 @@ struct InboxQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowForm(pub AlertId);
 
+/// The triage action a form asks for on `alert`: acknowledge, or resolve
+/// with an optional note. Shared by the inbox and the alert page.
+pub fn parse_action(
+    alert: AlertId,
+    fields: &FormFields,
+) -> std::result::Result<(OperatorAction, Flash), QueryError> {
+    match fields.text("action") {
+        Some("acknowledge") => Ok((OperatorAction::Acknowledge { alert }, Flash::Acknowledged)),
+        Some("resolve") => Ok((
+            OperatorAction::Resolve {
+                alert,
+                note: note(fields, "note")?,
+            },
+            Flash::Resolved,
+        )),
+        _ => Err(invalid("action", "unknown action")),
+    }
+}
+
 /// A validated inbox post: the action, its flash, and the tab to return to.
 pub fn parse(
     fields: &FormFields,
@@ -71,22 +90,8 @@ pub fn parse(
     let alert = id::<AlertId>(fields, "alert").map_err(|e| (None, e))?;
     let row = Some(RowForm(alert));
     let tab = parse_tab(fields.text("tab")).map_err(|e| (row, e))?;
-    match fields.text("action") {
-        Some("acknowledge") => Ok((
-            OperatorAction::Acknowledge { alert },
-            Flash::Acknowledged,
-            tab,
-        )),
-        Some("resolve") => {
-            let note = note(fields, "note").map_err(|e| (row, e))?;
-            Ok((
-                OperatorAction::Resolve { alert, note },
-                Flash::Resolved,
-                tab,
-            ))
-        }
-        _ => Err((row, invalid("action", "unknown action"))),
-    }
+    let (action, flash) = parse_action(alert, fields).map_err(|e| (row, e))?;
+    Ok((action, flash, tab))
 }
 
 struct Inbox {
@@ -128,7 +133,7 @@ async fn load(
 
 #[page("/alerts")]
 async fn alerts_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let tab = query_params::<InboxQuery>(cx)
         .map_err(|e| invalid("query", e))
         .and_then(|q| parse_tab(q.tab.as_deref()));
@@ -138,7 +143,7 @@ async fn alerts_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/alerts")]
 async fn alerts_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let (failure, tab) = match parse(&fields) {
         Ok((action, flash, tab)) => match perform(cx, action).await {
             Ok(_) => return Err(done(PATH, &state, &[("tab", tab_code(tab))], flash)),
@@ -232,7 +237,7 @@ async fn inbox_page(
                     for row in inbox.rows {
                         let error_here = row_error.clone().filter(|_| Some(&row.id) == failed_row.as_ref());
                         <tr class=(ROW)>
-                            <td class=(TD_MUTED)><span class="font-mono">(row.short.clone())</span></td>
+                            <td class=(TD_MUTED)><a class=(format!("{LINK} font-mono")) href=(row.url.clone())>(row.short.clone())</a></td>
                             <td class=(TD)>(row.rule.clone())</td>
                             <td class=(TD)><a class=(LINK) href=(row.subject_url.clone())>(row.subject_label.clone())</a></td>
                             <td class=(TD_NUM)>(row.occurrences)</td>

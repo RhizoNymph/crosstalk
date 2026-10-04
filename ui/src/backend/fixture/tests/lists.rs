@@ -7,12 +7,12 @@ use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permission};
-use crosstalk_spec::observed::agent::AgentState;
 
 use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, researcher, shared, week, window};
 use crate::backend::Backend;
+use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::errors::QueryError;
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
@@ -41,7 +41,7 @@ async fn pagination_covers_every_item_exactly_once() {
     let ids: HashSet<_> = paged.iter().map(|t| t.id).collect();
     assert_eq!(ids.len(), paged.len());
 
-    let agents = collect(7, async |p| b.agents(&c, &p).await).await;
+    let agents = collect(7, async |p| b.agents(&c, &Default::default(), &p).await).await;
     assert_eq!(agents.len(), 40);
     let alerts = collect(50, async |p| {
         b.alerts(&c, &AlertFilter::default(), &p).await
@@ -428,7 +428,7 @@ async fn alert_filter_by_state_and_channel() {
     assert!(!rows.is_empty());
     assert!(
         rows.iter()
-            .all(|a| a.state == crosstalk_spec::aggregates::alert::AlertState::Open)
+            .all(|a| a.state == crate::contract::alerts::AlertState::Open)
     );
     let wiki = channel(ChannelKey::HijackedWiki);
     let about = AlertFilter {
@@ -532,7 +532,175 @@ async fn same_seed_same_answers() {
             .await
     );
     assert_eq!(
-        a.agents(&c, &first(100)).await,
-        b.agents(&c, &first(100)).await
+        a.agents(&c, &Default::default(), &first(100)).await,
+        b.agents(&c, &Default::default(), &first(100)).await
     );
+}
+
+#[tokio::test]
+async fn names_resolve_aliases_and_supersession_in_one_call() {
+    use crosstalk_spec::ids::{AgentId, ChannelId};
+
+    use crate::contract::graph::ChannelShape;
+
+    let b = shared();
+    let c = researcher();
+    let (alias, plain) = (agent("al0"), agent("cc1"));
+    let unknown = AgentId::from_ulid(1);
+    let names = b
+        .agent_names(&c, &[alias, plain, unknown])
+        .await
+        .expect("names");
+    assert_eq!(names.len(), 2, "unknown ids are left out");
+    let canonical = b.agent(&c, alias).await.expect("read").expect("agent");
+    assert_eq!(names[&alias].id, canonical.summary.id);
+    assert_ne!(
+        names[&alias].id, alias,
+        "an alias is named by its canonical agent"
+    );
+    assert_eq!(names[&alias].label, canonical.summary.label);
+    assert_eq!(names[&plain].id, plain);
+
+    let (old, declared) = (
+        channel(ChannelKey::OldTeamNotes),
+        channel(ChannelKey::TeamNotes),
+    );
+    let names = b
+        .channel_names(&c, &[old, ChannelId::from_ulid(1)])
+        .await
+        .expect("names");
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[&old].id, declared);
+    assert!(matches!(names[&old].shape, ChannelShape::Pattern(_)));
+
+    let nobody = caller(&[]);
+    assert_eq!(
+        b.agent_names(&nobody, &[plain]).await.err(),
+        Some(QueryError::Forbidden {
+            missing: Permission::View
+        })
+    );
+}
+
+#[tokio::test]
+async fn one_alert_reads_by_id() {
+    use crosstalk_spec::ids::AlertId;
+
+    let b = shared();
+    let c = researcher();
+    let listed = b
+        .alerts(&c, &AlertFilter::default(), &first(1))
+        .await
+        .expect("alerts")
+        .items
+        .remove(0);
+    assert_eq!(
+        b.alert(&c, listed.id).await.expect("read"),
+        Some(listed.clone())
+    );
+    assert_eq!(b.alert(&c, AlertId::from_ulid(1)).await, Ok(None));
+    assert_eq!(
+        b.alert(&caller(&[]), listed.id).await.err(),
+        Some(QueryError::Forbidden {
+            missing: Permission::View
+        })
+    );
+}
+
+#[tokio::test]
+async fn agents_filter_by_state_claims_text_and_parent() {
+    use crosstalk_spec::observed::client::HarnessFamily;
+
+    use crate::contract::agents::{AgentListFilter, AgentStateKind};
+    use crate::contract::search::SearchText;
+
+    let b = shared();
+    let c = researcher();
+    let list = async |filter: AgentListFilter| {
+        b.agents(&c, &filter, &first(BIG))
+            .await
+            .expect("agents")
+            .items
+    };
+    let all = list(AgentListFilter::default()).await;
+    let registered = list(AgentListFilter {
+        states: vec![AgentStateKind::Registered],
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert_eq!(registered.len(), 3, "three config-registered agents");
+    assert!(
+        registered
+            .iter()
+            .all(|a| a.state == AgentStateKind::Registered)
+    );
+    let claude = list(AgentListFilter {
+        harness_claims: vec![HarnessFamily::ClaudeCode],
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert!(!claude.is_empty() && claude.len() < all.len());
+    assert!(claude.iter().all(|a| {
+        a.claims
+            .iter()
+            .any(|s| s.claim.family == HarnessFamily::ClaudeCode)
+    }));
+    let scraper = list(AgentListFilter {
+        text: SearchText::new("PI-SCRAPER").ok(),
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert_eq!(scraper.len(), 1);
+    assert_eq!(
+        scraper[0].label.as_ref().map(|l| l.as_str()),
+        Some("pi-scraper")
+    );
+    let parent = all
+        .iter()
+        .find_map(|a| a.parent)
+        .expect("some agent has a parent");
+    let children = list(AgentListFilter {
+        parents: vec![parent],
+        ..AgentListFilter::default()
+    })
+    .await;
+    let detail = b.agent(&c, parent).await.expect("read").expect("agent");
+    assert_eq!(
+        children.iter().map(|a| a.id).collect::<Vec<_>>(),
+        detail.children,
+        "one level of the tree, in the detail's order"
+    );
+}
+
+#[tokio::test]
+async fn channel_counts_follow_the_window() {
+    let b = shared();
+    let c = researcher();
+    let wiki = channel(ChannelKey::HijackedWiki);
+    let rows = async |window| {
+        let filter = ChannelListFilter {
+            window,
+            ..ChannelListFilter::default()
+        };
+        b.channels(&c, &filter, &first(BIG))
+            .await
+            .expect("channels")
+            .items
+            .into_iter()
+            .find(|s| s.channel.id == wiki)
+            .expect("wiki")
+    };
+    let all = rows(None).await;
+    let recent = rows(Some(day().window)).await;
+    assert!(recent.transmissions < all.transmissions);
+    assert!(recent.transmissions > 0);
+    assert!(recent.writers <= all.writers && recent.readers <= all.readers);
+    assert_eq!(recent.last_activity, all.last_activity);
+    let empty = crosstalk_spec::support::TimeWindow::new(
+        crosstalk_spec::support::Timestamp::from_micros(1),
+        crosstalk_spec::support::Timestamp::from_micros(2),
+    )
+    .expect("window");
+    let none = rows(Some(empty)).await;
+    assert_eq!((none.transmissions, none.writers, none.readers), (0, 0, 0));
 }

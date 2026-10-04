@@ -1,8 +1,6 @@
-//! The operator rule forms: watched topics and semantic queries.
-//!
-//! A semantic query rule carries the embedding of its text, and the UI has
-//! no embedder (the contract keeps embeddings out of the UI), so that form
-//! validates its fields and then reports that it cannot be saved yet.
+//! The operator rule forms: watched topics and semantic queries. Both parse
+//! into a [`UserRuleSpec`]; the gateway embeds a semantic query's text, so
+//! the UI never handles embeddings.
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::TopicId;
@@ -14,11 +12,9 @@ use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL};
 use crate::components::{content_hidden, error_panel, short_id};
 use crate::contract::SinkId;
 use crate::contract::errors::QueryError;
-use crate::contract::rules::{RuleName, UserRule};
+use crate::contract::rules::{QueryText, RuleName, UserRuleSpec};
 use crate::pages::common::form::{FormFields, invalid, required, similarity};
 use crate::url::ulid::UlidId;
-
-pub const SEMANTIC_UNSUPPORTED: &str = "semantic query rules cannot be saved from the UI yet: the rule needs the text's embedding, and the gateway does not embed rule text (see the UI contract)";
 
 pub const DEFAULT_REMAP: &str = "0.80";
 pub const DEFAULT_SEMANTIC: &str = "0.75";
@@ -81,7 +77,7 @@ pub fn parse_sinks(
 pub fn parse_watched(
     fields: &FormFields,
     choices: &Choices,
-) -> std::result::Result<(RuleName, UserRule, Vec<SinkId>), QueryError> {
+) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), QueryError> {
     let name = parse_name(fields)?;
     let version: u32 = required(fields, "version")?
         .parse()
@@ -105,7 +101,7 @@ pub fn parse_watched(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let topics =
         NonEmpty::from_vec(topics).ok_or_else(|| invalid("topic", "pick at least one topic"))?;
-    let rule = UserRule::WatchedTopic {
+    let rule = UserRuleSpec::WatchedTopic {
         version: choices.version,
         topics,
         remap_threshold: similarity(fields, "remap_threshold")?,
@@ -113,16 +109,19 @@ pub fn parse_watched(
     Ok((name, rule, parse_sinks(fields, &choices.sinks)?))
 }
 
-/// Validates a semantic query form, then refuses it: see the module docs.
-pub fn parse_semantic(fields: &FormFields, sinks: &[SinkId]) -> QueryError {
-    let checked = parse_name(fields)
-        .and_then(|_| required(fields, "text").map(|_| ()))
-        .and_then(|()| similarity(fields, "threshold").map(|_| ()))
-        .and_then(|()| parse_sinks(fields, sinks).map(|_| ()));
-    match checked {
-        Err(error) => error,
-        Ok(()) => invalid("text", SEMANTIC_UNSUPPORTED),
-    }
+/// A semantic query rule: its text, checked as [`QueryText`], and the
+/// similarity threshold.
+pub fn parse_semantic(
+    fields: &FormFields,
+    sinks: &[SinkId],
+) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), QueryError> {
+    let name = parse_name(fields)?;
+    let text = QueryText::new(required(fields, "text")?).map_err(|e| invalid("text", e))?;
+    let rule = UserRuleSpec::SemanticQuery {
+        text,
+        threshold: similarity(fields, "threshold")?,
+    };
+    Ok((name, rule, parse_sinks(fields, sinks)?))
 }
 
 /// What a form shows in its inputs.
@@ -199,12 +198,10 @@ pub async fn rule_form(
                 <input type="text" name="name" value=(name) required="" class=(format!("{INPUT} w-96"))>
             </label>
             if semantic {
-                <p class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-                    "Saving semantic query rules is not supported yet: the rule stores the embedding of its text, and the gateway does not embed rule text for the UI."
-                </p>
                 <label class="block">
                     <span class=(LABEL)>"Describe what to look for"</span>
-                    <textarea name="text" rows="3" class=(format!("{INPUT} w-full"))>(text)</textarea>
+                    <textarea name="text" rows="3" maxlength=(QueryText::MAX_CHARS.to_string()) required="" class=(format!("{INPUT} w-full"))>(text)</textarea>
+                    <span class="mt-1 block text-xs text-zinc-500">"The gateway embeds this text; transmissions at or above the threshold raise an alert."</span>
                 </label>
                 <label class="block">
                     <span class=(LABEL)>"Similarity threshold (0 to 1)"</span>
@@ -292,7 +289,7 @@ mod tests {
         let (name, rule, sinks) = parse_watched(&fields, &choices()).expect("valid");
         assert_eq!(name.as_str(), "keys");
         assert_eq!(sinks, vec![SinkId::from_ulid(9)]);
-        let UserRule::WatchedTopic {
+        let UserRuleSpec::WatchedTopic {
             version, topics, ..
         } = rule
         else {
@@ -348,15 +345,43 @@ mod tests {
     }
 
     #[test]
-    fn semantic_rules_validate_then_refuse() {
+    fn semantic_rules_parse_their_text() {
         let missing = FormFields::from_pairs(&[("name", "n"), ("threshold", "0.7")]);
-        assert_eq!(parse_semantic(&missing, &[]), invalid("text", "required"));
-        let complete =
-            FormFields::from_pairs(&[("name", "n"), ("text", "api keys"), ("threshold", "0.7")]);
         assert_eq!(
-            parse_semantic(&complete, &[]),
-            invalid("text", SEMANTIC_UNSUPPORTED)
+            parse_semantic(&missing, &[]).err(),
+            Some(invalid("text", "required"))
         );
+        let blank = FormFields::from_pairs(&[("name", "n"), ("text", "  "), ("threshold", "0.7")]);
+        assert_eq!(
+            parse_semantic(&blank, &[]).err(),
+            Some(invalid("text", "required"))
+        );
+        let long = "x".repeat(QueryText::MAX_CHARS + 1);
+        let too_long =
+            FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
+        assert_eq!(
+            parse_semantic(&too_long, &[]).err(),
+            Some(invalid(
+                "text",
+                crate::contract::rules::InvalidQueryText::TooLong
+            ))
+        );
+        let sink = SinkId::from_ulid(9).to_ulid();
+        let complete = FormFields::from_pairs(&[
+            ("name", "Keys"),
+            ("text", " api keys "),
+            ("threshold", "0.7"),
+            ("sink", &sink),
+        ]);
+        let (name, rule, sinks) =
+            parse_semantic(&complete, &[SinkId::from_ulid(9)]).expect("valid");
+        assert_eq!(name.as_str(), "Keys");
+        assert_eq!(sinks, vec![SinkId::from_ulid(9)]);
+        let UserRuleSpec::SemanticQuery { text, threshold } = rule else {
+            panic!("a semantic query")
+        };
+        assert_eq!(text.as_str(), "api keys");
+        assert!((threshold.get() - 0.7).abs() < 1e-6);
     }
 
     #[test]

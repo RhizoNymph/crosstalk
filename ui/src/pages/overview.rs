@@ -10,7 +10,7 @@ use crate::pages::view::view_state;
 
 #[page("/")]
 async fn overview(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let topology = format!("/topology?{}", state.to_query());
     Ok(view! {
         page_header(title: "Overview", subtitle: "Agent-to-agent communication seen by the gateway.")

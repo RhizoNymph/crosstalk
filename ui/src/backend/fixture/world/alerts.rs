@@ -2,7 +2,7 @@
 //! suppress reasons, deduplicated occurrence counts and every subject kind,
 //! consistent with each channel's policy history.
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId};
@@ -13,8 +13,8 @@ use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, 
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
-use crate::contract::actions::OperatorAction;
-use crate::contract::research::AuditSubject;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
+use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, OperatorRuleStatus, RuleStatus};
 
 use super::channels::{
@@ -357,8 +357,13 @@ fn disable_refunds(world: &World, state: &mut State, rules: &Rules, rng: &mut Rn
         id: rules.off,
         status: OperatorRuleStatus::Disabled,
     };
-    let subjects = vec![AuditSubject::Rule(rules.off)];
-    operator_action(state, OFF_RULE_DISABLED_AT, RESEARCHER, action, subjects);
+    operator_action(
+        state,
+        OFF_RULE_DISABLED_AT,
+        RESEARCHER,
+        action,
+        ActionOutcome::Applied,
+    );
     if let Some(rule) = state.rules.iter_mut().find(|r| r.id == rules.off) {
         rule.status = RuleStatus::Disabled;
     }

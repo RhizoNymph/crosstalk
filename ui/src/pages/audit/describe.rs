@@ -5,7 +5,7 @@ use crosstalk_spec::observed::agent::MergeRequest;
 use crate::components::locator::format_pattern;
 use crate::components::{badge::Badge, short_id};
 use crate::contract::actions::OperatorAction;
-use crate::contract::research::{AuditSubject, AuditedAction};
+use crate::contract::research::AuditedAction;
 use crate::contract::rules::OperatorRuleStatus;
 use crate::contract::verdict::Verdict;
 use crate::url::ulid::UlidId;
@@ -83,32 +83,6 @@ pub fn note(action: &AuditedAction) -> Option<&str> {
     }
 }
 
-/// What the action is about. Creations and unmerges have no subject id in
-/// the action itself.
-pub fn subject(action: &AuditedAction) -> Option<AuditSubject> {
-    let AuditedAction::Operator(action) = action else {
-        return None;
-    };
-    match action {
-        OperatorAction::SetPolicy { channel, .. }
-        | OperatorAction::PromoteChannel { channel, .. } => Some(AuditSubject::Channel(*channel)),
-        OperatorAction::MergeAgents(request) => Some(AuditSubject::Agent(request.source())),
-        OperatorAction::RenameAgent { agent, .. } => Some(AuditSubject::Agent(*agent)),
-        OperatorAction::Acknowledge { alert } | OperatorAction::Resolve { alert, .. } => {
-            Some(AuditSubject::Alert(*alert))
-        }
-        OperatorAction::SetVerdict { transmission, .. } => {
-            Some(AuditSubject::Transmission(*transmission))
-        }
-        OperatorAction::UpdateRule { id, .. } | OperatorAction::SetRuleEnabled { id, .. } => {
-            Some(AuditSubject::Rule(*id))
-        }
-        OperatorAction::ReplayDeadLetter { .. }
-        | OperatorAction::Unmerge { .. }
-        | OperatorAction::CreateRule { .. } => None,
-    }
-}
-
 /// Whether an entry changed a channel's policy: its policy history.
 pub fn is_policy_change(action: &AuditedAction) -> bool {
     matches!(
@@ -142,10 +116,6 @@ mod tests {
         });
         assert_eq!(describe(&action), "set policy to sanctioned");
         assert_eq!(note(&action), Some("team wiki"));
-        assert_eq!(
-            subject(&action),
-            Some(AuditSubject::Channel(ChannelId::from_ulid(4)))
-        );
         assert!(is_policy_change(&action));
     }
 
@@ -173,10 +143,6 @@ mod tests {
         .expect("not a self merge");
         let merged = op(OperatorAction::MergeAgents(merge));
         assert_eq!(describe(&merged), "merged agent …000001 into …000002");
-        assert_eq!(
-            subject(&merged),
-            Some(AuditSubject::Agent(AgentId::from_ulid(1)))
-        );
         let renamed = op(OperatorAction::RenameAgent {
             agent: AgentId::from_ulid(1),
             label: AgentLabel::new("planner").ok(),
@@ -188,10 +154,7 @@ mod tests {
         let ack = op(OperatorAction::Acknowledge {
             alert: AlertId::from_ulid(3),
         });
-        assert_eq!(
-            subject(&ack),
-            Some(AuditSubject::Alert(AlertId::from_ulid(3)))
-        );
+        assert_eq!(describe(&ack), "acknowledged alert");
         assert!(!is_policy_change(&ack));
     }
 
@@ -201,6 +164,6 @@ mod tests {
             summary: "declared channel wiki".into(),
         };
         assert_eq!(describe(&action), "declared channel wiki");
-        assert_eq!(subject(&action), None);
+        assert_eq!(note(&action), None);
     }
 }

@@ -1,12 +1,11 @@
 //! The pattern builder: patterns derived from a discovered channel's seed
-//! locator, and what each would cover.
+//! locator. What each would cover is the backend's `promotion_preview`.
 //!
 //! Candidates run from most to least specific. Every candidate covers the
 //! seed, which `PromoteChannel` requires, so the operator picks a scope
 //! rather than writing a pattern.
 
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
-use crosstalk_spec::ids::ChannelId;
 
 /// Patterns that cover `seed`, most specific first.
 pub fn candidates(seed: &Locator) -> Vec<ResourcePattern> {
@@ -61,43 +60,6 @@ pub fn pick(candidates: &[ResourcePattern], index: Option<&str>) -> Result<Optio
         Ok(Some(index))
     } else {
         Err(format!("there is no pattern {index}"))
-    }
-}
-
-/// What a pattern would take over.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Coverage {
-    /// This channel's known resources and whether the pattern matches each.
-    pub resources: Vec<(Locator, bool)>,
-    /// Other discovered channels whose seed the pattern matches: promotion
-    /// supersedes them too.
-    pub supersedes: Vec<(ChannelId, Locator)>,
-}
-
-impl Coverage {
-    pub fn new(
-        pattern: &ResourcePattern,
-        own: &[Locator],
-        others: &[(ChannelId, Locator)],
-    ) -> Self {
-        Self {
-            resources: own
-                .iter()
-                .map(|l| (l.clone(), pattern.matches(l)))
-                .collect(),
-            supersedes: others
-                .iter()
-                .filter(|(_, seed)| pattern.matches(seed))
-                .cloned()
-                .collect(),
-        }
-    }
-
-    pub fn missed(&self) -> usize {
-        self.resources
-            .iter()
-            .filter(|(_, covered)| !covered)
-            .count()
     }
 }
 
@@ -177,24 +139,5 @@ mod tests {
         assert_eq!(pick(&patterns, Some("1")), Ok(Some(1)));
         assert!(pick(&patterns, Some("9")).is_err());
         assert!(pick(&patterns, Some("-1")).is_err());
-    }
-
-    #[test]
-    fn coverage_reports_misses_and_superseded_channels() {
-        let pattern = ResourcePattern::UrlPrefix {
-            host: Host("wiki.example.org".into()),
-            path_prefix: "/team".into(),
-        };
-        let own = vec![url("/team/a"), url("/teamwork")];
-        let others = vec![
-            (ChannelId::from_ulid(2), url("/team/b")),
-            (ChannelId::from_ulid(3), url("/other")),
-        ];
-        let coverage = Coverage::new(&pattern, &own, &others);
-        assert_eq!(coverage.missed(), 1, "/teamwork is not under /team");
-        assert_eq!(
-            coverage.supersedes,
-            vec![(ChannelId::from_ulid(2), url("/team/b"))]
-        );
     }
 }

@@ -1,6 +1,6 @@
 //! Governance actions: policy, promotion, merges, renames and rules.
 
-use crosstalk_spec::aggregates::alert::{AlertState, AlertSubject, SuppressReason};
+use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
@@ -9,7 +9,6 @@ use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
-use crosstalk_spec::observed::agent::AgentState;
 use crosstalk_spec::support::{NonEmpty, Similarity};
 
 use super::super::FixtureBackend;
@@ -19,11 +18,14 @@ use super::{caller, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
+use crate::contract::agents::AgentState;
+use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::channels::ChannelListFilter;
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::rules::{
-    BuiltinRule, OperatorRuleStatus, RuleKind, RuleName, RuleStatus, UserRule,
+    BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
+    UserRuleSpec,
 };
 use crate::contract::scope::TopologyFilter;
 
@@ -231,11 +233,11 @@ async fn merge_redirects_and_rejects() {
         b.act(&c, merge(&b, "al0", "cx0")).await.err(),
         conflict(ConflictKind::AgentMerged)
     );
-    // A target that resolves to the source is invalid.
-    assert!(matches!(
-        b.act(&c, merge(&b, "pi2", "al3")).await,
-        Err(QueryError::InvalidInput(_))
-    ));
+    // A target that resolves to the source is a conflict.
+    assert_eq!(
+        b.act(&c, merge(&b, "pi2", "al3")).await.err(),
+        conflict(ConflictKind::MergeIntoSelf)
+    );
     // An operator merge clears the veto on the pair.
     let (omp3, omp1) = (agent(&b, "omp3"), agent(&b, "omp1"));
     assert!(
@@ -323,6 +325,83 @@ async fn rename_labels_canonical_agents_only() {
         .await
         .err(),
         conflict(ConflictKind::AgentMerged)
+    );
+}
+
+#[tokio::test]
+async fn promotion_previews_what_promote_then_does() {
+    let b = fresh();
+    let c = researcher();
+    let (wiki, talk) = (
+        channel(&b, ChannelKey::HijackedWiki),
+        channel(&b, ChannelKey::WikiTalk),
+    );
+    let pattern = ResourcePattern::UrlPrefix {
+        host: Host("wiki.example.org".to_owned()),
+        path_prefix: "/wiki".to_owned(),
+    };
+    let preview = b
+        .promotion_preview(&c, wiki, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(preview.conflicts, None);
+    assert_eq!(preview.superseded_channels, vec![talk]);
+    assert!(!preview.covered_resources.is_empty());
+    assert!(
+        preview
+            .covered_resources
+            .iter()
+            .all(|r| pattern.matches(&r.locator))
+    );
+    assert!(
+        preview
+            .uncovered_resources
+            .iter()
+            .all(|r| !pattern.matches(&r.locator))
+    );
+    let ActionOutcome::ChannelPromoted(new) = b
+        .act(
+            &c,
+            OperatorAction::PromoteChannel {
+                channel: wiki,
+                pattern: pattern.clone(),
+                policy: PolicyKind::Unreviewed,
+                note: None,
+            },
+        )
+        .await
+        .expect("promote")
+    else {
+        panic!("a promotion")
+    };
+    let declared = b.channel(&c, new).await.expect("ok").expect("declared");
+    let held: Vec<_> = preview.covered_resources.iter().map(|r| r.id).collect();
+    assert_eq!(declared.channel.resources, held, "the preview was exact");
+    // Afterwards the same preview reports why it would be refused.
+    let again = b
+        .promotion_preview(&c, wiki, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(again.conflicts, Some(ConflictKind::ChannelSuperseded));
+    let declared_preview = b
+        .promotion_preview(&c, new, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(
+        declared_preview.conflicts,
+        Some(ConflictKind::ChannelNotDiscovered)
+    );
+    let pastebin = channel(&b, ChannelKey::Pastebin);
+    let missed = b
+        .promotion_preview(&c, pastebin, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(missed.conflicts, Some(ConflictKind::PatternMissesSeed));
+    assert_eq!(
+        b.promotion_preview(&c, crosstalk_spec::ids::ChannelId::from_ulid(1), &pattern)
+            .await
+            .err(),
+        Some(QueryError::NotFound)
     );
 }
 
@@ -458,13 +537,13 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
     );
 }
 
-fn watch(b: &FixtureBackend, version: u32, theme: super::super::text::Theme) -> UserRule {
+fn watch(b: &FixtureBackend, version: u32, theme: super::super::text::Theme) -> UserRuleSpec {
     let topic = b
         .world
         .topics
         .theme_topic(TopicModelVersion(2), theme)
         .expect("topic");
-    UserRule::WatchedTopic {
+    UserRuleSpec::WatchedTopic {
         version: TopicModelVersion(version),
         topics: NonEmpty::new(topic),
         remap_threshold: Similarity::new(0.8).expect("similarity"),
@@ -495,28 +574,34 @@ async fn rules_are_created_updated_and_disabled() {
     let rules = b.rules(&c).await.expect("rules");
     let def = rules.iter().find(|r| r.id == id).expect("rule");
     assert_eq!(def.status, RuleStatus::Enabled);
-    assert_eq!(def.rule, RuleKind::User(rule.clone()));
-    // Invalid definitions.
+    assert!(matches!(&def.rule, RuleKind::User(stored) if stored.spec() == rule));
+    // Invalid definitions: an older topic version, an unknown sink.
     let old = watch(&b, 1, super::super::text::Theme::Incidents);
-    for (bad_rule, bad_sinks) in [
-        (old, sinks.clone()),
-        (rule.clone(), vec![crate::contract::SinkId::from_ulid(9)]),
-    ] {
-        let result = b
-            .act(
-                &c,
-                OperatorAction::CreateRule {
-                    name: name.clone(),
-                    rule: bad_rule,
-                    sinks: bad_sinks,
-                },
-            )
-            .await;
-        assert!(
-            matches!(result, Err(QueryError::InvalidInput(_))),
-            "{result:?}"
-        );
-    }
+    let on_old = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: name.clone(),
+                rule: old,
+                sinks: sinks.clone(),
+            },
+        )
+        .await;
+    assert_eq!(on_old.err(), conflict(ConflictKind::TopicVersionNotCurrent));
+    let unknown_sink = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: name.clone(),
+                rule: rule.clone(),
+                sinks: vec![crate::contract::SinkId::from_ulid(9)],
+            },
+        )
+        .await;
+    assert!(
+        matches!(unknown_sink, Err(QueryError::InvalidInput(_))),
+        "{unknown_sink:?}"
+    );
     // Built-ins can only be switched.
     let builtin = rules
         .iter()
@@ -575,7 +660,7 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| matches!(r.status, RuleStatus::Stale(_)))
         .expect("stale")
         .id;
-    assert!(matches!(
+    assert_eq!(
         b.act(
             &c,
             OperatorAction::SetRuleEnabled {
@@ -583,9 +668,10 @@ async fn rules_are_created_updated_and_disabled() {
                 status: OperatorRuleStatus::Enabled
             }
         )
-        .await,
-        Err(QueryError::InvalidInput(_))
-    ));
+        .await
+        .err(),
+        conflict(ConflictKind::RuleStale)
+    );
     let retarget = watch(&b, 2, super::super::text::Theme::CodeReview);
     b.act(
         &c,
@@ -606,7 +692,72 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| r.id == stale)
         .expect("rule");
     assert_eq!(def.status, RuleStatus::Enabled);
-    assert_eq!(def.rule, RuleKind::User(retarget));
+    assert!(matches!(&def.rule, RuleKind::User(stored) if stored.spec() == retarget));
+}
+
+#[tokio::test]
+async fn semantic_rules_are_embedded_from_their_text() {
+    let b = fresh();
+    let c = researcher();
+    let spec = |text: &str| UserRuleSpec::SemanticQuery {
+        text: QueryText::new(text).expect("text"),
+        threshold: Similarity::new(0.7).expect("similarity"),
+    };
+    let created = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: RuleName::new("Keys").expect("name"),
+                rule: spec("api keys pasted in chat"),
+                sinks: Vec::new(),
+            },
+        )
+        .await
+        .expect("create");
+    let ActionOutcome::RuleCreated(id) = created else {
+        panic!("{created:?}")
+    };
+    let stored = |rules: Vec<RuleDef>| {
+        rules
+            .into_iter()
+            .find(|r| r.id == id)
+            .map(|r| r.rule)
+            .expect("rule")
+    };
+    let RuleKind::User(UserRule::SemanticQuery {
+        text,
+        model,
+        embedding,
+        ..
+    }) = stored(b.rules(&c).await.expect("rules"))
+    else {
+        panic!("a semantic query")
+    };
+    assert_eq!(text.as_str(), "api keys pasted in chat");
+    assert_eq!(model, b.world.topics.model);
+    assert_eq!(*embedding.model(), model);
+    // Editing the text embeds it again.
+    b.act(
+        &c,
+        OperatorAction::UpdateRule {
+            id,
+            name: RuleName::new("Keys").expect("name"),
+            rule: spec("weekly meeting summary"),
+            sinks: Vec::new(),
+        },
+    )
+    .await
+    .expect("update");
+    let RuleKind::User(UserRule::SemanticQuery {
+        text: edited,
+        embedding: again,
+        ..
+    }) = stored(b.rules(&c).await.expect("rules"))
+    else {
+        panic!("a semantic query")
+    };
+    assert_eq!(edited.as_str(), "weekly meeting summary");
+    assert_ne!(again, embedding);
 }
 
 #[tokio::test]

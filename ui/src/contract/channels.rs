@@ -6,7 +6,10 @@ use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+use super::errors::ConflictKind;
+use super::graph::ChannelShape;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OriginKind {
@@ -75,6 +78,15 @@ pub struct Supersession {
     pub at: Timestamp,
 }
 
+/// What a channel is called (item 24): the channel in force (after
+/// supersession) and its pattern or seed locator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelName {
+    /// The channel in force.
+    pub id: ChannelId,
+    pub shape: ChannelShape,
+}
+
 /// A row in the channels list, and the head of the channel page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSummary {
@@ -88,13 +100,34 @@ pub struct ChannelSummary {
     pub last_activity: Option<Timestamp>,
 }
 
-/// Restricts the channels list. Empty lists do not restrict.
+/// Restricts the channels list (items 1 and 28). Empty lists do not
+/// restrict.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChannelListFilter {
     pub origins: Vec<OriginKind>,
     pub detections: Vec<DetectionKind>,
     pub policies: Vec<PolicyKind>,
     pub include_superseded: bool,
+    /// When set, rows count writers, readers and transmissions in this
+    /// window only; `None` counts everything. Never drops a row, and
+    /// `last_activity` is always the latest activity overall.
+    pub window: Option<TimeWindow>,
+}
+
+/// What promoting a channel with a pattern would do (item 26), over every
+/// known resource rather than a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionPreview {
+    /// The resources the declared channel would hold: those of the channels
+    /// it supersedes (the promoted one included) that the pattern matches.
+    pub covered_resources: Vec<Resource>,
+    /// Resources of those channels the pattern does not match. They stay
+    /// with their superseded channel, which resolves to the declared one.
+    pub uncovered_resources: Vec<Resource>,
+    /// The other discovered channels promotion would supersede.
+    pub superseded_channels: Vec<ChannelId>,
+    /// Why `PromoteChannel` would be refused now, if it would be.
+    pub conflicts: Option<ConflictKind>,
 }
 
 /// One resource of a channel with who wrote and read it in a window.

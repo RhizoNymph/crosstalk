@@ -112,7 +112,7 @@ fn list_href(state: &ViewState, query: &ListQuery) -> String {
 
 #[page("/channels")]
 async fn channels_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let parsed = query_params::<RawListQuery>(cx)
         .map_err(|e| crate::pages::common::form::invalid("query", e))
         .and_then(ListQuery::parse);
@@ -288,8 +288,14 @@ mod tests {
         assert!(reply.body.contains("Review queue"));
         let reply = get(&format!("/channels?{state}&tab=review&origin=discovered")).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("wiki.example.org"), "the hijacked wiki awaits review");
-        let reply = get(&format!("/channels?{state}&origin=discovered&detection=awaiting")).await;
+        assert!(
+            reply.body.contains("wiki.example.org"),
+            "the hijacked wiki awaits review"
+        );
+        let reply = get(&format!(
+            "/channels?{state}&origin=discovered&detection=awaiting"
+        ))
+        .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No channels match these filters."));
     }

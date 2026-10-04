@@ -22,12 +22,13 @@ mod world;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::derived::flow::resource::ResourcePattern;
+use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
@@ -37,8 +38,11 @@ use tokio::sync::RwLock;
 use super::{Backend, Result};
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelSummary, ResourceUse};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
+use crate::contract::alerts::Alert;
+use crate::contract::channels::{
+    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
+};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -58,6 +62,8 @@ use queries::{Ctx, require};
 use store::State;
 use world::World;
 
+#[cfg(test)]
+pub use world::ChannelKey;
 pub use world::GenError;
 
 #[derive(Debug)]
@@ -92,15 +98,10 @@ impl FixtureBackend {
         self.world.seed
     }
 
-    /// The end of the generated data. Buckets before the watermark (ten
-    /// minutes earlier) are final.
-    pub fn now(&self) -> Timestamp {
-        clock::NOW
-    }
-
-    /// The latest fitted topic-model version.
-    pub fn current_topic_version(&self) -> TopicModelVersion {
-        self.world.topics.latest()
+    /// Named handles into the generated world, for tests.
+    #[cfg(test)]
+    pub fn scenario(&self) -> &world::Scenario {
+        &self.world.scenario
     }
 
     /// Runs a read under the state's read lock.
@@ -111,6 +112,18 @@ impl FixtureBackend {
 }
 
 impl Backend for FixtureBackend {
+    /// The end of the generated data. Buckets before the watermark (ten
+    /// minutes earlier) are final.
+    async fn now(&self, caller: &Caller) -> Result<Timestamp> {
+        require(caller, Permission::View)?;
+        Ok(clock::NOW)
+    }
+
+    async fn current_topic_version(&self, caller: &Caller) -> Result<TopicModelVersion> {
+        require(caller, Permission::View)?;
+        Ok(self.world.topics.latest())
+    }
+
     async fn topology(
         &self,
         caller: &Caller,
@@ -277,14 +290,51 @@ impl Backend for FixtureBackend {
             .await
     }
 
-    async fn agents(&self, caller: &Caller, page: &PageRequest) -> Result<Page<AgentSummary>> {
+    async fn promotion_preview(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        pattern: &ResourcePattern,
+    ) -> Result<PromotionPreview> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::agents(ctx, page)).await
+        let state = self.state.read().await;
+        let plan = queries::promotion::plan(&self.world, &state, id, pattern)?;
+        Ok(queries::promotion::preview(&self.world, plan, id))
+    }
+
+    async fn agents(
+        &self,
+        caller: &Caller,
+        filter: &AgentListFilter,
+        page: &PageRequest,
+    ) -> Result<Page<AgentSummary>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::agents(ctx, filter, page))
+            .await
     }
 
     async fn agent(&self, caller: &Caller, id: AgentId) -> Result<Option<AgentDetail>> {
         require(caller, Permission::View)?;
         self.read(|ctx| Ok(queries::lists::agent(ctx, id))).await
+    }
+
+    async fn agent_names(
+        &self,
+        caller: &Caller,
+        ids: &[AgentId],
+    ) -> Result<HashMap<AgentId, AgentName>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::names::agents(ctx, ids))).await
+    }
+
+    async fn channel_names(
+        &self,
+        caller: &Caller,
+        ids: &[ChannelId],
+    ) -> Result<HashMap<ChannelId, ChannelName>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::names::channels(ctx, ids)))
+            .await
     }
 
     async fn alerts(
@@ -296,6 +346,12 @@ impl Backend for FixtureBackend {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::alerts(ctx, filter, page))
             .await
+    }
+
+    async fn alert(&self, caller: &Caller, id: AlertId) -> Result<Option<Alert>> {
+        require(caller, Permission::View)?;
+        let state = self.state.read().await;
+        Ok(state.alerts.iter().find(|a| a.id == id).cloned())
     }
 
     async fn rules(&self, caller: &Caller) -> Result<Vec<RuleDef>> {

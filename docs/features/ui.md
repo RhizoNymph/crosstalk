@@ -95,6 +95,9 @@ scroll position do not.
 
 - One typed `ViewState` struct parses and renders the query, so every page
   reads the same keys and links between views carry the filter along.
+- A missing window defaults to the 24 hours before the backend's present
+  (*`now`*) and a missing topic version to *`current_topic_version`*; both
+  are `Backend` calls, so pages never ask the fixture directly.
 - Filter controls are a `GET` form, so changing them navigates and the URL
   is always current.
 - Selections made inside an element update a signal and the URL
@@ -174,25 +177,32 @@ audit log. Traffic over time is not shown yet.
 Promotion is its own page. Candidate patterns are derived from the seed
 locator, most specific first (exact; URL path prefixes by whole segments,
 then host; file path prefixes; MCP server), so every candidate covers the
-seed. Picking one (`?pattern=<n>`) shows which of the channel's known
-resources it covers and which other discovered channels it would
-supersede, then a confirm form with policy and note.
+seed. Picking one (`?pattern=<n>`) asks the backend for a
+*`promotion_preview`* over every known resource (not the view's window):
+the resources the declared channel would hold, those of the superseded
+channels that fall outside the pattern, the other discovered channels it
+would supersede (named in one *`channel_names`* call), and the conflict
+promotion would hit, if any. Then a confirm form with policy and note.
 
 - Calls: *`channels`*, `channel`, *`channel_resources`*, `alerts`
   (filtered by channel), *`audit`* (policy history), *`operators`*,
-  *`rules`* (rule names), *`agent`* (writer and reader names).
+  *`rules`* (rule names), *`agent_names`* (writer and reader names, one
+  call), *`promotion_preview`*, *`channel_names`*.
 - Actions: `SetPolicy`, *`PromoteChannel`* (`Govern`; hidden on superseded
   channels, promotion only for discovered ones).
 
 ### Agents (`/agents`, `/agents/{id}`, `/agents/{id}/merge`)
 
 A paged table (name, state, harness claims, parent, transmissions in and
-out, last seen), and a detail page: identity evidence (each variant with
+out, last seen) filtered by toggle chips for state and claimed harness
+(`state`, `claims` query keys, comma lists; the backend filters), and a
+detail page: identity evidence (each variant with
 its scope and strength, most specific first, hashes abbreviated to their
 key version and first four bytes), harness claims (shown as "claims",
-never as identity), the sub-agent tree (read up to four levels and sixty
-agents deep), aliases, merge history with revert state and an unmerge
-button per merge in force, and merge vetoes. A URL naming an alias shows
+never as identity), the sub-agent tree (one *`agents`* call per level filtered by parent, up
+to four levels and sixty agents), aliases (each with the state it had
+before its merge), merge history with revert state, what an unmerge would
+restore and an unmerge button per merge in force, and merge vetoes. A URL naming an alias shows
 the canonical agent with a banner; actions always target the canonical
 agent. Rename validates `AgentLabel` and shows its error inline; clearing
 the label is a separate button.
@@ -204,27 +214,32 @@ carry different harness ids in the same scope, and confirms a
 `MergeRequest` authored by the operator (the first agent becomes an alias
 of the second).
 
-- Calls: *`agents`*, *`agent`*, *`operators`*.
+- Calls: *`agents`* (with *`AgentListFilter`*), *`agent`*, *`operators`*.
 - Actions: `MergeAgents`, *`Unmerge`*, *`RenameAgent`* (`Govern`).
 
-### Alerts (`/alerts`, `/alerts/rules`, `/alerts/rules/new`, `/alerts/rules/{id}`)
+### Alerts (`/alerts`, `/alerts/{id}`, `/alerts/rules`, `/alerts/rules/new`, `/alerts/rules/{id}`)
 
 An inbox with one tab per state (`tab=open|acknowledged|resolved|
 suppressed`), showing rule name, subject link (channel, agent or
 transmission page), occurrences, raise time, who moved the alert to its
-state (and the resolution note or suppression reason). Open alerts can be
+state (and the resolution note or suppression reason: channel sanctioned,
+rule disabled, or rejected as a false detection). Open alerts can be
 acknowledged; open and acknowledged ones resolved with a note (`Triage`).
 When the shared filter names exactly one channel, the inbox is narrowed to
-it. The rules page lists built-in rules (enable or disable), operator
-rules (what they match, status, stale reason, author, sinks; edit, enable,
-disable, or "Update" when stale) and sinks with their last delivery.
-Watched-topic rules pick topics of the newest topic version (labels need
-`Content`). Semantic query rules cannot be saved yet: `UserRule::
-SemanticQuery` carries an `Embedding` the UI cannot compute, so the form
-validates and then reports that.
+it. Each alert id links to the alert's page (`/alerts/{id}`): rule (its
+edit page, or the rules list for a built-in), subject link, raise time,
+occurrences, state with who and when, the acknowledge and resolve forms,
+and its history from the audit log (subject `al.<id>`). The rules page
+lists built-in rules (enable or disable), operator rules (what they match,
+status, stale reason, author, sinks; edit, enable, disable, or "Update"
+when stale) and sinks with their last delivery. Watched-topic rules pick
+topics of the current topic version (labels need `Content`). Semantic
+query rules are text (`QueryText`): the form submits a `UserRuleSpec` and
+the backend embeds it, so editing the text re-embeds it.
 
-- Calls: `alerts`, *`rules`*, *`sinks`*, *`topic_versions`*, `topics`,
-  *`operators`*.
+- Calls: `alerts`, *`alert`*, *`rules`*, *`sinks`*,
+  *`current_topic_version`*, `topics`, *`operators`*, *`audit`* (an
+  alert's history).
 - Actions: `Acknowledge`, `Resolve`, *`CreateRule`*, *`UpdateRule`*,
   *`SetRuleEnabled`*.
 
@@ -233,11 +248,14 @@ validates and then reports that.
 - **Export** (`/export`): pick dataset, window, filter, topic version and
   format; content needs `Content`. Calls *`export`*.
 - **Audit** (`/audit`): operator and config actions with actor, a one-line
-  description, note, subject link and outcome (applied, or rejected with
-  the typed error), paged. Filters: `op` (operator), `subject`
-  (`ch.`/`ag.`/`tx.`/`ru.`/`al.` plus the id; every row has a "filter"
-  link) and `span=all` (otherwise the shared window). Calls *`audit`*,
-  *`operators`*.
+  description, note, the entry's own subject (linked to its page; merges
+  have none and link to the log filtered to them) and outcome (applied,
+  with a link to what the action created, or rejected with the typed
+  error), paged. Filters: `op` (operator), `subject`
+  (`ch.`/`ag.`/`tx.`/`ru.`/`al.`/`mg.` plus the id; every row has a
+  "filter" link; the backend also matches merges an agent took part in
+  and what an entry created) and `span=all` (otherwise the shared window).
+  Calls *`audit`*, *`operators`*.
 - **Pipeline** (`/pipeline`): dead letters (consumer group, event id, kind
   and time, attempts, last error) with replay. Needs `Operate` to view.
   Calls *`dead_letters`*; action `ReplayDeadLetter` (`Operate`).
@@ -245,7 +263,8 @@ validates and then reports that.
 ## Data and control flow
 
 1. A request reaches a page. Trusted mode builds the `Caller` for the
-   configured operator. The page parses `ViewState` from the query.
+   configured operator. The page parses `ViewState` from the query, with
+   defaults read from the backend (*`now`*, *`current_topic_version`*).
 2. The page calls the `Backend` with the `Caller` and `ViewState`, and
    renders. Content fields are rendered only if the caller has `Content`.
 3. Element tags are rendered with their inputs as `data-*` attributes
@@ -281,7 +300,7 @@ the TypeScript tests parse exactly what Rust emits.
 | --- | --- | --- | --- |
 | `GET /data/topology?<view state>` | JSON `TopologyPayload` | `View` | `topology` (`g=agents`) or `channel_topology` (`g=channels`) |
 | `GET /data/timeline?<view state>&buckets=<n>` | JSON `TimelinePayload` | `View` | `timeline`, `n` in 1..=1000, default 96 |
-| `GET /data/projection/{id}` | binary, `application/octet-stream` | `Content` | `projection`, plus `agent`, `channel`, `topics` for names |
+| `GET /data/projection/{id}` | binary, `application/octet-stream` | `Content` | `projection`, plus `agent_names`, `channel_names`, `topics` for names (one call each) |
 
 - **No redirects.** A view-state route needs every canonical key (`from`,
   `to`, `v`, `w`, `g`); a missing or invalid one is a 400 naming it.
@@ -362,26 +381,26 @@ Element inputs and outputs (`value`, announced with `change`):
 | `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. |
 | `ui/src/app.rs` | `backend(cx)`, `caller(cx)`, `operator(cx)`, `can(caller, permission)`. `AppBackend` is the configured backend type. |
 | `ui/src/config.rs` | `Config`, `TrustedOperator` (builds the all-permissions `Caller`), `BackendConfig`. |
-| `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`). Checked constructors: `TopologyView`, `BipartiteView`, `ProjectionPoints`, `Excerpt`, `AgentLabel`, `RuleName`, `SearchText`, `ProjectionParams`. Removed when the gateway's types land. |
-| `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures. |
-| `ui/src/backend/fixture/` | `FixtureBackend::new(seed)`: a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing every `Backend` method with real semantics. `world/` generates it through the spec's and contract's checked constructors: `agents` (cast and merge history), `drafts` and `channels` (channel table, detection from traffic), `traffic` and `states` (transmissions and accesses), `evidence` (matches and excerpts), `topics`, `rules`, `alerts`, `history` (operators, policy decisions, verdicts, audit, dead letters). `store` holds what actions change behind one `tokio::sync::RwLock`; `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors; `actions/` applies and audits every action; `text/` holds the message templates and codecs; `rng` is SplitMix64. The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels: declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; a `kv_put` tool only one agent uses (observed); an `s3://agent-scratch` prefix with only suspected traffic (candidate); and `notes.corp.internal/team-a/standup`, superseded by the operator-promoted declared channel `notes.corp.internal/team-a`. Topics: v0 (unfitted), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago); v1's "Engineering chatter" maps to nothing in v2. Rules: the five built-ins, a watched-topic rule on v2 (credentials and agent instructions), a stale v1 rule, a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators: `researcher` (the trusted operator in `config.json`) and `oncall` (view, content, triage); about 60 verdicts (one withdrawn), a few hundred audit entries including two rejected actions, and four dead letters. |
+| `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name and say so (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`, `RuleDef`; `alerts`: `Alert`, `AlertState`, `SuppressReason` with `OperatorRejected`; `agents`: `Agent`, `AgentState` whose `Merged` keeps `prior: ActiveAgentState`). Also: `UserRuleSpec` (what an operator submits) beside the stored `UserRule`, `AgentName`, `ChannelName`, `PromotionPreview`, `AgentListFilter`, `ChannelListFilter` (with `window`), `AuditEntry` with `subject` and `AuditOutcome::Applied(ActionOutcome)`. Checked constructors: `TopologyView`, `BipartiteView`, `ProjectionPoints`, `Excerpt`, `AgentLabel`, `RuleName`, `QueryText`, `SearchText`, `ProjectionParams`. Removed when the gateway's types land. |
+| `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures: the present (`now`, `current_topic_version`), graphs, transmissions, content, channels (`channels` with `ChannelListFilter`, `channel`, `channel_resources`, `promotion_preview`), agents (`agents` with `AgentListFilter`, `agent`), names (`agent_names`, `channel_names`), alerts (`alerts`, `alert`), rules, research, pipeline and `act`. |
+| `ui/src/backend/fixture/` | `FixtureBackend::new(seed)`: a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing every `Backend` method with real semantics. `world/` generates it through the spec's and contract's checked constructors: `agents` (cast and merge history), `drafts` and `channels` (channel table, detection from traffic), `traffic` and `states` (transmissions and accesses), `evidence` (matches and excerpts), `topics`, `rules`, `alerts`, `history` (operators, policy decisions, verdicts, audit, dead letters). `store` holds what actions change behind one `tokio::sync::RwLock` (agents keep their pre-merge state in `AgentState::Merged`, the audit log is plain `AuditEntry`s); `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors (`names`: batch names; `promotion`: the plan shared by `promotion_preview` and `PromoteChannel`; `lists`: list filters, and audit subject matching derived from each entry's subject, action, outcome and the merge log); `actions/` applies and audits every action (subject and outcome recorded on the entry; a false-detection verdict suppresses the transmission's active alerts with `OperatorRejected`); `world/topics` also holds the fixture's text embedder (`embed`: theme vectors weighted by vocabulary hits plus hashed word axes), used for `CreateRule`/`UpdateRule` and the generated semantic rules; `text/` holds the message templates and codecs; `rng` is SplitMix64. The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels: declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; a `kv_put` tool only one agent uses (observed); an `s3://agent-scratch` prefix with only suspected traffic (candidate); and `notes.corp.internal/team-a/standup`, superseded by the operator-promoted declared channel `notes.corp.internal/team-a`. Topics: v0 (unfitted), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago); v1's "Engineering chatter" maps to nothing in v2. Rules: the five built-ins, a watched-topic rule on v2 (credentials and agent instructions), a stale v1 rule, a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators: `researcher` (the trusted operator in `config.json`) and `oncall` (view, content, triage); about 60 verdicts (one withdrawn), a few hundred audit entries including two rejected actions, and four dead letters. |
 | `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query). |
-| `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`view_state(cx)`: parse, default, redirect to canonical; `current_state(cx)` for the layout), one module per screen. |
-| `ui/src/pages/common/` | Shared by the governance pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator, rule and agent names). |
+| `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`defaults(cx)`: the default window and topic version from `Backend::now` and `current_topic_version`; async `view_state(cx)`: parse, default, redirect to canonical; async `current_state(cx)` for the layout), one module per screen. |
+| `ui/src/pages/common/` | Shared by the governance pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator and rule names; agent names from one `agent_names` call). |
 | `ui/src/pages/channels/` | `list` (`/channels`), `query` (list keys and toggles), `model` (shape, title, detection in words, decision), `detail` (`/channels/{id}` GET and POST `set-policy`), `sections` (resources, alerts, policy history), `policy` (set-policy form and parser), `promote/` (`patterns`: candidates from the seed and coverage; `mod`: GET and POST `/channels/{id}/promote`; `screen`: the page). |
-| `ui/src/pages/agents/` | `list` (`/agents`), `detail` (`/agents/{id}` GET and POST `rename`, `clear-label`, `unmerge`), `actions` (form parsers, `merge_action`), `evidence` (evidence rows, shared and conflicting evidence), `tree` (bounded sub-agent tree), `sections`, `merge` (`/agents/{id}/merge` GET and POST). |
-| `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`), `model` (alert rows), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`; `model`: rule and sink rows; `form`: watched-topic and semantic forms and parsers; `edit`: `/alerts/rules/new` and `/alerts/rules/{id}` GET and POST). |
-| `ui/src/pages/audit/` | `page` (`/audit`), `query` (`op`, `subject`, `span`), `describe` (an action in words, its note and subject), `subject` (subject codes and links). |
+| `ui/src/pages/agents/` | `list` (`/agents` with state and claim chips), `query` (`state`, `claims` keys into `AgentListFilter`), `detail` (`/agents/{id}` GET and POST `rename`, `clear-label`, `unmerge`), `actions` (form parsers, `merge_action`), `evidence` (evidence rows, shared and conflicting evidence), `tree` (bounded sub-agent tree, one `agents` call per level), `sections` (merge rows say what an unmerge restores), `merge` (`/agents/{id}/merge` GET and POST). |
+| `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`; `parse_action` shared with the alert page), `detail` (`/alerts/{id}` GET and POST: rule, subject, state, triage forms, audit history), `model` (alert rows), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`; `model`: rule and sink rows; `form`: watched-topic and semantic forms, parsed into `UserRuleSpec`; `edit`: `/alerts/rules/new` and `/alerts/rules/{id}` GET and POST). |
+| `ui/src/pages/audit/` | `page` (`/audit`), `query` (`op`, `subject`, `span`), `describe` (an action in words and its note), `subject` (subject codes, `mg.` for merges, and links; alerts link to their page). Rows show the entry's own `subject` and link what an applied action created. |
 | `ui/src/pages/pipeline/` | `/pipeline` GET and POST `replay`. |
-| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting, `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state and evidence strength; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`), `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
-| `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body, and `cx`/`render` for rendering components. |
+| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting (`agent_name`, `agent_name_of` for an `AgentName`), `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state and evidence strength; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`), `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
+| `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body (a fresh world per request), `Session` (one router, so state carries across requests), `world`/`agent_id`/`channel_id` (scenario ids from a same-seed copy), and `cx`/`render` for rendering components. |
 | `ui/src/data/mod.rs` | The data routes' module: route table, `require(caller, permission)` (403). |
-| `ui/src/data/query.rs` | `view_state(cx)`: the strict view-state parse (every required key or 400, never a redirect; same `ViewState::parse` and defaults as `pages::view`). `buckets(cx)`: `buckets=` in 1..=1000, default 96. |
+| `ui/src/data/query.rs` | `view_state(cx)`: the strict view-state parse (every required key or 400, never a redirect; same `ViewState::parse` and `pages::view::defaults`). `buckets(cx)`: `buckets=` in 1..=1000, default 96. |
 | `ui/src/data/errors.rs` | `query_error(QueryError)`: Forbidden → 403, NotFound → 404, VersionNotRetained / InvalidInput → 400 with the message, others → 500 (logged). |
-| `ui/src/data/names.rs` | Channel display names from a pattern or seed locator (`locator_name`, `pattern_name`, `channel_node_name`, `channel_summary_name`). |
+| `ui/src/data/names.rs` | Channel display names from a pattern or seed locator (`locator_name`, `pattern_name`, `shape_name`, `channel_node_name`, `channel_name` for a `ChannelName`). |
 | `ui/src/data/topology.rs` | `GET /data/topology`: `TopologyPayload::{agents, channels}` and its node, edge and code types. |
 | `ui/src/data/timeline.rs` | `GET /data/timeline`: `TimelinePayload` (buckets with `final`). |
-| `ui/src/data/projection/` | `GET /data/projection/{id}`: `format.rs` (binary layout, `ProjectionHeader`, `ProjectionTables`, `encode`), `mod.rs` (route, `tables` name lookup), `decode.rs` (test-only strict decoder). |
+| `ui/src/data/projection/` | `GET /data/projection/{id}`: `format.rs` (binary layout, `ProjectionHeader`, `ProjectionTables`, `encode`), `mod.rs` (route, `tables`: names from one `agent_names` and one `channel_names` call), `decode.rs` (test-only strict decoder). |
 | `ui/src/data/elements.rs` | `TOPOLOGY_JS`, `PROJECTION_JS`, `TIMEBRUSH_JS`: the bundled elements as Topcoat assets. |
 | `ui/src/data/fixtures.rs`, `route_tests.rs` | Tests: hand-built contract values, the element fixture files written from them, and the routes through the router. |
 | `ui/elements/package.json`, `pnpm-workspace.yaml` | pnpm package; exact pins; `minimumReleaseAge` of a week for every transitive dependency. Scripts: `build`, `demo`, `smoke`, `test`, `typecheck`, `lint`. |
@@ -417,6 +436,18 @@ Element inputs and outputs (`value`, announced with `change`):
   permissions allow; payload shapes change in Rust, the zod schemas and
   the fixtures together.
 - Harness claims are always presented as claims.
+- Pages and routes reach data only through the `Backend` trait, including
+  the present and the current topic version; nothing outside `main.rs`,
+  `app.rs` and the tests names `FixtureBackend`.
+- The UI never computes or handles embeddings: rule forms submit text
+  (`UserRuleSpec`) and search sends text (`SearchRequest`).
+- Names for many ids are one backend call (`agent_names`,
+  `channel_names`), never a read per id.
+- An audit entry's subject and what it created come from the backend
+  (`AuditEntry::subject`, `AuditOutcome::Applied(ActionOutcome)`); pages
+  do not infer them from the action.
+- What a promotion would do is computed by the backend over every known
+  resource, by the same plan `PromoteChannel` applies.
 - Topcoat is a dependency of `crosstalk-ui` only.
 
 ## Build and toolchain
@@ -490,8 +521,16 @@ What the UI needs from L8 beyond the current `QueryApi` and
     stream with a manifest (query, watermark, versions, gateway version).
     `include_content` needs `Content`.
 12. **Audit.** `AuditEntry { id, at, by: Config | Operator(id), action,
-    outcome: Applied | Rejected(error) }`, append-only, covering every
-    operator action and config change; `operators()` with display names.
+    subject: Option<AuditSubject>, outcome: Applied(ActionOutcome) |
+    Rejected(error) }`, append-only, covering every operator action and
+    config change. `subject` is what the entry is about (`Agent`,
+    `Channel`, `Transmission`, `Rule`, `Alert` or `Merge(MergeId)`): the
+    action's target, or what it created when it names none (a created
+    rule); an applied outcome carries what the action created.
+    `AuditFilter::subject` keeps entries about an entity or that created
+    it, resolving aliases and supersession, and an agent's entries include
+    the merges and unmerges it took part in. `operators()` with display
+    names.
 
 22. **Evidence content.** `transmission(id)` returns the matched text:
     `TransmissionEvidence { transmission, matches: Vec<MatchEvidence {
@@ -502,6 +541,26 @@ What the UI needs from L8 beyond the current `QueryApi` and
 23. **Search by text.** `search` takes `SearchRequest { text, mode: Text |
     Semantic | Hybrid }` and the gateway embeds the text; the UI never
     handles embeddings.
+24. **Batch names.** `agent_names(ids) -> HashMap<AgentId, AgentName { id
+    (canonical), label }>` and `channel_names(ids) -> HashMap<ChannelId,
+    ChannelName { id (in force), shape: Pattern | Seed }>`, keyed by the
+    id asked for, unknown ids left out; `View`.
+25. **One alert.** `alert(id) -> Option<Alert>`; `View`.
+26. **Promotion preview.** `promotion_preview(channel, pattern) ->
+    PromotionPreview { covered_resources, uncovered_resources,
+    superseded_channels, conflicts: Option<ConflictKind> }` over every
+    known resource: what the declared channel would hold, the superseded
+    channels' resources outside the pattern, the other channels it would
+    supersede, and why `PromoteChannel` would be refused. Unknown channel
+    is `NotFound`; `View`.
+27. **The present.** `now() -> Timestamp` (the end of a default view's
+    window) and `current_topic_version() -> TopicModelVersion` (the newest
+    fitted version; not content, so `View`).
+28. **List filters.** `agents(AgentListFilter { states, harness_claims,
+    text, parents }, page)` (`parents`: one level of a sub-agent tree) and
+    `channels(ChannelListFilter { origins, detections, policies,
+    include_superseded, window: Option<TimeWindow> }, page)`, where
+    `window` restricts the counts, never the rows.
 
 ### Actions
 
@@ -510,11 +569,15 @@ What the UI needs from L8 beyond the current `QueryApi` and
 14. **Rename**: `Agent.label: Option<AgentLabel>` (checked: trimmed,
     non-empty, bounded) and `RenameAgent { agent, label }`. Renaming a
     merged agent is a typed conflict.
-15. **Unmerge**: `Merged` keeps `prior: ActiveAgentState` (`Registered |
-    Provisional | Established`); merges are logged as `MergeRecord { id,
-    from, into, by, at, repointed }`; `Unmerge { merge }` reverts exactly
-    that record; a `MergeVeto { a, b, by, at }` stops the resolver from
-    re-merging an operator-split pair, and an operator merge clears it.
+15. **Unmerge**: `Agent.state: AgentState` (replacing the spec's) whose
+    `Merged { into, at, by, prior: ActiveAgentState }` keeps the state the
+    agent had before the merge (`Registered | Provisional |
+    Established`); merges are logged as `MergeRecord { id, from, into, by,
+    at, repointed }`; `Unmerge { merge }` reverts exactly that record,
+    restoring `prior`; a `MergeVeto { a, b, by, at }` stops the resolver
+    from re-merging an operator-split pair, and an operator merge clears
+    it. A merge whose target resolves to the source is
+    `Conflict(MergeIntoSelf)`.
 16. **Promote**: `PromoteChannel { channel, pattern, policy, note }`
     creates a declared channel (detection starts `InUse`) and supersedes
     the discovered channel and every other discovered channel the pattern
@@ -526,14 +589,21 @@ What the UI needs from L8 beyond the current `QueryApi` and
     verdict: Option<Verdict>, note }` is allowed on `Suspected`,
     `Discarded` and every state holding a `Confirmed`. A false detection
     suppresses active alerts on that transmission
-    (`SuppressReason::OperatorRejected`).
+    (`SuppressReason::OperatorRejected`): `Alert`, `AlertState` and
+    `SuppressReason` replace the spec's with that one reason added.
 18. **Rules**: built-in rules (one each, enable or disable only) are split
     from operator rules (`WatchedTopic`, `SemanticQuery`: create, edit,
     disable). Rules are never deleted. `AlertRuleDef` gains `name`,
-    `created`, `sinks`. `SemanticQuery` stores its text and embedding
-    model with the embedding. `Stale` carries a reason (`TopicsUnmapped`
-    or `EmbeddingModelChanged`). Actions: `CreateRule`, `UpdateRule`
-    (re-targets a stale rule), `SetRuleEnabled`.
+    `created`, `sinks`. Operators submit a `UserRuleSpec`:
+    `WatchedTopic { version, topics, remap_threshold }` or
+    `SemanticQuery { text: QueryText, threshold }`; the gateway embeds the
+    text with its current model and stores a `UserRule` whose
+    `SemanticQuery` keeps text, model and embedding. `Stale` carries a
+    reason (`TopicsUnmapped` or `EmbeddingModelChanged`). Actions:
+    `CreateRule`, `UpdateRule` (re-targets a stale rule and re-embeds a
+    query), `SetRuleEnabled`; enabling a stale rule is
+    `Conflict(RuleStale)`, a watched-topic rule on a version other than the
+    current one `Conflict(TopicVersionNotCurrent)`.
 
 ### Wire
 
@@ -544,3 +614,10 @@ What the UI needs from L8 beyond the current `QueryApi` and
 21. **Typed errors**: `QueryError` gains `Forbidden { missing }`,
     `VersionNotRetained { version }`, `Conflict(ConflictKind)` and
     `InvalidInput(InputError)` in place of `BadRequest { reason: String }`.
+29. **Conflict kinds**: `ConflictKind` is `AgentMerged`,
+    `ChannelSuperseded`, `ChannelNotDiscovered`, `PatternMissesSeed`,
+    `MergeReverted`, `NotJudgeable`, `AlertState`, `BuiltinRule`,
+    `RuleStale` (enabling a stale rule instead of updating it),
+    `MergeIntoSelf` (the target resolves to the source) and
+    `TopicVersionNotCurrent` (a watched-topic rule on a non-current
+    version). `InvalidInput` is kept for malformed fields.

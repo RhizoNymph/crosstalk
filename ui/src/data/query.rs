@@ -7,19 +7,13 @@
 //! [`ViewState::parse`] with the same defaults as `pages::view`.
 
 use std::num::NonZeroU32;
-use std::time::Duration;
 
-use crosstalk_spec::support::{TimeWindow, Timestamp};
 use topcoat::context::Cx;
 use topcoat::router::error::bad_request;
 use topcoat::router::parse_query_params;
 
-use crate::app::backend;
+use crate::pages::view::{defaults, defaults_error};
 use crate::url::view_state::{Defaults, RawViewState, ViewState, ViewStateError};
-
-/// The default window: the 24 hours before the data's watermark (as in
-/// `pages::view`).
-const DEFAULT_SPAN: Duration = Duration::from_secs(24 * 3600);
 
 /// Timeline bucket count when `buckets` is absent.
 pub const DEFAULT_BUCKETS: NonZeroU32 = NonZeroU32::new(96).expect("96 is non-zero");
@@ -56,23 +50,12 @@ pub fn parse_strict(
     Ok(parsed.state)
 }
 
-fn defaults(cx: &Cx) -> topcoat::Result<Defaults> {
-    let backend = backend(cx);
-    let end = backend.now();
-    let span = u64::try_from(DEFAULT_SPAN.as_micros()).unwrap_or(u64::MAX);
-    let start = Timestamp::from_micros(end.as_micros().saturating_sub(span));
-    let window = TimeWindow::new(start, end).map_err(|_| bad_request("empty default window"))?;
-    Ok(Defaults {
-        window,
-        topic_version: backend.current_topic_version(),
-    })
-}
-
 /// The request's view state; a 400 if it is incomplete or invalid.
-pub fn view_state(cx: &Cx) -> topcoat::Result<ViewState> {
+pub async fn view_state(cx: &Cx) -> topcoat::Result<ViewState> {
     let raw: RawViewState =
         parse_query_params(cx).map_err(|e| bad_request(format!("query: {e}")))?;
-    parse_strict(&raw, defaults(cx)?).map_err(|e| bad_request(e.to_string()).into())
+    let defaults = defaults(cx).await.map_err(defaults_error)?;
+    parse_strict(&raw, defaults).map_err(|e| bad_request(e.to_string()).into())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -108,6 +91,7 @@ pub fn buckets(cx: &Cx) -> topcoat::Result<NonZeroU32> {
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::aggregates::topic::TopicModelVersion;
+    use crosstalk_spec::support::{TimeWindow, Timestamp};
 
     use super::*;
 

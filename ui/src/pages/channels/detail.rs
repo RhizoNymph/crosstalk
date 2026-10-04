@@ -1,7 +1,6 @@
 //! `/channels/{id}`: one channel's origin, detection, policy, resources,
 //! alerts and policy history. Posting `set-policy` changes its policy.
 
-use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, PolicyKind};
 use topcoat::Result;
@@ -23,6 +22,7 @@ use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{
     empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header, short_id,
 };
+use crate::contract::alerts::Alert;
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
 use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
@@ -208,7 +208,7 @@ async fn load(
 
 #[page("/channels/{channel_ulid}")]
 async fn channel_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let flash = flash(cx);
     Ok(view! { channel_page(id: id, state: state, flash: flash, failure: None) })
@@ -216,7 +216,7 @@ async fn channel_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/channels/{channel_ulid}")]
 async fn channel_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let action = fields.text("action").map(str::to_owned);
     let failure = match action.as_deref() {
@@ -481,5 +481,35 @@ mod tests {
         // The stub backend knows no channel, so the action is not found.
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert!(reply.body.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn resources_name_their_agents_from_one_lookup() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::testing::{channel_id, operator, world};
+
+        let wiki = channel_id(ChannelKey::HijackedWiki);
+        let c = operator().caller();
+        let uses = world()
+            .channel_resources(&c, wiki, state().scope.window)
+            .await
+            .expect("resources");
+        let ids: Vec<_> = uses
+            .iter()
+            .flat_map(|u| u.writers.iter().chain(u.readers.iter()).map(|(a, _)| *a))
+            .collect();
+        let names = world().agent_names(&c, &ids).await.expect("names");
+        let label = names
+            .values()
+            .find_map(|n| n.label.clone())
+            .expect("a labelled agent uses the wiki");
+        let reply = get(&format!(
+            "/channels/{}?{}",
+            wiki.to_ulid(),
+            state().to_query()
+        ))
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains(label.as_str()), "{label:?}");
     }
 }

@@ -98,7 +98,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
             .is_some()
     );
     assert!(
-        !b.agents(&c, &first(50))
+        !b.agents(&c, &Default::default(), &first(50))
             .await
             .expect("agents")
             .items

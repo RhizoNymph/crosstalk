@@ -118,7 +118,7 @@ async fn load(
     let from = detail(cx, caller, id).await?;
     let Some(into) = into else {
         let page = backend(cx)
-            .agents(caller, &PageRequest::first(CHOICES))
+            .agents(caller, &Default::default(), &PageRequest::first(CHOICES))
             .await?;
         let choices = page
             .items
@@ -140,7 +140,7 @@ async fn load(
 
 #[page("/agents/{agent_ulid}/merge")]
 async fn merge_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let into = query_params::<MergeQuery>(cx)
         .ok()
@@ -150,7 +150,7 @@ async fn merge_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/agents/{agent_ulid}/merge")]
 async fn merge_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let from = agent_id(cx)?;
     let caller = caller(cx);
     let result = match id::<AgentId>(&fields, "into") {
@@ -342,6 +342,20 @@ mod tests {
             reply.status,
             StatusCode::NOT_FOUND,
             "the stub backend knows no agent"
+        );
+    }
+    #[tokio::test]
+    async fn merging_into_an_alias_of_the_source_is_a_conflict() {
+        use crate::testing::agent_id;
+
+        let (source, alias) = (agent_id("pi2").to_ulid(), agent_id("al3").to_ulid());
+        let url = format!("/agents/{source}/merge?{}", state().to_query());
+        let reply = post(&url, &format!("into={alias}")).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert!(
+            reply
+                .body
+                .contains("the merge target resolves to the source agent")
         );
     }
 }

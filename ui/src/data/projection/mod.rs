@@ -3,8 +3,9 @@
 //! `GET /data/projection/{id}` answers with a stored projection
 //! (`Backend::projection`) in the binary format of [`format`], as
 //! `application/octet-stream`. Needs `Content`. The header's category
-//! tables carry display names: agent names (`components::agent_name`),
-//! channel names ([`super::names`]) and topic labels.
+//! tables carry display names: agent names (`components::agent_name_of`),
+//! channel names ([`super::names`]) and topic labels, each table read in one
+//! backend call.
 
 #[cfg(test)]
 mod decode;
@@ -17,11 +18,11 @@ use topcoat::router::{path_param, route};
 
 use self::format::{ProjectionTables, encode};
 use super::errors::query_error;
-use super::names::channel_summary_name;
+use super::names::channel_name;
 use super::require;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
-use crate::components::{agent_name, short_id};
+use crate::components::{agent_name_of, short_id};
 use crate::contract::ProjectionId;
 use crate::contract::errors::QueryError;
 use crate::contract::research::ProjectionPoints;
@@ -37,20 +38,26 @@ pub async fn tables<B: Backend>(
     caller: &Caller,
     points: &ProjectionPoints,
 ) -> Result<ProjectionTables, QueryError> {
-    let mut agents = Vec::with_capacity(points.agents().len());
-    for id in points.agents() {
-        agents.push(match backend.agent(caller, *id).await? {
-            Some(detail) => agent_name(&detail.summary),
-            None => short_id(id.to_ulid()),
-        });
-    }
-    let mut channels = Vec::with_capacity(points.channels().len());
-    for id in points.channels() {
-        channels.push(match backend.channel(caller, *id).await? {
-            Some(summary) => channel_summary_name(&summary),
-            None => short_id(id.to_ulid()),
-        });
-    }
+    let agent_names = backend.agent_names(caller, points.agents()).await?;
+    let agents = points
+        .agents()
+        .iter()
+        .map(|id| {
+            agent_names
+                .get(id)
+                .map_or_else(|| short_id(id.to_ulid()), agent_name_of)
+        })
+        .collect();
+    let channel_names = backend.channel_names(caller, points.channels()).await?;
+    let channels = points
+        .channels()
+        .iter()
+        .map(|id| {
+            channel_names
+                .get(id)
+                .map_or_else(|| short_id(id.to_ulid()), channel_name)
+        })
+        .collect();
     let topics = if can(caller, Permission::Content) {
         match backend
             .topics(caller, points.meta().scope.topic_version)

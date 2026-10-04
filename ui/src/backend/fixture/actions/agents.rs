@@ -1,15 +1,15 @@
 //! Merge, unmerge and rename (items 14 and 15).
 
 use crosstalk_spec::ids::{AgentId, OperatorId};
-use crosstalk_spec::observed::agent::{AgentState, MergeAuthor, MergeRequest};
+use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 
 use crate::backend::Result;
 use crate::backend::fixture::clock::NOW;
-use crate::backend::fixture::store::{State, active_state, from_active};
+use crate::backend::fixture::store::State;
 use crate::contract::MergeId;
 use crate::contract::actions::ActionOutcome;
-use crate::contract::agents::{AgentLabel, MergeRecord, MergeVeto};
-use crate::contract::errors::{ConflictKind, InputError, QueryError};
+use crate::contract::agents::{AgentLabel, AgentState, MergeRecord, MergeVeto};
+use crate::contract::errors::{ConflictKind, QueryError};
 
 fn exists(state: &State, id: AgentId) -> Result<()> {
     if state.agents.contains_key(&id) {
@@ -28,14 +28,11 @@ pub fn merge(state: &mut State, by: OperatorId, request: &MergeRequest) -> Resul
     let prior = state
         .agents
         .get(&source)
-        .and_then(|r| active_state(&r.agent.state))
+        .and_then(|r| r.agent.state.active())
         .ok_or(QueryError::Conflict(ConflictKind::AgentMerged))?;
     let into = state.canonical_agent(target);
     if into == source {
-        return Err(QueryError::InvalidInput(InputError::Field {
-            field: "into",
-            reason: "the target is merged into the source".to_owned(),
-        }));
+        return Err(QueryError::Conflict(ConflictKind::MergeIntoSelf));
     }
     let repointed: Vec<AgentId> = state
         .agents
@@ -56,13 +53,13 @@ pub fn merge(state: &mut State, by: OperatorId, request: &MergeRequest) -> Resul
             into,
             at: NOW,
             by: author,
+            prior,
         };
     }
     let pair =
         |v: &MergeVeto, x: AgentId| (v.a == source && v.b == x) || (v.a == x && v.b == source);
     state.vetoes.retain(|v| !pair(v, target) && !pair(v, into));
     let id = MergeId::from_ulid(state.mint.ulid(NOW));
-    state.merge_priors.insert(id, prior);
     state.merges.push(MergeRecord {
         id,
         from: source,
@@ -88,15 +85,16 @@ pub fn unmerge(state: &mut State, by: OperatorId, merge: MergeId) -> Result<Acti
     if record.reverted.is_some() {
         return Err(QueryError::Conflict(ConflictKind::MergeReverted));
     }
-    let prior = state
-        .merge_priors
-        .get(&merge)
-        .copied()
-        .ok_or_else(|| QueryError::Store {
-            reason: "merge has no recorded prior state".to_owned(),
-        })?;
+    let prior = match state.agents.get(&record.from).map(|r| &r.agent.state) {
+        Some(AgentState::Merged { prior, .. }) => *prior,
+        _ => {
+            return Err(QueryError::Store {
+                reason: "the merged agent of an unreverted merge is not merged".to_owned(),
+            });
+        }
+    };
     if let Some(agent) = state.agents.get_mut(&record.from) {
-        agent.agent.state = from_active(prior);
+        agent.agent.state = AgentState::from(prior);
     }
     for id in &record.repointed {
         if let Some(AgentState::Merged { into, .. }) =

@@ -1,6 +1,5 @@
 //! Helpers shared by the action tests.
 
-use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 
@@ -8,6 +7,7 @@ use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::researcher;
 use crate::contract::actions::OperatorAction;
+use crate::contract::alerts::AlertState;
 use crate::contract::errors::{ConflictKind, QueryError};
 
 pub fn agent(b: &FixtureBackend, key: &str) -> AgentId {
@@ -50,7 +50,7 @@ pub async fn alert_state(b: &FixtureBackend, id: AlertId) -> AlertState {
 
 pub async fn find_alert(
     b: &FixtureBackend,
-    f: impl Fn(&crosstalk_spec::aggregates::alert::Alert) -> bool,
+    f: impl Fn(&crate::contract::alerts::Alert) -> bool,
 ) -> AlertId {
     b.state
         .read()

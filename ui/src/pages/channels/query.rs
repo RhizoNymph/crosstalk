@@ -110,6 +110,7 @@ impl ListQuery {
                 )?,
                 policies: parse_codes(raw.policy.as_deref(), "policy", &POLICIES, policy_code)?,
                 include_superseded,
+                window: None,
             },
         })
     }

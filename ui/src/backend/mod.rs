@@ -7,21 +7,25 @@
 
 pub mod fixture;
 
+use std::collections::HashMap;
 use std::future::Future;
 
-use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::derived::flow::resource::ResourcePattern;
+use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
-use crosstalk_spec::support::TimeWindow;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelSummary, ResourceUse};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
+use crate::contract::alerts::Alert;
+use crate::contract::channels::{
+    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
+};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -42,6 +46,19 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 /// Every read and action the UI performs. Methods return `Send` futures so
 /// pages can call them from Topcoat's multi-threaded runtime.
 pub trait Backend: Send + Sync + 'static {
+    // The present (item 27). Both need `View`.
+
+    /// The end of the data a default view shows: the gateway's clock, or the
+    /// fixture's fixed `now`.
+    fn now(&self, caller: &Caller) -> impl Future<Output = Result<Timestamp>> + Send;
+
+    /// The newest fitted topic-model version, which views default to. The
+    /// version number is not content, so this needs only `View`.
+    fn current_topic_version(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<TopicModelVersion>> + Send;
+
     // Topology (items 3, 4, 6).
 
     fn topology(
@@ -158,9 +175,20 @@ pub trait Backend: Send + Sync + 'static {
         window: TimeWindow,
     ) -> impl Future<Output = Result<Vec<ResourceUse>>> + Send;
 
+    /// What `PromoteChannel` with `pattern` would do (item 26). Needs
+    /// `View`; an unknown channel is `NotFound`, while the reasons it would
+    /// be refused are reported in the preview.
+    fn promotion_preview(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        pattern: &ResourcePattern,
+    ) -> impl Future<Output = Result<PromotionPreview>> + Send;
+
     fn agents(
         &self,
         caller: &Caller,
+        filter: &AgentListFilter,
         page: &PageRequest,
     ) -> impl Future<Output = Result<Page<AgentSummary>>> + Send;
 
@@ -172,6 +200,24 @@ pub trait Backend: Send + Sync + 'static {
         id: AgentId,
     ) -> impl Future<Output = Result<Option<AgentDetail>>> + Send;
 
+    // Names (item 24). Both need `View`; unknown ids are left out.
+
+    /// Names for many agents at once, keyed by the id asked for. An alias
+    /// is named by its canonical agent.
+    fn agent_names(
+        &self,
+        caller: &Caller,
+        ids: &[AgentId],
+    ) -> impl Future<Output = Result<HashMap<AgentId, AgentName>>> + Send;
+
+    /// Names for many channels at once, keyed by the id asked for. A
+    /// superseded channel is named by the channel in force.
+    fn channel_names(
+        &self,
+        caller: &Caller,
+        ids: &[ChannelId],
+    ) -> impl Future<Output = Result<HashMap<ChannelId, ChannelName>>> + Send;
+
     // Alerts and rules (items 1, 18).
 
     fn alerts(
@@ -180,6 +226,13 @@ pub trait Backend: Send + Sync + 'static {
         filter: &AlertFilter,
         page: &PageRequest,
     ) -> impl Future<Output = Result<Page<Alert>>> + Send;
+
+    /// One alert by id (item 25).
+    fn alert(
+        &self,
+        caller: &Caller,
+        id: AlertId,
+    ) -> impl Future<Output = Result<Option<Alert>>> + Send;
 
     fn rules(&self, caller: &Caller) -> impl Future<Output = Result<Vec<RuleDef>>> + Send;
 
