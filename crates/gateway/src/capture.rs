@@ -4,7 +4,9 @@
 //!
 //! 1. **Normalize** it with L1's [`AnthropicMessages`] (pure; an exchange
 //!    of another protocol, or whose request body is not a Messages request,
-//!    is counted `normalize_failed` and dropped).
+//!    is counted `normalize_failed`, by reason and protocol
+//!    ([`crate::normalize_failure`]), and dropped; at debug level the
+//!    refused body's top-level shape is logged, never its content).
 //! 2. **Store** every message body and media blob through
 //!    [`crosstalk_canonical::store`] into the [`BlobStore`], retrying the
 //!    whole put set up to `blob_put_attempts` times (puts are idempotent).
@@ -22,12 +24,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use crosstalk_canonical::anthropic::RequestShape;
 use crosstalk_canonical::{AnthropicMessages, StoreError};
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::{EventId, SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
-use crosstalk_spec::interfaces::l1_canonical::{NormalizedExchange, Normalizer};
+use crosstalk_spec::interfaces::l1_canonical::{NormalizeError, NormalizedExchange, Normalizer};
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, EventBus};
 use crosstalk_spec::observed::exchange::ExchangeOutcome;
 use crosstalk_spec::support::Clock;
@@ -35,12 +38,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::config::PipelineConfig;
+use crate::normalize_failure::{
+    FailureCounts, FailureReason, FailureStats, NormalizeFailure, protocol_code,
+};
 
 /// The capture stage's counters, shared with the health endpoint.
 #[derive(Debug, Default)]
 pub struct PipelineStats {
     published: AtomicU64,
-    normalize_failed: AtomicU64,
+    normalize_failed: FailureStats,
     store_failed: AtomicU64,
     store_retries: AtomicU64,
     publish_failed: AtomicU64,
@@ -53,7 +59,8 @@ pub struct PipelineCounts {
     /// Exchanges whose bodies were stored and whose `ExchangeCaptured` was
     /// published.
     pub published: u64,
-    /// Exchanges the normalizer refused.
+    /// Exchanges the normalizer refused, whatever the reason: the sum of
+    /// [`PipelineStats::normalize_failures`].
     pub normalize_failed: u64,
     /// Exchanges given up after every blob put attempt failed.
     pub store_failed: u64,
@@ -72,16 +79,43 @@ impl PipelineStats {
     pub fn snapshot(&self) -> PipelineCounts {
         PipelineCounts {
             published: self.published.load(Ordering::Relaxed),
-            normalize_failed: self.normalize_failed.load(Ordering::Relaxed),
+            normalize_failed: self.normalize_failed.snapshot().total(),
             store_failed: self.store_failed.load(Ordering::Relaxed),
             store_retries: self.store_retries.load(Ordering::Relaxed),
             publish_failed: self.publish_failed.load(Ordering::Relaxed),
         }
     }
 
+    /// The refusals by reason and protocol.
+    pub fn normalize_failures(&self) -> FailureCounts {
+        self.normalize_failed.snapshot()
+    }
+
     fn bump(counter: &AtomicU64) {
         counter.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// L1's normalization of `raw`, or why there is none: the refusal and the
+/// normalizer's error (`None` when no normalizer handles the protocol).
+fn normalize(
+    raw: &RawExchange,
+) -> Result<NormalizedExchange, (NormalizeFailure, Option<NormalizeError>)> {
+    let protocol = raw.meta.protocol;
+    if protocol != AnthropicMessages.protocol() {
+        let failure = NormalizeFailure {
+            reason: FailureReason::UnsupportedProtocol,
+            protocol,
+        };
+        return Err((failure, None));
+    }
+    AnthropicMessages.normalize(raw).map_err(|error| {
+        let failure = NormalizeFailure {
+            reason: FailureReason::of(&error),
+            protocol,
+        };
+        (failure, Some(error))
+    })
 }
 
 /// What became of one exchange.
@@ -155,11 +189,25 @@ where
     /// Normalize, store and publish one exchange.
     pub async fn capture(&mut self, raw: &RawExchange) -> Captured {
         let exchange = raw.meta.id.ulid_text();
-        let normalization = match AnthropicMessages.normalize(raw) {
+        let normalization = match normalize(raw) {
             Ok(normalization) => normalization,
-            Err(error) => {
-                PipelineStats::bump(&self.stats.normalize_failed);
-                tracing::warn!(exchange = %exchange, error = ?error, "exchange not normalized; dropped");
+            Err((failure, error)) => {
+                self.stats.normalize_failed.bump(failure);
+                tracing::warn!(
+                    exchange = %exchange,
+                    reason = failure.reason.code(),
+                    protocol = protocol_code(failure.protocol),
+                    error = ?error,
+                    "exchange not normalized; dropped"
+                );
+                // Nothing of a refused exchange is kept, so its body's
+                // shape (keys, roles, content kinds; never a value or a
+                // header) is the only record of what the normalizer saw.
+                tracing::debug!(
+                    exchange = %exchange,
+                    request_shape = %RequestShape::of(&raw.request.body),
+                    "refused request shape"
+                );
                 return Captured::NotNormalized;
             }
         };

@@ -157,6 +157,29 @@ start (exit 1).
 `crosstalk_pipeline_blob_put_retries_total`,
 `crosstalk_exchange_log_deliveries_total{outcome}`.
 
+The `normalize_failed` outcome of `crosstalk_pipeline_exchanges_total`
+also carries `reason` and `protocol`, fixed codes from
+`normalize_failure` (never free text): `reason` is `request_body` (the
+normalizer refused the body, `NormalizeError::RequestBody`) or
+`unsupported_protocol` (no normalizer handles the exchange's protocol);
+`protocol` is the exchange's `WireProtocol` wire name
+(`anthropic_messages`, `open_ai_chat`, `open_ai_responses`,
+`gemini_generate`, `gemini_code_assist`). Every one of the ten pairs is
+exposed, zeros included, and there is no unlabelled `normalize_failed`
+series beside them, so `sum by (outcome)` is the refusal total that
+`/healthz` reports as `pipeline.normalize_failed`. The other outcomes keep
+their single `{outcome}` series:
+
+```text
+crosstalk_pipeline_exchanges_total{outcome="published"} 3
+crosstalk_pipeline_exchanges_total{outcome="normalize_failed",reason="unsupported_protocol",protocol="anthropic_messages"} 0
+...
+crosstalk_pipeline_exchanges_total{outcome="normalize_failed",reason="request_body",protocol="anthropic_messages"} 2
+...
+crosstalk_pipeline_exchanges_total{outcome="store_failed"} 0
+crosstalk_pipeline_exchanges_total{outcome="publish_failed"} 0
+```
+
 ## Data and control flow
 
 ```text
@@ -167,7 +190,7 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
                  client response, unchanged                                                              ▼
                                                                          capture::CaptureStage::run (one task)
                                                                            AnthropicMessages::normalize_with_media (L1)
-                                                                             └ refused ─▶ normalize_failed
+                                                                             └ refused ─▶ normalize_failed; debug log of the body's shape
                                                                            crosstalk_canonical::store ─▶ FsBlobStore (blobs.root)
                                                                              └ retried blob_put_attempts times ─▶ store_failed, nothing published
                                                                            Envelope { EventId, clock time, ExchangeCaptured(Exchange) }
@@ -269,11 +292,12 @@ gracefully.
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`), `ApiConfig`, `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `not_built`), `UnknownRole` |
 | `src/gateway.rs` | Wiring, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
-| `src/capture.rs` | The capture stage | `CaptureStage` (`new` taking a `UlidGenerator<SeededRandom>` for envelope ids, `run`, `capture`), `Captured`, `PutRetry`, `PipelineStats`, `PipelineCounts` |
+| `src/capture.rs` | The capture stage | `CaptureStage` (`new` taking a `UlidGenerator<SeededRandom>` for envelope ids, `run`, `capture`), `Captured`, `PutRetry`, `PipelineStats` (`snapshot`, `normalize_failures`), `PipelineCounts` |
+| `src/normalize_failure.rs` | Refusal codes and counters: the `reason` and `protocol` labels | `FailureReason` (`of`, `code`, `ALL`), `NormalizeFailure`, `FailureStats`, `FailureCounts` (`get`, `total`, `iter`, `with`), `PROTOCOLS`, `protocol_code` |
 | `src/log/mod.rs` | The exchange log file | `ExchangeLog` (`open`, `append`, `close`), `Appended`, `read`, `LogContents`, `LogError` |
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |
-| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` |
+| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` (the health report and the refusal counts) |
 | `src/tasks.rs` | Per-task running flags | `Tasks` (`spawn`, `states`) |
 | `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
@@ -296,9 +320,11 @@ gracefully.
 | `e2e::in_flight_stream_finishes_during_shutdown` | Shutdown mid-stream: new connections refused at once, the paced stream completes unchanged, its exchange is logged, nothing is cut |
 | `e2e::stalled_stream_is_cut_at_the_drain_deadline_and_captured` | Shutdown during a stalled stream: cut at the drain deadline, the client sees an aborted body, the exchange is logged as `ClientDisconnected` with its bodies stored |
 | `e2e::ops_endpoints_and_inspect_report_the_capture` | `/healthz` counters, `/readyz` (tasks `exchange_log`, `capture`, `proxy`), `/metrics` lines, 404s, `healthcheck::check` on 2xx and 404, `inspect::list` and `show`, the ops listener stopping last |
-| `logs::logs_are_json_lines_without_secrets_credentials_or_bodies` | At debug level over three cases: every line JSON with a top-level `level`; never the deployment secret, the credential, or any message text |
+| `e2e::system_turn_exchange_is_published` | Claude Code's `role: "system"` turn inside `messages`: the reply reaches the client unchanged, the exchange is published with its request System, User, System in order, and `normalize_failed` stays 0 |
+| `tests::refusals_are_counted_by_reason_and_protocol` | The capture stage counts an unknown-role body as `request_body` and an OpenAI Chat exchange as `unsupported_protocol`, and the health total is their sum |
+| `logs::logs_are_json_lines_without_secrets_credentials_or_bodies` | At debug level over three cases and one refused request: every line JSON with a top-level `level`; the refusal's `request_shape` at debug level naming the role and content kind; never the deployment secret, the credential, any message text or the refused body's content |
 | `tests::dst_blobs_written_before_capture_published` | INV-48 (dst): under put latency and failures before and after the write, with seeded feed timing, every blob (bodies and media) an event names is stored when the event arrives; an exchange whose puts all failed publishes nothing; each exchange is published at most once |
-| unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text, healthcheck URL checks |
+| unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text (the `normalize_failed` series sum to the health total), healthcheck URL checks, refusal codes |
 
 ```sh
 cargo test -p crosstalk-gateway
@@ -315,7 +341,9 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
   holds each envelope once.
 - Nothing the gateway writes leaves the parent of `blobs.root`.
 - Secrets come only from the environment variables the config names; no
-  secret, credential, header or body is logged (`tests/logs.rs`).
+  secret, credential, header or body is logged (`tests/logs.rs`). A
+  refused exchange logs only its body's top-level shape, at debug level
+  (`crosstalk_canonical::anthropic::RequestShape`).
 - Concurrency is tokio tasks joined by channels (the capture channel, the
   bus, `watch` stop and phase signals); the only shared state is atomic
   counters and per-task running flags.

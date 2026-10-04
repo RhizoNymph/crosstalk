@@ -573,8 +573,9 @@ Features Index:
     description: >
       crosstalk-canonical, L1 (P2.5). AnthropicMessages, the spec's
       Normalizer for Anthropic Messages in every dialect, as pure
-      functions: the request body (system prompt as a string or blocks,
-      user turns split into maximal runs of one role so tool results
+      functions: the request body (system prompt as a string or blocks
+      first, a role "system" turn inside messages as a System message in
+      place, user turns split into maximal runs of one role so tool results
       become Tool messages, tool calls with canonical JSON arguments,
       thinking and redacted thinking, base64 media as their own blobs,
       cache_control markers dropped, unknown blocks kept and warned) and
@@ -587,8 +588,10 @@ Features Index:
       encoding and exact-number JSON (spec_primitives); thinking keeps its
       signature; token usage reports cache reads and cache writes as parts
       of input; store() writes every body and media blob through
-      BlobStore. Goldens (the spec's NormalizedExchange JSON) over the
-      testkit corpus, properties over generated requests and streams.
+      BlobStore. A refused body's top-level shape (keys, roles, content
+      kinds, never values) for the gateway's debug log. Goldens (the
+      spec's NormalizedExchange JSON) over the testkit corpus, properties
+      over generated requests and streams.
     entry_points:
       - crates/canonical/src/lib.rs
       - crates/canonical/src/anthropic/mod.rs
@@ -674,7 +677,8 @@ Features Index:
       envelope, synced before its ack, to
       <parent of blobs.root>/exchanges/exchange-log.jsonl (a P3 stopgap:
       the spec has no exchange store). The ops listener serves /metrics
-      (Prometheus text), /healthz (counters) and /readyz (database when
+      (Prometheus text; refusals as normalize_failed by fixed reason and
+      protocol codes), /healthz (counters) and /readyz (database when
       configured, migrations, role tasks). SIGINT and SIGTERM stop
       accepting, drain in-flight streams up to a deadline (cutting the
       rest, which are still captured as client_disconnected), drain the

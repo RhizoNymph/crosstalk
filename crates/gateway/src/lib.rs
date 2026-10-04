@@ -30,6 +30,7 @@ pub mod healthcheck;
 pub mod inspect;
 pub mod log;
 pub mod logging;
+pub mod normalize_failure;
 pub mod ops;
 pub mod role;
 pub mod server;

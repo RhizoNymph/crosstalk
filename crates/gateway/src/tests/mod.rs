@@ -5,6 +5,7 @@
 
 mod dst;
 mod raw;
+mod refusals;
 
 crosstalk_sim::sim_test! {
     /// `canonical.capture.blobs-before-event` (dst): every blob an exchange
@@ -15,4 +16,11 @@ crosstalk_sim::sim_test! {
     fn dst_blobs_written_before_capture_published(ctx) {
         dst::blobs_written_before_capture_published(ctx).await
     }
+}
+
+/// Refusals are counted by reason and protocol (the `normalize_failed`
+/// series of `/metrics`).
+#[tokio::test]
+async fn refusals_are_counted_by_reason_and_protocol() {
+    refusals::refusals_are_counted_by_reason_and_protocol().await;
 }

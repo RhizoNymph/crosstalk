@@ -21,7 +21,7 @@ const IMAGE_REQUEST: &str = r#"{"model":"claude-opus-5-5","max_tokens":64,"messa
 
 const IMAGE_RESPONSE: &str = r#"{"id":"msg_01img","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"a greeting"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":20,"output_tokens":3}}"#;
 
-fn raw(ids: &mut Ids, body: &[u8], transport: Transport, response: RawResponse) -> RawExchange {
+pub fn raw(ids: &mut Ids, body: &[u8], transport: Transport, response: RawResponse) -> RawExchange {
     let client = claude_code_client(ids);
     RawExchange {
         meta: ExchangeMeta {
