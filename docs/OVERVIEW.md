@@ -58,8 +58,14 @@ Overview:
     stage that normalizes with L1, stores bodies in FsBlobStore and
     publishes ExchangeCaptured on MpscBus, and persists each captured
     exchange through a bus consumer to an append-only exchange log, a P3
-    stopgap because the spec has no exchange store (gateway). The other
-    crates are still empty.
+    stopgap because the spec has no exchange store (gateway). That
+    composition is a library entry point, crosstalk_gateway::pipeline::
+    Pipeline (build over any blob store, bus and injected clock), and a
+    pre-normalized exchange enters it through Pipeline::ingest, the same
+    path the capture stage takes after L1 (P3.1), so the eval harness can
+    drive the real layers under simulated time. The other
+    crates are still empty. The phased implementation plan, with its
+    dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
     spec: >
@@ -133,6 +139,12 @@ Overview:
       synthetic week the UI and the tests share, seeded through the write
       traits). Layer crates may depend on store; memory, sim, testkit and
       world are their dev-dependencies only.
+    deploy: >
+      deploy/ (outside the workspace): docker compose on one machine with
+      Postgres, a migrate step, the crosstalk binary as --role all, the UI,
+      and the infrastructure observability stack (Prometheus, Grafana, Loki,
+      Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
+      stored, how they run and how they scale is in docs/infrastructure.md.
 
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
@@ -369,7 +381,8 @@ Features Index:
       The virtual Cargo workspace (members spec and crates/*, ui excluded,
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
-      crates never depend on each other or on api, client or gateway, take
+      crates never depend on each other or on the composers api, client,
+      eval or gateway, take
       transport only as a dev-dependency, and take memory, sim and testkit
       only as dev-dependencies) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
@@ -678,9 +691,22 @@ Features Index:
       sockets with testkit's fake upstream, harness and corpus (against
       L1's goldens), with a simulation of the capture stage under blob
       store faults (INV-48), and by hand with scripts/try-claude-code.sh.
+      The composition behind the proxy is the library entry point
+      pipeline::Pipeline (P3.1): Pipeline::build(Settings, Deps, clock)
+      over any spec BlobStore and EventBus subscribes and spawns the
+      role's stages (capture stage, exchange log), and
+      Pipeline::ingest(NormalizedExchange, at) stores the blobs (same
+      retry), mints the envelope id at at and publishes ExchangeCaptured;
+      the capture stage calls it after normalizing, so there is one path
+      after L1. Envelope ids reach the bus in strictly increasing order
+      under concurrent ingests. Every serve role builds one; the eval
+      harness (crosstalk-eval, a composer) builds one over simulated
+      stores and time.
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
+      - crates/gateway/src/pipeline/mod.rs
+      - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs
@@ -688,6 +714,24 @@ Features Index:
       - scripts/try-claude-code.sh
     depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
     doc: docs/features/gateway.md
+  deploy:
+    description: >
+      Single-machine deployment: images for the gateway and the UI, a docker
+      compose stack (Postgres 18 with pgvector, pg_trgm and
+      pg_stat_statements; a migrate step; crosstalk serve --role all; the
+      UI), generated secrets in deploy/.env, and infrastructure
+      observability (host, container, Postgres and log metrics, dashboards,
+      alert rules). Defines the contract the crosstalk binary implements:
+      serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
+      endpoints and the config file's top-level keys.
+    entry_points:
+      - deploy/compose.yaml
+      - deploy/run.sh
+      - deploy/crosstalk.Dockerfile
+      - deploy/config/crosstalk.json
+      - docs/infrastructure.md
+    depends_on: [workspace, store, ingress, transport]
+    doc: docs/features/deploy.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's

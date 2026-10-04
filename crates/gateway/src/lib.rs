@@ -6,13 +6,17 @@
 //! wired together. Today that is the capture slice (roadmap P3, milestone
 //! M1) in single-node mode:
 //!
+//! - [`pipeline::Pipeline`] is the composition behind the proxy, as a
+//!   library entry point: [`pipeline::Pipeline::build`] over a blob store,
+//!   a bus and an injected clock, with the [`capture`] stage (L1
+//!   normalization of what the proxy hands off) and the [`log`] consumer
+//!   (a P3 stopgap: the spec has no exchange store). Both the capture
+//!   stage and a caller holding a pre-normalized exchange enter through
+//!   [`pipeline::Pipeline::ingest`]: store the blobs in the blob store,
+//!   publish `ExchangeCaptured` on the bus (`crosstalk-transport`).
 //! - [`gateway::start`] runs a [`role::Role`]: the L0 proxy
-//!   (`crosstalk-ingress`), the [`capture`] stage that normalizes each
-//!   exchange with L1 (`crosstalk-canonical`), stores its bodies in the
-//!   blob store and publishes `ExchangeCaptured` on the in-process bus
-//!   (`crosstalk-transport`), the [`log`] consumer that persists every
-//!   captured exchange (a P3 stopgap: the spec has no exchange store), and
-//!   the [`ops`] listener (`/metrics`, `/healthz`, `/readyz`).
+//!   (`crosstalk-ingress`), a pipeline with the role's stages, and the
+//!   [`ops`] listener (`/metrics`, `/healthz`, `/readyz`).
 //! - [`config`] is the JSON config of the deployment contract; [`cli`]
 //!   the command line (`serve`, `migrate`, `healthcheck`, `inspect`);
 //!   [`store`] the Postgres side of `migrate` and `/readyz`;
@@ -31,6 +35,7 @@ pub mod inspect;
 pub mod log;
 pub mod logging;
 pub mod ops;
+pub mod pipeline;
 pub mod role;
 pub mod server;
 pub mod store;

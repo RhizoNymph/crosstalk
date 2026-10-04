@@ -12,8 +12,11 @@
 //!    dev-dependencies of a layer crate, never normal or build
 //!    dependencies.
 //!
-//! `store` and `spec` are open to every crate. Only `gateway`, `api` and
-//! `client` compose layer crates.
+//! `store` and `spec` are open to every crate. Only `gateway`, `api`,
+//! `client` and `eval` compose layer crates. `eval` (the evaluation
+//! harness, `crates/eval`) is registered before it exists: the rule
+//! classifies it, and the workspace check does not require it yet
+//! ([`Composer::required`]).
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -70,18 +73,31 @@ impl Layer {
 enum Composer {
     Api,
     Client,
+    Eval,
     Gateway,
 }
 
 impl Composer {
-    const ALL: [Composer; 3] = [Composer::Api, Composer::Client, Composer::Gateway];
+    const ALL: [Composer; 4] = [
+        Composer::Api,
+        Composer::Client,
+        Composer::Eval,
+        Composer::Gateway,
+    ];
 
     fn dir(self) -> &'static str {
         match self {
             Composer::Api => "api",
             Composer::Client => "client",
+            Composer::Eval => "eval",
             Composer::Gateway => "gateway",
         }
+    }
+
+    /// Whether the workspace must already have the crate. `eval` is being
+    /// created (roadmap P3.1); the rule applies to it once it is a member.
+    fn required(self) -> bool {
+        !matches!(self, Composer::Eval)
     }
 }
 
@@ -339,7 +355,12 @@ fn workspace_has_every_crate_the_rule_names() -> Result<(), MetadataError> {
     let expected = Layer::ALL
         .into_iter()
         .map(Layer::dir)
-        .chain(Composer::ALL.into_iter().map(Composer::dir))
+        .chain(
+            Composer::ALL
+                .into_iter()
+                .filter(|c| c.required())
+                .map(Composer::dir),
+        )
         .chain(TestSupport::ALL.into_iter().map(TestSupport::dir))
         .chain(["store", "spec"]);
     for dir in expected {
@@ -532,6 +553,7 @@ fn roles_classify_by_package_name() {
         Role::of("crosstalk-gateway"),
         Role::Composer(Composer::Gateway)
     );
+    assert_eq!(Role::of("crosstalk-eval"), Role::Composer(Composer::Eval));
     assert_eq!(
         Role::of("crosstalk-testkit"),
         Role::TestSupport(TestSupport::Testkit)
@@ -543,4 +565,27 @@ fn roles_classify_by_package_name() {
     assert_eq!(Role::of("crosstalk-store"), Role::Open);
     assert_eq!(Role::of("crosstalk-spec"), Role::Open);
     assert_eq!(Role::of("flow"), Role::Open);
+}
+
+#[test]
+fn eval_composes_gateway_and_layers_and_is_not_yet_required() {
+    for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+        assert_eq!(check(&edge("eval", "gateway", kind)), None);
+        for layer in Layer::ALL {
+            assert_eq!(check(&edge("eval", layer.dir(), kind)), None);
+            assert_eq!(
+                check(&edge(layer.dir(), "eval", kind)),
+                Some(Violation::LayerOnComposer {
+                    edge: edge(layer.dir(), "eval", kind)
+                })
+            );
+        }
+    }
+    assert!(!Composer::Eval.required());
+    assert!(
+        Composer::ALL
+            .into_iter()
+            .filter(|c| *c != Composer::Eval)
+            .all(Composer::required)
+    );
 }
