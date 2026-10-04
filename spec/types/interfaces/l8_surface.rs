@@ -4,8 +4,9 @@
 //! Operator actions flow back down the stack: policy changes are published
 //! as `PolicyChanged` (applied by L5); agent merges, unmerges and labels go
 //! to L3's identity resolver; channel promotion and transmission dismissal go
-//! to L5 (`ChannelRegistry::promote`, `TransmissionReview::dismiss`); alert
-//! rule management goes to L6's `AlertRuleStore`. Every action names its
+//! to L5 (`ChannelRegistry::promote`, `TransmissionReview::dismiss`), and so
+//! do verdicts on transmissions (`TransmissionVerdicts::set`); alert rule
+//! management goes to L6's `AlertRuleStore`. Every action names its
 //! permission ([`OperatorAction::required_permission`]), checked before any
 //! effect. Wherever an action records an author or time, the surface stamps
 //! them from the authenticated caller and the time it accepted the action;
@@ -43,6 +44,7 @@ use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
 use crate::aggregates::projection::{Projection, ProjectionToken};
+use crate::aggregates::quality::DetectionQuality;
 use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
@@ -50,6 +52,7 @@ use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
+use crate::derived::flow::verdict::{Verdict, VerdictLog};
 use crate::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, TransmissionId,
 };
@@ -88,7 +91,7 @@ pub enum Permission {
     /// counts and topic ids), channels, channel policy history, agents, alert
     /// rules, alerts and the topic history (versions, sizes, lineage): ids,
     /// counts, times and similarities, no message content and no topic
-    /// labels or terms.
+    /// labels or terms. Also verdict logs and detection quality.
     View,
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
@@ -97,7 +100,8 @@ pub enum Permission {
     /// unmerges and labels, and alert rules (what the gateway alerts on).
     Govern,
     /// Work alerts: acknowledge, resolve, and dismiss the suspected
-    /// transmissions they are about.
+    /// transmissions they are about. Judge transmissions: set and withdraw
+    /// verdicts.
     Triage,
     /// Operate the pipeline: list and replay dead-lettered deliveries. A
     /// replay re-runs a consumer on an old event, so it can reopen alerts or
@@ -266,6 +270,27 @@ pub trait QueryApi {
         request: &ProjectionRequest,
     ) -> Result<Projection, QueryError>;
 
+    /// View. Every verdict record of the transmission, oldest first
+    /// (`TransmissionVerdicts::log`); its last record is the current
+    /// verdict. An empty log for a transmission never judged, `None` for an
+    /// unknown one. Records hold ids, verdicts, times and operator notes, no
+    /// message content.
+    async fn verdicts(
+        &self,
+        caller: &Caller,
+        transmission: TransmissionId,
+    ) -> Result<Option<VerdictLog>, QueryError>;
+
+    /// View. Operator verdicts tallied against the detector's calls for the
+    /// judgeable transmissions opened in `window`
+    /// (`TransmissionVerdicts::quality`; see [`crate::aggregates::quality`]).
+    /// Rows hold route kinds, match classes and counts only.
+    async fn detection_quality(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+    ) -> Result<DetectionQuality, QueryError>;
+
     /// Audit. The audit records `filter` matches, newest first by time and
     /// id (`AuditLog::query`).
     async fn audit(
@@ -316,6 +341,18 @@ pub enum OperatorAction {
         transmission: TransmissionId,
         note: Option<String>,
     },
+    /// Set (`Some`) or withdraw (`None`) the operator's verdict on a
+    /// transmission (`TransmissionVerdicts::set`). The transmission's state
+    /// never changes. `Applied` when a record was appended, `Unchanged` when
+    /// the verdict was already current; an unknown transmission is
+    /// `NotFound`, and a `Detected` or `AwaitingContent` one is
+    /// `Conflict(TransmissionNotJudgeable)`. A `FalseDetection` verdict
+    /// suppresses the transmission's active alerts once L6 sees `VerdictSet`.
+    SetVerdict {
+        transmission: TransmissionId,
+        verdict: Option<Verdict>,
+        note: Option<String>,
+    },
     /// The client chooses the rule's id (a ULID), so a retried create is
     /// idempotent.
     CreateAlertRule {
@@ -349,6 +386,7 @@ pub enum ActionKind {
     Acknowledge,
     Resolve,
     DismissTransmission,
+    SetVerdict,
     CreateAlertRule,
     UpdateAlertRule,
     SetAlertRuleStatus,
@@ -366,6 +404,7 @@ impl OperatorAction {
             Self::Acknowledge { .. } => ActionKind::Acknowledge,
             Self::Resolve { .. } => ActionKind::Resolve,
             Self::DismissTransmission { .. } => ActionKind::DismissTransmission,
+            Self::SetVerdict { .. } => ActionKind::SetVerdict,
             Self::CreateAlertRule { .. } => ActionKind::CreateAlertRule,
             Self::UpdateAlertRule { .. } => ActionKind::UpdateAlertRule,
             Self::SetAlertRuleStatus { .. } => ActionKind::SetAlertRuleStatus,
@@ -375,8 +414,14 @@ impl OperatorAction {
 
     /// The permission the caller must hold, checked before any effect; a
     /// caller without it gets `Forbidden`. Govern for identity, policy and
-    /// rules, Triage for alerts, Operate for the pipeline. No action needs
-    /// View, Content or Audit, which are read permissions.
+    /// rules, Triage for alerts and verdicts, Operate for the pipeline. No
+    /// action needs View, Content or Audit, which are read permissions.
+    ///
+    /// `SetVerdict` needs Triage alone, not Content as well: it reveals no
+    /// content (its outcome and the records it writes hold no message text),
+    /// and reading the text to judge from is already gated by `transmission`
+    /// and `search`. One permission per action keeps `AuditRecord`'s
+    /// `Forbidden` check exact.
     pub fn required_permission(&self) -> Permission {
         match self {
             Self::SetPolicy { .. }
@@ -387,9 +432,10 @@ impl OperatorAction {
             | Self::CreateAlertRule { .. }
             | Self::UpdateAlertRule { .. }
             | Self::SetAlertRuleStatus { .. } => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::DismissTransmission { .. } => {
-                Permission::Triage
-            }
+            Self::Acknowledge { .. }
+            | Self::Resolve { .. }
+            | Self::DismissTransmission { .. }
+            | Self::SetVerdict { .. } => Permission::Triage,
             Self::ReplayDeadLetter { .. } => Permission::Operate,
         }
     }
@@ -475,7 +521,8 @@ pub enum ConflictKind {
     PatternOverlaps { existing: ChannelId },
     /// Changing an alert rule's kind, or editing a built-in rule.
     RuleNotEditable { rule: AlertRuleId },
-    /// A verdict on a transmission whose state does not take one.
+    /// A verdict on a transmission whose state does not take one
+    /// (`Detected`, `AwaitingContent`).
     TransmissionNotJudgeable { transmission: TransmissionId },
     /// Querying a topic-model version that is still being fitted.
     TopicVersionFitting { version: TopicModelVersion },

@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.verdict.set-rejects-without-effect"
+statement = "TransmissionVerdicts::set returns UnknownTransmission for an unknown transmission and NotJudgeable for a Detected or AwaitingContent one, appending no record and publishing no event."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The surface maps these to NotFound and Conflict(TransmissionNotJudgeable),
+and the audit log records them as rejected with no effect. A record
+appended on the rejecting path would be a label for a call the detector
+never made.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::set_verdict_rejects_unknown_and_unjudgeable"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -3,6 +3,7 @@
 use crate::aggregates::alert::{RuleStatus, WatchedTopics};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::resource::{Host, ResourcePattern};
+use crate::derived::flow::verdict::Verdict;
 use crate::ids::{AlertId, AlertRuleId, EventId, TopicId};
 use crate::interfaces::l2_transport::ConsumerGroup;
 use crate::interfaces::l6_analysis::RuleRequest;
@@ -110,6 +111,22 @@ fn every_action_names_its_permission() {
         (
             OperatorAction::DismissTransmission {
                 transmission: transmission(1),
+                note: None,
+            },
+            Permission::Triage,
+        ),
+        (
+            OperatorAction::SetVerdict {
+                transmission: transmission(1),
+                verdict: Some(Verdict::FalseDetection),
+                note: None,
+            },
+            Permission::Triage,
+        ),
+        (
+            OperatorAction::SetVerdict {
+                transmission: transmission(1),
+                verdict: None,
                 note: None,
             },
             Permission::Triage,

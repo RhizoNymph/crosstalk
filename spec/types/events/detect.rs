@@ -3,6 +3,7 @@
 use crate::derived::flow::access::Access;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::Route;
+use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::RelaySource;
 use crate::events::Subject;
@@ -60,6 +61,22 @@ pub enum DetectEvent {
         by: OperatorId,
         at: Timestamp,
     },
+    /// An operator's verdict on a transmission was appended to its
+    /// `VerdictLog` at `revision` (`verdict` is `None` for a withdrawal).
+    /// Published once per appended record by L5's verdict store, in the
+    /// record's transaction; a request that appended nothing publishes
+    /// nothing. Readers keep the highest revision per transmission
+    /// (`CurrentVerdict::observe`). Alert triage suppresses the
+    /// transmission's active alerts on `FalseDetection`; the edge store,
+    /// search and the projection read it for
+    /// `TopologyFilter::false_detections`.
+    VerdictSet {
+        transmission: TransmissionId,
+        verdict: Option<Verdict>,
+        revision: VerdictRevision,
+        by: OperatorId,
+        at: Timestamp,
+    },
 }
 
 impl DetectEvent {
@@ -75,6 +92,7 @@ impl DetectEvent {
             Self::TransmissionConfirmed { .. } => Subject::TransmissionConfirmed,
             Self::TransmissionSuspected { .. } => Subject::TransmissionSuspected,
             Self::TransmissionDismissed { .. } => Subject::TransmissionDismissed,
+            Self::VerdictSet { .. } => Subject::VerdictSet,
         }
     }
 }

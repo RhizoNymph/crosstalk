@@ -35,6 +35,7 @@ spec/types/
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
 │       ├── transmission.rs Transmission, Route, TransmissionState, DiscardReason, Dismissal, Confirmed
+│       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
 │       └── channel/
 │           ├── mod.rs     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed
 │           ├── detection.rs DeclaredDetection, TrafficDetection
@@ -43,6 +44,7 @@ spec/types/
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
 │   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
+│   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked, remap)
@@ -50,7 +52,7 @@ spec/types/
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged
-│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed)
+│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed, VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
@@ -59,9 +61,11 @@ spec/types/
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, set_label), AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator, TransmissionReview
+│   ├── l5_flow/
+│   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
-│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, audit), OperatorAction, ActionKind, OperatorActions, AlertSink
+│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit), OperatorAction, ActionKind, OperatorActions, AlertSink
 │   └── l8_surface/
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
 │       ├── live.rs        LiveFeed, LiveUpdate, UpdateKinds, LiveScope, LiveCursor, FeedWindow, LiveConfig
@@ -76,7 +80,8 @@ spec/types/
   appear in an assistant message. A confirmed transmission holds a
   `NonEmpty<ContentMatch>`. A channel declared before traffic and a
   discovered or promoted channel have different detection enums. Only a
-  watched-topic rule can be stale.
+  watched-topic rule can be stale. A verdict record can only be built for a
+  transmission whose state takes one (`TransmissionVerdict::new`).
 - **Opaque newtypes for server-issued values.** Cursors and projection
   tokens have private fields; clients only hand them back. A cursor's
   list is a type parameter, so one list's cursor does not fit another.
@@ -124,6 +129,10 @@ Code Assist) and self-hosted vLLM or SGLang. See
   resolve them through `AgentDirectory`. An operator unmerge restores the
   merge table exactly from the `Merged` record.
 - **Labels are display only.** An agent label is never identity evidence.
+- **Verdicts sit beside detection.** An operator's `Genuine` or
+  `FalseDetection` verdict never changes a transmission's state; it is an
+  append-only label used to exclude false detections from views, suppress
+  their alerts and measure the detector (`DetectionQuality`).
 
 ## Mapping from the lifecycle definition
 

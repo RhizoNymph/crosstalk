@@ -12,6 +12,7 @@ pub mod alert;
 pub mod edge;
 pub mod filter;
 pub mod projection;
+pub mod quality;
 pub mod series;
 pub mod topic;
 pub mod topic_history;

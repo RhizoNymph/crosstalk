@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.detection-quality-matches-tally"
+statement = "QueryApi::detection_quality for a window returns DetectionQuality::tally over every stored transmission paired with its VerdictLog::current, read in one snapshot."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+The SQL aggregate and the reference tally must agree on window, state,
+strongest match and verdict, or precision and recall figures quietly
+disagree with what the transmission list shows. One snapshot keeps a
+verdict appended mid-query from being counted under two verdicts.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_detection_quality_matches_tally"
+integration = "crosstalk::flow::tests::pg_detection_quality_matches_tally"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

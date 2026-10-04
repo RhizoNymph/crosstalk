@@ -8,6 +8,7 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::{Classification, DirectCarrier, Route};
+use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::span::RelaySource;
 use crate::events::detect::DetectEvent;
 use crate::events::ingest::{ConversationDelta, IngestEvent};
@@ -180,6 +181,13 @@ fn sample_events() -> Vec<BusEvent> {
             by: OperatorId::from_ulid(1),
             at: at(9),
         }),
+        BusEvent::Detect(DetectEvent::VerdictSet {
+            transmission: transmission(2),
+            verdict: Some(Verdict::FalseDetection),
+            revision: VerdictRevision::FIRST,
+            by: OperatorId::from_ulid(1),
+            at: at(9),
+        }),
         BusEvent::Insight(InsightEvent::TransmissionClassified {
             cause: ClassificationCause::Confirmation,
             transmission: transmission(1),
@@ -249,6 +257,7 @@ fn subjects_name_their_variant() {
             Subject::TransmissionConfirmed,
             Subject::TransmissionSuspected,
             Subject::TransmissionDismissed,
+            Subject::VerdictSet,
             Subject::TransmissionClassified,
             Subject::TopicVersionReady,
             Subject::TopicVersionActivated,
@@ -280,6 +289,7 @@ fn every_subject() -> Vec<Subject> {
             | Subject::TransmissionConfirmed
             | Subject::TransmissionSuspected
             | Subject::TransmissionDismissed
+            | Subject::VerdictSet
             | Subject::TransmissionClassified
             | Subject::TopicVersionReady
             | Subject::TopicVersionActivated
@@ -305,6 +315,7 @@ fn every_subject() -> Vec<Subject> {
         Subject::TransmissionConfirmed,
         Subject::TransmissionSuspected,
         Subject::TransmissionDismissed,
+        Subject::VerdictSet,
         Subject::TransmissionClassified,
         Subject::TopicVersionReady,
         Subject::TopicVersionActivated,
