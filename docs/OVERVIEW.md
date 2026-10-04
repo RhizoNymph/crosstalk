@@ -500,9 +500,14 @@ Features Index:
       heartbeats, session ends, a bus consumer that appends before it
       acks); export (refusals, plan, limits, header, sealed BLAKE3 rows,
       trailer, Started/Ended/Abandoned audit) with SpecExportSource
-      planning rows from the spec's read traits; and NodeCache, the spec's
-      NodeFacts, kept by NodeFeeder from L3's and L5's events and rebuilt
-      from the stores on start. crosstalk-api's InProcess builds it over
+      planning rows from the spec's read traits; channel_transmissions
+      (a channel's crossing transmissions under a surface cursor wrapping
+      the registry's); cross-agent semantics at every read (listings from
+      each channel's traffic, hidden channels and transmissions within one
+      agent left out of lists, counts, alerts and rows by id); and
+      NodeCache, the spec's NodeFacts (listings and the channel holding
+      each resource included), kept by NodeFeeder from L3's and L5's events
+      and rebuilt from the stores on start. crosstalk-api's InProcess builds it over
       the reference stores with a relay from their outbox to the node
       facts and the feed. The HTTP server (P7.1) is not part of it.
     entry_points:
@@ -515,7 +520,7 @@ Features Index:
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
       - crates/api/src/in_process/mod.rs
-    depends_on: [query_surface, read_models, export, memory, transport, sim, testkit, workspace]
+    depends_on: [query_surface, read_models, export, channel_semantics, memory, transport, sim, testkit, workspace]
     doc: docs/features/surface_service.md
   store:
     description: >
