@@ -70,7 +70,7 @@ means the stream ended before its terminal frame
 agent never saw. This follows the request tee's rule
 (`ingress.decode.tee-bounded`: abandon the copy, count the loss, keep
 forwarding). Recorded as the new invariant
-`ingress.capture.response-bounded` (`INV-X`).
+`ingress.capture.response-bounded` (INV-798).
 
 ### D2: the framer reports a held-back error on the next push
 
@@ -286,8 +286,7 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
 Passing (every evidence key reviewed): INV-1, 5, 6, 7, 8, 9, 10, 12, 13,
 14, 15, 16, 17, 19, 20, 21, 22, 24, 25, 26, 27, 32, 33, 34, 36, 40, 41, 42,
 43, 384, 385, 386, 387, 388, 389, `ingress.capture.response-bounded`, and
-the new `ingress.credential.previous-digests-within-overlap` (an INV-X
-file).
+the new `ingress.credential.previous-digests-within-overlap` (INV-816).
 INV-37 was already satisfied by the spec.
 
 Partly: INV-18 (unit yes; the fuzz target does not exist), INV-23 and

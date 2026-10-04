@@ -89,7 +89,7 @@ and can be named in invariants.
 Wall time is not monotonic. Elapsed time comes from `tokio::time::Instant`,
 which paused time virtualizes, so a component never needs a second clock
 abstraction: it takes one `Clock` reading and adds elapsed time. Two
-invariants (pending, `INV-X`) state this:
+invariants (INV-796, INV-797) state this:
 
 - `canonical.clock.injected` (`lint`): implementation code reads wall time
   only through a `Clock` it was handed and elapsed time only through
@@ -332,7 +332,7 @@ Patterns the invariants need:
 | `crates/sim/src/tests/ids.rs` | The spec's ULID generators under simulation: concurrent generators on skewed node clocks that step back, never minting an id twice (`canonical.ids.ulid-unique`, [spec_primitives](spec_primitives.md)) | test-only |
 | `spec/types/support.rs` | `Clock`, `SystemClock` | |
 | `spec/types/tests/support.rs` | `system_clock_reads_the_wall_clock`, `clock_is_shareable_across_tasks` | |
-| `spec/invariants/INV-X-canonical.clock.injected.toml`, `INV-X-canonical.clock.elapsed-from-monotonic.toml` | The clock invariants (pending numbers) | |
+| `spec/invariants/INV-797-canonical.clock.injected.toml`, `INV-796-canonical.clock.elapsed-from-monotonic.toml` | The clock invariants | |
 
 ## Invariants and constraints
 
