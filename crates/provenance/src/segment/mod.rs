@@ -2,7 +2,7 @@
 //! spans and classifies each against the exchange's inputs.
 //!
 //! For each text-bearing part of the output (text, visible reasoning, tool
-//! call arguments seen through their JSON-unescaped [`view`]):
+//! call arguments seen through their JSON-unescaped [`view()`]):
 //!
 //! 1. Every k-gram of the part is looked up in the [`Coverage`] of the
 //!    inputs (every layer of every input part, raw and decoded).
@@ -137,8 +137,12 @@ impl NovelRunSegmenter {
             let Some(source) = inputs.input(run.input) else {
                 continue;
             };
-            if let Some(draft) = draft(part_ref, start, end, Origin::Relayed(RelaySource::Input(source)))
-            {
+            if let Some(draft) = draft(
+                part_ref,
+                start,
+                end,
+                Origin::Relayed(RelaySource::Input(source)),
+            ) {
                 drafts.push(draft);
             }
         }
@@ -151,7 +155,11 @@ impl NovelRunSegmenter {
                 continue;
             };
             let text = &part.text[usize_of(start)..usize_of(end)];
-            if self.winnowing.kgrams(view(text, part.kind).text()).is_empty() {
+            if self
+                .winnowing
+                .kgrams(view(text, part.kind).text())
+                .is_empty()
+            {
                 continue;
             }
             if let Some(draft) = draft(part_ref, start, end, Origin::Originated) {
@@ -187,10 +195,7 @@ fn draft(part: PartRef, start: u32, end: u32, origin: Origin) -> Option<SpanDraf
 pub fn run_bytes(seen: &MappedText, kgrams: &[KGram], run: Run) -> (u32, u32) {
     let start = kgrams[run.first].start;
     let end = kgrams[run.last].end;
-    (
-        seen.source(usize_of(start)),
-        seen.source(usize_of(end)),
-    )
+    (seen.source(usize_of(start)), seen.source(usize_of(end)))
 }
 
 /// Maximal runs of consecutive k-grams that occur consecutively in one

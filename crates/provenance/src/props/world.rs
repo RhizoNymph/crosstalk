@@ -86,7 +86,9 @@ pub async fn run(plans: &[TurnPlan]) -> Outcome {
             ));
         }
         if parts.is_empty() {
-            parts.push(AssistantPart::Text(Text(format!("turn {index} had nothing to say"))));
+            parts.push(AssistantPart::Text(Text(format!(
+                "turn {index} had nothing to say"
+            ))));
         }
         turn = turn.output(assistant(parts));
         let ran = world.run(turn.clone()).await;
@@ -118,10 +120,15 @@ impl Outcome {
     }
 
     /// The text a span (or a read) locates.
-    pub fn text_at(&self, part: crosstalk_spec::observed::message::PartRef, range: crosstalk_spec::support::ByteRange) -> Option<String> {
+    pub fn text_at(
+        &self,
+        part: crosstalk_spec::observed::message::PartRef,
+        range: crosstalk_spec::support::ByteRange,
+    ) -> Option<String> {
         let message = self.message(part.message)?;
         let text = message.part_text(part.index).ok()?;
-        text.get(range.start() as usize..range.end() as usize).map(str::to_owned)
+        text.get(range.start() as usize..range.end() as usize)
+            .map(str::to_owned)
     }
 
     /// The text of a span through its part's view (unescaped arguments).

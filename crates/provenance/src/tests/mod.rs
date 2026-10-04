@@ -5,8 +5,8 @@
 mod agentdojo;
 mod config;
 mod decode;
-pub(crate) mod fixtures;
 mod fingerprint;
+pub(crate) mod fixtures;
 pub(crate) mod scenarios;
 mod segment;
 mod store;
@@ -128,4 +128,10 @@ async fn insert_on_wrong_shard_errors() {
 #[tokio::test]
 async fn lookup_on_wrong_shard_errors() {
     store::lookup_on_wrong_shard_errors().await;
+}
+
+/// `provenance.scan.status-terminal`.
+#[tokio::test]
+async fn delta_ends_indexed_or_failed() {
+    scenarios::delta_ends_indexed_or_failed().await;
 }

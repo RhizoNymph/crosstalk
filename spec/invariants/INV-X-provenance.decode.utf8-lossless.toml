@@ -1,0 +1,22 @@
+[invariant]
+id = "provenance.decode.utf8-lossless"
+statement = "Every text a provenance decoder yields is exactly the bytes its codec decodes from the source range, which are valid UTF-8; a decoding that is not valid UTF-8 yields nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Decoded text is fingerprinted and matched as if the reader had read it. A
+lossy conversion (replacement characters for invalid bytes) would turn
+binary payloads, and base64 or hex runs that only look encoded, into text
+that can collide with spans, and would hide where the decoded bytes came
+from. Base64, hex and URL decoding yield a payload only when its bytes are
+valid UTF-8, and then those bytes unchanged.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::decode::base64_leaves_short_runs_and_binary_alone"
+property = "crosstalk_provenance::props::decoders_yield_lossless_utf8"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

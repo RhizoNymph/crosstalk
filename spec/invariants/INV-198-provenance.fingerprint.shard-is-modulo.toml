@@ -18,4 +18,4 @@ property = "crosstalk_provenance::props::shard_is_fingerprint_modulo_shards"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

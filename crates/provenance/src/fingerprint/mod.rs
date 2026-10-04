@@ -1,7 +1,7 @@
 //! Winnowing over normalized shingles (Schleimer, Wilkerson and Aiken):
 //! [`Winnowing`], the spec's `Fingerprinter`.
 //!
-//! 1. The text is normalized ([`crate::text::normalize`]): whitespace runs
+//! 1. The text is normalized ([`crate::text::normalize()`]): whitespace runs
 //!    fold to one space, letters lowercase.
 //! 2. Every window of `k` consecutive normalized characters (a k-gram, or
 //!    shingle) is hashed ([`hash::rolling`]), so a fingerprint is a pure

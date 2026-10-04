@@ -24,10 +24,12 @@ use proptest::prelude::*;
 use self::generate::{codec_chain, encode_chain, long_sentence, scenario, sentence};
 use self::world::{Outcome, run};
 use crate::config::DecodeLimits;
-use crate::store::ProvenanceStore;
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{Winnowing, hash, positioned};
-use crate::tests::fixtures::{FakeSemantic, Recording, Turn, World, at, config, config_with, reference_index};
+use crate::store::ProvenanceStore;
+use crate::tests::fixtures::{
+    FakeSemantic, Recording, Turn, World, at, config, config_with, reference_index,
+};
 use crate::tests::scenarios::originate;
 use crate::text::normalize;
 
@@ -383,6 +385,49 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(cases(256))]
+
+    /// `provenance.decode.utf8-lossless`.
+    #[test]
+    fn decoders_yield_lossless_utf8(
+        payload in proptest::collection::vec(any::<u8>(), 8..64),
+        text in sentence(2, 6),
+    ) {
+        use base64::Engine as _;
+        use crate::decode::{Base64Decoder, HexDecoder, TextDecoder, UrlDecoder};
+        let mut source = payload.clone();
+        if payload.len() % 2 == 0 {
+            // Half the cases carry text, which is valid UTF-8.
+            source = text.clone().into_bytes();
+        }
+        let valid = std::str::from_utf8(&source).ok().map(str::to_owned);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&source);
+        let hex: String = source.iter().map(|b| format!("{b:02x}")).collect();
+        let url: String = source.iter().map(|b| format!("%{b:02X}")).collect();
+        for (decoded, encoded) in [
+            (Base64Decoder::new(16).decode_mapped(&format!("x {b64} y")), &b64),
+            (HexDecoder::new(16).decode_mapped(&format!("x {hex} y")), &hex),
+        ] {
+            let got: Vec<String> = decoded.into_iter().map(|d| d.text.into_text()).collect();
+            match &valid {
+                Some(text) if encoded.trim_end_matches('=').len() >= 16 => prop_assert_eq!(got, vec![text.clone()]),
+                Some(_) => {}
+                None => prop_assert!(got.is_empty(), "invalid UTF-8 was decoded"),
+            }
+        }
+        let got: Vec<String> = UrlDecoder
+            .decode_mapped(&format!("x {url} y"))
+            .into_iter()
+            .map(|d| d.text.into_text())
+            .collect();
+        match &valid {
+            Some(text) => prop_assert_eq!(got, vec![format!("x {text} y")]),
+            None => prop_assert!(got.is_empty(), "invalid UTF-8 was decoded"),
+        }
+    }
+}
+
 /// A originates `text`; B reads it encoded with `chain` in a tool result.
 /// The match's kind, if any.
 async fn encoded_read(text: &str, chain: &[Codec]) -> Option<MatchKind> {
@@ -423,8 +468,12 @@ fn on_boundaries(text: &str, range: ByteRange) -> bool {
 fn segment_spans_on_char_boundaries() {
     scenario_property(|outcome| {
         for record in &outcome.spans {
-            let message = outcome.message(record.span.location.part.message).expect("stored");
-            let text = message.part_text(record.span.location.part.index).expect("text part");
+            let message = outcome
+                .message(record.span.location.part.message)
+                .expect("stored");
+            let text = message
+                .part_text(record.span.location.part.index)
+                .expect("text part");
             assert!(on_boundaries(&text, record.span.location.range));
         }
     });
@@ -436,9 +485,14 @@ fn segment_spans_do_not_overlap() {
     scenario_property(|outcome| {
         for (i, a) in outcome.spans.iter().enumerate() {
             for b in &outcome.spans[i + 1..] {
-                if a.span.exchange == b.span.exchange && a.span.location.part == b.span.location.part {
+                if a.span.exchange == b.span.exchange
+                    && a.span.location.part == b.span.location.part
+                {
                     let (ra, rb) = (a.span.location.range, b.span.location.range);
-                    assert!(ra.end() <= rb.start() || rb.end() <= ra.start(), "overlapping spans");
+                    assert!(
+                        ra.end() <= rb.start() || rb.end() <= ra.start(),
+                        "overlapping spans"
+                    );
                 }
             }
         }
@@ -451,9 +505,14 @@ fn segment_spans_lie_within_output_parts() {
     scenario_property(|outcome| {
         for record in &outcome.spans {
             let turn = outcome.turn(record.span.exchange).expect("its turn");
-            assert_eq!(Some(record.span.location.part.message), turn.ran.delta.output);
+            assert_eq!(
+                Some(record.span.location.part.message),
+                turn.ran.delta.output
+            );
             let output = turn.turn.output.as_ref().expect("an output");
-            let text = output.part_text(record.span.location.part.index).expect("a text part");
+            let text = output
+                .part_text(record.span.location.part.index)
+                .expect("a text part");
             assert!(record.span.location.range.end() as usize <= text.len());
         }
     });
@@ -481,14 +540,23 @@ fn locations_index_part_text() {
 fn read_at_points_into_reader_delta() {
     scenario_property(|outcome| {
         for stored in &outcome.matches {
-            let turn = outcome.turn(stored.content.reader_exchange()).expect("its turn");
+            let turn = outcome
+                .turn(stored.content.reader_exchange())
+                .expect("its turn");
             let delta = &turn.ran.delta;
             let message = stored.content.read_at().part.message;
             let listed = delta.new_inputs.contains(&message)
                 || delta.new_system == Some(message)
                 || delta.output == Some(message);
             assert!(listed, "a read outside the delta");
-            assert!(outcome.text_at(stored.content.read_at().part, stored.content.read_at().range).is_some());
+            assert!(
+                outcome
+                    .text_at(
+                        stored.content.read_at().part,
+                        stored.content.read_at().range
+                    )
+                    .is_some()
+            );
         }
     });
 }
@@ -508,7 +576,9 @@ fn reader_output_match_agrees_with_relay_span() {
                     && record.span.location.range.start() <= read.range.start()
                     && read.range.end() <= record.span.location.range.end()
                     && record.span.state
-                        == SpanState::Relayed { source: RelaySource::Span(stored.content.origin()) }
+                        == SpanState::Relayed {
+                            source: RelaySource::Span(stored.content.origin()),
+                        }
             });
             assert!(inside, "a ReaderOutput match outside its relay span");
         }
@@ -523,12 +593,17 @@ fn reader_output_match_absent_from_inputs() {
             if *stored.content.carrier() != Carrier::ReaderOutput {
                 continue;
             }
-            let turn = outcome.turn(stored.content.reader_exchange()).expect("its turn");
+            let turn = outcome
+                .turn(stored.content.reader_exchange())
+                .expect("its turn");
             let coverage = outcome.input_coverage(turn);
             let read = stored.content.read_at();
             let text = outcome.text_at(read.part, read.range).expect("read text");
             for kgram in outcome.winnowing.winnow(&text) {
-                assert!(!coverage.contains(kgram.fingerprint), "explained by an input");
+                assert!(
+                    !coverage.contains(kgram.fingerprint),
+                    "explained by an input"
+                );
             }
         }
     });
@@ -548,11 +623,17 @@ fn originated_span_not_fingerprint_matchable_in_inputs() {
             let coverage = outcome.input_coverage(turn);
             let fingerprints = outcome.span_fingerprints(&record.span);
             for fingerprint in &fingerprints {
-                assert!(!coverage.contains(*fingerprint), "an originated span is in its inputs");
+                assert!(
+                    !coverage.contains(*fingerprint),
+                    "an originated span is in its inputs"
+                );
             }
             for earlier in outcome.indexed_before(record.span.exchange) {
                 let theirs = outcome.span_fingerprints(&earlier.span);
-                assert!(fingerprints.is_disjoint(&theirs), "an originated span matches an indexed span");
+                assert!(
+                    fingerprints.is_disjoint(&theirs),
+                    "an originated span matches an indexed span"
+                );
             }
         }
     });
@@ -572,18 +653,42 @@ fn relayed_span_source_contains_text() {
             match source {
                 RelaySource::Input(hash) => {
                     let request = turn.turn.request();
-                    let message = request.iter().find(|m| m.hash == hash).expect("the source is an input");
-                    assert!(outcome.message_contains(message, &text), "the input does not contain the span");
+                    let message = request
+                        .iter()
+                        .find(|m| m.hash == hash)
+                        .expect("the source is an input");
+                    assert!(
+                        outcome.message_contains(message, &text),
+                        "the input does not contain the span"
+                    );
                 }
                 RelaySource::Span(span) => {
-                    let origin = outcome.spans.iter().find(|r| r.span.id == span).expect("the source span is stored");
+                    let origin = outcome
+                        .spans
+                        .iter()
+                        .find(|r| r.span.id == span)
+                        .expect("the source span is stored");
                     assert!(origin.index_seq.is_some(), "the source span was indexed");
                     let origin_text = outcome.span_view(&origin.span).expect("origin text");
                     let normalized = crate::text::normalize::normalized_string(&origin_text);
                     let needle = crate::text::normalize::normalized_string(&text);
-                    assert!(normalized.contains(needle.trim()), "the source span does not contain the span");
+                    assert!(
+                        normalized.contains(needle.trim()),
+                        "the source span does not contain the span"
+                    );
                 }
             }
         }
     });
+}
+
+/// A regression `decoded_match_lists_codecs_in_decode_order` found: URL
+/// encoding touched only the last base64 character, so base64 alone
+/// decoded all but one character of the text and covered as many bytes.
+#[test]
+fn trailing_escape_still_reports_the_full_chain() {
+    let text = "aßîîéü aaa aaaaa aaa aaa aaa aaaa bca aulo αδρ";
+    let kind = block_on(encoded_read(text, &[Codec::Base64, Codec::UrlEncoding]));
+    let expected = NonEmpty::from_vec(vec![Codec::UrlEncoding, Codec::Base64]).expect("two codecs");
+    assert_eq!(kind, Some(MatchKind::Decoded(expected)));
 }

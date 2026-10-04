@@ -67,7 +67,10 @@ fn advance(record: &mut SpanRecord, event: SpanEvent) -> Result<(), ProvenanceSt
 }
 
 impl ProvenanceStore for MemoryProvenanceStore {
-    async fn record_exchange(&mut self, record: ExchangeRecord) -> Result<(), ProvenanceStoreError> {
+    async fn record_exchange(
+        &mut self,
+        record: ExchangeRecord,
+    ) -> Result<(), ProvenanceStoreError> {
         self.lock()
             .exchanges
             .entry(record.id)
@@ -141,7 +144,10 @@ impl ProvenanceStore for MemoryProvenanceStore {
         Ok(matches)
     }
 
-    async fn matches_of_span(&self, span: SpanId) -> Result<Vec<StoredMatch>, ProvenanceStoreError> {
+    async fn matches_of_span(
+        &self,
+        span: SpanId,
+    ) -> Result<Vec<StoredMatch>, ProvenanceStoreError> {
         let mut matches: Vec<StoredMatch> = self
             .lock()
             .matches
@@ -232,7 +238,11 @@ impl ProvenanceStore for MemoryProvenanceStore {
         if !matches!(status, ScanStatus::Scanned { .. }) {
             return Ok(());
         }
-        let ids = tables.by_exchange.get(&exchange).cloned().unwrap_or_default();
+        let ids = tables
+            .by_exchange
+            .get(&exchange)
+            .cloned()
+            .unwrap_or_default();
         for id in ids {
             let sequence = tables.sequence + 1;
             if let Some(record) = tables.spans.get_mut(&id)
@@ -288,7 +298,11 @@ impl ProvenanceStore for MemoryProvenanceStore {
         Ok(due.into_iter().take(limit).map(|(_, id)| id).collect())
     }
 
-    async fn expire(&mut self, spans: &[SpanId], at: Timestamp) -> Result<(), ProvenanceStoreError> {
+    async fn expire(
+        &mut self,
+        spans: &[SpanId],
+        at: Timestamp,
+    ) -> Result<(), ProvenanceStoreError> {
         let mut tables = self.lock();
         for id in spans {
             if let Some(record) = tables.spans.get_mut(id)

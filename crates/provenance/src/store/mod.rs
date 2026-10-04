@@ -217,8 +217,7 @@ pub trait ProvenanceStore {
     ) -> impl Future<Output = Result<Vec<MessageScan>, ProvenanceStoreError>> + Send;
 
     /// The highest index sequence assigned so far (0 when none).
-    fn index_watermark(&self)
-    -> impl Future<Output = Result<u64, ProvenanceStoreError>> + Send;
+    fn index_watermark(&self) -> impl Future<Output = Result<u64, ProvenanceStoreError>> + Send;
 
     /// Write a scan's spans and matches, advance each match's origin span
     /// by a hit at the reader's time (a refused hit leaves the span as it

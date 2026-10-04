@@ -25,7 +25,11 @@ Overview:
     unchanged and every generation exchange is normalized, its bodies
     stored, ExchangeCaptured published and the exchange persisted
     (gateway). L2's in-process bus and blob store (transport) are
-    implemented; L3 to L8 are not started. The data
+    implemented; L4 provenance (crosstalk-provenance: winnowing, decoders
+    with escape folding, the segmenter, the scanner and its bus consumer
+    publishing ContentMatched, the fingerprint index and L4's records on
+    Postgres) is implemented but not yet wired into the gateway; L3 and L5
+    to L8 are not started. The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -712,6 +716,42 @@ Features Index:
       - scripts/try-claude-code.sh
     depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
     doc: docs/features/gateway.md
+  provenance:
+    description: >
+      crosstalk-provenance, L4 (P4.2). Winnowing (the spec's
+      Fingerprinter) over whitespace- and case-normalized shingles with a
+      stable rolling hash pinned by golden vectors; base64, hex, URL and
+      Unicode decoders (the spec's Decoders) plus JSON and YAML string
+      unescapes, run depth-bounded with byte maps back to the part text;
+      the NovelRunSegmenter, which follows copied runs through every
+      decode layer of the exchange's inputs (relayed) and leaves the rest
+      originated; the scanner, which looks up new inputs, the new system
+      prompt and the output, resolves originated text against the index
+      (hidden relays become ReaderOutput matches, boilerplate Common) and
+      picks carrier, kind, read range and matched bytes; the engine, which
+      records exchanges from ExchangeCaptured and scans each
+      ConversationDelta, writes the index, republishes the stored outcome
+      with deterministic ids on redelivery and evicts after retention;
+      the bus consumer (group provenance) publishing SpanOriginated,
+      SpanRelayed and ContentMatched; PgFingerprintIndex model-tested
+      against crosstalk-memory's reference; L4's records (exchanges with
+      per-exchange and per-message scan status, spans by id, matches by
+      reader message and by origin span) in memory and on Postgres; a
+      semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
+      9949 exposed injection slots matched.
+    entry_points:
+      - crates/provenance/src/lib.rs
+      - crates/provenance/src/engine.rs
+      - crates/provenance/src/consumer.rs
+      - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/segment/mod.rs
+      - crates/provenance/src/decode/mod.rs
+      - crates/provenance/src/fingerprint/mod.rs
+      - crates/provenance/src/index/pg.rs
+      - crates/provenance/src/store/mod.rs
+      - crates/provenance/migrations/0001_provenance.sql
+    depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
+    doc: docs/features/provenance.md
   deploy:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker

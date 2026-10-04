@@ -33,7 +33,10 @@ fn invalid_json_is_refused() {
         (r#"{"decode": {"max_depth": 0}}"#, "no decoding"),
         (r#"{"decode": {"max_depth": 99}}"#, "unbounded decoding"),
         (r#"{"index": {"retention_secs": 0}}"#, "no retention"),
-        (r#"{"index": {"shards": 2, "owned": [2]}}"#, "a shard that does not exist"),
+        (
+            r#"{"index": {"shards": 2, "owned": [2]}}"#,
+            "a shard that does not exist",
+        ),
         (r#"{"index": {"owned": []}}"#, "no shard owned"),
         (r#"{"semantic_threshold": 1.5}"#, "a threshold above one"),
         (r#"{"eviction_interval_secs": 0}"#, "no eviction"),

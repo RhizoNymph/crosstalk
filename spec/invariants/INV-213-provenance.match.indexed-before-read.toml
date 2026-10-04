@@ -15,4 +15,4 @@ matched by provenance; out-of-order evidence is L5's concern.
 dst = "crosstalk_provenance::dst::match_only_against_spans_indexed_before_read"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

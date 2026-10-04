@@ -8,8 +8,11 @@
 //! (wherever it appears in the request). Other parts of assistant messages
 //! replayed as inputs carry nothing.
 //!
-//! Per origin span, the layer whose hits cover the most part bytes wins
-//! (the raw layer, then the shorter chain, on a tie). `read_at` runs from
+//! Per origin span, one layer wins: one whose text holds the origin span's
+//! whole text (normalized) before one that does not, then the one covering
+//! most part bytes, then the shorter chain, so the kind names the chain that
+//! really decodes the text (`provenance.decode.codecs-in-decode-order`).
+//! `read_at` runs from
 //! the first to the last covered byte in the part text, as it arrived;
 //! `matched_bytes` counts the covered bytes, at most the origin span's
 //! length for an exact match (`provenance.match.bytes-within-span`). Hits
@@ -32,6 +35,7 @@ use super::{ScanError, Scanner, Session};
 use crate::decode::Step;
 use crate::segment::{PartKind, TextPart, text_parts, view};
 use crate::store::ProvenanceStore;
+use crate::text::normalize::normalized_string;
 
 /// The carrier a read in `part` of `message` has; `None` for parts that
 /// carry nothing (an assistant message's own text or tool calls).
@@ -53,7 +57,7 @@ pub fn carrier(message: &Message, part: &TextPart<'_>) -> Option<Carrier> {
     }
 }
 
-/// The best layer found for one origin span.
+/// One layer's hits on one origin span.
 #[derive(Debug, Clone)]
 struct Candidate {
     layer: usize,
@@ -63,9 +67,24 @@ struct Candidate {
 }
 
 impl Candidate {
-    fn better_than(&self, other: &Candidate) -> bool {
-        (self.covered, std::cmp::Reverse(self.chain.len()), std::cmp::Reverse(self.layer))
-            > (other.covered, std::cmp::Reverse(other.chain.len()), std::cmp::Reverse(other.layer))
+    /// The ranking among one span's candidates: a layer holding the whole
+    /// origin text first (the chain that really decodes it), then the most
+    /// part bytes covered, then the shorter chain, then the earlier layer.
+    fn rank(
+        &self,
+        complete: bool,
+    ) -> (
+        bool,
+        u32,
+        std::cmp::Reverse<usize>,
+        std::cmp::Reverse<usize>,
+    ) {
+        (
+            complete,
+            self.covered,
+            std::cmp::Reverse(self.chain.len()),
+            std::cmp::Reverse(self.layer),
+        )
     }
 }
 
@@ -122,7 +141,7 @@ impl Scanner {
     {
         let base = view(&part.text, part.kind);
         let layers = self.pipeline().layers(base.text());
-        let mut best: BTreeMap<SpanId, Candidate> = BTreeMap::new();
+        let mut found: BTreeMap<SpanId, Vec<Candidate>> = BTreeMap::new();
         for (index, layer) in layers.iter().enumerate() {
             let mapped = base.compose(layer.text.clone());
             let kgrams = self.owned(self.winnowing().winnow(layer.text.text()));
@@ -130,7 +149,8 @@ impl Scanner {
             let reader = session.reader;
             let live = &session.live;
             let by_span = extents_by_span(&hits, &kgrams, |span| {
-                live.get(span).is_some_and(|record| record.span.agent != reader)
+                live.get(span)
+                    .is_some_and(|record| record.span.agent != reader)
             });
             for (span, extents) in by_span {
                 let merged = merge(
@@ -154,12 +174,35 @@ impl Scanner {
                 if candidate.covered == 0 {
                     continue;
                 }
-                match best.get(&span) {
-                    Some(current) if !candidate.better_than(current) => {}
-                    _ => {
-                        best.insert(span, candidate);
-                    }
-                }
+                found.entry(span).or_default().push(candidate);
+            }
+        }
+        let mut best: BTreeMap<SpanId, Candidate> = BTreeMap::new();
+        for (span, candidates) in found {
+            let chosen = if candidates.len() == 1 {
+                candidates.into_iter().next()
+            } else {
+                let origins: Vec<String> = session
+                    .origin_texts(span)
+                    .await?
+                    .iter()
+                    .map(|text| normalized_string(text).trim().to_owned())
+                    .filter(|text| !text.is_empty())
+                    .collect();
+                candidates
+                    .into_iter()
+                    .map(|candidate| {
+                        let layer = normalized_string(
+                            layers.get(candidate.layer).map_or("", |l| l.text.text()),
+                        );
+                        let complete = origins.iter().any(|origin| layer.contains(origin.as_str()));
+                        (candidate.rank(complete), candidate)
+                    })
+                    .max_by(|a, b| a.0.cmp(&b.0))
+                    .map(|(_, candidate)| candidate)
+            };
+            if let Some(candidate) = chosen {
+                best.insert(span, candidate);
             }
         }
         let mut matches = Vec::new();

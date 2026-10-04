@@ -41,6 +41,10 @@ pub mod store;
 pub mod text;
 
 #[cfg(test)]
+mod dst;
+#[cfg(test)]
+mod integration;
+#[cfg(test)]
 mod props;
 #[cfg(test)]
 mod tests;

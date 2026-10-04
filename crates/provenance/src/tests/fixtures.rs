@@ -27,7 +27,7 @@ use crate::config::{DecodeLimits, IndexSettings, ProvenanceConfig, winnow_params
 use crate::engine::{Processed, Provenance};
 use crate::scan::messages::MemoryMessages;
 use crate::semantic::DisabledSemanticMatcher;
-use crate::store::{MemoryProvenanceStore, StoredMatch};
+use crate::store::{MemoryProvenanceStore, ProvenanceStore, StoredMatch};
 
 /// Shingles of 8 characters, windows of 4: any shared run of 11
 /// normalized characters matches.
@@ -170,7 +170,10 @@ impl SemanticMatcher for FakeSemantic {
         span: &OriginatedSpan,
         _embedding: Embedding,
     ) -> Result<(), IndexError> {
-        self.stored.lock().expect("stored lock").insert(span.span().id);
+        self.stored
+            .lock()
+            .expect("stored lock")
+            .insert(span.span().id);
         Ok(())
     }
 
@@ -256,10 +259,12 @@ pub struct Ran {
     pub processed: Processed,
 }
 
-/// The engine over the reference index and in-memory records.
-pub struct World<I = MemoryFingerprintIndex, M = DisabledSemanticMatcher> {
-    pub engine: Provenance<I, MemoryProvenanceStore, M, MemoryMessages>,
-    pub store: MemoryProvenanceStore,
+/// The engine over an index, a record store and in-memory bodies: by
+/// default the reference index and the in-memory records.
+pub struct World<I = MemoryFingerprintIndex, M = DisabledSemanticMatcher, S = MemoryProvenanceStore>
+{
+    pub engine: Provenance<I, S, M, MemoryMessages>,
+    pub store: S,
     pub messages: MemoryMessages,
     pub ids: Ids,
     pub config: ProvenanceConfig,
@@ -278,7 +283,27 @@ where
     M: SemanticMatcher + Send + Sync,
 {
     pub fn with(config: ProvenanceConfig, index: I, semantic: M) -> Self {
-        let store = MemoryProvenanceStore::new();
+        World::over(config, index, semantic, MemoryProvenanceStore::new())
+    }
+
+    /// The matches whose reader exchange is `exchange`.
+    pub fn matches_of(&self, exchange: ExchangeId) -> Vec<StoredMatch> {
+        self.store
+            .all_matches()
+            .into_iter()
+            .filter(|stored| stored.content.reader_exchange() == exchange)
+            .collect()
+    }
+}
+
+impl<I, M, S> World<I, M, S>
+where
+    I: FingerprintIndex + Send + Sync,
+    M: SemanticMatcher + Send + Sync,
+    S: ProvenanceStore + Clone + Send + Sync,
+{
+    /// A world over `store`.
+    pub fn over(config: ProvenanceConfig, index: I, semantic: M, store: S) -> Self {
         let messages = MemoryMessages::new();
         let engine = Provenance::new(&config, index, store.clone(), semantic, messages.clone());
         Self {
@@ -320,7 +345,11 @@ where
             new_system: turn.new_system.as_ref().map(|message| message.hash),
             output: turn.output.as_ref().map(|message| message.hash),
         };
-        let processed = self.engine.process(&delta).await.expect("processing a delta");
+        let processed = self
+            .engine
+            .process(&delta)
+            .await
+            .expect("processing a delta");
         Ran {
             exchange: id,
             delta,
@@ -334,13 +363,12 @@ where
         message.part_text(0).expect("part 0 has text").into_owned()
     }
 
-    /// The matches whose reader exchange is `exchange`.
-    pub fn matches_of(&self, exchange: ExchangeId) -> Vec<StoredMatch> {
+    /// The matches whose reader exchange is `exchange`, read from the store.
+    pub async fn stored_matches(&self, exchange: ExchangeId) -> Vec<StoredMatch> {
         self.store
-            .all_matches()
-            .into_iter()
-            .filter(|stored| stored.content.reader_exchange() == exchange)
-            .collect()
+            .exchange_matches(exchange)
+            .await
+            .expect("matches read")
     }
 }
 
@@ -353,9 +381,9 @@ pub fn at(seconds: u64) -> Timestamp {
 /// pseudo-random words of three to seven letters, so two sentences share no
 /// run of eight characters by accident.
 pub fn sentence(seed: &str) -> String {
-    let mut state = seed
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    let mut state = seed.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
     let mut next = move || {
         state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = state;
@@ -402,10 +430,19 @@ pub fn brief_spans(spans: &[crate::store::SpanRecord]) -> String {
         .map(|record| {
             let span = &record.span;
             let state = match &span.state {
-                crosstalk_spec::derived::provenance::span::SpanState::Relayed { source } => match source {
-                    crosstalk_spec::derived::provenance::span::RelaySource::Span(id) => format!("relayed from span {:x}", crosstalk_spec::ids::EntityId::as_ulid(*id) & 0xffff),
-                    crosstalk_spec::derived::provenance::span::RelaySource::Input(_) => "relayed from input".to_owned(),
-                },
+                crosstalk_spec::derived::provenance::span::SpanState::Relayed { source } => {
+                    match source {
+                        crosstalk_spec::derived::provenance::span::RelaySource::Span(id) => {
+                            format!(
+                                "relayed from span {:x}",
+                                crosstalk_spec::ids::EntityId::as_ulid(*id) & 0xffff
+                            )
+                        }
+                        crosstalk_spec::derived::provenance::span::RelaySource::Input(_) => {
+                            "relayed from input".to_owned()
+                        }
+                    }
+                }
                 other => format!("{other:?}"),
             };
             format!(
@@ -429,7 +466,9 @@ pub fn brief_drafts(drafts: &[crosstalk_spec::interfaces::l4_provenance::SpanDra
                 draft.location.range.start(),
                 draft.location.range.end(),
                 match draft.origin {
-                    Origin::Relayed(crosstalk_spec::derived::provenance::span::RelaySource::Input(_)) => "relayed from input",
+                    Origin::Relayed(
+                        crosstalk_spec::derived::provenance::span::RelaySource::Input(_),
+                    ) => "relayed from input",
                     Origin::Relayed(_) => "relayed from span",
                     Origin::Originated => "originated",
                     Origin::Common => "common",

@@ -15,5 +15,5 @@ unit = "crosstalk_provenance::tests::insert_skips_fingerprints_above_cutoff"
 integration = "crosstalk_provenance::integration::pg_insert_skips_fingerprints_above_cutoff"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

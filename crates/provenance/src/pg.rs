@@ -32,9 +32,9 @@ pub fn hash_bytes(hash: MessageHash) -> Vec<u8> {
 
 /// A message hash from 32 digest bytes.
 pub fn hash_from(bytes: &[u8]) -> Result<MessageHash, OutOfRange> {
-    let array: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| OutOfRange { what: "a message hash" })?;
+    let array: [u8; 32] = bytes.try_into().map_err(|_| OutOfRange {
+        what: "a message hash",
+    })?;
     Ok(MessageHash::from_digest(Blake3::from_bytes(array)))
 }
 
@@ -50,14 +50,18 @@ pub fn fingerprint_from(value: i64) -> Fingerprint {
 
 /// A time as microseconds in a `bigint`.
 pub fn time_i64(at: Timestamp) -> Result<i64, OutOfRange> {
-    i64::try_from(at.as_micros()).map_err(|_| OutOfRange { what: "a timestamp" })
+    i64::try_from(at.as_micros()).map_err(|_| OutOfRange {
+        what: "a timestamp",
+    })
 }
 
 /// A time from microseconds in a `bigint`.
 pub fn time_from(value: i64) -> Result<Timestamp, OutOfRange> {
     u64::try_from(value)
         .map(Timestamp::from_micros)
-        .map_err(|_| OutOfRange { what: "a timestamp" })
+        .map_err(|_| OutOfRange {
+            what: "a timestamp",
+        })
 }
 
 /// `now - retention` as a `bigint` bound: what counts at `now` is at or

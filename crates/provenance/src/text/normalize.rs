@@ -40,7 +40,11 @@ pub fn normalize(text: &str) -> Vec<NormChar> {
         if ch.is_whitespace() {
             match out.last_mut() {
                 Some(last) if in_space => last.end = end,
-                _ => out.push(NormChar { ch: ' ', start, end }),
+                _ => out.push(NormChar {
+                    ch: ' ',
+                    start,
+                    end,
+                }),
             }
             in_space = true;
         } else {
@@ -57,7 +61,7 @@ pub fn normalize(text: &str) -> Vec<NormChar> {
     out
 }
 
-/// The normalized text as a string (tests and diagnostics).
+/// The normalized text as a string.
 pub fn normalized_string(text: &str) -> String {
     normalize(text).iter().map(|c| c.ch).collect()
 }

@@ -14,4 +14,4 @@ matched bytes when L5 sums a transmission's evidence.
 property = "crosstalk_provenance::props::segment_spans_do_not_overlap"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

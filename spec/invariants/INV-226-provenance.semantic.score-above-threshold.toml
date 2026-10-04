@@ -15,5 +15,5 @@ unit = "crosstalk_provenance::tests::semantic_lookup_respects_threshold"
 property = "crosstalk_provenance::props::semantic_hits_meet_threshold"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

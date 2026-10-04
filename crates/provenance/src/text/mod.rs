@@ -1,5 +1,5 @@
 //! Text as provenance reads it: whitespace and case normalization with a
-//! map back to source bytes ([`normalize`]), and decoded text that remembers
+//! map back to source bytes ([`normalize()`]), and decoded text that remembers
 //! where each of its bytes came from ([`mapped`]).
 
 pub mod mapped;

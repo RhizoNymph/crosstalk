@@ -4,14 +4,14 @@
 //! matcher, origin bodies for exactness) and decides; it writes nothing.
 //! Its [`ScanCommit`] holds the delta's spans and content matches:
 //!
-//! - **Reads** ([`reads`]): every text part of every message the delta
+//! - **Reads** (`reads`): every text part of every message the delta
 //!   lists in `new_inputs` and `new_system`, and the server tool results in
 //!   its output, is expanded into its decode layers, winnowed and looked
 //!   up; hits on live spans of other agents become one match per origin
 //!   span and part, from the layer that covers most bytes, with the
 //!   carrier the part implies. A semantic lookup runs on every part, its
 //!   hits kept only for spans no fingerprint matched there.
-//! - **Output** ([`output`]): the output is segmented against the
+//! - **Output** (`output`): the output is segmented against the
 //!   exchange's inputs (its request history, the new system prompt and the
 //!   new inputs); each originated candidate is resolved against the index:
 //!   stretches matching an indexed span become `Relayed(Span)` (with a
@@ -417,8 +417,11 @@ impl Scanner {
                     _ => reads::carrier(message, &part).is_some(),
                 };
                 if scanned {
-                    work.observations
-                        .push(self.part_fingerprints(&part.text, part.kind).into_iter().collect());
+                    work.observations.push(
+                        self.part_fingerprints(&part.text, part.kind)
+                            .into_iter()
+                            .collect(),
+                    );
                 }
             }
         }

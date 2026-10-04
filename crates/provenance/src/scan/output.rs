@@ -35,8 +35,8 @@ use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
 use crate::segment::{Coverage, TextPart, run_bytes, runs, text_parts, view};
 use crate::span::span_id;
-use crate::text::{normalize, trim_range};
 use crate::store::ProvenanceStore;
+use crate::text::{normalize, trim_range};
 
 /// One resolved stretch of an output part.
 #[derive(Debug, Clone)]
@@ -162,9 +162,7 @@ impl Scanner {
                 });
                 continue;
             }
-            let relayed = self
-                .relayed_runs(session, part, text, &by_span)
-                .await?;
+            let relayed = self.relayed_runs(session, part, text, &by_span).await?;
             let mut at = 0u32;
             for (run_start, run_end, source) in relayed {
                 if run_start > at {

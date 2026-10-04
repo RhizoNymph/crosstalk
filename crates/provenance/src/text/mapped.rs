@@ -47,14 +47,8 @@ impl MappedText {
     /// the source end). An index past the end gives the source end.
     pub fn source(&self, index: usize) -> u32 {
         match &self.origin {
-            Origin::Identity => {
-                u32::try_from(index.min(self.text.len())).unwrap_or(u32::MAX)
-            }
-            Origin::Map(map) => map
-                .get(index)
-                .or_else(|| map.last())
-                .copied()
-                .unwrap_or(0),
+            Origin::Identity => u32::try_from(index.min(self.text.len())).unwrap_or(u32::MAX),
+            Origin::Map(map) => map.get(index).or_else(|| map.last()).copied().unwrap_or(0),
         }
     }
 
@@ -108,8 +102,7 @@ impl MappedBuilder {
     /// `source`.
     pub fn push_str(&mut self, piece: &str, source: u32) {
         self.text.push_str(piece);
-        self.map
-            .extend(std::iter::repeat_n(source, piece.len()));
+        self.map.extend(std::iter::repeat_n(source, piece.len()));
     }
 
     /// Append `ch`, from the source character at `source`.

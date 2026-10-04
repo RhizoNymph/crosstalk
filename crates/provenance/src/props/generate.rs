@@ -92,7 +92,11 @@ pub enum Via {
 }
 
 pub fn via() -> impl Strategy<Value = Via> {
-    prop_oneof![Just(Via::ToolResult), Just(Via::UserTurn), Just(Via::SystemPrompt)]
+    prop_oneof![
+        Just(Via::ToolResult),
+        Just(Via::UserTurn),
+        Just(Via::SystemPrompt)
+    ]
 }
 
 /// One piece of a generated output.

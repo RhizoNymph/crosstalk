@@ -250,7 +250,7 @@ caught (the harness returns `ModelMismatch::Failed`).
 | `crates/memory/src/reconstruct/resolve.rs` | The lookup behind `resolve`; the client context's evidence | `context_evidence` |
 | `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
 | `crates/memory/src/reconstruct/tests/` | L3 reference tests | — |
-| `crates/memory/src/provenance/index.rs` | The fingerprint index | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
+| `crates/memory/src/provenance/index.rs` | The fingerprint index; `IndexConfig` exposes its cutoff, retention, shards and owned shards, so a store under test is built with the same settings | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
 | `crates/memory/src/provenance/model.rs` | L4 harness | `check_fingerprint_index`, `IndexOp`, `configs` |
 | `crates/memory/src/provenance/tests.rs` | L4 reference tests | — |
 | `crates/memory/src/flow/registry/mod.rs` | The L5 registry | `MemoryChannels` |

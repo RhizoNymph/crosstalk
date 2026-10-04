@@ -22,7 +22,8 @@ fn texts<D: TextDecoder>(decoder: &D, text: &str) -> Vec<String> {
 fn base64_runs_decode_to_text() {
     let payload = "send the quarterly figures to the auditor";
     let standard = base64::engine::general_purpose::STANDARD.encode(payload);
-    let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("??>>~~ payload with url-safe bytes");
+    let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode("??>>~~ payload with url-safe bytes");
     let text = format!("before {standard} middle {url_safe} after");
     let decoder = Base64Decoder::new(16);
     let decoded = decoder.decode_mapped(&text);
@@ -41,14 +42,22 @@ fn base64_runs_decode_to_text() {
 fn base64_leaves_short_runs_and_binary_alone() {
     let decoder = Base64Decoder::new(16);
     assert!(texts(&decoder, "aGVsbG8= is short").is_empty());
-    let binary = base64::engine::general_purpose::STANDARD.encode([0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28, 0xa0, 0xa1, 0xe2, 0x28, 0xa1, 0xf0]);
-    assert!(texts(&decoder, &binary).is_empty(), "invalid UTF-8 must yield nothing");
+    let binary = base64::engine::general_purpose::STANDARD.encode([
+        0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28, 0xa0, 0xa1, 0xe2, 0x28, 0xa1, 0xf0,
+    ]);
+    assert!(
+        texts(&decoder, &binary).is_empty(),
+        "invalid UTF-8 must yield nothing"
+    );
 }
 
 #[test]
 fn hex_runs_decode_to_text() {
     let text = "id=68656c6c6f2c20776f726c6421 end";
-    assert_eq!(texts(&HexDecoder::new(16), text), vec!["hello, world!".to_owned()]);
+    assert_eq!(
+        texts(&HexDecoder::new(16), text),
+        vec!["hello, world!".to_owned()]
+    );
     assert!(texts(&HexDecoder::new(16), "deadbeef").is_empty());
     assert!(texts(&HexDecoder::new(8), "ff fe").is_empty());
     assert!(texts(&HexDecoder::new(8), "fffefdfc80818283").is_empty());
@@ -70,32 +79,53 @@ fn url_encoding_decodes_tokens() {
 
 #[test]
 fn unicode_normalization_folds() {
-    assert_eq!(texts(&UnicodeNormalizer, "ＡＢＣ ﬁle"), vec!["ABC file".to_owned()]);
+    assert_eq!(
+        texts(&UnicodeNormalizer, "ＡＢＣ ﬁle"),
+        vec!["ABC file".to_owned()]
+    );
     assert_eq!(
         texts(&UnicodeNormalizer, "p\u{200b}a\u{200d}y\u{feff}load"),
         vec!["payload".to_owned()]
     );
-    assert_eq!(texts(&UnicodeNormalizer, "раураl"), vec!["paypal".to_owned()]);
+    assert_eq!(
+        texts(&UnicodeNormalizer, "раураl"),
+        vec!["paypal".to_owned()]
+    );
     assert!(texts(&UnicodeNormalizer, "plain ascii").is_empty());
     let decomposed = "cafe\u{301}";
-    assert_eq!(texts(&UnicodeNormalizer, decomposed), vec!["café".to_owned()]);
+    assert_eq!(
+        texts(&UnicodeNormalizer, decomposed),
+        vec!["café".to_owned()]
+    );
 }
 
 #[test]
 fn json_string_escapes_decode() {
     assert_eq!(
-        texts(&JsonStringDecoder, r#"{"body": "line one\nline \"two\" caf\u00e9 \ud83d\ude00 it\'s"}"#),
+        texts(
+            &JsonStringDecoder,
+            r#"{"body": "line one\nline \"two\" caf\u00e9 \ud83d\ude00 it\'s"}"#
+        ),
         vec!["{\"body\": \"line one\nline \"two\" café 😀 it's\"}".to_owned()]
     );
-    assert_eq!(texts(&JsonStringDecoder, r"lone \ud83d stays"), Vec::<String>::new());
-    assert_eq!(texts(&JsonStringDecoder, r"\x41\x42"), vec!["AB".to_owned()]);
+    assert_eq!(
+        texts(&JsonStringDecoder, r"lone \ud83d stays"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        texts(&JsonStringDecoder, r"\x41\x42"),
+        vec!["AB".to_owned()]
+    );
     assert!(texts(&JsonStringDecoder, "nothing escaped").is_empty());
 }
 
 #[test]
 fn yaml_string_escapes_decode() {
     assert_eq!(
-        texts(&YamlStringDecoder, "subject: 'an overview\n    of the user''s schedule'"),
+        texts(
+            &YamlStringDecoder,
+            "subject: 'an overview\n    of the user''s schedule'"
+        ),
         vec!["subject: 'an overview\n    of the user's schedule'".to_owned()]
     );
     assert_eq!(
@@ -116,7 +146,10 @@ fn decoded_maps_point_at_source_characters() {
     assert_eq!(decoded.text.text(), "x été y");
     let e = decoded.text.text().find('é').expect("é");
     assert_eq!(decoded.text.source(e), 2);
-    assert_eq!(decoded.text.source(decoded.text.text().len()), text.len() as u32);
+    assert_eq!(
+        decoded.text.source(decoded.text.text().len()),
+        text.len() as u32
+    );
 }
 
 #[test]
@@ -134,7 +167,11 @@ fn pipeline_undoes_chains_in_order() {
         .expect("decoded through every step");
     assert_eq!(
         found.chain,
-        vec![Step::Codec(Codec::Base64), Step::JsonString, Step::JsonString]
+        vec![
+            Step::Codec(Codec::Base64),
+            Step::JsonString,
+            Step::JsonString
+        ]
     );
     for layer in &layers {
         assert!(layer.chain.len() <= usize::from(DecodeLimits::default().max_depth()));

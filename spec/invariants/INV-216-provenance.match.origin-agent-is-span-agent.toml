@@ -15,4 +15,4 @@ compares against the wrong agent.
 unit = "crosstalk_provenance::tests::origin_agent_taken_from_span"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

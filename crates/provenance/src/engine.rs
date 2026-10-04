@@ -218,7 +218,9 @@ where
 
     /// Record an exchange from `ExchangeCaptured`.
     pub async fn record_exchange(&mut self, exchange: &Exchange) -> Result<(), EngineError> {
-        self.store.record_exchange(exchange_record(exchange)).await?;
+        self.store
+            .record_exchange(exchange_record(exchange))
+            .await?;
         Ok(())
     }
 
@@ -319,7 +321,10 @@ where
         Ok(envelopes(exchange, at, &spans, &matches))
     }
 
-    async fn required(&self, hash: MessageHash) -> Result<Result<Message, ScanFailure>, EngineError> {
+    async fn required(
+        &self,
+        hash: MessageHash,
+    ) -> Result<Result<Message, ScanFailure>, EngineError> {
         match self.messages.message(hash).await {
             Ok(Some(message)) => Ok(Ok(message)),
             Ok(None) => Ok(Err(ScanFailure::BodyMissing(hash))),
@@ -414,5 +419,8 @@ where
 
 /// Whether a span record's state is one the index holds postings for.
 pub fn is_live(state: &SpanState) -> bool {
-    matches!(state, SpanState::Indexed { .. } | SpanState::Propagated { .. })
+    matches!(
+        state,
+        SpanState::Indexed { .. } | SpanState::Propagated { .. }
+    )
 }

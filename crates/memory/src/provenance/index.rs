@@ -107,6 +107,16 @@ impl IndexConfig {
         self.retention
     }
 
+    /// How many shards there are.
+    pub fn shards(&self) -> NonZeroU16 {
+        self.shards
+    }
+
+    /// The shards this node owns.
+    pub fn owned(&self) -> &BTreeSet<u16> {
+        &self.owned
+    }
+
     /// Whether this node owns `fingerprint`'s shard.
     pub fn owns(&self, fingerprint: Fingerprint) -> bool {
         self.owned.contains(&fingerprint.shard(self.shards))

@@ -18,4 +18,4 @@ Relayed with RelaySource::Span and reported as a ReaderOutput match.
 property = "crosstalk_provenance::props::reader_output_match_absent_from_inputs"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

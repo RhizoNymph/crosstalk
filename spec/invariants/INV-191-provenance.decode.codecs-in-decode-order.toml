@@ -16,4 +16,4 @@ shorter chain already matches.
 property = "crosstalk_provenance::props::decoded_match_lists_codecs_in_decode_order"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

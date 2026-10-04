@@ -15,4 +15,4 @@ evidence of such channels, so missing it hides them entirely.
 property = "crosstalk_provenance::props::unexplained_output_text_matches_as_reader_output"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

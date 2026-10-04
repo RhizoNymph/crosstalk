@@ -102,7 +102,9 @@ fn status_from(row: &PgRow) -> Result<ScanStatus, ProvenanceStoreError> {
     let status: String = row.try_get("status")?;
     let at: Option<i64> = row.try_get("status_at")?;
     let at = || -> Result<Timestamp, ProvenanceStoreError> {
-        Ok(time_from(at.ok_or_else(|| corrupt("status time missing"))?)?)
+        Ok(time_from(
+            at.ok_or_else(|| corrupt("status time missing"))?,
+        )?)
     };
     match status.as_str() {
         "pending" => Ok(ScanStatus::Pending),
@@ -464,7 +466,10 @@ async fn locked_status(
 }
 
 impl ProvenanceStore for PgProvenanceStore {
-    async fn record_exchange(&mut self, record: ExchangeRecord) -> Result<(), ProvenanceStoreError> {
+    async fn record_exchange(
+        &mut self,
+        record: ExchangeRecord,
+    ) -> Result<(), ProvenanceStoreError> {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO provenance.exchanges (exchange, started_at, output, status) \
@@ -601,7 +606,10 @@ impl ProvenanceStore for PgProvenanceStore {
         rows.iter().map(match_from).collect()
     }
 
-    async fn matches_of_span(&self, span: SpanId) -> Result<Vec<StoredMatch>, ProvenanceStoreError> {
+    async fn matches_of_span(
+        &self,
+        span: SpanId,
+    ) -> Result<Vec<StoredMatch>, ProvenanceStoreError> {
         let query = concat!(
             "SELECT ",
             match_columns!(),
@@ -793,7 +801,11 @@ impl ProvenanceStore for PgProvenanceStore {
             .collect()
     }
 
-    async fn expire(&mut self, spans: &[SpanId], at: Timestamp) -> Result<(), ProvenanceStoreError> {
+    async fn expire(
+        &mut self,
+        spans: &[SpanId],
+        at: Timestamp,
+    ) -> Result<(), ProvenanceStoreError> {
         let mut tx = self.pool.begin().await?;
         for span in spans {
             match advance_span(&mut tx, *span, SpanEvent::Expire { at }, false).await {

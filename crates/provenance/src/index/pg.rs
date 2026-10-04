@@ -229,7 +229,8 @@ impl FingerprintIndex for PgFingerprintIndex {
             .fetch_one(&mut *tx)
             .await
             .map_err(store_error)?;
-            let distinct: BTreeSet<i64> = fingerprints.iter().copied().map(fingerprint_i64).collect();
+            let distinct: BTreeSet<i64> =
+                fingerprints.iter().copied().map(fingerprint_i64).collect();
             let distinct: Vec<i64> = distinct.into_iter().collect();
             sqlx::query(
                 "INSERT INTO provenance.observed (fingerprint, observation, at) \

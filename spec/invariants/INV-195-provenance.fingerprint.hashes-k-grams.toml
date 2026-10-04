@@ -14,4 +14,4 @@ returned fingerprint from the normalized k-gram at its offset.
 property = "crosstalk_provenance::props::fingerprints_hash_normalized_k_grams"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
