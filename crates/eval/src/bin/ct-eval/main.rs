@@ -5,6 +5,10 @@
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ```
 //!
+//! `--dataset` is `salt`, `agentdojo` or `tau2`. For AgentDojo, `--include
+//! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
+//! exactly, and `run` also prints how the injections arrived.
+//!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
 
@@ -16,9 +20,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
-use crosstalk_eval::corpus::TraceSource;
+use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
+use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::gateway::PipelineDetector;
+use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
 use crosstalk_eval::report::table::render;
@@ -44,13 +51,43 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    Agentdojo,
+    Tau2,
 }
 
 impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::Agentdojo => "agentdojo",
+            Self::Tau2 => "tau2",
         }
+    }
+}
+
+/// Any dataset's source.
+enum AnySource {
+    Salt(SaltSource),
+    AgentDojo(AgentDojoSource),
+    Tau2(Tau2Source),
+}
+
+impl TraceSource for AnySource {
+    fn id(&self) -> DatasetId {
+        match self {
+            Self::Salt(source) => source.id(),
+            Self::AgentDojo(source) => source.id(),
+            Self::Tau2(source) => source.id(),
+        }
+    }
+
+    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
+            Self::Salt(source) => Box::new(source.worlds()),
+            Self::AgentDojo(source) => Box::new(source.worlds()),
+            Self::Tau2(source) => Box::new(source.worlds()),
+        };
+        worlds
     }
 }
 
@@ -143,7 +180,7 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<SaltSource> {
+fn open_source(args: &SourceArgs) -> Result<AnySource> {
     let root = match &args.root {
         Some(root) => root.clone(),
         None => {
@@ -166,7 +203,26 @@ fn open_source(args: &SourceArgs) -> Result<SaltSource> {
     };
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
+            .map(AnySource::Salt)
             .with_context(|| format!("opening SALT at {}", root.display())),
+        Dataset::Agentdojo => AgentDojoSource::open(
+            &root,
+            &agentdojo::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::AgentDojo)
+        .with_context(|| format!("opening AgentDojo at {}", root.display())),
+        Dataset::Tau2 => Tau2Source::open(
+            &root,
+            &tau2::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::Tau2)
+        .with_context(|| format!("opening τ²-bench at {}", root.display())),
     }
 }
 
@@ -206,7 +262,11 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         failures,
         summary.unscored,
     );
-    let table = render(&report);
+    let mut table = render(&report);
+    if let AnySource::AgentDojo(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;

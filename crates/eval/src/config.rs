@@ -46,13 +46,26 @@ pub enum ConfigError {
 }
 
 impl Default for EvalConfig {
-    /// `~/Data/ai/agents`, with SALT at `salt-nlp`.
+    /// `~/Data/ai/agents`, with SALT at `salt-nlp`, AgentDojo at `agentdojo`
+    /// and τ²-bench at `tau2-bench/data/tau2/results/final`.
     fn default() -> Self {
         let mut datasets = BTreeMap::new();
         datasets.insert(
             "salt".to_owned(),
             DatasetConfig {
                 path: "salt-nlp".to_owned(),
+            },
+        );
+        datasets.insert(
+            "agentdojo".to_owned(),
+            DatasetConfig {
+                path: "agentdojo".to_owned(),
+            },
+        );
+        datasets.insert(
+            "tau2".to_owned(),
+            DatasetConfig {
+                path: "tau2-bench/data/tau2/results/final".to_owned(),
             },
         );
         Self {
