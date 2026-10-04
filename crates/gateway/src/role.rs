@@ -1,0 +1,117 @@
+//! Process roles: which of the gateway's tasks one process runs.
+//!
+//! | Role | Runs |
+//! | --- | --- |
+//! | `all` | everything below that exists |
+//! | `proxy` | the reverse proxy and the capture stage (L0 and L1: normalize, store bodies, publish `ExchangeCaptured`) |
+//! | `pipeline` | the bus consumers: today the exchange log (the P3 stopgap); L3 to L7 later |
+//! | `api` | the L8 HTTP binding: not built yet (P7.1), so nothing |
+//! | `analysis` | L6 analysis: not built yet (P6), so nothing |
+//!
+//! Every role serves the ops listener. The bus is in-process until the
+//! cross-node bus (P9), so a `proxy` process and a `pipeline` process do
+//! not reach each other yet: only `all` captures and logs end to end.
+
+use std::fmt;
+use std::str::FromStr;
+
+/// A process role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    All,
+    Proxy,
+    Pipeline,
+    Api,
+    Analysis,
+}
+
+/// The role text is not one of the five.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown role {0:?} (expected all, proxy, pipeline, api or analysis)")]
+pub struct UnknownRole(pub String);
+
+impl FromStr for Role {
+    type Err = UnknownRole;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "all" => Ok(Self::All),
+            "proxy" => Ok(Self::Proxy),
+            "pipeline" => Ok(Self::Pipeline),
+            "api" => Ok(Self::Api),
+            "analysis" => Ok(Self::Analysis),
+            other => Err(UnknownRole(other.to_owned())),
+        }
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::All => "all",
+            Self::Proxy => "proxy",
+            Self::Pipeline => "pipeline",
+            Self::Api => "api",
+            Self::Analysis => "analysis",
+        })
+    }
+}
+
+impl Role {
+    /// Whether this process runs the proxy and the capture stage.
+    pub fn runs_proxy(self) -> bool {
+        matches!(self, Self::All | Self::Proxy)
+    }
+
+    /// Whether this process runs the bus consumers (the exchange log).
+    pub fn runs_pipeline(self) -> bool {
+        matches!(self, Self::All | Self::Pipeline)
+    }
+
+    /// What this role would run that does not exist yet, for the startup
+    /// log.
+    pub fn not_built(self) -> &'static [&'static str] {
+        match self {
+            Self::All => &[
+                "api: the L8 HTTP binding (P7.1); api.listen is not bound",
+                "analysis: L6 (P6)",
+            ],
+            Self::Api => &["api: the L8 HTTP binding (P7.1); api.listen is not bound"],
+            Self::Analysis => &["analysis: L6 (P6)"],
+            Self::Proxy | Self::Pipeline => &[],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_role_round_trips_through_its_text() {
+        for role in [
+            Role::All,
+            Role::Proxy,
+            Role::Pipeline,
+            Role::Api,
+            Role::Analysis,
+        ] {
+            assert_eq!(role.to_string().parse::<Role>(), Ok(role));
+        }
+        assert_eq!(
+            "everything".parse::<Role>(),
+            Err(UnknownRole("everything".to_owned()))
+        );
+    }
+
+    #[test]
+    fn roles_select_their_tasks() {
+        assert!(Role::All.runs_proxy() && Role::All.runs_pipeline());
+        assert!(Role::Proxy.runs_proxy() && !Role::Proxy.runs_pipeline());
+        assert!(!Role::Pipeline.runs_proxy() && Role::Pipeline.runs_pipeline());
+        for role in [Role::Api, Role::Analysis] {
+            assert!(!role.runs_proxy() && !role.runs_pipeline());
+            assert!(!role.not_built().is_empty());
+        }
+    }
+}

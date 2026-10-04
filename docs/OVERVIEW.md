@@ -19,8 +19,13 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: workspace scaffolded; L2's in-process bus and blob store
-    (transport) are implemented, the other layers are not started. The data
+    Status: milestone M1 (capture) is reachable: the crosstalk binary
+    (crosstalk-gateway, roadmap P3) runs the capture slice in single-node
+    mode, so Claude Code pointed at it through ANTHROPIC_BASE_URL works
+    unchanged and every generation exchange is normalized, its bodies
+    stored, ExchangeCaptured published and the exchange persisted
+    (gateway). L2's in-process bus and blob store (transport) are
+    implemented; L3 to L8 are not started. The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -42,8 +47,15 @@ Overview:
     that stores the bodies through BlobStore (canonical).
     crosstalk-ingress has the L0 reverse proxy for Anthropic
     Messages over HTTP and SSE, handing each generation exchange to a
-    bounded capture channel as a RawExchange (ingress). The other crates
-    are still empty.
+    bounded capture channel as a RawExchange (ingress). crosstalk-gateway
+    is the crosstalk binary of the deployment contract (serve --role,
+    migrate, healthcheck, inspect; JSON config; JSON logs; an ops listener
+    with /metrics, /healthz and /readyz): it wires the proxy to a capture
+    stage that normalizes with L1, stores bodies in FsBlobStore and
+    publishes ExchangeCaptured on MpscBus, and persists each captured
+    exchange through a bus consumer to an append-only exchange log, a P3
+    stopgap because the spec has no exchange store (gateway). The other
+    crates are still empty.
 
   subsystems:
     spec: >
@@ -103,7 +115,8 @@ Overview:
       Crates crosstalk-api (the HTTP and SSE server for the L8 surface),
       crosstalk-client (the L8 traits over HTTP, for the UI) and
       crosstalk-gateway (the crosstalk binary: config, wiring, process
-      roles). The only crates allowed to depend on layer crates.
+      roles, the ops listener, graceful shutdown; today the single-node
+      capture slice). The only crates allowed to depend on layer crates.
     support: >
       Crates crosstalk-store (Postgres through sqlx: the pool configured
       from DATABASE_URL, one schema and one migrations table per layer,
@@ -590,4 +603,40 @@ Features Index:
       - crates/ingress/src/config.rs
     depends_on: [type_spec, workspace, sim, testkit]
     doc: docs/features/ingress.md
+  gateway:
+    description: >
+      crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the
+      deployment contract (docs/features/deploy.md): serve --role
+      all|proxy|pipeline|api|analysis, migrate (extensions; no layer
+      migrations yet), healthcheck (a hyper GET for the distroless image)
+      and inspect (lists logged exchanges and decodes one with its bodies).
+      One JSON config refusing unknown fields (ingress's config unchanged,
+      api, ops, store, blobs, embeddings, and optional bus, pipeline and
+      shutdown tuning), secrets only by environment variable name. In role
+      all the L0 proxy hands each RawExchange over a bounded channel to a
+      capture stage that normalizes it with L1, stores every body and media
+      blob in FsBlobStore (retrying idempotent puts) and only then
+      publishes ExchangeCaptured on MpscBus; a bus consumer appends each
+      envelope, synced before its ack, to
+      <parent of blobs.root>/exchanges/exchange-log.jsonl (a P3 stopgap:
+      the spec has no exchange store). The ops listener serves /metrics
+      (Prometheus text), /healthz (counters) and /readyz (database when
+      configured, migrations, role tasks). SIGINT and SIGTERM stop
+      accepting, drain in-flight streams up to a deadline (cutting the
+      rest, which are still captured as client_disconnected), drain the
+      capture stage and the log's consumer group, and sync the log. Logs
+      are JSON lines on stdout filtered by RUST_LOG. Tested end to end over
+      sockets with testkit's fake upstream, harness and corpus (against
+      L1's goldens), with a simulation of the capture stage under blob
+      store faults (INV-48), and by hand with scripts/try-claude-code.sh.
+    entry_points:
+      - crates/gateway/src/main.rs
+      - crates/gateway/src/gateway.rs
+      - crates/gateway/src/capture.rs
+      - crates/gateway/src/config/mod.rs
+      - crates/gateway/src/log/mod.rs
+      - crates/gateway/src/ops/mod.rs
+      - scripts/try-claude-code.sh
+    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
+    doc: docs/features/gateway.md
 ```

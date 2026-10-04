@@ -32,7 +32,8 @@ store is a separate async step through the spec's `BlobStore`.
   WebSocket increments: roadmap P8. Their invariant evidence stays pending.
 - The capture task: receiving `RawExchange`s from L0, calling `store`, and
   publishing `ExchangeCaptured` only after it succeeds
-  (`canonical.capture.blobs-before-event`, roadmap P3).
+  (`canonical.capture.blobs-before-event`): the gateway's capture stage
+  ([gateway](gateway.md), roadmap P3).
 - Credential hashing, deployment secrets and ULID generation
   (`canonical.ids.*`): their evidence names this crate, but L0 and every
   minting layer need them and layer crates cannot depend on each other,
@@ -256,8 +257,9 @@ encoding as JSON; checking also decodes the file back.
 Implementation evidence in this crate now passes for: INV-47, 49, 50, 51,
 59, 60, 61, 62, 67, 68, 69, 70 (property; its OpenAI Chat units are P8),
 72, 73, 74, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 95, 96, 97, 98, 99.
-Pending: INV-48 (the capture task, P3), 53–58 (keyed hashing and ids, see
-Gaps), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
+INV-48's evidence moved to the gateway, where the capture task lives, and
+passes there ([gateway](gateway.md)). Pending: 53–58 (keyed hashing and
+ids, see Gaps), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
 
 ## Gaps found
 

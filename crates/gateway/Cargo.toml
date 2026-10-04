@@ -10,10 +10,26 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-canonical = { path = "../canonical" }
+crosstalk-ingress = { path = "../ingress" }
+crosstalk-store = { path = "../store" }
+crosstalk-transport = { path = "../transport" }
+bytes.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json", "std"] }
 
 [[bin]]
 name = "crosstalk"
 path = "src/main.rs"
 
 [dev-dependencies]
-serde_json.workspace = true
+crosstalk-sim = { path = "../sim" }
+crosstalk-testkit = { path = "../testkit" }
+tempfile.workspace = true
