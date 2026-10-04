@@ -12,7 +12,7 @@ use crosstalk_spec::interfaces::l8_surface::Caller;
 
 use crate::backend::Result;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction};
+use crate::contract::research::{Actor, AuditOutcome, AuditedAction};
 
 use super::clock::NOW;
 use super::queries::require;
@@ -77,15 +77,10 @@ pub fn act(
     caller: &Caller,
     action: OperatorAction,
 ) -> Result<ActionOutcome> {
-    let mut subjects = effects::subjects(state, &action);
     let result = permitted(caller, &action).and_then(|()| apply(world, state, caller, &action));
-    match &result {
-        Ok(ActionOutcome::RuleCreated(id)) => subjects.push(AuditSubject::Rule(*id)),
-        Ok(ActionOutcome::ChannelPromoted(id)) => subjects.push(AuditSubject::Channel(*id)),
-        _ => {}
-    }
+    let subject = effects::subject(&action, result.as_ref().ok());
     let outcome = match &result {
-        Ok(_) => AuditOutcome::Applied,
+        Ok(outcome) => AuditOutcome::Applied(*outcome),
         Err(err) => AuditOutcome::Rejected(err.clone()),
     };
     effects::audit(
@@ -93,8 +88,8 @@ pub fn act(
         NOW,
         Actor::Operator(caller.operator),
         AuditedAction::Operator(action),
+        subject,
         outcome,
-        subjects,
     );
     result
 }

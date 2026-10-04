@@ -9,10 +9,10 @@ use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionI
 use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use super::actions::OperatorAction;
+use super::actions::{ActionOutcome, OperatorAction};
 use super::errors::QueryError;
 use super::scope::Scope;
-use super::{AuditId, ProjectionId};
+use super::{AuditId, MergeId, ProjectionId};
 
 /// UMAP parameters. `min_dist` is checked to lie in `[0, 1]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -247,9 +247,12 @@ pub enum AuditedAction {
     Config { summary: String },
 }
 
+/// What became of an audited action. An applied operator action carries
+/// what it created (`RuleCreated`, `ChannelPromoted`, `Merged`); config
+/// changes are `Applied(ActionOutcome::Applied)`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuditOutcome {
-    Applied,
+    Applied(ActionOutcome),
     Rejected(QueryError),
 }
 
@@ -260,6 +263,10 @@ pub struct AuditEntry {
     pub at: Timestamp,
     pub by: Actor,
     pub action: AuditedAction,
+    /// The entity the entry is about: the action's target, or what it
+    /// created when the action names none (a created rule). `None` for
+    /// actions about no entity (dead-letter replays, most config changes).
+    pub subject: Option<AuditSubject>,
     pub outcome: AuditOutcome,
 }
 
@@ -271,8 +278,13 @@ pub enum AuditSubject {
     Transmission(TransmissionId),
     Rule(crosstalk_spec::ids::AlertRuleId),
     Alert(crosstalk_spec::ids::AlertId),
+    Merge(MergeId),
 }
 
+/// Restricts the audit log. `subject` keeps the entries about that entity
+/// or created it, resolving agent aliases and channel supersession: an
+/// agent's entries include the merges it took part in, a channel's the
+/// promotion that declared it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AuditFilter {
     pub operators: Vec<OperatorId>,

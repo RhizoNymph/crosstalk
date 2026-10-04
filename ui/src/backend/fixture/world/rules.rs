@@ -11,8 +11,7 @@ use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
 use crate::contract::SinkId;
-use crate::contract::actions::OperatorAction;
-use crate::contract::research::AuditSubject;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::rules::{
     BuiltinRule, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, SinkInfo, SinkKind,
     StaleReason, UserRule,
@@ -196,7 +195,7 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
             at,
             OPERATOR_RESEARCHER,
             action,
-            vec![AuditSubject::Rule(id)],
+            ActionOutcome::RuleCreated(id),
         );
         state.rules.push(RuleDef {
             id,

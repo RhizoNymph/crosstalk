@@ -22,7 +22,7 @@ use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
-use crate::contract::actions::OperatorAction;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
@@ -67,25 +67,27 @@ pub fn operators() -> Vec<Operator> {
     ]
 }
 
-/// Records an applied operator action in the audit log.
+/// Records an applied operator action in the audit log, with what it
+/// produced.
 pub fn operator_action(
     state: &mut State,
     at: Timestamp,
     by: OperatorId,
     action: OperatorAction,
-    subjects: Vec<AuditSubject>,
+    outcome: ActionOutcome,
 ) {
+    let subject = effects::subject(&action, Some(&outcome));
     effects::audit(
         state,
         at,
         Actor::Operator(by),
         AuditedAction::Operator(action),
-        AuditOutcome::Applied,
-        subjects,
+        subject,
+        AuditOutcome::Applied(outcome),
     );
 }
 
-fn config(state: &mut State, at: Timestamp, summary: &str, subjects: Vec<AuditSubject>) {
+fn config(state: &mut State, at: Timestamp, summary: &str, subject: Option<AuditSubject>) {
     effects::audit(
         state,
         at,
@@ -93,8 +95,8 @@ fn config(state: &mut State, at: Timestamp, summary: &str, subjects: Vec<AuditSu
         AuditedAction::Config {
             summary: summary.to_owned(),
         },
-        AuditOutcome::Applied,
-        subjects,
+        subject,
+        AuditOutcome::Applied(ActionOutcome::Applied),
     );
 }
 
@@ -110,7 +112,7 @@ pub fn populate(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<
     verdicts(world, state)?;
     rejected(state, plan)?;
     dead_letters(world, state)?;
-    state.audit.sort_by_key(|r| (r.entry.at, r.entry.id));
+    state.audit.sort_by_key(|e| (e.at, e.id));
     Ok(())
 }
 
@@ -138,14 +140,14 @@ fn configuration(world: &World, state: &mut State, plan: &ChannelPlan) -> Result
             state,
             CONFIG_AT,
             summary,
-            vec![AuditSubject::Channel(plan.id(key)?)],
+            Some(AuditSubject::Channel(plan.id(key)?)),
         );
     }
     config(
         state,
         DESIGN_DOCS_AT,
         "declared channel docs.corp.internal/design (sanctioned)",
-        vec![AuditSubject::Channel(plan.id(K::DesignDocs)?)],
+        Some(AuditSubject::Channel(plan.id(K::DesignDocs)?)),
     );
     for key in ["reg0", "reg1", "reg2"] {
         let id = world.scenario.cast.id(key)?;
@@ -153,26 +155,26 @@ fn configuration(world: &World, state: &mut State, plan: &ChannelPlan) -> Result
             state,
             CONFIG_AT,
             "registered agent from config",
-            vec![AuditSubject::Agent(id)],
+            Some(AuditSubject::Agent(id)),
         );
     }
     config(
         state,
         CONFIG_AT,
         "enabled the five built-in alert rules",
-        Vec::new(),
+        None,
     );
     config(
         state,
         CONFIG_AT,
         "added sinks soc-webhook, #agent-alerts, local-log",
-        Vec::new(),
+        None,
     );
     config(
         state,
         CONFIG_AT,
         "topic versions: retain unpinned versions for 14 days",
-        Vec::new(),
+        None,
     );
     Ok(())
 }
@@ -217,8 +219,7 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
         ),
     ];
     for (at, action) in steps {
-        let subjects = effects::subjects(state, &action);
-        operator_action(state, at, researcher, action, subjects);
+        operator_action(state, at, researcher, action, ActionOutcome::Applied);
     }
     let old = plan.id(K::OldTeamNotes)?;
     let pattern = match state
@@ -237,11 +238,8 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
         policy: PolicyKind::Sanctioned,
         note: note("team notes are an approved handoff space"),
     };
-    let subjects = vec![
-        AuditSubject::Channel(old),
-        AuditSubject::Channel(plan.id(K::TeamNotes)?),
-    ];
-    operator_action(state, PROMOTE_AT, researcher, promote, subjects);
+    let declared = ActionOutcome::ChannelPromoted(plan.id(K::TeamNotes)?);
+    operator_action(state, PROMOTE_AT, researcher, promote, declared);
     Ok(())
 }
 
@@ -252,13 +250,11 @@ fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
             let request = MergeRequest::new(merge.from, merge.into, merge.by)
                 .map_err(|e| GenError::invalid("MergeRequest", e))?;
             let action = OperatorAction::MergeAgents(request);
-            let subjects = effects::subjects(state, &action);
-            operator_action(state, merge.at, by, action, subjects);
+            operator_action(state, merge.at, by, action, ActionOutcome::Merged(merge.id));
         }
         if let Some((by, at)) = merge.reverted {
             let action = OperatorAction::Unmerge { merge: merge.id };
-            let subjects = effects::subjects(state, &action);
-            operator_action(state, at, by, action, subjects);
+            operator_action(state, at, by, action, ActionOutcome::Applied);
         }
     }
     let mut rng = Rng::fork(world.seed, "renames");
@@ -274,13 +270,7 @@ fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
             agent,
             label: Some(label),
         };
-        operator_action(
-            state,
-            at,
-            OPERATOR_RESEARCHER,
-            action,
-            vec![AuditSubject::Agent(agent)],
-        );
+        operator_action(state, at, OPERATOR_RESEARCHER, action, ActionOutcome::Applied);
     }
     Ok(())
 }
@@ -307,8 +297,7 @@ fn triage(state: &mut State) {
         })
         .collect();
     for (by, at, action) in steps {
-        let subjects = effects::subjects(state, &action);
-        operator_action(state, at, by, action, subjects);
+        operator_action(state, at, by, action, ActionOutcome::Applied);
     }
 }
 
@@ -381,7 +370,7 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
                 verdict,
                 note: note(text),
             },
-            vec![AuditSubject::Transmission(transmission)],
+            ActionOutcome::Applied,
         );
         if verdict == Some(Verdict::FalseDetection) {
             effects::reject_transmission_alerts(state, transmission, at);
@@ -400,15 +389,16 @@ fn rejected(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
         policy: PolicyKind::Sanctioned,
         note: note("looks like a normal wiki"),
     };
+    let subject = effects::subject(&action, None);
     effects::audit(
         state,
         ago(DAY),
         Actor::Operator(OPERATOR_ONCALL),
         AuditedAction::Operator(action),
+        subject,
         AuditOutcome::Rejected(QueryError::Forbidden {
             missing: Permission::Govern,
         }),
-        vec![AuditSubject::Channel(wiki)],
     );
     if let Some(alert) = state
         .alerts
@@ -421,8 +411,8 @@ fn rejected(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
             ago(20 * HOUR),
             Actor::Operator(OPERATOR_ONCALL),
             AuditedAction::Operator(OperatorAction::Acknowledge { alert }),
+            Some(AuditSubject::Alert(alert)),
             AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::AlertState)),
-            vec![AuditSubject::Alert(alert)],
         );
     }
     Ok(())

@@ -12,7 +12,7 @@ use crosstalk_spec::support::Timestamp;
 use crate::contract::alerts::Alert;
 use crate::contract::agents::{Agent, AgentLabel, AgentState, MergeRecord, MergeVeto};
 use crate::contract::channels::Supersession;
-use crate::contract::research::{AuditEntry, AuditSubject, ProjectionPoints};
+use crate::contract::research::{AuditEntry, ProjectionPoints};
 use crate::contract::rules::RuleDef;
 use crate::contract::verdict::TransmissionVerdict;
 use crate::contract::ProjectionId;
@@ -33,13 +33,6 @@ pub struct ChannelRecord {
     pub created: Timestamp,
 }
 
-/// An audit entry with the entities it concerns, for `AuditFilter::subject`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AuditRecord {
-    pub entry: AuditEntry,
-    pub subjects: Vec<AuditSubject>,
-}
-
 #[derive(Debug, Clone)]
 pub struct State {
     pub agents: BTreeMap<AgentId, AgentRecord>,
@@ -52,7 +45,7 @@ pub struct State {
     pub alerts: Vec<Alert>,
     pub rules: Vec<RuleDef>,
     /// Append-only, oldest first.
-    pub audit: Vec<AuditRecord>,
+    pub audit: Vec<AuditEntry>,
     pub dead_letters: Vec<DeadLetter>,
     pub projections: Vec<(ProjectionId, ProjectionPoints)>,
     pub mint: Mint,

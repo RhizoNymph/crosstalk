@@ -22,8 +22,11 @@ use crate::contract::channels::{
 use crate::contract::errors::QueryError;
 use crate::contract::graph::route_kind;
 use crate::contract::lists::{Page, PageRequest};
+use crate::contract::MergeId;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{
-    Actor, AuditEntry, AuditFilter, AuditSubject, MatchKindName, QualityRow,
+    Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
+    QualityRow,
 };
 use crate::contract::verdict::Verdict;
 
@@ -265,6 +268,39 @@ pub fn quality(ctx: &Ctx, window: TimeWindow) -> Vec<QualityRow> {
     rows.into_values().collect()
 }
 
+/// Every entity an audit entry concerns: its subject, the agents of a merge
+/// or unmerge, and what it created.
+fn concerns(ctx: &Ctx, entry: &AuditEntry) -> Vec<AuditSubject> {
+    let mut out: Vec<AuditSubject> = entry.subject.into_iter().collect();
+    if let AuditedAction::Operator(OperatorAction::MergeAgents(request)) = &entry.action {
+        out.push(AuditSubject::Agent(request.source()));
+        out.push(AuditSubject::Agent(request.target()));
+    }
+    if let AuditOutcome::Applied(outcome) = &entry.outcome {
+        match outcome {
+            ActionOutcome::RuleCreated(id) => out.push(AuditSubject::Rule(*id)),
+            ActionOutcome::ChannelPromoted(id) => out.push(AuditSubject::Channel(*id)),
+            ActionOutcome::Merged(id) => out.push(AuditSubject::Merge(*id)),
+            ActionOutcome::Applied => {}
+        }
+    }
+    let merges: Vec<MergeId> = out
+        .iter()
+        .filter_map(|s| match s {
+            AuditSubject::Merge(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for merge in merges {
+        if let Some(record) = ctx.state.merges.iter().find(|m| m.id == merge) {
+            out.push(AuditSubject::Agent(record.from));
+            out.push(AuditSubject::Agent(record.into));
+        }
+    }
+    out
+}
+
+/// Whether `subject` is `wanted`, after alias and supersession resolution.
 fn subject_matches(ctx: &Ctx, wanted: AuditSubject, subject: AuditSubject) -> bool {
     match (wanted, subject) {
         (AuditSubject::Agent(a), AuditSubject::Agent(b)) => a == b || ctx.agent(a) == ctx.agent(b),
@@ -280,22 +316,19 @@ pub fn audit(ctx: &Ctx, filter: &AuditFilter, page: &PageRequest) -> Result<Page
         .state
         .audit
         .iter()
-        .filter(|r| {
+        .filter(|e| {
             filter.operators.is_empty()
-                || matches!(r.entry.by, Actor::Operator(op) if filter.operators.contains(&op))
+                || matches!(e.by, Actor::Operator(op) if filter.operators.contains(&op))
         })
-        .filter(|r| filter.window.is_none_or(|w| w.contains(r.entry.at)))
-        .filter(|r| {
-            filter
-                .subject
-                .is_none_or(|s| r.subjects.iter().any(|x| subject_matches(ctx, s, *x)))
+        .filter(|e| filter.window.is_none_or(|w| w.contains(e.at)))
+        .filter(|e| {
+            filter.subject.is_none_or(|s| {
+                concerns(ctx, e)
+                    .into_iter()
+                    .any(|x| subject_matches(ctx, s, x))
+            })
         })
-        .map(|r| {
-            (
-                newest_first(r.entry.at, r.entry.id.as_ulid()),
-                r.entry.clone(),
-            )
-        })
+        .map(|e| (newest_first(e.at, e.id.as_ulid()), e.clone()))
         .collect();
     page::paginate("audit", items, page)
 }

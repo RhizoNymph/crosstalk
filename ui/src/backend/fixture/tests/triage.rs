@@ -63,10 +63,10 @@ async fn every_action_appends_one_audit_entry() {
         assert_eq!(result.is_ok(), ok, "{action:?}: {result:?}");
         let state = b.state.read().await;
         assert_eq!(state.audit.len(), before + 1);
-        let last = &state.audit.last().expect("entry").entry;
+        let last = state.audit.last().expect("entry");
         assert_eq!(last.at, NOW);
         assert_eq!(last.action, AuditedAction::Operator(action));
-        assert_eq!(matches!(last.outcome, AuditOutcome::Applied), ok);
+        assert_eq!(matches!(last.outcome, AuditOutcome::Applied(_)), ok);
     }
     // A forbidden action is audited as rejected too.
     let before = audit_len(&b).await;
@@ -90,9 +90,58 @@ async fn every_action_appends_one_audit_entry() {
     assert_eq!(audit_len(&b).await, before + 1);
     let state = b.state.read().await;
     assert!(matches!(
-        state.audit.last().expect("entry").entry.outcome,
+        state.audit.last().expect("entry").outcome,
         AuditOutcome::Rejected(QueryError::Forbidden { .. })
     ));
+}
+
+#[tokio::test]
+async fn audit_entries_name_their_subject_and_what_they_created() {
+    use crate::contract::research::{AuditFilter, AuditSubject};
+
+    let b = fresh();
+    let c = researcher();
+    let (cc6, cc5) = (agent(&b, "cc6"), agent(&b, "cc5"));
+    let ActionOutcome::Merged(id) = b.act(&c, merge(&b, "cc6", "cc5")).await.expect("merge")
+    else {
+        panic!("a merge")
+    };
+    {
+        let state = b.state.read().await;
+        let last = state.audit.last().expect("entry");
+        assert_eq!(last.subject, Some(AuditSubject::Agent(cc6)));
+        assert_eq!(last.outcome, AuditOutcome::Applied(ActionOutcome::Merged(id)));
+    }
+    b.act(&c, OperatorAction::Unmerge { merge: id })
+        .await
+        .expect("unmerge");
+    {
+        let state = b.state.read().await;
+        let last = state.audit.last().expect("entry");
+        assert_eq!(last.subject, Some(AuditSubject::Merge(id)));
+        assert_eq!(last.outcome, AuditOutcome::Applied(ActionOutcome::Applied));
+    }
+    // Both entries concern the merge and both of its agents.
+    for subject in [
+        AuditSubject::Merge(id),
+        AuditSubject::Agent(cc6),
+        AuditSubject::Agent(cc5),
+    ] {
+        let filter = AuditFilter {
+            subject: Some(subject),
+            ..AuditFilter::default()
+        };
+        let page = b.audit(&c, &filter, &first(50)).await.expect("audit");
+        let ours: Vec<_> = page
+            .items
+            .iter()
+            .filter(|e| e.at == NOW)
+            .map(|e| e.subject)
+            .collect();
+        assert_eq!(ours.len(), 2, "{subject:?}");
+        assert!(ours.contains(&Some(AuditSubject::Merge(id))), "{subject:?}");
+        assert!(ours.contains(&Some(AuditSubject::Agent(cc6))), "{subject:?}");
+    }
 }
 
 #[tokio::test]

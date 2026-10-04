@@ -6,9 +6,9 @@ use crosstalk_spec::ids::{AlertRuleId, ChannelId, TransmissionId};
 use crosstalk_spec::support::Timestamp;
 
 use crate::contract::alerts::{Alert, AlertState, SuppressReason};
-use crate::backend::fixture::store::{AuditRecord, State};
+use crate::backend::fixture::store::State;
 use crate::contract::AuditId;
-use crate::contract::actions::OperatorAction;
+use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::research::{Actor, AuditEntry, AuditOutcome, AuditSubject, AuditedAction};
 
 pub fn is_active(alert: &Alert) -> bool {
@@ -81,48 +81,43 @@ pub fn audit(
     at: Timestamp,
     by: Actor,
     action: AuditedAction,
+    subject: Option<AuditSubject>,
     outcome: AuditOutcome,
-    subjects: Vec<AuditSubject>,
 ) -> AuditId {
     let id = AuditId::from_ulid(state.mint.ulid(at));
-    state.audit.push(AuditRecord {
-        entry: AuditEntry {
-            id,
-            at,
-            by,
-            action,
-            outcome,
-        },
-        subjects,
+    state.audit.push(AuditEntry {
+        id,
+        at,
+        by,
+        action,
+        subject,
+        outcome,
     });
     id
 }
 
-/// What an operator action is about, for `AuditFilter::subject`.
-pub fn subjects(state: &State, action: &OperatorAction) -> Vec<AuditSubject> {
+/// What an operator action is about: its target, or what it created when
+/// it names none.
+pub fn subject(action: &OperatorAction, outcome: Option<&ActionOutcome>) -> Option<AuditSubject> {
     match action {
         OperatorAction::SetPolicy { channel, .. }
-        | OperatorAction::PromoteChannel { channel, .. } => vec![AuditSubject::Channel(*channel)],
-        OperatorAction::MergeAgents(request) => vec![
-            AuditSubject::Agent(request.source()),
-            AuditSubject::Agent(request.target()),
-        ],
-        OperatorAction::RenameAgent { agent, .. } => vec![AuditSubject::Agent(*agent)],
-        OperatorAction::Unmerge { merge } => state
-            .merges
-            .iter()
-            .find(|m| m.id == *merge)
-            .map(|m| vec![AuditSubject::Agent(m.from), AuditSubject::Agent(m.into)])
-            .unwrap_or_default(),
+        | OperatorAction::PromoteChannel { channel, .. } => Some(AuditSubject::Channel(*channel)),
+        OperatorAction::MergeAgents(request) => Some(AuditSubject::Agent(request.source())),
+        OperatorAction::RenameAgent { agent, .. } => Some(AuditSubject::Agent(*agent)),
+        OperatorAction::Unmerge { merge } => Some(AuditSubject::Merge(*merge)),
         OperatorAction::SetVerdict { transmission, .. } => {
-            vec![AuditSubject::Transmission(*transmission)]
+            Some(AuditSubject::Transmission(*transmission))
         }
         OperatorAction::Acknowledge { alert } | OperatorAction::Resolve { alert, .. } => {
-            vec![AuditSubject::Alert(*alert)]
+            Some(AuditSubject::Alert(*alert))
         }
         OperatorAction::UpdateRule { id, .. } | OperatorAction::SetRuleEnabled { id, .. } => {
-            vec![AuditSubject::Rule(*id)]
+            Some(AuditSubject::Rule(*id))
         }
-        OperatorAction::CreateRule { .. } | OperatorAction::ReplayDeadLetter { .. } => Vec::new(),
+        OperatorAction::CreateRule { .. } => match outcome {
+            Some(ActionOutcome::RuleCreated(id)) => Some(AuditSubject::Rule(*id)),
+            _ => None,
+        },
+        OperatorAction::ReplayDeadLetter { .. } => None,
     }
 }
