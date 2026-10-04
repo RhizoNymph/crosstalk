@@ -228,9 +228,10 @@ services:
     pid: host
     command:
       - --path.rootfs=/host
-      # 9101, not the usual 9100, so it coexists with a node-exporter the host
-      # already runs. prometheus/prometheus.yml scrapes this port.
-      - --web.listen-address=${NODE_EXPORTER_LISTEN:-0.0.0.0:9101}
+      # Host networking puts this port on the host itself, where 9100/9101
+      # are commonly taken (node-exporter, MinIO). 19100 is the one place
+      # besides prometheus/prometheus.yml's node job; change both together.
+      - --web.listen-address=0.0.0.0:19100
     # Read-only bind without rslave: rslave needs / to be a shared mount,
     # which rootless and snap Docker do not provide. Filesystems mounted
     # after the container starts are not seen until it restarts.
