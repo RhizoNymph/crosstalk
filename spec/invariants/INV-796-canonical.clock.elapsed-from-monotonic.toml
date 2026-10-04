@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.clock.elapsed-from-monotonic"
+statement = "No component derives an elapsed time, a deadline or the order of two of its own instants from the difference of two Clock::now readings; it takes one reading and adds elapsed time measured with tokio::time::Instant."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Clock::now is wall time, which NTP steps backwards and forwards, and which
+the simulation steps on purpose (SimClock::step). A duration computed as
+the difference of two readings can be negative or wildly long, which would
+reorder an exchange's stage times, close a window early or keep a lease
+alive forever. Measuring elapsed time monotonically from one wall reading
+keeps the order the events actually had, whatever the wall clock does. The
+evidence steps the simulated wall clock backwards and forwards mid-exchange.
+"""
+
+[evidence]
+dst = "crosstalk_ingress::tests::sim::stage_times_monotone_under_clock_steps"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

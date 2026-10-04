@@ -1,7 +1,7 @@
 use crate::aggregates::alert::{RULE_QUERY_MAX_CHARS, RuleQueryText};
 use crate::support::{
-    Blank, ByteRange, DisplayText, EmptyRange, EmptyWindow, InvalidQueryText, InvalidText,
-    NonBlank, NonEmpty, OutOfRange, QueryText, Share, Similarity, TimeWindow,
+    Blank, ByteRange, Clock, DisplayText, EmptyRange, EmptyWindow, InvalidQueryText, InvalidText,
+    NonBlank, NonEmpty, OutOfRange, QueryText, Share, Similarity, SystemClock, TimeWindow,
 };
 use crate::tests::fixtures::at;
 
@@ -149,4 +149,19 @@ fn a_rule_query_is_bounded() {
             got: RULE_QUERY_MAX_CHARS + 1
         })
     );
+}
+
+#[test]
+fn system_clock_reads_the_wall_clock() {
+    // 2020-01-01T00:00:00Z: any machine running the tests is past it.
+    let after_2020 = at(1_577_836_800_000_000);
+    let clock: &dyn Clock = &SystemClock;
+    assert!(clock.now() > after_2020);
+}
+
+#[test]
+fn clock_is_shareable_across_tasks() {
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+    assert_send_sync::<dyn Clock>();
+    assert_send_sync::<SystemClock>();
 }

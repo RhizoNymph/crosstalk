@@ -250,6 +250,9 @@ name = "crosstalk-sim"
 version = "0.1.0"
 dependencies = [
  "crosstalk-spec",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

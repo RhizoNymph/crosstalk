@@ -18,7 +18,7 @@ P1.2 and P0.5.
 
 ## Non-scope
 
-- Any implementation. Every crate under `crates/` is an empty library whose
+- Any implementation. Every crate under `crates/` started as an empty library whose
   crate doc says what it will implement; the per-layer roadmap items fill
   them.
 - The UI (`ui/`), which is excluded from the workspace and keeps its own
@@ -72,6 +72,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde and serde_json from the workspace pins |
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing) |
 | `crates/gateway/Cargo.toml` | Adds the `crosstalk` binary and a `serde_json` dev-dependency for the architecture test |
+| `crates/sim/Cargo.toml` | Adds `thiserror`, `tracing` and `tokio` with `macros`, `rt`, `sync`, `time` and `test-util` (paused time); see [sim.md](sim.md) |
 
 A crate that needs a new third-party dependency adds its exact pin to
 `[workspace.dependencies]` (matching the UI's pin where they overlap) and
@@ -150,6 +151,37 @@ it, so the checks need only that channel with rustfmt and clippy, not every
 component the file lists (miri, which no check uses). The invariant step
 runs without `--allow-pending`: an unnumbered `INV-X-` file fails it.
 
+## Testing
+
+Tests sit beside the code they test (`#[cfg(test)] mod tests` in each
+crate, with `spec/types/tests/` for the spec), and the invariant evidence
+paths name them (below). Each evidence kind of
+`spec/invariants/README.md` has its tool:
+
+| Kind | How it runs |
+| --- | --- |
+| `unit`, `property` | plain `#[test]`s (`cargo test --workspace`) |
+| `dst` | a scenario under `crosstalk-sim` ([sim.md](sim.md)), declared with `crosstalk_sim::sim_test!` or `crosstalk_sim::sim_test(..)`, in the layer crate's tests with `crosstalk-sim` as a dev-dependency |
+| `integration` | against a real Postgres from `crosstalk-store`'s harness (P1.5) |
+
+A `dst` test is an ordinary `#[test]`, so `scripts/check.sh` runs it. It
+sweeps a fixed set of seeds (16 by default, `SimConfig::default_seeds`),
+so CI is reproducible. Two environment variables change that:
+
+```sh
+CROSSTALK_SIM_SEED=1234 cargo test -p crosstalk-flow dst::   # rerun the one failing seed
+CROSSTALK_SIM_SEEDS=1000 cargo test -p crosstalk-transport   # sweep seeds 0..1000
+```
+
+A failure panics with the seed, the step it reached, the last step label,
+the simulated time, the cause, the last trace records and the
+`CROSSTALK_SIM_SEED=<n>` command that reproduces it.
+
+Layer code reads time only through the spec's `Clock`
+(`crosstalk_spec::support::Clock`) and `tokio::time::Instant`
+(`canonical.clock.injected`), so a simulation can drive it: the gateway
+wires `SystemClock`, and a test wires `SimClock`.
+
 ## Evidence paths
 
 Each invariant's evidence names where its proof lives, by the library name
@@ -194,6 +226,9 @@ any error.
 - The dependency rule holds for every declared dependency of every member,
   and the crates the rule names all exist.
 - Every member other than the spec depends on `crosstalk-spec`.
+- `tokio`'s `test-util` feature (paused time) is enabled only by
+  `crosstalk-sim`, which layer crates take only as a dev-dependency, so it
+  never reaches a production build.
 - No evidence path uses the `crosstalk::<layer>::` form, and every path's
   crate exists.
 
@@ -204,7 +239,7 @@ any error.
 | `Cargo.toml` | The virtual workspace | `[workspace.package]`, `[workspace.lints]`, `[workspace.dependencies]` |
 | `Cargo.lock` | The workspace lock | — |
 | `rust-toolchain.toml` | Pinned nightly and its components | — |
-| `crates/*/Cargo.toml`, `crates/*/src/lib.rs` | One empty library per layout entry, with its crate doc | crates `crosstalk_<dir>` |
+| `crates/*/Cargo.toml`, `crates/*/src/lib.rs` | One library per layout entry, with its crate doc; empty until its roadmap item fills it (`sim`: [sim.md](sim.md)) | crates `crosstalk_<dir>` |
 | `crates/gateway/src/main.rs` | The placeholder `crosstalk` binary | `main` |
 | `crates/gateway/tests/architecture.rs` | The dependency rule over `cargo metadata` | `Role`, `DepKind`, `Edge`, `Violation`, `check`, `violations` (test-local) |
 | `scripts/check.sh` | Every workspace check, stopping at the first failure | — |
