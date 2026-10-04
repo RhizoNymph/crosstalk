@@ -58,7 +58,12 @@ Overview:
     stage that normalizes with L1, stores bodies in FsBlobStore and
     publishes ExchangeCaptured on MpscBus, and persists each captured
     exchange through a bus consumer to an append-only exchange log, a P3
-    stopgap because the spec has no exchange store (gateway). The other
+    stopgap because the spec has no exchange store (gateway). That
+    composition is a library entry point, crosstalk_gateway::pipeline::
+    Pipeline (build over any blob store, bus and injected clock), and a
+    pre-normalized exchange enters it through Pipeline::ingest, the same
+    path the capture stage takes after L1 (P3.1), so the eval harness can
+    drive the real layers under simulated time. The other
     crates are still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
@@ -374,7 +379,8 @@ Features Index:
       The virtual Cargo workspace (members spec and crates/*, ui excluded,
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
-      crates never depend on each other or on api, client or gateway, take
+      crates never depend on each other or on the composers api, client,
+      eval or gateway, take
       transport only as a dev-dependency, and take memory, sim and testkit
       only as dev-dependencies) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
@@ -683,9 +689,22 @@ Features Index:
       sockets with testkit's fake upstream, harness and corpus (against
       L1's goldens), with a simulation of the capture stage under blob
       store faults (INV-48), and by hand with scripts/try-claude-code.sh.
+      The composition behind the proxy is the library entry point
+      pipeline::Pipeline (P3.1): Pipeline::build(Settings, Deps, clock)
+      over any spec BlobStore and EventBus subscribes and spawns the
+      role's stages (capture stage, exchange log), and
+      Pipeline::ingest(NormalizedExchange, at) stores the blobs (same
+      retry), mints the envelope id at at and publishes ExchangeCaptured;
+      the capture stage calls it after normalizing, so there is one path
+      after L1. Envelope ids reach the bus in strictly increasing order
+      under concurrent ingests. Every serve role builds one; the eval
+      harness (crosstalk-eval, a composer) builds one over simulated
+      stores and time.
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
+      - crates/gateway/src/pipeline/mod.rs
+      - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs

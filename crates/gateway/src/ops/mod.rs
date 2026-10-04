@@ -21,8 +21,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::capture::{PipelineCounts, PipelineStats};
 use crate::log::consumer::{LogCounts, LogStats};
+use crate::pipeline::{PipelineCounts, PipelineStats};
 use crate::role::Role;
 use crate::store::{StoreCheck, StoreProbe};
 use crate::tasks::Tasks;

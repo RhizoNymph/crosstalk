@@ -395,6 +395,9 @@ then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
 `Role::of`) drives the real layers through it on dataset corpora under sim
 time. Depends on P3; P4 and P5 consume it.
 
+- [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and `crosstalk-eval` registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
+- [ ] `crosstalk-eval` driving the real layers through it on dataset corpora.
+
 ## P4 Identity and provenance (parallel)
 
 Both consume bus events, so they can be developed against recorded event
