@@ -12,9 +12,9 @@ use super::{
 use crate::derived::flow::resource::Host;
 use crate::ids::{AccountHash, CredentialHash, ExchangeId, SecretVersion};
 use crate::observed::client::{
-    ClientContext, CredentialRef, CredentialScheme, HarnessClaim, HarnessFamily, HarnessIds,
-    InferenceServer, IngressMode, PreviousDigests, RequestClass, RouteName, Upstream, UpstreamId,
-    UpstreamKind, Vendor,
+    ClientContext, CorpusId, CredentialRef, CredentialScheme, HarnessClaim, HarnessFamily,
+    HarnessIds, InferenceServer, IngressMode, PreviousDigests, RequestClass, RouteName, Upstream,
+    UpstreamId, UpstreamKind, Vendor,
 };
 use crate::observed::exchange::{
     ConnectionId, Continuation, Exchange, ExchangeFailure, ExchangeMeta, ExchangeOutcome,
@@ -327,10 +327,19 @@ fn exchange_enums_golden_with_every_variant() {
 fn client_enums_golden_with_every_variant() {
     fn ingress(value: IngressMode) -> IngressMode {
         match value {
-            IngressMode::ReverseProxy { .. } | IngressMode::ForwardProxy { .. } => value,
+            IngressMode::ReverseProxy { .. }
+            | IngressMode::ForwardProxy { .. }
+            | IngressMode::Replay { .. } => value,
         }
     }
-    let modes = [claude_code_client().ingress, codex_client().ingress].map(ingress);
+    let modes = [
+        claude_code_client().ingress,
+        codex_client().ingress,
+        IngressMode::Replay {
+            corpus: CorpusId("agentdojo-v1.2".into()),
+        },
+    ]
+    .map(ingress);
     assert_golden(AREA, "ingress_modes", &modes.to_vec());
 
     fn vendor(value: Vendor) -> Vendor {

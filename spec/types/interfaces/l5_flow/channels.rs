@@ -13,8 +13,13 @@
 //!
 //! [`ChannelReads`] is what the surface reads back: one stored channel by
 //! id, and a filtered page of them, for `QueryApi::channel` and
-//! `QueryApi::channels`.
+//! `QueryApi::channels`. [`AccessStore`] reads a batch of recorded
+//! accesses back, each with its resource, for the evidence page's access
+//! details and for evaluation.
 
+use std::collections::BTreeMap;
+
+use crate::batch::IdBatch;
 use crate::derived::flow::access::Access;
 use crate::derived::flow::channel::Channel;
 #[cfg(doc)]
@@ -128,6 +133,31 @@ pub trait ChannelReads {
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
     ) -> impl Future<Output = Result<Page<Channel, ChannelList>, RegistryError>> + Send;
+}
+
+/// The accesses the registry recorded, read back in batches with their
+/// resources: what the evidence page shows behind each co-access record, in
+/// every state that holds one (`surface.evidence.every-state`). A store
+/// implementing [`ChannelTraffic`] implements this over the same records.
+pub trait AccessStore {
+    /// The accesses in `ids` as `ChannelTraffic::record_access` recorded
+    /// them (a write's outcome included, a rejected write too), each with
+    /// the stored resource it touched, read in one snapshot
+    /// (`flow.access-store.accesses-as-recorded`). An id never recorded is
+    /// absent from the map, so its keys are a subset of `ids`
+    /// (`flow.access-store.keys-within-batch`); the batch is at most
+    /// `IdBatch::MAX` ids by construction.
+    fn accesses(
+        &self,
+        ids: &IdBatch<AccessId>,
+    ) -> impl Future<Output = Result<BTreeMap<AccessId, (Access, Resource)>, AccessReadError>> + Send;
+}
+
+/// Why an access or resource read failed; a retry may succeed. The surface
+/// reports it as `EvidenceError::Store`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccessReadError {
+    Store { reason: String },
 }
 
 /// Why a traffic write was refused. Nothing changed. Consumer-side only:

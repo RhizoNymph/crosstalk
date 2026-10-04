@@ -334,7 +334,15 @@ transmission, `None` for an unknown id. Verdicts stay in `verdicts`
    `AccessDetail { access, resource, agent }` per distinct access its
    co-access records name (`TransmissionState::co_accesses`), in order of
    first mention, write before read. The surface supplies each match's two
-   excerpts (`MatchQuotes`) and each access's record and resource; a detail
+   excerpts (`MatchQuotes`) and each access's record and resource, read in
+   batches of at most `IdBatch::MAX` ids: the origin spans of the matches
+   through L4's `SpanIndex::spans` (each span's exchange, author and
+   location as recorded, `IndexedSpan`), and the accesses with their
+   resources through L5's `AccessStore::accesses`; an id a batch answer
+   lacks is `EvidenceError::Missing`. Every state has evidence
+   (`surface.evidence.every-state`): `Detected` none yet,
+   `AwaitingContent`, `Suspected` and `Discarded` both accesses of each
+   co-access record, the confirmed states their matches too. A detail
    for another access, or a resource the access did not touch, is refused,
    so the evidence always belongs to its transmission. Records keep their
    stored ids; `AccessDetail::agent` is the access's canonical agent, and
@@ -344,8 +352,8 @@ transmission, `None` for an unknown id. Verdicts stay in `verdicts`
    visible reasoning, a tool call's argument text, a tool result's text
    contents joined with `"\n"` (`TOOL_RESULT_SEPARATOR`); media, opaque
    reasoning and unknown blocks have none. `origin` is cut around the origin
-   span's location, `read` around the match's `read_at`, as the text
-   arrived (before decoding).
+   span's location as recorded (`IndexedSpan::location`), `read` around the
+   match's `read_at`, as the text arrived (before decoding).
 3. **Excerpt** (`l8_surface/excerpt.rs`). `Excerpted::of(location, body,
    window)` takes what `BlobStore::get` returned for the location's
    message, decoded, and cuts `Excerpt::cut(part_text, range, window)`:

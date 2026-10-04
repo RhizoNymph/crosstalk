@@ -2,7 +2,7 @@
 
 use super::super::harness::{assert_golden, assert_rejected, assert_request_golden};
 use super::{AREA, ULID_F, page, read_access, wiki_locator, write_access};
-use crate::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
+use crate::derived::flow::access::{Access, AccessKind, AccessOp, Extraction, WriteOutcome};
 use crate::derived::flow::resource::{Host, Locator, Resource, ResourcePattern};
 use crate::observed::message::ToolName;
 use crate::tests::wire::ts;
@@ -120,6 +120,22 @@ fn accesses_golden() {
         "access_kinds",
         &[AccessKind::Write, AccessKind::Read].map(kind).to_vec(),
     );
+    fn outcome(outcome: WriteOutcome) -> WriteOutcome {
+        match outcome {
+            WriteOutcome::Delivered | WriteOutcome::Rejected | WriteOutcome::Unknown => outcome,
+        }
+    }
+    assert_golden(
+        AREA,
+        "write_outcomes",
+        &[
+            WriteOutcome::Delivered,
+            WriteOutcome::Rejected,
+            WriteOutcome::Unknown,
+        ]
+        .map(outcome)
+        .to_vec(),
+    );
     fn via(via: Extraction) -> Extraction {
         match via {
             Extraction::Scanned | Extraction::Parsed | Extraction::Structured => via,
@@ -182,6 +198,11 @@ fn accesses_refuse_unknown_fields_and_variants() {
         r#"{"type": "read", "data": {"result": {"message": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", "index": 2}, "spans": []}}"#,
         "unknown field `spans`",
     );
+    assert_rejected::<AccessOp>(
+        r#"{"type": "write", "data": {"call": {"message": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", "index": 1}, "spans": []}}"#,
+        "missing field `outcome`",
+    );
+    assert_rejected::<WriteOutcome>(r#""partial""#, "unknown variant `partial`");
     assert_rejected::<AccessKind>(r#""append""#, "unknown variant `append`");
     assert_rejected::<Extraction>(r#""guessed""#, "unknown variant `guessed`");
 }

@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.mode.never-replay"
+statement = "No IngressMode UpstreamRouter::route returns, and no ClientContext::ingress of a RawExchange the L0 proxy hands off, is IngressMode::Replay."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+IngressMode::Replay marks exchanges of a recorded dataset entered through
+the pipeline's ingest, which L3 keeps apart from live agents
+(reconstruct.identity.replay-within-corpus). A proxy that could label live
+traffic a replay would let a caller wall its traffic off from the agents it
+talks to, and a replay labelled live would merge dataset agents with real
+ones. Only Pipeline::ingest's callers set it.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::routing::routes_never_resolve_to_a_replay"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

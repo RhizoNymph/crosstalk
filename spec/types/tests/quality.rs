@@ -8,7 +8,7 @@ use crate::derived::flow::transmission::{
     Confirmed, DelegationDirection, Route, Transmission, TransmissionState,
 };
 use crate::derived::flow::verdict::{Judgeable, Verdict};
-use crate::derived::provenance::matching::{Carrier, Codec, ContentMatch, MatchKind};
+use crate::derived::provenance::matching::{Carrier, CarrierKind, Codec, ContentMatch, MatchKind};
 use crate::observed::message::ToolCallId;
 use crate::support::{NonEmpty, Similarity, TimeWindow};
 use crate::tests::fixtures::{agent, at, bytes, exchange, location, span, transmission};
@@ -114,7 +114,10 @@ fn quality_match_follows_the_judgeable_state() {
         let expected = match judgeable {
             Judgeable::Suspected(_) => QualityMatch::Suspected,
             Judgeable::Discarded(_) => QualityMatch::Discarded,
-            Judgeable::Confirmed(_) => QualityMatch::Content(MatchClass::Exact),
+            Judgeable::Confirmed(_) => QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: CarrierKind::ToolResult,
+            },
         };
         assert_eq!(QualityMatch::from(judgeable), expected, "{state:?}");
     }
@@ -148,14 +151,20 @@ fn quality_rows_are_sorted_by_route_then_match() {
         row(RouteKind::Unobserved, QualityMatch::Suspected, 1, 0, 0),
         row(
             RouteKind::Channel,
-            QualityMatch::Content(MatchClass::Semantic),
+            QualityMatch::Content {
+                class: MatchClass::Semantic,
+                carrier: CarrierKind::ToolResult,
+            },
             0,
             1,
             0,
         ),
         row(
             RouteKind::Channel,
-            QualityMatch::Content(MatchClass::Exact),
+            QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: CarrierKind::ToolResult,
+            },
             0,
             0,
             1,
@@ -171,10 +180,19 @@ fn quality_rows_are_sorted_by_route_then_match() {
     assert_eq!(
         keys,
         vec![
-            (RouteKind::Channel, QualityMatch::Content(MatchClass::Exact)),
             (
                 RouteKind::Channel,
-                QualityMatch::Content(MatchClass::Semantic)
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::ToolResult
+                }
+            ),
+            (
+                RouteKind::Channel,
+                QualityMatch::Content {
+                    class: MatchClass::Semantic,
+                    carrier: CarrierKind::ToolResult
+                }
             ),
             (RouteKind::Channel, QualityMatch::Discarded),
             (RouteKind::Unobserved, QualityMatch::Suspected),
@@ -219,7 +237,10 @@ fn tally_counts_each_judgeable_transmission_once_under_its_verdict() {
             // AwaitingContent are not counted.
             row(
                 RouteKind::Channel,
-                QualityMatch::Content(MatchClass::Exact),
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::ToolResult
+                },
                 3,
                 0,
                 0
@@ -228,14 +249,20 @@ fn tally_counts_each_judgeable_transmission_once_under_its_verdict() {
             row(RouteKind::Channel, QualityMatch::Discarded, 1, 0, 0),
             row(
                 RouteKind::Delegation,
-                QualityMatch::Content(MatchClass::Exact),
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::ToolResult
+                },
                 0,
                 0,
                 1
             ),
             row(
                 RouteKind::Delegation,
-                QualityMatch::Content(MatchClass::Semantic),
+                QualityMatch::Content {
+                    class: MatchClass::Semantic,
+                    carrier: CarrierKind::ToolResult
+                },
                 0,
                 1,
                 0
@@ -250,4 +277,83 @@ fn tally_counts_each_judgeable_transmission_once_under_its_verdict() {
 fn tally_of_nothing_is_empty() {
     let quality = DetectionQuality::tally(window(), std::iter::empty());
     assert!(quality.rows().is_empty());
+}
+
+fn matched_via(kind: MatchKind, carrier: Carrier) -> ContentMatch {
+    ContentMatch::new(
+        span(1),
+        agent(1),
+        agent(2),
+        exchange(2),
+        location(),
+        carrier,
+        kind,
+        bytes(8),
+    )
+    .expect("different agents, fits the read range")
+}
+
+/// A confirmed transmission's quality call names the class and the carrier
+/// of its first match of the strongest class, in stored order.
+#[test]
+fn quality_content_names_the_strongest_matchs_carrier() {
+    let mut confirmed = Confirmed::new(
+        NonEmpty::new(matched_via(
+            semantic(),
+            Carrier::ToolResult(ToolCallId("call_1".into())),
+        )),
+        Vec::new(),
+        at(4),
+    )
+    .expect("one match");
+    for (kind, carrier) in [
+        (MatchKind::Exact, Carrier::UserTurn),
+        (MatchKind::Exact, Carrier::SystemPrompt),
+        (decoded(), Carrier::ReaderOutput),
+    ] {
+        confirmed
+            .extend(matched_via(kind, carrier))
+            .expect("same sender and reader");
+    }
+    assert_eq!(
+        MatchClass::strongest_match(&confirmed).carrier(),
+        &Carrier::UserTurn
+    );
+    assert_eq!(
+        QualityMatch::from(Judgeable::Confirmed(&confirmed)),
+        QualityMatch::Content {
+            class: MatchClass::Exact,
+            carrier: CarrierKind::UserTurn,
+        }
+    );
+}
+
+/// Every carrier and every direct route's carrier has its kind.
+#[test]
+fn carriers_and_direct_carriers_report_their_kind() {
+    use crate::derived::flow::transmission::DirectCarrier;
+    use crate::observed::message::ToolName;
+    let carriers = [
+        (
+            Carrier::ToolResult(ToolCallId("call_1".into())),
+            CarrierKind::ToolResult,
+        ),
+        (Carrier::UserTurn, CarrierKind::UserTurn),
+        (Carrier::SystemPrompt, CarrierKind::SystemPrompt),
+        (Carrier::ReaderOutput, CarrierKind::ReaderOutput),
+    ];
+    for (carrier, kind) in carriers {
+        assert_eq!(carrier.kind(), kind);
+    }
+    let direct = [
+        (
+            DirectCarrier::ToolResult(ToolName("fetch".into())),
+            CarrierKind::ToolResult,
+        ),
+        (DirectCarrier::UserTurn, CarrierKind::UserTurn),
+        (DirectCarrier::SystemPrompt, CarrierKind::SystemPrompt),
+    ];
+    for (carrier, kind) in direct {
+        assert_eq!(carrier.kind(), kind);
+    }
 }

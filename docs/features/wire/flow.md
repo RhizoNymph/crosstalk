@@ -12,7 +12,9 @@ duration convention that started here.
 - Request: `ResourcePattern` (the pattern of `PromoteChannel` and of
   `promotion_preview`), one request golden per variant.
 - Responses and bus payloads: `Host`, `Locator`, `Resource`, `Access`,
-  `AccessOp`, `AccessKind`, `Extraction`, `CoAccess`, `Transmission`,
+  `AccessOp` (a write's `outcome` is required), `WriteOutcome`
+  (`"delivered" | "rejected" | "unknown"`), `AccessKind`, `Extraction`,
+  `CoAccess`, `Transmission`,
   `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState`,
   `Confirmed`, `Classification`, `Verdict`, `VerdictRevision`,
   `TransmissionVerdict`, `VerdictLog`, `Channel`, `Seed`, `ChannelOrigin`,
@@ -29,7 +31,7 @@ duration convention that started here.
 `Observed`, `PromotionPlan`, `Registered`, `PromotionRefusal`,
 `TrafficVerdict`, `Recorded`, `CorrelationTiming` (config), and
 everything in `l5_flow.rs` and `l5_flow/verdicts.rs` (traits,
-`ExtractedAccess`, `ChannelLookup`, `Promoted`, `TransmissionUpdate`, the
+`ExtractedAccess`, `ExtractedOp`, `ChannelLookup`, `Promoted`, `TransmissionUpdate`, the
 store errors that map into `ActionError` or `QueryError`): no wire root
 reaches them, so they have no serde.
 
@@ -58,7 +60,7 @@ bus index, transmission evidence) carries `lag_micros`.
 | `Confirmed` | `{"content", "co_access", "at"}`, no sender: `Confirmed::new` rebuilds it as the content's origin agent and refuses several origins or readers; a `from` key is an unknown field |
 | `VerdictLog` | `{"transmission", "records": [{"revision", "record"}]}`: each record with its revision, so the UI can line the log up with `VerdictSet` events and verdict export rows. Decoded through `VerdictLog::from_records`, which refuses a gap, repeat or reordering of revisions (`UnexpectedRevision`), a record about another transmission (`Record`) and a record repeating the current verdict (`Unchanged`), each an `InvalidVerdictLog` |
 | `PolicyHistory` | `{"entries": [..]}` through `PolicyHistory::from_entries` (`OutOfOrder`, `Duplicate`) |
-| `CoAccess` | cannot rerun `CoAccess::new`, which reads the two accesses and the window; checks what the value holds: two different accesses (`WrongOperations`) and a positive lag (`ReadNotAfterWrite`) |
+| `CoAccess` | cannot rerun `CoAccess::new`, which reads the two accesses (their outcome included: `RejectedWrite`) and the window; checks what the value holds: two different accesses (`WrongOperations`) and a positive lag (`ReadNotAfterWrite`) |
 | `PromotionCoverage` | cannot rerun `coverage`, which reads the registry; checks what the value holds (`InvalidCoverage`): no channel superseded twice, each sample strictly newest first, no resource on both sides |
 | `TransmissionVerdict` | field by field: its one check reads the transmission's state, which the record names only by id |
 | `VerdictRevision` | the number; `0` is refused (`NonZeroU32`) |
@@ -72,7 +74,7 @@ origin of `Channel`, per variant of `ResourcePattern` and per
 lists through an exhaustive `match` for `Locator`, `Route`,
 `DirectCarrier`, `DelegationDirection`, `DeclaredDetection`,
 `TrafficDetection`, `DetectionKind`, `Policy`, `PolicyKind`, `AccessKind`,
-`Extraction` and `Verdict`. The fixtures follow one story: a planner
+`WriteOutcome`, `Extraction` and `Verdict`. The fixtures follow one story: a planner
 writes a wiki page, a coder reads it 30.25 s later, and the planner's text
 is found in the coder's tool result.
 
@@ -83,7 +85,7 @@ is found in the coder's tool result.
 | `spec/types/wire/duration.rs` | The `_micros` duration encoding (`micros`, `UnfitDuration`), used through `#[serde(with)]` |
 | `spec/types/derived/flow/` | The flow types and their decode mirrors (`VerdictLog::from_records`, `InvalidVerdictLog`, `InvalidCoverage`) |
 | `spec/types/tests/wire/flow/` | `mod.rs` (fixtures), `resources.rs`, `channels.rs`, `transmissions.rs`, `verdicts.rs`, `events.rs` (detect envelopes), `duration.rs` (the convention and its source scan) |
-| `spec/types/tests/golden/flow/` | 52 goldens |
+| `spec/types/tests/golden/flow/` | 53 goldens |
 
 ## Invariants
 

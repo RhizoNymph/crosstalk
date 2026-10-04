@@ -1,6 +1,6 @@
 //! Resources, accesses and channels.
 
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crosstalk_spec::derived::flow::channel::{
@@ -96,12 +96,15 @@ impl ResourceBuilder {
 /// Which operation an [`AccessBuilder`] builds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Op {
-    Write { spans: Vec<SpanId> },
+    Write {
+        spans: Vec<SpanId>,
+        outcome: WriteOutcome,
+    },
     Read,
 }
 
-/// Builds an [`Access`]. The default is a structured write at [`T0`] by a
-/// fresh agent in a fresh exchange, on a fresh resource; its part is the
+/// Builds an [`Access`]. The default is a structured, delivered write at
+/// [`T0`] by a fresh agent in a fresh exchange, on a fresh resource; its part is the
 /// first part of a fresh message (the tool call for a write, the tool
 /// result for a read).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +132,10 @@ impl AccessBuilder {
                 message: ids.message(),
                 index: 0,
             },
-            op: Op::Write { spans: Vec::new() },
+            op: Op::Write {
+                spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
+            },
         }
     }
 
@@ -173,14 +179,31 @@ impl AccessBuilder {
         self
     }
 
+    /// A delivered write.
     pub fn write(mut self) -> Self {
-        self.op = Op::Write { spans: Vec::new() };
+        self.op = Op::Write {
+            spans: Vec::new(),
+            outcome: WriteOutcome::Delivered,
+        };
         self
     }
 
-    /// A write whose arguments hold `spans`.
+    /// A delivered write whose arguments hold `spans`.
     pub fn write_spans(mut self, spans: Vec<SpanId>) -> Self {
-        self.op = Op::Write { spans };
+        self.op = Op::Write {
+            spans,
+            outcome: WriteOutcome::Delivered,
+        };
+        self
+    }
+
+    /// A write with `outcome`, keeping the spans of an earlier write call.
+    pub fn write_outcome(mut self, outcome: WriteOutcome) -> Self {
+        let spans = match self.op {
+            Op::Write { spans, .. } => spans,
+            Op::Read => Vec::new(),
+        };
+        self.op = Op::Write { spans, outcome };
         self
     }
 
@@ -191,9 +214,10 @@ impl AccessBuilder {
 
     pub fn build(self) -> Access {
         let op = match self.op {
-            Op::Write { spans } => AccessOp::Write {
+            Op::Write { spans, outcome } => AccessOp::Write {
                 call: self.part,
                 spans,
+                outcome,
             },
             Op::Read => AccessOp::Read { result: self.part },
         };

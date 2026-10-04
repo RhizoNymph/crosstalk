@@ -31,6 +31,11 @@
 //!   example the Copilot inference host, which pi derives from the token and
 //!   cannot be redirected); every other host is tunnelled untouched.
 //!
+//! A third mode, `IngressMode::Replay`, marks recorded datasets entered
+//! through the pipeline's ingest, never through the proxy: no route the
+//! `UpstreamRouter` returns and no `RawExchange` the proxy hands off is a
+//! replay (`ingress.mode.never-replay`).
+//!
 //! The proxy never refreshes, mints, rewrites or strips credentials. OAuth
 //! refresh traffic goes to the vendor's auth host, which is never captured.
 //!

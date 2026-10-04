@@ -18,7 +18,9 @@ pub enum Evidence {
 }
 
 /// Agent A wrote a resource, then a different agent B read the same
-/// resource, within the correlation window.
+/// resource, within the correlation window. A's write is one that pairs: a
+/// rejected write never becomes a co-access (`flow.coaccess.write-not-rejected`);
+/// an `Unknown` one does, at the lower confidence its outcome records.
 ///
 /// On its own this only makes a transmission suspected: B may have read
 /// something unrelated, or A's text may be there but encoded, paraphrased or
@@ -49,6 +51,9 @@ pub enum InvalidCoAccess {
     SameAgent,
     /// `write` is not a write, or `read` is not a read.
     WrongOperations,
+    /// `write` is a write whose outcome is `WriteOutcome::Rejected`: it
+    /// delivered nothing, so no read can have received it.
+    RejectedWrite,
     ReadNotAfterWrite,
     OutsideWindow,
 }
@@ -92,9 +97,12 @@ impl CoAccess {
         if write.agent == read.agent {
             return Err(InvalidCoAccess::SameAgent);
         }
-        if !matches!(write.op, AccessOp::Write { .. }) || !matches!(read.op, AccessOp::Read { .. })
-        {
-            return Err(InvalidCoAccess::WrongOperations);
+        let outcome = match (&write.op, &read.op) {
+            (AccessOp::Write { outcome, .. }, AccessOp::Read { .. }) => *outcome,
+            _ => return Err(InvalidCoAccess::WrongOperations),
+        };
+        if !outcome.pairs() {
+            return Err(InvalidCoAccess::RejectedWrite);
         }
         if read.at <= write.at {
             return Err(InvalidCoAccess::ReadNotAfterWrite);

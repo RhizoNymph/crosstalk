@@ -724,7 +724,10 @@ fn verdict_rows_follow_the_log_with_the_detector_call() {
         ExportRow::Verdict(VerdictRow {
             transmission: transmission.id,
             route_kind: RouteKind::Unobserved,
-            call: QualityMatch::Content(MatchClass::Exact),
+            call: QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: crate::derived::provenance::matching::CarrierKind::ToolResult,
+            },
             revision: revision(n),
             verdict,
             by: operator(),

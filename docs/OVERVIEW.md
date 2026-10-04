@@ -100,10 +100,13 @@ Overview:
       as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
-      index, content matching) and L5 flow detection (resource extraction,
-      channel registry with promotion and supersession, write/read
-      correlation into transmissions, and the operator verdict log kept
-      beside each transmission).
+      index, content matching over part text only, strict decoding,
+      escape-folded normalization) and L5 flow detection (resource
+      extraction with write outcomes, channel registry with promotion and
+      supersession, write/read correlation into transmissions, in which
+      rejected writes are recorded but never paired and a match on a
+      resource its sender never wrote stays suspected, and the operator
+      verdict log kept beside each transmission).
     insight: >
       Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
@@ -187,12 +190,14 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on canonical channels (AccessRecorded), resolves
-    channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds (an
-    OpenAI-compatible endpoint) and classifies transmissions (topic fits
-    and projection layouts are computed by the Python topics sidecar over
-    HTTP; assignment to the current topics is local), records topic-model versions and their
+    calls into accesses on canonical channels (AccessRecorded; a write once
+    its result settles its outcome), resolves channels and correlates
+    cross-agent accesses and content matches into transmissions
+    (TransmissionConfirmed / Suspected) → L6 embeds (an OpenAI-compatible
+    endpoint) and classifies transmissions (topic fits and projection
+    layouts are computed by the Python topics sidecar over HTTP;
+    assignment to the current topics is local), records topic-model
+    versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
@@ -208,10 +213,12 @@ Overview:
     channel it superseded, in an optional window that never changes which
     rows are listed); promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
-    channel names; transmission rows by id; the evidence page, which cuts
-    excerpts of both sides of each content match from the blob store's
-    bodies through the spans' and matches' locations (a body content
-    retention dropped is reported, not an error); and the overview's
+    channel names; transmission rows by id; the evidence page, which reads
+    span records (L4's SpanIndex::spans) and accesses with their resources
+    (L5's AccessStore::accesses) in batches, in every transmission state,
+    and cuts excerpts of both sides of each content match from the blob
+    store's bodies through the spans' and matches' locations (a body
+    content retention dropped is reported, not an error); and the overview's
     counts. Exports stream one dataset between a header naming the
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
@@ -604,8 +611,9 @@ Features Index:
       evidence lookup behind resolve, AgentLifecycle, ClaimStore,
       ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
       with cutoff, retention measured from the now each call is given, and
-      shards), MemoryChannels (ChannelRegistry, ChannelTraffic,
-      ChannelReads and ChannelDirectory: lookups, declarations, policy
+      shards; SpanIndex, the span records read in batches), MemoryChannels
+      (ChannelRegistry, ChannelTraffic, ChannelReads, AccessStore and
+      ChannelDirectory: lookups, declarations, policy
       history, promotion by promotion::plan and its coverage, supersession,
       resource use, traffic writes and stored channels) and MemoryVerdicts
       (TransmissionStore and TransmissionVerdicts); state sits behind a std
@@ -720,8 +728,8 @@ Features Index:
       overlaps; the ULID generator over the injected Clock and a
       RandomSource, monotonic per generator (stamping the clock's reading
       or a given time). TokenUsage gained cache_write
-      (checked: cache counts within input) and Reasoning::Visible a hashed
-      signature.
+      (checked: cache counts within input), Reasoning::Visible a hashed
+      signature, and later ToolCall one too (Gemini's thoughtSignature).
     entry_points:
       - spec/types/observed/message/encoding.rs
       - spec/types/observed/message/json.rs
@@ -730,6 +738,40 @@ Features Index:
       - spec/types/interfaces/l1_canonical.rs
     depends_on: [type_spec, wire_contract, sim]
     doc: docs/features/spec_primitives.md
+  eval_gaps:
+    description: >
+      Detection rules from evaluating on real agent datasets (INV-950..973):
+      ToolOutcome::Unknown for protocols without a failure flag; write
+      outcomes (AccessOp::Write carries WriteOutcome Delivered, Rejected or
+      Unknown, classified per known tool), with a writing call held until
+      its result arrives or CorrelationTiming::write_settles_at passes
+      (then Unknown), every write recorded and only Delivered and Unknown
+      writes paired (CoAccess::new refuses a rejected one); a write's spans
+      include the writer's own relayed spans, so a retry after a rejected
+      write confirms; a ToolResult match on a resource its sender never
+      wrote is a shared upstream source and keeps the transmission
+      Suspected; ToolCall::signature hashed and never part text; decoders
+      and the fingerprinter read part text only and decode strictly as
+      UTF-8, and string serialisation is undone by two codecs
+      (Codec::JsonString, Codec::YamlString, one level per chain). Batch
+      reads shared by evaluation, the evidence page, the conversation view
+      and the UI's world seed: SpanIndex::spans (span records with their
+      author as recorded) and AccessStore::accesses (accesses with their
+      resources), so evidence exists in every transmission state;
+      CarrierKind splits quality rows by carrier; IngressMode::Replay {
+      corpus: CorpusId } marks replayed datasets, which L3 keeps apart.
+    entry_points:
+      - spec/types/derived/flow/access.rs
+      - spec/types/derived/flow/evidence.rs
+      - spec/types/derived/flow/timing.rs
+      - spec/types/interfaces/l5_flow.rs
+      - spec/types/interfaces/l4_provenance.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/derived/provenance/matching.rs
+      - spec/types/observed/message.rs
+      - spec/types/observed/client.rs
+    depends_on: [type_spec, spec_primitives, wire_contract, read_models]
+    doc: docs/features/eval_gaps.md
   gateway:
     description: >
       crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the

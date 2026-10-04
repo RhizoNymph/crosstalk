@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aliases::Aliases;
 use crate::derived::flow::evidence::CoAccess;
-use crate::derived::provenance::matching::ContentMatch;
+use crate::derived::provenance::matching::{CarrierKind, ContentMatch};
 use crate::ids::{AgentId, ChannelId, TopicId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::{NonEmpty, Timestamp};
@@ -72,7 +72,11 @@ pub struct Transmission {
 )]
 pub enum Route {
     /// Through a shared resource: written by the sender, read by the reader
-    /// through a tool call the gateway resolved to a channel.
+    /// through a tool call the gateway resolved to a channel. The sender's
+    /// write is one that pairs (`WriteOutcome::pairs`). A tool-result match
+    /// from an agent with no such write on the read resource is a shared
+    /// upstream source, not a transmission: it confirms no channel
+    /// transmission (`l5_flow`, "Shared upstream source").
     Channel(ChannelId),
     /// Between a parent agent and a sub-agent it spawned (Claude Code's
     /// Task/Agent tool, Codex multi-agent, oh-my-pi tasks).
@@ -138,6 +142,18 @@ pub enum DirectCarrier {
     UserTurn,
     SystemPrompt,
     ToolResult(ToolName),
+}
+
+impl DirectCarrier {
+    /// The carrier without its tool name. Never `ReaderOutput`: text that
+    /// reached the reader through nothing visible is `Route::Unobserved`.
+    pub fn kind(&self) -> CarrierKind {
+        match self {
+            Self::UserTurn => CarrierKind::UserTurn,
+            Self::SystemPrompt => CarrierKind::SystemPrompt,
+            Self::ToolResult(_) => CarrierKind::ToolResult,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

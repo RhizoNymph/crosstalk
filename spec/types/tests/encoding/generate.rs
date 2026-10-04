@@ -329,16 +329,16 @@ fn arb_result() -> impl Strategy<Value = ToolResult> {
             ],
             0..4,
         ),
-        any::<bool>(),
+        prop_oneof![
+            Just(ToolOutcome::Success),
+            Just(ToolOutcome::Error),
+            Just(ToolOutcome::Unknown),
+        ],
     )
-        .prop_map(|(id, content, error)| ToolResult {
+        .prop_map(|(id, content, outcome)| ToolResult {
             call_id: ToolCallId(id),
             content,
-            outcome: if error {
-                ToolOutcome::Error
-            } else {
-                ToolOutcome::Success
-            },
+            outcome,
         })
 }
 
@@ -360,10 +360,11 @@ fn arb_assistant_part() -> impl Strategy<Value = AssistantPart> {
                 arb_json().prop_map(|value| ToolArguments::Json(value.value().canonical())),
                 any::<String>().prop_map(ToolArguments::Invalid),
             ],
-            any::<bool>()
+            any::<bool>(),
+            proptest::option::of(any::<String>()),
         )
             .prop_map(
-                |(id, name, arguments, server)| AssistantPart::ToolCall(ToolCall {
+                |(id, name, arguments, server, signature)| AssistantPart::ToolCall(ToolCall {
                     id: ToolCallId(id),
                     name: ToolName(name),
                     arguments,
@@ -372,6 +373,7 @@ fn arb_assistant_part() -> impl Strategy<Value = AssistantPart> {
                     } else {
                         ToolExecution::Client
                     },
+                    signature,
                 })
             ),
         arb_result().prop_map(AssistantPart::ServerToolResult),
