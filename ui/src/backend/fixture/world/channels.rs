@@ -32,9 +32,7 @@ use super::drafts::{DraftOrigin, Target, decisions, drafts, team_notes_promotion
 use super::traffic::{ChannelStats, Traffic};
 use super::{Cast, GenError};
 
-pub use super::drafts::{
-    DESIGN_DOCS_AT, MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT, SHARED_FILE_DECIDED_AT,
-};
+pub use super::drafts::{MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT, SHARED_FILE_DECIDED_AT};
 
 /// Every channel in the world, by role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

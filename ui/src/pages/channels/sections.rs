@@ -1,6 +1,5 @@
 //! The sections of the channel page: resources with their writers and
-//! readers, policy history, and the channel's alerts. Also the audit
-//! history rows the alert page shares.
+//! readers, policy history, and the channel's alerts.
 
 use crosstalk_spec::aggregates::access::{AgentAccesses, ResourceUse};
 use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
@@ -16,10 +15,8 @@ use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, empty_state, error_panel, format_time, kind_badge, locator_text,
 };
-use crate::contract::research::{AuditEntry, AuditOutcome};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
-use crate::pages::audit::describe::{describe, note};
 use crate::pages::channels::model::decision_text;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::lookup::{AgentNames, OperatorNames};
@@ -195,33 +192,6 @@ pub async fn policy_history_section(
     })
 }
 
-/// One audit entry about a subject (the alert page's history).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryRow {
-    pub at: String,
-    pub by: String,
-    pub what: String,
-    pub note: Option<String>,
-    /// `Err` holds why the gateway rejected it.
-    pub outcome: std::result::Result<(), String>,
-}
-
-pub fn history_rows(entries: &[AuditEntry], operators: &OperatorNames) -> Vec<HistoryRow> {
-    entries
-        .iter()
-        .map(|e| HistoryRow {
-            at: format_time(e.at),
-            by: operators.actor(e.by),
-            what: describe(&e.action),
-            note: note(&e.action).map(str::to_owned),
-            outcome: match &e.outcome {
-                AuditOutcome::Applied(_) => Ok(()),
-                AuditOutcome::Rejected(error) => Err(crate::error::describe(error)),
-            },
-        })
-        .collect()
-}
-
 #[component]
 pub async fn alerts_section(
     rows: std::result::Result<Vec<AlertRow>, UiError>,
@@ -262,7 +232,7 @@ pub async fn alerts_section(
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::derived::flow::resource::Resource;
-    use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::ids::{AgentId, OperatorId, ResourceId};
     use crosstalk_spec::interfaces::l8_surface::{PolicyKind, QueryError};
     use crosstalk_spec::support::Timestamp;
 
@@ -297,43 +267,6 @@ mod tests {
         assert_eq!(rows[0].writers[0].count, 9);
         assert_eq!(rows[0].writers[1].name, "…000001");
         assert!(rows[0].readers.is_empty());
-    }
-
-    #[test]
-    fn history_names_the_operator_and_keeps_rejections() {
-        use crate::contract::research::{Actor, AuditedAction};
-        use crosstalk_spec::ids::AuditId;
-        use crosstalk_spec::interfaces::l8_surface::ConflictKind;
-        use crosstalk_spec::interfaces::l8_surface::OperatorAction;
-
-        let entry = AuditEntry {
-            id: AuditId::from_ulid(1),
-            at: Timestamp::from_micros(1_790_985_600_000_000),
-            by: Actor::Operator(OperatorId::from_ulid(3)),
-            action: AuditedAction::Operator(OperatorAction::SetPolicy {
-                channel: ChannelId::from_ulid(1),
-                policy: PolicyKind::Sanctioned,
-                note: Some("ok".into()),
-            }),
-            subject: Some(crate::contract::research::AuditSubject::Channel(
-                ChannelId::from_ulid(1),
-            )),
-            outcome: AuditOutcome::Rejected(QueryError::Conflict(
-                ConflictKind::ChannelSuperseded {
-                    channel: ChannelId::from_ulid(1),
-                    by: ChannelId::from_ulid(2),
-                },
-            )),
-        };
-        let operators = OperatorNames::new([(OperatorId::from_ulid(3), "ada".to_owned())]);
-        let rows = history_rows(&[entry], &operators);
-        assert_eq!(rows[0].by, "ada");
-        assert_eq!(rows[0].what, "set policy to sanctioned");
-        assert_eq!(rows[0].note.as_deref(), Some("ok"));
-        assert_eq!(
-            rows[0].outcome,
-            Err("the channel is superseded: 00000000000000000000000001 resolves to 00000000000000000000000002; act on that channel instead".to_owned())
-        );
     }
 
     #[test]

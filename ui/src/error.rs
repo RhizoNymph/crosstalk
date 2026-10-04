@@ -9,6 +9,8 @@
 use std::fmt;
 
 use crosstalk_spec::aggregates::projection::{FitFailure, ProjectionStatusKind};
+use crosstalk_spec::interfaces::l8_surface::audit::Rejection;
+use crosstalk_spec::interfaces::l8_surface::export::{ExportFailure, RowRefused};
 use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ConflictKind, InputError, Permission, QueryError,
 };
@@ -183,6 +185,49 @@ fn conflict(kind: &ConflictKind) -> String {
     }
 }
 
+/// The error a recorded refusal stands for, so the audit log words it
+/// as the page that was refused did: a store failure as `Store`, the
+/// rest unchanged.
+pub fn rejection(rejection: &Rejection) -> QueryError {
+    match rejection {
+        Rejection::NotFound => QueryError::NotFound,
+        Rejection::Conflict(kind) => QueryError::Conflict(kind.clone()),
+        Rejection::InvalidInput(input) => QueryError::InvalidInput(input.clone()),
+        Rejection::Failed { reason } => QueryError::Store {
+            reason: reason.clone(),
+        },
+    }
+}
+
+/// Why an export that had started did not complete, in words.
+pub fn export_failure(failure: &ExportFailure) -> String {
+    match failure {
+        ExportFailure::Store { reason } => format!("the gateway's store failed: {reason}"),
+        ExportFailure::VersionNotRetained { version } => format!(
+            "topic model version {} was dropped while the export streamed",
+            version.0
+        ),
+        ExportFailure::CountMismatch { planned, produced } => {
+            format!("the export planned {planned} rows but produced {produced}")
+        }
+        ExportFailure::InvalidRow { index, refused } => format!(
+            "row {} was refused: {}",
+            index + 1,
+            match refused {
+                RowRefused::OtherDataset { .. } => "it belongs to another dataset",
+                RowRefused::ContentMismatch { requested: true } =>
+                    "its content columns are missing",
+                RowRefused::ContentMismatch { requested: false } => {
+                    "it has content columns the request did not include"
+                }
+                RowRefused::OutOfOrder => "it is out of order or repeated",
+                RowRefused::BeyondPlan { .. } => "it is beyond the planned rows",
+                RowRefused::AfterRefusal => "an earlier row was refused",
+            }
+        ),
+    }
+}
+
 /// Why a projection's fit failed, in words.
 pub fn fit_failure(failure: &FitFailure) -> String {
     match failure {
@@ -260,6 +305,24 @@ mod tests {
                 missing: Permission::Audit
             }),
             "this needs the Audit permission"
+        );
+    }
+
+    #[test]
+    fn recorded_refusals_read_as_their_errors() {
+        assert_eq!(rejection(&Rejection::NotFound), QueryError::NotFound);
+        assert_eq!(
+            describe(&rejection(&Rejection::Failed {
+                reason: "timeout".into()
+            })),
+            "the gateway's store failed: timeout"
+        );
+        assert_eq!(
+            export_failure(&ExportFailure::CountMismatch {
+                planned: 3,
+                produced: 2
+            }),
+            "the export planned 3 rows but produced 2"
         );
     }
 

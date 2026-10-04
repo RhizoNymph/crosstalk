@@ -1,4 +1,5 @@
-//! Names for ids: operators from `operators`, agents from one
+//! Names for ids: operators from `operators` (the spec's `Operator`s,
+//! former operators included), agents from one
 //! `agent_names` call per `IdBatch`, and [`id_batches`] for name lookups
 //! over more ids than one `IdBatch` holds. Rule names are in
 //! [`super::rules`].
@@ -9,6 +10,7 @@ use crosstalk_spec::aggregates::agents::AgentName;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
 use crosstalk_spec::ids::{AgentId, OperatorId};
+use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use crosstalk_spec::observed::agent::MergeAuthor;
 use topcoat::context::Cx;
@@ -16,7 +18,6 @@ use topcoat::context::Cx;
 use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
-use crate::contract::research::Actor;
 use crate::url::ulid::UlidId;
 
 /// Operator display names. Unknown operators show as a short id.
@@ -26,6 +27,15 @@ pub struct OperatorNames(HashMap<OperatorId, String>);
 impl OperatorNames {
     pub fn new(names: impl IntoIterator<Item = (OperatorId, String)>) -> Self {
         Self(names.into_iter().collect())
+    }
+
+    /// The directory's names, current and former operators alike.
+    pub fn of(operators: &[Operator]) -> Self {
+        Self::new(
+            operators
+                .iter()
+                .map(|operator| (operator.id, operator.name.as_str().to_owned())),
+        )
     }
 
     pub fn name(&self, id: OperatorId) -> String {
@@ -42,13 +52,6 @@ impl OperatorNames {
         }
     }
 
-    pub fn actor(&self, by: Actor) -> String {
-        match by {
-            Actor::Config => "config".to_owned(),
-            Actor::Operator(id) => self.name(id),
-        }
-    }
-
     pub fn merge_author(&self, by: MergeAuthor) -> String {
         match by {
             MergeAuthor::Resolver => "identity resolver".to_owned(),
@@ -61,7 +64,7 @@ impl OperatorNames {
 /// failing the page.
 pub async fn operator_names(cx: &Cx, caller: &Caller) -> OperatorNames {
     match backend(cx).operators(caller).await {
-        Ok(operators) => OperatorNames::new(operators.into_iter().map(|o| (o.id, o.name))),
+        Ok(operators) => OperatorNames::of(&operators),
         Err(error) => {
             tracing::warn!(error = ?error, "operator names unavailable");
             OperatorNames::default()

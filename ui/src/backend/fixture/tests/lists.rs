@@ -16,9 +16,11 @@ use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
 use crate::backend::Backend;
-use crate::contract::research::{AuditFilter, AuditSubject};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::audit::{
+    AuditAuthor, AuditBody, AuditFilter, AuditSubject,
+};
 use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crosstalk_spec::observed::agent::AgentState;
 
@@ -72,7 +74,7 @@ async fn pagination_covers_every_item_exactly_once() {
     .await;
     assert_eq!(alerts.len(), b.state.read().await.alerts.len());
     let audit = collect(33, async |p| b.audit(&c, &AuditFilter::default(), &p).await).await;
-    assert_eq!(audit.len(), b.state.read().await.audit.len());
+    assert_eq!(audit.len(), b.state.read().await.audit.entries().len());
     let filter = ChannelFilter {
         origin: OriginFilter::WithSuperseded(Vec::new()),
         ..Default::default()
@@ -90,7 +92,7 @@ async fn pagination_covers_every_item_exactly_once() {
         hits.windows(2)
             .all(|w| w[0].score.get() >= w[1].score.get())
     );
-    let letters = collect(1, async |p| b.dead_letters(&c, &p).await).await;
+    let letters = collect(1, async |p| b.dead_letters(&c, None, &p).await).await;
     assert_eq!(letters.len(), b.state.read().await.dead_letters.len());
 }
 
@@ -167,7 +169,7 @@ async fn content_needs_the_content_permission() {
     );
     assert!(b.verdicts(&view, tx).await.is_ok(), "verdicts need View");
     assert_eq!(
-        b.dead_letters(&view, &first(5)).await.err(),
+        b.dead_letters(&view, None, &first(5)).await.err(),
         Some(QueryError::Forbidden {
             missing: Permission::Operate
         })
@@ -345,23 +347,26 @@ async fn audit_filter_by_operator_subject_and_window() {
     let c = researcher();
     let oncall = super::super::world::OPERATOR_ONCALL;
     let mine = AuditFilter {
-        operators: vec![oncall],
+        by: vec![AuditAuthor::Operator(oncall)],
         ..Default::default()
     };
     let rows = collect(100, async |p| b.audit(&c, &mine, &p).await).await;
     assert!(!rows.is_empty());
-    assert!(
-        rows.iter()
-            .all(|e| e.by == crate::contract::research::Actor::Operator(oncall))
-    );
+    assert!(rows.iter().all(|e| e.by() == AuditAuthor::Operator(oncall)));
     let pastebin = channel(ChannelKey::Pastebin);
     let about = AuditFilter {
         subject: Some(AuditSubject::Channel(pastebin)),
         ..Default::default()
     };
     let rows = collect(100, async |p| b.audit(&c, &about, &p).await).await;
-    assert!(rows.iter().any(|e| matches!(&e.action,
-        crate::contract::research::AuditedAction::Operator(crosstalk_spec::interfaces::l8_surface::OperatorAction::SetPolicy { channel, .. }) if *channel == pastebin)));
+    assert!(rows.iter().any(|e| matches!(&e.body,
+        AuditBody::Operator(record) if matches!(record.action(),
+            crosstalk_spec::interfaces::l8_surface::OperatorAction::SetPolicy { channel, .. } if *channel == pastebin))));
+    assert!(
+        rows.iter()
+            .all(|e| e.subjects().contains(&AuditSubject::Channel(pastebin))),
+        "the filter matches the entry's subjects exactly"
+    );
     let recent = AuditFilter {
         window: Some(window(ago(DAY))),
         ..Default::default()

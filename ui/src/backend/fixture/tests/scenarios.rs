@@ -490,30 +490,62 @@ fn verdicts_audit_and_dead_letters() {
             .all(|(id, log)| log.transmission() == *id && log.revision().is_some()),
         "each log is its transmission's, and holds a record"
     );
-    let operators: HashSet<_> = state
-        .audit
+    use crosstalk_spec::interfaces::l8_surface::audit::{
+        AuditAuthor, AuditBody, AuditOutcome, ConfigChange,
+    };
+    use crosstalk_spec::interfaces::l8_surface::operators::AccessMode;
+
+    let entries = state.audit.entries();
+    assert!(
+        (200..1_000).contains(&entries.len()),
+        "a few hundred entries"
+    );
+    let operators: HashSet<_> = entries
         .iter()
-        .filter_map(|r| match r.by {
-            crate::contract::research::Actor::Operator(op) => Some(op),
-            crate::contract::research::Actor::Config => None,
+        .filter_map(|e| match e.by() {
+            AuditAuthor::Operator(op) => Some(op),
+            AuditAuthor::Config => None,
         })
         .collect();
     assert_eq!(operators.len(), 2);
-    assert!(
-        state
-            .audit
+    let changes: Vec<&ConfigChange> = entries
+        .iter()
+        .filter_map(|e| match &e.body {
+            AuditBody::Config(record) => Some(&record.change),
+            _ => None,
+        })
+        .collect();
+    assert!(changes.contains(&&ConfigChange::SetAccessMode(AccessMode::Authenticated)));
+    let defined: Vec<&str> = changes
+        .iter()
+        .filter_map(|c| match c {
+            ConfigChange::SetOperator { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(defined, ["researcher", "oncall"]);
+    assert_eq!(
+        changes
             .iter()
-            .any(|r| matches!(r.by, crate::contract::research::Actor::Config))
+            .filter(|c| matches!(c, ConfigChange::DeclareChannel { .. }))
+            .count(),
+        5
     );
-    assert!(state.audit.iter().any(|r| matches!(
-        r.outcome,
-        crate::contract::research::AuditOutcome::Rejected(_)
-    )));
-    assert!(
-        state
-            .audit
-            .windows(2)
-            .all(|w| (w[0].at, w[0].id) <= (w[1].at, w[1].id))
-    );
-    assert!((3..=5).contains(&state.dead_letters.len()));
+    let refused: Vec<&AuditOutcome> = entries
+        .iter()
+        .filter_map(|e| match &e.body {
+            AuditBody::Operator(record) => Some(record.outcome()),
+            _ => None,
+        })
+        .filter(|o| {
+            matches!(
+                o,
+                AuditOutcome::Rejected(_) | AuditOutcome::Forbidden { .. }
+            )
+        })
+        .collect();
+    assert_eq!(refused.len(), 2, "the two refused actions");
+    let ids: HashSet<_> = entries.iter().map(|e| e.id).collect();
+    assert_eq!(ids.len(), entries.len(), "ids are unique");
+    assert_eq!(state.dead_letters.len(), 4);
 }

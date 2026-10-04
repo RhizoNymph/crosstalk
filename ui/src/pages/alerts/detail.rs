@@ -21,9 +21,8 @@ use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
 };
-use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::error::UiError;
-use crate::pages::channels::sections::{HistoryRow, history_rows};
+use crate::pages::audit::entry::{EntryView, OutcomeView, entry_view};
 use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
@@ -33,6 +32,7 @@ use crate::pages::common::rules::{RuleNames, all_rules};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditFilter, AuditSubject};
 
 path_param!(alert_ulid);
 
@@ -62,7 +62,9 @@ pub fn rule_link(rule: Option<&AlertRuleDef>, state: &ViewState) -> String {
 struct Loaded {
     row: AlertRow,
     rule_url: String,
-    history: std::result::Result<Vec<HistoryRow>, UiError>,
+    /// The audit entries about the alert, newest first; reading them needs
+    /// `Audit`.
+    history: std::result::Result<Vec<EntryView>, UiError>,
 }
 
 async fn load(
@@ -83,15 +85,23 @@ async fn load(
         subject: Some(AuditSubject::Alert(id)),
         ..AuditFilter::default()
     };
-    let history = backend
-        .audit(
-            caller,
-            &filter,
-            &crate::pages::common::paging::first(HISTORY),
-        )
-        .await
-        .map_err(UiError::from)
-        .map(|page| history_rows(page.items(), &operators));
+    let history = match require(caller, Permission::Audit) {
+        Ok(()) => backend
+            .audit(
+                caller,
+                &filter,
+                &crate::pages::common::paging::first(HISTORY),
+            )
+            .await
+            .map_err(UiError::from)
+            .map(|page| {
+                page.items()
+                    .iter()
+                    .map(|entry| entry_view(entry, &operators))
+                    .collect()
+            }),
+        Err(error) => Err(error),
+    };
     Ok(Some(Loaded {
         row: AlertRow::new(&alert, &names, &operators, state),
         rule_url: rule_link(rules.iter().find(|r| r.id() == alert.rule), state),
@@ -228,13 +238,15 @@ async fn alert_page(
                             for entry in rows {
                                 <tr class=(ROW)>
                                     <td class=(TD_MUTED)>(entry.at)</td>
-                                    <td class=(TD)>(entry.by)</td>
+                                    <td class=(TD)>(entry.actor)</td>
                                     <td class=(TD)>(entry.what)</td>
                                     <td class=(TD)>(entry.note.unwrap_or_default())</td>
                                     <td class=(TD)>
                                         match entry.outcome {
-                                            Ok(()) => <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>,
-                                            Err(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
+                                            OutcomeView::Applied { .. } => <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>,
+                                            OutcomeView::Unchanged => <span class="text-xs text-zinc-500">"unchanged"</span>,
+                                            OutcomeView::Rejected(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
+                                            OutcomeView::Forbidden(missing) => <span class="text-xs text-red-700 dark:text-red-400">"forbidden: needs " (crate::error::permission_name(missing))</span>,
                                         }
                                     </td>
                                 </tr>

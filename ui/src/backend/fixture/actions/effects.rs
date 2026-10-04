@@ -7,9 +7,6 @@ use crosstalk_spec::support::Timestamp;
 
 use crate::backend::alert_state;
 use crate::backend::fixture::store::State;
-use crate::contract::research::{Actor, AuditEntry, AuditOutcome, AuditSubject, AuditedAction};
-use crosstalk_spec::ids::AuditId;
-use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 
 pub fn is_active(alert: &Alert) -> bool {
     alert_state::is_active(&alert.state)
@@ -75,53 +72,4 @@ pub fn reject_transmission_alerts(
         }
     }
     count
-}
-
-/// Appends an audit entry and returns its id.
-pub fn audit(
-    state: &mut State,
-    at: Timestamp,
-    by: Actor,
-    action: AuditedAction,
-    subject: Option<AuditSubject>,
-    outcome: AuditOutcome,
-) -> AuditId {
-    let id = AuditId::from_ulid(state.mint.ulid(at));
-    state.audit.push(AuditEntry {
-        id,
-        at,
-        by,
-        action,
-        subject,
-        outcome,
-    });
-    id
-}
-
-/// What an operator action is about: its target, or what it created when
-/// it names none.
-pub fn subject(action: &OperatorAction, outcome: Option<&ActionOutcome>) -> Option<AuditSubject> {
-    match action {
-        OperatorAction::SetPolicy { channel, .. }
-        | OperatorAction::PromoteChannel { channel, .. } => Some(AuditSubject::Channel(*channel)),
-        OperatorAction::MergeAgents(request) => Some(AuditSubject::Agent(request.source())),
-        OperatorAction::RenameAgent { agent, .. } => Some(AuditSubject::Agent(*agent)),
-        OperatorAction::Unmerge { merge } => Some(AuditSubject::Merge(*merge)),
-        OperatorAction::SetVerdict { transmission, .. } => {
-            Some(AuditSubject::Transmission(*transmission))
-        }
-        OperatorAction::Acknowledge { alert } | OperatorAction::Resolve { alert, .. } => {
-            Some(AuditSubject::Alert(*alert))
-        }
-        OperatorAction::UpdateRule { id, .. } | OperatorAction::SetRuleEnabled { id, .. } => {
-            Some(AuditSubject::Rule(*id))
-        }
-        OperatorAction::CreateRule { .. } => match outcome {
-            Some(ActionOutcome::RuleCreated(id)) => Some(AuditSubject::Rule(*id)),
-            _ => None,
-        },
-        OperatorAction::ReplayDeadLetter { .. }
-        | OperatorAction::PinTopicVersion { .. }
-        | OperatorAction::UnpinTopicVersion { .. } => None,
-    }
 }

@@ -9,17 +9,27 @@ use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
-use crate::contract::research::{AuditOutcome, AuditedAction};
 use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::audit::{
+    AuditBody, AuditEntry, AuditOutcome, OperatorRecord,
+};
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
-use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 use crosstalk_spec::observed::agent::AgentLabel;
 
 use super::actions_support::*;
+
+/// The operator record of an entry `act` appended.
+fn record(entry: &AuditEntry) -> &OperatorRecord {
+    match &entry.body {
+        AuditBody::Operator(record) => record,
+        other => panic!("an operator entry, got {other:?}"),
+    }
+}
 
 #[tokio::test]
 async fn every_action_appends_one_audit_entry() {
@@ -64,12 +74,17 @@ async fn every_action_appends_one_audit_entry() {
         assert_eq!(result.is_ok(), ok, "{action:?}: {result:?}");
         let state = b.state.read().await;
         assert_eq!(state.audit.len(), before + 1);
-        let last = state.audit.last().expect("entry");
+        let last = state.audit.entries().last().expect("entry");
         assert_eq!(last.at, NOW);
-        assert_eq!(last.action, AuditedAction::Operator(action));
-        assert_eq!(matches!(last.outcome, AuditOutcome::Applied(_)), ok);
+        assert_eq!(record(last).action(), &action);
+        assert_eq!(record(last).caller(), &c, "the caller as authenticated");
+        assert_eq!(record(last).outcome().result(), result, "what act returned");
+        assert_eq!(
+            matches!(record(last).outcome(), AuditOutcome::Succeeded(_)),
+            ok
+        );
     }
-    // A forbidden action is audited as rejected too.
+    // A forbidden action is audited as forbidden, naming the permission.
     let before = audit_len(&b).await;
     let viewer = caller(&[Permission::View]);
     let denied = b
@@ -90,15 +105,17 @@ async fn every_action_appends_one_audit_entry() {
     );
     assert_eq!(audit_len(&b).await, before + 1);
     let state = b.state.read().await;
-    assert!(matches!(
-        state.audit.last().expect("entry").outcome,
-        AuditOutcome::Rejected(QueryError::Forbidden { .. })
-    ));
+    assert_eq!(
+        record(state.audit.entries().last().expect("entry")).outcome(),
+        &AuditOutcome::Forbidden {
+            missing: Permission::Govern
+        }
+    );
 }
 
 #[tokio::test]
 async fn audit_entries_name_their_subject_and_what_they_created() {
-    use crate::contract::research::{AuditFilter, AuditSubject};
+    use crosstalk_spec::interfaces::l8_surface::audit::{AuditFilter, AuditSubject};
 
     let b = fresh();
     let c = researcher();
@@ -108,11 +125,19 @@ async fn audit_entries_name_their_subject_and_what_they_created() {
     };
     {
         let state = b.state.read().await;
-        let last = state.audit.last().expect("entry");
-        assert_eq!(last.subject, Some(AuditSubject::Agent(cc6)));
+        let last = state.audit.entries().last().expect("entry");
         assert_eq!(
-            last.outcome,
-            AuditOutcome::Applied(ActionOutcome::Merged(id))
+            last.subjects(),
+            [
+                AuditSubject::Agent(cc6),
+                AuditSubject::Agent(cc5),
+                AuditSubject::Merge(id)
+            ],
+            "both agents as requested, then the record it created"
+        );
+        assert_eq!(
+            record(last).outcome(),
+            &AuditOutcome::Succeeded(ActionOutcome::Merged(id))
         );
     }
     b.act(&c, OperatorAction::Unmerge { merge: id })
@@ -120,31 +145,30 @@ async fn audit_entries_name_their_subject_and_what_they_created() {
         .expect("unmerge");
     {
         let state = b.state.read().await;
-        let last = state.audit.last().expect("entry");
-        assert_eq!(last.subject, Some(AuditSubject::Merge(id)));
-        assert_eq!(last.outcome, AuditOutcome::Applied(ActionOutcome::Applied));
+        let last = state.audit.entries().last().expect("entry");
+        assert_eq!(last.subjects(), [AuditSubject::Merge(id)]);
+        assert_eq!(
+            record(last).outcome(),
+            &AuditOutcome::Succeeded(ActionOutcome::Applied)
+        );
     }
-    // Both entries concern the merge and both of its agents.
-    for subject in [
-        AuditSubject::Merge(id),
-        AuditSubject::Agent(cc6),
-        AuditSubject::Agent(cc5),
+    // The merge record finds both entries; each agent finds the merge it
+    // took part in (ids are matched as recorded: the unmerge names only
+    // the record).
+    for (subject, entries) in [
+        (AuditSubject::Merge(id), 2),
+        (AuditSubject::Agent(cc6), 1),
+        (AuditSubject::Agent(cc5), 1),
     ] {
         let filter = AuditFilter {
             subject: Some(subject),
             ..AuditFilter::default()
         };
         let page = b.audit(&c, &filter, &first(50)).await.expect("audit");
-        let ours: Vec<_> = page
-            .items()
-            .iter()
-            .filter(|e| e.at == NOW)
-            .map(|e| e.subject)
-            .collect();
-        assert_eq!(ours.len(), 2, "{subject:?}");
-        assert!(ours.contains(&Some(AuditSubject::Merge(id))), "{subject:?}");
+        let ours: Vec<_> = page.items().iter().filter(|e| e.at == NOW).collect();
+        assert_eq!(ours.len(), entries, "{subject:?}");
         assert!(
-            ours.contains(&Some(AuditSubject::Agent(cc6))),
+            ours.iter().all(|e| e.subjects().contains(&subject)),
             "{subject:?}"
         );
     }
@@ -394,7 +418,7 @@ async fn replaying_a_dead_letter_removes_it() {
     let b = fresh();
     let c = researcher();
     let letter = b
-        .dead_letters(&c, &first(1))
+        .dead_letters(&c, None, &first(1))
         .await
         .expect("letters")
         .into_parts()

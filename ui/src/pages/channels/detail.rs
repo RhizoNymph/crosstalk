@@ -30,7 +30,6 @@ use crate::components::{
     PageLinks, empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header,
     short_id,
 };
-use crate::contract::research::AuditSubject;
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::audit::subject::subject_code;
@@ -48,6 +47,7 @@ use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::alert::Alert;
+use crosstalk_spec::interfaces::l8_surface::audit::AuditSubject;
 
 path_param!(channel_ulid);
 

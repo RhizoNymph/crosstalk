@@ -1,16 +1,20 @@
-//! The audit page's own query keys: `op` (an operator id), `subject` (see
-//! [`super::subject`]) and `span` (`all` for every time; otherwise the
-//! shared window).
+//! The audit page's own query keys: `op` (an operator id, or `config` for
+//! the changes config made), `subject` (see [`super::subject`]) and `span`
+//! (`all` for every time; otherwise the shared window). Together they are
+//! the spec's `AuditFilter`.
 
 use crosstalk_spec::ids::OperatorId;
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditAuthor, AuditFilter, AuditSubject};
 use topcoat::router::query_params;
 
 use super::subject::{parse_subject, subject_code};
-use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+
+/// The `op` value selecting the changes config made.
+pub const CONFIG: &str = "config";
 
 #[query_params]
 pub struct RawAuditQuery {
@@ -21,21 +25,33 @@ pub struct RawAuditQuery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AuditQuery {
-    pub operator: Option<OperatorId>,
+    pub author: Option<AuditAuthor>,
     pub subject: Option<AuditSubject>,
     /// Every entry, rather than those in the shared window.
     pub all_time: bool,
 }
 
+/// An `op` value: `config`, or an operator id.
+pub fn parse_author(text: &str) -> Result<AuditAuthor, UiError> {
+    if text == CONFIG {
+        return Ok(AuditAuthor::Config);
+    }
+    OperatorId::parse_ulid(text)
+        .map(AuditAuthor::Operator)
+        .map_err(|e| invalid("op", e))
+}
+
+pub fn author_code(author: AuditAuthor) -> String {
+    match author {
+        AuditAuthor::Config => CONFIG.to_owned(),
+        AuditAuthor::Operator(id) => id.to_ulid(),
+    }
+}
+
 impl AuditQuery {
     pub fn parse(raw: &RawAuditQuery) -> Result<Self, UiError> {
         Ok(Self {
-            operator: raw
-                .op
-                .as_deref()
-                .map(OperatorId::parse_ulid)
-                .transpose()
-                .map_err(|e| invalid("op", e))?,
+            author: raw.op.as_deref().map(parse_author).transpose()?,
             subject: raw
                 .subject
                 .as_deref()
@@ -52,7 +68,7 @@ impl AuditQuery {
 
     pub fn filter(&self, state: &ViewState) -> AuditFilter {
         AuditFilter {
-            operators: self.operator.into_iter().collect(),
+            by: self.author.into_iter().collect(),
             subject: self.subject,
             window: (!self.all_time).then_some(state.scope.window),
         }
@@ -62,7 +78,7 @@ impl AuditQuery {
     /// builder.
     pub fn pairs(&self) -> Vec<(&'static str, String)> {
         vec![
-            ("op", self.operator.map(|o| o.to_ulid()).unwrap_or_default()),
+            ("op", self.author.map(author_code).unwrap_or_default()),
             (
                 "subject",
                 self.subject.map(subject_code).unwrap_or_default(),
@@ -86,8 +102,8 @@ impl AuditQuery {
         Self { all_time, ..self }
     }
 
-    pub fn with_operator(self, operator: Option<OperatorId>) -> Self {
-        Self { operator, ..self }
+    pub fn with_author(self, author: Option<AuditAuthor>) -> Self {
+        Self { author, ..self }
     }
 }
 
@@ -111,7 +127,7 @@ mod tests {
         let query = AuditQuery::parse(&raw(None, None, None)).expect("parse");
         let filter = query.filter(&state());
         assert_eq!(filter.window, Some(state().scope.window));
-        assert!(filter.operators.is_empty());
+        assert!(filter.by.is_empty());
         assert!(query.pairs().iter().all(|(_, v)| v.is_empty()));
     }
 
@@ -122,7 +138,10 @@ mod tests {
         let query = AuditQuery::parse(&raw(Some(&op), Some(&subject), Some("all"))).expect("parse");
         let filter = query.filter(&state());
         assert_eq!(filter.window, None);
-        assert_eq!(filter.operators, vec![OperatorId::from_ulid(2)]);
+        assert_eq!(
+            filter.by,
+            vec![AuditAuthor::Operator(OperatorId::from_ulid(2))]
+        );
         assert_eq!(
             filter.subject,
             Some(AuditSubject::Channel(ChannelId::from_ulid(4)))
@@ -130,13 +149,16 @@ mod tests {
         let pairs = query.pairs();
         assert!(pairs.contains(&("subject", subject)));
         assert!(pairs.contains(&("span", "all".to_owned())));
+        let config = AuditQuery::parse(&raw(Some("config"), None, None)).expect("parse");
+        assert_eq!(config.filter(&state()).by, vec![AuditAuthor::Config]);
+        assert!(config.pairs().contains(&("op", "config".to_owned())));
     }
 
     #[test]
     fn bad_values_name_their_key() {
         assert!(matches!(
             AuditQuery::parse(&raw(Some("x"), None, None)),
-            Err(UiError::Field { .. })
+            Err(UiError::Field { field: "op", .. })
         ));
         assert_eq!(
             AuditQuery::parse(&raw(None, None, Some("week"))),

@@ -3,6 +3,7 @@
 
 mod actions_support;
 mod agents;
+mod audit;
 mod channels;
 mod governance;
 mod graph;
@@ -50,13 +51,8 @@ pub fn fresh() -> FixtureBackend {
     FixtureBackend::try_new(SEED).expect("fixture generates")
 }
 
-pub const ALL: [Permission; 5] = [
-    Permission::View,
-    Permission::Content,
-    Permission::Govern,
-    Permission::Triage,
-    Permission::Operate,
-];
+/// Every permission: the researcher's in the fixture's config.
+pub const ALL: [Permission; 6] = Permission::ALL;
 
 pub fn researcher() -> Caller {
     crate::testing::caller_of(OPERATOR_RESEARCHER, &ALL)

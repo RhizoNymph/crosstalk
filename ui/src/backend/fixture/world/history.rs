@@ -1,35 +1,30 @@
-//! Operators and the operator history: policy decisions, merges, renames,
-//! triage, verdicts (one withdrawn), two rejected actions, configuration
-//! changes and a few dead letters. Every past operator action is in the
-//! audit log.
+//! The operator history: policy decisions, the promotion, merges and the
+//! revert, renames, triage, verdicts (one withdrawn) and two refused
+//! actions. Every past operator call is in the audit log as the spec
+//! records one: an `OperatorRecord` of the caller the directory gave the
+//! operator, the action and its outcome. What config made is in
+//! [`super::config`], the dead letters in [`super::letters`].
 
-use std::num::{NonZeroU32, NonZeroU64};
-
-use crosstalk_spec::aggregates::edge::{EdgeKey, TopicSlot};
-use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
-use crosstalk_spec::events::detect::DetectEvent;
-use crosstalk_spec::events::insight::InsightEvent;
-use crosstalk_spec::events::{BusEvent, Envelope};
-use crosstalk_spec::ids::{EventId, OperatorId};
-use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
+use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::actions::SupersededChannels;
-use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditOutcome, OperatorRecord};
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, ActionOutcome, ConflictKind, OperatorAction, PolicyKind,
+};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::Timestamp;
 
 use crate::backend::fixture::actions::effects;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
-use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
 use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictRecorded};
-use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
-use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
-use super::channels::{ChannelKey, ChannelPlan, DESIGN_DOCS_AT, PASTEBIN_DECIDED_AT};
+use super::channels::{ChannelKey, ChannelPlan};
+use super::config::caller;
 use super::drafts::{decisions, team_notes_promotion};
 use super::states::confirmed;
 use super::{GenError, World};
@@ -45,58 +40,36 @@ pub const OPERATOR_RESEARCHER: OperatorId =
 pub const OPERATOR_ONCALL: OperatorId =
     OperatorId::from_ulid(0x0192_7f71_f10d_0000_0000_0000_0000_0002);
 
-pub fn operators() -> Vec<Operator> {
-    vec![
-        Operator {
-            id: OPERATOR_RESEARCHER,
-            name: "researcher".to_owned(),
-            permissions: vec![
-                Permission::View,
-                Permission::Content,
-                Permission::Govern,
-                Permission::Triage,
-                Permission::Operate,
-            ],
-        },
-        Operator {
-            id: OPERATOR_ONCALL,
-            name: "oncall".to_owned(),
-            permissions: vec![Permission::View, Permission::Content, Permission::Triage],
-        },
-    ]
+/// Records one past operator call as the surface records it: the caller
+/// the directory gives `by`, the action, and `AuditOutcome::of` what the
+/// call returned, at `at`.
+fn operator_call(
+    world: &World,
+    state: &mut State,
+    at: Timestamp,
+    by: OperatorId,
+    action: OperatorAction,
+    result: &Result<ActionOutcome, ActionError>,
+) -> Result<(), GenError> {
+    let record = OperatorRecord::new(caller(world, by)?, action, AuditOutcome::of(result))
+        .map_err(|e| GenError::invalid("OperatorRecord", e))?;
+    state
+        .audit
+        .operator(&mut state.mint, at, record)
+        .map_err(|e| GenError::invalid("operator audit entry", e))?;
+    Ok(())
 }
 
-/// Records an applied operator action in the audit log, with what it
-/// produced.
+/// Records an accepted past operator action with what it returned.
 pub fn operator_action(
+    world: &World,
     state: &mut State,
     at: Timestamp,
     by: OperatorId,
     action: OperatorAction,
     outcome: ActionOutcome,
-) {
-    let subject = effects::subject(&action, Some(&outcome));
-    effects::audit(
-        state,
-        at,
-        Actor::Operator(by),
-        AuditedAction::Operator(action),
-        subject,
-        AuditOutcome::Applied(outcome),
-    );
-}
-
-fn config(state: &mut State, at: Timestamp, summary: &str, subject: Option<AuditSubject>) {
-    effects::audit(
-        state,
-        at,
-        Actor::Config,
-        AuditedAction::Config {
-            summary: summary.to_owned(),
-        },
-        subject,
-        AuditOutcome::Applied(ActionOutcome::Applied),
-    );
+) -> Result<(), GenError> {
+    operator_call(world, state, at, by, action, &Ok(outcome))
 }
 
 fn note(text: &str) -> Option<String> {
@@ -104,83 +77,16 @@ fn note(text: &str) -> Option<String> {
 }
 
 pub fn populate(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
-    configuration(world, state, plan)?;
-    policies(state, plan)?;
+    policies(world, state, plan)?;
     agents(world, state)?;
-    triage(state);
+    triage(world, state)?;
     verdicts(world, state)?;
-    rejected(state, plan)?;
-    dead_letters(world, state)?;
-    state.audit.sort_by_key(|e| (e.at, e.id));
-    Ok(())
-}
-
-fn configuration(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
-    use ChannelKey as K;
-    for (key, summary) in [
-        (
-            K::InternalWiki,
-            "declared channel wiki.corp.internal/eng (sanctioned)",
-        ),
-        (
-            K::Monorepo,
-            "declared channel git.corp.internal/platform/monorepo (sanctioned)",
-        ),
-        (
-            K::IssueTracker,
-            "declared channel issues.corp.internal (sanctioned)",
-        ),
-        (
-            K::ReleaseBucket,
-            "declared channel nfs-01:/mnt/shared/releases (sanctioned)",
-        ),
-    ] {
-        config(
-            state,
-            CONFIG_AT,
-            summary,
-            Some(AuditSubject::Channel(plan.id(key)?)),
-        );
-    }
-    config(
-        state,
-        DESIGN_DOCS_AT,
-        "declared channel docs.corp.internal/design (sanctioned)",
-        Some(AuditSubject::Channel(plan.id(K::DesignDocs)?)),
-    );
-    for key in ["reg0", "reg1", "reg2"] {
-        let id = world.scenario.cast.id(key)?;
-        config(
-            state,
-            CONFIG_AT,
-            "registered agent from config",
-            Some(AuditSubject::Agent(id)),
-        );
-    }
-    config(
-        state,
-        CONFIG_AT,
-        "enabled the five built-in alert rules",
-        None,
-    );
-    config(
-        state,
-        CONFIG_AT,
-        "added sinks soc-webhook, #agent-alerts, local-log",
-        None,
-    );
-    config(
-        state,
-        CONFIG_AT,
-        "topic versions: retain unpinned versions for 14 days",
-        None,
-    );
-    Ok(())
+    refused(world, state, plan)
 }
 
 /// The operator decisions in the channels' policy histories, and the
 /// promotion, as the audit log recorded the actions that made them.
-fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
+fn policies(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     for (key, decision) in decisions() {
         let PolicyAuthor::Operator(by) = decision.decision.by else {
             continue;
@@ -191,12 +97,13 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
             note: decision.decision.note.clone(),
         };
         operator_action(
+            world,
             state,
             decision.decision.at,
             by,
             action,
             ActionOutcome::Applied,
-        );
+        )?;
     }
     let (key, promotion) = team_notes_promotion();
     let channel = plan.id(key)?;
@@ -216,6 +123,7 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
         note: promotion.decision().decision.note.clone(),
     };
     operator_action(
+        world,
         state,
         promotion.at(),
         by,
@@ -224,7 +132,7 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
             channel,
             superseded,
         },
-    );
+    )?;
     Ok(())
 }
 
@@ -236,22 +144,24 @@ fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
                 .map_err(|e| GenError::invalid("MergeRequest", e))?;
             let action = OperatorAction::MergeAgents(request);
             operator_action(
+                world,
                 state,
                 merge.at(),
                 by,
                 action,
                 ActionOutcome::Merged(merge.id()),
-            );
+            )?;
         }
         if let Some(reversal) = merge.reverted() {
             let action = OperatorAction::Unmerge { merge: merge.id() };
             operator_action(
+                world,
                 state,
                 reversal.at,
                 reversal.by,
                 action,
                 ActionOutcome::Applied,
-            );
+            )?;
         }
     }
     let mut rng = Rng::fork(world.seed, "renames");
@@ -268,19 +178,20 @@ fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
             label: Some(label),
         };
         operator_action(
+            world,
             state,
             at,
             OPERATOR_RESEARCHER,
             action,
             ActionOutcome::Applied,
-        );
+        )?;
     }
     Ok(())
 }
 
 /// Audit entries for the acknowledgements and resolutions in the alert
 /// history.
-fn triage(state: &mut State) {
+fn triage(world: &World, state: &mut State) -> Result<(), GenError> {
     let steps: Vec<(OperatorId, Timestamp, OperatorAction)> = state
         .alerts
         .iter()
@@ -300,8 +211,9 @@ fn triage(state: &mut State) {
         })
         .collect();
     for (by, at, action) in steps {
-        operator_action(state, at, by, action, ActionOutcome::Applied);
+        operator_action(world, state, at, by, action, ActionOutcome::Applied)?;
     }
+    Ok(())
 }
 
 fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
@@ -364,7 +276,13 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
             .map_err(|e| GenError::invalid("TransmissionVerdict", e))?;
         let recorded = crate::backend::fixture::actions::record_verdict(state, entry)
             .map_err(|e| GenError::invalid("VerdictLog", e))?;
+        let outcome = if recorded == VerdictRecorded::Unchanged {
+            ActionOutcome::Unchanged
+        } else {
+            ActionOutcome::Applied
+        };
         operator_action(
+            world,
             state,
             at,
             by,
@@ -373,8 +291,8 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
                 verdict,
                 note: note(text),
             },
-            ActionOutcome::Applied,
-        );
+            outcome,
+        )?;
         if recorded != VerdictRecorded::Unchanged && verdict == Some(Verdict::FalseDetection) {
             effects::reject_transmission_alerts(state, transmission, at);
         }
@@ -382,137 +300,37 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
     Ok(())
 }
 
-/// Two actions the log shows as rejected: a policy change by an operator
-/// without `Govern`, and an acknowledgement of a resolved alert.
-fn rejected(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
+/// Two calls the log shows refused: a policy change by the on-call
+/// operator, who lacks `Govern` (`Forbidden`), and the on-call operator
+/// acknowledging an alert already resolved (`Conflict(AlertNotActive)`).
+fn refused(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     let wiki = plan.id(ChannelKey::HijackedWiki)?;
     let action = OperatorAction::SetPolicy {
         channel: wiki,
         policy: PolicyKind::Sanctioned,
         note: note("looks like a normal wiki"),
     };
-    let subject = effects::subject(&action, None);
-    effects::audit(
-        state,
-        ago(DAY),
-        Actor::Operator(OPERATOR_ONCALL),
-        AuditedAction::Operator(action),
-        subject,
-        AuditOutcome::Rejected(QueryError::Forbidden {
-            missing: Permission::Govern,
-        }),
-    );
+    let forbidden = Err(ActionError::Forbidden {
+        missing: action.required_permission(),
+    });
+    operator_call(world, state, ago(DAY), OPERATOR_ONCALL, action, &forbidden)?;
     if let Some(alert) = state
         .alerts
         .iter()
         .find(|a| matches!(a.state, AlertState::Resolved { at, .. } if at < ago(DAY)))
         .map(|a| a.id)
     {
-        effects::audit(
+        let conflict = Err(ActionError::Conflict(ConflictKind::AlertNotActive {
+            alert,
+        }));
+        operator_call(
+            world,
             state,
             ago(20 * HOUR),
-            Actor::Operator(OPERATOR_ONCALL),
-            AuditedAction::Operator(OperatorAction::Acknowledge { alert }),
-            Some(AuditSubject::Alert(alert)),
-            AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::AlertNotActive { alert })),
-        );
+            OPERATOR_ONCALL,
+            OperatorAction::Acknowledge { alert },
+            &conflict,
+        )?;
     }
-    Ok(())
-}
-
-fn dead_letters(world: &World, state: &mut State) -> Result<(), GenError> {
-    let mut letters = Vec::new();
-    let envelope = |state: &mut State, at: Timestamp, event: BusEvent| Envelope {
-        id: EventId::from_ulid(state.mint.ulid(at)),
-        at,
-        event,
-    };
-    if let Some(record) = world.transmissions.iter().rev().find(|t| t.is_confirmed())
-        && let (Some(from), Some(bytes)) = (record.from, NonZeroU64::new(record.matched_bytes))
-    {
-        let at = record.transmission.opened_at;
-        letters.push(DeadLetter {
-            group: ConsumerGroup("analyze".to_owned()),
-            envelope: envelope(
-                state,
-                at,
-                BusEvent::Detect(DetectEvent::TransmissionConfirmed {
-                    transmission: record.transmission.id,
-                    from,
-                    to: record.transmission.to,
-                    route: record.transmission.route.clone(),
-                    at,
-                    matched_bytes: bytes,
-                }),
-            ),
-            attempts: NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
-            last_error: "embedder: request timed out after 30s".to_owned(),
-        });
-        let bucket_start = minus(at, at.as_micros() % HOUR);
-        let bucket = TimeWindow::new(bucket_start, plus(bucket_start, HOUR))
-            .map_err(|e| GenError::invalid("TimeWindow", e))?;
-        if let Ok(key) = EdgeKey::new(
-            from,
-            record.transmission.to,
-            record.transmission.route.clone(),
-            TopicSlot {
-                version: TopicModelVersion(2),
-                topic: record.topic(TopicModelVersion(2)),
-            },
-            bucket,
-        ) {
-            letters.push(DeadLetter {
-                group: ConsumerGroup("topology".to_owned()),
-                envelope: envelope(state, at, BusEvent::Insight(InsightEvent::EdgeUpdated(key))),
-                attempts: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-                last_error: "edge store: deadlock detected, transaction rolled back".to_owned(),
-            });
-        }
-    }
-    let pastebin = world
-        .scenario
-        .channel(ChannelKey::Pastebin)
-        .ok_or_else(|| GenError::Missing("pastebin".to_owned()))?;
-    if let Some(policy) = state
-        .channels
-        .get(&pastebin)
-        .map(|r| r.channel().policy.clone())
-    {
-        let at = PASTEBIN_DECIDED_AT;
-        letters.push(DeadLetter {
-            group: ConsumerGroup("alerts".to_owned()),
-            envelope: envelope(
-                state,
-                at,
-                BusEvent::Insight(InsightEvent::PolicyChanged {
-                    channel: pastebin,
-                    policy,
-                }),
-            ),
-            attempts: NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
-            last_error: "sink soc-webhook rejected the delivery: HTTP 503".to_owned(),
-        });
-    }
-    let recorded = world.accesses.iter().rev().nth(3).and_then(|access| {
-        let channel = *world.resource_channel.get(&access.resource)?;
-        Some((access, channel))
-    });
-    if let Some((access, channel)) = recorded {
-        letters.push(DeadLetter {
-            group: ConsumerGroup("flow".to_owned()),
-            envelope: envelope(
-                state,
-                access.at,
-                BusEvent::Detect(DetectEvent::AccessRecorded {
-                    access: access.clone(),
-                    channel,
-                }),
-            ),
-            attempts: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
-            last_error: "resource extractor: unparseable bash command".to_owned(),
-        });
-    }
-    letters.sort_by_key(|l| (l.envelope.at, l.envelope.id));
-    state.dead_letters = letters;
     Ok(())
 }

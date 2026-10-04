@@ -359,6 +359,12 @@ fn disable_refunds(
         id: rules.off,
         enabled: false,
     };
-    operator_action(state, OFF_RULE_DISABLED_AT, RESEARCHER, action, outcome);
-    Ok(())
+    operator_action(
+        world,
+        state,
+        OFF_RULE_DISABLED_AT,
+        RESEARCHER,
+        action,
+        outcome,
+    )
 }

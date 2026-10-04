@@ -15,8 +15,7 @@ use crosstalk_spec::ids::{ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::research::AuditEntry;
-
+use super::audit::AuditLog;
 use super::clock::Mint;
 use super::identity::Identity;
 
@@ -109,8 +108,9 @@ pub struct State {
     pub alerts: Vec<Alert>,
     /// Each built-in rule once, and the user rules; none is ever removed.
     pub rules: AlertRuleSet,
-    /// Append-only, oldest first.
-    pub audit: Vec<AuditEntry>,
+    /// Append-only: every operator call and config change, in append
+    /// order.
+    pub audit: AuditLog,
     pub dead_letters: Vec<DeadLetter>,
     /// Projection jobs, oldest first.
     pub projections: Vec<Job>,
@@ -132,7 +132,7 @@ impl State {
             alerts: Vec::new(),
             // Generation replaces it with the configured settings.
             rules: AlertRuleSet::new(|_| (RuleStatus::Enabled, Vec::new())),
-            audit: Vec::new(),
+            audit: AuditLog::default(),
             dead_letters: Vec::new(),
             projections: Vec::new(),
             mint,

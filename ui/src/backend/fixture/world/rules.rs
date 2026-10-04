@@ -170,12 +170,13 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
             sinks: sinks.clone(),
         };
         operator_action(
+            world,
             state,
             at,
             OPERATOR_RESEARCHER,
             action,
             ActionOutcome::RuleCreated(id),
-        );
+        )?;
         insert(
             state,
             id,

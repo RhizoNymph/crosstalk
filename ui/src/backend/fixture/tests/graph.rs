@@ -19,10 +19,10 @@ use super::super::clock::WATERMARK;
 use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
 use crate::backend::Backend;
-use crate::contract::research::AuditFilter;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
+use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 use super::reads_support::*;
@@ -174,7 +174,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
     );
     assert_eq!(b.operators(&c).await.expect("operators").len(), 2);
     assert!(
-        !b.dead_letters(&c, &first(50))
+        !b.dead_letters(&c, None, &first(50))
             .await
             .expect("dead letters")
             .items()

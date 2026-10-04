@@ -31,20 +31,21 @@ use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
-use crosstalk_spec::interfaces::l2_transport::DeadLetter;
+use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
+use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, SinkInfo};
 use crosstalk_spec::support::TimeWindow;
 
-use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ActionOutcome, OperatorAction, QueryError,
@@ -390,8 +391,6 @@ pub trait Backend: Send + Sync + 'static {
     /// Govern. Every configured sink and how its last delivery went.
     fn sinks(&self, caller: &Caller) -> impl Future<Output = Result<Vec<SinkInfo>>> + Send;
 
-    // Research and pipeline (item 12).
-
     /// View. Operator verdicts tallied against the detector's calls for the
     /// judgeable transmissions opened in `window`.
     fn detection_quality(
@@ -400,6 +399,12 @@ pub trait Backend: Send + Sync + 'static {
         window: TimeWindow,
     ) -> impl Future<Output = Result<DetectionQuality>> + Send;
 
+    // The audit log, the operator directory and dead letters: exactly
+    // `QueryApi`'s methods.
+
+    /// Audit. The audit entries `filter` matches (`AuditFilter::matches`:
+    /// authors, subjects as recorded, window), operator, config and export
+    /// alike, newest first by time and id.
     fn audit(
         &self,
         caller: &Caller,
@@ -407,12 +412,16 @@ pub trait Backend: Send + Sync + 'static {
         page: &PageRequest<AuditList>,
     ) -> impl Future<Output = Result<Page<AuditEntry, AuditList>>> + Send;
 
+    /// View. Every operator the directory holds, by id: current ones and
+    /// former ones, listed with no permissions.
     fn operators(&self, caller: &Caller) -> impl Future<Output = Result<Vec<Operator>>> + Send;
 
-    /// Needs `Operate`.
+    /// Operate. Dead letters of one consumer group, or of every group,
+    /// newest envelope first.
     fn dead_letters(
         &self,
         caller: &Caller,
+        group: Option<&ConsumerGroup>,
         page: &PageRequest<DeadLetterList>,
     ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>>> + Send;
 

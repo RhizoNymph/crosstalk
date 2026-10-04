@@ -15,9 +15,11 @@ mod alerts;
 pub mod blobs;
 pub mod catalog;
 mod channels;
+mod config;
 mod drafts;
 mod evidence;
 mod history;
+mod letters;
 mod retention;
 mod rules;
 mod states;
@@ -34,9 +36,8 @@ use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::SinkInfo;
+use crosstalk_spec::interfaces::l8_surface::operators::OperatorDirectory;
 use crosstalk_spec::observed::agent::ClaimSet;
-
-use crate::contract::research::Operator;
 
 use super::store::State;
 use super::text::Theme;
@@ -200,7 +201,9 @@ impl Scenario {
 #[derive(Debug, Clone)]
 pub struct World {
     pub seed: u64,
-    pub operators: Vec<Operator>,
+    /// The operator directory config defines: authenticated, the
+    /// researcher and the on-call operator.
+    pub directory: OperatorDirectory,
     pub resources: Vec<Resource>,
     pub resource_index: HashMap<ResourceId, usize>,
     /// The channel each resource was grouped into when first seen.
@@ -253,7 +256,7 @@ impl World {
 /// Builds the world and the initial mutable state for `seed`.
 pub fn generate(seed: u64) -> Result<(World, State), GenError> {
     let mut mint = super::clock::Mint::new(seed);
-    let operators = history::operators();
+    let (directory, operator_changes) = config::directory()?;
     let cast = agents::build(seed, &mut mint)?;
     let plan = channels::plan(&mut mint, &cast)?;
     let topic_model = topics::build(seed, &mut mint)?;
@@ -269,7 +272,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
 
     let mut world = World {
         seed,
-        operators,
+        directory,
         resource_index: index_by(&traffic.resources, |r| r.id),
         resources: traffic.resources,
         resource_channel: traffic.resource_channel,
@@ -295,7 +298,9 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
     world.claims = agents::claims(&cast, &world.last_activity);
     world.sinks = rules::sinks(&mut state.mint);
     alerts::populate(&world, &mut state, &plan)?;
+    config::record(&world, &mut state, &plan, operator_changes)?;
     history::populate(&world, &mut state, &plan)?;
+    letters::populate(&world, &mut state)?;
     Ok((world, state))
 }
 

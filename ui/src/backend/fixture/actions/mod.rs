@@ -18,7 +18,7 @@ use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, Caller, OperatorAction};
 use crosstalk_spec::support::{Change, Timestamp};
 
-use crate::contract::research::{Actor, AuditOutcome, AuditedAction};
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditOutcome, OperatorRecord};
 
 use super::clock::NOW;
 use super::store::State;
@@ -106,25 +106,31 @@ fn apply(world: &World, state: &mut State, stamp: Stamp, action: &OperatorAction
     }
 }
 
-/// Checks the permission, applies the action and audits the outcome.
+/// Checks the permission, applies the action and appends the call's one
+/// audit entry: the caller as authenticated, the action, and
+/// `AuditOutcome::of` what the call returns, at the acceptance time.
+///
+/// The record is built with `OperatorRecord::new`, which refuses an
+/// outcome that disagrees with the caller's permission; the check above
+/// makes that impossible, and so is an id the mint already issued. Either
+/// would be a fixture fault, reported as `Store`.
 pub fn act(world: &World, state: &mut State, caller: &Caller, action: OperatorAction) -> Acted {
     let stamp = Stamp {
         by: caller.operator(),
         at: NOW,
     };
     let result = permitted(caller, &action).and_then(|()| apply(world, state, stamp, &action));
-    let subject = effects::subject(&action, result.as_ref().ok());
-    let outcome = match &result {
-        Ok(outcome) => AuditOutcome::Applied(outcome.clone()),
-        Err(error) => AuditOutcome::Rejected(error.clone().into()),
-    };
-    effects::audit(
-        state,
-        stamp.at,
-        Actor::Operator(stamp.by),
-        AuditedAction::Operator(action),
-        subject,
-        outcome,
-    );
+    let record =
+        OperatorRecord::new(caller.clone(), action, AuditOutcome::of(&result)).map_err(|e| {
+            ActionError::Store {
+                reason: format!("fixture audit record: {e:?}"),
+            }
+        })?;
+    state
+        .audit
+        .operator(&mut state.mint, stamp.at, record)
+        .map_err(|e| ActionError::Store {
+            reason: format!("fixture audit log: {e:?}"),
+        })?;
     result
 }

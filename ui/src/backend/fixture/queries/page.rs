@@ -21,10 +21,6 @@ pub fn newest_first(at: Timestamp, id: u128) -> Key {
     (u64::MAX - at.as_micros(), u128::MAX - id)
 }
 
-pub fn oldest_first(at: Timestamp, id: u128) -> Key {
-    (at.as_micros(), id)
-}
-
 /// A digest of the request a list was asked with (its filter and anything
 /// else that selects its items), for binding cursors to it.
 pub fn digest(request: &impl Debug) -> u64 {

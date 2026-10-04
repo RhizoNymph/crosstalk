@@ -12,6 +12,7 @@
 //! The scenarios the world contains are listed in `docs/features/ui.md`.
 
 mod actions;
+mod audit;
 mod clock;
 mod identity;
 mod queries;
@@ -46,14 +47,16 @@ use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
-use crosstalk_spec::interfaces::l2_transport::DeadLetter;
+use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
+use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{
@@ -64,7 +67,6 @@ use tokio::sync::RwLock;
 
 use super::{Backend, Result};
 use crate::contract::present::Present;
-use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::paging::{
@@ -501,23 +503,25 @@ impl Backend for FixtureBackend {
         filter: &AuditFilter,
         page: &PageRequest<AuditList>,
     ) -> Result<Page<AuditEntry, AuditList>> {
-        require(caller, Permission::View)?;
+        require(caller, Permission::Audit)?;
         self.read(|ctx| queries::lists::audit(ctx, filter, page))
             .await
     }
 
+    /// The directory's operators by id, former ones with no permissions.
     async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>> {
         require(caller, Permission::View)?;
-        Ok(self.world.operators.clone())
+        Ok(self.world.directory.operators().cloned().collect())
     }
 
     async fn dead_letters(
         &self,
         caller: &Caller,
+        group: Option<&ConsumerGroup>,
         page: &PageRequest<DeadLetterList>,
     ) -> Result<Page<DeadLetter, DeadLetterList>> {
         require(caller, Permission::Operate)?;
-        self.read(|ctx| queries::lists::dead_letters(ctx, page))
+        self.read(|ctx| queries::lists::dead_letters(ctx, group, page))
             .await
     }
 
