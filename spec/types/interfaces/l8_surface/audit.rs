@@ -14,8 +14,10 @@
 //! An entry's [`AuditBody`] is either an operator's call or a change config
 //! made, never a mix: a config change is a [`ConfigChange`], not an
 //! [`OperatorAction`] with a made-up author, and an operator entry always
-//! carries the [`Caller`] as authenticated. [`AuditEntry::by`] derives the
-//! author from the body, so the two cannot disagree.
+//! carries a [`CallerSnapshot`] of the [`Caller`](super::Caller) as
+//! authenticated: its operator and the permissions it held.
+//! [`AuditEntry::by`] derives the author from the body, so the two cannot
+//! disagree.
 //!
 //! A config load records only what it changes: loading a config the stored
 //! state already reflects records nothing.
@@ -38,15 +40,13 @@ use crate::ids::{
 use crate::interfaces::l8_surface::export::ExportRecord;
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
 use crate::interfaces::l8_surface::{
-    ActionError, ActionOutcome, Caller, ConflictKind, InputError, OperatorAction, Permission,
-    PermissionSet, PolicyKind,
+    ActionError, ActionOutcome, CallerSnapshot, ConflictKind, InputError, OperatorAction,
+    Permission, PermissionSet, PolicyKind,
 };
 use crate::observed::agent::IdentityEvidence;
 use crate::paging::{AuditList, Page, PageRequest};
 use crate::support::{NonEmpty, TimeWindow, Timestamp};
 use crate::wire::{Rejected, WireRequest};
-
-use super::permissions::RecordedCaller;
 
 /// Who made an audited change: config, or an operator. The same type that
 /// authors a policy decision, so a `SetPolicy` entry and the decision it
@@ -171,19 +171,19 @@ impl AuditOutcome {
 /// One operator action call.
 ///
 /// Built only through [`OperatorRecord::new`]: the outcome is `Forbidden`
-/// exactly when the caller lacks the action's required permission, and then
+/// exactly when the caller (as its [`CallerSnapshot`] records it) lacks the
+/// action's required permission, and then
 /// names that permission, because the permission is checked before anything
 /// else. A record that says an action was attempted by a caller who could
 /// not attempt it, or forbidden to one who could, cannot be built.
 ///
 /// On the wire, `{"caller": {"operator": .., "permissions": [..]}, "action":
-/// .., "outcome": ..}`: the caller is written as a `RecordedCaller`, and
-/// decoding goes through [`OperatorRecord::new`]. A response (inside
-/// `AuditEntry`), never a request.
+/// .., "outcome": ..}`, decoded through [`OperatorRecord::new`]. A response
+/// (inside `AuditEntry`), never a request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawOperatorRecord", into = "RawOperatorRecord")]
+#[serde(rename_all = "snake_case", try_from = "RawOperatorRecord")]
 pub struct OperatorRecord {
-    caller: Caller,
+    caller: CallerSnapshot,
     action: OperatorAction,
     outcome: AuditOutcome,
 }
@@ -200,41 +200,34 @@ pub enum InvalidOperatorRecord {
     WrongMissingPermission { required: Permission },
 }
 
-/// [`OperatorRecord`]'s wire form: the caller as recorded, the action and
-/// the outcome.
-#[derive(Serialize, Deserialize)]
+/// [`OperatorRecord`]'s fields, decoded without the check.
+#[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawOperatorRecord {
-    caller: RecordedCaller,
+    caller: CallerSnapshot,
     action: OperatorAction,
     outcome: AuditOutcome,
-}
-
-impl From<OperatorRecord> for RawOperatorRecord {
-    fn from(record: OperatorRecord) -> Self {
-        Self {
-            caller: RecordedCaller::from(&record.caller),
-            action: record.action,
-            outcome: record.outcome,
-        }
-    }
 }
 
 impl TryFrom<RawOperatorRecord> for OperatorRecord {
     type Error = Rejected<InvalidOperatorRecord>;
 
     fn try_from(raw: RawOperatorRecord) -> Result<Self, Self::Error> {
-        Self::new(Caller::from(raw.caller), raw.action, raw.outcome)
+        Self::new(raw.caller, raw.action, raw.outcome)
             .map_err(|error| Rejected::new("operator record", error))
     }
 }
 
 impl OperatorRecord {
+    /// The record of `caller`'s call: the surface passes the
+    /// [`Caller`](super::Caller) of the call, and the record keeps its
+    /// [`CallerSnapshot`]; decoding passes the snapshot it read.
     pub fn new(
-        caller: Caller,
+        caller: impl Into<CallerSnapshot>,
         action: OperatorAction,
         outcome: AuditOutcome,
     ) -> Result<Self, InvalidOperatorRecord> {
+        let caller = caller.into();
         let required = action.required_permission();
         let permitted = caller.has(required);
         match (&outcome, permitted) {
@@ -255,9 +248,9 @@ impl OperatorRecord {
         })
     }
 
-    /// The caller as authenticated for the call, with the permissions it
-    /// held then.
-    pub fn caller(&self) -> &Caller {
+    /// The caller as authenticated for the call: its operator and the
+    /// permissions it held then.
+    pub fn caller(&self) -> &CallerSnapshot {
         &self.caller
     }
 

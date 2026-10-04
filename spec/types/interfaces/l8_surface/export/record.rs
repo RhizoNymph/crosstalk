@@ -23,8 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::ExportId;
 use crate::interfaces::l8_surface::audit::AuditSubject;
-use crate::interfaces::l8_surface::permissions::RecordedCaller;
-use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
+use crate::interfaces::l8_surface::{CallerSnapshot, Permission, QueryError};
 use crate::wire::Rejected;
 
 use super::manifest::{ExportHeader, ExportTrailer};
@@ -62,7 +61,7 @@ pub enum ExportEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawExportRecord", into = "RawExportRecord")]
 pub struct ExportRecord {
-    caller: Caller,
+    caller: CallerSnapshot,
     request: ExportRequest,
     event: ExportEvent,
 }
@@ -87,7 +86,7 @@ pub enum InvalidExportRecord {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawExportRecord {
-    caller: RecordedCaller,
+    caller: CallerSnapshot,
     request: ExportRequest,
     event: ExportEvent,
 }
@@ -95,7 +94,7 @@ struct RawExportRecord {
 impl From<ExportRecord> for RawExportRecord {
     fn from(record: ExportRecord) -> Self {
         Self {
-            caller: RecordedCaller::from(&record.caller),
+            caller: record.caller,
             request: record.request,
             event: record.event,
         }
@@ -106,17 +105,18 @@ impl TryFrom<RawExportRecord> for ExportRecord {
     type Error = Rejected<InvalidExportRecord>;
 
     fn try_from(raw: RawExportRecord) -> Result<Self, Self::Error> {
-        Self::new(Caller::from(raw.caller), raw.request, raw.event)
+        Self::new(raw.caller, raw.request, raw.event)
             .map_err(|error| Rejected::new("export record", error))
     }
 }
 
 impl ExportRecord {
     pub fn new(
-        caller: Caller,
+        caller: impl Into<CallerSnapshot>,
         request: ExportRequest,
         event: ExportEvent,
     ) -> Result<Self, InvalidExportRecord> {
+        let caller = caller.into();
         let required = request.required_permission();
         let permitted = caller.has(required);
         match (&event, permitted) {
@@ -144,7 +144,7 @@ impl ExportRecord {
         })
     }
 
-    pub fn caller(&self) -> &Caller {
+    pub fn caller(&self) -> &CallerSnapshot {
         &self.caller
     }
 

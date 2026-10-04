@@ -1,0 +1,35 @@
+[invariant]
+id = "surface.wire.action-request-covers-actions"
+statement = "Every OperatorAction variant has exactly one ActionRequest variant, of the same ActionKind, which carries no server-stamped field and from which ActionRequest::into_action builds the action with the caller's operator as any author, refusing a merge that names one agent twice with SelfMerge; and ActionRequest::of recovers that request from the action."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A client cannot send an OperatorAction, because MergeAgents holds a
+MergeRequest whose author the surface stamps, so it sends an ActionRequest
+instead. If an action had no request form, no client could ask for it; if
+two request variants built the same action, or a request built an action
+of another kind, the route, its permission check and the audit record
+would disagree with what the operator asked. ActionRequest::into_action,
+ActionRequest::of and ActionRequest::kind match exhaustively with no
+wildcard, so an action added without its request form does not compile.
+A self-merge is the one request that names no valid action: stamping
+refuses it with the existing SelfMerge, which the surface returns as
+InvalidInput(SelfMerge) without calling act or auditing anything.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::interfaces::l8_surface::ActionRequest",
+    "crosstalk_spec::interfaces::l8_surface::ActionRequest::into_action",
+    "crosstalk_spec::interfaces::l8_surface::ActionRequest::of",
+]
+unit = [
+    "crosstalk_spec::tests::wire::surface_actions::actions::every_action_has_exactly_one_request_form",
+    "crosstalk_spec::tests::wire::surface_actions::actions::a_merge_is_authored_by_the_caller",
+    "crosstalk_spec::tests::wire::surface_actions::actions::stamping_a_self_merge_is_refused",
+    "crosstalk_spec::tests::wire::surface_actions::actions::every_action_request_golden",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

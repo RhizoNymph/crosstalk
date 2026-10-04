@@ -203,9 +203,9 @@ on the wire.
 - **Responses and bus events** derive `Serialize` and `Deserialize`
   (the UI and other nodes decode them) and are never `WireRequest`.
 - **Authority** never comes from the client. `Caller` implements neither
-  serde trait (an audit record writes the caller it keeps as a private
-  `RecordedCaller`, `{"operator": .., "permissions": [..]}`, which a
-  client decoding the record reads back into a `Caller`): the extractor builds it from the verified session through
+  serde trait, and no decoded value becomes one (an audit record keeps a
+  `CallerSnapshot`, `{"operator": .., "permissions": [..]}`, plain data
+  that is not a `Caller`; see "Surface actions" below): the extractor builds it from the verified session through
   `OperatorDirectory::caller`, and responses name its `OperatorId`. So do
   `RequestIdentity`, `OperatorDirectory` and `Promotion` (built in process
   from a `PromoteChannel`, the caller and the acceptance time). Every
@@ -226,9 +226,10 @@ on the wire.
 
 `OperatorAction` holds a `MergeRequest`, whose author
 `OperatorAction::merge_agents` stamps from the caller, so it cannot be
-what a client sends. The action a client sends is a separate request type
-without the author, which the surface turns into an `OperatorAction` with
-the caller; defining it is part of the surface's conversion.
+what a client sends. The action a client sends is `ActionRequest`, the
+same actions without the author, which `ActionRequest::into_action`
+turns into an `OperatorAction` with the caller (see "Surface actions"
+below).
 
 ### Errors
 
@@ -316,7 +317,7 @@ the spec types themselves:
 | `spec/types/aggregates/topic.rs`, `aggregates/projection/mod.rs` | What the errors carry: `TopicModelVersion`, `EmbeddingModel`, `FitFailure`, `ProjectionStatusKind` | — |
 | `spec/types/interfaces/l8_surface.rs` | `AlertFilter` (a request), `AlertStateKind` | — |
 | `spec/types/interfaces/l8_surface/errors.rs` | The error enums, adjacently tagged | `InputError::MalformedRequest` |
-| `spec/types/interfaces/l8_surface/permissions.rs` | `Permission` as a string, `PermissionSet` as an array; `Caller` never serialized, an audit record's copy written as `RecordedCaller` | `RecordedCaller` (surface-private) |
+| `spec/types/interfaces/l8_surface/permissions.rs` | `Permission` as a string, `PermissionSet` as an array; `Caller` never serialized; an audit record's `CallerSnapshot` | `CallerSnapshot`, `NoPermissions` |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | `From<DecodeError>` for `QueryError` and `ActionError` | — |
 | `spec/types/tests/wire/harness.rs` | The golden harness | `assert_golden`, `assert_encodes`, `assert_request_golden`, `assert_request_golden_allowing`, `assert_rejected`, `assert_round_trips`, `authority_key`, `BLESS`, `AUTHORITY_KEYS` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | One module per area: goldens, rejections, reference values | — |
@@ -346,3 +347,114 @@ the spec types themselves:
   every shape is fixed.
 - The spec's only dependencies are `serde` and `serde_json`, pinned
   exactly; no other crate is added for the wire.
+
+## Surface actions (surface-actions)
+
+The operator surface's own wire types: the action a client sends and the
+action it becomes, the audit log, the live feed and its SSE framing, the
+operator directory and permissions, alert sinks, the list filters and the
+overview. Tests in `spec/types/tests/wire/surface_actions/` (`actions`,
+`audit`, `live`, `lists`, `operators`), goldens in
+`spec/types/tests/golden/surface_actions/<area>/`.
+
+### Actions: request, action, outcome
+
+```text
+client ── ActionRequest JSON ──▶ decode_request::<ActionRequest>
+                                   └─ into_action(&caller) ─┬─ Ok(OperatorAction) ─▶ act(caller, action) ─▶ ActionOutcome
+                                                            └─ Err(SelfMerge) ─▶ InvalidInput(SelfMerge), never audited
+audit log ◀── OperatorRecord { caller: CallerSnapshot, action: OperatorAction, outcome }
+```
+
+- `ActionRequest` (a `WireRequest`) has one variant per `OperatorAction`
+  variant, same name, same fields, except `MergeAgents { from, into }`,
+  which names no author: `{"type": "merge_agents", "data": {"from":
+  "01J..", "into": "01J.."}}`. Every other variant carries exactly its
+  action's fields, none of which is stamped (where applying an action
+  records an operator or a time, the surface stamps it then).
+- `ActionRequest::into_action(self, &Caller) -> Result<OperatorAction,
+  SelfMerge>` stamps it: a merge is authored by
+  `MergeAuthor::Operator(caller.operator())` through
+  `OperatorAction::merge_agents`, which refuses one agent named twice with
+  the existing `SelfMerge`. It takes no time: no action holds one.
+- `ActionRequest::of(&OperatorAction)` is the inverse and
+  `ActionRequest::kind` names the action kind; with `into_action` all
+  three match exhaustively, so a new action does not compile until it has
+  its request form. Each action comes from exactly one request variant
+  (`surface.wire.action-request-covers-actions`).
+- `OperatorAction` serializes both ways (the audit log returns it) and is
+  never a request; a merge carries `"by": {"type": "operator", "data":
+  ..}`. Sending that form as a request is refused as an unknown field
+  `by`.
+- `ActionOutcome` is adjacently tagged; `SupersededChannels` is an array
+  of channel ids, sorted and deduplicated on decode as its constructor
+  does.
+
+### Audit log
+
+- `AuditEntry { id, at, body }`, `body` one of `operator`, `config`,
+  `export`. `AuditFilter` is a request whose `by` is the client's choice
+  of authors (its golden allows that key).
+- `OperatorRecord` and `ExportRecord` keep a `CallerSnapshot`, not a
+  `Caller`: `{"operator": "01J..", "permissions": ["view", "audit"]}`.
+  It is public plain data (`of(&Caller)`, `operator`, `permissions`,
+  `has`), serde both ways and not a request. Its decode goes through
+  `CallerSnapshot::new`, which refuses an empty set (`NoPermissions`):
+  `OperatorDirectory::caller` never grants one. Nothing converts a
+  snapshot into a `Caller`, so decoding the log yields no authority
+  (`surface.wire.authority-not-decoded`; a `compile_fail` doctest in
+  `wire/authority.rs`). Records decode through their constructors, so a
+  record whose outcome contradicts its snapshot's permissions is a decode
+  error. The constructors take `impl Into<CallerSnapshot>`: the surface
+  passes the call's `Caller`, decoding the snapshot it read.
+
+### Live feed and SSE framing
+
+Each `LiveItem` is one SSE event:
+
+```text
+event: event
+id: 7-1042
+data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}}}
+
+```
+
+- `event` is `LiveItem::event_name`, the item's JSON `type`: `event`,
+  `resync` or `heartbeat`.
+- `id` is the cursor's text, `LiveCursor::encode` (`<epoch>-<seq>`, both
+  decimal, no leading zeros), the same string as the JSON's `cursor`. The
+  browser sends the last one back as `Last-Event-ID`, which
+  `Resume::from_last_event_id` reads. Heartbeats carry one too.
+- `data` is the whole item as one line of JSON.
+- The stream's last event is named `end` (`LiveEnd::EVENT_NAME`), its
+  data the `LiveEnd` string (`"lagged"`), with no `id`, so the client's
+  resume point stays its last cursor
+  (`surface.live.sse-frame-matches-item`).
+- `UiEvent` is adjacently tagged with `{"id": ..}` (or `{"at": ..}`,
+  `{"version": ..}`) data; `ResyncReason` and `LiveEnd` are strings;
+  `Resume` is adjacently tagged, though the server builds it from the
+  `Last-Event-ID` header, not from JSON.
+
+### Operators, sinks, lists, overview
+
+- `Operator { id, name, permissions }`; a former operator's permissions
+  are `[]`. `OperatorName` is checked text (trimmed; `Blank`, `TooLong`,
+  `ControlCharacter` refused). `PermissionSet` is an array in
+  `Permission::ALL` order, decoded from any order with repeats counted
+  once. `AccessMode` is a string.
+- `SinkInfo::last_delivery` is `null`, `{"type": "succeeded", "data":
+  "<timestamp>"}` or `{"type": "failed", "data": <SinkError>}`, never
+  serde's `{"Ok": ..}` form of a `Result`.
+- Requests: `ChannelFilter` (its `OriginFilter` adjacently tagged:
+  `in_force`, `with_superseded`, `superseded`), `AlertRuleFilter`,
+  `SearchRequest` (`text` is checked non-blank text). `AgentFilter` is
+  re-exported from the agents area, which owns its goldens.
+- Responses: `TopicPage`, `OverviewCounts`.
+
+### Not on the wire
+
+`ActionKind`, `OutcomeKind`, `AuditError`, `FeedWindow`, `ResumePlan`,
+`LiveConfig`, `AccessConfig`, `OperatorConfig`, `TrustedOperator`,
+`OperatorDirectory`, `RequestIdentity`, `Unauthenticated`,
+`InvalidAccessConfig` and the traits (`OperatorActions`, `AuditLog`,
+`LiveFeed`, `LiveStream`, `AlertSink`): no wire root reaches them.

@@ -31,6 +31,13 @@ unit = [
     "crosstalk_spec::tests::wire::paging::cursors_refuse_tokens_the_constructor_refuses",
     "crosstalk_spec::tests::wire::paging::pages_refuse_what_the_surface_never_serves",
     "crosstalk_spec::tests::wire::paging::id_batches_normalize_and_refuse_too_many",
+    "crosstalk_spec::tests::wire::surface_actions::audit::caller_snapshots_refuse_no_permissions_and_unknown_fields",
+    "crosstalk_spec::tests::wire::surface_actions::audit::operator_records_refuse_outcomes_their_caller_contradicts",
+    "crosstalk_spec::tests::wire::surface_actions::operators::operator_names_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::surface_actions::operators::permission_sets_decode_any_order_and_encode_canonically",
+    "crosstalk_spec::tests::wire::surface_actions::live::live_cursors_refuse_other_text",
+    "crosstalk_spec::tests::wire::surface_actions::actions::superseded_channels_decode_sorted_and_once",
+    "crosstalk_spec::tests::wire::surface_actions::lists::list_requests_refuse_unknown_fields_and_variants",
 ]
 
 [evidence-review]

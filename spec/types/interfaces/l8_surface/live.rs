@@ -7,9 +7,34 @@
 //!                                     fan-out, one bounded buffer per stream ▼
 //!                                stream task: drop events the caller may not receive
 //!                                                                            ▼
-//!                                       SSE: `id: <LiveCursor>`, `data: <UiEvent>`
+//!                  SSE: `event: <LiveItem type>`, `id: <LiveCursor>`, `data: <LiveItem JSON>`
 //! UI: on each UiEvent, re-query what it names through `QueryApi`
 //! ```
+//!
+//! **SSE framing.** Each [`LiveItem`] is one SSE event of three fields:
+//!
+//! ```text
+//! event: event
+//! id: 7-1042
+//! data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}}}
+//!
+//! ```
+//!
+//! - `event` is the item's variant, the same snake_case name as its JSON
+//!   `type` ([`LiveItem::event_name`]): `event`, `resync` or `heartbeat`, so
+//!   an `EventSource` client can listen per kind.
+//! - `id` is the item's cursor as text ([`LiveCursor::encode`],
+//!   `<epoch>-<seq>`), the same string as the JSON's `cursor`. The browser
+//!   keeps the last one and sends it back as `Last-Event-ID` on reconnect,
+//!   which [`Resume::from_last_event_id`] reads. Heartbeats carry an id too,
+//!   so the last id always holds the newest cursor the stream has passed.
+//! - `data` is the whole item as JSON on one line (`serde_json::to_string`,
+//!   which never writes a newline), decoded by the client as a `LiveItem`.
+//!
+//! When the stream ends, the server sends one last event named
+//! [`LiveEnd::EVENT_NAME`] (`end`) whose `data` is the [`LiveEnd`] JSON
+//! (`"lagged"`), with no `id` field, so the client's `Last-Event-ID` stays
+//! the last cursor it received, and then closes the response.
 //!
 //! **Ids only.** A [`UiEvent`] says which entity changed and nothing about
 //! how; the UI re-queries it. So an event can never carry stale state or
@@ -182,7 +207,8 @@ impl LiveCursor {
         format!("{}-{}", self.epoch.0, self.seq)
     }
 
-    /// Reads what [`LiveCursor::encode`] wrote. `None` for anything else.
+    /// Reads what [`LiveCursor::encode`] wrote. `None` for anything else,
+    /// a leading zero included, so a cursor's text is unique.
     pub fn decode(text: &str) -> Option<Self> {
         let (epoch, seq) = text.split_once('-')?;
         Some(Self {
@@ -212,8 +238,11 @@ impl<'de> Deserialize<'de> for LiveCursor {
     }
 }
 
+/// A decimal number as `encode` writes it: digits only, and no leading
+/// zero, so each cursor has exactly one text.
 fn decimal(text: &str) -> Option<u64> {
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+    let canonical = text == "0" || !text.starts_with('0');
+    if text.is_empty() || !canonical || !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     text.parse().ok()
@@ -319,7 +348,9 @@ impl FeedWindow {
     }
 }
 
-/// One SSE event. Its cursor is the event id.
+/// One SSE event: its variant is the event name
+/// ([`LiveItem::event_name`]), its cursor the event id, and the whole item
+/// the event's data (see the module's SSE framing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -345,6 +376,17 @@ pub enum LiveItem {
 }
 
 impl LiveItem {
+    /// The SSE `event` field of this item: its variant's snake_case name,
+    /// the same as its JSON `type`.
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Event { .. } => "event",
+            Self::Resync { .. } => "resync",
+            Self::Heartbeat { .. } => "heartbeat",
+        }
+    }
+
+    /// The item's cursor: its SSE `id`, as [`LiveCursor::encode`] writes it.
     pub fn cursor(&self) -> LiveCursor {
         match self {
             Self::Event { cursor, .. }
@@ -365,6 +407,12 @@ pub enum LiveEnd {
     /// or removed its operator, so its permissions may be stale.
     SessionEnded,
     ShuttingDown,
+}
+
+impl LiveEnd {
+    /// The SSE `event` field of the stream's last event, whose `data` is
+    /// the `LiveEnd` and which has no `id`. No `LiveItem` has this name.
+    pub const EVENT_NAME: &'static str = "end";
 }
 
 /// Feed limits. Built only through [`LiveConfig::new`]: the heartbeat is

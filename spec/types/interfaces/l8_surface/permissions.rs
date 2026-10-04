@@ -17,13 +17,12 @@ use crate::wire::Rejected;
 /// always holds at least one.
 ///
 /// Authority: it implements neither `Serialize` nor `Deserialize`
-/// ([`crate::wire::authority`]), so no request can carry one and no
-/// response leaks one; responses name its `OperatorId`. The one exception
-/// is an audit record of a call (`OperatorRecord`, `ExportRecord`), a
-/// response that keeps the operator and permissions of the caller as
-/// authenticated: it writes them as a `RecordedCaller`, and a client that
-/// decodes such a record gets a `Caller` back holding exactly what the
-/// record says. The gateway never decodes one from a client.
+/// ([`crate::wire::authority`]), so no request can carry one, no response
+/// leaks one, and no bytes ever become one; responses name its
+/// `OperatorId`. An audit record of a call (`OperatorRecord`,
+/// `ExportRecord`) keeps a [`CallerSnapshot`] of it instead: the same
+/// operator and permissions as plain data, which decodes, but which no
+/// query or action accepts in a `Caller`'s place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     pub(super) operator: OperatorId,
@@ -164,60 +163,92 @@ impl fmt::Debug for PermissionSet {
     }
 }
 
-/// The caller of one recorded call, as an audit record writes it: the
-/// operator and the permissions it held then. On the wire, the record's
-/// `caller`: `{"operator": .., "permissions": [..]}`.
+/// What an audit record keeps of the caller it records: the operator and
+/// the permissions it held at the call. Plain data, not authority: no query
+/// or action takes one, so a client that decodes an audit record holds a
+/// snapshot it can read, never a [`Caller`] it could act as.
 ///
-/// Only the audit records use it, to write the [`Caller`] they keep and to
-/// read it back. Decoding refuses an empty set of permissions, which
-/// `OperatorDirectory::caller` never grants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", try_from = "RawRecordedCaller")]
-pub(super) struct RecordedCaller {
+/// Built from a caller with [`CallerSnapshot::of`] when the surface records
+/// a call. Its permissions are never empty, because
+/// `OperatorDirectory::caller` never grants an empty set:
+/// [`CallerSnapshot::new`] refuses one, and decoding goes through it.
+///
+/// On the wire, `{"operator": "01J..", "permissions": ["view", "audit"]}`.
+/// A response (the `caller` of an `OperatorRecord` or `ExportRecord`),
+/// never a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawCallerSnapshot")]
+pub struct CallerSnapshot {
     operator: OperatorId,
     permissions: PermissionSet,
 }
 
-/// A recorded caller with no permissions.
+/// A caller snapshot with no permissions, which no caller ever held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct NoPermissions;
+pub struct NoPermissions;
 
-/// `RecordedCaller`'s fields, decoded without the check.
+/// `CallerSnapshot`'s fields, decoded without the check.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-struct RawRecordedCaller {
+struct RawCallerSnapshot {
     operator: OperatorId,
     permissions: PermissionSet,
 }
 
-impl TryFrom<RawRecordedCaller> for RecordedCaller {
+impl TryFrom<RawCallerSnapshot> for CallerSnapshot {
     type Error = Rejected<NoPermissions>;
 
-    fn try_from(raw: RawRecordedCaller) -> Result<Self, Self::Error> {
-        if raw.permissions.is_empty() {
-            return Err(Rejected::new("recorded caller", NoPermissions));
-        }
-        Ok(Self {
-            operator: raw.operator,
-            permissions: raw.permissions,
-        })
+    fn try_from(raw: RawCallerSnapshot) -> Result<Self, Self::Error> {
+        Self::new(raw.operator, raw.permissions)
+            .map_err(|error| Rejected::new("caller snapshot", error))
     }
 }
 
-impl From<&Caller> for RecordedCaller {
-    fn from(caller: &Caller) -> Self {
+impl CallerSnapshot {
+    /// The caller's operator and permissions as they are now.
+    pub fn of(caller: &Caller) -> Self {
         Self {
             operator: caller.operator,
             permissions: caller.permissions,
         }
     }
+
+    /// A snapshot read back from storage or the wire. `NoPermissions` for
+    /// an empty set.
+    pub fn new(operator: OperatorId, permissions: PermissionSet) -> Result<Self, NoPermissions> {
+        if permissions.is_empty() {
+            return Err(NoPermissions);
+        }
+        Ok(Self {
+            operator,
+            permissions,
+        })
+    }
+
+    pub fn operator(self) -> OperatorId {
+        self.operator
+    }
+
+    pub fn permissions(self) -> PermissionSet {
+        self.permissions
+    }
+
+    /// Whether the caller held `permission` at the call.
+    pub fn has(self, permission: Permission) -> bool {
+        self.permissions.contains(permission)
+    }
 }
 
-impl From<RecordedCaller> for Caller {
-    fn from(recorded: RecordedCaller) -> Self {
-        Self {
-            operator: recorded.operator,
-            permissions: recorded.permissions,
-        }
+/// [`CallerSnapshot::of`].
+impl From<&Caller> for CallerSnapshot {
+    fn from(caller: &Caller) -> Self {
+        Self::of(caller)
+    }
+}
+
+/// [`CallerSnapshot::of`].
+impl From<Caller> for CallerSnapshot {
+    fn from(caller: Caller) -> Self {
+        Self::of(&caller)
     }
 }

@@ -34,6 +34,7 @@
 //! | `PromotionPreview` | operator, time of the would-be declaration | 2 |
 //! | `OperatorAction` | holds a `MergeRequest`, so an author | 2 |
 //! | `OperatorRecord`, `AuditEntry` | caller, time | 2 |
+//! | `CallerSnapshot` | operator, permissions | 2 |
 //! | `ExportHeader`, `ExportRecord` | caller, time | 2 |
 //! | `ProjectionInfo` | requester, time | 2 |
 //! | `AlertRuleDef` | creator, time | 2 |
@@ -49,12 +50,14 @@
 //!
 //! `OperatorAction` is what the surface acts on and the audit log stores,
 //! after `OperatorAction::merge_agents` has stamped the caller into a merge.
-//! The request a client sends for an action is a separate type without
-//! the author (see `docs/features/wire_contract.md`).
+//! The request a client sends for an action is [`ActionRequest`], the same
+//! actions without the author, which `ActionRequest::into_action` stamps
+//! with the caller.
 //!
-//! An audit record's caller is written through `RecordedCaller` (private to
-//! the surface): the operator and permissions it held, a response's copy of
-//! a `Caller`, never decoded from a client.
+//! An audit record keeps a [`CallerSnapshot`] of its caller: the operator
+//! and the permissions it held, as plain data. It decodes (the UI reads the
+//! log), but it is not a `Caller` and nothing converts it into one, so
+//! decoding an audit record never yields authority.
 //!
 //! The checks are `assert_not_impl!` items below: each fails to compile if
 //! its type gains a listed trait. The doctests show the same from outside
@@ -67,6 +70,14 @@
 //!
 //! let filter = decode_request::<AlertFilter>(br#"{"states": [], "channel": null}"#);
 //! assert!(filter.is_ok());
+//! ```
+//!
+//! ```
+//! use crosstalk_spec::interfaces::l8_surface::ActionRequest;
+//! use crosstalk_spec::wire::decode_request;
+//!
+//! let json = br#"{"type": "acknowledge", "data": {"alert": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}"#;
+//! assert!(decode_request::<ActionRequest>(json).is_ok());
 //! ```
 //!
 //! ```compile_fail,E0277
@@ -85,6 +96,23 @@
 //! ```
 //!
 //! ```compile_fail,E0277
+//! use crosstalk_spec::interfaces::l8_surface::{Caller, CallerSnapshot};
+//!
+//! // An audit record's caller snapshot decodes, but never becomes a Caller.
+//! fn act_as(snapshot: CallerSnapshot) -> Caller {
+//!     snapshot.into()
+//! }
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+//! use crosstalk_spec::wire::decode_request;
+//!
+//! // An action holds a stamped merge author; a client sends an ActionRequest.
+//! let _ = decode_request::<OperatorAction>(b"{}");
+//! ```
+//!
+//! ```compile_fail,E0277
 //! use crosstalk_spec::derived::flow::channel::promotion::Promotion;
 //! use crosstalk_spec::wire::decode_request;
 //!
@@ -96,6 +124,8 @@
 //! [`RequestIdentity`]: crate::interfaces::l8_surface::operators::RequestIdentity
 //! [`OperatorDirectory`]: crate::interfaces::l8_surface::operators::OperatorDirectory
 //! [`Promotion`]: crate::derived::flow::channel::promotion::Promotion
+//! [`ActionRequest`]: crate::interfaces::l8_surface::ActionRequest
+//! [`CallerSnapshot`]: crate::interfaces::l8_surface::CallerSnapshot
 //! [`WireRequest`]: super::WireRequest
 //! [`decode_request`]: super::decode_request
 
@@ -120,7 +150,7 @@ use crate::interfaces::l8_surface::channels::{PromotionPreview, SupersededInto};
 use crate::interfaces::l8_surface::export::rows::VerdictRow;
 use crate::interfaces::l8_surface::export::{ExportHeader, ExportRecord};
 use crate::interfaces::l8_surface::operators::{Operator, OperatorDirectory, RequestIdentity};
-use crate::interfaces::l8_surface::{Caller, OperatorAction, PermissionSet};
+use crate::interfaces::l8_surface::{Caller, CallerSnapshot, OperatorAction, PermissionSet};
 use crate::observed::agent::{MergeAuthor, MergeRecord, MergeRequest, MergeVeto, Reversal};
 
 // Rule 1: authority never serializes, either way.
@@ -164,3 +194,4 @@ assert_not_impl!(ConfigChange: WireRequest);
 assert_not_impl!(ConfigRecord: WireRequest);
 assert_not_impl!(Operator: WireRequest);
 assert_not_impl!(PermissionSet: WireRequest);
+assert_not_impl!(CallerSnapshot: WireRequest);

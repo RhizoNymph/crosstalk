@@ -26,6 +26,15 @@ unit = [
     "crosstalk_spec::tests::wire::ids::secret_digests_reject_unknown_and_missing_fields",
     "crosstalk_spec::tests::wire::support::fieldless_enums_are_strings",
     "crosstalk_spec::tests::wire::support::watermarked_refuses_unknown_fields",
+    "crosstalk_spec::tests::wire::surface_actions::actions::action_requests_refuse_stamps_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::surface_actions::actions::superseded_channels_decode_sorted_and_once",
+    "crosstalk_spec::tests::wire::surface_actions::audit::audit_entries_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::surface_actions::audit::audit_filters_refuse_unknown_fields",
+    "crosstalk_spec::tests::wire::surface_actions::audit::caller_snapshots_refuse_no_permissions_and_unknown_fields",
+    "crosstalk_spec::tests::wire::surface_actions::live::live_items_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::surface_actions::lists::list_requests_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::surface_actions::lists::reports_refuse_unknown_fields_and_other_delivery_forms",
+    "crosstalk_spec::tests::wire::surface_actions::operators::operators_refuse_unknown_fields_and_modes",
 ]
 
 [evidence-review]

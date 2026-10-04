@@ -1,0 +1,15 @@
+{
+  "type": "update_rule",
+  "data": {
+    "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+    "name": "Deploy keys leaving the wiki",
+    "rule": {
+      "type": "semantic_query",
+      "data": {
+        "text": "ssh private keys or deploy tokens",
+        "threshold": 0.5
+      }
+    },
+    "sinks": []
+  }
+}

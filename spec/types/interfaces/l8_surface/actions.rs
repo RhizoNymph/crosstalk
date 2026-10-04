@@ -6,6 +6,16 @@
 //! until its kind, permission and subjects are decided. The audit log stores
 //! the action value itself ([`super::audit::OperatorRecord`]), so every
 //! action is audited the same way.
+//!
+//! A client never sends an [`OperatorAction`]: it sends an
+//! [`ActionRequest`], the same actions without anything the surface stamps,
+//! and the surface turns it into the action with the caller
+//! ([`ActionRequest::into_action`]):
+//!
+//! ```text
+//! HTTP body ─decode_request─▶ ActionRequest ─into_action(&caller)─┬─ Ok ──▶ OperatorAction ─▶ act(caller, action)
+//!                                                                └─ Err(SelfMerge) ─▶ InvalidInput(SelfMerge), not audited
+//! ```
 
 use serde::{Deserialize, Serialize};
 
@@ -22,13 +32,18 @@ use crate::observed::agent::{AgentLabel, MergeAuthor, MergeRequest, SelfMerge};
 use super::audit::AuditSubject;
 use super::{Caller, Permission, PolicyKind};
 
+mod request;
+
+pub use request::ActionRequest;
+
 /// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
 /// similarity thresholds, which are floats.
 ///
 /// What the surface acts on and the audit log stores, so it serializes
 /// both ways (the audit log returns it), but it is never a request:
 /// `MergeAgents` holds a [`MergeRequest`] whose author the surface stamps
-/// from the caller ([`crate::wire::authority`]).
+/// from the caller ([`crate::wire::authority`]). A client sends the
+/// [`ActionRequest`] of the same variant instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
