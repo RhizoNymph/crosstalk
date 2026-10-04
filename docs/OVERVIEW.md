@@ -702,7 +702,9 @@ Features Index:
       observability (host, container, Postgres and log metrics, dashboards,
       alert rules). Defines the contract the crosstalk binary implements:
       serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
-      endpoints and the config file's top-level keys.
+      endpoints and the config file's top-level keys. Also notes for
+      running on a shared host (snap Docker, host port clashes, syncing a
+      checkout, a smoke test, inspecting the distroless gateway).
     entry_points:
       - deploy/compose.yaml
       - deploy/run.sh
