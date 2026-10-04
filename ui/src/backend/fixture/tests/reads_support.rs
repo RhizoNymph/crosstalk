@@ -22,8 +22,9 @@ use super::super::queries::linked::resolve_version;
 use super::super::queries::{Ctx, transmissions};
 use super::super::world::{ChannelKey, TxRecord};
 use super::{scope_with, shared, week};
-use crate::backend::{Backend, Result};
+use crate::backend::Result;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 pub const BIG: u32 = 100_000;
 

@@ -26,8 +26,8 @@ use super::super::clock::{DAY, MINUTE, NOW, START, WATERMARK, ago, plus};
 use super::super::export::ExportRows;
 use super::super::export::digest::RowDigest;
 use super::{caller, collect, day, first, fresh, researcher, week};
-use crate::backend::Backend;
 use crate::url::scope::Scope;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 fn scope(scope: &Scope) -> ExportScope {
     ExportScope {

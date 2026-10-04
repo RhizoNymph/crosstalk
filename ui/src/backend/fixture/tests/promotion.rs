@@ -20,12 +20,12 @@ use super::super::clock::{NOW, all_time};
 use super::super::world::ChannelKey;
 use super::channels::{row, rows};
 use super::{caller, collect, fresh, graph_of, researcher, scope_with, shared, week};
-use crate::backend::Backend;
 use crate::pages::channels::promote::patterns::candidates;
 use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::interfaces::l8_surface::actions::SupersededChannels;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
 use super::actions_support::{alert_state, channel, find_alert};
 

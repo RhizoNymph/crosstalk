@@ -18,8 +18,8 @@ use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::actions_support::{agent, audit_len, channel, find_alert, merge};
 use super::{caller, fresh, researcher};
-use crate::backend::Backend;
 use crosstalk_spec::aggregates::alert::{AlertState, BuiltinRule};
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
 /// Everything an action can change, the audit log and the id mint aside.
 async fn effects(b: &FixtureBackend) -> String {

@@ -15,7 +15,7 @@ use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 
 use super::{collect, first, graph_of, researcher, shared, week};
-use crate::backend::Backend;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 use super::reads_support::*;
 

@@ -10,7 +10,6 @@ use topcoat::view::{View, view};
 
 use super::query::{AgentQuery, FAMILIES, RawAgentQuery, STATES};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::badge::Badge;
 use crate::components::form::{FACET, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
@@ -29,6 +28,7 @@ use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::agents::AgentRow as Row;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::observed::agent::SeenClaim;
 use crosstalk_spec::paging::{AgentList, Cursor};
 use crosstalk_spec::support::Timestamp;

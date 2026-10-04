@@ -35,7 +35,6 @@ use self::drawer::topology_drawer;
 use self::filters::{FilterChoices, chips, clear_href, filter_chips, filter_form, load_choices};
 use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::{Tab, error_panel, format_time, href, segmented};
 use crate::data::elements::{TIMEBRUSH_JS, TOPOLOGY_JS};
 use crate::error::UiError;
@@ -44,6 +43,7 @@ use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::view::view_state;
 use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{GraphMode, ViewState, format_time as rfc3339};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 pub const PATH: &str = "/topology";
 

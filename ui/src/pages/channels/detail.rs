@@ -24,7 +24,6 @@ use super::sections::{
     resources_section,
 };
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{
     PageLinks, empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header,
@@ -47,6 +46,7 @@ use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::alert::Alert;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditSubject;
 
 path_param!(channel_ulid);

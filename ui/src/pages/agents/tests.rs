@@ -4,10 +4,10 @@
 use crosstalk_spec::ids::MergeId;
 use topcoat::router::StatusCode;
 
-use crate::backend::Backend;
 use crate::components::href::tests::state;
 use crate::testing::{Session, agent_id, get, operator, post, world};
 use crate::url::ulid::UlidId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 fn page(key: &str) -> String {
     format!("/agents/{}?{}", agent_id(key).to_ulid(), state().to_query())

@@ -15,7 +15,6 @@ use super::inbox::parse_action;
 use super::model::AlertRow;
 use super::rules::PATH as RULES_PATH;
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
@@ -32,6 +31,7 @@ use crate::pages::common::rules::{RuleNames, all_rules};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditFilter, AuditSubject};
 
 path_param!(alert_ulid);

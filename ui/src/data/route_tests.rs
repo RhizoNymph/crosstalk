@@ -82,9 +82,9 @@ async fn projections_answer_with_their_payload_or_why_not() {
     use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
     use crosstalk_spec::aggregates::projection::{ProjectionLimit, ProjectionParams};
 
-    use crate::backend::Backend;
     use crate::pages::common::paging::first;
     use crate::url::ulid::UlidId;
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
     let backend = FixtureBackend::try_new(7).expect("fixture generates");
     let caller = crate::testing::operator().caller();

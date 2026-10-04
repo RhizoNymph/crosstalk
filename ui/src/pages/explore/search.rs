@@ -15,7 +15,6 @@ use topcoat::view::{View, component, view};
 
 use super::query::{ExploreQuery, MODES, mode_code, mode_label};
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, INPUT};
 use crate::components::{
     PageLinks, empty_state, error_panel, pagination, route_badge, state_inputs,
@@ -25,6 +24,7 @@ use crate::pages::common::links::transmission_url;
 use crate::pages::common::transmissions::{TransmissionRow, rows, summaries_by_id};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{Cursor, PageRequest, SearchList};
 
 #[derive(Debug, Clone, PartialEq)]

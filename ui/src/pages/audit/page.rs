@@ -12,7 +12,6 @@ use super::entry::{EntryView, OutcomeView, entry_view};
 use super::query::{AuditQuery, CONFIG, RawAuditQuery, author_code};
 use super::subject::{subject_code, subject_link};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, FACET, INPUT, LABEL, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
@@ -26,6 +25,7 @@ use crate::pages::common::lookup::OperatorNames;
 use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{AuditList, Cursor, PageRequest};
 
 const PATH: &str = "/audit";

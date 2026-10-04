@@ -1,8 +1,8 @@
 //! The `<ct-topology>` payload and its route.
 //!
 //! `GET /data/topology?<view state>` answers with a [`TopologyPayload`] as
-//! JSON: the agents-mode graph (`g=agents`, `Backend::topology`) or the
-//! bipartite graph (`g=channels`, `Backend::channel_topology`). Needs
+//! JSON: the agents-mode graph (`g=agents`, `QueryApi::topology`) or the
+//! bipartite graph (`g=channels`, `QueryApi::channel_topology`). Needs
 //! `View`. Example (agents mode, one node and one edge shown):
 //!
 //! ```json
@@ -61,12 +61,12 @@ use super::errors::query_error;
 use super::query::view_state;
 use super::require;
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::{agent_node_name, family_name};
 use crate::pages::common::transmissions::{ChannelNames, channel_names};
 use crate::url::route::encode;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::{GraphMode, format_time};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -16,7 +16,6 @@ use topcoat::router::{page, query_params};
 use topcoat::view::{View, component, view};
 
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::form::{FACET, LINK, SMALL_BUTTON};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
@@ -31,6 +30,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{Cursor, DeadLetterList};
 
 const PATH: &str = "/pipeline";

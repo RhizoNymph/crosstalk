@@ -17,7 +17,6 @@ use topcoat::view::{View, view};
 use super::model::{Shape, origin_kind, shape};
 use super::query::{DETECTIONS, ListQuery, ORIGINS, RawListQuery, Tab};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::badge::Badge;
 use crate::components::form::{FACET, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
@@ -34,6 +33,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{ChannelList, Cursor};
 
 const PATH: &str = "/channels";

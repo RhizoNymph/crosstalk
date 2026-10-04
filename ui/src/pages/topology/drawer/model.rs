@@ -16,7 +16,6 @@ use crosstalk_spec::observed::client::HarnessClaim;
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::{agent_name, format_bytes, format_share, format_time_short, href};
 use crate::error::UiError;
 use crate::pages::agents::list::last_seen_text;
@@ -37,6 +36,7 @@ use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::PageRequest;
 
 /// Transmissions per drawer page: the drawer is narrow and short.

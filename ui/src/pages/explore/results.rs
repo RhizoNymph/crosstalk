@@ -19,7 +19,6 @@ use topcoat::view::{View, view};
 
 use super::lasso::ProjectionSelection;
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{empty_state, error_panel, kind_badge, route_badge};
 use crate::error::UiError;
@@ -32,6 +31,7 @@ use crate::pages::common::transmissions::{
 use crate::pages::view::state_from_query;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::PageRequest;
 
 pub const RESULTS_PAGE: NonZeroU32 = match NonZeroU32::new(15) {

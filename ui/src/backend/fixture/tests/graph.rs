@@ -18,10 +18,10 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, ConflictKind, QueryErr
 use super::super::clock::WATERMARK;
 use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
-use crate::backend::Backend;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 

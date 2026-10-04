@@ -15,8 +15,8 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permis
 use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
-use crate::backend::Backend;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditAuthor, AuditBody, AuditFilter, AuditSubject,

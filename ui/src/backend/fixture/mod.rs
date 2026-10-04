@@ -65,12 +65,13 @@ use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{
-    ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, Permission, SinkInfo,
+    ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, OperatorActions, Permission,
+    QueryApi, SinkInfo,
 };
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
 
-use super::{Backend, Result};
+use super::Result;
 use crate::contract::formats::ExportFormats;
 use crate::contract::present::Present;
 use crosstalk_spec::aggregates::series::BucketWidth;
@@ -173,7 +174,11 @@ impl ExportFormats for FixtureBackend {
     }
 }
 
-impl Backend for FixtureBackend {
+/// Every read `QueryApi` defines, with the spec's semantics; see
+/// [`queries`] and [`export`].
+impl QueryApi for FixtureBackend {
+    type ExportRows = export::ExportRows;
+
     async fn watermark(&self, caller: &Caller) -> Result<Watermark> {
         require(caller, Permission::View)?;
         Ok(queries::graph::watermark())
@@ -549,8 +554,6 @@ impl Backend for FixtureBackend {
             .await
     }
 
-    type ExportRows = export::ExportRows;
-
     async fn export(
         &self,
         caller: &Caller,
@@ -565,7 +568,11 @@ impl Backend for FixtureBackend {
         )
         .await
     }
+}
 
+/// Every action, applied and audited as `OperatorActions::act` defines;
+/// see [`actions`].
+impl OperatorActions for FixtureBackend {
     async fn act(
         &self,
         caller: &Caller,

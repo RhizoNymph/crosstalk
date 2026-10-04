@@ -22,7 +22,6 @@ use self::patterns::{candidates, pick};
 use self::screen::promote_page;
 use super::detail::{channel_id, channel_path};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, settled};
 use crate::pages::common::flash::Flash;
@@ -30,6 +29,7 @@ use crate::pages::common::form::{FormFields, invalid, note, policy};
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 

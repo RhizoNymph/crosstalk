@@ -22,7 +22,7 @@ use super::super::FixtureBackend;
 use super::super::clock::{BUCKET, START, plus};
 use super::super::world::{ChannelKey, OPERATOR_RESEARCHER};
 use super::{caller, collect, day, first, researcher, shared, week};
-use crate::backend::Backend;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 use super::actions_support::channel;
 

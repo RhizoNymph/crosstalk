@@ -1,7 +1,7 @@
 //! The `<ct-projection>` payload and its route.
 //!
 //! `GET /data/projection/{id}` answers with a stored projection
-//! (`Backend::projection`) in the binary format of [`format`], as
+//! (`QueryApi::projection`) in the binary format of [`format`], as
 //! `application/octet-stream`. Needs `Content`. The spec's frame has no
 //! channel column, so the channels of the channel-routed points are read
 //! from their transmissions' rows (`transmissions_by_id`, routes resolved
@@ -34,7 +34,6 @@ use super::errors::query_error;
 use super::names::channel_name;
 use super::require;
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
 use crate::error::UiError;
 use crate::pages::common::lookup::id_batches;
@@ -43,6 +42,7 @@ use crate::pages::common::topics::all_topics;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::aggregates::agents::AgentName;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::channels::ChannelName;
 
@@ -57,7 +57,7 @@ const MAX_ROUTE_PAGES: usize = 200;
 /// its row reports the route now (`TopicVersionSelector::Current`: the
 /// rows' topics are not needed, and the active version is always
 /// retained). Transmissions no longer stored are left out.
-pub async fn point_channels<B: Backend>(
+pub async fn point_channels<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     projection: &Projection,
@@ -98,7 +98,7 @@ pub async fn point_channels<B: Backend>(
 }
 
 /// Agent names for `ids`, in batches of at most `IdBatch::MAX`.
-async fn agent_names<B: Backend>(
+async fn agent_names<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     ids: &[AgentId],
@@ -111,7 +111,7 @@ async fn agent_names<B: Backend>(
 }
 
 /// Channel names for `ids`, in batches of at most `IdBatch::MAX`.
-async fn channel_names<B: Backend>(
+async fn channel_names<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     ids: &[ChannelId],
@@ -127,7 +127,7 @@ async fn channel_names<B: Backend>(
 /// labels are `None` without `Content` or when the projection's topic
 /// version is unknown to the catalog; other backend errors fail the
 /// request.
-pub async fn tables<B: Backend>(
+pub async fn tables<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     projection: &Projection,

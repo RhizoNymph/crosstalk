@@ -16,8 +16,9 @@ use super::super::clock::NOW;
 use super::super::text::Theme;
 use super::super::world::topics::QUERY_CONTEXT_CHARS;
 use super::{caller, collect, first, fresh, researcher, shared};
-use crate::backend::{Backend, alert_state};
+use crate::backend::alert_state;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
 fn name(text: &str) -> RuleName {
     RuleName::new(text).expect("name")

@@ -36,7 +36,6 @@ use self::model::{
 use self::sections::{co_access_section, matches_section};
 use self::verdict::{FormState, VerdictRow, verdict_rows, verdict_section};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::{
     content_hidden, empty_state, error_panel, flash_banner, format_bytes, format_time, href,
@@ -59,6 +58,7 @@ use crate::pages::topology::selection::Selection;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 path_param!(tx_ulid);
 

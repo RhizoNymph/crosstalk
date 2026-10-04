@@ -26,7 +26,6 @@ use topcoat::view::{View, component, view};
 
 use self::model::{RemapRow, TopicRow, VersionTab, remap_rows, topic_rows, version_tabs};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::sparkline::sparkline;
 use crate::components::table::{ROW, TD, TD_NUM};
@@ -45,6 +44,7 @@ use crate::pages::common::transmissions::Named;
 use crate::pages::explore::topics::watch_url;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 pub const PATH: &str = "/topics";
 

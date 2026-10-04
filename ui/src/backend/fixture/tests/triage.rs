@@ -8,7 +8,6 @@ use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
-use crate::backend::Backend;
 use crate::url::scope::ViewFilter;
 use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
@@ -19,6 +18,7 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
 };
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 use crosstalk_spec::observed::agent::AgentLabel;
 
 use super::actions_support::*;

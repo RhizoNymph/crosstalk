@@ -21,7 +21,6 @@ use topcoat::view::{View, component, view};
 use super::links::{agent_url, channel_url, transmission_url};
 use super::lookup::{AgentNames, id_batches};
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
@@ -31,6 +30,7 @@ use crate::data::names::{channel_name, locator_name, pattern_name};
 use crate::error::UiError;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
 /// A channel row's name: the declared pattern, else the seed resource,

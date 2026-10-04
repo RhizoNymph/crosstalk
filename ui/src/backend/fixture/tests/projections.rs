@@ -19,8 +19,8 @@ use super::super::clock::{MINUTE, START, WATERMARK, plus};
 use super::super::queries::projection::{FRAME_RETENTION, MAX_PENDING};
 use super::super::store::Job;
 use super::{collect, day, first, fresh, researcher, shared, week};
-use crate::backend::Backend;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 use super::reads_support::*;
 

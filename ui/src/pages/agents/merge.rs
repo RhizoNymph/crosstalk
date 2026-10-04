@@ -17,7 +17,6 @@ use super::actions::merge_action;
 use super::detail::{agent_id, agent_path};
 use super::evidence::{EvidenceRow, conflicts, evidence_rows};
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
@@ -35,6 +34,7 @@ use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::agents::AgentDetail;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// Agents offered as merge targets.

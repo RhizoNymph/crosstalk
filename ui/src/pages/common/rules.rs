@@ -11,10 +11,10 @@ use crosstalk_spec::paging::{AlertRuleList, PageRequest, PageSize};
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::short_id;
 use crate::pages::common::paging::size;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// Pages read before a rule listing is cut short. Rules number in the tens;
 /// this only bounds a backend that never stops paging.
@@ -22,7 +22,7 @@ const MAX_PAGES: usize = 100;
 
 /// Every rule, built-ins first in `BuiltinRule::ALL` order, then user rules
 /// newest first.
-pub async fn all_rules<B: Backend>(
+pub async fn all_rules<B: QueryApi>(
     backend: &B,
     caller: &Caller,
 ) -> Result<Vec<AlertRuleDef>, QueryError> {
@@ -49,7 +49,7 @@ pub async fn all_rules<B: Backend>(
 }
 
 /// The rule stored under `id`, if any.
-pub async fn rule<B: Backend>(
+pub async fn rule<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     id: AlertRuleId,

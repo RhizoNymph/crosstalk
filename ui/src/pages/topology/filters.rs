@@ -16,7 +16,6 @@ use topcoat::view::{View, component, view};
 
 use super::query::fields;
 use crate::app::{backend, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, FACET, INPUT, LINK};
 use crate::components::href::state_pairs;
 use crate::components::{agent_node_name, href, route_kind_name, short_id};
@@ -28,6 +27,7 @@ use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 pub const ROUTE_KINDS: [RouteKind; 4] = [

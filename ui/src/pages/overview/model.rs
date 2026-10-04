@@ -11,7 +11,6 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Caller
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::{format_bytes, format_time, href};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
@@ -21,6 +20,7 @@ use crate::pages::common::rules::rule_names;
 use crate::pages::common::transmissions::channel_names;
 use crate::pages::topology::drawer::model::{EdgeItem, edge_items};
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 const HEAVIEST: usize = 5;
 const NEWEST_ALERTS: NonZeroU32 = match NonZeroU32::new(5) {

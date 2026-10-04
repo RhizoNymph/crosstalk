@@ -14,11 +14,11 @@ use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use crosstalk_spec::paging::{PageRequest, PageSize, TopicList};
 use crosstalk_spec::support::TimeWindow;
 
-use crate::backend::Backend;
 use crate::contract::present::Present;
 use crate::data::timeline::timeline_grid;
 use crate::error::UiError;
 use crate::url::scope::ViewFilter;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// Trend points over a view's window.
 pub const TREND_BUCKETS: NonZeroU32 = match NonZeroU32::new(24) {
@@ -32,7 +32,7 @@ const MAX_PAGES: usize = 100;
 
 /// The version a view without one reads: the history's active version, the
 /// one graphs and series read. Needs `View`.
-pub async fn default_version<B: Backend>(
+pub async fn default_version<B: QueryApi>(
     backend: &B,
     caller: &Caller,
 ) -> Result<TopicModelVersion, QueryError> {
@@ -41,7 +41,7 @@ pub async fn default_version<B: Backend>(
 
 /// Every topic of the version `selector` names, newest id first, and that
 /// version: `topics` followed to its last page. Needs `Content`.
-pub async fn all_topics<B: Backend>(
+pub async fn all_topics<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     selector: TopicVersionSelector,
@@ -94,7 +94,7 @@ impl Trends {
 /// grouped by topic with no filter but the version, so a trend follows
 /// what the version's topic sizes count (though graph-counted: self-edges
 /// left out).
-pub async fn topic_trends<B: Backend + Present>(
+pub async fn topic_trends<B: QueryApi + Present>(
     backend: &B,
     caller: &Caller,
     window: TimeWindow,

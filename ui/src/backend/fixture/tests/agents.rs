@@ -15,8 +15,8 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use super::super::clock::WATERMARK;
 use super::reads_support::agent;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week};
-use crate::backend::Backend;
 use crate::url::scope::Scope;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 async fn rows(scope: &Scope) -> Vec<AgentRow> {
     let b = shared();

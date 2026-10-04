@@ -19,7 +19,6 @@ use super::sections::{
 };
 use super::tree::{self, Tree};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION};
 use crate::components::{
     agent_name, empty_state, error_panel, flash_banner, href, kind_badge, page_header, short_id,
@@ -37,6 +36,7 @@ use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::agents::{AgentDetail, AgentLookup};
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::observed::agent::{AgentLabel, SeenClaim};
 
 path_param!(agent_ulid);

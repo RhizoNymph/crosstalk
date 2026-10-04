@@ -36,7 +36,6 @@ use self::results::projection_results;
 use self::search::{Hits, hit_list, load_hits, search_form};
 use self::topics::{load_topics, topic_sidebar};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{INPUT, LABEL, PANEL};
 use crate::components::{PageLinks, error_panel, flash_banner, format_time, href, page_header};
 use crate::data::elements::PROJECTION_JS;
@@ -50,6 +49,7 @@ use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{PageRequest, SearchList};
 

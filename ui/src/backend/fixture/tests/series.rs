@@ -18,8 +18,8 @@ use crosstalk_spec::support::TimeWindow;
 
 use super::super::clock::{MINUTE, NOW, START};
 use super::{caller, collect, day, first, graph_of, researcher, shared, week};
-use crate::backend::Backend;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
 

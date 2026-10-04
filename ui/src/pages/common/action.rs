@@ -13,10 +13,10 @@ use topcoat::router::error::see_other;
 use super::flash::{self, Flash};
 use super::form::FormFields;
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::href;
 use crate::error::UiError;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::OperatorActions;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, OperatorAction};
 

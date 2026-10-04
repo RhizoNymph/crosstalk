@@ -11,11 +11,11 @@ use crosstalk_spec::interfaces::l8_surface::Caller;
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::{agent_name, short_id};
 use crate::pages::common::links::agent_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// Levels below the agent that are read.
 pub const MAX_DEPTH: usize = 4;

@@ -69,8 +69,8 @@ fn different_seeds_differ() {
 
 #[tokio::test]
 async fn now_and_versions() {
-    use crate::backend::Backend;
     use crosstalk_spec::interfaces::l8_surface::Permission;
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
     use crosstalk_spec::interfaces::l8_surface::QueryError;
 
     let b = shared();

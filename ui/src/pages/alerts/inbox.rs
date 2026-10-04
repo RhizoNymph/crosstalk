@@ -11,7 +11,6 @@ use topcoat::view::{View, component, view};
 
 use super::model::AlertRow;
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::badge::Badge;
 use crate::components::form::{INPUT, LINK, SMALL_BUTTON};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
@@ -30,6 +29,7 @@ use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{AlertList, Cursor};
 
 const PATH: &str = "/alerts";

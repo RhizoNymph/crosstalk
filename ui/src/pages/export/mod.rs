@@ -28,7 +28,6 @@ use self::jsonl::{Download, download};
 use self::quality::{quality_lines, quality_section};
 use self::request::{DatasetChoice, FORMATS, format_code, format_label, parse};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{error_panel, format_time, href, page_header};
 use crate::contract::formats::ExportFormats;
@@ -37,6 +36,7 @@ use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::FormFields;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 pub const PATH: &str = "/export";
 

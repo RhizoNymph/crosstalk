@@ -15,7 +15,7 @@ use super::super::clock::WATERMARK;
 use super::super::world::confirmed;
 use super::super::world::topics::{REMAP_THRESHOLD, V2_AT};
 use super::{collect, first, researcher, shared, week};
-use crate::backend::Backend;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 const V0: TopicModelVersion = TopicModelVersion(0);
 const V1: TopicModelVersion = TopicModelVersion(1);

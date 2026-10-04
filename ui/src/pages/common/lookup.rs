@@ -16,9 +16,9 @@ use crosstalk_spec::observed::agent::MergeAuthor;
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
 use crate::url::ulid::UlidId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// Operator display names. Unknown operators show as a short id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

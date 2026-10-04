@@ -14,7 +14,6 @@ use super::PromoteForm;
 use super::patterns::{candidates, pick};
 use super::promotable_seed;
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::components::badge::Badge;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::locator::{format_pattern, pattern_kind};
@@ -28,6 +27,7 @@ use crate::pages::common::links::channel_url;
 use crate::pages::common::transmissions::channel_names;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// What the chosen pattern would do, display-ready: what it would hold, or

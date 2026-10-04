@@ -1,5 +1,5 @@
 //! Tests of the fixture backend: the generated world and its scenarios,
-//! then every read and action through the `Backend` trait.
+//! then every read and action through `QueryApi` and `OperatorActions`.
 
 mod actions_support;
 mod agents;
@@ -35,8 +35,9 @@ use crosstalk_spec::support::TimeWindow;
 use super::FixtureBackend;
 use super::clock::{DAY, NOW, START, ago};
 use super::world::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
-use crate::backend::{Backend, Result};
+use crate::backend::Result;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::{Page, PageRequest};
 
 pub const SEED: u64 = 7;

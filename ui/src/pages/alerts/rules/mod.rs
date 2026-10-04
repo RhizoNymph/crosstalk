@@ -23,7 +23,6 @@ use self::model::{
     Detail, RuleRow, TopicLabels, delivery, sink_kind, status_label, status_tone, watched_topics,
 };
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, SECTION, SECTION_TITLE, SMALL_BUTTON};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
@@ -41,6 +40,7 @@ use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::ids::SinkId;
 use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 pub const PATH: &str = "/alerts/rules";
 

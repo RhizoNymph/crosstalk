@@ -12,7 +12,6 @@ use topcoat::context::Cx;
 use topcoat::view::{View, component, view};
 
 use crate::app::backend;
-use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::sparkline::sparkline;
 use crate::components::{error_panel, href};
@@ -21,6 +20,7 @@ use crate::pages::common::topics::{Trends, all_topics, topic_trends};
 use crate::pages::topics::model::size_of;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopicRow {

@@ -6,11 +6,11 @@ use crosstalk_spec::interfaces::l8_surface::Permission;
 
 use super::super::clock::NOW;
 use super::{caller, fresh, graph_of, node_ids, researcher, week};
-use crate::backend::Backend;
 use crosstalk_spec::aggregates::agents::AgentLookup;
 use crosstalk_spec::ids::AgentId;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 use crosstalk_spec::observed::agent::{AgentLabel, AgentState, MergeVeto};
 
 use super::actions_support::*;

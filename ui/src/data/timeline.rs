@@ -1,7 +1,7 @@
 //! The `<ct-timebrush>` payload and its route.
 //!
 //! `GET /data/timeline?<view state>&buckets=<n>` answers with a
-//! [`TimelinePayload`] as JSON, from two `Backend::series` calls on one grid
+//! [`TimelinePayload`] as JSON, from two `QueryApi::series` calls on one grid
 //! (transmissions, then matched bytes, both `SeriesGrouping::Total`, under
 //! the view's filter). `buckets` is 1 to
 //! [`MAX_BUCKETS`](super::query::MAX_BUCKETS), default 96. Needs `View`.
@@ -50,9 +50,9 @@ use super::query::{buckets, view_state};
 use super::require;
 use super::topology::WindowPayload;
 use crate::app::{backend, caller};
-use crate::backend::Backend;
 use crate::contract::present::Present;
 use crate::url::view_state::format_time;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

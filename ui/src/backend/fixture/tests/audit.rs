@@ -21,7 +21,7 @@ use super::super::clock::{DAY, NOW, ago};
 use super::super::world::{ChannelKey, OPERATOR_ONCALL, OPERATOR_RESEARCHER};
 use super::actions_support::channel;
 use super::{caller, collect, first, fresh, researcher, shared, window};
-use crate::backend::Backend;
+use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
 /// `audit` followed to its last page.
 async fn audited(b: &FixtureBackend, filter: &AuditFilter) -> Vec<AuditEntry> {

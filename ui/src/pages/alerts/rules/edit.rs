@@ -22,7 +22,6 @@ use super::form::{
 };
 use super::model::{semantic_query, staleness, status_label, status_tone, watched_topics};
 use crate::app::{backend, caller, can};
-use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::{Tone, error_panel, href, page_header, state_badge};
 use crate::error::UiError;
@@ -37,6 +36,7 @@ use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(rule_ulid);
