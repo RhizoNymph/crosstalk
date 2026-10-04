@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.passthrough.no-originated-requests"
+statement = "Every request the proxy sends upstream is the forwarding of exactly one client request; the proxy originates none of its own, including retries, OAuth token refreshes and token exchanges."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The proxy never refreshes, mints or replays credentials. A proxy-side retry
+would double-bill and could produce a second generation the harness never
+sees; a proxy-side refresh or Copilot token exchange would make the gateway
+hold long-lived secrets and act as the user. Refresh traffic belongs to the
+harness and the vendor's auth host.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::upstream_requests_map_one_to_one_to_client_requests"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

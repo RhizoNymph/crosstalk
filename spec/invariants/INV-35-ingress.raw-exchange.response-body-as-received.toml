@@ -1,0 +1,19 @@
+[invariant]
+id = "ingress.raw-exchange.response-body-as-received"
+statement = "A RawExchange's response bytes (Complete.body or Failed.partial_body) are exactly the bytes the proxy received from upstream for that exchange until its stream ended, in order, including bytes after a framing error: the HTTP body, or the server frames of that WebSocket turn."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The response is where an agent's originated text first appears. A gap or
+reordering in captured bytes corrupts the spans that provenance indexes.
+A framing error does not stop the stream reaching the client, so the
+agent saw the bytes after it too; capturing them keeps what detection
+reads equal to what the agent read.
+"""
+
+[evidence]
+property = ["crosstalk::ingress::tests::capture::response_body_matches_received", "crosstalk::ingress::tests::capture::partial_body_includes_bytes_after_frame_error", "crosstalk::ingress::tests::websocket::turn_body_is_its_server_frames"]
+
+[evidence-review]
+property = { agent = "false", human = "false" }

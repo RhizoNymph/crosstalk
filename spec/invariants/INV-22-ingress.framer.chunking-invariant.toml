@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.framer.chunking-invariant"
+statement = "Re-splitting the same response bytes into different chunks leaves the concatenated FrameEvents unchanged, and leaves any FrameError unchanged including its offset."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+TCP and TLS split the stream at arbitrary points, so chunk boundaries carry
+no meaning. A framer that only recognised frames aligned to chunks would
+mark the same response completed on one connection and failed on another.
+"""
+
+[evidence]
+property = "crosstalk::ingress::tests::framer::events_independent_of_chunking"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

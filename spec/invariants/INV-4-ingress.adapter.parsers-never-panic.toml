@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.adapter.parsers-never-panic"
+statement = "No ProviderAdapter, ResponseFramer or WebSocketTap method panics on any request head, request body, response bytes or WebSocket frame."
+kind = "domain"
+property = "invariant"
+requires = ["fuzz"]
+rationale = """
+Adapters parse untrusted bytes on the hot path. A panic there drops the
+client connection, breaking passthrough for exactly the malformed or novel
+traffic the gateway most needs to keep serving. Bad input must surface as
+DecodeError or FrameError.
+"""
+
+[evidence]
+fuzz = ["crosstalk::ingress::fuzz::decode_request", "crosstalk::ingress::fuzz::framer_push", "crosstalk::ingress::fuzz::websocket_tap_frames"]
+
+[evidence-review]
+fuzz = { agent = "false", human = "false" }

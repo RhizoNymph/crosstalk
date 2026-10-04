@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.encoding.decoded-size-bounded"
+statement = "Decoding a compressed request body for capture stops at a configured maximum decoded size, beyond which the request is forwarded uncaptured."
+kind = "performance"
+requires = ["unit", "fuzz"]
+rationale = """
+A small zstd or gzip body can expand to gigabytes. Decoding happens on the
+proxy node, so an unbounded decode lets one request exhaust its memory and
+take every client's traffic down. The forwarded bytes are unaffected.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::encoding::oversized_decode_aborts_capture"
+fuzz = "crosstalk::ingress::fuzz::decode_request_compressed"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+fuzz = { agent = "false", human = "false" }

@@ -1,0 +1,16 @@
+[invariant]
+id = "ingress.stage.completed-requires-finished"
+statement = "An exchange enters Completed only after Finished has been reported for it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+An upstream connection that closes before the terminal frame is a
+truncated response. Treating connection close as completion would record
+a cut-off output as the agent's full turn.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::upstream_close_before_finished_is_failure"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.failure.cause-classified"
+statement = "A failed exchange's ExchangeFailure names its first cause: Upstream with the status for a non-2xx status before content, UpstreamUnreachable when no response head arrived, StreamTruncated when the stream ended before Finished or a later WebSocket turn superseded it, MalformedStream with the offset on a malformed frame, UpstreamErrorEvent on an error event in a 2xx stream, Timeout when the deadline elapsed, and ClientDisconnected when the client left first."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "dst"]
+rationale = """
+Failure reasons drive operator diagnosis and tell L1 whether the partial
+body is an error document, a cut-off output or unparseable bytes. When
+causes race (a client gives up because the upstream stalled), the first
+cause is the true one. UnparseableResponse is a normalizer verdict on a
+complete response, so only L1 may assign it.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::failure::each_cause_classified"
+dst = "crosstalk::ingress::tests::sim::first_failure_cause_wins"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }
