@@ -34,7 +34,7 @@ those are query refusals.
 
 [evidence]
 unit = [
-    "crosstalk_surface::tests::layer_rejections_map_to_action_errors",
+    "crosstalk_surface::tests::outcomes::layer_rejections_map_to_action_errors",
     "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors",
     "crosstalk_spec::tests::action_errors::registry_refusals_map_to_typed_action_errors",
     "crosstalk_spec::tests::action_errors::verdict_refusals_map_to_typed_action_errors",
@@ -45,4 +45,4 @@ unit = [
 ]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

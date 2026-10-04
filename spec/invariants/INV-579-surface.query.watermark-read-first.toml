@@ -22,10 +22,10 @@ watermark claims nothing about them.
 
 [evidence]
 dst = [
-    "crosstalk_surface::dst::responses_carry_watermark_read_first",
-    "crosstalk_surface::dst::overview_reads_watermark_first",
-    "crosstalk_surface::dst::agent_reads_watermark_read_first",
+    "crosstalk_surface::dst::reads::responses_carry_watermark_read_first",
+    "crosstalk_surface::dst::reads::overview_reads_watermark_first",
+    "crosstalk_surface::dst::reads::agent_reads_watermark_read_first",
 ]
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

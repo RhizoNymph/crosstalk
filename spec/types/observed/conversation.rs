@@ -2,8 +2,10 @@
 //!
 //! Each request carries the full message history, so a conversation is found
 //! by matching a request's message hashes against the known prefixes. System
-//! messages are left out of prefix matching: a changed system prompt
-//! continues the conversation and is reported as the delta's `new_system`.
+//! messages, wherever they sit (the top-level prompt first, or a system turn
+//! inside the history), are left out of prefix matching: a changed system
+//! prompt continues the conversation and is reported as the delta's
+//! `new_system`.
 //! Matching considers every conversation of the same canonical agent, so a
 //! merge does not orphan the merged agent's conversations.
 //! Harnesses fork conversations (sub-agents, retries) and compact them

@@ -440,15 +440,18 @@ streams from testkit without waiting for P3.
 - [ ] Model-tested against memory. Implement INV-331–361 plus the watermark and retention ranges.
 
 ### P6.2 L6 search and alerts
-- [ ] `Embedder` against an OpenAI-compatible embeddings endpoint (decision D1).
+- [x] `Embedder` against an OpenAI-compatible embeddings endpoint (decision D1): `OpenAiEmbedder` in `crosstalk-analysis` (`remote::embedder`), built with P6.3's sidecar adapters.
 - [ ] `SearchIndex` on pgvector plus pg_trgm.
 - [ ] Alert rule evaluation and triage on the rule store.
 - [ ] Sinks.
 
 ### P6.3 L6 topics and projections
-- [ ] `TopicModel` fitting and versions, with lineage.
-- [ ] `ProjectionStore`, plus a `LayoutFitter` (UMAP) that is seeded and deterministic.
-- [ ] Implementation language is decision D1.
+- [x] Implementation language is decision D1: Python. The topics sidecar (`sidecar/topics/`, image `deploy/topics.Dockerfile`, contract v1 in `docs/features/topics_sidecar.md`) fits topics (UMAP, HDBSCAN, c-TF-IDF) and layouts (UMAP fit and transform), byte-for-byte deterministic for a seed.
+- [x] `TopicModel` fitting: `SidecarTopicModel` (fit of the catalog's version at a given time, centroids and derived topic ids in Rust, nearest-centroid assignment). The spec's `TopicModel::fit` and `LayoutFitter::fit` became async, `fit` takes the version, documents (text and embedding) and time, and both gained a backend error.
+- [ ] Topic versions and lineage in the catalog (`TopicCatalog`, `TopicLifecycle` on Postgres), and the `analyze` re-fit trigger.
+- [x] A `LayoutFitter` (UMAP) that is seeded and deterministic: `SidecarLayoutFitter`, plus `transform` onto an existing layout.
+- [ ] `ProjectionStore` on Postgres and the fitter loop.
+- [ ] Wire the sidecar into compose (`topics` service, see `docs/features/topics_sidecar.md`, "Running") and the gateway config (`topics{base_url, timeout_ms}`).
 
 ## P7 Surface on the real system (milestone M3)
 

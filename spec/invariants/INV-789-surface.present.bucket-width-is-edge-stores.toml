@@ -13,7 +13,7 @@ refusal.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::present_reports_the_edge_store_bucket_width"
+unit = "crosstalk_surface::tests::reads::present_reports_the_edge_store_bucket_width"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

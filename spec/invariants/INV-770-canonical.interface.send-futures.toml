@@ -38,6 +38,8 @@ type = [
     "crosstalk_spec::interfaces::l5_flow::ChannelRegistry",
     "crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts",
     "crosstalk_spec::interfaces::l6_analysis::Embedder",
+    "crosstalk_spec::interfaces::l6_analysis::TopicModel",
+    "crosstalk_spec::interfaces::l6_analysis::LayoutFitter",
     "crosstalk_spec::interfaces::l6_analysis::TopicCatalog",
     "crosstalk_spec::interfaces::l6_analysis::SearchIndex",
     "crosstalk_spec::interfaces::l6_analysis::ProjectionStore",

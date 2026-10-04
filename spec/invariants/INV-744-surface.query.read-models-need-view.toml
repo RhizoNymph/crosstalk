@@ -20,12 +20,12 @@ fails a test rather than opening a door.
 
 [evidence]
 unit = [
-    "crosstalk_surface::tests::channel_reads_without_view_forbidden",
-    "crosstalk_surface::tests::agent_reads_without_view_forbidden",
-    "crosstalk_surface::tests::rows_alert_and_overview_without_view_forbidden",
+    "crosstalk_surface::tests::permissions::channel_reads_without_view_forbidden",
+    "crosstalk_surface::tests::permissions::agent_reads_without_view_forbidden",
+    "crosstalk_surface::tests::permissions::rows_alert_and_overview_without_view_forbidden",
 ]
 integration = "crosstalk_surface::integration::transmission_routes_enforce_permissions"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

@@ -79,8 +79,11 @@ pub struct ConversationDelta {
     /// a compaction's first exchange, its non-system messages whose hash is
     /// not in the predecessor's history, in request order.
     pub new_inputs: Vec<MessageHash>,
-    /// The system message, when it is new to the conversation (its first
-    /// exchange, or the harness changed it).
+    /// The request's first System message (its top-level system prompt
+    /// when it has one), when it is new to the conversation (its first
+    /// exchange, or the harness changed it). A later System message (a
+    /// system turn inside the history) is not carried here
+    /// (`reconstruct.delta.new-system-when-changed`).
     pub new_system: Option<MessageHash>,
     /// The response, or a failed exchange's partial response. Write-side
     /// detection and span extraction read this.

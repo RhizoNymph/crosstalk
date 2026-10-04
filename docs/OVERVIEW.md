@@ -25,7 +25,11 @@ Overview:
     unchanged and every generation exchange is normalized, its bodies
     stored, ExchangeCaptured published and the exchange persisted
     (gateway). L2's in-process bus and blob store (transport) are
-    implemented; L3 to L8 are not started. The data
+    implemented; L3 to L7 are not started. The L8 surface service
+    (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
+    the graphs' node facts, generic over the spec's store traits) is
+    implemented and runs in process over the reference stores through
+    crosstalk-api's InProcess (surface_service). The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -63,10 +67,19 @@ Overview:
     Pipeline (build over any blob store, bus and injected clock), and a
     pre-normalized exchange enters it through Pipeline::ingest, the same
     path the capture stage takes after L1 (P3.1), so the eval harness can
-    drive the real layers under simulated time. The operator UI
+    drive the real layers under simulated time. crosstalk-eval is that
+    harness (eval): it converts public multi-agent datasets (SALT-NLP
+    first) into labelled corpora of spec NormalizedExchanges, scores a
+    detector against the labels, and runs both a naive reference matcher
+    and Pipeline::ingest (unscored until detection consumers exist). crosstalk-analysis has
+    L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
+    SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
+    HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint. The operator UI
     (crosstalk-ui, ui/) runs on the spec's L8 traits, implemented by a
     deterministic fixture backend until it is wired to the gateway (ui).
-    The other crates are still empty. The phased implementation plan, with its
+    The
+    other crates are still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -122,9 +135,12 @@ Overview:
       and trailer manifest; alert sinks; and the HTTP binding of all of it:
       one route per query, action kind and the live feed, a status for
       every error, and the caller taken from a bearer token or session
-      cookie only).
+      cookie only). crosstalk-surface implements the L8 service over the
+      spec's store traits (surface_service).
     serve: >
-      Crates crosstalk-api (the HTTP and SSE server for the L8 surface),
+      Crates crosstalk-api (the HTTP and SSE server for the L8 surface;
+      today InProcess, the surface over the reference stores in one
+      process),
       crosstalk-client (the L8 traits over HTTP, for the UI) and
       crosstalk-gateway (the crosstalk binary: config, wiring, process
       roles, the ops listener, graceful shutdown; today the single-node
@@ -141,6 +157,14 @@ Overview:
       synthetic week the UI and the tests share, seeded through the write
       traits). Layer crates may depend on store; memory, sim, testkit and
       world are their dev-dependencies only.
+    eval: >
+      Crate crosstalk-eval (a composer, beside the gateway rather than in
+      it) and its ct-eval binary: dataset converters stream worlds of spec
+      NormalizedExchanges with ground-truth labels; a detector (the naive
+      reference matcher, or the gateway's own Pipeline::ingest, which is
+      unscored until L3 to L5 consume the bus) produces spec Transmissions;
+      the scorer aligns them with the labels and reports per dataset,
+      route, carrier, match class and tier against regression gates.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -178,8 +202,10 @@ Overview:
     new inputs against other agents' spans (ContentMatched); L5 turns tool
     calls into accesses on canonical channels (AccessRecorded), resolves
     channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
-    classifies transmissions, records topic-model versions and their
+    transmissions (TransmissionConfirmed / Suspected) → L6 embeds (an
+    OpenAI-compatible endpoint) and classifies transmissions (topic fits
+    and projection layouts are computed by the Python topics sidecar over
+    HTTP; assignment to the current topics is local), records topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
@@ -440,6 +466,38 @@ Features Index:
       - spec/types/interfaces/l8_surface/http/auth.rs
     depends_on: [query_surface, read_models, export, wire_contract]
     doc: docs/features/http_api.md
+  surface_service:
+    description: >
+      crosstalk-surface, L8 (P2.6). Surface<S: SurfaceStores>, generic over
+      the spec's L3 to L8 store traits (one associated type per store
+      group): every QueryApi method with its permission checked first,
+      watermark-first reads, paging and a keyed-MAC cursor for
+      transmission rows by id, typed errors through the spec's From
+      impls; OperatorActions::act (one store write stamped with the
+      caller and the accept time, then exactly one OperatorRecord whose
+      AuditOutcome inverts to the returned result) and Surface::request;
+      the live feed (a writer task owning the epoch's log, bounded
+      per-stream buffers that end lagging streams, resume and resync,
+      heartbeats, session ends, a bus consumer that appends before it
+      acks); export (refusals, plan, limits, header, sealed BLAKE3 rows,
+      trailer, Started/Ended/Abandoned audit) with SpecExportSource
+      planning rows from the spec's read traits; and NodeCache, the spec's
+      NodeFacts, kept by NodeFeeder from L3's and L5's events and rebuilt
+      from the stores on start. crosstalk-api's InProcess builds it over
+      the reference stores with a relay from their outbox to the node
+      facts and the feed. The HTTP server (P7.1) is not part of it.
+    entry_points:
+      - crates/surface/src/lib.rs
+      - crates/surface/src/service.rs
+      - crates/surface/src/stores.rs
+      - crates/surface/src/query/mod.rs
+      - crates/surface/src/actions/mod.rs
+      - crates/surface/src/live/mod.rs
+      - crates/surface/src/export/mod.rs
+      - crates/surface/src/nodes/mod.rs
+      - crates/api/src/in_process/mod.rs
+    depends_on: [query_surface, read_models, export, memory, transport, sim, testkit, workspace]
+    doc: docs/features/surface_service.md
   store:
     description: >
       crosstalk-store, the Postgres infrastructure layer crates build on
@@ -603,8 +661,9 @@ Features Index:
     description: >
       crosstalk-canonical, L1 (P2.5). AnthropicMessages, the spec's
       Normalizer for Anthropic Messages in every dialect, as pure
-      functions: the request body (system prompt as a string or blocks,
-      user turns split into maximal runs of one role so tool results
+      functions: the request body (system prompt as a string or blocks
+      first, a role "system" turn inside messages as a System message in
+      place, user turns split into maximal runs of one role so tool results
       become Tool messages, tool calls with canonical JSON arguments,
       thinking and redacted thinking, base64 media as their own blobs,
       cache_control markers dropped, unknown blocks kept and warned) and
@@ -617,8 +676,10 @@ Features Index:
       encoding and exact-number JSON (spec_primitives); thinking keeps its
       signature; token usage reports cache reads and cache writes as parts
       of input; store() writes every body and media blob through
-      BlobStore. Goldens (the spec's NormalizedExchange JSON) over the
-      testkit corpus, properties over generated requests and streams.
+      BlobStore. A refused body's top-level shape (keys, roles, content
+      kinds, never values) for the gateway's debug log. Goldens (the
+      spec's NormalizedExchange JSON) over the testkit corpus, properties
+      over generated requests and streams.
     entry_points:
       - crates/canonical/src/lib.rs
       - crates/canonical/src/anthropic/mod.rs
@@ -704,7 +765,8 @@ Features Index:
       envelope, synced before its ack, to
       <parent of blobs.root>/exchanges/exchange-log.jsonl (a P3 stopgap:
       the spec has no exchange store). The ops listener serves /metrics
-      (Prometheus text), /healthz (counters) and /readyz (database when
+      (Prometheus text; refusals as normalize_failed by fixed reason and
+      protocol codes), /healthz (counters) and /readyz (database when
       configured, migrations, role tasks). SIGINT and SIGTERM stop
       accepting, drain in-flight streams up to a deadline (cutting the
       rest, which are still captured as client_disconnected), drain the
@@ -736,6 +798,50 @@ Features Index:
       - scripts/try-claude-code.sh
     depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
     doc: docs/features/gateway.md
+  analysis:
+    description: >
+      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). So far its
+      remote module: SidecarTopicModel (TopicModel: fits the catalog's
+      version over documents at a given time through the sidecar, computes
+      centroids as normalized member means and derives topic ids from the
+      fit time, version and cluster; assigns locally to the nearest
+      centroid above a threshold), SidecarLayoutFitter (LayoutFitter, plus
+      transform onto an existing layout), OpenAiEmbedder (Embedder:
+      batched, ordered by index, normalized, dimension probed, key from an
+      env var and never disclosed), a shared hyper/rustls client with a
+      deadline per call, and typed errors in which only the sidecar's
+      deterministic refusals become TooFewSamples or a FitFailure.
+      Contract-tested against testkit's fake server and the sidecar's own
+      fixture files; ignored live tests run against the real sidecar.
+    entry_points:
+      - crates/analysis/src/remote/mod.rs
+      - crates/analysis/src/remote/sidecar/topics.rs
+      - crates/analysis/src/remote/sidecar/layout.rs
+      - crates/analysis/src/remote/embedder.rs
+    depends_on: [type_spec, topics_sidecar, testkit, workspace]
+    doc: docs/features/analysis.md
+  topics_sidecar:
+    description: >
+      The Python topics sidecar (sidecar/topics, roadmap D1/P6.3): a
+      FastAPI service on port 8090 with /healthz, /v1/topics/fit (UMAP
+      reduction, HDBSCAN clusters renumbered by size, c-TF-IDF terms and
+      labels), /v1/layout/fit and /v1/layout/transform (seeded UMAP to two
+      dimensions, fitted bases in an LRU cache). Contract v1: JSON in the
+      spec's wire conventions, embeddings and coordinates as exact
+      little-endian binary32 hex matrices, adjacently tagged errors mapped
+      to HTTP statuses. Same request bytes give the same response bytes
+      (SeedSequence-seeded UMAP, one thread for BLAS and Numba, a generic
+      Numba target; bit-identity per image and CPU architecture). Pinned
+      with uv; pytest with determinism and golden tests; image
+      deploy/topics.Dockerfile (python slim, non-root).
+    entry_points:
+      - sidecar/topics/src/crosstalk_topics/app.py
+      - sidecar/topics/src/crosstalk_topics/topics.py
+      - sidecar/topics/src/crosstalk_topics/layout.py
+      - sidecar/topics/pyproject.toml
+      - deploy/topics.Dockerfile
+    depends_on: [wire_contract]
+    doc: docs/features/topics_sidecar.md
   deploy:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker
@@ -822,4 +928,28 @@ Features Index:
       - deploy/ui.Dockerfile
     depends_on: [query_surface, read_models, export, type_spec, workspace, deploy]
     doc: docs/features/ui.md
+  eval:
+    description: >
+      crosstalk-eval and the ct-eval CLI (a composer): dataset converters
+      (SALT-NLP first) streaming worlds of checked spec
+      NormalizedExchanges on a deterministic virtual clock, with typed,
+      JSONL-serialisable ground truth (expected transmissions, negative
+      controls, agent clusters, with tiers); predictions converted from
+      spec Transmissions and ContentMatches; one documented alignment rule
+      and a scorer with TP/FP/FN by dataset, route, carrier, match class
+      and tier, negative-control violations and a DetectionQuality bridge;
+      a Detector seam with the naive reference matcher (escape-aware
+      normalization, decoding, opaque-blob exclusion) and the gateway
+      pipeline (Pipeline::ingest under the corpus clock or a sim clock,
+      reported as unscored until detection consumers exist); reports and
+      regression gates.
+    entry_points:
+      - crates/eval/src/lib.rs
+      - crates/eval/src/pipeline.rs
+      - crates/eval/src/gateway.rs
+      - crates/eval/src/score/align.rs
+      - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/bin/ct-eval/main.rs
+    depends_on: [type_spec, gateway, transport, sim, testkit]
+    doc: docs/features/eval.md
 ```

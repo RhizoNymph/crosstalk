@@ -24,9 +24,10 @@ use crosstalk_spec::aggregates::topic::{
 use crosstalk_spec::derived::flow::channel::policy::Policy;
 use crosstalk_spec::ids::{ChannelId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l6_analysis::{
-    EmbedError, Embedder, LayoutFitter, RuleContext, TopicError, TopicModel,
+    EmbedError, Embedder, FitDocument, LayoutError, LayoutFitter, RuleContext, TopicError,
+    TopicModel,
 };
-use crosstalk_spec::support::{Clock, Similarity};
+use crosstalk_spec::support::{Similarity, Timestamp};
 
 use super::search::terms;
 use super::support::similarity;
@@ -102,13 +103,13 @@ impl Embedder for FakeEmbedder {
 /// Clusters around the first `clusters` distinct embeddings of a fit; an
 /// embedding whose best similarity is below `outlier_below` is an outlier.
 /// Version 0, before the first fit, classifies everything as an outlier.
-#[derive(Clone)]
+/// Texts are ignored: topics are labelled `topic <index>`.
+#[derive(Debug, Clone)]
 pub struct FakeTopicModel {
     model: EmbeddingModel,
     clusters: usize,
     min_samples: u32,
     outlier_below: Similarity,
-    clock: Arc<dyn Clock>,
     state: Arc<Mutex<FitState>>,
 }
 
@@ -125,14 +126,12 @@ impl FakeTopicModel {
         clusters: usize,
         min_samples: u32,
         outlier_below: Similarity,
-        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             model,
             clusters,
             min_samples,
             outlier_below,
-            clock,
             state: Arc::new(Mutex::new(FitState {
                 version: TopicModelVersion(0),
                 topics: Vec::new(),
@@ -190,9 +189,22 @@ impl TopicModel for FakeTopicModel {
         lock(&self.state).version
     }
 
-    fn fit(&self, embeddings: &[Embedding]) -> Result<(TopicModelVersion, Vec<Topic>), TopicError> {
-        for embedding in embeddings {
+    async fn fit(
+        &self,
+        version: TopicModelVersion,
+        documents: &[FitDocument<'_>],
+        at: Timestamp,
+    ) -> Result<Vec<Topic>, TopicError> {
+        let embeddings: Vec<&Embedding> = documents.iter().map(|doc| doc.embedding).collect();
+        for embedding in &embeddings {
             self.check_model(embedding)?;
+        }
+        let current = lock(&self.state).version;
+        if version <= current {
+            return Err(TopicError::VersionNotNewer {
+                current,
+                requested: version,
+            });
         }
         let got = u32::try_from(embeddings.len()).unwrap_or(u32::MAX);
         if got < self.min_samples {
@@ -202,22 +214,21 @@ impl TopicModel for FakeTopicModel {
             });
         }
         let mut anchors: Vec<&Embedding> = Vec::new();
-        for embedding in embeddings {
+        for &embedding in &embeddings {
             if anchors.len() < self.clusters && !anchors.contains(&embedding) {
                 anchors.push(embedding);
             }
         }
         let mut members: Vec<Vec<&Embedding>> = vec![Vec::new(); anchors.len()];
-        for embedding in embeddings {
+        for &embedding in &embeddings {
             if let Some((index, _)) = nearest(&anchors, embedding)
                 && let Some(cluster) = members.get_mut(index)
             {
                 cluster.push(embedding);
             }
         }
-        let fitted_at = self.clock.now();
+        let fitted_at = at;
         let mut state = lock(&self.state);
-        let version = TopicModelVersion(state.version.0.saturating_add(1));
         let mut topics = Vec::new();
         for (index, cluster) in members.iter().enumerate() {
             let Some(centroid) = centroid(&self.model, cluster) else {
@@ -234,7 +245,7 @@ impl TopicModel for FakeTopicModel {
         }
         state.version = version;
         state.topics.clone_from(&topics);
-        Ok((version, topics))
+        Ok(topics)
     }
 
     fn assign(&self, embedding: &Embedding) -> Result<Assignment, TopicError> {
@@ -257,13 +268,22 @@ impl TopicModel for FakeTopicModel {
 
 /// Lays each embedding at its first two coordinates, shifted by an offset
 /// derived from the seed. Deterministic bit for bit; refuses fewer points
-/// than `neighbors + 1`.
+/// than `neighbors + 1`. Never fails with `LayoutError::Backend`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FakeLayoutFitter;
 
 impl LayoutFitter for FakeLayoutFitter {
-    fn fit(
+    async fn fit(
         &self,
+        embeddings: &[Embedding],
+        params: ProjectionParams,
+    ) -> Result<Vec<[f32; 2]>, LayoutError> {
+        Self::layout(embeddings, params).map_err(LayoutError::Failed)
+    }
+}
+
+impl FakeLayoutFitter {
+    fn layout(
         embeddings: &[Embedding],
         params: ProjectionParams,
     ) -> Result<Vec<[f32; 2]>, FitFailure> {

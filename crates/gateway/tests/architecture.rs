@@ -13,13 +13,10 @@
 //!    dependencies.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client`, `eval` and `ui` compose layer crates. `ui` (the operator UI,
-//! `crosstalk-ui`) is an application: today it depends on the spec alone,
-//! and it may later depend on `surface`, `api` or `client`; no layer crate
-//! may depend on it. `eval` (the evaluation
-//! harness, `crates/eval`) is registered before it exists: the rule
-//! classifies it, and the workspace check does not require it yet
-//! ([`Composer::required`]).
+//! `client`, `eval` (the evaluation harness, `crates/eval`) and `ui` compose
+//! layer crates. `ui` (the operator UI, `crosstalk-ui`) is an application:
+//! it may depend on `surface`, `api`, `client`, the memory stores and the
+//! world seed; no layer crate may depend on it.
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -99,12 +96,6 @@ impl Composer {
             Composer::Gateway => "gateway",
             Composer::Ui => "ui",
         }
-    }
-
-    /// Whether the workspace must already have the crate. `eval` is being
-    /// created (roadmap P3.1); the rule applies to it once it is a member.
-    fn required(self) -> bool {
-        !matches!(self, Composer::Eval)
     }
 }
 
@@ -362,12 +353,7 @@ fn workspace_has_every_crate_the_rule_names() -> Result<(), MetadataError> {
     let expected = Layer::ALL
         .into_iter()
         .map(Layer::dir)
-        .chain(
-            Composer::ALL
-                .into_iter()
-                .filter(|c| c.required())
-                .map(Composer::dir),
-        )
+        .chain(Composer::ALL.into_iter().map(Composer::dir))
         .chain(TestSupport::ALL.into_iter().map(TestSupport::dir))
         .chain(["store", "spec"]);
     for dir in expected {
@@ -575,7 +561,7 @@ fn roles_classify_by_package_name() {
 }
 
 #[test]
-fn eval_composes_gateway_and_layers_and_is_not_yet_required() {
+fn eval_composes_gateway_and_layers() {
     for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
         assert_eq!(check(&edge("eval", "gateway", kind)), None);
         for layer in Layer::ALL {
@@ -588,19 +574,11 @@ fn eval_composes_gateway_and_layers_and_is_not_yet_required() {
             );
         }
     }
-    assert!(!Composer::Eval.required());
-    assert!(
-        Composer::ALL
-            .into_iter()
-            .filter(|c| *c != Composer::Eval)
-            .all(Composer::required)
-    );
 }
 
 #[test]
 fn ui_is_an_application_that_may_compose_layers() {
     assert_eq!(Role::of("crosstalk-ui"), Role::Composer(Composer::Ui));
-    assert!(Composer::Ui.required());
     for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
         assert_eq!(check(&edge("ui", "spec", kind)), None);
         for to in ["surface", "api", "client"] {

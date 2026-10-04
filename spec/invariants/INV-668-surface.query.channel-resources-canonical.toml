@@ -12,9 +12,9 @@ old links working.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::channel_resources_include_superseded"
+unit = "crosstalk_surface::tests::channels::channel_resources_include_superseded"
 integration = "crosstalk_flow::tests::pg_resource_use_pages"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

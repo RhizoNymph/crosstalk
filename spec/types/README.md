@@ -113,7 +113,7 @@ spec/types/
 │   │   ├── channels.rs    ChannelTraffic (discover, add_resource, record_access, set_detection, confirm), DetectionUpdate, TrafficError; ChannelReads (channel by id, filtered channel pages)
 │   │   ├── transmissions.rs TransmissionStore (save, transmission), TransmissionStoreError
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention; publishes TopicVersionDropped), SearchIndex, ProjectionStore (FrameMismatch), ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage (suppressions at a time), AlertRuleStore; SearchHit and SearchResults are its only wire types
+│   ├── l6_analysis.rs     Embedder, TopicModel (async fit of a given version over FitDocuments at a given time; TopicError::VersionNotNewer, Backend), TopicCatalog (pins, retention; publishes TopicVersionDropped), SearchIndex, ProjectionStore (FrameMismatch), ProjectionSource, LayoutFitter (async; LayoutError: Backend or Failed(FitFailure)), AlertRuleEval, AlertTriage (suppressions at a time), AlertRuleStore; SearchHit and SearchResults are its only wire types
 │   ├── l6_analysis/
 │   │   ├── lifecycle.rs   TopicLifecycle (begin_fit, complete_fit, fail_fit, mark_ready, mark_active, assign), StoredAssignment, CatalogActivation, TopicLifecycleError
 │   │   ├── corpus.rs      SearchCorpus (index, remove, judge, set_model, drop_model), IndexedTransmission, CorpusError

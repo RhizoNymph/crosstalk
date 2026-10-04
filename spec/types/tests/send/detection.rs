@@ -7,11 +7,13 @@ use crate::aggregates::edge::{
 };
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::projection::frame::ProjectionFrame;
-use crate::aggregates::projection::{FitFailure, Projection, ProjectionInfo, ProjectionSpec};
+use crate::aggregates::projection::{
+    FitFailure, Projection, ProjectionInfo, ProjectionParams, ProjectionSpec,
+};
 use crate::aggregates::quality::DetectionQuality;
 use crate::aggregates::retention::{Pin, PinChange, RetentionPolicy};
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
-use crate::aggregates::topic::{Embedding, EmbeddingModel, Topic, TopicModelVersion};
+use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::aggregates::watermark::{PipelineFrontier, Watermarked};
 use crate::derived::flow::channel::Declaration;
@@ -32,10 +34,10 @@ use crate::interfaces::l5_flow::{
     ChannelLookup, ChannelRegistry, PromoteError, Promoted, RegistryError,
 };
 use crate::interfaces::l6_analysis::{
-    AlertRuleEval, AlertRuleStore, AlertTriage, CatalogError, EmbedError, Embedder,
-    ProjectionJobError, ProjectionSource, ProjectionStore, ProjectionStoreError, RuleContext,
-    RuleError, Sample, SampleError, SearchError, SearchIndex, SearchQuery, SearchResults,
-    TopicCatalog, TriageError,
+    AlertRuleEval, AlertRuleStore, AlertTriage, CatalogError, EmbedError, Embedder, FitDocument,
+    LayoutError, LayoutFitter, ProjectionJobError, ProjectionSource, ProjectionStore,
+    ProjectionStoreError, RuleContext, RuleError, Sample, SampleError, SearchError, SearchIndex,
+    SearchQuery, SearchResults, TopicCatalog, TopicError, TopicModel, TriageError,
 };
 use crate::interfaces::l7_topology::{
     AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
@@ -249,6 +251,33 @@ impl ProjectionStore for Dummy {
     }
 }
 
+impl TopicModel for Dummy {
+    fn version(&self) -> TopicModelVersion {
+        match *self {}
+    }
+    async fn fit(
+        &self,
+        _version: TopicModelVersion,
+        _documents: &[FitDocument<'_>],
+        _at: Timestamp,
+    ) -> Result<Vec<Topic>, TopicError> {
+        match *self {}
+    }
+    fn assign(&self, _embedding: &Embedding) -> Result<Assignment, TopicError> {
+        match *self {}
+    }
+}
+
+impl LayoutFitter for Dummy {
+    async fn fit(
+        &self,
+        _embeddings: &[Embedding],
+        _params: ProjectionParams,
+    ) -> Result<Vec<[f32; 2]>, LayoutError> {
+        match *self {}
+    }
+}
+
 impl ProjectionSource for Dummy {
     async fn sample(&self, _spec: &ProjectionSpec) -> Result<Sample, SampleError> {
         match *self {}
@@ -366,6 +395,14 @@ fn projection_store<T: ProjectionStore>(x: &mut T, never: &Dummy) {
     assert_send(x.info(arg(never)));
     assert_send(x.list(arg(never)));
     assert_send(x.projection(arg(never)));
+}
+
+fn topic_model<T: TopicModel>(x: &T, never: &Dummy) {
+    assert_send(x.fit(arg(never), arg(never), arg(never)));
+}
+
+fn layout_fitter<T: LayoutFitter>(x: &T, never: &Dummy) {
+    assert_send(x.fit(arg(never), arg(never)));
 }
 
 fn projection_source<T: ProjectionSource>(x: &T, never: &Dummy) {
@@ -525,6 +562,8 @@ fn l5_flow_futures_are_send() {
 #[test]
 fn l6_analysis_futures_are_send() {
     let _ = embedder::<Dummy>;
+    let _ = topic_model::<Dummy>;
+    let _ = layout_fitter::<Dummy>;
     let _ = topic_catalog::<Dummy>;
     let _ = search_index::<Dummy>;
     let _ = projection_store::<Dummy>;

@@ -1,0 +1,24 @@
+[invariant]
+id = "analysis.topic.ids-derived"
+statement = "Every Topic that SidecarTopicModel::fit returns for version v at time t has the TopicId whose ULID time is t in milliseconds and whose 80 low bits are the first ten bytes of BLAKE3::derive_key(\"crosstalk topic id v1\", v as u32 LE followed by the topic's cluster index as u32 LE)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The sidecar is deterministic, so re-running a fit with the same documents,
+version and time must name the same topics too; random ids would make two
+identical fits disagree on every watched topic and every stored
+assignment. Including the version keeps ids of different versions apart,
+which the catalog requires (TopicIdReused), and the time prefix keeps them
+in fit order like any other ULID.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_analysis::remote::tests::topics::fit_builds_topics_from_the_reply",
+    "crosstalk_analysis::remote::tests::topics::topic_ids_carry_the_fit_time_and_differ_by_version_and_index",
+    "crosstalk_analysis::remote::tests::topics::same_reply_gives_the_same_topics",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

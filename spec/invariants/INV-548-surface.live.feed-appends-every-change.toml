@@ -11,7 +11,7 @@ extra re-query and changes nothing the client shows.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::feed_writer_appends_before_ack"
+dst = "crosstalk_surface::dst::live::feed_writer_appends_before_ack"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

@@ -13,9 +13,9 @@ the action, would no longer describe what happened.
 
 [evidence]
 unit = [
-    "crosstalk_surface::tests::identity_and_rule_actions_forwarded_unchanged",
-    "crosstalk_surface::tests::new_actions_forwarded_unchanged",
+    "crosstalk_surface::tests::actions::identity_and_rule_actions_forwarded_unchanged",
+    "crosstalk_surface::tests::actions::new_actions_forwarded_unchanged",
 ]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

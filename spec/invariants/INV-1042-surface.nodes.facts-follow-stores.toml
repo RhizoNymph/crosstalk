@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.nodes.facts-follow-stores"
+statement = "Once the node facts cache has been rebuilt from the stores or has applied the events of every committed change, NodeFacts::agent of each canonical agent holds its record's label and stored parent, its state and the ClaimSet::union of its cluster's claims, NodeFacts::channel of each channel in force holds its origin, detection and policy kinds, and a merged agent or a superseded channel has no facts."
+kind = "domain"
+property = "model-based"
+requires = ["unit"]
+rationale = """
+The edge store describes graph nodes through NodeFacts, a synchronous cache
+it cannot fill itself. Events name ids and never facts, so the cache re-reads
+each id an event names from L3's and L5's reads; a redelivered, reordered or
+duplicated event then leaves it as the stores are, and a rebuild on start
+gives the same cache as replaying every event. Harness claims change with
+every attributed exchange without a Changed::Agent, so ConversationDelta
+refreshes its agent too. Without this, graph nodes show stale labels and
+policies, or a merged agent as a node of its own.
+"""
+
+[evidence]
+unit = ["crosstalk_surface::tests::nodes::node_facts_rebuild_from_the_stores", "crosstalk_surface::tests::nodes::node_facts_follow_events", "crosstalk_surface::tests::nodes::graphs_describe_nodes_from_the_cache"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

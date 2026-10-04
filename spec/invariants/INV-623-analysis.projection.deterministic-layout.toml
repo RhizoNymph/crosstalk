@@ -12,7 +12,7 @@ harmless. It requires a seeded random state and a single-threaded fit.
 """
 
 [evidence]
-property = "crosstalk_analysis::tests::prop_layout_is_deterministic"
+property = "crosstalk_analysis::remote::tests::layout::prop_layout_is_deterministic"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

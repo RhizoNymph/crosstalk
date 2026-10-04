@@ -165,6 +165,29 @@ start (exit 1).
 `crosstalk_pipeline_blob_put_retries_total`,
 `crosstalk_exchange_log_deliveries_total{outcome}`.
 
+The `normalize_failed` outcome of `crosstalk_pipeline_exchanges_total`
+also carries `reason` and `protocol`, fixed codes from
+`normalize_failure` (never free text): `reason` is `request_body` (the
+normalizer refused the body, `NormalizeError::RequestBody`) or
+`unsupported_protocol` (no normalizer handles the exchange's protocol);
+`protocol` is the exchange's `WireProtocol` wire name
+(`anthropic_messages`, `open_ai_chat`, `open_ai_responses`,
+`gemini_generate`, `gemini_code_assist`). Every one of the ten pairs is
+exposed, zeros included, and there is no unlabelled `normalize_failed`
+series beside them, so `sum by (outcome)` is the refusal total that
+`/healthz` reports as `pipeline.normalize_failed`. The other outcomes keep
+their single `{outcome}` series:
+
+```text
+crosstalk_pipeline_exchanges_total{outcome="published"} 3
+crosstalk_pipeline_exchanges_total{outcome="normalize_failed",reason="unsupported_protocol",protocol="anthropic_messages"} 0
+...
+crosstalk_pipeline_exchanges_total{outcome="normalize_failed",reason="request_body",protocol="anthropic_messages"} 2
+...
+crosstalk_pipeline_exchanges_total{outcome="store_failed"} 0
+crosstalk_pipeline_exchanges_total{outcome="publish_failed"} 0
+```
+
 ## Data and control flow
 
 ```text
@@ -175,7 +198,7 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
                  client response, unchanged                                                              ▼
                                                                          capture::CaptureStage::run (one task, spawned by Pipeline::build)
                                                                            AnthropicMessages::normalize_with_media (L1)
-                                                                             └ refused ─▶ normalize_failed
+                                                                             └ refused ─▶ normalize_failed (by reason, protocol); debug log of the body's shape
                                                                            Ingester::ingest(normalization, clock.now())   ◀── Pipeline::ingest(NormalizedExchange, at)
                                                                              crosstalk_canonical::store ─▶ FsBlobStore (blobs.root)
                                                                                └ retried blob_put_attempts times ─▶ store_failed, nothing published
@@ -262,10 +285,11 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
   Each outcome is counted in `PipelineStats` (`published`, `store_failed`,
   `store_retries`, `publish_failed`) before it returns.
 - **One path after L1.** The capture stage normalizes a `RawExchange` with
-  `AnthropicMessages` (a refusal is `CaptureError::NotNormalized`, counted
-  `normalize_failed`) and calls the same `Ingester::ingest` with the
-  clock's reading. `pipeline_ingest_matches_the_proxy_path` checks that
-  both put the same bytes in the same order and publish the same envelope.
+  `AnthropicMessages` (a refusal is `CaptureError::NotNormalized(Refusal)`,
+  counted `normalize_failed` under its reason and protocol, with the
+  refused body's top-level shape logged at debug) and calls the same
+  `Ingester::ingest` with the clock's reading.
+  `pipeline_ingest_matches_the_proxy_path` checks that both put the same bytes in the same order and publish the same envelope.
 - **Shutdown.** `join_capture(deadline)` waits for the capture stage once
   the caller has dropped every capture sender; `join_consumers(deadline)`
   waits for the consumers once the bus has stopped; for `MpscBus`,
@@ -283,9 +307,10 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 | `IngestError` | `NotStored { attempts, source: StoreError }`, `IdsExhausted { at }`, `NotPublished(BusError)` |
 | `BuildError` | `Subscribe(BusError)` |
 | `Drained` | `capture`, `log`: whether each drained by the deadline |
-| `PipelineStats`, `PipelineCounts`, `PutRetry` | the counters (`/healthz`, `/metrics`) and the put retry policy, moved here from `capture` |
+| `PipelineStats`, `PipelineCounts`, `PutRetry` | the counters (`/healthz`, `/metrics`; refusals by reason and protocol through `normalize_failures`) and the put retry policy, moved here from `capture` |
 | `capture::CaptureStage<B, E>` | `new(Ingester)`, `run(receiver)`, `capture(&RawExchange) -> Result<EventId, CaptureError>` |
-| `capture::CaptureError` | `NotNormalized(NormalizeError)`, `Ingest(IngestError)` |
+| `capture::CaptureError` | `NotNormalized(Refusal)`, `Ingest(IngestError)` |
+| `capture::Refusal` | `UnsupportedProtocol(WireProtocol)`, `Refused { protocol, error: NormalizeError }`; `failure()` is its `NormalizeFailure` (the `/metrics` labels) |
 
 ## Persistence: a P3 stopgap
 
@@ -350,18 +375,19 @@ gracefully.
 | `src/gateway.rs` | Role wiring around a `Pipeline`: the proxy and ops listeners, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `pipeline`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
 | `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
 | `src/pipeline/ingest.rs` | Ingest at L1: store (retried), mint, publish | `Ingester` (`ingest`, `now`, `blobs`, `bus`, `stats`, `retry`), `IngestError` |
-| `src/pipeline/stats.rs` | Counters and put retry | `PipelineStats`, `PipelineCounts`, `PutRetry` |
-| `src/capture.rs` | The capture stage: L1 normalization, then `Ingester::ingest` | `CaptureStage` (`new`, `run`, `capture`), `CaptureError` |
+| `src/pipeline/stats.rs` | Counters and put retry; refusals held as a `FailureStats` by reason and protocol | `PipelineStats` (`snapshot`, `normalize_failures`), `PipelineCounts`, `PutRetry` |
+| `src/capture.rs` | The capture stage: L1 normalization (refusals counted by reason and protocol, their request shape logged at debug), then `Ingester::ingest` | `CaptureStage` (`new`, `run`, `capture`), `CaptureError`, `Refusal` (`failure`) |
+| `src/normalize_failure.rs` | Refusal codes and counters: the `reason` and `protocol` labels | `FailureReason` (`of`, `code`, `ALL`), `NormalizeFailure`, `FailureStats`, `FailureCounts` (`get`, `total`, `iter`, `with`), `PROTOCOLS`, `protocol_code` |
 | `src/log/mod.rs` | The exchange log file | `ExchangeLog` (`open`, `append`, `close`), `Appended`, `read`, `LogContents`, `LogError` |
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |
-| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` |
+| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` (the health report and the refusal counts) |
 | `src/tasks.rs` | Per-task running flags | `Tasks` (`spawn`, `states`) |
 | `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
 | `src/inspect.rs` | Reading back the log and bodies | `list`, `show`, `InspectError` |
 | `src/logging.rs` | JSON log setup | `init`, `try_init`, `Sink` |
-| `src/tests/` | `crosstalk_gateway::tests::*`: the capture stage simulation (`dst.rs`) and the `ingest` simulations (`ingest.rs`) over raw exchanges built from the corpus (`raw.rs`), with recording store and bus wrappers (`record.rs`) | — |
+| `src/tests/` | `crosstalk_gateway::tests::*`: the capture stage simulation (`dst.rs`), the `ingest` simulations (`ingest.rs`) and the refusal counts (`refusals.rs`) over raw exchanges built from the corpus (`raw.rs`), with recording store and bus wrappers (`record.rs`) | — |
 | `tests/e2e/` | `crosstalk_gateway::e2e::*`: end-to-end tests (`support.rs` starts a gateway in front of testkit's fake upstream) | — |
 | `tests/logs.rs` | The log redaction test (its own binary: it installs the global subscriber) | — |
 | `tests/architecture.rs` | The workspace dependency rule ([workspace](workspace.md)) | — |
@@ -378,12 +404,14 @@ gracefully.
 | `e2e::in_flight_stream_finishes_during_shutdown` | Shutdown mid-stream: new connections refused at once, the paced stream completes unchanged, its exchange is logged, nothing is cut |
 | `e2e::stalled_stream_is_cut_at_the_drain_deadline_and_captured` | Shutdown during a stalled stream: cut at the drain deadline, the client sees an aborted body, the exchange is logged as `ClientDisconnected` with its bodies stored |
 | `e2e::ops_endpoints_and_inspect_report_the_capture` | `/healthz` counters, `/readyz` (tasks `exchange_log`, `capture`, `proxy`), `/metrics` lines, 404s, `healthcheck::check` on 2xx and 404, `inspect::list` and `show`, the ops listener stopping last |
-| `logs::logs_are_json_lines_without_secrets_credentials_or_bodies` | At debug level over three cases: every line JSON with a top-level `level`; never the deployment secret, the credential, or any message text |
+| `e2e::system_turn_exchange_is_published` | Claude Code's `role: "system"` turn inside `messages`: the reply reaches the client unchanged, the exchange is published with its request System, User, System in order, and `normalize_failed` stays 0 |
+| `tests::refusals_are_counted_by_reason_and_protocol` | The capture stage counts an unknown-role body as `request_body` and an OpenAI Chat exchange as `unsupported_protocol`, and the health total is their sum |
+| `logs::logs_are_json_lines_without_secrets_credentials_or_bodies` | At debug level over three cases and one refused request: every line JSON with a top-level `level`; the refusal's `request_shape` at debug level naming the role and content kind; never the deployment secret, the credential, any message text or the refused body's content |
 | `tests::pipeline_ingest_matches_the_proxy_path` | Under paused time, for every corpus exchange plus the image request at seeded instants: a pipeline fed the raw exchange through the capture channel and one fed the pre-normalized exchange through `ingest` at the same instant put the same bytes in the same order, publish the same envelope (id, `at`, event), and count the same |
 | `tests::pipeline_ingest_retries_blob_faults_then_fails_typed` | With every put failing before (and, separately, after) it commits: exactly `attempts` puts `backoff` apart, `IngestError::NotStored` with the attempt count, nothing published, `store_retries` = attempts - 1; a put that committed is stored once. Under 10% transient failures and latency every exchange is stored and published, with one retry per failed put |
 | `tests::pipeline_concurrent_ingests_keep_ids_monotonic` | Four rounds of the corpus ingested concurrently over a slow store and a slow bus (whose acceptance order follows call order only if ingest serializes mint and publish), with `at` spread back and forth: every one published, ids distinct and reaching the bus in strictly increasing order, each envelope stamped its `at` and its id never in an earlier millisecond |
 | `tests::dst_blobs_written_before_capture_published` | INV-48 (dst): under put latency and failures before and after the write, with seeded feed timing, every blob (bodies and media) an event names is stored when the event arrives; an exchange whose puts all failed publishes nothing; each exchange is published at most once |
-| unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text, healthcheck URL checks |
+| unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text (the `normalize_failed` series sum to the health total), healthcheck URL checks, refusal codes |
 
 ```sh
 cargo test -p crosstalk-gateway
@@ -405,7 +433,9 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
   holds each envelope once.
 - Nothing the gateway writes leaves the parent of `blobs.root`.
 - Secrets come only from the environment variables the config names; no
-  secret, credential, header or body is logged (`tests/logs.rs`).
+  secret, credential, header or body is logged (`tests/logs.rs`). A
+  refused exchange logs only its body's top-level shape, at debug level
+  (`crosstalk_canonical::anthropic::RequestShape`).
 - Concurrency is tokio tasks joined by channels (the capture channel, the
   bus, `watch` stop and phase signals); the only shared state is atomic
   counters, per-task running flags, and the envelope id generator behind
