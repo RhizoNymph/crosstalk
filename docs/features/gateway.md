@@ -73,7 +73,7 @@ against the config file's directory.
 
 | Key | Required | Shape |
 | --- | --- | --- |
-| `ingress` | yes | `crosstalk_ingress::config::IngressConfig`, unchanged: `listen`, `routes` (name, prefix, upstream id, kind, base URL), `secrets` (`current` and optional `previous` `{version, env}`), `limits`, `capture.channel_capacity` |
+| `ingress` | yes | `crosstalk_ingress::config::IngressConfig`, unchanged: `listen`, `routes` (name, prefix, upstream id, kind, base URL), `secrets` (`current` `{version, env}` and an optional `previous` `{version, env, overlap_ends}`, an older version whose digests are also computed for exchanges that start before `overlap_ends`, an RFC 3339 timestamp at microsecond precision), `limits`, `capture.channel_capacity` |
 | `api` | no | `{"listen": SocketAddr, "token": {"env": ..}}`; checked, not bound |
 | `ops` | yes | `{"listen": SocketAddr}` |
 | `store` | no | `{"pool": crosstalk_store::PoolSettings}`; the URL is `DATABASE_URL` |
@@ -93,11 +93,26 @@ a parent directory.
 8080, 8081, 9464; blobs under the repository's `target/crosstalk-dev`).
 `crates/gateway/.env.example` lists the environment.
 
+The example loads one secret. During a rotation, `secrets` names both
+versions and when the old one stops keying digests; after that instant
+`previous` can be removed:
+
+```json
+"secrets": {
+  "current": {"version": 2, "env": "CROSSTALK_SECRET_V2"},
+  "previous": {"version": 1, "env": "CROSSTALK_SECRET_V1",
+               "overlap_ends": "2026-11-01T00:00:00.000000Z"}
+}
+```
+
+A previous version that is not older than the current one is refused at
+start (exit 1).
+
 ### Environment
 
 | Variable | Read by |
 | --- | --- |
-| `CROSSTALK_SECRET_V1` (whatever `ingress.secrets.current.env` names) | `serve` (roles running the proxy): 64 hex digits keying credential and account digests |
+| `CROSSTALK_SECRET_V1` (whatever `ingress.secrets.current.env` names, and `previous.env` during a rotation) | `serve` (roles running the proxy): 64 hex digits keying credential and account digests; surrounding whitespace such as a trailing newline is ignored |
 | `DATABASE_URL` | `migrate`; `serve` when `store` is configured (missing or malformed is a start error; unreachable only makes `/readyz` fail) |
 | `CROSSTALK_API_TOKEN`, `CROSSTALK_EMBEDDINGS_API_KEY` | nothing yet (their sections are checked, not used) |
 | `RUST_LOG` | the log filter (default `info`; `inspect` defaults to `warn`) |
@@ -124,7 +139,8 @@ a parent directory.
 ```json
 {"status": "ok",
  "capture": {"captured": 3, "unclassified": 0, "decode_error": 0,
-             "channel_full": 0, "channel_closed": 0, "response_too_large": 0},
+             "channel_full": 0, "channel_closed": 0, "response_too_large": 0,
+             "ids_exhausted": 0},
  "pipeline": {"published": 3, "normalize_failed": 0, "store_failed": 0,
               "store_retries": 0, "publish_failed": 0},
  "log": {"written": 3, "duplicates": 0, "write_failed": 0}}
@@ -169,9 +185,11 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
   the bus and subscribe the exchange log before anything can publish;
   spawn the tasks (each tracked by a running flag for `/readyz`); with
   `store`, connect to Postgres in the background, retrying every 5 s.
-- **Envelope ids** come from ingress's ULID generator (`ExchangeIds`, the
-  stand-in for P0.7's) behind `capture::EventIds`; nothing is duplicated
-  here. The envelope time is the injected clock's reading after the store.
+- **Envelope ids** come from the spec's `UlidGenerator` (seeded from the
+  operating system's randomness), owned by the capture stage's one task
+  and minted with `mint_at` at the envelope time, the injected clock's
+  reading after the store. If no id is left (`UlidExhausted`), the event
+  is not published and is counted `publish_failed`.
 - **Shutdown** (`Running::shutdown`), in dependency order:
   1. `/healthz` reports `draining` and `/readyz` 503.
   2. The proxy listener closes (new connections are refused) and every
@@ -251,7 +269,7 @@ gracefully.
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`), `ApiConfig`, `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `not_built`), `UnknownRole` |
 | `src/gateway.rs` | Wiring, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
-| `src/capture.rs` | The capture stage | `CaptureStage` (`new`, `run`, `capture`), `Captured`, `PutRetry`, `EventIds`, `PipelineStats`, `PipelineCounts` |
+| `src/capture.rs` | The capture stage | `CaptureStage` (`new` taking a `UlidGenerator<SeededRandom>` for envelope ids, `run`, `capture`), `Captured`, `PutRetry`, `PipelineStats`, `PipelineCounts` |
 | `src/log/mod.rs` | The exchange log file | `ExchangeLog` (`open`, `append`, `close`), `Appended`, `read`, `LogContents`, `LogError` |
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |

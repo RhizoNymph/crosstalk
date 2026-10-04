@@ -52,11 +52,12 @@ decode(bytes): json::Json::parse_bytes ─▶ canonical text == bytes? (else Not
                ─serde_json─▶ mirror::Body (else Shape) ─TryFrom─▶ MessageBody (EmptyTool, NonCanonicalJson)
                ─encode(body) == bytes? (else NotCanonical) ─▶ Ok(body)
 
-L0 proxy: KeyedHasher::credential(raw, clock.now()) ─▶ SecretDigests { current, previous }
+L0 proxy: KeyedHasher::credential(raw, started_at) ─▶ SecretDigests { current, previous }
             current  ─▶ ClientContext.credential.hash
             previous ─▶ ClientContext.previous_digests (inside a rotation overlap only)
 
 any minting layer: UlidGenerator::new(Arc<dyn Clock>, RandomSource).mint::<AgentId>()
+L0 proxy:          shared Mutex<UlidGenerator>.mint_at::<ExchangeId>(started_at)
 ```
 
 ### The encoding
@@ -106,8 +107,10 @@ crate in the workspace.
 ### Secrets
 
 A `DeploymentSecret` is one version's 32-byte BLAKE3 key, built from bytes
-or from 64 hex digits (`from_hex`; `InvalidSecret` names positions and
-lengths, never the text). It has no key accessor, and implements no
+or from 64 hex digits (`from_hex`, which ignores surrounding ASCII
+whitespace such as an environment variable's trailing newline;
+`InvalidSecret` names positions and lengths within the trimmed text,
+never the text). It has no key accessor, and implements no
 `Serialize`, `Deserialize`, `Clone` or `PartialEq`; `Debug` and `Display`
 print the version alone. A `KeyedHasher` holds the current secret and, in
 a rotation, the previous one with the instant its overlap ends
@@ -115,7 +118,9 @@ a rotation, the previous one with the instant its overlap ends
 `InvalidRotation`). `credential(raw, at)` and `account(raw, at)` return the
 keyed digest under the current version and, while `at` is before the
 overlap's end, under the previous one (`SecretDigests`, current first).
-The hasher is pure: the caller reads `at` from its `Clock`.
+The hasher is pure: the caller passes `at`, the time of what it hashes
+for (ingress passes the exchange's `started_at`, which the
+`ClientIdentifier` derivations take as an argument).
 
 ### Minting
 
@@ -127,7 +132,10 @@ the next millisecond when the random part is full, so a generator's ids
 strictly increase whatever its clock does
 (`canonical.ids.ulid-monotonic`). Times past 2^48 ms read as the largest;
 past the largest ULID, `next_ulid` is `Err(UlidExhausted)`. `mint::<I>()`
-returns any `EntityId`. `SeededRandom` is SplitMix64: `new(seed)` under
+returns any `EntityId`. `next_at(at)` and `mint_at::<I>(at)` stamp a time
+the caller passes instead of the clock's reading (an exchange id carries
+the exchange's start) under the same rule and the same last id: a time in
+or before the last id's millisecond mints the last id plus one. `SeededRandom` is SplitMix64: `new(seed)` under
 simulation (and `crosstalk_sim::SimRng` is itself a `RandomSource`),
 `from_entropy()` in a running gateway, seeded through the standard
 library's per-process random hasher keys, which it draws from the

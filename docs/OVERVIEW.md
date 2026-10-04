@@ -594,8 +594,9 @@ Features Index:
       Messages over HTTP and SSE. Structured routes map a path prefix (the
       harness's base URL path) to an upstream by the head alone; no route
       is a local 421. The credential and account are hashed at once with
-      BLAKE3 keyed by the deployment secret (from an environment variable,
-      with the previous version during a rotation overlap) and the scheme
+      the spec's KeyedHasher (the deployment secret from an environment
+      variable; the previous version too for exchanges that start before
+      the rotation overlap's configured end) and the scheme
       follows the documented rule; harness claims are recorded as sent.
       Only Generation is captured: the request is forwarded as soon as it
       is routed, its body teed (bounded) and decoded concurrently (gzip and
@@ -609,8 +610,9 @@ Features Index:
       is handed off once, after its stream ended, with try_send on the
       caller's bounded channel; every loss is counted by reason. Hop-by-hop
       headers are dropped; everything else is forwarded byte for byte.
-      Keyed hashing and exchange ids sit in one module (ids) that the
-      spec's own versions (P0.7) are to replace. Tests run over sockets
+      Exchange ids come from the spec's UlidGenerator, shared by every
+      connection behind a std Mutex and stamped with each exchange's
+      start. Tests run over sockets
       against testkit's fake upstream and harness, and as crosstalk-sim
       simulations over in-memory pipes; two ignored timing tests hold the
       latency budgets.
@@ -636,7 +638,8 @@ Features Index:
       applied on decode; the DeploymentSecret (never serialized, cloned or
       shown) and the KeyedHasher that alone reads it, with rotation
       overlaps; the ULID generator over the injected Clock and a
-      RandomSource, monotonic per generator. TokenUsage gained cache_write
+      RandomSource, monotonic per generator (stamping the clock's reading
+      or a given time). TokenUsage gained cache_write
       (checked: cache counts within input) and Reasoning::Visible a hashed
       signature.
     entry_points:

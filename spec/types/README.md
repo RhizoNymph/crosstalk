@@ -30,8 +30,8 @@ spec/types/
 ├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests; EntityId), BLAKE3 content ids (incl. ConfigHash), secret digests
 ├── ids/
-│   ├── mint.rs            UlidGenerator (over the injected Clock and a RandomSource; monotonic per generator: next_ulid, mint), SeededRandom (new, from_entropy), UlidExhausted
-│   └── secret.rs          DeploymentSecret (no serde, Clone or key accessor; Debug and Display show the version), KeyedHasher (the only maker of CredentialHash and AccountHash; rotation overlap), SecretDigests, InvalidSecret, InvalidRotation
+│   ├── mint.rs            UlidGenerator (over the injected Clock and a RandomSource; monotonic per generator: next_ulid, mint, and next_at, mint_at stamping a given time), SeededRandom (new, from_entropy), UlidExhausted
+│   └── secret.rs          DeploymentSecret (no serde, Clone or key accessor; Debug and Display show the version; from_hex ignores surrounding whitespace), KeyedHasher (the only maker of CredentialHash and AccountHash; rotation overlap), SecretDigests, InvalidSecret, InvalidRotation
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), QueryText (checked: at most MAX characters, line breaks allowed), Capped (checked: capped list with exact total), Change, Timestamp, Clock (the injected wall clock: now; SystemClock reads the OS clock), TimeWindow (a WireRequest), ByteRange, Blake3 (of, hex), hex and from_hex (raw bytes), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
 ├── wire/                  the JSON wire contract: conventions, requests and authority
@@ -100,7 +100,7 @@ spec/types/
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet); bus payloads inside an Envelope, never requests
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged; golden inside a full Envelope each
 ├── interfaces/            one module per layer: traits (read and write side) and their errors; mod.rs states the write-side, publication and time conventions
-│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
+│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier (derivations at the exchange's start time), ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange (with its media; check, applied on decode: InvalidNormalizedExchange; serde for goldens, in process only), NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)

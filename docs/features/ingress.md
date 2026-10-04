@@ -15,10 +15,13 @@ to the gateway exactly as it would to `https://api.anthropic.com`.
 - Reverse-proxy routing from structured config: a path prefix (the base
   URL's path) to an upstream, matched on the request head alone, longest
   prefix on whole segments; an unrouted request is answered 421 locally.
-- Credential and account hashing (BLAKE3 keyed with the deployment secret,
-  from an environment variable, with the previous version's digests during
-  a rotation overlap), the credential scheme rule, and harness claims as
-  sent.
+- Credential and account hashing with the spec's `KeyedHasher` (BLAKE3
+  keyed with the deployment secret, from an environment variable, with the
+  previous version's digests for exchanges that start before the rotation
+  overlap's configured end), the credential scheme rule, and harness
+  claims as sent.
+- Exchange ids from the spec's `UlidGenerator`, stamped with each
+  exchange's start.
 - The Anthropic Messages adapter: the endpoint table, request decoding
   (gzip and zstd within a bound), and the response framers.
 - Forwarding before decoding: the request body is teed and decoded
@@ -129,16 +132,37 @@ removed and the upstream base URL's path in its place. `/v1/models` is
 shared with OpenAI's protocol, so the Anthropic adapter claims it only with
 an `anthropic-version` header.
 
-### D7: keyed hashing and ids are a stand-in for the spec's
+### D7: keyed hashing and ids are the spec's
 
-The keyed hasher, `DeploymentSecret` and the exchange id generator live in
-`src/ids.rs` with the semantics the `canonical.ids.*` invariants give the
-spec's versions (P0.7): `blake3::keyed_hash` of the raw value under the
-secret of the recorded `SecretVersion`, no domain prefix; previous-version
-digests during an overlap; a redacted `Debug`, no `Display`, no
-serialization; ULIDs whose time is the injected clock's reading and whose
-random part (a per-generator random base plus a counter) never repeats.
-Swapping in the spec's module touches `ids.rs` and its imports only.
+The keyed hasher, `DeploymentSecret` and the ULID generator are
+`crosstalk_spec::ids` (`KeyedHasher`, `DeploymentSecret`, `UlidGenerator`,
+`SeededRandom`); ingress has no implementation of its own.
+
+- **Secrets.** `load_secrets` reads each configured secret's environment
+  variable through `DeploymentSecret::from_hex` (64 hex digits, either
+  case, surrounding ASCII whitespace such as a trailing newline ignored)
+  and builds `KeyedHasher::new(current)`, or, with a `previous` secret,
+  `KeyedHasher::rotating(current, previous, overlap_ends)`, which refuses a
+  previous version that is not older than the current one
+  (`SecretError::Rotation`). Neither type is `Clone`, so
+  `HeaderIdentifier` holds the hasher behind an `Arc` and clones share it.
+- **Rotation overlap.** The overlap ends at `overlap_ends`, an explicit
+  instant in the config. The hasher is pure: `HeaderIdentifier::context`
+  and the `ClientIdentifier` derivations pass the exchange's `started_at`,
+  and previous-version digests are computed exactly for exchanges that
+  start before `overlap_ends`
+  (`ingress.credential.previous-digests-within-overlap`); current-version
+  digests do not depend on the time.
+- **Exchange ids.** One `UlidGenerator<SeededRandom>` (seeded from the
+  operating system's randomness in production) is shared by every
+  connection task behind a `std::sync::Mutex`, locked only for the
+  synchronous mint and never across an await. Each id is
+  `mint_at(started_at)`: its time is the exchange's start, and ids stay
+  monotonic when exchanges started on concurrent connections reach the
+  generator out of order (`canonical.ids.ulid-monotonic`). A poisoned lock
+  is recovered: the generator is never left half-updated. If no id is left
+  (`UlidExhausted`, only reachable with a clock past the year 10889), the
+  request is forwarded uncaptured and counted `ids_exhausted`.
 
 ### D8: TLS and pooling
 
@@ -161,7 +185,7 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
           ┌─────────────┼───────────────────────────┐
      None (count       Some(not Generation)      Some(Generation)
      unclassified)          │                        │ StageClock::start (one wall reading)
-          └──────┬──────────┘                        │ ExchangeIds::next, HeaderIdentifier::context
+          └──────┬──────────┘                        │ mint_at(started_at), HeaderIdentifier::context(.., started_at)
                  ▼                                   │ (credential hashed; decode head has no credentials)
           forward plainly ──▶ relay Incoming         │ spawn finish(...)   ── capture task ──┐
                                                      ▼                                       │
@@ -202,18 +226,17 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
 | --- | --- | --- |
 | `crates/ingress/Cargo.toml` | Manifest (see [workspace](workspace.md)) | — |
 | `src/lib.rs` | Crate doc, trait-to-type table, production builder | `anthropic_proxy`, `AnthropicProxy`, `BuildError` |
-| `src/config.rs` | Structured config, unknown fields refused | `IngressConfig` (`from_json`), `RouteConfig`, `UpstreamConfig`, `SecretsConfig`, `SecretRef`, `LimitsConfig` (`upstream_idle_timeout`), `CaptureConfig` |
+| `src/config.rs` | Structured config, unknown fields refused | `IngressConfig` (`from_json`), `RouteConfig`, `UpstreamConfig`, `SecretsConfig`, `SecretRef`, `PreviousSecretRef` (with `overlap_ends`), `LimitsConfig` (`upstream_idle_timeout`), `CaptureConfig` |
 | `src/routing.rs` | `UpstreamRouter` | `Routes` (`new`, `resolve`), `Resolved`, `RoutePrefix`, `UpstreamBase`, `ConfigError` |
-| `src/ids.rs` | Keyed hasher, secret, exchange ids (stand-in for P0.7) | `KeyedHasher`, `DeploymentSecret`, `SecretFormat`, `SameVersion`, `ExchangeIds` |
-| `src/credential.rs` | Raw credentials, secret loading | `RawCredential`, `load_secrets`, `SecretError`; re-exports `DeploymentSecret`, `KeyedHasher` |
-| `src/identify.rs` | `ClientIdentifier` | `HeaderIdentifier` (`raw_credential`, `scheme`, `context`), `CredentialSource`, `CREDENTIAL_HEADERS`, `without_credentials` |
+| `src/credential.rs` | Raw credentials, secret loading into the spec's `KeyedHasher` | `RawCredential`, `load_secrets`, `SecretError` (`Missing`, `Malformed` with the spec's `InvalidSecret`, `Rotation` with its `InvalidRotation`) |
+| `src/identify.rs` | `ClientIdentifier` | `HeaderIdentifier` (`new`, `raw_credential`, `scheme`, `context` at a start time; `Clone`, sharing one `Arc<KeyedHasher>`), `CredentialSource`, `CREDENTIAL_HEADERS`, `without_credentials` |
 | `src/encoding.rs` | `content-encoding` and bounded decompression | `content_encoding`, `decode`, `EncodingError` |
 | `src/adapter/mod.rs`, `anthropic.rs` | `ProviderAdapter` for Anthropic Messages | `AnthropicAdapter`, `ANTHROPIC_VERSION`, `NoTap` |
 | `src/framer/mod.rs`, `sse.rs`, `json.rs` | `ResponseFramer` | `AnthropicFramer` (`for_response`, `kind`), `FramerKind` (`for_head`), `SseFramer`, `JsonFramer` |
 | `src/decode.rs` | Decoding for capture | `RequestDecoder`, `AdapterDecoder` (`decode_now`), `DecodeJob`, `CaptureDecodeError` |
 | `src/exchange.rs` | Stages, times, the response record | `InFlight`, `StageClock`, `StageEvent`, `StageObserver` |
 | `src/capture.rs` | The hand-off and loss counters | `CaptureSender` (`new`, `offer`, `capacity`), `Offer`, `CaptureStats` (`snapshot`), `CaptureCounts`, `UncapturedReason` |
-| `src/proxy/mod.rs` | The proxy and the capture task | `Proxy` (`new`, `handle`, `stats`), `ProxyParts` |
+| `src/proxy/mod.rs` | The proxy and the capture task; mints exchange ids from the shared generator | `Proxy` (`new`, `handle`, `stats`), `ProxyParts` (`ids: UlidGenerator<SeededRandom>`) |
 | `src/proxy/server.rs` | Accept loop and per-connection serving | `Proxy::serve`, `Proxy::serve_connection`, `ServeError` |
 | `src/proxy/headers.rs` | Hop-by-hop handling, head views | `strip_hop_by_hop`, `strip_request`, `request_head`, `response_head` |
 | `src/proxy/tee.rs` | The request-body tee (crate-private) | `TeeBody`, `TeeOutcome`, `read_rest` |
@@ -231,11 +254,20 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
   (RFC 9110 7.6.1) and `Host` are the only changes; the proxy adds no
   `Date`.
 - No raw credential or secret is logged, stored, published or put in an
-  error; `RawCredential` and `DeploymentSecret` print placeholders.
+  error; `RawCredential` prints a placeholder and the spec's
+  `DeploymentSecret` and `KeyedHasher` print versions only.
+- A `ClientContext`'s `credential` and `account` are keyed with the current
+  version whatever the time; `previous_digests` is `Some` exactly when the
+  configured previous secret's `overlap_ends` is after the exchange's
+  `started_at`. The previous version is older than the current one.
+- An exchange id's ULID time is its exchange's `started_at` millisecond,
+  or later only when an earlier-minted id already took that millisecond
+  (the generator stays monotonic).
 - Every forwarded generation exchange whose request decodes yields exactly
   one `RawExchange`, after its stream ended; every other one is counted by
   reason (`unclassified`, `decode_error`, `channel_full`, `channel_closed`,
-  `response_too_large`). Non-generation endpoints are not losses.
+  `response_too_large`, `ids_exhausted`). Non-generation endpoints are not
+  losses.
 - The capture channel is the caller's bounded `tokio::sync::mpsc`;
   `CaptureSender` offers only `try_send`.
 - Memory per exchange is bounded: the request tee
@@ -243,7 +275,9 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
   (`decoded_bytes`, 64 MiB), the kept response (`response_capture_bytes`,
   32 MiB), one SSE event (`sse_event_bytes`, 8 MiB).
 - Concurrency is tokio only; the capture hand-off and the record and tee
-  hand-offs are channels. The only shared state is the atomic counters.
+  hand-offs are channels. The only shared state is the atomic counters
+  and the exchange id generator, behind a `std::sync::Mutex` held only for
+  one synchronous mint.
 - No `unwrap` or `expect` outside tests; errors are typed (`thiserror`);
   logs are structured (`tracing`), and never carry headers or queries.
 
@@ -251,7 +285,9 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
 
 Passing (every evidence key reviewed): INV-1, 5, 6, 7, 8, 9, 10, 12, 13,
 14, 15, 16, 17, 19, 20, 21, 22, 24, 25, 26, 27, 32, 33, 34, 36, 40, 41, 42,
-43, 384, 385, 386, 387, 388, 389, and the new `ingress.capture.response-bounded`.
+43, 384, 385, 386, 387, 388, 389, `ingress.capture.response-bounded`, and
+the new `ingress.credential.previous-digests-within-overlap` (an INV-X
+file).
 INV-37 was already satisfied by the spec.
 
 Partly: INV-18 (unit yes; the fuzz target does not exist), INV-23 and

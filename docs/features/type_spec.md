@@ -33,7 +33,9 @@ The types follow data through the stack:
 1. **L0 ingress.** The `UpstreamRouter` resolves the upstream: by route in
    reverse-proxy mode, or by intercepted host in forward-proxy mode (other
    hosts are tunnelled untouched). The `ClientIdentifier` hashes the
-   credential (`CredentialRef`), the account (`AccountHash`) and reads the
+   credential (`CredentialRef`) and the account (`AccountHash`) at the
+   exchange's start time (which decides whether a secret rotation's
+   overlap is still open), and reads the
    harness headers (`HarnessClaim`, `HarnessIds`, `RequestClass`) into a
    `ClientContext`. A `ProviderAdapter` classifies the endpoint
    (`EndpointKind`): only `Generation` is captured. All of this reads only
@@ -385,7 +387,7 @@ The types follow data through the stack:
 | `spec/types/wire/` | The JSON wire contract: conventions, `WireRequest`, `decode_request`, `Rejected`, timestamps' RFC 3339 text, the authority assertions ([wire_contract.md](wire_contract.md)) | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `time`, `authority` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids, and their wire text | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) and `from_ulid_text`, `InvalidUlidText`; `EntityId` (every entity id and `ConnectionId`, for minting) |
-| `spec/types/ids/mint.rs` | The ULID generator ([spec_primitives.md](spec_primitives.md)) | `UlidGenerator` (`next_ulid`, `mint`), `RandomSource`, `SeededRandom` (`new`, `from_entropy`), `UlidExhausted`, `ulid_millis`, `MAX_ULID_MILLIS` |
+| `spec/types/ids/mint.rs` | The ULID generator ([spec_primitives.md](spec_primitives.md)) | `UlidGenerator` (`next_ulid`, `mint`, `next_at`, `mint_at`), `RandomSource`, `SeededRandom` (`new`, `from_entropy`), `UlidExhausted`, `ulid_millis`, `MAX_ULID_MILLIS` |
 | `spec/types/ids/secret.rs` | The deployment secret and the keyed hasher ([spec_primitives.md](spec_primitives.md)) | `DeploymentSecret` (`new`, `from_hex`, `version`; `InvalidSecret`), `KeyedHasher` (`new`, `rotating`, `credential`, `account`; `InvalidRotation`), `SecretDigests` |
 | `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `QueryText` (checked: trimmed, non-empty, at most `MAX` characters, line breaks allowed; `InvalidQueryText`), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `Clock` (the injected wall clock, `now`; `SystemClock` reads the OS clock; see [sim.md](sim.md)), `TimeWindow`, `ByteRange`, `Blake3` (`of`, `to_hex`, `from_hex`, `InvalidHex`), `hex`, `from_hex`, `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
@@ -443,7 +445,8 @@ The types follow data through the stack:
   `SecretVersion` that computed them; rotation overlaps two versions. Only
   `KeyedHasher` reads a `DeploymentSecret`'s key, and neither serializes,
   clones or formats it.
-- A `UlidGenerator`'s ids strictly increase whatever its clock reads; it
+- A `UlidGenerator`'s ids strictly increase whatever its clock reads or
+  the time `next_at` is given; it
   reads time from the injected `Clock` and randomness from a
   `RandomSource`, so it is deterministic under simulation.
 - A `RetryPolicy` has a non-zero initial backoff no greater than its
