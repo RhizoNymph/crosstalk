@@ -143,7 +143,7 @@ Accepted for now, for the hackathon, each with what replaces it:
 | Postgres connections, TPS, cache hits, size, slow statements | postgres-exporter + `pg_stat_statements` | same |
 | Every container's logs | Alloy → Loki (7 days), `level` lifted from JSON logs | Grafana Explore / logs row |
 | Alerts | Prometheus rules (`deploy/prometheus/rules/`) | Prometheus and Grafana UIs (no Alertmanager) |
-| The gateway itself | `crosstalk:9464/metrics` scrape job, already configured | to be filled by the application's own metrics |
+| The gateway itself | `crosstalk:9464/metrics` (capture, pipeline and exchange log counters, draining) and its WARN/ERROR logs | Grafana "crosstalk / gateway"; alerts in `deploy/prometheus/rules/gateway.yml` |
 
 Application metrics (proxy added latency, capture drops, bus queue depth,
 L7 watermark lag, embedding queue) belong to the application and arrive on

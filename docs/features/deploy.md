@@ -136,8 +136,10 @@ without breaking the linking of exchanges across the change:
 | `deploy/postgres/init/` | First-start SQL: extensions and the monitor role. |
 | `deploy/prometheus/prometheus.yml` | Scrape jobs: `prometheus`, `node`, `cadvisor`, `postgres`, `loki`, `alloy`, `grafana`, `crosstalk`. |
 | `deploy/prometheus/rules/infrastructure.yml` | Infra alert rules (group `crosstalk-infra`). |
+| `deploy/prometheus/rules/gateway.yml` | Gateway health alert rules (group `crosstalk-gateway`) on the gateway's own `/metrics`: normalize, store and publish failures, capture drops and decode errors, exchange log write failures, nothing published while capturing, stuck draining. |
 | `deploy/grafana/provisioning/` | Datasources (uids `prometheus`, `loki`) and the dashboard provider. |
 | `deploy/grafana/dashboards/infrastructure.json` | Host, containers, Postgres, logs and monitoring-stack panels, plus a crosstalk-process row. |
+| `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
 
