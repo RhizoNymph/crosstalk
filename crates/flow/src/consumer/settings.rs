@@ -1,0 +1,106 @@
+//! The flow consumer's configuration: the correlator's timing (whose
+//! `settle_after` is the settle window), the number of correlator shards,
+//! and how often it ticks.
+
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
+use crosstalk_spec::derived::flow::timing::{CorrelationTiming, InvalidTiming};
+use serde::Deserialize;
+
+/// Checked settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settings {
+    pub timing: CorrelationTiming,
+    pub shards: NonZeroUsize,
+    /// How often the consumer ticks, in elapsed (tokio) time. Each tick
+    /// reads the injected clock, which a replay drives, so windows close on
+    /// the clock's time, never on wall time.
+    pub tick_every: Duration,
+}
+
+/// The `flow` section of a config document. Durations in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct FlowConfig {
+    #[serde(default = "defaults::correlation_window_ms")]
+    pub correlation_window_ms: u64,
+    #[serde(default = "defaults::evidence_window_ms")]
+    pub evidence_window_ms: u64,
+    #[serde(default = "defaults::suspected_ttl_ms")]
+    pub suspected_ttl_ms: u64,
+    #[serde(default = "defaults::shards")]
+    pub shards: usize,
+    #[serde(default = "defaults::tick_ms")]
+    pub tick_ms: u64,
+}
+
+mod defaults {
+    /// Ten minutes from a write to a read.
+    pub fn correlation_window_ms() -> u64 {
+        600_000
+    }
+
+    /// Two minutes after a read for its content match.
+    pub fn evidence_window_ms() -> u64 {
+        120_000
+    }
+
+    /// Thirty minutes for a late match once suspected.
+    pub fn suspected_ttl_ms() -> u64 {
+        1_800_000
+    }
+
+    pub fn shards() -> usize {
+        1
+    }
+
+    pub fn tick_ms() -> u64 {
+        1_000
+    }
+}
+
+impl Default for FlowConfig {
+    fn default() -> Self {
+        Self {
+            correlation_window_ms: defaults::correlation_window_ms(),
+            evidence_window_ms: defaults::evidence_window_ms(),
+            suspected_ttl_ms: defaults::suspected_ttl_ms(),
+            shards: defaults::shards(),
+            tick_ms: defaults::tick_ms(),
+        }
+    }
+}
+
+/// Why a `flow` section was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidFlowConfig {
+    #[error("correlation timing: {0:?}")]
+    Timing(InvalidTiming),
+    #[error("shards must be at least 1")]
+    ZeroShards,
+    #[error("tick_ms must be at least 1")]
+    ZeroTick,
+}
+
+impl TryFrom<FlowConfig> for Settings {
+    type Error = InvalidFlowConfig;
+
+    fn try_from(config: FlowConfig) -> Result<Self, Self::Error> {
+        let timing = CorrelationTiming::new(
+            Duration::from_millis(config.correlation_window_ms),
+            Duration::from_millis(config.evidence_window_ms),
+            Duration::from_millis(config.suspected_ttl_ms),
+        )
+        .map_err(InvalidFlowConfig::Timing)?;
+        let shards = NonZeroUsize::new(config.shards).ok_or(InvalidFlowConfig::ZeroShards)?;
+        if config.tick_ms == 0 {
+            return Err(InvalidFlowConfig::ZeroTick);
+        }
+        Ok(Self {
+            timing,
+            shards,
+            tick_every: Duration::from_millis(config.tick_ms),
+        })
+    }
+}

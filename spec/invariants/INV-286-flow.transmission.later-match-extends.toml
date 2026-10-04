@@ -11,7 +11,7 @@ would break identity. Extend applies them through `Confirmed::extend`.
 """
 
 [evidence]
-unit = "crosstalk_flow::correlator::tests::later_match_extends_confirmed"
+unit = "crosstalk_flow::correlate::tests::channel::later_match_extends_confirmed"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -13,7 +13,7 @@ channel unconfirmed for good.
 """
 
 [evidence]
-dst = "crosstalk_flow::dst::discovery_moves_resource_evidence"
+dst = "crosstalk_flow::consumer::tests::dst::discovery_moves_resource_evidence"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

@@ -11,7 +11,7 @@ content found in an input would hide a route that was in fact observed.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::unobserved_only_for_reader_output"
+property = "crosstalk_flow::correlate::tests::props::unobserved_only_for_reader_output"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
