@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.verdict.state-untouched"
+statement = "TransmissionVerdicts::set never changes the transmission's TransmissionState, its route or its content matches."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The detector's output and the operator's judgement are separate axes.
+Writing the judgement into the state would destroy the detector's call,
+and with it the ability to measure the detector against the labels.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::set_verdict_keeps_transmission_state"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

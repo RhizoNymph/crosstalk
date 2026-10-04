@@ -1,0 +1,25 @@
+[invariant]
+id = "analysis.rule.update-makes-current"
+statement = "AlertRuleDef::update with a definition of a user rule's kind replaces its name, definition and sinks, keeps its id and creator, leaves it current, enables it if it was stale and otherwise keeps its status, and on a built-in rule or a definition of another kind returns NotEditable and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Updating is the only way a stale rule becomes current again, and the user
+chose that it also re-enables the rule: an operator retargeting a stale
+rule wants it watching again. A current rule keeps the operator's switch.
+A rule keeps its kind for life because its alerts and their deduplication
+key name the rule, and built-in rules take no definition.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::rules::updating_a_stale_rule_retargets_and_enables_it",
+    "crosstalk_spec::tests::rules::updating_a_current_rule_keeps_its_status_id_and_creator",
+    "crosstalk_spec::tests::rules::an_identical_update_is_unchanged",
+    "crosstalk_spec::tests::rules::update_refuses_another_kind_without_effect",
+    "crosstalk_spec::tests::rules::builtin_rules_can_only_be_enabled_or_disabled",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

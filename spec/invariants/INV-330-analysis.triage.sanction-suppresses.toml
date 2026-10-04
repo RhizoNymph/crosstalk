@@ -1,15 +1,18 @@
 [invariant]
 id = "analysis.triage.sanction-suppresses"
-statement = "AlertTriage::channel_sanctioned moves exactly the Open or Acknowledged alerts whose subject is that channel to Suppressed with reason ChannelSanctioned."
+statement = "AlertTriage::channel_sanctioned moves exactly the Open or Acknowledged alerts whose subject is that channel, or a channel it superseded (subjects compared with AlertSubject::resolved), to Suppressed with reason ChannelSanctioned."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
 Sanctioning a channel is the operator saying its traffic is expected, so
 alerts about the channel being new, unreviewed or unsanctioned stop being
-alert-worthy. Alerts whose subject is a transmission on the channel are
-about content, which can be worth flagging on a sanctioned channel, and
-stay. Resolved alerts keep their resolution.
+alert-worthy. Alerts stay stored under the ids they were raised with, so
+alerts raised on a channel before a promotion absorbed it are covered too:
+the operator reviewed the medium they belong to
+(analysis.alert.sanction-covers-superseded). Alerts whose subject is a
+transmission on the channel are about content, which can be worth flagging
+on a sanctioned channel, and stay. Resolved alerts keep their resolution.
 """
 
 [evidence]

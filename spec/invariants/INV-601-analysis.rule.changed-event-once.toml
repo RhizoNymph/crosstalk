@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.rule.changed-event-once"
+statement = "Each stored change to a rule (create, update, enable, disable, going stale) bumps its RuleRevision by one, starting at CREATED, and publishes exactly one AlertRuleChanged with the rule after the change and that revision; an Unchanged result publishes none."
+kind = "coordination"
+requires = ["unit", "dst"]
+rationale = """
+The live feed turns AlertRuleChanged into the UI's rule change. The surface
+and the alerts consumer change rules concurrently (an update and a re-fit
+making the rule stale), so events can arrive out of order; consecutive
+revisions, compare-and-set in the store, let a reader keep the highest
+revision and end with the stored rule.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::rules::rule_revisions_count_up_from_created"
+dst = "crosstalk::analysis::tests::dst_rule_changed_once_per_change"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+dst = { agent = "false", human = "false" }

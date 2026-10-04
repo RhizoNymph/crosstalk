@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.route.resolves-supersession"
+statement = "Every graph, channel-centred graph, series and edge drill-down counts a transmission routed through a superseded channel as routed through that channel's canonical channel."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+Stored routes keep the channel they were recorded on. Resolving them at
+read time (Route::resolved) sums the old pages of a wiki into the promoted
+channel's edges without rewriting any stored bucket, as merges do for
+agents.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::route_resolution_changes_only_channels"
+property = "crosstalk::topology::props::superseded_routes_count_on_canonical"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

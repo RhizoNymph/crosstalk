@@ -4,11 +4,13 @@ statement = "No IdentityEvidence variant carries the harness claim (family, vers
 kind = "representation"
 requires = ["type"]
 rationale = """
-pi and oh-my-pi send Claude Code's User-Agent and `x-app` headers on Claude
-subscription traffic, so the harness family is a claim anyone can make.
-Using it as evidence would let one harness's agents match another's.
-`IdentityEvidence` has no variant that holds a `HarnessClaim` or its fields,
-so the claim cannot enter resolution.
+pi and oh-my-pi send Claude Code's User-Agent and `x-app` headers on
+Claude subscription traffic, so the harness family is a claim anyone can
+make. Using it as evidence would let one harness's agents match another's.
+`IdentityEvidence` has no variant that holds a `HarnessClaim` or its
+fields, so the claim cannot enter resolution. The claims seen on each
+agent's exchanges are kept for display in `ClaimStore`, and
+`IdentityResolver::resolve` never reads that store.
 """
 
 [evidence]

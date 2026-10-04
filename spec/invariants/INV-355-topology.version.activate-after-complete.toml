@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.version.activate-after-complete"
-statement = "Graph queries switch to a topic-model version only after TopicVersionReady for it has arrived and L7 has processed, by applying or by rejecting as a self-edge, as many distinct transmissions classified under that version as the event's transmissions count."
+statement = "EdgeStore::activate switches Current graph and series queries to a topic-model version only after TopicVersionReady for it has arrived and L7 has processed, by applying or by rejecting as a self-edge, as many distinct transmissions classified under that version with ClassificationCause::Refit as the event's transmissions count; classifications under the version with cause Confirmation do not count towards it."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -10,11 +10,29 @@ edges and totals far below the truth. TopicVersionReady alone is not
 enough: the bus can redeliver a nacked TransmissionClassified for the new
 version after TopicVersionReady, so L7 counts what it has processed under
 the version and switches when the count reaches the event's
-`transmissions`. The count is of distinct (transmission, version) pairs, so
-redeliveries do not inflate it. Self-edge rejections are permanent
-outcomes for classifications L6 did count, so they count as processed;
-otherwise one corrupt contribution would block the version forever. Until
-the switch, queries keep the previous version.
+`transmissions`. The count is of distinct (transmission, version) pairs,
+so redeliveries do not inflate it.
+
+The event's count is the re-fit's: L6 publishes TopicVersionReady only
+after classifying every transmission under the new version, and until then
+every classification under it has cause Refit (a transmission confirmed
+during the re-fit gets a Confirmation under the current version and a
+Refit under the new one). Once the version is ready, L6 classifies new
+confirmations under it with cause Confirmation. Counting those too would
+let the total reach the event's count while re-fit classifications are
+still being redelivered, activating a version with part of its history
+missing; those late contributions would then land in buckets the watermark
+may already have finalized (topology.watermark.rejects-late). This is also
+why the FrontierSource leaves Refit classifications out of oldest_pending:
+activation, not the watermark, waits for them.
+
+Self-edge rejections are permanent outcomes for classifications L6 did
+count, so they count as processed; otherwise one corrupt contribution
+would block the version forever. No other refusal applies to a version
+that has not been activated: LateContribution needs an activated version,
+and retention never drops a version newer than the active one
+(topology.retention.drop-refuses-in-use). Until the switch, Current
+queries keep the previous version.
 """
 
 [evidence]

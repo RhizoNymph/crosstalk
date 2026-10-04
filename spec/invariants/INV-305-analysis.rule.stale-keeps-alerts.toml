@@ -1,14 +1,15 @@
 [invariant]
 id = "analysis.rule.stale-keeps-alerts"
-statement = "A WatchedTopic rule becoming Stale leaves the state of its Open and Acknowledged alerts unchanged."
+statement = "A user rule becoming stale, its watch turning TopicWatch::Stale or QueryWatch::Stale, leaves the state of its Open and Acknowledged alerts unchanged."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
-Staleness says the rule can no longer track its topics in the new fit, not
-that what it already flagged stopped mattering. Unlike disabling, which is
-an operator's decision that the condition is not alert-worthy, going Stale
-must not suppress alerts operators are still working on.
+Staleness says the rule can no longer track what it watched in the new fit
+or under the new embedding model, not that what it already flagged stopped
+mattering. Unlike disabling, which is an operator's decision that the
+condition is not alert-worthy, going stale must not suppress alerts
+operators are still working on.
 """
 
 [evidence]

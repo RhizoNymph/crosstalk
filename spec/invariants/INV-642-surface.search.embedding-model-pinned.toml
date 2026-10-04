@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.search.embedding-model-pinned"
+statement = "A QueryApi::search page whose first page was served under an embedding model other than the current one returns Conflict(EmbeddingModelChanged) and no hits."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Semantic scores from two models are not comparable, so continuing a
+traversal across a model change would interleave two rankings. The cursor
+records the model; the client restarts the search.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::search_page_after_model_change_conflicts"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

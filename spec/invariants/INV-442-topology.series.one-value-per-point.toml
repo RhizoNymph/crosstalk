@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.series.one-value-per-point"
+statement = "Every series in a TopologySeries has exactly one value per point of its grid."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The UI draws value i at the grid's point i. A series one value short would
+shift or truncate a trend line, and the per-key sums that tie a series to
+the graph would silently drop a step. TopologySeries::new returns
+WrongPointCount for the total series and for every grouped series.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::TopologySeries::new"
+unit = "crosstalk_spec::tests::series::series_rejects_wrong_point_count"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

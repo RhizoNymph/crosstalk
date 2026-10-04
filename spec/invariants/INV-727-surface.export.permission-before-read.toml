@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.export.permission-before-read"
+statement = "QueryApi::export returns Forbidden naming ExportRequest::required_permission, which is Content when the request includes content or names a projection and View otherwise, without reading any store or sending any row when the caller lacks that permission."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+An export moves records out in bulk, so the permission check must come
+before the watermark read and the plan: a refused caller learns nothing,
+not even a row count. Content covers message text and topic labels, and a
+projection's coordinates are a layout of embeddings, so reading one needs
+Content as QueryApi::projection does. One permission per request keeps the
+audit record's Forbidden check exact.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::export::required_permission_is_content_for_content_or_a_projection"
+integration = "crosstalk::surface::export::tests::export_without_permission_reads_nothing"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

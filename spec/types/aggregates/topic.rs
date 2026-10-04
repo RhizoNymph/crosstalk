@@ -68,8 +68,9 @@ pub struct Topic {
     pub label: String,
     /// Top c-TF-IDF terms, highest weight first.
     pub terms: Vec<(String, f32)>,
-    /// The mean of its members' embeddings, normalized. Used to remap
-    /// watched topics across versions.
+    /// The mean of its members' embeddings, normalized. Compared across
+    /// versions to build the topic lineage, from which watched topics are
+    /// remapped.
     pub centroid: Embedding,
     pub fitted_at: Timestamp,
 }

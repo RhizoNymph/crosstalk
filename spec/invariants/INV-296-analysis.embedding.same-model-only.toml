@@ -8,9 +8,12 @@ rationale = """
 Vectors from different embedding models live in unrelated spaces, so a
 cross-model similarity is a meaningless number that would still pass every
 threshold check. This covers TopicModel::assign (TopicError::WrongModel),
-semantic and hybrid search (SearchError::BadQuery) and SemanticQuery rule
-evaluation (no draft). It is what lets the embedder be swapped without
-corrupting topics, search or alerts until a re-fit and re-embed complete.
+semantic and hybrid search (SearchError::WrongModel, which the surface
+reports as Conflict(EmbeddingModelChanged)) and SemanticQuery rule
+evaluation (no draft; a rule whose query was embedded with another model
+goes stale, analysis.rule.semantic-stale-on-model-change). It is what lets
+the embedder be swapped without corrupting topics, search or alerts until
+a re-fit and re-embed complete.
 """
 
 [evidence]

@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.retention.pin-after-ready"
+statement = "Every pin on a fitted TopicVersionInfo is no earlier than the version's ready_at."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Fitting versions cannot be pinned, so a pin is placed once the version is
+ready; a pin dated earlier would be a corrupt record in the version
+history the UI draws on the time axis. TopicVersionInfo::with_retention
+returns TimestampsOutOfOrder otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionInfo::with_retention"
+unit = "crosstalk_spec::tests::retention::retention_times_follow_the_lifecycle"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

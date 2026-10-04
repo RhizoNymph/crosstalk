@@ -17,9 +17,14 @@
 //! | L3 | [`l3_reconstruction`] | `ExchangeCaptured` | `ConversationDelta`, `AgentSeen`, `AgentMerged` |
 //! | L4 | [`l4_provenance`] | `ConversationDelta` | `SpanOriginated`, `SpanRelayed`, `ContentMatched` |
 //! | L5 | [`l5_flow`] | `ConversationDelta`, `ContentMatched`, clock, policy | channel and transmission events |
-//! | L6 | [`l6_analysis`] | `TransmissionConfirmed`, clock, detect events | `TransmissionClassified`, `AlertOpened` |
-//! | L7 | [`l7_topology`] | `TransmissionClassified` | `EdgeUpdated` |
-//! | L8 | [`l8_surface`] | `AlertOpened`, `EdgeUpdated`, operator | `PolicyChanged`, agent merges |
+//! | L6 | [`l6_analysis`] | `TransmissionConfirmed`, `TopicVersionActivated`, clock, detect events | `TransmissionClassified`, `TopicVersionReady`, `AlertOpened`, `AlertChanged` |
+//! | L7 | [`l7_topology`] | `TransmissionClassified`, `TopicVersionReady`, `AccessRecorded` | `EdgeUpdated`, `TopicVersionActivated` |
+//! | L8 | [`l8_surface`] | `AlertOpened`, `Changed`, operator, config | `PolicyChanged`, `AlertChanged`, agent merges, SSE `UiEvent`s |
+//!
+//! Every store whose entities a surface query returns (L3 agents, L5
+//! channels and verdicts, L6 alerts, rules, topic versions and projection
+//! jobs, L7's watermark) also publishes [`Changed`](crate::events::changed::Changed)
+//! after every committed change to one of them, for the live feed.
 
 pub mod l0_ingress;
 pub mod l1_canonical;

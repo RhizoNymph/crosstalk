@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.session-end-closes-stream"
+statement = "A live stream delivers no item after its Caller's session expires or is revoked, and ends with LiveEnd::SessionEnded."
+kind = "confidentiality"
+requires = ["dst"]
+rationale = """
+A stream outlives the request that opened it. Without this, revoking an
+operator's access would not stop updates already flowing to an open
+browser tab, and permissions removed from a session would keep applying to
+its streams. The client reconnects and re-authenticates, resuming from its
+last cursor.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::revoked_session_ends_live_stream"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

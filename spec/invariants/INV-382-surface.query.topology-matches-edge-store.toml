@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.topology-matches-edge-store"
-statement = "For a Caller with View, QueryApi::topology returns exactly the graph EdgeStore::graph returns for the same window, weighting and filter, with UnalignedWindow mapped to BadRequest and other store errors to Store."
+statement = "For a Caller with View, QueryApi::topology returns exactly the Watermarked graph EdgeStore::graph returns for the same window, weighting and filter, and each EdgeQueryError mapped by its From impl, UnalignedWindow to InvalidInput(UnalignedWindow)."
 kind = "domain"
 property = "model-based"
 requires = ["property"]
@@ -8,7 +8,7 @@ rationale = """
 L7 computes edges and shares; the surface must not re-filter, re-weight or
 drop edges, or the graph view would disagree with the edge table and its
 shares would no longer sum to 1. The reference model is InMemoryEdgeStore.
-Mapping UnalignedWindow to BadRequest tells the UI to snap the window
+Mapping UnalignedWindow to InvalidInput tells the UI to snap the window
 rather than reporting a server fault.
 """
 

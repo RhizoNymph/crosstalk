@@ -8,8 +8,15 @@ Retention runs while L6 may already be re-classifying under a still newer
 version. Dropping the active version would empty the graph; dropping a
 pending version would lose applied classifications whose deliveries were
 already acked, so its processed count could never reach the
-TopicVersionReady count and it would never activate. Only versions older
-than the one just replaced are eligible.
+TopicVersionReady count and it would never activate; dropping the version
+it replaced would break queries and paged traversals that began just
+before the switch. L7 deletes a version only on TopicVersionDropped
+(topology.retention.drops-on-event), which the topic catalog publishes
+only for versions RetentionPolicy::to_drop lists: keep_last is at least 2,
+so the replaced version is kept, and drop_version refuses the active
+version or a newer one (topology.retention.drop-refuses-in-use).
+Activation itself drops nothing
+(topology.retention.activate-drops-nothing).
 """
 
 [evidence]

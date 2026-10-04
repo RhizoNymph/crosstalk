@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.projection.queue-bounded"
+statement = "ProjectionStore never holds more than 16 jobs that are Queued or Fitting, and an enqueue beyond that returns QueueFull and records nothing, under any interleaving of concurrent enqueues."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Each fit holds up to 100,000 embeddings in memory for minutes. An unbounded
+queue would let a burst of requests delay every fit for hours. The bound is
+checked in the same transaction that inserts the job, so concurrent
+requests cannot overshoot it.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::concurrent_enqueues_respect_pending_limit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

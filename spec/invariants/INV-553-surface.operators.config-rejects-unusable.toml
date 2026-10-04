@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.operators.config-rejects-unusable"
+statement = "OperatorDirectory::load rejects, changing nothing, an authenticated config with no operators, with an operator id listed twice, or with an operator holding no permissions."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+No operators would lock everyone out; a duplicate id leaves which
+permissions apply ambiguous; an operator with no permissions could not
+even view, which is what removal already expresses. Rejecting these keeps
+every Caller holding at least one permission.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::operators::OperatorDirectory::load"
+unit = "crosstalk_spec::tests::operators::load_rejects_unusable_configs"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,14 +1,16 @@
 [invariant]
 id = "surface.action.audit-recorded"
-statement = "After an operator action returns Ok, the audit log holds a record of that action with the Caller's OperatorId and the time the action was accepted."
+statement = "After an operator action returns Ok, the audit log holds an AuditEntry for it whose body is an OperatorRecord with the Caller, the action and AuditOutcome::Succeeded of the returned ActionOutcome, at the time the action was accepted."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]
 rationale = """
 Policy changes and merges alter what the gateway reports from then on, so
 an operator must be able to answer who sanctioned a channel or merged two
-agents, and when. The record is written in the same transaction as the
+agents, and when. The entry is written in the same transaction as the
 action's effect (outbox), so an action cannot succeed without its record.
+Refused and forbidden calls are recorded too
+(surface.audit.every-call-recorded).
 """
 
 [evidence]

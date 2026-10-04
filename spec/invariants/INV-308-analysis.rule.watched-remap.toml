@@ -1,17 +1,20 @@
 [invariant]
 id = "analysis.rule.watched-remap"
-statement = "When TopicVersionReady for version V is processed, a WatchedTopic rule whose every topic's centroid has a most-similar centroid among V's topics reaching remap_threshold gets version V and each topic replaced by that most-similar topic."
+statement = "When TopicVersionReady for version V is processed, a WatchedTopic rule current on V's predecessor whose every topic's best link in the stored lineage (the most similar centroid among V's topics, ties to the lower id) reaches remap_threshold gets version V and each topic replaced by its best link, each new topic listed once."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
 Topic ids are only meaningful within one fit, so without remapping every
-watchlist would go silent at each re-fit. Comparing Topic::centroid values
+watchlist would go silent at each re-fit. The lineage records, for each
+old topic, the new topic whose Topic::centroid is most similar, which
 carries the operator's intent forward when the new fit has a clearly
-corresponding topic; the threshold stops it drifting onto an unrelated one.
-Remapping on TopicVersionReady, not at fit time, switches the rule in step
-with the classifications of new confirmations, which stay on the old
-version until then.
+corresponding topic; the threshold stops it drifting onto an unrelated
+one. Reading the stored lineage keeps the rules and the UI's lineage view
+in agreement (analysis.lineage.remap-uses-lineage). Remapping on
+TopicVersionReady, not at fit time, switches the rule in step with the
+classifications of new confirmations, which stay on the old version until
+then.
 """
 
 [evidence]

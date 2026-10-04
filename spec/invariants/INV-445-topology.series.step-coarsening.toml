@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.series.step-coarsening"
+statement = "Changing a grid's step from s to k times s, over a window that is a whole number of the coarser steps, gives for each key the sums of consecutive runs of k values of the series with step s."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Zooming out the time axis must not change the total under a range, only
+its resolution. Since points are unions of buckets, a coarser point is the
+union of k finer ones.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::series_coarser_step_sums_finer_points"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

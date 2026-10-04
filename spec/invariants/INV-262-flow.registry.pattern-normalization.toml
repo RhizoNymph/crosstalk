@@ -6,10 +6,11 @@ property = "metamorphic"
 requires = ["property"]
 rationale = """
 `ResourcePattern::matches` compares against normalized locators with `==`
-and `starts_with`. A config entry naming `Wiki.Example` or
-`/srv/./shared/` would silently match nothing: the sanctioned channel would
-go Unused and its real traffic would be discovered as a new, unreviewed
-channel. `declare` must normalize patterns the same way locators are.
+and `starts_with`. A config entry or a promotion naming `Wiki.Example` or
+`/srv/./shared/` would silently match nothing: the sanctioned channel
+would go Unused and its real traffic would be discovered as a new,
+unreviewed channel. `declare` and `promote` must normalize patterns the
+same way locators are.
 """
 
 [evidence]

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::events::{Envelope, Subject};
 use crate::ids::{EventId, MessageHash};
+use crate::paging::{DeadLetterList, Page, PageRequest};
 
 /// Consumers in the same group share deliveries: each event goes to one of
 /// them. Different groups each get every event.
@@ -127,12 +128,25 @@ pub trait DeadLetterStore {
 
     /// Redeliver a dead letter to its group and remove it from the store.
     async fn replay(&self, group: &ConsumerGroup, id: EventId) -> Result<(), BusError>;
+
+    /// Stored dead letters, of one group or of all groups, newest envelope
+    /// first (descending (`Envelope::id`, group)). A letter replayed during
+    /// a traversal simply stops appearing; no other letter is skipped.
+    async fn list(
+        &self,
+        group: Option<&ConsumerGroup>,
+        page: &PageRequest<DeadLetterList>,
+    ) -> Result<Page<DeadLetter, DeadLetterList>, BusError>;
 }
 
 pub trait BlobStore {
     /// Idempotent: putting the same bytes twice returns the same hash.
     async fn put(&self, bytes: &[u8]) -> Result<MessageHash, BlobError>;
 
+    /// `None` when no body is stored under `hash`. L1 stores every body
+    /// before publishing `ExchangeCaptured`, so for a hash a span, match or
+    /// access names, `None` means content retention dropped it; the
+    /// evidence page shows that as `Excerpted::BodyDropped`.
     async fn get(&self, hash: MessageHash) -> Result<Option<Vec<u8>>, BlobError>;
 }
 
@@ -161,6 +175,8 @@ pub enum BusError {
     Decode {
         reason: String,
     },
+    /// A cursor the store did not issue, or issued for another group.
+    InvalidCursor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

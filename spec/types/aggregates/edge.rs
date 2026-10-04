@@ -2,15 +2,25 @@
 //! topic and time bucket.
 //!
 //! Edges are stored under the agent ids the transmissions were attributed
-//! to. A graph query resolves every agent through the merge aliases first,
-//! sums edges that become equal, and drops edges that become self-edges.
+//! to and the channel ids they were routed through. A graph query resolves
+//! every agent through the merge aliases and every channel through
+//! supersession first ([`crate::aliases`]), sums edges that become equal,
+//! and drops edges that become self-edges.
+//!
+//! The transmissions counted into one edge of a graph can be listed with an
+//! [`EdgeSelector`] (see `EdgeStore::transmissions`), so a click on an edge
+//! drills down to exactly what it counts.
 
 use std::num::NonZeroU64;
 
+use crate::aggregates::node::GraphNode;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
-use crate::ids::{AgentId, ChannelId, TopicId};
-use crate::support::{Share, TimeWindow};
+use crate::ids::{AgentId, TopicId, TransmissionId};
+use crate::paging::{EdgeTransmissionList, Page};
+use crate::support::{Share, TimeWindow, Timestamp};
+
+pub use crate::aggregates::filter::TopologyFilter;
 
 /// The topic dimension of an edge bucket. Buckets are kept per topic-model
 /// version; after a re-fit the new version's buckets are rebuilt, and queries
@@ -109,19 +119,15 @@ pub enum RouteKind {
     Unobserved,
 }
 
-/// Restricts which transmissions a graph counts. Empty lists do not
-/// restrict. Non-empty lists combine with AND across fields.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TopologyFilter {
-    /// Keep edges whose sender OR reader is one of these (after alias
-    /// resolution).
-    pub agents: Vec<AgentId>,
-    /// Keep only channel-routed edges on these channels.
-    pub channels: Vec<ChannelId>,
-    pub route_kinds: Vec<RouteKind>,
-    /// Keep only transmissions whose topic, under the current topic-model
-    /// version, is one of these. Outliers never match a topic filter.
-    pub topics: Vec<TopicId>,
+impl From<&Route> for RouteKind {
+    fn from(route: &Route) -> Self {
+        match route {
+            Route::Channel(_) => Self::Channel,
+            Route::Delegation(_) => Self::Delegation,
+            Route::Direct(_) => Self::Direct,
+            Route::Unobserved => Self::Unobserved,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,15 +139,125 @@ pub struct WeightedEdge {
     pub share: Share,
 }
 
-/// The communication graph for one query window, over canonical agents.
+/// The communication graph for one query window, over canonical agents and
+/// canonical channels (a `Route::Channel` names the channel after
+/// supersession).
 ///
 /// Invariant: the shares of `edges` sum to 1 (within float error) unless
 /// `edges` is empty. Each edge's share is its stat under `weighting` divided
 /// by the total of that stat across the window, after filtering.
+///
+/// `nodes` describes every agent the edges name, and their ancestors, once
+/// each, with counts that agree with `edges` ([`TopologyGraph::check_nodes`],
+/// [`crate::aggregates::node`]). It holds no channel nodes; the
+/// channel-centred view does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopologyGraph {
     pub window: TimeWindow,
     pub weighting: Weighting,
+    /// The version the filter's selector resolved to.
     pub topic_version: TopicModelVersion,
+    pub nodes: Vec<GraphNode>,
     pub edges: Vec<WeightedEdge>,
+}
+
+/// What a [`TopologyGraph`] counts in total, without its nodes, edges or
+/// shares: what the overview shows for a window and filter
+/// (`EdgeStore::totals`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeTotals {
+    /// The version the filter's selector resolved to.
+    pub topic_version: TopicModelVersion,
+    /// Transmissions counted into the graph's edges.
+    pub transmissions: u64,
+    /// Their matched bytes.
+    pub matched_bytes: u64,
+    /// Active channels: the distinct canonical channels that some edge's
+    /// route names (`Route::Channel`), that is, every channel that carried
+    /// at least one transmission the graph counts.
+    pub active_channels: u64,
+}
+
+impl EdgeTotals {
+    /// The definition: the totals of `graph`'s edges. Weighting and shares
+    /// do not enter, so every weighting gives the same totals.
+    pub fn of(graph: &TopologyGraph) -> Self {
+        let mut channels = Vec::new();
+        let (mut transmissions, mut matched_bytes) = (0u64, 0u64);
+        for edge in &graph.edges {
+            transmissions = transmissions.saturating_add(edge.stats.transmissions.get());
+            matched_bytes = matched_bytes.saturating_add(edge.stats.matched_bytes.get());
+            if let Route::Channel(channel) = edge.route
+                && !channels.contains(&channel)
+            {
+                channels.push(channel);
+            }
+        }
+        Self {
+            topic_version: graph.topic_version,
+            transmissions,
+            matched_bytes,
+            active_channels: u64::try_from(channels.len()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
+/// One edge of a [`TopologyGraph`]: canonical sender, canonical reader and
+/// route, as in a [`WeightedEdge`]. Ids that have since been merged away are
+/// resolved through `AgentDirectory` before matching; an edge whose two ends
+/// resolve to one agent counts nothing, as in the graph.
+///
+/// Built only through [`EdgeSelector::new`], which rejects a self-edge.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EdgeSelector {
+    from: AgentId,
+    to: AgentId,
+    route: Route,
+}
+
+impl EdgeSelector {
+    pub fn new(from: AgentId, to: AgentId, route: Route) -> Result<Self, SelfEdge> {
+        if from == to {
+            return Err(SelfEdge);
+        }
+        Ok(Self { from, to, route })
+    }
+
+    pub fn from(&self) -> AgentId {
+        self.from
+    }
+
+    pub fn to(&self) -> AgentId {
+        self.to
+    }
+
+    pub fn route(&self) -> &Route {
+        &self.route
+    }
+}
+
+/// One transmission counted into an edge. Sender, reader and route are the
+/// selector's. Holds no message content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeTransmission {
+    pub transmission: TransmissionId,
+    /// `Confirmed::at`: what the window is tested against and what edges are
+    /// bucketed by.
+    pub confirmed_at: Timestamp,
+    pub matched_bytes: NonZeroU64,
+    /// The topic under the page's `topic_version`; `None` for an outlier.
+    pub topic: Option<TopicId>,
+}
+
+/// One page of the transmissions behind an edge, newest confirmation first.
+///
+/// Every page of one traversal evaluates topics (the filter's and each row's)
+/// under the same `topic_version`, the version the first page resolved the
+/// filter's selector to; the cursor pins it. Read with no apply in between, a full
+/// traversal for an aligned window lists exactly the transmissions
+/// `EdgeStore::graph` counts into that edge for the same window and filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeTransmissionPage {
+    pub topic_version: TopicModelVersion,
+    pub page: Page<EdgeTransmission, EdgeTransmissionList>,
 }

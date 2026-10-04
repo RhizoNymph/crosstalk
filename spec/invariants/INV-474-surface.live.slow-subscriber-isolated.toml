@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.slow-subscriber-isolated"
+statement = "A stream whose client does not read never delays the feed writer or delivery to any other stream, and when its LiveConfig::buffer items are all undelivered it ends with LiveEnd::Lagged instead of dropping or skipping items."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+One stuck browser tab must not hold back alerts for everyone else, and
+must not slow the feed writer's consumption of the bus. Dropping items
+from a full buffer would be silent loss; ending the stream makes the loss
+visible and recoverable, since the client resumes from its last cursor and
+replays from the log, or resyncs if it fell out of retention.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::stalled_stream_lags_without_blocking_others"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

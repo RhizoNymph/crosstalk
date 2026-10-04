@@ -1,13 +1,13 @@
 [invariant]
 id = "analysis.topic.watched-flag"
-statement = "A Classification's watched flag is true exactly when its topic is listed by at least one Enabled WatchedTopic rule whose version equals the classification's version."
+statement = "A Classification's watched flag is true exactly when its topic is listed by at least one WatchedTopic rule that evaluates (enabled, with TopicWatch::Current topics) whose topics' version equals the classification's version."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
 The watched flag is what the surface highlights and what downstream
 consumers filter on. It must agree with the rule set: an outlier (topic
-None) is never watched, a topic listed only by Disabled or Stale rules is
+None) is never watched, a topic listed only by disabled or stale rules is
 not watched, and an id listed by a rule of another version is a different
 topic.
 """

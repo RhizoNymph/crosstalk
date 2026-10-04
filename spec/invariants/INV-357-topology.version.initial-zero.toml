@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.version.initial-zero"
-statement = "graph on a store that has never switched to another version reports topic_version 0."
+statement = "graph with TopicVersionSelector::Current on a store that has never activated another version reports topic_version 0."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

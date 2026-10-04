@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.policy.routed-once"
-statement = "Every confirmed transmission with a Channel route is routed through its channel's policy exactly once."
+statement = "Every confirmed transmission with a Channel route is routed through channel policy exactly once, under the policy flow.policy.policy-at-confirmation picks."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

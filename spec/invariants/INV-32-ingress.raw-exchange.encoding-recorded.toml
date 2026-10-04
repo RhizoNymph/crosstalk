@@ -1,14 +1,15 @@
 [invariant]
 id = "ingress.raw-exchange.encoding-recorded"
-statement = "A RawExchange's request_encoding is the request's Content-Encoding."
+statement = "A RawExchange's request.encoding, the encoding its DecodedRequest records, is the request's Content-Encoding."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]
 rationale = """
 Normalization, threading and content matching run on the captured request,
 and they need plaintext JSON, while the upstream must get the original
-compressed bytes. Capturing the decoded form of exactly the forwarded
-bytes keeps what detection reads identical to what the model received.
+compressed bytes. The DecodedRequest holds the decoded body and the
+encoding it arrived in side by side, so what detection reads can be tied
+back to exactly the bytes that were forwarded.
 """
 
 [evidence]

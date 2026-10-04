@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.policy.history-ordered"
+statement = "Every PolicyHistory is ordered by decision time, keeps equal-time entries in the order they were recorded, and holds no decision twice."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+current and in_force_at read the order directly, so an out-of-order
+history would report the wrong policy, and a duplicated entry would show a
+redelivered event as a second decision.
+"""
+
+[evidence]
+type = ["crosstalk_spec::derived::flow::channel::policy::PolicyHistory::from_entries", "crosstalk_spec::derived::flow::channel::policy::PolicyHistory::record"]
+unit = ["crosstalk_spec::tests::policy::from_entries_rejects_out_of_order", "crosstalk_spec::tests::policy::from_entries_rejects_duplicates", "crosstalk_spec::tests::policy::from_entries_accepts_ordered_history_with_ties", "crosstalk_spec::tests::policy::late_decision_is_kept_behind_newer_one", "crosstalk_spec::tests::policy::recording_a_decision_twice_changes_nothing", "crosstalk_spec::tests::policy::distinct_decisions_at_the_same_time_are_both_kept"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

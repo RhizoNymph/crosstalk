@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.alert.change-announced"
+statement = "After every committed change triage makes to a stored alert (open, deduplicate, suppress) L6 publishes Changed::Alert at least once for it, and never before the change is visible to QueryApi::alerts."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+AlertOpened and AlertChanged carry the alert for other consumers; the UI
+instead re-queries on Changed::Alert, so it must follow every stored
+change and only once the change can be read.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::alert_changes_announced_after_commit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

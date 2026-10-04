@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.channel.supersession-one-step"
+statement = "For every channel id c, ChannelDirectory::canonical(canonical(c)) equals canonical(c), and canonical(c) is c unless c is superseded, in which case it is the declared channel named by c's supersession."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+Readers resolve each stored channel id with one lookup. That is only
+correct if a superseding channel is never itself superseded, which holds
+because only discovered channels are superseded and a superseding channel
+is a promoted, declared one. A chain would make the graph, filters and
+alerts disagree depending on how many hops each resolved.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::supersession_resolves_in_one_step"
+property = "crosstalk::flow::props::channel_canonical_is_idempotent"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

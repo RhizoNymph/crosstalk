@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.verdict.repeat-appends-nothing"
+statement = "VerdictLog::record of a record whose verdict equals the log's current verdict, including a withdrawal when no verdict is in force, returns Unchanged and leaves the log unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A retried SetVerdict must not add records, bump the revision or publish a
+second VerdictSet; it returns Unchanged, as every other idempotent
+operator action does. The note of the repeated request is not recorded.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::verdicts::repeating_the_current_verdict_appends_nothing"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

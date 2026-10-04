@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.query.operators-requires-view"
+statement = "QueryApi::operators returns Forbidden naming View to a Caller without View."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+The directory shows who can govern, triage and audit. It is needed to
+label decisions and audit entries, which View already shows by id, so it
+needs no more than View, and no less.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::operators_without_view_forbidden"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

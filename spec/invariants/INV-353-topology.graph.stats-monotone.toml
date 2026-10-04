@@ -1,18 +1,23 @@
 [invariant]
 id = "topology.graph.stats-monotone"
-statement = "For a fixed window, weighting and filter, when no agent merge and no topic-version activation falls between two graph queries, every edge of the earlier result appears in the later result with stats at least as large."
+statement = "For a fixed window, weighting and filter, when no agent merge or unmerge, no channel promotion, no topic-version activation and, under FalseDetections::Exclude, no verdict change falls between two graph queries, every edge of the earlier result appears in the later result with stats at least as large."
 kind = "coordination"
 requires = ["integration"]
 rationale = """
-Edge stats only grow as transmissions arrive; nothing in L7 subtracts.
-Observed through queries, this can still break in the Timescale store: a
-refresh that rewrites a materialized bucket from an incomplete source, or a
-real-time union that double counts and then corrects, makes edges shrink or
-flicker between queries. Operators read a falling count as communication
-that was undone. Two events legitimately change edges and are excluded: a
-merge re-keys edges onto the canonical agent (summing some, dropping those
-that become self-edges), and an activation switches to another version's
-buckets, under which a topic filter can match different transmissions.
+Edge stats only grow as transmissions arrive; nothing in L7 subtracts from
+a bucket. Observed through queries, this can still break in the Timescale
+store: a refresh that rewrites a materialized bucket from an incomplete
+source, or a real-time union that double counts and then corrects, makes
+edges shrink or flicker between queries. Operators read a falling count as
+communication that was undone. Some events legitimately change edges and
+are excluded: a merge re-keys edges onto the canonical agent (summing
+some, dropping those that become self-edges) and an unmerge splits them
+again; a promotion re-keys routes on the channels it absorbed onto the
+promoted channel; an activation switches a Current query to another
+version's buckets, under which a topic filter can match different
+transmissions; and with Exclude, a new FalseDetection verdict subtracts
+its transmission at query time. A version that retention drops answers
+VersionNotRetained, never smaller edges.
 """
 
 [evidence]

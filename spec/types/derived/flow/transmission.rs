@@ -22,11 +22,19 @@
 //! on a channel), then `Direct`, then `Unobserved`.
 //!
 //! **Policy.** A channel-routed transmission is judged by the channel policy
-//! in force when it was confirmed.
+//! in force when it was confirmed, on its canonical channel: one opened on a
+//! channel that was superseded before confirmation is judged by the
+//! superseding channel's policy.
 //!
-//! **Discarded is final.** Content evidence that arrives after a suspected
-//! transmission was discarded opens a new transmission through the normal
-//! path; the discarded one is never revived.
+//! **Superseded channels.** A stored `Route::Channel` keeps the channel the
+//! access resolved to when it was recorded; readers resolve it through
+//! supersession ([`Route::resolved`]).
+//!
+//! **Discarded is final.** A suspected transmission is discarded only when
+//! its window expires ([`TransmissionState::expire`]). Content evidence that
+//! arrives afterwards opens a new transmission through the normal path; the
+//! discarded one is never revived. Operator verdicts on transmissions are a
+//! separate axis.
 //!
 //! The sender is unknown until content evidence arrives, so it lives inside
 //! [`Confirmed`], not on the transmission itself.
@@ -34,6 +42,7 @@
 use std::num::NonZeroU64;
 
 use crate::aggregates::topic::TopicModelVersion;
+use crate::aliases::Aliases;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AgentId, ChannelId, TopicId, TransmissionId};
@@ -65,6 +74,19 @@ pub enum Route {
     /// The reader's own output contains the sender's text, but none of the
     /// reader's visible inputs did: a channel the gateway cannot see.
     Unobserved,
+}
+
+impl Route {
+    /// The route with its channel resolved through supersession. Stored
+    /// transmissions keep the channel they were routed through; readers
+    /// resolve it, so a transmission on a superseded channel counts on the
+    /// channel that superseded it.
+    pub fn resolved(&self, aliases: impl Aliases) -> Self {
+        match self {
+            Self::Channel(channel) => Self::Channel(aliases.channel(*channel)),
+            Self::Delegation(_) | Self::Direct(_) | Self::Unobserved => self.clone(),
+        }
+    }
 }
 
 /// A route that needs no channel: what a transmission opened and confirmed
@@ -106,11 +128,14 @@ pub enum TransmissionState {
     Detected,
     AwaitingContent {
         co_access: CoAccess,
+        /// `CorrelationTiming::window_closes_at` of the read's time.
         window_closes_at: Timestamp,
     },
     /// Only access-pattern evidence.
     Suspected {
         co_access: NonEmpty<CoAccess>,
+        /// The `window_closes_at` it was suspected at. It expires at
+        /// `CorrelationTiming::expires_at(since)`.
         since: Timestamp,
     },
     Confirmed(Confirmed),
@@ -128,6 +153,61 @@ pub enum TransmissionState {
         at: Timestamp,
         co_access: NonEmpty<CoAccess>,
     },
+}
+
+/// A transition that applies only to a suspected transmission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotSuspected;
+
+impl TransmissionState {
+    /// Suspected to Discarded at `at`, keeping its co-accesses. Any other
+    /// state is left unchanged.
+    pub fn expire(&mut self, at: Timestamp) -> Result<(), NotSuspected> {
+        match self {
+            Self::Suspected { co_access, .. } => {
+                *self = Self::Discarded {
+                    at,
+                    co_access: co_access.clone(),
+                };
+                Ok(())
+            }
+            Self::Detected
+            | Self::AwaitingContent { .. }
+            | Self::Confirmed(_)
+            | Self::Classified { .. }
+            | Self::Aggregated { .. }
+            | Self::Discarded { .. } => Err(NotSuspected),
+        }
+    }
+
+    /// The content evidence, in `Confirmed`, `Classified` and `Aggregated`.
+    pub fn confirmed(&self) -> Option<&Confirmed> {
+        match self {
+            Self::Confirmed(confirmed)
+            | Self::Classified { confirmed, .. }
+            | Self::Aggregated { confirmed, .. } => Some(confirmed),
+            Self::Detected
+            | Self::AwaitingContent { .. }
+            | Self::Suspected { .. }
+            | Self::Discarded { .. } => None,
+        }
+    }
+
+    /// The co-access records this state holds, in stored order: none while
+    /// `Detected`, the one being waited on, the suspected or discarded
+    /// ones, or a confirmed transmission's `Confirmed::co_access`.
+    pub fn co_accesses(&self) -> Vec<CoAccess> {
+        match self {
+            Self::Detected => Vec::new(),
+            Self::AwaitingContent { co_access, .. } => vec![*co_access],
+            Self::Suspected { co_access, .. } | Self::Discarded { co_access, .. } => {
+                co_access.iter().copied().collect()
+            }
+            Self::Confirmed(confirmed)
+            | Self::Classified { confirmed, .. }
+            | Self::Aggregated { confirmed, .. } => confirmed.co_access().to_vec(),
+        }
+    }
 }
 
 /// A transmission backed by at least one content match.
@@ -196,6 +276,12 @@ impl Confirmed {
         &self.co_access
     }
 
+    /// When the reader received the content: the `started_at` of the
+    /// reader exchange holding the first content match. For a channel
+    /// transmission that is the exchange whose tool result made the read, so
+    /// it is the read's time. Edges are bucketed by it and query windows are
+    /// tested against it, so a late match adds to an earlier bucket; see
+    /// [`crate::aggregates::watermark`].
     pub fn at(&self) -> Timestamp {
         self.at
     }

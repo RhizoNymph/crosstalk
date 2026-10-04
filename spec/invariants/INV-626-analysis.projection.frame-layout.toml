@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.projection.frame-layout"
+statement = "ProjectionFrame::encode writes the 64-byte header and the body sections at the offsets and in the order documented in projection/frame.rs, little-endian, zero-padded to a multiple of 8 bytes, for a total of 64 + 16 (S + R + T) + 48 n + K bytes before padding."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The browser reads the frame by offset into typed arrays, with no parser, so
+the layout is the contract between the server and the UI. Every section is
+aligned for its element type, which a typed-array view requires.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::projection_frame::encoded_length_follows_the_layout", "crosstalk_spec::tests::projection_frame::header_fields_sit_at_their_offsets", "crosstalk_spec::tests::projection_frame::body_sections_sit_at_their_offsets", "crosstalk_spec::tests::projection_frame::empty_frame_when_nothing_matched"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

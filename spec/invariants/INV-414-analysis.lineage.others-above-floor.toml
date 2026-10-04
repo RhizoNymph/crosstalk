@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.lineage.others-above-floor"
+statement = "In every stored TopicLineage, each entry's other links are exactly the to version's topics other than the best whose centroid similarity to the entry topic reaches the lineage's floor."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Splits and merges show as several links above the floor. Leaving out a
+qualifying topic would hide a split; including one below the floor would
+clutter the UI with unrelated topics.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::lineage_others_are_topics_above_floor"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

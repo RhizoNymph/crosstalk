@@ -1,6 +1,6 @@
 [invariant]
 id = "canonical.normalize.content-encoding-independent"
-statement = "Two RawExchanges that differ only in request_encoding normalize to equal NormalizedExchanges."
+statement = "Two RawExchanges that differ only in request.encoding normalize to equal NormalizedExchanges."
 kind = "domain"
 property = "metamorphic"
 requires = ["property"]

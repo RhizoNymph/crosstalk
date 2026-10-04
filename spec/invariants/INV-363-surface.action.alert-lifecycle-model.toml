@@ -7,12 +7,13 @@ requires = ["property", "unit"]
 rationale = """
 The model is the operator half of the lifecycle in aggregates/alert.rs:
 Acknowledge moves Open to Acknowledged{by, at}; Resolve moves Open or
-Acknowledged to Resolved{by, at, note}; an Acknowledge on Acknowledged or a
-Resolve on Resolved is accepted and changes nothing; every other pair
-(Acknowledge on Resolved or Suppressed, Resolve on Suppressed) returns
-BadRequest and changes nothing. An unknown alert returns NotFound. Without
-this, a suppressed alert could be reopened as acknowledged, or a resolve
-could overwrite who resolved it.
+Acknowledged to Resolved{by, at, note}; both return Applied. An
+Acknowledge on Acknowledged or a Resolve on Resolved is accepted, changes
+nothing and returns Unchanged; every other pair (Acknowledge on Resolved
+or Suppressed, Resolve on Suppressed) returns Conflict(AlertNotActive) and
+changes nothing. An unknown alert returns NotFound. Without this, a
+suppressed alert could be reopened as acknowledged, or a resolve could
+overwrite who resolved it.
 """
 
 [evidence]

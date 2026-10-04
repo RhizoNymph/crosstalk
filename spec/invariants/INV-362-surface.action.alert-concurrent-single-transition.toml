@@ -5,10 +5,12 @@ kind = "coordination"
 requires = ["dst", "integration"]
 rationale = """
 Two operators clicking acknowledge, or a client retrying a timed-out
-request, must not produce two audit entries for one transition or let the
-second request overwrite the first's by and at. The update is a
-compare-and-set on the prior state, so the loser sees the new state and
-takes the idempotent no-op path of the lifecycle model.
+request, must not take one transition twice, record two Applied outcomes
+in the audit log for it, or let the second request overwrite the first's
+by and at. The update is a compare-and-set on the prior state, so the
+loser sees the new state and takes the idempotent no-op path of the
+lifecycle model: Unchanged for a repeat of the transition that won, or
+Conflict(AlertNotActive) for one the new state no longer allows.
 """
 
 [evidence]

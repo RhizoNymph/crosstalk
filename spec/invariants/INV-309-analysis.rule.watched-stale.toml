@@ -1,14 +1,16 @@
 [invariant]
 id = "analysis.rule.watched-stale"
-statement = "When TopicVersionReady for a version is processed, a WatchedTopic rule with any topic whose most-similar centroid in that version is below remap_threshold gets status Stale."
+statement = "When TopicVersionReady for a version is processed, a WatchedTopic rule current on its predecessor with any topic whose best link in the stored lineage is absent or below remap_threshold becomes TopicWatch::Stale, naming exactly those topics, and keeps its RuleStatus."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
 A topic that has no close counterpart in the new fit cannot be remapped
-without guessing. Marking the whole rule Stale makes the loss visible to
+without guessing. Marking the whole rule stale makes the loss visible to
 the operator instead of silently watching the wrong topics, or a subset of
-the intended ones.
+the intended ones. Staleness is separate from the operator's enabled or
+disabled status, which the remap leaves as it was
+(analysis.rule.remap-via-lineage).
 """
 
 [evidence]

@@ -1,0 +1,31 @@
+[invariant]
+id = "surface.export.trailer-ends-every-stream"
+statement = "An ExportStream yields rows and then exactly one ExportTrailer, after which nothing remains to call, and the trailer, built only by ExportSealer, counts and digests exactly the rows sent and is Complete only when every row the header planned was sent and none was refused, otherwise Failed with the source failure, the refused row or the count mismatch."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A truncated export must never look complete. ExportStream::next consumes
+the stream and gives it back only with a row, so the trailer is the last
+item by construction and a store failure mid-stream still produces one,
+recording the failure. The only way to end without a trailer is a stream
+cut off, which a reader detects by the missing trailer.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::interfaces::l8_surface::export::stream::ExportStream",
+    "crosstalk_spec::interfaces::l8_surface::export::seal::ExportSealer",
+]
+unit = [
+    "crosstalk_spec::tests::export_stream::sealer_completes_when_every_planned_row_is_accepted",
+    "crosstalk_spec::tests::export_stream::an_empty_export_completes_with_no_rows",
+    "crosstalk_spec::tests::export_stream::a_source_that_runs_short_fails_with_the_counts",
+    "crosstalk_spec::tests::export_stream::a_source_failure_is_recorded_after_the_rows_sent",
+    "crosstalk_spec::tests::export_stream::a_stream_sends_every_row_then_one_complete_trailer",
+    "crosstalk_spec::tests::export_stream::a_stream_ends_with_the_store_failure_in_its_trailer",
+    "crosstalk_spec::tests::export_stream::a_stream_never_sends_a_refused_row",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

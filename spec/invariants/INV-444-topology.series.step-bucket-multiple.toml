@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.series.step-bucket-multiple"
+statement = "Every SeriesStep is a whole, non-zero number of its bucket width."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A step that split a bucket would have to count part of a bucket's
+transmissions in one point and the rest in the next, which the edge table
+cannot do: a bucket's stats are a single sum. Requiring a whole number of
+buckets makes every point a union of buckets, so each point equals a graph
+over an aligned window. SeriesStep's fields are private and
+SeriesStep::new returns NotBucketMultiple otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::SeriesStep::new"
+unit = ["crosstalk_spec::tests::series::step_rejects_non_multiple_of_bucket", "crosstalk_spec::tests::series::step_accepts_bucket_multiples"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

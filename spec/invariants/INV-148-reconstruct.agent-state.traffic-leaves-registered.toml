@@ -1,15 +1,24 @@
 [invariant]
 id = "reconstruct.agent-state.traffic-leaves-registered"
-statement = "After an exchange is attributed to an agent, that agent's state is not Registered."
+statement = "After an exchange is attributed to an agent that is not Merged, that agent's state is not Registered, then or at any later time."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 Registered means declared in config but never seen. An agent that has sent
-traffic and still reads as Registered would show as unused to operators and
-alert rules while its exchanges flow. Agents discovered from traffic are
-therefore created Provisional, and a Registered agent moves to Provisional
-on its first attributed exchange.
+traffic and still reads as Registered would show as unused to operators
+and alert rules while its exchanges flow. Agents discovered from traffic
+are therefore created Provisional, and a Registered agent moves to
+Provisional on its first attributed exchange. A later merge records that
+active state as `MergedInto.prior`, so its unmerge cannot bring Registered
+back.
+
+Traffic while an agent is Merged changes none of its state, `prior`
+included: an unmerge restores the state the agent was merged from exactly
+(`Agent::revert`), so an agent merged while Registered returns Registered,
+whatever traffic its evidence matched while it was merged. That traffic
+showed under its canonical agent at the time, and the agent's next
+attributed exchange after the unmerge moves it to Provisional.
 """
 
 [evidence]

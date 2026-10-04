@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.version.never-rolls-back"
-statement = "Once a graph query has reported topic_version v, no later graph query reports a topic_version older than v."
+statement = "Once a graph query with TopicVersionSelector::Current has reported topic_version v, no later graph query with Current reports a topic_version older than v."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -9,7 +9,9 @@ can be redelivered after a newer version is active, and two consumers can
 process activations in different orders. Without a rule, the view would
 jump back to stale topic ids and an older history. activate therefore
 ignores a version older than the active one (TopicModelVersion is
-ordered).
+ordered). A query that pins a retained older version
+(TopicVersionSelector::Pinned) reports that version because it asked for
+it, and is outside this rule.
 """
 
 [evidence]

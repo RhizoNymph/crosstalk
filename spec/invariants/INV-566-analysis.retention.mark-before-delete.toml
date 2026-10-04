@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.retention.mark-before-delete"
+statement = "A version's topic assignments are deleted, and TopicVersionDropped for it is published, only after the catalog has marked it dropped."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Marking first means every reader that could see a partial deletion is
+already being told VersionNotRetained, in L6 directly and in L7 through
+the event that follows the mark.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::version_marked_dropped_before_any_deletion"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

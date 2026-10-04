@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.audit.every-call-recorded"
+statement = "Every OperatorActions::act call that returns Ok or an ActionError other than Store leaves exactly one AuditBody::Operator entry, holding the call's Caller and action and an outcome whose AuditOutcome::result equals what the call returned, and a call that returns Store leaves at most one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The audit log answers who tried to do what and what came of it, so refused
+attempts matter as much as applied ones: a run of Forbidden policy changes
+from a viewer is the signal. Recording the OperatorAction value itself,
+not a per-action shape, covers actions added later without a schema
+change. Succeeded entries are written in the action's transaction;
+Forbidden and Rejected ones carry no effect. A Store error had no effect
+and may have made the log itself unreachable, so its entry is written only
+when the log can still be reached.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::every_action_outcome_is_audited", "crosstalk::surface::tests::forbidden_action_is_audited"]
+property = "crosstalk::surface::tests::prop_one_audit_record_per_act_call"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

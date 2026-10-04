@@ -1,14 +1,15 @@
 [invariant]
 id = "surface.delivery.at-least-once-per-sink"
-statement = "Every AlertOpened event is delivered to every sink enabled at the time it is processed at least once, with failed deliveries retried until the sink accepts it, including across a gateway restart."
+statement = "Every AlertOpened event is delivered at least once to every sink its rule lists, with failed deliveries retried until the sink accepts it, including across a gateway restart."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 An alert nobody receives is a missed detection. Sinks fail transiently
 (Slack rate limits, webhook endpoints down), so delivery state is
-persisted per (alert, sink) and the AlertOpened delivery is acked to the bus
-only once every enabled sink has accepted. At-least-once means a sink may
-see an alert twice; surface.delivery.carries-alert-id lets it deduplicate.
+persisted per (alert, sink) and the AlertOpened delivery is acked to the
+bus only once every listed sink has accepted. Which sinks those are is
+surface.sink.rule-sinks-only. At-least-once means a sink may see an alert
+twice; surface.delivery.carries-alert-id lets it deduplicate.
 """
 
 [evidence]

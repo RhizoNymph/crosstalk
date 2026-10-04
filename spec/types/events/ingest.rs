@@ -1,8 +1,8 @@
 //! Events from capture (L1) and reconstruction (L3).
 
 use crate::events::Subject;
-use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
-use crate::observed::agent::{IdentityEvidence, MergeAuthor};
+use crate::ids::{AgentId, ConversationId, ExchangeId, MergeId, MessageHash, OperatorId};
+use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor};
 use crate::observed::exchange::Exchange;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,10 +15,33 @@ pub enum IngestEvent {
         agent: AgentId,
         evidence: IdentityEvidence,
     },
+    /// Merge record `merge` was applied: `from` and every agent in
+    /// `repointed` now resolve to `into`.
     AgentMerged {
+        merge: MergeId,
         from: AgentId,
         into: AgentId,
+        repointed: Vec<AgentId>,
         by: MergeAuthor,
+    },
+    /// An operator reverted merge record `merge`. Readers that cache the
+    /// merge table point `agent` at itself and every agent in `restored` at
+    /// `agent`.
+    AgentUnmerged {
+        merge: MergeId,
+        /// The record's source.
+        agent: AgentId,
+        /// The agent it resolved to until now.
+        was_into: AgentId,
+        /// Agents the record repointed that now point at `agent` again.
+        restored: Vec<AgentId>,
+        by: OperatorId,
+    },
+    /// An operator set (`Some`) or cleared (`None`) an agent's label.
+    AgentRenamed {
+        agent: AgentId,
+        label: Option<AgentLabel>,
+        by: OperatorId,
     },
 }
 
@@ -29,6 +52,8 @@ impl IngestEvent {
             Self::ConversationDelta(_) => Subject::ConversationDelta,
             Self::AgentSeen { .. } => Subject::AgentSeen,
             Self::AgentMerged { .. } => Subject::AgentMerged,
+            Self::AgentUnmerged { .. } => Subject::AgentUnmerged,
+            Self::AgentRenamed { .. } => Subject::AgentRenamed,
         }
     }
 }

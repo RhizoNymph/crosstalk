@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.filter.access-ignores-false-detections"
+statement = "TopologyFilter::admits_access returns the same result for an access subject under FalseDetections::Include and FalseDetections::Exclude, all other filter fields equal."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit"]
+rationale = """
+An access is an observed read or write, not a detection, so an operator's
+FalseDetection verdict on a transmission cannot make an access disappear
+from the channel-centred view. The filter's false_detections applies where
+it means something: the edge store builds an access subject's
+channel_topics only from the transmissions false_detections keeps, so a
+topic carried to a channel only by false detections does not keep that
+channel's accesses under a topic filter.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::access_admission_ignores_false_detections"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

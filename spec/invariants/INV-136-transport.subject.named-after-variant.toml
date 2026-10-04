@@ -1,20 +1,24 @@
 [invariant]
 id = "transport.subject.named-after-variant"
-statement = "BusEvent::subject returns the Subject variant with the same name as the event's innermost variant."
+statement = "BusEvent::subject returns the Subject variant with the same name as the event's variant in IngestEvent, DetectEvent or InsightEvent, and Subject::Changed for every BusEvent::Changed."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
-Makes the mapping injective (no two event variants share a subject, so a
-subscriber never receives an event family it did not ask for) and onto (no
-subject nobody publishes). sample_events builds one event of each of the 18
-variants; subjects_name_their_variant checks each maps to the same-named
-Subject, and each_variant_has_its_own_subject checks the 18 subjects are
-distinct.
+Makes the mapping injective over the layer events (no two event variants
+share a subject, so a subscriber never receives an event family it did not
+ask for) and onto (no subject nobody publishes). Change notifications are
+the exception by design: every Changed variant shares Subject::Changed,
+because the live feed's writer consumes them all alike and reads which
+entity changed from the payload. sample_events builds one event of each of
+the 28 kinds (27 layer event variants and one Changed);
+subjects_name_their_variant checks each maps to its Subject,
+each_variant_has_its_own_subject checks the 28 subjects are distinct, and
+samples_cover_every_subject checks that together they are every Subject.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::events::subjects_name_their_variant", "crosstalk_spec::tests::events::each_variant_has_its_own_subject"]
+unit = ["crosstalk_spec::tests::events::subjects_name_their_variant", "crosstalk_spec::tests::events::each_variant_has_its_own_subject", "crosstalk_spec::tests::events::samples_cover_every_subject"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

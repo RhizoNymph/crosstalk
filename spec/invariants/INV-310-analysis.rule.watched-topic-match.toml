@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.rule.watched-topic-match"
-statement = "On a TransmissionClassified event with cause Confirmation, a WatchedTopic rule drafts exactly when the classification's version equals the rule's version and the classification's topic is one of the rule's topics."
+statement = "On a TransmissionClassified event with cause Confirmation, a WatchedTopic rule that evaluates (enabled, with TopicWatch::Current topics) drafts exactly when the classification's version equals its topics' version and the classification's topic is one of its topics."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]

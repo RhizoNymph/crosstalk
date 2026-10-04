@@ -6,9 +6,10 @@ property = "postcondition"
 requires = ["unit"]
 rationale = """
 Repointing agents already merged into the source is bookkeeping that keeps
-chains flat. Directory resolution already sends their ids to the new
-target, so an event per repointed agent would announce merges no resolver
-or operator made, and could trigger merge alerts for them.
+chains flat. The merge's one AgentMerged lists them in `repointed`, so a
+cache of the merge table updates them with it; an event per repointed
+agent would announce merges no resolver or operator made, and could
+trigger merge alerts for them.
 """
 
 [evidence]

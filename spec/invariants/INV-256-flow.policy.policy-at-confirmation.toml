@@ -1,13 +1,17 @@
 [invariant]
 id = "flow.policy.policy-at-confirmation"
-statement = "A channel-routed transmission is judged by the channel policy in force when it was confirmed."
+statement = "A channel-routed transmission is judged by the policy in force when it was confirmed (PolicyHistory::in_force_at) of its route's channel, or of the channel that superseded it when the supersession came at or before the confirmation."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 Policy changes arrive on the bus and may be processed between confirmation
 and routing. Judging by the confirmation-time policy makes the verdict
-independent of processing lag: sanctioning a channel does not retroactively
-silence traffic that was unsanctioned when it happened.
+independent of processing lag: sanctioning a channel does not
+retroactively silence traffic that was unsanctioned when it happened. A
+promotion is the operator's review of the medium, so a transmission
+confirmed after it on a channel the promotion absorbed is judged by the
+promoted channel's policy (flow.policy.judged-on-canonical-channel), never
+by the absorbed channel's stale one.
 """
 
 [evidence]

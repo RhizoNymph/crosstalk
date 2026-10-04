@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.policy.history-records-every-decision"
+statement = "Every policy decision for a channel, whether made by config (a declaration or a reload) or carried by a PolicyChanged, appears exactly once in that channel's PolicyHistory, however often its event is delivered or the config is reloaded."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Channel.policy keeps only the latest decision, so without the history an
+earlier sanction, and who made it, is lost the moment it is overridden.
+Config decisions are included so the history explains a channel's policy
+from its first decision, not only from the first operator action.
+PolicyHistory::record returns Duplicate for a redelivered decision, so at-least-once delivery adds nothing twice.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::policy_history_complete_under_redelivery_and_reload"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

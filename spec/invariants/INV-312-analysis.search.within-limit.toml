@@ -1,14 +1,14 @@
 [invariant]
 id = "analysis.search.within-limit"
-statement = "A search returns at most `limit` hits."
+statement = "A search page holds at most its PageRequest's PageSize hits."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]
 rationale = """
-The limit bounds response size and the cost of fetching snippets. Hybrid
-search merges a full-text and a vector candidate list, each of which may
-return up to the limit, so the merged list must be cut again after
-fusion.
+The page size bounds response size and the cost of fetching snippets.
+Hybrid search merges a full-text and a vector candidate list, each of
+which may return up to the page size, so the merged list must be cut again
+after fusion, before the page's cursor is taken from its last hit.
 """
 
 [evidence]

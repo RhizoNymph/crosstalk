@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.bipartite.shares-normalized-separately"
+statement = "In a BipartiteGraph each access share equals its accesses over the total accesses of all its access edges, and each transmission share equals its stat under the weighting over the total of that stat, each within 1e-9."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Accesses and transmissions measure different things, so one denominator
+would let a busy wiki's reads shrink every transmission edge. Each family
+sums to 1 on its own, and access shares are counts whatever the
+transmission weighting.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::access::BipartiteGraph::new"
+unit = "crosstalk_spec::tests::graph::access_and_transmission_shares_are_normalized_separately"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

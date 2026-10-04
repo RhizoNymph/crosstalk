@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.query.history-and-audit-permissions"
+statement = "QueryApi::audit returns Forbidden to a Caller without the Audit permission, and QueryApi::policy_history returns Forbidden to a Caller without View."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+The audit log reveals every operator's activity, including refused
+attempts and their notes, which is for whoever audits operators, not for
+every viewer; a separate Audit permission lets an auditor read it without
+being able to change policy. A channel's policy history holds what the
+channel view already shows for the latest decision (author, time, note),
+so it needs View, like QueryApi::channel.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::audit_query_without_audit_forbidden", "crosstalk::surface::tests::policy_history_without_view_forbidden"]
+integration = "crosstalk::surface::integration::history_and_audit_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

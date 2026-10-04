@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.lineage.entry-order"
+statement = "Every LineageEntry lists its best link first and its other links after it in lineage order (higher similarity first, ties to the lower topic id), with no successor topic twice and no other links when it has no best link."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The best link is what remapping uses, so it must be the first in the same
+order the UI draws, including on ties; otherwise the UI could show topic 12
+going mainly to 31 while the rule moved to 30. LineageEntry::new returns
+OutOfOrder, DuplicateSuccessor or OthersWithoutBest otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::LineageEntry::new"
+unit = ["crosstalk_spec::tests::topic_history::lineage_entry_accepts_lineage_order", "crosstalk_spec::tests::topic_history::lineage_entry_rejects_link_more_similar_than_best", "crosstalk_spec::tests::topic_history::lineage_entry_rejects_unsorted_others", "crosstalk_spec::tests::topic_history::lineage_entry_rejects_duplicate_successor", "crosstalk_spec::tests::topic_history::lineage_entry_rejects_others_without_best"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

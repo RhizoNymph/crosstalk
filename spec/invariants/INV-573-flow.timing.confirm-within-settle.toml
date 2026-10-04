@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.timing.confirm-within-settle"
+statement = "Every Confirm or OpenConfirmed the correlator emits has a Confirmed::at no earlier than the earlier of the event time of the input it was processing (an access's at, a content match's reader exchange started_at, or a tick's time) and the shard's last processed tick minus CorrelationTiming::settle_after."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+This is the correlator's half of the watermark contract. A confirmation
+caused by new input is no older than that input, which the frontier still
+counts as pending until it is acked; a confirmation from held state (a
+late match on a suspected transmission, a window closing) is at most
+settle_after behind the tick. Together they mean nothing before the
+watermark can still be confirmed.
+"""
+
+[evidence]
+property = "crosstalk::flow::correlator::tests::confirmations_within_settle_bound"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

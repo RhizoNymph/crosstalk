@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.series.no-self-edges"
+statement = "No by-edge series in a TopologySeries has the same agent as from and to."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Series resolve agents through merge aliases like graphs do, and drop the
+self-edges that resolution creates. A self-edge series would add traffic
+to the series total that the graph does not count. TopologySeries::new
+returns SelfEdge otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::TopologySeries::new"
+unit = "crosstalk_spec::tests::series::series_rejects_self_edge"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

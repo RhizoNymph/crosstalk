@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.rule.update-keeps-alerts"
+statement = "AlertRuleStore::update leaves the state and occurrence count of every alert unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Alerts were valid under the definition that raised them; editing a rule is
+not a decision about them. Disabling is the action that suppresses, so an
+operator who only tunes a threshold or renames a rule does not lose the
+alerts being worked.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::rule_update_keeps_alerts"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

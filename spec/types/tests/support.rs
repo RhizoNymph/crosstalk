@@ -1,5 +1,6 @@
 use crate::support::{
-    ByteRange, EmptyRange, EmptyWindow, NonEmpty, OutOfRange, Share, Similarity, TimeWindow,
+    Blank, ByteRange, DisplayText, EmptyRange, EmptyWindow, InvalidText, NonBlank, NonEmpty,
+    OutOfRange, Share, Similarity, TimeWindow,
 };
 use crate::tests::fixtures::at;
 
@@ -15,6 +16,13 @@ fn non_empty_keeps_order_and_counts() {
     assert_eq!(list.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
     assert_eq!(*list.first(), 1);
     assert_eq!(list.count().get(), 4);
+}
+
+#[test]
+fn non_empty_into_vec_keeps_order() {
+    let mut list = NonEmpty::new(1);
+    list.push(2);
+    assert_eq!(list.into_vec(), vec![1, 2]);
 }
 
 #[test]
@@ -69,4 +77,40 @@ fn share_rejects_out_of_range_and_nan() {
     assert!(Share::new(1.5).is_none());
     assert!(Share::new(-0.1).is_none());
     assert!(Share::new(f64::NAN).is_none());
+}
+
+#[test]
+fn non_blank_trims_and_rejects_whitespace() {
+    assert_eq!(
+        NonBlank::new("  deploy keys \n").map(|t| t.as_str().to_owned()),
+        Ok("deploy keys".to_owned())
+    );
+    assert_eq!(NonBlank::new(""), Err(Blank));
+    assert_eq!(NonBlank::new(" \t\n"), Err(Blank));
+}
+
+type Short = DisplayText<4>;
+
+#[test]
+fn display_text_is_trimmed() {
+    assert_eq!(
+        Short::new("  ab ").map(|t| t.as_str().to_owned()),
+        Ok("ab".to_owned())
+    );
+}
+
+#[test]
+fn display_text_rejects_blank_long_and_control_text() {
+    assert_eq!(Short::new(" \t "), Err(InvalidText::Blank));
+    assert_eq!(
+        Short::new("abcde"),
+        Err(InvalidText::TooLong { max: 4, got: 5 })
+    );
+    assert_eq!(Short::new("a\nb"), Err(InvalidText::ControlCharacter));
+}
+
+#[test]
+fn display_text_counts_characters_not_bytes() {
+    assert!(Short::new("éééé").is_ok());
+    assert_eq!(Short::MAX_CHARS, 4);
 }

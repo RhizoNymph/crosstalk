@@ -1,13 +1,16 @@
 [invariant]
 id = "flow.registry.one-channel-per-resource"
-statement = "Each ResourceId belongs to exactly one channel, even when two first accesses to the same undeclared resource are processed concurrently."
+statement = "Each ResourceId is stored on exactly one channel, and so resolves to exactly one canonical channel, even when two first accesses to the same undeclared resource are processed concurrently."
 kind = "coordination"
 requires = ["dst", "integration"]
 rationale = """
 Lookup followed by creating a discovered channel is a check-then-act. Two
 consumers that both see `New` would create two channels for one resource,
-putting the writer and the reader on different channels so the cross access
-is never seen, and raising NewChannel twice.
+putting the writer and the reader on different channels so the cross
+access is never seen, and raising NewChannel twice. A promotion moves no
+stored resource: a superseded channel's resources stay under its id and
+resolve, in one step, to the channel that superseded it, so every reader
+still sees one channel per resource.
 """
 
 [evidence]

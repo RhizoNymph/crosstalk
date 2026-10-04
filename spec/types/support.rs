@@ -42,6 +42,14 @@ impl<T> NonEmpty<T> {
         std::iter::once(&self.head).chain(self.tail.iter())
     }
 
+    /// The elements in order; never empty.
+    pub fn into_vec(self) -> Vec<T> {
+        let mut items = Vec::with_capacity(self.tail.len() + 1);
+        items.push(self.head);
+        items.extend(self.tail);
+        items
+    }
+
     /// Always at least 1.
     pub fn count(&self) -> NonZeroU32 {
         let tail = u32::try_from(self.tail.len()).unwrap_or(u32::MAX - 1);
@@ -177,3 +185,159 @@ impl Share {
         self.0
     }
 }
+
+/// Text with at least one non-whitespace character, stored trimmed.
+///
+/// Used for operator-written text that must say something, such as a
+/// semantic alert rule's query.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NonBlank(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Blank;
+
+impl NonBlank {
+    pub fn new(text: &str) -> Result<Self, Blank> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            Err(Blank)
+        } else {
+            Ok(Self(trimmed.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Display text an operator writes: trimmed, non-empty, at most `MAX`
+/// characters (not bytes), and free of control characters. Agent labels and
+/// alert rule names are this with their own limits.
+///
+/// Blank text looks like no text, very long text breaks layout, and control
+/// characters can spoof other text in logs and terminals.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DisplayText<const MAX: usize>(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidText {
+    Blank,
+    TooLong { max: usize, got: usize },
+    ControlCharacter,
+}
+
+impl<const MAX: usize> DisplayText<MAX> {
+    pub const MAX_CHARS: usize = MAX;
+
+    pub fn new(text: &str) -> Result<Self, InvalidText> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidText::Blank);
+        }
+        let chars = trimmed.chars().count();
+        if chars > MAX {
+            return Err(InvalidText::TooLong {
+                max: MAX,
+                got: chars,
+            });
+        }
+        if trimmed.chars().any(char::is_control) {
+            return Err(InvalidText::ControlCharacter);
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// At most `MAX` items of a longer list, and how long the whole list is.
+///
+/// A capped list that looks complete invites a wrong decision ("these are all
+/// the resources it covers"), so a sampled list is never a plain `Vec`: the
+/// reader always has `total` and [`Capped::hidden`] beside what is shown.
+/// Built only through [`Capped::new`] (`shown.len() <= MAX`, `total >=
+/// shown.len()`) and [`Capped::first`]. The order of `shown` is the
+/// producer's, stated where the sample is returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capped<T, const MAX: usize> {
+    shown: Vec<T>,
+    total: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidCapped {
+    TooMany { max: usize, got: usize },
+    TotalBelowShown { total: u64, shown: usize },
+}
+
+impl<T, const MAX: usize> Capped<T, MAX> {
+    pub const MAX: usize = MAX;
+
+    pub fn new(shown: Vec<T>, total: u64) -> Result<Self, InvalidCapped> {
+        if shown.len() > MAX {
+            return Err(InvalidCapped::TooMany {
+                max: MAX,
+                got: shown.len(),
+            });
+        }
+        if total < len(shown.len()) {
+            return Err(InvalidCapped::TotalBelowShown {
+                total,
+                shown: shown.len(),
+            });
+        }
+        Ok(Self { shown, total })
+    }
+
+    /// The first `MAX` of `items`, with `total` the length of all of them.
+    pub fn first(items: Vec<T>) -> Self {
+        let total = len(items.len());
+        let mut shown = items;
+        shown.truncate(MAX);
+        Self { shown, total }
+    }
+
+    /// The items shown: at most `MAX`.
+    pub fn shown(&self) -> &[T] {
+        &self.shown
+    }
+
+    /// How many items the whole list has.
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// How many items are not shown: `total - shown().len()`.
+    pub fn hidden(&self) -> u64 {
+        self.total - len(self.shown.len())
+    }
+
+    /// Whether every item is shown.
+    pub fn is_complete(&self) -> bool {
+        self.hidden() == 0
+    }
+}
+
+fn len(n: usize) -> u64 {
+    u64::try_from(n).unwrap_or(u64::MAX)
+}
+
+/// Whether an accepted request changed stored state. The surface reports
+/// `Applied` as `ActionOutcome::Applied` and `Unchanged` as
+/// `ActionOutcome::Unchanged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Applied,
+    /// The state already matched the request.
+    Unchanged,
+}
+
+/// The time before which every aggregate bucket is final. Late content
+/// matches and suspected-to-confirmed upgrades can still change buckets at or
+/// after it; nothing changes a bucket before it. Every aggregate response
+/// reports one, so a cited view can say what was settled when it was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Watermark(pub Timestamp);

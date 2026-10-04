@@ -1,13 +1,13 @@
 [invariant]
 id = "surface.action.merge-forwarded"
-statement = "A MergeAgents action that returns Ok passes to IdentityResolver::merge a MergeRequest with the source and target the operator requested and MergeAuthor::Operator of the Caller's OperatorId."
+statement = "A MergeAgents action that returns Ok passes to IdentityResolver::merge a MergeRequest with the source and target the operator requested and MergeAuthor::Operator of the Caller's OperatorId, with the time the surface accepted the action."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
-The surface does not perform merges; L3 owns identity and records
-AgentState::Merged with its author. Swapping source and target would alias
-the wrong agent, and a request built with MergeAuthor::Resolver or another
+The surface does not perform merges; L3 owns identity and records the
+MergeRecord with its author. Swapping source and target would alias the
+wrong agent, and a request built with MergeAuthor::Resolver or another
 operator would make an operator merge indistinguishable from an automatic
 one or misattribute it.
 """

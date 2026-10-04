@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.channel.discovered-seed"
-statement = "A channel created for a New lookup has the accessed resource as its seed and the triggering access as its first_access."
+statement = "A channel created for a New lookup has a Seed whose resource is the accessed resource and whose first_access is the triggering access."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

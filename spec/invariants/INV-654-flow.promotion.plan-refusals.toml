@@ -1,0 +1,26 @@
+[invariant]
+id = "flow.promotion.plan-refusals"
+statement = "promotion::plan refuses, checking in this order, an unknown channel with UnknownChannel, a superseded channel with Superseded naming its superseding channel, a declared channel with NotDiscovered, a pattern that does not match the channel's seed locator with PatternMissesSeed, and a pattern overlapping another declared channel's pattern with PatternOverlaps naming that channel."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Each refusal maps to one surface error the operator can act on, and a
+fixed order makes the answer to a request with several problems
+deterministic. A pattern that misses the channel's own seed is almost
+certainly a typo; an overlapping one would make lookups ambiguous between
+two channels with different policies.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::plan_refuses_an_unknown_channel",
+    "crosstalk_spec::tests::channels::plan_refuses_a_superseded_channel_naming_its_superseder",
+    "crosstalk_spec::tests::channels::plan_refuses_a_declared_channel",
+    "crosstalk_spec::tests::channels::plan_refuses_a_pattern_that_misses_the_seed",
+    "crosstalk_spec::tests::channels::plan_refuses_a_pattern_overlapping_a_declared_channel",
+    "crosstalk_spec::tests::channels::plan_checks_in_order",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

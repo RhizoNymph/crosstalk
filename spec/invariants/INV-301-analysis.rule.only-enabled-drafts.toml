@@ -1,14 +1,18 @@
 [invariant]
 id = "analysis.rule.only-enabled-drafts"
-statement = "A rule whose status is Disabled or Stale produces no AlertDraft for any envelope."
+statement = "A rule that is disabled or stale, so that AlertRuleDef::evaluates is false, produces no AlertDraft for any envelope."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
 rationale = """
-Disabling a rule is how an operator silences an alert class, and a Stale
-watched-topic rule names topic ids from a superseded fit that no longer
-mean what the operator chose. A Disabled rule that still drafted would open
-alerts the operator turned off; a Stale one would watch the wrong topics.
+Disabling a rule is how an operator silences an alert class. A stale user
+rule names topic ids from a superseded fit (TopicWatch::Stale) or a query
+embedded with a model the embedder no longer uses (QueryWatch::Stale),
+which no longer mean what the operator chose. A disabled rule that still
+drafted would open alerts the operator turned off; a stale one would watch
+the wrong topics or compare vectors from two models. Staleness is separate
+from the operator's status, so a rule that went stale while enabled is
+enabled and still drafts nothing.
 """
 
 [evidence]

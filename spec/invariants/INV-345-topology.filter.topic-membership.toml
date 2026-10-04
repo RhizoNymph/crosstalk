@@ -7,12 +7,15 @@ requires = ["property"]
 rationale = """
 Topic filters answer "who talks to whom about X". Topic ids only mean
 something within the topic-model version that produced them, so the filter
-is evaluated against the active version's topic slots, never against a
-transmission's classification under an older or a pending version.
-Outliers (topic None) belong to no topic and so match no topic filter.
-Unlike agent, channel and route-kind filters, a topic filter works below
-edge granularity: counting a whole edge because one of its transmissions
-matched would overstate it.
+is evaluated against the topic slots of the version the graph resolved
+(TopicVersionSelector::resolve: the active version for Current, the pinned
+one otherwise) and reports as topic_version, never against a
+transmission's classification under another version; a list naming topics
+outside that version is refused with TopicsNotInVersion rather than
+matching nothing. Outliers (topic None) belong to no topic and so match no
+topic filter. Unlike agent, channel and route-kind filters, a topic filter
+works below edge granularity: counting a whole edge because one of its
+transmissions matched would overstate it.
 """
 
 [evidence]

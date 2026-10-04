@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.query.unauthorized-forbidden"
-statement = "Every QueryApi call whose Caller lacks the permission its endpoint requires (View for channel, alerts and topology; Content for transmission, search, topics and projection) returns Forbidden."
+statement = "Every QueryApi call whose Caller lacks the permission its endpoint requires (View for structure such as channels, agents, alerts and topology; Content for transmission, search, topics and projections; Govern for sinks; Operate for dead letters; Audit for the audit log) returns Forbidden naming that permission."
 kind = "confidentiality"
 requires = ["unit", "integration"]
 rationale = """
