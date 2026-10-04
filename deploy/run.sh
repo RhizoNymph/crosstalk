@@ -68,14 +68,16 @@ case "${1:-}" in
         # shellcheck source=/dev/null
         source "$env_file"
         set +a
+        local_host="${CROSSTALK_BIND:-127.0.0.1}"
+        [[ "$local_host" == "0.0.0.0" ]] && local_host="<this-host>"
         cat <<URLS
 proxy (agents)   http://<this-host>:${CROSSTALK_PROXY_PORT:-8080}/anthropic   (ANTHROPIC_BASE_URL)
-operator API     http://127.0.0.1:${CROSSTALK_API_PORT:-8081}
-operator UI      http://127.0.0.1:${CROSSTALK_UI_PORT:-3000}
-grafana          http://127.0.0.1:${GRAFANA_PORT:-3001}   (admin / GRAFANA_ADMIN_PASSWORD)
-prometheus       http://127.0.0.1:${PROMETHEUS_PORT:-9090}
-alloy            http://127.0.0.1:${ALLOY_PORT:-12345}
-postgres         postgres://crosstalk@127.0.0.1:${POSTGRES_PORT:-5432}/crosstalk
+operator API     http://${local_host}:${CROSSTALK_API_PORT:-8081}
+operator UI      http://${local_host}:${CROSSTALK_UI_PORT:-3000}
+grafana          http://${local_host}:${GRAFANA_PORT:-3001}   (admin / GRAFANA_ADMIN_PASSWORD)
+prometheus       http://${local_host}:${PROMETHEUS_PORT:-9090}
+alloy            http://${local_host}:${ALLOY_PORT:-12345}
+postgres         postgres://crosstalk@${local_host}:${POSTGRES_PORT:-5432}/crosstalk
 URLS
         ;;
     *)

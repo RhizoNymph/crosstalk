@@ -126,7 +126,7 @@ without breaking the linking of exchanges across the change:
 
 | File | Role |
 |---|---|
-| `deploy/compose.yaml` | Every service, volume, port bind and healthcheck. Only the proxy publishes beyond 127.0.0.1; node-exporter listens on the host network. |
+| `deploy/compose.yaml` | Every service, volume, port bind and healthcheck. The proxy publishes on `CROSSTALK_PROXY_BIND` (0.0.0.0); every other published port on `CROSSTALK_BIND` (127.0.0.1 unless set); node-exporter listens on the host network. |
 | `deploy/crosstalk.Dockerfile` (+ `.dockerignore`) | Builds the gateway from the repository root on the nightly in `rust-toolchain.toml` (minimal profile). The runtime image is distroless `cc-debian13:nonroot`. |
 | `deploy/ui.Dockerfile` (+ `.dockerignore`) | Builds the elements bundle (pnpm 11.27.1, frozen lockfile), then the Topcoat binary. The context is the repository root, because `ui/` depends on `spec/` by path and `spec/` inherits from the root workspace. |
 | `deploy/config/crosstalk.json` | Gateway config (contract above). |
@@ -254,6 +254,36 @@ Every host port but node-exporter's is a variable in `deploy/.env`:
   Then `bash deploy/run.sh up` and `docker restart crosstalk-prometheus-1`
   (see the single-file mounts under syncing).
 
+### Reaching the stack from a tailnet or the LAN
+
+By default only the proxy is reachable from other machines; the API, ops
+port, UI, Grafana, Prometheus, Alloy and Postgres bind 127.0.0.1. One
+variable in `deploy/.env` moves all of them:
+
+| `CROSSTALK_BIND` | Reachable from |
+|---|---|
+| `127.0.0.1` (default) | this machine only (SSH tunnels from elsewhere) |
+| `0.0.0.0` | this machine, the LAN and the tailnet |
+| the host's tailnet IP (`tailscale ip -4`, e.g. `100.x.y.z`) | the tailnet only, and **not** this machine's 127.0.0.1 |
+
+`0.0.0.0` is the simple choice on a trusted LAN, and what node0 uses:
+
+```
+echo "CROSSTALK_BIND=0.0.0.0" >> deploy/.env
+bash deploy/run.sh up && bash deploy/run.sh urls
+```
+
+`up` recreates the containers whose ports changed. A tailnet IP keeps the
+services off the LAN, but they then stop answering on the host's
+127.0.0.1: the smoke test's `curl 127.0.0.1:<ops port>` and any SSH tunnel
+to `127.0.0.1:5432` (the store tests') must use the tailnet IP instead, and
+Tailscale must be up before the stack starts (after a reboot Docker may
+start first; `bash deploy/run.sh up` again fixes it).
+Grafana keeps its admin password, Postgres its role password and the
+operator API its bearer token; Prometheus, Alloy and the ops endpoints
+(`/metrics`, `/healthz`) have no authentication, so anyone who can reach
+the bind address can read them.
+
 ### Reaching the proxy from agent machines
 
 Agents point at the host's IP and the proxy's host port:
@@ -359,8 +389,11 @@ from the host instead.
   - `deploy/.env` is git-ignored and written with mode 600.
   - Config files only name environment variables.
   - Each container receives only the secrets it uses.
-- **Only the proxy is published off-host.** Every other published port
-  binds 127.0.0.1. node-exporter is the exception that is not published:
+- **Only the proxy is published off-host by default.** Every other
+  published port binds `CROSSTALK_BIND`, 127.0.0.1 unless `deploy/.env`
+  sets the host's tailnet IP or 0.0.0.0 (see "Reaching the stack from a
+  tailnet or the LAN"); none of those services has TLS, and Prometheus,
+  Alloy and the ops port have no authentication. node-exporter is the exception that is not published:
   it runs on the host network and listens on `0.0.0.0:19100`, because
   Prometheus reaches it through the Docker bridge (`host-gateway`), so
   host metrics are readable from the LAN unless a firewall blocks the port.
