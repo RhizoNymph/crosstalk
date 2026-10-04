@@ -17,6 +17,12 @@ env_file="${here}/.env"
 compose() {
     local profiles=()
     [[ -d "${here}/../ui" ]] && profiles=(--profile ui)
+    # cAdvisor mounts Docker's data root; ask the daemon where it is (snap
+    # Docker keeps it under /var/snap) unless deploy/.env pins it.
+    if [[ -z "${DOCKER_ROOT_DIR:-}" ]] && ! grep -q '^DOCKER_ROOT_DIR=' "$env_file" 2>/dev/null; then
+        DOCKER_ROOT_DIR="$(docker info --format '{{.DockerRootDir}}')"
+        export DOCKER_ROOT_DIR
+    fi
     docker compose --project-directory "$here" -f "${here}/compose.yaml" \
         --env-file "$env_file" "${profiles[@]}" "$@"
 }
