@@ -2,12 +2,14 @@
 
 use std::num::NonZeroU32;
 
+use crate::aggregates::node::{AgentNode, CanonicalStateKind, GraphNode};
 use crate::derived::flow::access::{Access, AccessOp, Extraction};
 use crate::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{
     AccessId, AgentId, ChannelId, ExchangeId, MessageHash, ResourceId, SpanId, TransmissionId,
 };
+use crate::observed::agent::ClaimSet;
 use crate::observed::message::{PartRef, ToolCallId};
 use crate::support::{Blake3, ByteRange, Timestamp};
 
@@ -110,4 +112,18 @@ pub fn read_access(id: u128, by: AgentId, on: ResourceId, when: u64) -> Access {
             },
         },
     }
+}
+
+/// An unlabelled, established, top-level agent node with no claims and the
+/// given transmission counts.
+pub fn agent_node(n: u128, transmissions_in: u64, transmissions_out: u64) -> GraphNode {
+    GraphNode::Agent(AgentNode {
+        id: agent(n),
+        label: None,
+        state_kind: CanonicalStateKind::Established,
+        parent: None,
+        claims: ClaimSet::default(),
+        transmissions_in,
+        transmissions_out,
+    })
 }

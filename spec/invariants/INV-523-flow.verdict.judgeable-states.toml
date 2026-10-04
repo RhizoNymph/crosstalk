@@ -1,0 +1,28 @@
+[invariant]
+id = "flow.verdict.judgeable-states"
+statement = "A TransmissionVerdict can be built only for a transmission whose state is Suspected, Discarded, Confirmed, Classified or Aggregated; for Detected or AwaitingContent TransmissionVerdict::new returns NotJudgeable."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A verdict judges a call the detector has made: confirmed (true or false
+positive), suspected (still undecided) or discarded (its negative call, so
+a Genuine verdict there records a false negative). Detected and
+AwaitingContent are still collecting evidence, and judging them would
+label a call that does not exist yet. TransmissionState::judgeable is one
+exhaustive match, so a new state does not compile until it is placed.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::derived::flow::transmission::TransmissionState::judgeable",
+    "crosstalk_spec::derived::flow::verdict::TransmissionVerdict::new",
+]
+unit = [
+    "crosstalk_spec::tests::verdicts::judgeable_states_are_suspected_discarded_and_confirmed",
+    "crosstalk_spec::tests::verdicts::judgeable_carries_the_detector_evidence",
+    "crosstalk_spec::tests::verdicts::verdict_record_rejects_states_still_collecting_evidence",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

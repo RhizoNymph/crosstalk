@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.version.history-ascending"
+statement = "A TopicVersionHistory starts at version 0 and its versions strictly increase."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Versions are only ever created by a fit, which returns a newer version
+than the current one, and version 0 exists from the start. Listing them in
+order lets the UI and lineage queries walk from one version to the next.
+TopicVersionHistory::new returns MissingVersionZero or NotAscending
+otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionHistory::new"
+unit = ["crosstalk_spec::tests::topic_history::history_starts_at_version_zero", "crosstalk_spec::tests::topic_history::history_versions_strictly_increase"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

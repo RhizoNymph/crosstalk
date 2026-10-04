@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.retention.drops-on-event"
+statement = "L7 deletes a topic-model version's buckets and stored contributions only while processing TopicVersionDropped for that version."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The catalog publishes TopicVersionDropped only after marking the version
+dropped, which it does only for versions the policy no longer protects.
+Tying deletion to the event keeps L7's data in step with the catalog's
+record of what is retained.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::buckets_deleted_only_on_version_dropped"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

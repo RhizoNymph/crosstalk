@@ -1,13 +1,23 @@
 use std::time::Duration;
 
-use crate::aggregates::alert::{AlertRule, AlertRuleKind};
+use crate::aggregates::alert::{AlertRule, AlertRuleKind, BuiltinRule};
+use crate::aggregates::topic::TopicModelVersion;
+use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor, TrafficVerdict};
+use crate::derived::flow::channel::{
+    AlreadyDeclared, ChannelOrigin, Declaration, DeclaredHistory, Seed,
+};
 use crate::derived::flow::evidence::{CoAccess, InvalidCoAccess};
 use crate::derived::flow::resource::{Host, Locator, ResourcePattern};
-use crate::derived::flow::transmission::{Confirmed, MixedMatches};
+use crate::derived::flow::transmission::{
+    Classification, Confirmed, MixedMatches, NotSuspected, TransmissionState,
+};
+use crate::ids::{OperatorId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::NonEmpty;
-use crate::tests::fixtures::{agent, at, content_match, read_access, resource, write_access};
+use crate::tests::fixtures::{
+    access, agent, at, content_match, read_access, resource, write_access,
+};
 
 const WINDOW: Duration = Duration::from_secs(3600);
 
@@ -249,22 +259,182 @@ fn policy_routes_traffic() {
 #[test]
 fn every_alert_rule_reports_its_kind() {
     let cases = [
-        (AlertRule::NewChannel, AlertRuleKind::NewChannel),
+        (BuiltinRule::NewChannel, AlertRuleKind::NewChannel),
         (
-            AlertRule::UnreviewedTraffic,
+            BuiltinRule::UnreviewedTraffic,
             AlertRuleKind::UnreviewedTraffic,
         ),
         (
-            AlertRule::UnsanctionedTraffic,
+            BuiltinRule::UnsanctionedTraffic,
             AlertRuleKind::UnsanctionedTraffic,
         ),
-        (AlertRule::SanctionedUnused, AlertRuleKind::SanctionedUnused),
         (
-            AlertRule::SuspectedTransmission,
+            BuiltinRule::SanctionedUnused,
+            AlertRuleKind::SanctionedUnused,
+        ),
+        (
+            BuiltinRule::SuspectedTransmission,
             AlertRuleKind::SuspectedTransmission,
         ),
     ];
     for (rule, kind) in cases {
         assert_eq!(rule.kind(), kind);
+        assert_eq!(AlertRule::Builtin(rule).kind(), kind);
+    }
+}
+
+fn seed() -> Seed {
+    Seed {
+        resource: resource(1),
+        first_access: access(1),
+    }
+}
+
+fn wiki_declaration() -> Declaration {
+    Declaration {
+        pattern: ResourcePattern::Host(Host("wiki.example".into())),
+        by: PolicyAuthor::Operator(OperatorId::from_ulid(7)),
+        at: at(50),
+    }
+}
+
+fn active() -> TrafficDetection {
+    TrafficDetection::Active {
+        since: at(20),
+        last_transmission: TransmissionId::from_ulid(3),
+    }
+}
+
+#[test]
+fn promotion_keeps_detection_and_records_the_seed() {
+    let discovered = ChannelOrigin::Discovered {
+        seed: seed(),
+        detection: active(),
+    };
+    let promoted = discovered
+        .promoted(wiki_declaration())
+        .expect("discovered channels can be promoted");
+    assert_eq!(
+        promoted,
+        ChannelOrigin::Declared {
+            declaration: wiki_declaration(),
+            history: DeclaredHistory::Promoted {
+                from: seed(),
+                detection: active(),
+            },
+        }
+    );
+    assert_eq!(promoted.traffic(), discovered.traffic());
+    assert_eq!(promoted.pattern(), Some(&wiki_declaration().pattern));
+    assert_eq!(discovered.pattern(), None);
+}
+
+#[test]
+fn promotion_rejects_declared_channels() {
+    let before_traffic = ChannelOrigin::Declared {
+        declaration: wiki_declaration(),
+        history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
+    };
+    assert_eq!(
+        before_traffic.promoted(wiki_declaration()),
+        Err(AlreadyDeclared)
+    );
+    let promoted = ChannelOrigin::Discovered {
+        seed: seed(),
+        detection: active(),
+    }
+    .promoted(wiki_declaration())
+    .expect("discovered");
+    assert_eq!(promoted.promoted(wiki_declaration()), Err(AlreadyDeclared));
+}
+
+#[test]
+fn traffic_detection_is_absent_only_before_traffic() {
+    let declared = |detection| ChannelOrigin::Declared {
+        declaration: wiki_declaration(),
+        history: DeclaredHistory::BeforeTraffic(detection),
+    };
+    assert_eq!(declared(DeclaredDetection::AwaitingTraffic).traffic(), None);
+    assert_eq!(
+        declared(DeclaredDetection::Unused { since: at(9) }).traffic(),
+        None
+    );
+    assert_eq!(
+        declared(DeclaredDetection::InUse(active())).traffic(),
+        Some(&active())
+    );
+}
+
+fn suspected() -> TransmissionState {
+    let co = CoAccess::new(
+        &write_access(1, agent(1), resource(1), 1),
+        &read_access(2, agent(2), resource(1), 2),
+        WINDOW,
+    )
+    .expect("valid co-access");
+    TransmissionState::Suspected {
+        co_access: NonEmpty::new(co),
+        since: at(3),
+    }
+}
+
+#[test]
+fn expire_discards_a_suspected_transmission_with_its_co_accesses() {
+    let mut state = suspected();
+    let TransmissionState::Suspected { co_access, .. } = suspected() else {
+        unreachable!("fixture is suspected")
+    };
+    assert_eq!(state.expire(at(8)), Ok(()));
+    assert_eq!(
+        state,
+        TransmissionState::Discarded {
+            at: at(8),
+            co_access,
+        }
+    );
+}
+
+#[test]
+fn only_suspected_transmissions_expire() {
+    let confirmed = Confirmed::new(
+        NonEmpty::new(content_match(agent(1), agent(2), 8)),
+        Vec::new(),
+        at(4),
+    )
+    .expect("one match");
+    let classification = Classification {
+        version: TopicModelVersion(1),
+        topic: None,
+        watched: false,
+    };
+    let mut discarded = suspected();
+    discarded.expire(at(8)).expect("suspected");
+    let co = CoAccess::new(
+        &write_access(1, agent(1), resource(1), 1),
+        &read_access(2, agent(2), resource(1), 2),
+        WINDOW,
+    )
+    .expect("valid co-access");
+    let others = [
+        TransmissionState::Detected,
+        TransmissionState::AwaitingContent {
+            co_access: co,
+            window_closes_at: at(5),
+        },
+        TransmissionState::Confirmed(confirmed.clone()),
+        TransmissionState::Classified {
+            confirmed: confirmed.clone(),
+            classification: classification.clone(),
+        },
+        TransmissionState::Aggregated {
+            confirmed,
+            classification,
+        },
+        discarded,
+    ];
+    for state in others {
+        let mut expired = state.clone();
+        assert_eq!(expired.expire(at(9)), Err(NotSuspected), "{state:?}");
+        assert_eq!(expired, state);
     }
 }

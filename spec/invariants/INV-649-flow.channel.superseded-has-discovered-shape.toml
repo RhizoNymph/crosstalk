@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.channel.superseded-has-discovered-shape"
+statement = "A superseded channel carries a seed, a TrafficDetection and a Supersession and no declaration, so it was discovered from traffic and never declared."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Only discovered channels are absorbed by a promotion. A declared channel
+owns a pattern, and superseding it would leave two patterns claiming the
+same resources with no channel answering lookups for one of them.
+ChannelOrigin::Superseded has the fields of Discovered plus the
+supersession, so a superseded declared channel cannot be built.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::channel::ChannelOrigin::Superseded"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

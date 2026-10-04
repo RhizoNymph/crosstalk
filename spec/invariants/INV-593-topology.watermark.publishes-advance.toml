@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.watermark.publishes-advance"
+statement = "L7 publishes WatermarkAdvanced(w) exactly once for each value w the exposed watermark advances to, after persisting w, and each published value is later than every earlier one."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Bus consumers learn from this event that more history is final; the live
+feed does not read it but Changed::Watermark, which the same advance
+publishes (topology.watermark.change-announced). One event per advance, in
+increasing order, lets a consumer keep the latest value without comparing;
+publishing after persisting means no consumer sees a watermark L7 could
+forget.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::watermark_advanced_once_per_advance"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

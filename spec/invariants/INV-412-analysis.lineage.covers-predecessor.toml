@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.lineage.covers-predecessor"
+statement = "A stored TopicLineage has exactly one entry per topic of its from version, and its to is the version right after from in the TopicCatalog's history."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Lineage is between consecutive versions: since failed fits leave no
+version (analysis.version.failed-fit-leaves-none), the next version in the
+history is the one whose fit followed. A missing entry would leave a
+watched topic with no remap outcome and an unexplained gap in the UI.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::lineage_links_consecutive_versions"
+property = "crosstalk::analysis::tests::lineage_has_entry_per_from_topic"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

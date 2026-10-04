@@ -1,0 +1,24 @@
+[invariant]
+id = "analysis.rule.semantic-stale-on-model-change"
+statement = "AlertRuleDef::embedding_model_changed(current) makes a current semantic rule whose embedding model differs from current stale, returns Unchanged for every other rule, and never changes the rule's status."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Embeddings from different models are never compared, so a query embedded
+with the old model would match nothing, or match at random, after the
+embedder changes. Marking it stale makes that visible and an update
+re-embeds the text. The alerts consumer applies it at startup, before
+evaluating any event.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::rules::embedding_model_change_makes_only_current_semantic_rules_stale",
+    "crosstalk_spec::tests::rules::query_under_its_own_model_is_current",
+]
+integration = "crosstalk::analysis::tests::pg_model_change_marks_semantic_rules_stale"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

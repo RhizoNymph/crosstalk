@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.channels.window-never-filters"
+statement = "Two full QueryApi::channels traversals in the same registry state whose filters differ only in window list the same channel ids in the same order."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+The window answers "how busy was each channel then", not "which channels
+existed then". A channel review queue that dropped channels quiet in the
+view's window would hide exactly the unreviewed channels nobody is using
+yet. ChannelFilter::matches never reads the window, so only the counts can
+change with it.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channel_reads::the_window_never_changes_which_channels_match"
+property = "crosstalk::surface::tests::prop_channel_window_changes_only_counts"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.export.projection-reads-stored-frame"
+statement = "A projection export's rows are projection_rows of the stored Projection: its frame's points in frame order, each with its index, with a topic label column exactly when the request includes content."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+UMAP is randomized, so a projection is cited by its stored frame, not by
+refitting. Exporting the frame's points as stored, with the fit's own
+spec and watermark in the header, makes the export the same projection
+the UI showed.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::projection_rows_are_the_stored_frame_in_order",
+    "crosstalk_spec::tests::export::projection_rows_with_content_carry_topic_labels",
+]
+integration = "crosstalk::surface::export::tests::projection_export_matches_stored_frame"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

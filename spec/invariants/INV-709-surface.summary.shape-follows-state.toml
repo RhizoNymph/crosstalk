@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.summary.shape-follows-state"
+statement = "A TransmissionSummary holds a sender, confirmation time and matched bytes exactly in the Confirmed, Classified and Aggregated states, a topic exactly in Classified and Aggregated, and a verdict only in the states TransmissionState::judgeable accepts."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A row with optional fields could show a sender for a suspected
+transmission or a verdict on one still gathering evidence. SummaryState
+carries per state exactly what that state knows, so a row cannot disagree
+with its state.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::summary::SummaryState"
+unit = [
+    "crosstalk_spec::tests::summary::the_row_has_what_its_state_knows_and_nothing_else",
+    "crosstalk_spec::tests::summary::every_state_has_a_kind",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

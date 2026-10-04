@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.projection-within-window"
+statement = "Every point of the stored projection QueryApi::projection returns is for a confirmed transmission whose Confirmed::at lies in the window its ProjectionSpec records."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+The UMAP view is read as what was said in the chosen period, and a cited
+projection must say exactly what was fitted. Points from outside the
+spec's window (for example sampled with a wider window than the spec
+records) would show conversations that did not happen then. Only confirmed
+transmissions have embeddings, so the window is tested against
+Confirmed::at, the same time edges are bucketed by.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_projection_points_within_window"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

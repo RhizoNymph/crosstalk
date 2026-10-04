@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.agent.traffic-matches-topology"
+statement = "The transmissions_in and transmissions_out of every row of QueryApi::agents and of every QueryApi::agent detail equal the counts of that agent's node in EdgeStore::graph for the same window, Weighting::Transmissions and TopologyFilter::default(), and are zero when that graph has no node for the agent."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The counts are windowed rather than lifetime totals so that a row agrees
+with the graph the operator came from, is final before the watermark like
+every other aggregate, and costs a sum over the window's buckets rather
+than over the gateway's whole history. Defining them as the graph's node
+counts (merges resolved, self-edges dropped, every route and topic, false
+detections included) leaves one counting rule to implement and test.
+"""
+
+[evidence]
+property = "crosstalk::topology::tests::prop_agent_traffic_equals_graph_node_counts"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

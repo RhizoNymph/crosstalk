@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.history-requires-view"
+statement = "Every QueryApi series, topic_versions, topic_sizes and topic_lineage call whose Caller lacks View returns Forbidden."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+These endpoints return only ids, counts, times and similarity scores, the
+same class of data as the topology, so they sit with it under View rather
+than Content. Labels and terms stay behind Content through QueryApi::topics.
+Checking per endpoint makes a new endpoint without a permission a test
+failure.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::history_endpoints_without_view_forbidden"
+integration = "crosstalk::surface::integration::http_history_routes_enforce_view"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

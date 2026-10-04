@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.page.cursor-typed-by-list"
+statement = "A cursor issued by one list query cannot be passed to a different list query."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Cursor<L> carries its list as a marker type (ChannelList, AgentList,
+AlertRuleList, DeadLetterList, EdgeTransmissionList), and each query takes a
+PageRequest of its own marker, so handing an agent cursor to the channel
+list is a compile error in the client library rather than a confusing
+InvalidCursor at run time.
+"""
+
+[evidence]
+type = ["crosstalk_spec::paging::Cursor", "crosstalk_spec::paging::PageRequest"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

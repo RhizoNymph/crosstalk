@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.agent.detail-resolves-alias"
+statement = "QueryApi::agent(id) returns the detail of AgentDirectory::canonical(id), with lookup Canonical when id is that agent and Redirected { from: id } when id is merged, and returns None for an id no agent has."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Links, audit entries and old URLs name agents that have since been
+merged. Showing the canonical agent keeps every action on the page valid
+(actions on merged agents are refused), and saying it was redirected tells
+the operator why the id in the URL is not the one on the page.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::agent_detail_redirects_merged_ids"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

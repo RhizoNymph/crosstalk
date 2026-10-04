@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.rule.disable-no-late-alerts"
+statement = "Once AlertRuleStore::set_enabled(false) for a rule returns, the rule has no Open or Acknowledged alert and none is opened or deduplicated into until a later set_enabled(true) returns, however concurrent drafts and the disable interleave."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Rules are evaluated from a cache, so a draft evaluated before the disable
+can reach triage after it. Without a check at triage it would open an alert
+for a rule the operator just turned off. Triage reads the rule's status in
+its own transaction and returns RuleInactive, and the disable suppresses
+existing alerts in the same transaction as the status change. Built-in and
+user rules alike.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::dst_disable_no_late_alerts"
+integration = "crosstalk::analysis::tests::pg_disable_no_late_alerts"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

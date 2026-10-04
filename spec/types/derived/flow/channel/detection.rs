@@ -11,12 +11,18 @@
 //! ```
 //!
 //! A cross access is a read by an agent other than an earlier writer.
+//!
+//! A promoted channel keeps the `TrafficDetection` it had when it was
+//! discovered and continues on the traffic machine. A superseded channel's
+//! detection is frozen: a confirmation of a transmission whose stored route
+//! names it is a confirmation on the channel that superseded it, and moves
+//! that channel's detection (`confirm` above) instead.
 
 use crate::derived::flow::evidence::CoAccess;
 use crate::ids::{AccessId, TransmissionId};
 use crate::support::Timestamp;
 
-/// Detection for a channel declared in config.
+/// Detection for a channel declared before any traffic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredDetection {
     /// No traffic yet, and the idle window has not closed.
@@ -47,4 +53,35 @@ pub enum TrafficDetection {
         since: Timestamp,
         last_transmission: TransmissionId,
     },
+}
+
+/// Which detection state a channel is in, without its data: what a graph
+/// node shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DetectionKind {
+    AwaitingTraffic,
+    Unused,
+    Observed,
+    Candidate,
+    Active,
+    Dormant,
+}
+
+impl DetectionKind {
+    pub fn of_traffic(detection: &TrafficDetection) -> Self {
+        match detection {
+            TrafficDetection::Observed { .. } => Self::Observed,
+            TrafficDetection::Candidate { .. } => Self::Candidate,
+            TrafficDetection::Active { .. } => Self::Active,
+            TrafficDetection::Dormant { .. } => Self::Dormant,
+        }
+    }
+
+    pub fn of_declared(detection: &DeclaredDetection) -> Self {
+        match detection {
+            DeclaredDetection::AwaitingTraffic => Self::AwaitingTraffic,
+            DeclaredDetection::Unused { .. } => Self::Unused,
+            DeclaredDetection::InUse(traffic) => Self::of_traffic(traffic),
+        }
+    }
 }

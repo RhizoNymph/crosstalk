@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.transmission.at-is-reader-exchange"
+statement = "Every Confirmed's at equals the started_at of the reader exchange holding its first content match."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Edges are bucketed by Confirmed::at and every view's window is tested
+against it, so it must be when the communication happened, not when the
+gateway noticed: a late match must land in the bucket of the exchange that
+carried the content. For a channel transmission that exchange is the one
+whose tool result made the read, so at is the read's time.
+"""
+
+[evidence]
+unit = "crosstalk::flow::correlator::tests::confirmed_at_is_reader_exchange_start"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

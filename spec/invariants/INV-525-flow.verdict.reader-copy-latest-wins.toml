@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.verdict.reader-copy-latest-wins"
+statement = "A CurrentVerdict fed the VerdictSet events of one log, in any order and each any number of times, ends with the verdict and revision of the log's latest record."
+kind = "coordination"
+requires = ["unit", "property"]
+rationale = """
+Delivery is at least once and not ordered across redeliveries. A reader
+that took the last event to arrive would let a redelivered FalseDetection
+undo a withdrawal, suppressing alerts and hiding a transmission the
+operator restored. CurrentVerdict::observe keeps the highest revision.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::verdicts::current_verdict_copy_is_order_insensitive",
+    "crosstalk_spec::tests::verdicts::stale_events_leave_the_copy_unchanged",
+]
+property = "crosstalk::flow::tests::prop_current_verdict_order_insensitive"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

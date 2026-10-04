@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.policy.history-order-insensitive"
+statement = "Recording the same decisions, with distinct decision times, into a PolicyHistory in any order yields the same history and the same current policy."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit"]
+rationale = """
+PolicyChanged events from different surface nodes can arrive in a
+different order than they were accepted. Ordering the history by decision
+time makes the current policy last-writer-wins by acceptance time, the
+same on every replay, instead of depending on bus delivery order.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::policy::history_is_independent_of_arrival_order"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

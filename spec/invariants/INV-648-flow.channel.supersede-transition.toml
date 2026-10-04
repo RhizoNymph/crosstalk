@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.channel.supersede-transition"
+statement = "ChannelOrigin::superseded on a Discovered origin returns a Superseded origin with the same seed and detection and the given supersession, on a Declared origin returns NotSupersedable::Declared, and on a Superseded origin returns AlreadySuperseded naming its existing supersession."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Supersession freezes what the channel showed when it was absorbed and
+keeps its seed as the evidence it was found from. Re-superseding a channel
+would make its canonical channel depend on which promotion happened last
+and could build a chain.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::superseding_keeps_seed_and_detection",
+    "crosstalk_spec::tests::channels::only_discovered_channels_can_be_superseded",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

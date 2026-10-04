@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.operators.trusted-caller"
+statement = "In trusted mode, OperatorDirectory::caller returns for every RequestIdentity a Caller for the configured trusted operator holding every permission, and that operator is the only directory entry with any permission."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A single-user deployment has no login, but its actions must still be
+attributed and audited to a named operator, and permission checks must
+still run the same code path. Building a real Caller for every request,
+rather than skipping checks, keeps trusted mode from being a separate,
+untested branch of every action.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::operators::OperatorDirectory::caller"
+unit = ["crosstalk_spec::tests::operators::trusted_mode_gives_every_request_the_trusted_caller", "crosstalk_spec::tests::operators::trusted_mode_has_one_operator_with_permissions"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

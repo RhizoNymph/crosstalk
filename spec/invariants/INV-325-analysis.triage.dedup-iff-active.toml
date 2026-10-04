@@ -1,0 +1,25 @@
+[invariant]
+id = "analysis.triage.dedup-iff-active"
+statement = "For a draft whose rule evaluates and whose subject is not a transmission triage holds as a FalseDetection, triage returns Deduplicated exactly when an Open or Acknowledged alert with the draft's rule and stored subject exists, and Opened otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Acknowledged means an operator is working on it, so a repeat of the same
+condition belongs to that alert rather than a fresh page. Resolved and
+Suppressed alerts are closed: a recurrence after them is news and opens a
+new alert. The other drafts open nothing: one whose rule stopped
+evaluating returns RuleInactive, and one about a transmission judged a
+false detection returns OperatorRejected. Subjects are compared as stored,
+not resolved, so alerts on a channel a promotion later absorbed stay under
+its id and traffic after the promotion raises alerts on the promoted
+channel.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::draft_folds_into_open_alert", "crosstalk::analysis::tests::draft_folds_into_acknowledged_alert", "crosstalk::analysis::tests::draft_after_resolved_opens_new_alert", "crosstalk::analysis::tests::draft_after_suppressed_opens_new_alert"]
+property = "crosstalk::analysis::tests::triage_outcome_matches_active_alert_model"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

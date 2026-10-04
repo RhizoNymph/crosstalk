@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.filter.topics-in-version"
+statement = "A topology, series, search, edge_transmissions or fit_projection call whose filter lists a topic not in the version it resolved to returns Conflict(TopicsNotInVersion) naming that version and exactly the listed topics outside it, in list order without repeats, and returns no data."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Topic ids are never reused across versions, so a filter built from an older
+version used to match nothing, which looks exactly like "no traffic on this
+topic". Refusing it, with the version the view resolved to and the
+offending ids, lets the client re-read the topics or pin the version its
+filter came from.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::topic_version::topics_outside_lists_foreign_topics_once_in_order", "crosstalk_spec::tests::topic_version::unknown_topics_are_outside_every_version", "crosstalk_spec::tests::topic_version::no_topics_are_never_outside"]
+integration = "crosstalk::surface::integration::stale_topic_filter_conflicts"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.consumer.ack-after-outputs"
+statement = "A consumer in the reconstruct, provenance, flow or analyze group acks a delivery only after every event it publishes because of that delivery has been published."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The pipeline frontier counts an input as pending until its delivery is
+acked. If a consumer acked first and published later, an event derived
+from old input could appear after the frontier had moved past it, and a
+bucket L7 already declared final would change. Publishing before acking
+hands the pending status from input to output without a gap.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::pipeline_consumers_ack_after_publishing"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

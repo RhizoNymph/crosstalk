@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.timing.non-zero"
+statement = "Every CorrelationTiming has a non-zero correlation window, evidence window and suspected TTL."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A zero evidence window would mark every channel transmission suspected
+before its content match could arrive, and a zero suspected TTL would
+discard it at once, so late matches could never confirm anything. A zero
+correlation window pairs no write with any read. CorrelationTiming::new
+returns ZeroCorrelationWindow, ZeroEvidenceWindow or ZeroSuspectedTtl
+otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::timing::CorrelationTiming::new"
+unit = "crosstalk_spec::tests::watermark::timing_rejects_zero_durations"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

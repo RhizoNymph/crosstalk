@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.action.superseded-refused"
+statement = "SetPolicy and PromoteChannel on a superseded channel name both the channel and its superseding channel in their Conflict(ChannelSuperseded), and publish and change nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Policy on a superseded channel would never take effect, and promoting it
+would declare resources that already resolve elsewhere. The conflict names
+where to act instead. SetPolicy is checked against the channel directory
+before PolicyChanged is published.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::actions_on_superseded_channel_conflict"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

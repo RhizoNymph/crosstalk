@@ -1,6 +1,6 @@
 use std::num::NonZeroU16;
 
-use crate::aggregates::edge::{EdgeKey, SelfEdge, TopicSlot};
+use crate::aggregates::edge::{EdgeKey, EdgeSelector, SelfEdge, TopicSlot};
 use crate::aggregates::topic::{Embedding, EmbeddingModel, InvalidEmbedding, TopicModelVersion};
 use crate::derived::flow::transmission::Route;
 use crate::support::TimeWindow;
@@ -27,6 +27,18 @@ fn edge_key_rejects_self_edge() {
     let key = EdgeKey::new(agent(1), agent(2), Route::Channel(channel(1)), slot, bucket)
         .expect("different agents");
     assert_eq!((key.from(), key.to()), (agent(1), agent(2)));
+}
+
+#[test]
+fn edge_selector_rejects_self_edge() {
+    assert_eq!(
+        EdgeSelector::new(agent(1), agent(1), Route::Unobserved),
+        Err(SelfEdge)
+    );
+    let edge = EdgeSelector::new(agent(1), agent(2), Route::Channel(channel(1)))
+        .expect("different agents");
+    assert_eq!((edge.from(), edge.to()), (agent(1), agent(2)));
+    assert_eq!(edge.route(), &Route::Channel(channel(1)));
 }
 
 #[test]

@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.query.sinks-need-govern"
+statement = "QueryApi::sinks returns Forbidden to a Caller without the Govern permission and reads nothing."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+A sink's last delivery error can name its endpoint, such as a webhook URL
+with a token in it. Sinks are chosen when editing rules, which already
+needs Govern.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::sinks_query_needs_govern"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

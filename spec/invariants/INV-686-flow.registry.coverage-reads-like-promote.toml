@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.registry.coverage-reads-like-promote"
+statement = "ChannelRegistry::promotion_coverage returns exactly promotion::coverage over the stored channels that promote would plan over and their stored resources, read in one snapshot, and changes no stored channel, policy history or resource."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The preview's agreement with the action holds only if both read the same
+channels the same way. A preview that read channels outside the snapshot,
+or that the store let write (a planned origin left behind), would make the
+preview itself change what it predicts.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::promotion_coverage_matches_reference"
+integration = "crosstalk::flow::tests::pg_promotion_coverage_changes_nothing"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
