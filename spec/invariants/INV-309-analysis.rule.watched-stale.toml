@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.rule.watched-stale"
+statement = "When TopicVersionReady for a version is processed, a WatchedTopic rule with any topic whose most-similar centroid in that version is below remap_threshold gets status Stale."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A topic that has no close counterpart in the new fit cannot be remapped
+without guessing. Marking the whole rule Stale makes the loss visible to
+the operator instead of silently watching the wrong topics, or a subset of
+the intended ones.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::watched_rule_with_unmappable_topic_becomes_stale"
+property = "crosstalk::analysis::tests::stale_iff_some_topic_below_remap_threshold"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

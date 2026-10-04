@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.rule.trigger-subject"
+statement = "A rule produces a draft only for its kind's triggering event: ChannelDiscovered for NewChannel, TransmissionConfirmed for UnreviewedTraffic and UnsanctionedTraffic, DeclaredChannelUnused for SanctionedUnused, TransmissionSuspected for SuspectedTransmission, and TransmissionClassified for WatchedTopic and SemanticQuery."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The alerts consumer subscribes every rule to the union of these subjects.
+A rule reacting to another rule's event would raise the wrong kind of alert
+for the right subject, and dedup would fold unrelated conditions together.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::each_rule_kind_drafts_on_its_trigger"
+property = "crosstalk::analysis::tests::rule_ignores_non_trigger_events"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.rule.only-enabled-drafts"
+statement = "A rule whose status is Disabled or Stale produces no AlertDraft for any envelope."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Disabling a rule is how an operator silences an alert class, and a Stale
+watched-topic rule names topic ids from a superseded fit that no longer
+mean what the operator chose. A Disabled rule that still drafted would open
+alerts the operator turned off; a Stale one would watch the wrong topics.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::disabled_rule_drafts_nothing_on_its_trigger", "crosstalk::analysis::tests::stale_rule_drafts_nothing_on_its_trigger"]
+property = "crosstalk::analysis::tests::non_enabled_rule_never_drafts"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

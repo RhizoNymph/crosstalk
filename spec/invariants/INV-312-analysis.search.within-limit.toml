@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.search.within-limit"
+statement = "A search returns at most `limit` hits."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The limit bounds response size and the cost of fetching snippets. Hybrid
+search merges a full-text and a vector candidate list, each of which may
+return up to the limit, so the merged list must be cut again after
+fusion.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::hybrid_fusion_truncates_to_limit"
+integration = "crosstalk::analysis::tests::pg_hybrid_search_respects_limit"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.topic.classified-once-per-version"
+statement = "The analyze consumer publishes TransmissionClassified at most once per (transmission, topic-model version), across redeliveries and re-fits."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Topology keys edges by topic slot, which includes the version, so each
+version needs each transmission exactly once. Republishing under the same
+version on redelivery, or when a confirmation and a re-fit race, would ask
+topology to count the same transmission twice in one slot.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::classified_published_once_per_version_across_redelivery_and_refit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
