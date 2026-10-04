@@ -1,0 +1,29 @@
+[invariant]
+id = "topology.graph.nodes-cover-endpoints"
+statement = "Every TopologyGraph returned by EdgeStore::graph passes TopologyGraph::check_nodes: one agent node per edge endpoint and per canonical ancestor of one, no other node and no channel node, every parent named by a node and never the agent itself, and each agent node's transmissions_in and transmissions_out equal to the transmissions of its edges."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+The UI draws nodes without one lookup per agent, so a missing node is a
+blank in the graph and an extra one is a phantom agent. Including whole
+ancestor chains lets the UI collapse sub-agents into parents using only
+the response. Counts that disagree with the edges would make node sizes
+and edge widths tell different stories.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::graph::graph_nodes_cover_endpoints_and_their_ancestors",
+    "crosstalk_spec::tests::graph::an_empty_graph_has_no_nodes",
+    "crosstalk_spec::tests::graph::every_endpoint_needs_a_node",
+    "crosstalk_spec::tests::graph::no_node_appears_twice",
+    "crosstalk_spec::tests::graph::parents_have_nodes_and_are_never_the_agent",
+    "crosstalk_spec::tests::graph::nodes_beyond_endpoints_and_ancestors_are_rejected",
+    "crosstalk_spec::tests::graph::node_counts_agree_with_edges",
+]
+property = "crosstalk::topology::props::graph_nodes_pass_check"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

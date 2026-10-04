@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.filter.channels-resolve-supersession"
+statement = "Replacing a channel listed in a TopologyFilter with its canonical channel never changes which transmissions or accesses the filter admits."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+A filter saved or linked before a promotion names the old channel. It must
+keep selecting the medium, now under the promoted channel, or a linked
+view would empty out the moment an operator promotes.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::filter_listing_a_superseded_channel_selects_its_superseder"
+property = "crosstalk::topology::props::filter_channels_resolve"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

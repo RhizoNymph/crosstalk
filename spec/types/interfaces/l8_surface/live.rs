@@ -44,7 +44,8 @@
 //! **Filter.** The subscription's `TopologyFilter` is applied on the server
 //! to each entry's [`LiveScope`], with the same meaning it has for a graph
 //! query ([`LiveScope::admitted_by`]). Agent ids on both sides are resolved
-//! through the `AgentDirectory` when matched. Topic ids name topics of the
+//! through the `AgentDirectory` when matched, and channel ids through the
+//! `ChannelDirectory`. Topic ids name topics of the
 //! topic-model version active when the stream started; when another version
 //! is activated, a stream whose filter names topics ends with
 //! [`LiveEnd::TopicVersionChanged`] so the client remaps its topics.
@@ -327,7 +328,8 @@ impl ScopeKeys {
 
 impl LiveScope {
     /// Whether a stream with `filter` receives the update. Agent ids on both
-    /// sides must already be resolved through merge aliases.
+    /// sides must already be resolved through merge aliases, and channel ids
+    /// through supersession ([`crate::aliases`]).
     pub fn admitted_by(&self, filter: &TopologyFilter) -> bool {
         let Self::Scoped(keys) = self else {
             return true;

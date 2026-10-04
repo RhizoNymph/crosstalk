@@ -10,8 +10,7 @@ their events can arrive out of order. With consecutive revisions a live
 client keeps the highest revision it has seen and ends with the stored
 alert; without them an older snapshot arriving late would undo an
 acknowledgement on screen. Each change is a compare-and-set on the stored
-revision, which also serves surface.action.alert-concurrent-single-
-transition.
+revision, which also serves surface.action.alert-concurrent-single-transition.
 """
 
 [evidence]

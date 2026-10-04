@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.access.apply-idempotent"
+statement = "EdgeStore::apply_access counts each AccessId into its bucket at most once, however many times its AccessRecorded is delivered."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Bus delivery is at least once. Counting a redelivered access twice would
+inflate write counts on exactly the channels an operator is watching for
+unusual writes.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::apply_access_twice_counts_once"
+integration = "crosstalk::topology::tests::timescale_apply_access_idempotent"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

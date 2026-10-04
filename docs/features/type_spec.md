@@ -11,10 +11,15 @@
   included), the one filter that links the graph, search, projection and
   edge drill-down, the projection's points, time series, the topic-model
   version history and the channel policy history.
+- Graph node metadata (labels, states, parents, harness claims, counts), the
+  channel-centred (bipartite) topology with access edges, and per-resource
+  use of a channel.
+- Channel promotion with supersession, resolved as aliases at read time.
 - The live update feed (SSE) and the append-only audit log.
 - Operator actions, each with one required permission: policy, channel
-  promotion, agent merges, unmerges and labels, alert triage, transmission
-  dismissal, alert rule management and dead-letter replay.
+  promotion (with its policy and supersession), agent merges, unmerges and
+  labels, alert triage, transmission dismissal, alert rule management and
+  dead-letter replay.
 
 ## Non-scope
 
@@ -23,6 +28,10 @@
   crates add serde and sqlx on their copies of these types.
 - Lifecycle simulation: `design/lifecycles/cascade.yaml`, outside the
   repository, models the same lifecycles for the stateviz simulator.
+- How buckets become final (the watermark's definition) and the feed
+  updates a promotion produces; graph responses only report the store's
+  watermark and the bus carries `ChannelPromoted`.
+- Undoing a promotion or a supersession.
 
 ## Data and control flow
 
@@ -71,7 +80,12 @@ The types follow data through the stack:
    `IdentityResolver::set_label` appends to the canonical agent's
    `LabelLog`; labels are never identity evidence, merges and unmerges
    change no log, and `LabelView` shows the target's label with differing
-   alias labels as history.
+   alias labels as history. For every exchange that carries a
+   `HarnessClaim`, `ClaimStore::record` adds it with the exchange's start
+   time to the attributed agent's `ClaimSet` (distinct claims, latest time
+   kept, so redelivery and reordering change nothing). `ClaimStore::claims`
+   reads a canonical agent's claims as `ClaimSet::union` over every agent
+   resolving to it, so merges and unmerges change no stored claim.
    The `Threader` resolves `Continuation::Increment` exchanges through the
    stored response chain and gives a `ThreadOutcome` holding a
    `ConversationDelta` (new inputs, new system prompt, output), which is
@@ -103,10 +117,14 @@ The types follow data through the stack:
    channel's policy to the history's current entry in the same transaction.
    A `PolicyChanged` carrying `Unreviewed(None)` holds no decision and is
    acked without effect. An operator can promote a discovered channel
-   (`ChannelRegistry::promote`): it keeps its id, resources, policy and
-   `TrafficDetection`, gains a non-overlapping pattern that must match its
-   seed, and its origin becomes `Declared` with `DeclaredHistory::Promoted`
-   recording the seed. An operator can dismiss a suspected transmission
+   (`ChannelRegistry::promote` with a `Promotion`, see below): it keeps its
+   id, resources and `TrafficDetection`, gains a non-overlapping pattern
+   that must match its seed, its origin becomes `Declared` with
+   `DeclaredHistory::Promoted` recording the seed, the operator's policy
+   decision is recorded in its history, and every other discovered channel
+   whose seed the pattern matches becomes `Superseded` by it. Lookups never
+   return a superseded channel, so each `AccessRecorded { access, channel }`
+   names a canonical channel. An operator can dismiss a suspected transmission
    (`TransmissionReview::dismiss`): the request goes through the owning
    correlator shard (`Correlator::on_dismiss`), so it is ordered with late
    matches, and the transmission becomes `Discarded` with
@@ -156,19 +174,26 @@ The types follow data through the stack:
    `EdgeStore::transmissions` lists the contributions behind one edge
    (`EdgeSelector`) from the same stored rows, a page at a time
    (`EdgeTransmissionPage`), with the first page's topic version pinned in
-   the cursor.
+   the cursor. `EdgeStore::apply_access` counts each `AccessRecorded` into
+   an `AccessEdge` bucket (agent, channel, op, bucket), idempotent on the
+   access id, and `EdgeStore::channel_topology` answers the channel-centred
+   graph (below). Every query resolves stored agents and channels through
+   the two directories and fills graph nodes from the agent store, the
+   claim store and the channel registry.
 9. **L8 surface.** `QueryApi` serves channels, policy histories, agents,
    alert rules, dead letters, alerts, the topology, series, the topic
    history (versions, sizes, lineage), the transmissions behind an edge,
    search, transmissions, topics, projections and the audit log to an
-   authenticated `Caller` with `Permission`s (View for structure, Content
+   authenticated `Caller` with `Permission`s (View for structure, including
+   the channel-centred topology and a channel's resources; Content
    for anything derived from message text, Operate for dead letters, Audit
    for the audit log). Series and the topic history need `View`: they carry
    ids, counts, times and similarities but no text, and topic labels stay
    behind `Content`. `OperatorActions::act` checks
    `OperatorAction::required_permission` before any effect, then publishes
    `PolicyChanged` or forwards the action down the stack: merges, unmerges
-   and labels to L3, channel promotion and transmission dismissal to L5,
+   and labels to L3, channel promotion (as a `Promotion` stamped with the
+   caller and time) and transmission dismissal to L5,
    alert rule management to L6; acknowledging and resolving an alert
    publishes `AlertChanged`. It stamps every author and time from the
    caller and returns an `ActionEffect`. `AlertSink`s deliver alerts.
@@ -218,14 +243,15 @@ a stale-rule list includes disabled stale rules.
 `topology`, `search`, `projection` and `edge_transmissions` take the same
 `TopologyFilter` (`aggregates/filter.rs`, re-exported from
 `aggregates::edge`). Each view reduces a confirmed transmission to a
-`FilterSubject` (canonical sender and reader at query time, route, topic
+`FilterSubject` (canonical sender and reader at query time, route with its
+channel resolved through supersession, topic
 under the response's topic version) and keeps it when
 `TopologyFilter::admits` holds:
 
 | Field | Admits a transmission when |
 | --- | --- |
 | `agents` | the canonical sender or reader equals the canonical form of a listed agent |
-| `channels` | its route is `Channel(c)` with `c` listed; other routes never match |
+| `channels` | its route is `Channel(c)` with `c` (canonical) the canonical form of a listed channel; other routes never match |
 | `route_kinds` | `RouteKind::from(route)` is listed |
 | `topics` | its topic under the response's version is listed; outliers and unclassified transmissions never match |
 
@@ -253,33 +279,127 @@ are the `limit` with the smallest keyed sample hash, so the sample is fixed
 per token and survives narrowing. `Projection::new` checks that it holds
 exactly `min(matching, limit)` points, none twice, all finite.
 
+### Graph nodes
+
+`TopologyGraph::nodes` and `BipartiteGraph::nodes` describe what the graph
+draws, so the UI needs no lookup per node (`aggregates/node.rs`):
+
+- `GraphNode::Agent(AgentNode { id, label, state_kind, parent, claims,
+  transmissions_in, transmissions_out })`. `label` is the canonical agent's
+  current display label, an `AgentLabel`. `state_kind` is a `CanonicalStateKind`
+  (no `Merged`). `parent` is the canonical parent, never the agent itself.
+  `claims` is the `ClaimSet` union over the agent's aliases, shown as
+  claimed. The counts are the transmissions of the response's edges into
+  and out of the agent.
+- `GraphNode::Channel(ChannelNode { id, label, origin_kind, detection_kind,
+  policy_kind, locator_summary })`, in the channel-centred view only.
+  `origin_kind` is a `CanonicalOriginKind` (no superseded origin); `label`
+  is `None` until channels carry display labels.
+
+Which nodes appear: every edge endpoint (in the channel-centred view also
+every access channel and transmission route channel) and every canonical
+ancestor of an agent among them, each once and nothing else, so each
+`parent` names a node in the same response. `TopologyGraph::check_nodes`
+and `BipartiteGraph::new` check this and the counts; canonicity is checked
+at query time.
+
+### Channel-centred view
+
+Splitting `Route::Channel` edges into A→C→B would show only writes someone
+read, and the early stage of a hijacked wiki is writes nobody has read yet.
+So accesses have their own aggregate (`aggregates/access.rs`): an
+`AccessEdge { agent, channel, op, bucket, accesses }`, bucketed like
+`EdgeKey` with no topic, maintained by L7 from `AccessRecorded`.
+`QueryApi::channel_topology(caller, window, weighting, filter)` returns a
+`BipartiteGraph { nodes, accesses, transmissions, watermark, topic_version }`:
+
+- `accesses`: access buckets in the window, resolved to canonical agents and
+  channels, kept by `TopologyFilter::admits_access`, summed per (agent,
+  channel, op). Each share is its count over all access counts, normalized
+  apart from transmissions and independent of the weighting.
+- `transmissions`: exactly `topology`'s edges for the same window, weighting
+  and filter.
+- `watermark`: the edge store's watermark when the response was computed.
+
+The filter on accesses (`admits_access`): agents and channels match the
+access's canonical agent and channel; `route_kinds` admits accesses when it
+lists `Channel`; an access has no topic, so `topics` keeps the accesses of
+channels that carried, in the window, a channel-routed confirmed
+transmission with a listed topic (after the `false_detections` setting).
+
+`QueryApi::channel_resources(caller, channel, window, page)` pages a
+channel's resources newest first (`ResourceUseList`, keyed by
+`ResourceId`), each a `ResourceUse { resource, writers, readers }` with
+canonical agents and their access counts in the window (merged aliases
+summed, most accesses first). A superseded channel answers for its
+superseding channel, named in the `ResourceUsePage`, whose resources include
+those of every channel it superseded.
+
+### Promotion and supersession
+
+`OperatorAction::PromoteChannel { channel, pattern, policy, note }` (Govern)
+becomes a `Promotion` (pattern and policy decision, both authored by the
+caller at the accept time) and `ChannelRegistry::promote`, which follows
+`promotion::plan`:
+
+1. Refusals, in order: unknown channel (`NotFound`); superseded
+   (`Conflict(ChannelSuperseded { channel, by })`); already declared
+   (`Conflict(ChannelNotDiscovered)`); pattern misses the seed locator
+   (`InvalidInput(PatternMissesSeed)`); pattern overlaps another declared
+   pattern, by `ResourcePattern::overlaps` (`Conflict(PatternOverlaps)`).
+2. In one transaction: the channel's origin is promoted (same id), the
+   decision is recorded in its `PolicyHistory`, and every other discovered
+   channel whose seed the pattern matches becomes
+   `ChannelOrigin::Superseded { seed, detection, supersession: { by, at } }`.
+3. One `DetectEvent::ChannelPromoted { channel, declaration, policy,
+   superseded }` after commit; the action returns `ChannelPromoted(channel)`.
+
+A superseded channel keeps its id, seed, resources, policy history and the
+detection it had; accepts no new resources (lookups of its resources return
+the superseding channel); and refuses promotion and policy changes
+(`Conflict(ChannelSuperseded)`, checked through `ChannelDirectory` before
+`PolicyChanged` is published). `ChannelDirectory::canonical` resolves it in
+one step: superseding channels are declared, so never superseded. Routes
+(`Route::resolved`), filters (`TopologyFilter::admits`), alert subjects
+(`AlertSubject::resolved`), graph nodes, edges and access buckets all
+resolve through it at read time. Alerts stay stored under the superseded id;
+the alert inbox's channel filter and sanction suppression compare resolved
+subjects, while deduplication compares stored ones. A transmission
+confirmed on a superseded channel is judged by the superseding channel's
+policy.
+
 ## Files
 
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run | crate `crosstalk-spec` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
+| `spec/types/aliases.rs` | Read-time resolution of merged agents and superseded channels | `Aliases`, `Resolve`, `NoAliases` |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
-| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList` |
+| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList`, `ResourceUseList` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
 | `spec/types/observed/agent.rs` | Agent identity, merge records and exact unmerge | `Agent`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `Merged`, `MergeableState`, `MergeRequest`, `MergeAuthor` |
+| `spec/types/observed/agent/claims.rs` | Harness claims seen per agent | `SeenClaim`, `ClaimSet` (checked; `observe`, `union`), `DuplicateClaim` |
 | `spec/types/observed/agent/label.rs` | Display labels | `AgentLabel`, `Labeled`, `LabelChange`, `LabelLog`, `LabelView`, `PastLabel` |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
 | `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec`, `Carrier`, `InvalidMatch` |
-| `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern`, `Host` |
+| `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern` (`matches`, `overlaps`), `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
-| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
-| `spec/types/derived/flow/channel/mod.rs` | Channels and promotion | `Channel`, `ChannelOrigin` (`promoted`), `Declaration`, `DeclaredHistory`, `Seed` |
-| `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
+| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
+| `spec/types/derived/flow/channel/mod.rs` | Channels, promotion and supersession | `Channel` (`canonical`), `ChannelOrigin` (`promoted`, `superseded`, `seed`, `detection_kind`), `Supersession`, `NotPromotable`, `NotSupersedable`, `Declaration`, `DeclaredHistory`, `Seed` |
+| `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses | `Promotion` (checked), `Registered`, `plan`, `PromotionPlan`, `PromotionRefusal` |
+| `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection`, `DetectionKind` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
-| `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph`, `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
-| `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
+| `spec/types/aggregates/access.rs` | Access buckets, the channel-centred graph and resource use | `AccessEdge`, `WeightedAccess`, `BipartiteParts`, `BipartiteGraph` (checked), `InvalidBipartite`, `AgentAccesses`, `ResourceUse` (checked), `ResourceUsePage` |
+| `spec/types/aggregates/node.rs` | Graph nodes | `GraphNode`, `NodeId`, `AgentNode`, `ChannelNode`, `CanonicalStateKind`, `CanonicalOriginKind`, `InvalidNodes`, `TopologyGraph::check_nodes` |
+| `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph` (with `nodes`), `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
+| `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits`, `AccessSubject`, `TopologyFilter::admits_access` |
 | `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
@@ -287,11 +407,11 @@ exactly `min(matching, limit)` points, none twice, all finite.
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason`, `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentUnmerged`), `ConversationDelta`, `DetectEvent` (including `TransmissionDismissed`), `InsightEvent` (including `AlertChanged`, `TopicVersionActivated`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series` and `EdgeStore::transmissions` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::unmerge` and `set_label`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use`, `TransmissionReview`, `DismissError` (L5); `TopicCatalog`, `ProjectionIndex`, `AlertRuleStore`, `RuleRequest`, `RuleError` (L6); `EdgeStore::series`, `EdgeStore::transmissions`, `EdgeStore::apply_access` (`AccessContribution`) and `EdgeStore::channel_topology` (L7); the list, series, topic-history, policy-history, channel-topology, channel-resources and audit queries on `QueryApi`, the error mappings from `PromotionRefusal`, `PromoteError` and `RegistryError`, and `Caller`, `Permission`, `OperatorAction` (`required_permission`, `kind`), `ActionKind` (L8) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `LiveUpdate`, `LiveUpdateKind`, `UpdateKinds` (checked), `ChannelChange`, `LiveScope`, `ScopeKeys`, `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveSubscription`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditRecord` (checked), `AuditOutcome`, `OutcomeKind`, `Rejection`, `ActionEffect`, `AuditFilter`, `AuditError` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions) | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `policy.rs` for the live feed, audit log and policy history; `agents.rs` holds a reference merge table for exact unmerge; `surface.rs` for operator actions; `channels.rs` for supersession, promotion planning, pattern overlap and read-time resolution; `graph.rs` for graph nodes, the channel-centred graph, resource use and harness claims) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -375,8 +495,18 @@ exactly `min(matching, limit)` points, none twice, all finite.
 - A channel declared before traffic has `DeclaredDetection`; a discovered
   or promoted channel has `TrafficDetection`. So a declared, never-used
   channel is representable and a discovered or promoted, never-accessed one
-  is not. Promotion keeps the channel's id, resources, policy and detection;
-  its pattern matches its seed and overlaps no other declared pattern.
+  is not. Promotion keeps the channel's id, resources and detection, records
+  the operator's policy decision, and supersedes exactly the other
+  discovered channels whose seed its pattern matches; its pattern matches
+  its seed and overlaps no other declared pattern (`ResourcePattern::overlaps`
+  is exact). A `Promotion`'s declaration and decision share one operator and
+  time (`Promotion::new`).
+- Only a discovered channel can be superseded (`ChannelOrigin::superseded`),
+  and a superseded one cannot be promoted or take a policy decision.
+  Resolution is one step: `canonical(canonical(c)) = canonical(c)`. Lookups
+  never return a superseded channel. Routes, filters, alert subjects, graph
+  nodes, edges and access buckets resolve through supersession at read
+  time; nothing stored is rewritten.
 - Only a suspected transmission can be discarded, by expiry or by an
   operator's dismissal; a dismissal and a late match on it are ordered in
   the correlator shard, so exactly one applies.
@@ -418,6 +548,19 @@ exactly `min(matching, limit)` points, none twice, all finite.
   per switch, only after `EdgeStore::activate` has switched graph and
   series queries, and never for a version older than the active one.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges.
+- A graph's nodes are exactly its endpoints (and, in the channel-centred
+  view, its access and route channels) plus the canonical ancestors of its
+  agents, once each, every parent among them, with agent counts equal to the
+  transmission edges' (`TopologyGraph::check_nodes`, `BipartiteGraph::new`).
+  No node is a merged agent or a superseded channel.
+- A `BipartiteGraph` has distinct access and transmission edges, no
+  self-edge, and access and transmission shares each normalized on their
+  own (`BipartiteGraph::new`). Its transmissions equal `topology`'s edges for
+  the same arguments; its accesses include writes nobody read.
+- A `ClaimSet` holds each claim once, newest first with a total tie order;
+  observing is idempotent and order-independent, and a canonical agent's
+  claims are the union over its aliases. A `ResourceUse` has a writer or
+  reader and no agent twice per list (`ResourceUse::new`).
 - Every linked view (graph, search, projection, edge drill-down) applies
   one `TopologyFilter` as `TopologyFilter::admits` defines, with agents
   resolved through merges at query time and topics under the version the

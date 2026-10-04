@@ -35,6 +35,11 @@
 //! its label, and a merged agent keeps its own, which the canonical agent's
 //! [`LabelView`] lists in its history when it differs.
 //!
+//! **Harness claims are aggregated, never evidence.** The harness claims
+//! seen on an agent's exchanges are kept per attributed agent as a
+//! [`ClaimSet`] and unioned over merge aliases at read time, so graph nodes
+//! can show what an agent claimed to be.
+//!
 //! **Harness ids are scoped.** Session and agent ids sent by a harness are
 //! client-asserted (oh-my-pi sends Claude Code's), so they only count as
 //! evidence within the [`IdentityScope`] they arrived in: the same session id
@@ -44,8 +49,10 @@ use crate::ids::{AccountHash, AgentId, CredentialHash, OperatorId, PromptHash};
 use crate::observed::client::UpstreamId;
 use crate::support::{NonEmpty, Timestamp};
 
+mod claims;
 mod label;
 
+pub use claims::{ClaimSet, DuplicateClaim, SeenClaim};
 pub use label::{
     AgentLabel, InvalidLabel, InvalidLabelView, LabelChange, LabelLog, LabelView, Labeled,
     OutOfOrder, PastLabel,

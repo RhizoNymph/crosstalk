@@ -76,6 +76,51 @@ impl ResourcePattern {
             _ => false,
         }
     }
+
+    /// Whether some locator matches both patterns. Two declared channels
+    /// whose patterns overlap would make a lookup ambiguous, so declaring
+    /// or promoting with an overlapping pattern is refused. Exact for
+    /// segment prefixes: `/a` and `/a/b` overlap, `/a` and `/ab` do not.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Exact(locator), pattern) | (pattern, Self::Exact(locator)) => {
+                pattern.matches(locator)
+            }
+            (Self::Host(a), Self::Host(b))
+            | (Self::Host(a), Self::UrlPrefix { host: b, .. })
+            | (Self::UrlPrefix { host: b, .. }, Self::Host(a)) => a == b,
+            (
+                Self::UrlPrefix {
+                    host: a,
+                    path_prefix: p,
+                },
+                Self::UrlPrefix {
+                    host: b,
+                    path_prefix: q,
+                },
+            ) => a == b && nested(p, q),
+            (Self::PathPrefix { host: a, prefix: p }, Self::PathPrefix { host: b, prefix: q }) => {
+                a == b && nested(p, q)
+            }
+            (Self::McpServer(a), Self::McpServer(b)) => a == b,
+            (
+                Self::Host(_) | Self::UrlPrefix { .. },
+                Self::PathPrefix { .. } | Self::McpServer(_),
+            )
+            | (
+                Self::PathPrefix { .. } | Self::McpServer(_),
+                Self::Host(_) | Self::UrlPrefix { .. },
+            )
+            | (Self::PathPrefix { .. }, Self::McpServer(_))
+            | (Self::McpServer(_), Self::PathPrefix { .. }) => false,
+        }
+    }
+}
+
+/// Whether some path lies under both prefixes: one is a segment prefix of
+/// the other.
+fn nested(a: &str, b: &str) -> bool {
+    segment_prefix(a, b) || segment_prefix(b, a)
 }
 
 /// Whether `prefix` is `path` or an ancestor of it, by whole `/` segments.

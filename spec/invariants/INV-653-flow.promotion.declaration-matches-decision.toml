@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.promotion.declaration-matches-decision"
+statement = "A Promotion's declaration and policy decision name the same operator as author and the same time."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Promotion records a pattern and a policy decision in one action. If the
+two could carry different authors or times, the channel's declaration and
+its policy history would disagree about who promoted it and when, and the
+audit trail would not line up with either. Promotion::new takes one
+operator and one time and builds both.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::channel::promotion::Promotion::new"
+unit = "crosstalk_spec::tests::channels::promotion_declaration_and_decision_share_operator_and_time"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

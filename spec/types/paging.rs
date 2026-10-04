@@ -11,6 +11,7 @@
 //! | dead letters | [`DeadLetterList`] | (`Envelope::id`, `ConsumerGroup`) |
 //! | transmissions on an edge | [`EdgeTransmissionList`] | (`Confirmed::at`, `TransmissionId`) |
 //! | the audit log | [`AuditList`] | (`AuditRecord::at`, `AuditId`) |
+//! | a channel's resources | [`ResourceUseList`] | `ResourceId` |
 //!
 //! A [`Cursor`] holds the sort key of the last item served, so the next page
 //! is "the items after that key that match the request" (keyset
@@ -21,7 +22,8 @@
 //! later page if its key sorts after the cursor, otherwise not at all.
 //!
 //! A cursor also binds the request it came from (which list, its filter, and
-//! for an edge list its edge, window and topic-model version). The server
+//! for an edge list its edge, window and topic-model version; for a
+//! channel's resources its canonical channel and window). The server
 //! authenticates the token it issues; one it cannot verify, or one presented
 //! with a different request, is rejected as an invalid cursor. The marker
 //! type parameter makes presenting one list's cursor to another list a
@@ -54,6 +56,8 @@ list_marker! {
     EdgeTransmissionList;
     /// `QueryApi::audit` and `AuditLog::query`.
     AuditList;
+    /// `QueryApi::channel_resources` and `ChannelRegistry::resource_use`.
+    ResourceUseList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

@@ -9,7 +9,7 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::ids::TopicId;
 use crate::support::{Share, TimeWindow};
-use crate::tests::fixtures::{agent, at, channel};
+use crate::tests::fixtures::{agent, agent_node, at, channel};
 
 fn n(value: u64) -> NonZeroU64 {
     NonZeroU64::new(value).expect("fixture values are non-zero")
@@ -225,6 +225,7 @@ fn edge_series_sum_to_graph_stats_and_total() {
         window: grid().window(),
         weighting: Weighting::MatchedBytes,
         topic_version: TopicModelVersion(1),
+        nodes: vec![agent_node(1, 1, 2), agent_node(2, 2, 1)],
         edges: vec![
             WeightedEdge {
                 from: agent(1),

@@ -51,3 +51,34 @@ pub enum TrafficDetection {
         last_transmission: TransmissionId,
     },
 }
+
+/// Which detection state a channel is in, without its data: what a graph
+/// node shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DetectionKind {
+    AwaitingTraffic,
+    Unused,
+    Observed,
+    Candidate,
+    Active,
+    Dormant,
+}
+
+impl DetectionKind {
+    pub fn of_traffic(detection: &TrafficDetection) -> Self {
+        match detection {
+            TrafficDetection::Observed { .. } => Self::Observed,
+            TrafficDetection::Candidate { .. } => Self::Candidate,
+            TrafficDetection::Active { .. } => Self::Active,
+            TrafficDetection::Dormant { .. } => Self::Dormant,
+        }
+    }
+
+    pub fn of_declared(detection: &DeclaredDetection) -> Self {
+        match detection {
+            DeclaredDetection::AwaitingTraffic => Self::AwaitingTraffic,
+            DeclaredDetection::Unused { .. } => Self::Unused,
+            DeclaredDetection::InUse(traffic) => Self::of_traffic(traffic),
+        }
+    }
+}

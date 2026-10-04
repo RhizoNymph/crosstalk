@@ -49,6 +49,7 @@ pub enum Subject {
     ChannelDiscovered,
     ChannelCrossAccessed,
     DeclaredChannelUnused,
+    ChannelPromoted,
     TransmissionConfirmed,
     TransmissionSuspected,
     TransmissionDismissed,

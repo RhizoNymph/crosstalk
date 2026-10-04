@@ -22,7 +22,13 @@
 //! on a channel), then `Direct`, then `Unobserved`.
 //!
 //! **Policy.** A channel-routed transmission is judged by the channel policy
-//! in force when it was confirmed.
+//! in force when it was confirmed, on its canonical channel: one opened on a
+//! channel that was superseded before confirmation is judged by the
+//! superseding channel's policy.
+//!
+//! **Superseded channels.** A stored `Route::Channel` keeps the channel the
+//! access resolved to when it was recorded; readers resolve it through
+//! supersession ([`Route::resolved`]).
 //!
 //! **Discarded is final.** A suspected transmission is discarded when its
 //! window expires ([`TransmissionState::expire`]) or when an operator
@@ -36,6 +42,7 @@
 use std::num::NonZeroU64;
 
 use crate::aggregates::topic::TopicModelVersion;
+use crate::aliases::Aliases;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionId};
@@ -67,6 +74,19 @@ pub enum Route {
     /// The reader's own output contains the sender's text, but none of the
     /// reader's visible inputs did: a channel the gateway cannot see.
     Unobserved,
+}
+
+impl Route {
+    /// The route with its channel resolved through supersession. Stored
+    /// transmissions keep the channel they were routed through; readers
+    /// resolve it, so a transmission on a superseded channel counts on the
+    /// channel that superseded it.
+    pub fn resolved(&self, aliases: impl Aliases) -> Self {
+        match self {
+            Self::Channel(channel) => Self::Channel(aliases.channel(*channel)),
+            Self::Delegation(_) | Self::Direct(_) | Self::Unobserved => self.clone(),
+        }
+    }
 }
 
 /// A route that needs no channel: what a transmission opened and confirmed

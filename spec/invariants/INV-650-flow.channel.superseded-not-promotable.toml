@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.channel.superseded-not-promotable"
+statement = "ChannelOrigin::promoted on a Superseded origin returns NotPromotable::Superseded with its supersession and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A superseded channel's resources already belong to the promoted channel
+that absorbed it. Promoting it would create a second declared channel over
+resources that resolve elsewhere; the refusal names the channel to act on
+instead.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::superseded_channels_cannot_be_promoted"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

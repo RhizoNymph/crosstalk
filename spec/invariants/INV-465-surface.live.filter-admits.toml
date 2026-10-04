@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.live.filter-admits"
-statement = "LiveScope::admitted_by admits a Global scope under every TopologyFilter, and admits a Scoped one exactly when, for every non-empty list in the filter, the scope has a key in that list (one of its agents, its channel, its route kind or its topic)."
+statement = "LiveScope::admitted_by admits a Global scope under every TopologyFilter, and admits a Scoped one exactly when, for every non-empty list in the filter, the scope has a key in that list (one of its agents, its channel, its route kind or its topic), with agent ids on both sides resolved through merges and channel ids on both sides resolved through supersession."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -12,7 +12,9 @@ has no agents, so an agent filter excludes it, and an unclassified
 transmission has no topic, so a topic filter excludes it, as outliers are
 excluded from a topic-filtered graph. Global updates
 (TopicVersionActivated) concern the whole graph and always pass, so a
-filtered view still learns to refetch.
+filtered view still learns to refetch. Resolving channels means a stream
+filtered on a channel keeps receiving its updates after a promotion
+supersedes it.
 """
 
 [evidence]

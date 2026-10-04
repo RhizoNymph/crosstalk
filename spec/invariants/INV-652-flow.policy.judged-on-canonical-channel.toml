@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.policy.judged-on-canonical-channel"
+statement = "A channel-routed transmission confirmed after its channel was superseded is judged by the policy of the superseding channel in force at confirmation."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A transmission opened on a channel shortly before a promotion absorbed it
+is confirmed afterwards. The operator's decision at promotion is the
+reviewed policy for that medium; judging by the superseded channel's stale
+policy would raise an unreviewed-traffic alert the operator just answered.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::confirmation_after_supersession_uses_canonical_policy"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

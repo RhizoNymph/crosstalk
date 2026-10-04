@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.action.rejections-typed"
-statement = "An operator action rejected by L3, L5 or L6 returns NotFound for an unknown agent, channel, transmission or rule, and BadRequest naming the reason for NotMerged, NotDiscovered, PatternMissesSeed, OverlappingDeclaration, NotSuspected, KindChanged, NotCurrentVersion, UnknownTopic and DuplicateId."
+statement = "An operator action rejected by L3, L5 or L6 returns ActionError::NotFound for an unknown agent, channel, transmission or rule, Conflict(ChannelSuperseded) for a superseded channel, Conflict(ChannelNotDiscovered) for promoting a declared channel, InvalidInput(PatternMissesSeed) for a pattern that misses the seed, Conflict(PatternOverlaps) for an overlapping pattern, and a typed Conflict or InvalidInput naming the reason for NotMerged, NotSuspected, KindChanged, NotCurrentVersion, UnknownTopic and DuplicateId."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -8,11 +8,14 @@ rationale = """
 The UI shows these to the operator. Collapsing them into a store error
 would hide that a retry is pointless (already unmerged, no longer
 suspected) or that the request needs changing (overlapping pattern, stale
-topic version).
+topic version), or that the request belongs on another channel (superseded).
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::layer_rejections_map_to_query_errors"
+unit = [
+    "crosstalk::surface::tests::layer_rejections_map_to_query_errors",
+    "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors",
+]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

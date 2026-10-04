@@ -69,6 +69,8 @@ fn every_action_names_its_permission() {
             OperatorAction::PromoteChannel {
                 channel: channel(1),
                 pattern: ResourcePattern::Host(Host("wiki.example".into())),
+                policy: PolicyKind::Sanctioned,
+                note: None,
             },
             Permission::Govern,
         ),

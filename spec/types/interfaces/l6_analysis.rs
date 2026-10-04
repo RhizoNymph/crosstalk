@@ -13,8 +13,8 @@
 //! versions.
 //!
 //! `alerts` evaluates rules against detect and insight events and triages
-//! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned) and
-//! `TransmissionDismissed`. On `TopicVersionReady` it carries every current
+//! the drafts; it suppresses alerts on `PolicyChanged` and `ChannelPromoted`
+//! (sanctioned) and `TransmissionDismissed`. On `TopicVersionReady` it carries every current
 //! watched-topic rule on the predecessor over with [`TopicLineage::remap`]
 //! over the stored lineage, which yields the rule's new [`TopicWatch`]: it
 //! becomes [`TopicWatch::Stale`] exactly when the lineage shows a watched
@@ -163,7 +163,9 @@ pub trait AlertTriage {
     /// transaction).
     async fn triage(&mut self, draft: AlertDraft) -> Result<TriageOutcome, TriageError>;
 
-    /// Suppress the active alerts whose subject is `channel`.
+    /// Suppress the active alerts whose subject is `channel` or a channel
+    /// it superseded (`AlertSubject::resolved`). Triggered by
+    /// `PolicyChanged` and `ChannelPromoted` carrying `Sanctioned`.
     async fn channel_sanctioned(&mut self, channel: ChannelId) -> Result<u32, TriageError>;
 
     /// Suppress the active alerts raised by `rule`.

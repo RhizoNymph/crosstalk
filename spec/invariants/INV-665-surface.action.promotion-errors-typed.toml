@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.action.promotion-errors-typed"
+statement = "A refused promotion maps to one ActionError: UnknownChannel to NotFound, Superseded to Conflict(ChannelSuperseded), NotDiscovered to Conflict(ChannelNotDiscovered), PatternMissesSeed to InvalidInput(PatternMissesSeed), PatternOverlaps to Conflict(PatternOverlaps), and a store failure to Store."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The operator fixes each refusal differently: pick another channel, follow
+the superseder, correct the pattern, or retry. The audit log records the
+same typed outcome.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

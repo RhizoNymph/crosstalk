@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.action.promote-same-id"
+statement = "An OperatorAction::PromoteChannel that returns Ok returns ChannelPromoted naming the requested channel, and that channel keeps its id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Transmissions, edges, alerts and policy history reference the channel id.
+Returning the same id tells the UI nothing moved, so its selection and
+links stay valid.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::promote_returns_same_channel"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

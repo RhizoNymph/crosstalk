@@ -11,6 +11,8 @@
 //!   `CompactionThreader` (harness compaction hints and summary heuristics).
 //! - `AgentDirectory`: the merge table. Every reader of stored agent ids
 //!   resolves them through it.
+//! - `ClaimStore`: `PgClaimStore`, the harness claims seen per attributed
+//!   agent, recorded for every captured exchange that carries one.
 //!
 //! Operators reach L3 through the surface: merges, exact unmerges and
 //! display labels. An unmerge changes only the merge table, so graphs and
@@ -48,10 +50,11 @@ use crate::events::ingest::ConversationDelta;
 use crate::ids::{AgentId, ConversationId, OperatorId};
 #[cfg(doc)]
 use crate::observed::agent::Merged;
-use crate::observed::agent::{IdentityEvidence, LabelChange, MergeRequest};
+use crate::observed::agent::{ClaimSet, IdentityEvidence, LabelChange, MergeRequest};
+use crate::observed::client::HarnessClaim;
 use crate::observed::exchange::{Exchange, ExchangeMeta};
 use crate::observed::message::Message;
-use crate::support::NonEmpty;
+use crate::support::{NonEmpty, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -73,6 +76,29 @@ pub enum Resolution {
 pub trait AgentDirectory {
     /// The agent `id` resolves to after merges: itself unless merged.
     fn canonical(&self, id: AgentId) -> AgentId;
+}
+
+/// The harness claims seen on each agent's exchanges. Claims are never
+/// identity evidence: `IdentityResolver::resolve` never reads this store.
+pub trait ClaimStore {
+    /// Record that an exchange attributed to `agent`, started at `at`,
+    /// carried `claim` (`ClientContext::harness`), keeping the latest time
+    /// per distinct claim ([`ClaimSet::observe`]). Called by the
+    /// reconstruct consumer for each `ExchangeCaptured` after the agent is
+    /// resolved, so it is idempotent under redelivery. `agent` is the
+    /// attributed agent, never rewritten by a later merge.
+    async fn record(
+        &mut self,
+        agent: AgentId,
+        claim: &HarnessClaim,
+        at: Timestamp,
+    ) -> Result<(), ResolveError>;
+
+    /// The claims of `agent`'s canonical agent: the [`ClaimSet::union`] of
+    /// the claims recorded for it and for every agent that currently
+    /// resolves to it. Merges and unmerges change only which sets are
+    /// unioned.
+    async fn claims(&self, agent: AgentId) -> Result<ClaimSet, ResolveError>;
 }
 
 pub trait IdentityResolver {

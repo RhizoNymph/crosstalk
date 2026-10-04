@@ -1,14 +1,16 @@
 [invariant]
 id = "flow.registry.promote-rejects-without-effect"
-statement = "ChannelRegistry::promote returns UnknownChannel, NotDiscovered, PatternMissesSeed or OverlappingDeclaration for an unknown channel, an already declared one, a pattern that does not match the channel's seed locator, or one overlapping another declared channel's pattern, and changes nothing."
+statement = "ChannelRegistry::promote returns PromoteError::Refused with PromotionRefusal::UnknownChannel, Superseded, NotDiscovered, PatternMissesSeed or PatternOverlaps for an unknown channel, a superseded one, an already declared one, a pattern that does not match the channel's seed locator, or one overlapping another declared channel's pattern, and changes nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]
 rationale = """
 A pattern that misses the channel's own seed is almost certainly a typo and
 would pull unrelated resources into it. An overlapping pattern would make
-lookup ambiguous between two channels with different policies. Rejecting
-without effect lets the operator correct the pattern and retry.
+lookup ambiguous between two channels with different policies. A superseded
+channel already resolves to the promoted channel that absorbed it, and the
+refusal names that channel. Rejecting without effect lets the operator
+correct the request and retry.
 """
 
 [evidence]

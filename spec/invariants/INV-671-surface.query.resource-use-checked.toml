@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.query.resource-use-checked"
+statement = "A ResourceUse has at least one writer or reader, no agent twice among its writers or among its readers, and both lists ordered by accesses descending, then agent id."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A resource with no access in the window has nothing to show. An agent
+listed twice means its merged aliases were not summed, splitting one
+agent's activity across two rows.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::access::ResourceUse::new"
+unit = [
+    "crosstalk_spec::tests::graph::resource_use_needs_a_writer_or_reader",
+    "crosstalk_spec::tests::graph::resource_use_lists_each_agent_once",
+    "crosstalk_spec::tests::graph::resource_use_orders_by_accesses_then_agent",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

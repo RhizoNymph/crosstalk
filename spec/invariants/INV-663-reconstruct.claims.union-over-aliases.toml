@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.claims.union-over-aliases"
+statement = "ClaimStore::claims for an agent returns the ClaimSet::union of the claim sets recorded under every agent that currently resolves to that agent's canonical agent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Claims are stored under the attributed agent and never rewritten. A merge
+then shows the merged agent's claims on its target, and an unmerge splits
+them again on the next read, the same alias rule as edges and labels.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::graph::a_canonical_agent_claims_the_union_of_its_aliases",
+    "crosstalk::reconstruct::tests::claims_follow_merge_and_unmerge",
+]
+integration = "crosstalk::reconstruct::tests::pg_claims_union_over_aliases"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

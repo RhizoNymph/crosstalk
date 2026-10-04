@@ -20,11 +20,14 @@
 //!   with its error type.
 //!
 //! Cross-tier references are always typed ids from [`ids`], never raw strings
-//! or integers. List queries page with the opaque cursors in [`paging`].
+//! or integers. Merged agents and superseded channels are aliases, resolved
+//! at read time through [`aliases`]. List queries page with the opaque
+//! cursors in [`paging`].
 
 #![allow(async_fn_in_trait)]
 
 pub mod aggregates;
+pub mod aliases;
 pub mod derived;
 pub mod events;
 pub mod ids;
