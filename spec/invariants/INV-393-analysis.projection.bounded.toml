@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.projection.bounded"
+statement = "A Projection holds exactly min(matching, limit) points for a limit between 1 and 50,000, no transmission twice, and only finite coordinates."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The limit bounds response size and canvas cost. Holding exactly
+min(matching, limit) points lets the client show "n of m" truthfully and
+know whether it is looking at a sample. A duplicate point would be drawn
+twice and counted twice; a NaN coordinate breaks the canvas's bounds.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::projection::ProjectionLimit::new", "crosstalk_spec::aggregates::projection::Projection::new"]
+unit = ["crosstalk_spec::tests::projection::projection_limit_rejects_zero_and_above_max", "crosstalk_spec::tests::projection::projection_rejects_a_count_other_than_min_of_matching_and_limit", "crosstalk_spec::tests::projection::projection_rejects_duplicate_transmissions", "crosstalk_spec::tests::projection::projection_rejects_non_finite_coordinates", "crosstalk_spec::tests::projection::projection_samples_down_to_the_limit"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

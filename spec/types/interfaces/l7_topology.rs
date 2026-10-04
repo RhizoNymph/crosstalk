@@ -10,10 +10,13 @@
 
 use std::num::NonZeroU64;
 
-use crate::aggregates::edge::{EdgeKey, TopologyFilter, TopologyGraph, Weighting};
+use crate::aggregates::edge::{
+    EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
+};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::ids::{AgentId, TransmissionId};
+use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
 /// One classified transmission, as the edge store counts it.
@@ -45,6 +48,21 @@ pub trait EdgeStore {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<TopologyGraph, EdgeError>;
+
+    /// The applied contributions behind one edge: those `graph` counts into
+    /// the edge (`from`, `to`, `route`) for the same window and filter, one
+    /// row per transmission, newest `Confirmed::at` first. Served from the
+    /// stored contributions, so the window need not be bucket-aligned. The
+    /// first page pins the active topic-model version into its cursor; if
+    /// that version's contributions are dropped mid-traversal, the next page
+    /// fails with `InvalidCursor`.
+    async fn transmissions(
+        &self,
+        edge: &EdgeSelector,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        page: &PageRequest<EdgeTransmissionList>,
+    ) -> Result<EdgeTransmissionPage, EdgeError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,4 +73,7 @@ pub enum EdgeError {
     /// The window is not aligned to bucket boundaries.
     UnalignedWindow,
     SelfEdge,
+    /// A cursor the store did not issue, issued for another edge, window or
+    /// filter, or pinning a topic-model version whose contributions are gone.
+    InvalidCursor,
 }

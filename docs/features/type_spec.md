@@ -7,6 +7,9 @@
 - The events that cross the bus between layers.
 - The trait each layer of the abstraction stack exposes, and its errors.
 - Tests for invariants enforced by checked constructors.
+- The query surface a frontend reads: paginated lists, the one filter that
+  links the graph, search, projection and edge drill-down, and the
+  projection's points.
 
 ## Non-scope
 
@@ -47,7 +50,8 @@ The types follow data through the stack:
    then `IngestEvent::ExchangeCaptured` is published.
 3. **L2 transport.** Every event is an `Envelope { id, at, BusEvent }`.
    Consumers subscribe by `Subject` within a `ConsumerGroup` and ack or
-   nack each `Delivery`.
+   nack each `Delivery`. Exhausted deliveries become `DeadLetter`s, which
+   `DeadLetterStore::list` pages through and `replay` redelivers.
 4. **L3 reconstruction.** The `IdentityResolver` gives a `Resolution`
    (known agent, new agent, or conflict) from the most specific
    `IdentityEvidence`, with harness ids scoped by `IdentityScope`; it also
@@ -80,18 +84,83 @@ The types follow data through the stack:
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
    (`TransmissionClassified`); a re-fit re-classifies everything and then
-   publishes `TopicVersionReady`. `AlertRuleEval`s turn envelopes into
+   publishes `TopicVersionReady`. Each fit also fits a 2-D layout; later
+   transmissions are placed into it. The `SearchIndex` and the
+   `ProjectionIndex` take a `TopologyFilter` and report the topic-model
+   version they evaluated topics under (`SearchResults`, `Projection`). `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), and suppresses on sanctioning or rule disabling.
 8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
    `EdgeKey` bucket (per topic-model version), activates a version once it is
    complete, and answers `TopologyGraph` queries over canonical agents with
-   per-edge `Share`s.
-9. **L8 surface.** `QueryApi` serves channels, alerts, the topology,
-   search, transmissions, topics and projections to an authenticated
-   `Caller` with `Permission`s. `OperatorActions` publish `PolicyChanged`
-   (stamping author and time from the caller) and agent merges back down the
-   stack, and `AlertSink`s deliver alerts.
+   per-edge `Share`s. `EdgeStore::transmissions` lists the contributions
+   behind one edge (`EdgeSelector`) from the same stored rows, a page at a
+   time (`EdgeTransmissionPage`), with the first page's topic version pinned
+   in the cursor.
+9. **L8 surface.** `QueryApi` serves channels, agents, alert rules, dead
+   letters, alerts, the topology, the transmissions behind an edge, search,
+   transmissions, topics and projections to an authenticated `Caller` with
+   `Permission`s (View for structure, Content for anything derived from
+   message text, Operate for dead letters). `OperatorActions` publish
+   `PolicyChanged` (stamping author and time from the caller) and agent
+   merges back down the stack, and `AlertSink`s deliver alerts.
+
+### Lists and pagination
+
+Channels, agents, alert rules, dead letters and edge transmissions are read
+a `Page` at a time. A `PageRequest<L>` holds a `PageSize` (1 to 500) and,
+after the first page, the `Cursor<L>` from the previous page. `L` is a
+marker per list (`ChannelList`, `AgentList`, `AlertRuleList`,
+`DeadLetterList`, `EdgeTransmissionList`), so a cursor only fits its own
+list. Each list is ordered newest first by a unique sort key that never
+changes (ids, or `(Confirmed::at, TransmissionId)` for an edge), and the
+cursor holds the last key served (keyset pagination), so concurrent inserts
+and removals never make a traversal skip or repeat an item. The cursor also
+holds a digest of the request and a MAC; one presented with another request
+is `InvalidCursor`. A page with a next cursor is never empty, so following
+cursors always ends. List filters (`ChannelFilter`, `AgentFilter`,
+`AlertRuleFilter`, in `l8_surface/lists.rs`) are defined by their `matches`
+methods; empty lists do not restrict.
+
+### Linked views
+
+`topology`, `search`, `projection` and `edge_transmissions` take the same
+`TopologyFilter` (`aggregates/filter.rs`, re-exported from
+`aggregates::edge`). Each view reduces a confirmed transmission to a
+`FilterSubject` (canonical sender and reader at query time, route, topic
+under the response's topic version) and keeps it when
+`TopologyFilter::admits` holds:
+
+| Field | Admits a transmission when |
+| --- | --- |
+| `agents` | the canonical sender or reader equals the canonical form of a listed agent |
+| `channels` | its route is `Channel(c)` with `c` listed; other routes never match |
+| `route_kinds` | `RouteKind::from(route)` is listed |
+| `topics` | its topic under the response's version is listed; outliers and unclassified transmissions never match |
+
+Empty lists do not restrict and non-empty fields combine with AND. The
+window is separate and always tested against `Confirmed::at`. For the graph
+the subject is each transmission counted into an edge, for search each hit,
+for the projection each point, and for the drill-down each row. Every
+response reports its topic-model version; a client links two responses only
+when the versions agree, and a filter holding an old version's topic ids
+matches nothing.
+
+### Projection
+
+`QueryApi::projection` takes a `ProjectionRequest` (window, filter,
+`ProjectionLimit` of 1 to 50,000, and optionally the `ProjectionToken` of
+points the client already holds) and returns a `Projection`. The token names
+one fitted layout (topic version and revision); within a token a
+transmission's coordinates and topic never change, and a request naming a
+token that is no longer current gets `StaleProjection { current }` instead
+of points. Each `ProjectedPoint` carries its canonical sender and reader,
+`RouteKind`, topic (its slot under the token's version, `Projection::slot`),
+`Confirmed::at` and coordinates, so a client colours and links points
+without lookups. When more transmissions match than the limit, the points
+are the `limit` with the smallest keyed sample hash, so the sample is fixed
+per token and survives narrowing. `Projection::new` checks that it holds
+exactly `min(matching, limit)` points, none twice, all finite.
 
 ## Files
 
@@ -101,6 +170,7 @@ The types follow data through the stack:
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
+| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
@@ -116,12 +186,15 @@ The types follow data through the stack:
 | `spec/types/derived/flow/channel/mod.rs` | Channels | `Channel`, `ChannelOrigin` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `TrafficVerdict` |
-| `spec/types/aggregates/edge.rs` | Topology edges | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyFilter`, `TopologyGraph` |
+| `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph`, `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
+| `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
+| `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `AlertRuleDef`, `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent`, `ConversationDelta`, `DetectEvent`, `InsightEvent` |
 | `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums |
+| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
 | `spec/types/tests/` | Invariant tests | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -200,6 +273,22 @@ The types follow data through the stack:
   sanctioned (`Policy::on_traffic`).
 - Deduplication is a triage outcome, not an alert state.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges.
+- Every linked view (graph, search, projection, edge drill-down) applies
+  one `TopologyFilter` as `TopologyFilter::admits` defines, with agents
+  resolved through merges at query time and topics under the version the
+  response reports.
+- List pages hold at most their `PageSize` (1 to 500) items; a page with a
+  next cursor is non-empty (`Page::more`). Cursors are typed by list and
+  bound to their request; keyset ordering on immutable unique keys keeps a
+  traversal exactly-once under concurrent writes.
+- An `EdgeSelector` is never a self-edge. A full drill-down of an edge lists
+  exactly the transmissions the graph counts into it, under the topic
+  version pinned by its first page.
+- A `Projection` holds exactly `min(matching, limit)` points with a limit of
+  1 to 50,000, no transmission twice and finite coordinates. Within one
+  `ProjectionToken` points never move or change topic.
+- Lists of dead letters need Operate; edge drill-down rows carry no message
+  content and need View.
 - `TimeWindow` and `ByteRange` are never empty. `Similarity` and `Share` are
   never NaN or outside `0..=1`.
 - Bus delivery is at least once. Consumers are idempotent on the envelope id

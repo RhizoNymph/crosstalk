@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.page.traversal-exactly-once"
+statement = "Following next cursors from the first page of a list query to its last returns, in the list's sort-key order, every item that matches the request throughout the traversal exactly once and no item more than once, while items are concurrently inserted, updated or removed."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Offset pagination skips an item for every insert ahead of the offset and
+repeats one for every removal, and the gateway inserts channels, agents and
+transmissions continuously. Each list is keyset-paginated on a unique sort
+key that never changes once an item exists (paging.rs), so writes never
+shift a position. Items inserted mid-traversal may appear once or not at
+all; a dead letter replayed mid-traversal stops appearing without causing a
+skip.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::list_traversal_exactly_once_under_concurrent_writes"
+integration = "crosstalk::surface::integration::keyset_pages_postgres_concurrent_inserts"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -38,8 +38,9 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, search, alert rules), L7 topology
-      (edge aggregation per time window), L8 surface (query API, UI, operator
-      actions, alert sinks).
+      (edge aggregation per time window), L8 surface (query API with
+      cursor-paginated lists and linked views sharing one filter, UI,
+      operator actions, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -54,7 +55,9 @@ Overview:
     channels and correlates cross-agent accesses and content matches into
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions and evaluates alert rules → L7 aggregates
-    edges → L8 serves topology, search and alerts. Operator actions flow
+    edges → L8 serves topology, search, projections, lists and alerts, with
+    the graph, search, projection and edge drill-down all filtered by one
+    TopologyFilter. Operator actions flow
     back down: policy changes to L5, agent merges to L3.
 
 Features Index:
@@ -62,8 +65,9 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams and credentials), derived inferences,
-      aggregates, bus events and per-layer interfaces, with tests for the
-      invariants checked at runtime. Harness and server wire behavior it is
+      aggregates, bus events and per-layer interfaces (including the query
+      surface's paginated lists, shared view filter and projection), with
+      tests for the invariants checked at runtime. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []

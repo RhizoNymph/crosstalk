@@ -18,6 +18,13 @@ fn non_empty_keeps_order_and_counts() {
 }
 
 #[test]
+fn non_empty_into_vec_keeps_order() {
+    let mut list = NonEmpty::new(1);
+    list.push(2);
+    assert_eq!(list.into_vec(), vec![1, 2]);
+}
+
+#[test]
 fn non_empty_single_counts_one() {
     assert_eq!(NonEmpty::new("only").count().get(), 1);
 }

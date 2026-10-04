@@ -16,6 +16,7 @@ spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
 ├── ids.rs                 typed ids: ULID entity ids, BLAKE3 content ids
 ├── support.rs             NonEmpty, Timestamp, TimeWindow, ByteRange, Similarity, Share
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
@@ -37,7 +38,9 @@ spec/types/
 │           ├── detection.rs DeclaredDetection, TrafficDetection
 │           └── policy.rs  Policy, Decision, TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── edge.rs            EdgeKey (checked), TopicSlot, EdgeStats, TopologyFilter, TopologyGraph
+│   ├── edge.rs            EdgeKey, EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
+│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
+│   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
 ├── events/                what crosses the bus
@@ -48,13 +51,15 @@ spec/types/
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
-│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore, BlobStore
+│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore
 │   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
-│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage
-│   ├── l7_topology.rs     EdgeStore
-│   └── l8_surface.rs      Caller, QueryApi, OperatorActions, AlertSink
+│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage
+│   ├── l7_topology.rs     EdgeStore (graph, edge drill-down)
+│   ├── l8_surface.rs      Caller, QueryApi (lists, linked views), OperatorActions, AlertSink
+│   └── l8_surface/
+│       └── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
 └── tests/                 tests for the invariants checked at runtime
 ```
 
@@ -65,6 +70,9 @@ spec/types/
   appear in an assistant message. A confirmed transmission holds a
   `NonEmpty<ContentMatch>`. A declared channel and a discovered channel have
   different detection enums.
+- **Opaque newtypes for server-issued values.** Cursors and projection
+  tokens have private fields; clients only hand them back. A cursor's
+  list is a type parameter, so one list's cursor does not fit another.
 - **Checked constructors for the rest.** When an invariant spans values
   (a content match's reader is not its origin agent; every match in a
   confirmed transmission has one sender), the type has private fields and a

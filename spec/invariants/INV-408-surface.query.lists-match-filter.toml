@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.query.lists-match-filter"
+statement = "Every item on a page of QueryApi::channels, agents or alert_rules satisfies the request filter's matches, and every dead letter on a page of dead_letters belongs to the requested consumer group when one is named."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+An operator working the unreviewed-channel queue or a stale-rule list acts
+on every row shown; a sanctioned channel in the unreviewed list invites a
+wrong decision. The filters' matches methods are the definition, so the SQL
+behind each list is checked against them. Completeness (no matching item is
+missed) is surface.page.traversal-exactly-once.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::list_filter_cases"
+property = "crosstalk::surface::tests::prop_list_pages_satisfy_filter"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

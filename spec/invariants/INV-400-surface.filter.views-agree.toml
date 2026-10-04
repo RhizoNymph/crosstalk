@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.filter.views-agree"
+statement = "For each of QueryApi::search, projection and a full edge_transmissions traversal, when the result is not truncated by a limit and both calls report the same topic-model version, the transmissions returned under a TopologyFilter are exactly those returned under the default filter whose FilterSubject TopologyFilter::admits."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+The graph, search, UMAP and edge drill-down are linked views: a selection
+in one must narrow the others to the same transmissions, or a point
+highlighted in the UMAP has no edge in the graph and a search shows hits
+the graph excludes. TopologyFilter::admits is the single definition (agents
+on either end after alias resolution, channels only on channel routes,
+route kinds, topics under the reported version with outliers never
+matching); topology.filter.* pins the graph to it. Comparing each view with
+its own unfiltered result catches a view that interprets a field
+differently, such as matching agents before alias resolution.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_filtered_views_equal_unfiltered_then_admits"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
