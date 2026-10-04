@@ -3,7 +3,7 @@
 // so demo/index.html can load dist/ and test/fixtures/.
 import * as esbuild from 'esbuild';
 
-const ELEMENTS = ['ct-topology', 'ct-projection', 'ct-timebrush'];
+const ELEMENTS = ['ct-topology', 'ct-projection', 'ct-timebrush', 'ct-live'];
 const serve = process.argv.includes('--serve');
 
 /** @type {import('esbuild').BuildOptions} */

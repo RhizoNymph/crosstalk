@@ -14,6 +14,7 @@ use topcoat::view::{View, component, view};
 use self::model::{Tile, load};
 use crate::app::caller;
 use crate::components::form::{LINK, SECTION, SECTION_TITLE};
+use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, empty_state, error_panel, format_time, href, kind_badge, route_badge,
@@ -78,6 +79,7 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
     let alerts_url = href("/alerts", &state, &[]);
     let topology_url = href("/topology", &state, &[]);
     Ok(view! {
+        live_watch(tokens: "alert channel watermark".to_owned())
         <header class="mb-4">
             <h1 class="text-lg font-semibold">"Overview"</h1>
             <p class="text-sm text-zinc-500">

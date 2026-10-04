@@ -6,6 +6,7 @@
 //! outcome is what the call returned.
 
 mod agents;
+pub mod changes;
 mod channels;
 pub mod effects;
 mod pins;
@@ -14,6 +15,7 @@ mod triage;
 
 pub use triage::record_verdict;
 
+use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, Caller, OperatorAction};
 use crosstalk_spec::support::{Change, Timestamp};
@@ -106,6 +108,23 @@ fn apply(world: &World, state: &mut State, stamp: Stamp, action: &OperatorAction
     }
 }
 
+/// An action's result and the `Changed` notifications its stores publish
+/// once it is committed ([`changes`]): none for a refusal or `Unchanged`.
+#[derive(Debug)]
+pub struct Committed {
+    pub result: Acted,
+    pub changed: Vec<Changed>,
+}
+
+/// [`audited`], with what the call changed.
+pub fn act(world: &World, state: &mut State, caller: &Caller, action: OperatorAction) -> Committed {
+    let before = changes::Before::of(state);
+    let named = action.clone();
+    let result = audited(world, state, caller, action);
+    let changed = changes::changes(&before, state, &named, &result);
+    Committed { result, changed }
+}
+
 /// Checks the permission, applies the action and appends the call's one
 /// audit entry: the caller as authenticated, the action, and
 /// `AuditOutcome::of` what the call returns, at the acceptance time.
@@ -114,7 +133,7 @@ fn apply(world: &World, state: &mut State, stamp: Stamp, action: &OperatorAction
 /// outcome that disagrees with the caller's permission; the check above
 /// makes that impossible, and so is an id the mint already issued. Either
 /// would be a fixture fault, reported as `Store`.
-pub fn act(world: &World, state: &mut State, caller: &Caller, action: OperatorAction) -> Acted {
+fn audited(world: &World, state: &mut State, caller: &Caller, action: OperatorAction) -> Acted {
     let stamp = Stamp {
         by: caller.operator(),
         at: NOW,

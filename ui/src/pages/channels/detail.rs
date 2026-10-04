@@ -25,6 +25,7 @@ use super::sections::{
 };
 use crate::app::{backend, caller, can};
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
+use crate::components::live::{live_watch, watch_one};
 use crate::components::{
     PageLinks, empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header,
     short_id,
@@ -303,10 +304,14 @@ async fn channel_page(
     let subject = subject_code(AuditSubject::Channel(id));
     let audit_url = href("/audit", &state, &[("subject", &subject), ("span", "all")]);
 
+    // A promotion names every channel it superseded, so this id is enough;
+    // the page also lists alerts about the channel.
+    let watch = format!("{} alert", watch_one("channel", id));
     Ok(view! {
         if let Some(status) = failed_status {
             (status)
         }
+        live_watch(tokens: watch)
         <div class="mb-1 text-xs text-zinc-500">
             <a class=(LINK) href=(list_url)>"Channels"</a>
             " / "

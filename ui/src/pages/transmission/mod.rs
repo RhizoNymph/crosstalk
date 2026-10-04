@@ -37,6 +37,7 @@ use self::sections::{co_access_section, matches_section};
 use self::verdict::{FormState, VerdictRow, verdict_rows, verdict_section};
 use crate::app::{backend, caller, can};
 use crate::components::form::LINK;
+use crate::components::live::{live_watch, watch_one};
 use crate::components::{
     content_hidden, empty_state, error_panel, flash_banner, format_bytes, format_time, href,
     kind_badge, route_badge,
@@ -340,10 +341,12 @@ async fn evidence_page(
     let topology_url = href(crate::pages::topology::PATH, &state, &[]);
     let short = title_id(id);
 
+    let watch = format!("{} alert", watch_one("verdict", id));
     Ok(view! {
         if let Some(status) = failed_status {
             (status)
         }
+        live_watch(tokens: watch)
         <div class="mb-1 text-xs text-zinc-500">
             <a class=(LINK) href=(topology_url)>"Topology"</a>
             " / transmission "

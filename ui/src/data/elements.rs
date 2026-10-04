@@ -18,3 +18,6 @@ pub const TOPOLOGY_JS: Asset = asset!("../../elements/dist/ct-topology.js");
 pub const PROJECTION_JS: Asset = asset!("../../elements/dist/ct-projection.js");
 /// `<ct-timebrush>`: transmissions per bucket with a window brush.
 pub const TIMEBRUSH_JS: Asset = asset!("../../elements/dist/ct-timebrush.js");
+/// `<ct-live>`: subscribes to `/data/live` and refreshes the page's
+/// `data-live-region` when an event matches its `data-live-watch` tokens.
+pub const LIVE_JS: Asset = asset!("../../elements/dist/ct-live.js");

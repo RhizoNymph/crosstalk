@@ -20,6 +20,7 @@ use super::sections::{
 use super::tree::{self, Tree};
 use crate::app::{backend, caller, can};
 use crate::components::form::{BUTTON, BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION};
+use crate::components::live::live_watch;
 use crate::components::{
     agent_name, empty_state, error_panel, flash_banner, href, kind_badge, page_header, short_id,
 };
@@ -178,10 +179,13 @@ async fn agent_page(
     let unmerge_error = error_for(failure.as_ref(), AgentForm::Unmerge);
     let list_url = href("/agents", &state, &[]);
 
+    // The page shows the whole cluster (aliases, children, merges), whose
+    // ids a merge elsewhere can re-point: any agent event refreshes it.
     Ok(view! {
         if let Some(status) = failed_status {
             (status)
         }
+        live_watch(tokens: "agent".to_owned())
         <div class="mb-1 text-xs text-zinc-500">
             <a class=(LINK) href=(list_url)>"Agents"</a>
             " / "

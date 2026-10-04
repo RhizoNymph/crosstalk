@@ -19,6 +19,7 @@ use super::query::{DETECTIONS, ListQuery, ORIGINS, RawListQuery, Tab};
 use crate::app::{backend, caller};
 use crate::components::badge::Badge;
 use crate::components::form::{FACET, LINK};
+use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     PageLinks, Tab as TabLink, Tone, data_table, empty_state, error_panel, filter_chip,
@@ -216,6 +217,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
     let empty = listing.as_ref().is_ok_and(|l| l.rows.is_empty());
 
     Ok(view! {
+        live_watch(tokens: "channel".to_owned())
         page_header(
             title: "Channels",
             subtitle: "Resources agents write and read to reach each other, and the policy for each.",

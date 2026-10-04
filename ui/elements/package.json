@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Custom elements for the crosstalk operator UI: topology graph, UMAP projection and time brush.",
+  "description": "Custom elements for the crosstalk operator UI: topology graph, UMAP projection, time brush and live updates.",
   "scripts": {
     "build": "node scripts/build.mjs",
     "demo": "node scripts/build.mjs --serve",

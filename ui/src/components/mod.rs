@@ -4,6 +4,7 @@ pub mod badge;
 pub mod feedback;
 pub mod form;
 pub mod href;
+pub mod live;
 pub mod locator;
 pub mod nav;
 pub mod paging;

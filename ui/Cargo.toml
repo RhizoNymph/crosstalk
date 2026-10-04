@@ -8,6 +8,7 @@ description = "Operator web UI for crosstalk."
 [dependencies]
 anyhow = "=1.0.104"
 crosstalk-spec = { path = "../spec" }
+futures-core = { version = "=0.3.34", default-features = false }
 jiff = "=0.2.37"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"

@@ -12,6 +12,7 @@ use super::query::{AgentQuery, FAMILIES, RawAgentQuery, STATES};
 use crate::app::{backend, caller};
 use crate::components::badge::Badge;
 use crate::components::form::{FACET, LINK};
+use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     PageLinks, agent_name, claim_badge, data_table, empty_state, error_panel, family_name,
@@ -144,6 +145,7 @@ async fn agents_get(cx: &Cx) -> Result<impl View> {
         .collect();
     let pairs = query.pairs();
     Ok(view! {
+        live_watch(tokens: "agent".to_owned())
         page_header(
             title: "Agents",
             subtitle: "Canonical agents. In and out count transmissions in the view's window. Harness claims are what clients said about themselves, not identity.",

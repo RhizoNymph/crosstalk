@@ -13,6 +13,7 @@ use super::model::AlertRow;
 use crate::app::{backend, caller, can};
 use crate::components::badge::Badge;
 use crate::components::form::{INPUT, LINK, SMALL_BUTTON};
+use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     PageLinks, Tab, data_table, empty_state, error_panel, flash_banner, href, kind_badge,
@@ -214,6 +215,7 @@ async fn inbox_page(
         if let Some(status) = failed_status {
             (status)
         }
+        live_watch(tokens: "alert rule".to_owned())
         page_header(title: "Alerts", subtitle: "What the rules raised, by state. Acknowledge to claim one; resolve with a note when handled.")
         <div class="mb-2 text-right text-sm">
             <a class=(LINK) href=(rules_url)>"Rules and sinks"</a>

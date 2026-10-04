@@ -11,6 +11,7 @@
 //! | `GET /data/topology?<view state>` | [`topology::TopologyPayload`] (JSON) | `View` |
 //! | `GET /data/timeline?<view state>&buckets=<n>` | [`timeline::TimelinePayload`] (JSON) | `View` |
 //! | `GET /data/projection/{id}` | [`projection::format`] (binary) | `Content` |
+//! | `GET /data/live` (`Last-Event-ID`) | [`live`]: server-sent events | `View` |
 //!
 //! View-state routes require the canonical query ([`query`]): an incomplete
 //! one is a 400, never a redirect, because the element asked for exactly
@@ -23,6 +24,7 @@
 
 pub mod elements;
 pub mod errors;
+pub mod live;
 pub mod names;
 pub mod projection;
 pub mod query;

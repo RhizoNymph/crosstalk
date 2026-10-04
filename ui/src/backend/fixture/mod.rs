@@ -16,6 +16,7 @@ mod audit;
 mod clock;
 pub mod export;
 mod identity;
+pub mod live;
 mod queries;
 mod rng;
 mod store;
@@ -48,6 +49,7 @@ use crosstalk_spec::derived::flow::channel::policy::{PolicyAuthor, PolicyHistory
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
+use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
@@ -61,6 +63,7 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
+use crosstalk_spec::interfaces::l8_surface::live::{LiveFeed, Resume};
 use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
@@ -97,6 +100,7 @@ pub struct FixtureBackend {
     /// end.
     state: Arc<RwLock<State>>,
     export_limits: ExportLimits,
+    feed: live::Feed,
 }
 
 impl FixtureBackend {
@@ -110,7 +114,24 @@ impl FixtureBackend {
             world,
             state: Arc::new(RwLock::new(state)),
             export_limits: export::limits(),
+            feed: live::Feed::new(live::config().map_err(|e| GenError::invalid("live config", e))?),
         })
+    }
+
+    /// The same world with a new feed under other limits.
+    #[cfg(test)]
+    pub fn with_live_config(
+        mut self,
+        config: crosstalk_spec::interfaces::l8_surface::live::LiveConfig,
+    ) -> Self {
+        self.feed = live::Feed::new(config);
+        self
+    }
+
+    /// The epoch of the feed's log, for tests that build cursors.
+    #[cfg(test)]
+    pub fn feed_epoch(&self) -> crosstalk_spec::interfaces::l8_surface::live::FeedEpoch {
+        self.feed.epoch()
     }
 
     /// The same world with another `export.max_rows`.
@@ -346,14 +367,17 @@ impl QueryApi for FixtureBackend {
     ) -> Result<ProjectionId> {
         require(caller, Permission::Content)?;
         let mut state = self.state.write().await;
-        queries::projection::fit(
+        let id = queries::projection::fit(
             &self.world,
             &mut state,
             caller.operator(),
             window,
             filter,
             params,
-        )
+        )?;
+        // The fixture's fitter runs the job at once: it is ready or failed.
+        self.feed.publish([Changed::Projection(id)]).await;
+        Ok(id)
     }
 
     async fn projection_status(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionInfo> {
@@ -579,6 +603,19 @@ impl OperatorActions for FixtureBackend {
         action: OperatorAction,
     ) -> std::result::Result<ActionOutcome, ActionError> {
         let mut state = self.state.write().await;
-        actions::act(&self.world, &mut state, caller, action)
+        let committed = actions::act(&self.world, &mut state, caller, action);
+        // Published before the lock is released: the log's order is the
+        // commit order.
+        self.feed.publish(committed.changed).await;
+        committed.result
+    }
+}
+
+/// The feed of committed changes; see [`live`].
+impl LiveFeed for FixtureBackend {
+    type Stream = live::FeedStream;
+
+    async fn subscribe(&self, caller: &Caller, resume: Resume) -> Result<live::FeedStream> {
+        self.feed.subscribe(caller, resume).await
     }
 }

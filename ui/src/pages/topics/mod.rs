@@ -27,6 +27,7 @@ use topcoat::view::{View, component, view};
 use self::model::{RemapRow, TopicRow, VersionTab, remap_rows, topic_rows, version_tabs};
 use crate::app::{backend, caller, can};
 use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
+use crate::components::live::live_watch;
 use crate::components::sparkline::sparkline;
 use crate::components::table::{ROW, TD, TD_NUM};
 use crate::components::{
@@ -202,6 +203,7 @@ async fn topics_page(
         error => (None, error),
     };
     Ok(view! {
+        live_watch(tokens: "topic-version rule".to_owned())
         page_header(title: "Topics", subtitle: "What transmissions are about, per topic-model version, and how topics carried over after a re-fit.")
         if let Some(status) = status {
             (status)

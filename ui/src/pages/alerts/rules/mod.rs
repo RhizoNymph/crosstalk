@@ -24,6 +24,7 @@ use self::model::{
 };
 use crate::app::{backend, caller, can};
 use crate::components::form::{BUTTON, LINK, SECTION, SECTION_TITLE, SMALL_BUTTON};
+use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     Tone, content_hidden, data_table, empty_state, error_panel, flash_banner, href, page_header,
@@ -174,6 +175,7 @@ async fn rules_page(
     let inbox_url = href("/alerts", &state, &[]);
 
     Ok(view! {
+        live_watch(tokens: "rule".to_owned())
         <div class="mb-1 text-xs text-zinc-500"><a class=(LINK) href=(inbox_url)>"Alerts"</a> " / rules"</div>
         page_header(title: "Alert rules", subtitle: "What raises an alert, and where alerts are delivered. Rules are never deleted, so every alert keeps its rule.")
         if let Some((status, error)) = failed {

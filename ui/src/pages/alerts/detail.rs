@@ -16,6 +16,7 @@ use super::model::AlertRow;
 use super::rules::PATH as RULES_PATH;
 use crate::app::{backend, caller, can};
 use crate::components::form::{BUTTON, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
+use crate::components::live::{live_watch, watch_one};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
@@ -157,7 +158,9 @@ async fn alert_page(
         ],
     );
 
+    let watch = format!("{} rule", watch_one("alert", id));
     Ok(view! {
+        live_watch(tokens: watch)
         <div class="mb-1 text-xs text-zinc-500"><a class=(LINK) href=(inbox_url)>"Alerts"</a> " / alert"</div>
         match loaded {
             Err(error) => {
