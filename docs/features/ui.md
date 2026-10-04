@@ -222,12 +222,18 @@ lists sinks with their last delivery result.
 
 | Path | Role |
 | --- | --- |
-| `ui/Cargo.toml` | The `crosstalk-ui` package. Pins `topcoat = "=0.9.0"`. |
-| `ui/src/main.rs` | Builds the router (pages, assets, runtime) and serves. |
-| `ui/src/contract/` | The L8 additions the UI needs, mirroring the spec's naming. Removed when the gateway's types land. |
-| `ui/src/backend/` | `Backend` trait (mirrors `QueryApi` + `OperatorActions` + contract additions) and `FixtureBackend`. |
-| `ui/src/view_state.rs` | `ViewState`: the typed URL query shared by every page and data route. |
-| `ui/src/pages/` | One module per screen. |
+| `ui/Cargo.toml` | The `crosstalk-ui` package. Pins `topcoat = "=0.9.0"` and every other dependency exactly. |
+| `ui/build.rs`, `ui/styles/app.css` | Tailwind 4.3.3 (checksum-pinned on linux-x64) rendered from classes in `src/`. Route-kind colours are theme tokens shared with the elements. |
+| `ui/config.json` | Listen address, trusted operator, backend choice (`fixture { seed }`). `CROSSTALK_UI_CONFIG` overrides the path. |
+| `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. |
+| `ui/src/app.rs` | `backend(cx)`, `caller(cx)`, `operator(cx)`, `can(caller, permission)`. `AppBackend` is the configured backend type. |
+| `ui/src/config.rs` | `Config`, `TrustedOperator` (builds the all-permissions `Caller`), `BackendConfig`. |
+| `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`). Checked constructors: `TopologyView`, `BipartiteView`, `ProjectionPoints`, `Excerpt`, `AgentLabel`, `RuleName`, `SearchText`, `ProjectionParams`. Removed when the gateway's types land. |
+| `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures. |
+| `ui/src/backend/fixture/` | `FixtureBackend`: deterministic synthetic world from a seed. |
+| `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query). |
+| `ui/src/pages/` | `mod.rs` (root layout and navigation), `view.rs` (`view_state(cx)`: parse, default, redirect to canonical), one module per screen. |
+| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting. |
 | `ui/src/data/` | `#[route]` endpoints feeding the custom elements, and their payload types. |
 | `ui/elements/` | TypeScript custom elements (pnpm, strict TS, esbuild, vitest, biome). |
 
@@ -248,9 +254,13 @@ lists sinks with their last delivery result.
 ## Build and toolchain
 
 - Rust: the repository toolchain (`nightly-2026-10-02`); Topcoat 0.9.0
-  needs rustc 1.98 or newer.
+  needs rustc 1.98 or newer. The build script downloads the Tailwind CLI
+  from GitHub on first build.
 - Assets: `topcoat asset bundle` (from `topcoat-cli` 0.9.0) after
-  `pnpm --dir ui/elements build`, so the bundle includes the elements.
+  `pnpm --dir ui/elements build`, so the bundle includes the elements and
+  the Tailwind stylesheet. The bundle is written next to the binary and
+  must come from the same build.
+- Run: `cargo run` from `ui/` serves on the configured address.
 - Topcoat releases roughly weekly and expects breaking changes. Upgrades
   are deliberate, one version at a time, and only to releases at least a
   week old.
@@ -308,6 +318,16 @@ What the UI needs from L8 beyond the current `QueryApi` and
 12. **Audit.** `AuditEntry { id, at, by: Config | Operator(id), action,
     outcome: Applied | Rejected(error) }`, append-only, covering every
     operator action and config change; `operators()` with display names.
+
+22. **Evidence content.** `transmission(id)` returns the matched text:
+    `TransmissionEvidence { transmission, matches: Vec<MatchEvidence {
+    content_match, origin: Excerpt, read: Excerpt }>, accesses:
+    Vec<AccessDetail { access, resource }>, verdicts }`. An `Excerpt` is
+    text around the matched range with the highlight checked to lie on
+    character boundaries. Needs `Content`.
+23. **Search by text.** `search` takes `SearchRequest { text, mode: Text |
+    Semantic | Hybrid }` and the gateway embeds the text; the UI never
+    handles embeddings.
 
 ### Actions
 
