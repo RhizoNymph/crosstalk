@@ -1,0 +1,171 @@
+//! Folding: the normalization `Normalized` matches compare under.
+//!
+//! In one pass over the raw text:
+//!
+//! 1. **String escapes are unfolded**, whatever their nesting depth: a run of
+//!    backslashes before `n`, `t`, `r`, `b` or `f` becomes whitespace, before
+//!    `uXXXX` the character it names, before a line break nothing (a YAML
+//!    line continuation, which also drops the next line's indentation), and
+//!    before anything else is dropped (`\"` is `"`, `\\` is `\`). Content one
+//!    agent wrote inside JSON tool arguments therefore folds to the same text
+//!    as the same content delivered raw, escaped twice in a relayed log, or
+//!    wrapped in YAML.
+//! 2. **Case is folded** (`char::to_lowercase`).
+//! 3. **Whitespace is collapsed**: every run becomes one space; leading
+//!    whitespace is dropped.
+//!
+//! Each folded byte remembers the raw byte range it came from, so a folded
+//! match maps back to a raw location on character boundaries.
+
+/// Folded text and, per folded byte, the raw range `[start, end)` that
+/// produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folded {
+    pub text: String,
+    pub raw_start: Vec<u32>,
+    pub raw_end: Vec<u32>,
+}
+
+impl Folded {
+    /// The raw byte range a folded range `[start, end)` came from.
+    pub fn raw_range(&self, start: usize, end: usize) -> Option<(u32, u32)> {
+        if start >= end {
+            return None;
+        }
+        Some((*self.raw_start.get(start)?, *self.raw_end.get(end - 1)?))
+    }
+}
+
+struct Writer {
+    folded: Folded,
+    /// The last thing written was whitespace (or nothing yet).
+    in_space: bool,
+}
+
+impl Writer {
+    fn push(&mut self, ch: char, start: usize, end: usize) {
+        let (start, end) = (to_u32(start), to_u32(end));
+        if ch.is_whitespace() {
+            if !self.in_space {
+                self.emit(' ', start, end);
+                self.in_space = true;
+            }
+            return;
+        }
+        self.in_space = false;
+        for lower in ch.to_lowercase() {
+            self.emit(lower, start, end);
+        }
+    }
+
+    fn emit(&mut self, ch: char, start: u32, end: u32) {
+        let mut buffer = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buffer);
+        self.folded.text.push_str(encoded);
+        for _ in 0..encoded.len() {
+            self.folded.raw_start.push(start);
+            self.folded.raw_end.push(end);
+        }
+    }
+}
+
+fn to_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Folds `raw`; ranges are offset by `base` (the position of `raw` in the
+/// part text it was cut from).
+pub fn fold(raw: &str, base: usize) -> Folded {
+    let mut writer = Writer {
+        folded: Folded {
+            text: String::with_capacity(raw.len()),
+            raw_start: Vec::with_capacity(raw.len()),
+            raw_end: Vec::with_capacity(raw.len()),
+        },
+        in_space: true,
+    };
+    let chars: Vec<(usize, char)> = raw.char_indices().collect();
+    let end_of = |at: usize| chars.get(at).map_or(raw.len(), |(offset, _)| *offset);
+    let mut at = 0;
+    while at < chars.len() {
+        let (start, ch) = chars[at];
+        if ch != '\\' {
+            writer.push(ch, base + start, base + end_of(at + 1));
+            at += 1;
+            continue;
+        }
+        let mut next = at;
+        while next < chars.len() && chars[next].1 == '\\' {
+            next += 1;
+        }
+        let Some(&(_, escaped)) = chars.get(next) else {
+            // Trailing backslashes: nothing to unfold.
+            break;
+        };
+        match escaped {
+            'n' | 't' | 'r' | 'b' | 'f' => {
+                writer.push(' ', base + start, base + end_of(next + 1));
+                at = next + 1;
+            }
+            'u' => match unicode_escape(&chars, next + 1) {
+                Some((decoded, after)) => {
+                    writer.push(decoded, base + start, base + end_of(after));
+                    at = after;
+                }
+                None => at = next,
+            },
+            '\n' | '\r' => {
+                // YAML line continuation: drop the break and the indentation.
+                let mut after = next + 1;
+                if escaped == '\r' && chars.get(after).is_some_and(|(_, c)| *c == '\n') {
+                    after += 1;
+                }
+                while chars
+                    .get(after)
+                    .is_some_and(|(_, c)| *c == ' ' || *c == '\t')
+                {
+                    after += 1;
+                }
+                at = after;
+            }
+            _ => {
+                // `\"`, `\\` collapsed into the run, `\/`, anything else: the
+                // backslashes go, the character stays.
+                writer.push(escaped, base + start, base + end_of(next + 1));
+                at = next + 1;
+            }
+        }
+    }
+    writer.folded
+}
+
+/// The character a `uXXXX` escape (with `XXXX` at `at`) names, and the index
+/// after it; a surrogate pair written as two escapes is combined.
+fn unicode_escape(chars: &[(usize, char)], at: usize) -> Option<(char, usize)> {
+    let high = hex4(chars, at)?;
+    if (0xD800..0xDC00).contains(&high) {
+        // Expect `\uDCxx` next (any number of backslashes).
+        let mut next = at + 4;
+        let mut slashes = 0;
+        while chars.get(next).is_some_and(|(_, c)| *c == '\\') {
+            next += 1;
+            slashes += 1;
+        }
+        if slashes > 0 && chars.get(next).is_some_and(|(_, c)| *c == 'u') {
+            let low = hex4(chars, next + 1)?;
+            if (0xDC00..0xE000).contains(&low) {
+                let combined = 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+                return char::from_u32(combined).map(|ch| (ch, next + 5));
+            }
+        }
+        return Some(('\u{FFFD}', at + 4));
+    }
+    char::from_u32(high).map(|ch| (ch, at + 4))
+}
+
+fn hex4(chars: &[(usize, char)], at: usize) -> Option<u32> {
+    let digits = chars.get(at..at + 4)?;
+    digits
+        .iter()
+        .try_fold(0u32, |value, (_, c)| Some(value * 16 + c.to_digit(16)?))
+}

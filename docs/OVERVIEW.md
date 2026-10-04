@@ -63,8 +63,12 @@ Overview:
     Pipeline (build over any blob store, bus and injected clock), and a
     pre-normalized exchange enters it through Pipeline::ingest, the same
     path the capture stage takes after L1 (P3.1), so the eval harness can
-    drive the real layers under simulated time. The other
-    crates are still empty. The phased implementation plan, with its
+    drive the real layers under simulated time. crosstalk-eval is that
+    harness (eval): it converts public multi-agent datasets (SALT-NLP
+    first) into labelled corpora of spec NormalizedExchanges, scores a
+    detector against the labels, and runs both a naive reference matcher
+    and Pipeline::ingest (unscored until detection consumers exist). The
+    other crates are still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -139,6 +143,14 @@ Overview:
       synthetic week the UI and the tests share, seeded through the write
       traits). Layer crates may depend on store; memory, sim, testkit and
       world are their dev-dependencies only.
+    eval: >
+      Crate crosstalk-eval (a composer, beside the gateway rather than in
+      it) and its ct-eval binary: dataset converters stream worlds of spec
+      NormalizedExchanges with ground-truth labels; a detector (the naive
+      reference matcher, or the gateway's own Pipeline::ingest, which is
+      unscored until L3 to L5 consume the bus) produces spec Transmissions;
+      the scorer aligns them with the labels and reports per dataset,
+      route, carrier, match class and tier against regression gates.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -763,4 +775,28 @@ Features Index:
       - crates/world/tests/support/mod.rs
     depends_on: [type_spec, memory, transport, workspace]
     doc: docs/features/world.md
+  eval:
+    description: >
+      crosstalk-eval and the ct-eval CLI (a composer): dataset converters
+      (SALT-NLP first) streaming worlds of checked spec
+      NormalizedExchanges on a deterministic virtual clock, with typed,
+      JSONL-serialisable ground truth (expected transmissions, negative
+      controls, agent clusters, with tiers); predictions converted from
+      spec Transmissions and ContentMatches; one documented alignment rule
+      and a scorer with TP/FP/FN by dataset, route, carrier, match class
+      and tier, negative-control violations and a DetectionQuality bridge;
+      a Detector seam with the naive reference matcher (escape-aware
+      normalization, decoding, opaque-blob exclusion) and the gateway
+      pipeline (Pipeline::ingest under the corpus clock or a sim clock,
+      reported as unscored until detection consumers exist); reports and
+      regression gates.
+    entry_points:
+      - crates/eval/src/lib.rs
+      - crates/eval/src/pipeline.rs
+      - crates/eval/src/gateway.rs
+      - crates/eval/src/score/align.rs
+      - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/bin/ct-eval/main.rs
+    depends_on: [type_spec, gateway, transport, sim, testkit]
+    doc: docs/features/eval.md
 ```
