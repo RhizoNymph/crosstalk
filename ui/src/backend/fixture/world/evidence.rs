@@ -1,0 +1,156 @@
+//! Content matches with the text behind them: the sender's paragraph, and
+//! the reader's copy of its key sentence as it arrived (exact, re-cased,
+//! encoded or paraphrased).
+
+use std::num::NonZeroU32;
+
+use crosstalk_spec::derived::provenance::matching::{Carrier, Codec, ContentMatch, MatchKind};
+use crosstalk_spec::derived::provenance::span::SpanLocation;
+use crosstalk_spec::ids::{AgentId, ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::observed::message::PartRef;
+use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty, Similarity, Timestamp};
+
+use crate::backend::fixture::clock::Mint;
+use crate::backend::fixture::rng::Rng;
+use crate::backend::fixture::text::{self, Theme, codec};
+use crate::contract::evidence::Excerpt;
+
+use super::{GenError, MatchText};
+
+pub struct BuiltMatch {
+    pub content: ContentMatch,
+    pub text: MatchText,
+}
+
+/// The codec chains decoded matches use, in application order.
+const CHAINS: &[&[Codec]] = &[
+    &[Codec::Base64],
+    &[Codec::Base64, Codec::UrlEncoding],
+    &[Codec::Hex],
+    &[Codec::UrlEncoding],
+    &[Codec::UnicodeNormalization],
+];
+
+pub fn pick_kind(rng: &mut Rng) -> Result<MatchKind, GenError> {
+    Ok(match rng.weighted(&[0.5, 0.2, 0.15, 0.15]) {
+        Some(1) => MatchKind::Normalized,
+        Some(2) => {
+            let chain = rng.pick(CHAINS).copied().unwrap_or(&[Codec::Base64]);
+            let chain = NonEmpty::from_vec(chain.to_vec())
+                .ok_or_else(|| GenError::Missing("codec chain".to_owned()))?;
+            MatchKind::Decoded(chain)
+        }
+        Some(3) => {
+            let score = 0.70 + 0.27 * rng.unit();
+            MatchKind::Semantic(
+                Similarity::new(score as f32).map_err(|e| GenError::invalid("Similarity", e))?,
+            )
+        }
+        _ => MatchKind::Exact,
+    })
+}
+
+pub fn part(rng: &mut Rng) -> PartRef {
+    PartRef {
+        message: MessageHash::from_digest(Blake3::from_bytes(rng.bytes32())),
+        index: u16::try_from(rng.below(6)).unwrap_or(0),
+    }
+}
+
+/// The line a reader's input shows before the copied text.
+fn context(carrier: &Carrier) -> &'static str {
+    match carrier {
+        Carrier::ToolResult(_) => "Tool result:\n",
+        Carrier::UserTurn => "Forwarded from another session:\n",
+        Carrier::SystemPrompt => "## Team context\n",
+        Carrier::ReaderOutput => "Plan for this step: ",
+    }
+}
+
+fn len_u32(n: usize, what: &'static str) -> Result<u32, GenError> {
+    u32::try_from(n).map_err(|e| GenError::invalid(what, e))
+}
+
+/// Who a match is between and how it arrived.
+pub struct Ends {
+    pub theme: Theme,
+    pub from: AgentId,
+    pub to: AgentId,
+    pub exchange: ExchangeId,
+    pub carrier: Carrier,
+}
+
+/// One content match of `kind`: a fresh paragraph on the theme for the
+/// sender, and the reader's copy of its key sentence.
+pub fn build(
+    rng: &mut Rng,
+    mint: &mut Mint,
+    ends: Ends,
+    kind: MatchKind,
+    at: Timestamp,
+) -> Result<BuiltMatch, GenError> {
+    let Ends {
+        theme,
+        from,
+        to,
+        exchange,
+        carrier,
+    } = ends;
+    let paragraph = text::paragraph(theme, rng);
+    let key = paragraph.key_text().to_owned();
+    let origin_before = len_u32(rng.below(1500) as usize, "elided")?;
+    let origin_after = len_u32(rng.below(800) as usize, "elided")?;
+    let origin = Excerpt::new(
+        paragraph.text.clone(),
+        paragraph.key.clone(),
+        (origin_before, origin_after),
+    )
+    .map_err(|e| GenError::invalid("Excerpt (origin)", e))?;
+
+    let body = match &kind {
+        MatchKind::Exact => key.clone(),
+        MatchKind::Normalized => codec::denormalize(&key),
+        MatchKind::Decoded(chain) => codec::encode_chain(&key, chain.iter()),
+        MatchKind::Semantic(_) => text::sentence(theme, rng),
+    };
+    let prefix = context(&carrier);
+    let suffix = format!("\n{}", text::sentence(theme, rng));
+    let read_text = format!("{prefix}{body}{suffix}");
+    let highlight = prefix.len()..prefix.len() + body.len();
+    let before = len_u32(rng.below(4000) as usize, "elided")?;
+    let read = Excerpt::new(
+        read_text,
+        highlight.clone(),
+        (before, len_u32(rng.below(600) as usize, "elided")?),
+    )
+    .map_err(|e| GenError::invalid("Excerpt (read)", e))?;
+
+    let start = before + len_u32(highlight.start, "range")?;
+    let end = before + len_u32(highlight.end, "range")?;
+    let range = ByteRange::new(start, end).map_err(|e| GenError::invalid("ByteRange", e))?;
+    let read_len = range.len().get();
+    let matched = match kind {
+        MatchKind::Semantic(_) => (read_len * 4 / 5).max(1),
+        _ => read_len,
+    };
+    let matched =
+        NonZeroU32::new(matched).ok_or_else(|| GenError::Missing("matched bytes".to_owned()))?;
+    let content = ContentMatch::new(
+        SpanId::from_ulid(mint.ulid(at)),
+        from,
+        to,
+        exchange,
+        SpanLocation {
+            part: part(rng),
+            range,
+        },
+        carrier,
+        kind,
+        matched,
+    )
+    .map_err(|e| GenError::invalid("ContentMatch", e))?;
+    Ok(BuiltMatch {
+        content,
+        text: MatchText { origin, read },
+    })
+}

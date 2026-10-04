@@ -1,18 +1,38 @@
 //! A backend over deterministic synthetic data, for development, tests and
-//! demos. Same seed, same world.
+//! demos. Same seed, same world, same answers.
 //!
-//! This is a stub that returns an empty world; the generator replaces it.
+//! - [`world`] generates seven days of traffic between about forty agents
+//!   over fifteen channels, with topics, alerts, rules and operator history.
+//!   It is immutable once built.
+//! - [`store`] holds what operator actions change, behind one lock.
+//! - [`queries`] reads both, resolving merged agents and superseded
+//!   channels at read time; [`actions`] applies operator actions and audits
+//!   every one.
+//!
+//! The scenarios the world contains are listed in `docs/features/ui.md`.
+
+mod actions;
+mod clock;
+mod queries;
+mod rng;
+mod store;
+mod text;
+mod world;
+
+#[cfg(test)]
+mod tests;
 
 use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::alert::Alert;
-use crosstalk_spec::aggregates::edge::{TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
+use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
+use tokio::sync::RwLock;
 
 use super::{Backend, Result};
 use crate::contract::ProjectionId;
@@ -34,236 +54,294 @@ use crate::contract::scope::Scope;
 use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
 
+use queries::{Ctx, require};
+use store::State;
+use world::World;
+
+pub use world::GenError;
+
 #[derive(Debug)]
 pub struct FixtureBackend {
-    seed: u64,
+    world: World,
+    state: RwLock<State>,
 }
 
 impl FixtureBackend {
+    /// Generates the world for `seed`. Generation only fails on a fixture
+    /// bug; then the error is logged and the backend serves an empty world.
     pub fn new(seed: u64) -> Self {
-        Self { seed }
+        Self::try_new(seed).unwrap_or_else(|error| {
+            tracing::error!(seed, %error, "fixture generation failed; serving an empty world");
+            let (world, state) = world::empty(seed);
+            Self {
+                world,
+                state: RwLock::new(state),
+            }
+        })
+    }
+
+    pub fn try_new(seed: u64) -> std::result::Result<Self, GenError> {
+        let (world, state) = world::generate(seed)?;
+        Ok(Self {
+            world,
+            state: RwLock::new(state),
+        })
     }
 
     pub fn seed(&self) -> u64 {
-        self.seed
+        self.world.seed
     }
 
-    /// The end of the generated data; every bucket before it is final.
+    /// The end of the generated data. Buckets before the watermark (ten
+    /// minutes earlier) are final.
     pub fn now(&self) -> Timestamp {
-        Timestamp::from_micros(1_790_985_600_000_000)
+        clock::NOW
     }
 
+    /// The latest fitted topic-model version.
     pub fn current_topic_version(&self) -> TopicModelVersion {
-        TopicModelVersion(0)
+        self.world.topics.latest()
     }
-}
 
-fn empty<T>() -> Page<T> {
-    Page {
-        items: Vec::new(),
-        next: None,
+    /// Runs a read under the state's read lock.
+    async fn read<T>(&self, f: impl FnOnce(&Ctx) -> Result<T>) -> Result<T> {
+        let state = self.state.read().await;
+        f(&Ctx::new(&self.world, &state))
     }
 }
 
 impl Backend for FixtureBackend {
     async fn topology(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         scope: &Scope,
         weighting: Weighting,
     ) -> Result<TopologyView> {
-        let graph = TopologyGraph {
-            window: scope.window,
-            weighting,
-            topic_version: scope.topic_version,
-            edges: Vec::new(),
-        };
-        TopologyView::new(graph, Vec::new(), self.now()).map_err(|e| QueryError::Store {
-            reason: e.to_string(),
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::topology(ctx, scope, weighting))
+            .await
     }
 
     async fn channel_topology(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         scope: &Scope,
         weighting: Weighting,
     ) -> Result<BipartiteView> {
-        BipartiteView::new(
-            scope.window,
-            weighting,
-            scope.topic_version,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            self.now(),
-        )
-        .map_err(|e| QueryError::Store {
-            reason: e.to_string(),
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::channel_topology(ctx, scope, weighting))
+            .await
     }
 
     async fn timeline(
         &self,
-        _caller: &Caller,
-        _scope: &Scope,
-        _buckets: NonZeroU32,
+        caller: &Caller,
+        scope: &Scope,
+        buckets: NonZeroU32,
     ) -> Result<Timeline> {
-        Ok(Timeline {
-            bucket_width: std::time::Duration::from_secs(3600),
-            buckets: Vec::new(),
-            watermark: self.now(),
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::timeline(ctx, scope, buckets))
+            .await
     }
 
     async fn transmissions(
         &self,
-        _caller: &Caller,
-        _scope: &Scope,
-        _selector: &TransmissionSelector,
-        _page: &PageRequest,
+        caller: &Caller,
+        scope: &Scope,
+        selector: &TransmissionSelector,
+        page: &PageRequest,
     ) -> Result<Page<TransmissionSummary>> {
-        Ok(empty())
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::transmissions::list(ctx, scope, selector, page))
+            .await
     }
 
     async fn transmission(
         &self,
-        _caller: &Caller,
-        _id: TransmissionId,
+        caller: &Caller,
+        id: TransmissionId,
     ) -> Result<Option<TransmissionEvidence>> {
-        Ok(None)
+        require(caller, Permission::Content)?;
+        self.read(|ctx| Ok(queries::transmissions::evidence(ctx, id)))
+            .await
     }
 
     async fn search(
         &self,
-        _caller: &Caller,
-        _request: &SearchRequest,
-        _scope: &Scope,
-        _page: &PageRequest,
+        caller: &Caller,
+        request: &SearchRequest,
+        scope: &Scope,
+        page: &PageRequest,
     ) -> Result<Page<SearchHit>> {
-        Ok(empty())
+        require(caller, Permission::Content)?;
+        self.read(|ctx| queries::transmissions::search(ctx, request, scope, page))
+            .await
     }
 
-    async fn topic_versions(&self, _caller: &Caller) -> Result<Vec<TopicVersionInfo>> {
-        Ok(Vec::new())
+    async fn topic_versions(&self, caller: &Caller) -> Result<Vec<TopicVersionInfo>> {
+        require(caller, Permission::Content)?;
+        Ok(self.world.topics.versions.clone())
     }
 
-    async fn topics(&self, _caller: &Caller, _version: TopicModelVersion) -> Result<Vec<Topic>> {
-        Ok(Vec::new())
+    async fn topics(&self, caller: &Caller, version: TopicModelVersion) -> Result<Vec<Topic>> {
+        require(caller, Permission::Content)?;
+        self.read(|ctx| queries::content::topics(ctx, version))
+            .await
     }
 
     async fn topic_stats(
         &self,
-        _caller: &Caller,
-        _scope: &Scope,
-        _buckets: NonZeroU32,
+        caller: &Caller,
+        scope: &Scope,
+        buckets: NonZeroU32,
     ) -> Result<Vec<TopicStats>> {
-        Ok(Vec::new())
+        require(caller, Permission::Content)?;
+        self.read(|ctx| queries::content::stats(ctx, scope, buckets))
+            .await
     }
 
     async fn topic_remap(
         &self,
-        _caller: &Caller,
-        _from: TopicModelVersion,
+        caller: &Caller,
+        from: TopicModelVersion,
     ) -> Result<Option<TopicVersionRemap>> {
-        Ok(None)
+        require(caller, Permission::Content)?;
+        self.read(|ctx| queries::content::remap(ctx, from)).await
     }
 
     async fn fit_projection(
         &self,
-        _caller: &Caller,
-        _scope: &Scope,
-        _params: ProjectionParams,
+        caller: &Caller,
+        scope: &Scope,
+        params: ProjectionParams,
     ) -> Result<ProjectionId> {
-        Err(QueryError::NotFound)
+        require(caller, Permission::Content)?;
+        queries::retained(&self.world, scope.topic_version)?;
+        let mut state = self.state.write().await;
+        let same = |p: &ProjectionPoints| p.meta().scope == *scope && p.meta().params == params;
+        if let Some((id, _)) = state.projections.iter().find(|(_, p)| same(p)) {
+            return Ok(*id);
+        }
+        let id = ProjectionId::from_ulid(state.mint.ulid(clock::NOW));
+        let points = queries::content::project(&Ctx::new(&self.world, &state), scope, params, id)?;
+        state.projections.push((id, points));
+        Ok(id)
     }
 
-    async fn projection_job(&self, _caller: &Caller, _id: ProjectionId) -> Result<ProjectionJob> {
-        Err(QueryError::NotFound)
+    async fn projection_job(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionJob> {
+        require(caller, Permission::Content)?;
+        let state = self.state.read().await;
+        state
+            .projections
+            .iter()
+            .find(|(p, _)| *p == id)
+            .map(|(_, points)| ProjectionJob::Ready(points.meta().clone()))
+            .ok_or(QueryError::NotFound)
     }
 
-    async fn projection(&self, _caller: &Caller, _id: ProjectionId) -> Result<ProjectionPoints> {
-        Err(QueryError::NotFound)
+    async fn projection(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionPoints> {
+        require(caller, Permission::Content)?;
+        let state = self.state.read().await;
+        state
+            .projections
+            .iter()
+            .find(|(p, _)| *p == id)
+            .map(|(_, points)| points.clone())
+            .ok_or(QueryError::NotFound)
     }
 
     async fn channels(
         &self,
-        _caller: &Caller,
-        _filter: &ChannelListFilter,
-        _page: &PageRequest,
+        caller: &Caller,
+        filter: &ChannelListFilter,
+        page: &PageRequest,
     ) -> Result<Page<ChannelSummary>> {
-        Ok(empty())
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::channels(ctx, filter, page))
+            .await
     }
 
-    async fn channel(&self, _caller: &Caller, _id: ChannelId) -> Result<Option<ChannelSummary>> {
-        Ok(None)
+    async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<ChannelSummary>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::lists::channel(ctx, id))).await
     }
 
     async fn channel_resources(
         &self,
-        _caller: &Caller,
-        _id: ChannelId,
-        _window: TimeWindow,
+        caller: &Caller,
+        id: ChannelId,
+        window: TimeWindow,
     ) -> Result<Vec<ResourceUse>> {
-        Ok(Vec::new())
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::channel_resources(ctx, id, window))
+            .await
     }
 
-    async fn agents(&self, _caller: &Caller, _page: &PageRequest) -> Result<Page<AgentSummary>> {
-        Ok(empty())
+    async fn agents(&self, caller: &Caller, page: &PageRequest) -> Result<Page<AgentSummary>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::agents(ctx, page)).await
     }
 
-    async fn agent(&self, _caller: &Caller, _id: AgentId) -> Result<Option<AgentDetail>> {
-        Ok(None)
+    async fn agent(&self, caller: &Caller, id: AgentId) -> Result<Option<AgentDetail>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::lists::agent(ctx, id))).await
     }
 
     async fn alerts(
         &self,
-        _caller: &Caller,
-        _filter: &AlertFilter,
-        _page: &PageRequest,
+        caller: &Caller,
+        filter: &AlertFilter,
+        page: &PageRequest,
     ) -> Result<Page<Alert>> {
-        Ok(empty())
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::alerts(ctx, filter, page))
+            .await
     }
 
-    async fn rules(&self, _caller: &Caller) -> Result<Vec<RuleDef>> {
-        Ok(Vec::new())
+    async fn rules(&self, caller: &Caller) -> Result<Vec<RuleDef>> {
+        require(caller, Permission::View)?;
+        Ok(self.state.read().await.rules.clone())
     }
 
-    async fn sinks(&self, _caller: &Caller) -> Result<Vec<SinkInfo>> {
-        Ok(Vec::new())
+    async fn sinks(&self, caller: &Caller) -> Result<Vec<SinkInfo>> {
+        require(caller, Permission::View)?;
+        Ok(self.world.sinks.clone())
     }
 
     async fn detection_quality(
         &self,
-        _caller: &Caller,
-        _window: TimeWindow,
+        caller: &Caller,
+        window: TimeWindow,
     ) -> Result<Vec<QualityRow>> {
-        Ok(Vec::new())
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::lists::quality(ctx, window)))
+            .await
     }
 
     async fn audit(
         &self,
-        _caller: &Caller,
-        _filter: &AuditFilter,
-        _page: &PageRequest,
+        caller: &Caller,
+        filter: &AuditFilter,
+        page: &PageRequest,
     ) -> Result<Page<AuditEntry>> {
-        Ok(empty())
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::lists::audit(ctx, filter, page))
+            .await
     }
 
-    async fn operators(&self, _caller: &Caller) -> Result<Vec<Operator>> {
-        Ok(Vec::new())
+    async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>> {
+        require(caller, Permission::View)?;
+        Ok(self.world.operators.clone())
     }
 
-    async fn dead_letters(
-        &self,
-        _caller: &Caller,
-        _page: &PageRequest,
-    ) -> Result<Page<DeadLetter>> {
-        Ok(empty())
+    async fn dead_letters(&self, caller: &Caller, page: &PageRequest) -> Result<Page<DeadLetter>> {
+        require(caller, Permission::Operate)?;
+        self.read(|ctx| queries::lists::dead_letters(ctx, page))
+            .await
     }
 
-    async fn act(&self, _caller: &Caller, _action: OperatorAction) -> Result<ActionOutcome> {
-        Err(QueryError::NotFound)
+    async fn act(&self, caller: &Caller, action: OperatorAction) -> Result<ActionOutcome> {
+        let mut state = self.state.write().await;
+        actions::act(&self.world, &mut state, caller, action)
     }
 }
