@@ -46,11 +46,11 @@ pub use agents::Cast;
 pub use blobs::Blobs;
 pub use channels::ChannelKey;
 pub use retention::BodySide;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub use states::co_accesses;
 pub use states::confirmed;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub use history::OPERATOR_ONCALL;
 pub use history::OPERATOR_RESEARCHER;
 

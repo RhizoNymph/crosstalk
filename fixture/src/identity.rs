@@ -87,7 +87,7 @@ impl Identity {
             .unwrap_or(id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_merged(&self, id: AgentId) -> bool {
         self.agent(id)
             .is_some_and(|agent| agent.state.merged_into().is_some())

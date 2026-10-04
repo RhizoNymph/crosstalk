@@ -23,6 +23,8 @@ mod actions;
 mod alert_state;
 mod audit;
 mod clock;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
 pub mod export;
 mod identity;
 pub mod live;
