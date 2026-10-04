@@ -23,8 +23,9 @@ pub struct Conversation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversationOrigin {
     Root,
-    /// Shares the first `shared_prefix` messages with `parent`, then
-    /// diverges. The shared prefix always includes at least one assistant
+    /// Shares the first `shared_prefix` non-system messages with `parent`,
+    /// then diverges. (System messages are left out of prefix matching, so
+    /// they are left out of this count too.) The shared prefix always includes at least one assistant
     /// message, so conversations that only share a system prompt and first
     /// user turn are separate roots. A retry (a request that is a prefix of
     /// the parent's history) forks with `shared_prefix` equal to the
