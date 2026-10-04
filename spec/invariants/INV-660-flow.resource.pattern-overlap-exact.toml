@@ -17,8 +17,8 @@ unit = [
     "crosstalk_spec::tests::pattern_overlap::pattern_overlap_cases",
     "crosstalk_spec::tests::pattern_overlap::overlap_is_implied_by_a_shared_match",
 ]
-property = "crosstalk_flow::props::overlap_iff_shared_locator"
+property = "crosstalk_flow::extract::resource::tests::overlap_iff_shared_locator"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

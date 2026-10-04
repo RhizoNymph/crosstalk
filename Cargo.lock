@@ -249,6 +249,11 @@ name = "crosstalk-flow"
 version = "0.1.0"
 dependencies = [
  "crosstalk-spec",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
 ]
 
 [[package]]

@@ -12,7 +12,7 @@ specific file, so it never matches a declared PathPrefix pattern.
 """
 
 [evidence]
-unit = "crosstalk_flow::resource::tests::relative_path_without_cwd_is_opaque"
+unit = "crosstalk_flow::extract::resource::tests::relative_path_without_cwd_is_opaque"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

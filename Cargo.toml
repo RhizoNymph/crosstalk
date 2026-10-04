@@ -35,4 +35,5 @@ tokio = "=1.53.1"
 tower-service = "=0.3.3"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false }
+url = "=2.5.8"
 zstd = { version = "=0.13.3", default-features = false }
