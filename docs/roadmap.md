@@ -386,6 +386,15 @@ persist exchanges and blobs.
 - [ ] A manual check with a real Claude Code session.
 - [ ] Structured logs (key-value) and a health endpoint.
 
+### P3.1 Pipeline wiring and ingest-at-L1
+Done: the capture slice above. Next: factor the gateway's composition into a
+library entry, `crosstalk_gateway::pipeline::Pipeline::build(config, stores,
+clock)`, and split the capture stage so a pre-normalized exchange can enter
+through `Pipeline::ingest(NormalizedExchange, at)`. `ingest` stores the blobs,
+then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
+`Role::of`) drives the real layers through it on dataset corpora under sim
+time. Depends on P3; P4 and P5 consume it.
+
 ## P4 Identity and provenance (parallel)
 
 Both consume bus events, so they can be developed against recorded event
@@ -396,12 +405,16 @@ streams from testkit without waiting for P3.
 - [ ] `AgentDirectory` on Postgres: merges, unmerge restoring `prior`, vetoes and the merge log. It is model-tested against `crosstalk-memory`.
 - [ ] `Threader`: conversations, including WebSocket increment resolution.
 - [ ] Implement INV-139–190 and the merge and claim invariants.
+- [ ] Fixtures (read in place, never copy dataset bytes into the repo):
+  - AI Village Claude Code stream: `~/Data/ai/agents/ai-village/claude_code_messages.jsonl.gz` and `claude_code_sessions.jsonl.gz`. It has 940 compact_boundary records in one resumed session; group into calls by `content.message.id`; the schema is in `SCHEMA.md` there.
+  - lmcache interleaved re-runs: `~/Data/ai/agents/lmcache/data/train-0000{0..4}-of-00005.parquet`. In session `wildclaw__01_Productivity_Flow_task_1_arxiv_digest__claude`, two re-runs interleave under one session id.
 
 ### P4.2 L4 provenance
 - [ ] `Segmenter`, the `Decoder`s (codecs and carriers), and `Fingerprinter` (winnowing).
 - [ ] `FingerprintIndex` on Postgres (or an in-memory shard).
 - [ ] Publish `ContentMatched`. The semantic matcher is a stub until P6.2 provides embeddings.
 - [ ] Implement INV-191–235.
+- [ ] Escape-folded matching against AgentDojo: `~/Data/ai/agents/agentdojo/runs/<pipeline>/<suite>/<user_task>/<attack>/<injection_task>.json`. The `injections` field holds the exact text; the slots are in `src/agentdojo/data/suites/<suite>/environment.yaml`. 49% of slots need YAML/JSON un-escaping, 26% whitespace folding, and 9% are exact.
 
 ## P5 L5 flow (milestone M2)
 
@@ -409,6 +422,10 @@ streams from testkit without waiting for P3.
 - [ ] `ChannelRegistry` on Postgres: declare, discover, promote and supersede, policy history, and correlator shards keyed by canonical channel (INV-253).
 - [ ] `Correlator`: co-access plus content match gives a transmission. Includes suspected, confirmed, expiry and late confirmation on a canonical channel.
 - [ ] Verdict store.
+- [ ] Write outcomes, from the eval spec PR (crosstalk-rollouts, INV-950..999):
+  - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown when the settle window closes.
+  - Self-relayed spans count in `Write.spans`.
+  - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream).
 - [ ] Implement INV-236–290 plus the promotion and verdict ranges.
 - [ ] **M2 demo script:** two Claude Code agents and a local wiki MCP server, through the gateway. Assert the discovered channel and the confirmed transmission.
 
