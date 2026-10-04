@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.version.initial-zero"
+statement = "graph on a store that has never switched to another version reports topic_version 0."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Version 0 is the unfitted topic model, active from the start, so a fresh
+deployment has a graph before any re-fit. Every transmission is an outlier
+under it, so the graph shows all communication and any non-empty topic
+filter matches nothing (topology.filter.topic-membership). Without a
+defined initial version, graph would have no topic_version to report and
+no buckets to read until the first fit completed.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::fresh_store_graph_reports_version_zero"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

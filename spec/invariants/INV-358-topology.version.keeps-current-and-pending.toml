@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.version.keeps-current-and-pending"
+statement = "Dropping superseded buckets never removes buckets of the active version, the version it replaced, or any version newer than the active one."
+kind = "coordination"
+requires = ["property"]
+rationale = """
+Retention runs while L6 may already be re-classifying under a still newer
+version. Dropping the active version would empty the graph; dropping a
+pending version would lose applied classifications whose deliveries were
+already acked, so its processed count could never reach the
+TopicVersionReady count and it would never activate. Only versions older
+than the one just replaced are eligible.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::retention_spares_active_previous_and_pending_versions"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

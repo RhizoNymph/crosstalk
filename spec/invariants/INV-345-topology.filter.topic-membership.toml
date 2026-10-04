@@ -1,0 +1,22 @@
+[invariant]
+id = "topology.filter.topic-membership"
+statement = "When a filter's topics list is non-empty, a graph's stats count only transmissions whose topic under the graph's topic_version is in that list, so outlier transmissions never count."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Topic filters answer "who talks to whom about X". Topic ids only mean
+something within the topic-model version that produced them, so the filter
+is evaluated against the active version's topic slots, never against a
+transmission's classification under an older or a pending version.
+Outliers (topic None) belong to no topic and so match no topic filter.
+Unlike agent, channel and route-kind filters, a topic filter works below
+edge granularity: counting a whole edge because one of its transmissions
+matched would overstate it.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::topic_filter_counts_only_listed_topics"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

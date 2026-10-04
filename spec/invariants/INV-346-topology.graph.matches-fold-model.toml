@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.graph.matches-fold-model"
+statement = "graph returns the same edges, stats and shares as a reference fold that takes the applied contributions classified under the active topic version (one per transmission), keeps those whose at lies in the window, maps from and to through AgentDirectory::canonical, drops the resulting self-edges, keeps those that pass the filter, sums transmissions and matched_bytes per (from, to, route), and divides each sum under the weighting by the total."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+Edges are an aggregate that can be dropped and rebuilt from transmissions,
+so their meaning is a simple fold over the stored classified transmissions.
+The fold pins the order that matters: aliases are resolved before the agent
+filter and before grouping, and the filter's non-empty fields combine with
+AND. Checking both stores against it catches what the narrower properties
+miss: missing edges, edges split across rows or topic slots, buckets read
+twice by the continuous aggregate plus its real-time tail, buckets from a
+non-active version leaking in. Shares are compared within float error.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::in_memory_graph_matches_fold"
+integration = "crosstalk::topology::integration::timescale_graph_matches_fold"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
