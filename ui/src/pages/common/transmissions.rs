@@ -253,7 +253,7 @@ mod tests {
             id: TransmissionId::from_ulid(9),
             from: None,
             to: AgentId::from_ulid(2),
-            route_kind: crate::contract::graph::route_kind(&route),
+            route_kind: crosstalk_spec::aggregates::edge::RouteKind::from(&route),
             route,
             state: TransmissionStateKind::Suspected,
             opened_at: Timestamp::from_micros(1_790_985_600_000_000),

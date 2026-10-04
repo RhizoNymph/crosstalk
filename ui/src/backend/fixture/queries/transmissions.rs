@@ -11,15 +11,14 @@ use crate::backend::Result;
 use crate::backend::fixture::text::{self, Theme};
 use crate::backend::fixture::world::{TxRecord, co_accesses, confirmed, excerpt_text};
 use crate::contract::evidence::{AccessDetail, MatchEvidence, TransmissionEvidence};
-use crate::contract::graph::{
-    TransmissionSelector, TransmissionStateKind, TransmissionSummary, route_kind,
-};
+use crate::contract::graph::{TransmissionSelector, TransmissionStateKind, TransmissionSummary};
 use crate::contract::search::{SearchMode, SearchRequest};
 use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{Page, PageRequest, SearchList, TransmissionList};
 
 use super::Ctx;
+use super::linked::Linked;
 use super::page::{self, Key, newest_first};
 use super::scope::Filter;
 
@@ -44,7 +43,7 @@ pub fn summary(filter: &Filter, record: &TxRecord) -> TransmissionSummary {
         from: record.from.map(|f| ctx.agent(f)),
         to: ctx.agent(t.to),
         route: ctx.route(&t.route),
-        route_kind: route_kind(&t.route),
+        route_kind: crosstalk_spec::aggregates::edge::RouteKind::from(&t.route),
         state: state_kind(&t.state),
         opened_at: t.opened_at,
         topic: record.topic(filter.version),
@@ -87,7 +86,9 @@ pub fn list(
         }
         TransmissionSelector::Edge { from, to, route } => {
             let (from, to, route) = (ctx.agent(*from), ctx.agent(*to), ctx.route(route));
-            super::graph::counted(&filter)
+            let topology = scope.topology_filter();
+            Linked::new(ctx, scope.window, &topology)?
+                .counted()
                 .into_iter()
                 .filter(|c| c.from == from && c.to == to && c.route == route)
                 .map(|c| (key(c.record), summary(&filter, c.record)))

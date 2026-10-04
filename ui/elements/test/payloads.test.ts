@@ -18,7 +18,9 @@ describe('topology payload', () => {
     expect(a.edges.every((e) => e.kind === 'transmission')).toBe(true);
     const c = topologyPayload.parse(channels());
     expect(c.mode).toBe('channels');
-    expect(c.nodes.filter((n) => n.kind === 'channel').length).toBe(5);
+    // One channel node per channel an access touches or a transmission is
+    // routed through: an unused channel is not drawn.
+    expect(c.nodes.filter((n) => n.kind === 'channel').length).toBe(4);
     expect(c.edges.some((e) => e.kind === 'access')).toBe(true);
   });
 

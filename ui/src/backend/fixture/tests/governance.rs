@@ -14,7 +14,7 @@ use crosstalk_spec::support::{NonEmpty, Similarity};
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
-use super::{caller, collect, first, fresh, researcher, scope_with, week};
+use super::{caller, collect, first, fresh, graph_of, node_ids, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
@@ -122,8 +122,7 @@ async fn merge_then_unmerge_restores_the_graph() {
         agent(&b, "al2"),
         agent(&b, "al3"),
     );
-    let before = b
-        .topology(&c, &week(), Weighting::Transmissions)
+    let before = graph_of(&b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
     let prior = b
@@ -155,14 +154,13 @@ async fn merge_then_unmerge_restores_the_graph() {
         );
         assert_eq!(state.canonical_agent(al2), pi1);
     }
-    let merged = b
-        .topology(&c, &week(), Weighting::Transmissions)
+    let merged = graph_of(&b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert!(merged.nodes().iter().all(|n| n.id != pi2));
+    assert!(node_ids(&merged.value).iter().all(|n| *n != pi2));
     assert!(
         merged
-            .graph()
+            .value
             .edges
             .iter()
             .all(|e| e.from != pi2 && e.to != pi2)
@@ -186,15 +184,11 @@ async fn merge_then_unmerge_restores_the_graph() {
                 .any(|v| v.a == pi2 && v.b == pi1 && v.at == NOW)
         );
     }
-    let after = b
-        .topology(&c, &week(), Weighting::Transmissions)
+    let after = graph_of(&b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert_eq!(before.graph(), after.graph());
-    assert_eq!(
-        before.nodes().iter().map(|n| n.id).collect::<Vec<_>>(),
-        after.nodes().iter().map(|n| n.id).collect::<Vec<_>>()
-    );
+    assert_eq!(before.value.edges, after.value.edges);
+    assert_eq!(node_ids(&before.value), node_ids(&after.value));
     assert!(matches!(
         b.act(&c, OperatorAction::Unmerge { merge: id }).await.err(),
         Some(QueryError::Conflict(
@@ -486,18 +480,17 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
     .await;
     assert_eq!(rows.len() as u64, before);
     assert!(rows.iter().all(|t| t.route == Route::Channel(new)));
-    let view = b
-        .topology(&c, &week(), Weighting::Transmissions)
+    let view = graph_of(&b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
     assert!(
-        view.graph()
+        view.value
             .edges
             .iter()
             .all(|e| e.route != Route::Channel(wiki) && e.route != Route::Channel(talk))
     );
     assert!(
-        view.graph()
+        view.value
             .edges
             .iter()
             .any(|e| e.route == Route::Channel(new))

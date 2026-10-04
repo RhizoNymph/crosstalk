@@ -7,20 +7,25 @@ mod graph;
 mod lists;
 mod reads_support;
 mod scenarios;
+mod series;
 mod triage;
 mod world;
 
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
+use crosstalk_spec::aggregates::edge::{TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aggregates::watermark::Watermarked;
+use crosstalk_spec::ids::AgentId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use crosstalk_spec::support::TimeWindow;
 
 use super::FixtureBackend;
 use super::clock::{DAY, NOW, START, ago};
 use super::world::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
-use crate::backend::Result;
+use crate::backend::{Backend, Result};
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::paging::{Page, PageRequest};
 
@@ -108,4 +113,27 @@ pub async fn collect<T, L>(
             None => return out,
         }
     }
+}
+
+/// `topology` over a scope's window and filter, as pages call it.
+pub async fn graph_of(
+    b: &FixtureBackend,
+    c: &Caller,
+    scope: &Scope,
+    weighting: Weighting,
+) -> Result<Watermarked<TopologyGraph>> {
+    b.topology(c, scope.window, weighting, &scope.topology_filter())
+        .await
+}
+
+/// The ids of a graph's agent nodes, in node order.
+pub fn node_ids(graph: &TopologyGraph) -> Vec<AgentId> {
+    graph
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            GraphNode::Agent(agent) => Some(agent.id),
+            GraphNode::Channel(_) => None,
+        })
+        .collect()
 }

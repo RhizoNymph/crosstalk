@@ -1,5 +1,5 @@
-//! Hand-built contract values for the data tests, and the element fixture
-//! files generated from them.
+//! Hand-built spec and contract values for the data tests, and the element
+//! fixture files generated from them.
 //!
 //! `ui/elements/test/fixtures/` holds the payloads these values encode to;
 //! the TypeScript tests and the demo page read those files, so they parse
@@ -13,34 +13,40 @@
 use std::collections::BTreeMap;
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
-use std::time::Duration;
 
+use crosstalk_spec::aggregates::access::{BipartiteGraph, BipartiteParts, WeightedAccess};
 use crosstalk_spec::aggregates::edge::{
     EdgeStats, RouteKind, TopologyGraph, WeightedEdge, Weighting,
 };
+use crosstalk_spec::aggregates::node::{
+    AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
+};
+use crosstalk_spec::aggregates::series::{
+    BucketWidth, SeriesGrid, SeriesGroups, SeriesStep, TopologySeries,
+};
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
+use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
+use crosstalk_spec::observed::agent::{AgentLabel, ClaimSet};
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
 use crosstalk_spec::observed::message::ToolName;
-use crosstalk_spec::support::{Share, TimeWindow, Timestamp};
+use crosstalk_spec::support::{NonBlank, Share, TimeWindow, Timestamp};
 
+use super::names::shape_name;
 use super::projection::format::{ProjectionTables, encode};
 use super::timeline::TimelinePayload;
 use super::topology::TopologyPayload;
-use crate::components::agent_name;
-use crate::contract::agents::{AgentLabel, AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::channels::{DetectionKind, OriginKind};
-use crate::contract::graph::{
-    AccessEdge, BipartiteView, ChannelNode, ChannelShape, Timeline, TimelineBucket, TopologyView,
-    route_kind,
-};
+use crate::components::agent_node_name;
+use crate::contract::graph::ChannelShape;
 use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
+use crate::pages::common::transmissions::ChannelNames;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::ids::ProjectionId;
 
@@ -71,8 +77,15 @@ pub fn window() -> TimeWindow {
 }
 
 /// Every bucket before 23:22:30 is final.
-fn watermark() -> Timestamp {
-    ts(23 * HOUR_MICROS + 22 * 60_000_000 + 30_000_000)
+fn watermark() -> Watermark {
+    Watermark(ts(23 * HOUR_MICROS + 22 * 60_000_000 + 30_000_000))
+}
+
+fn watermarked<T>(value: T) -> Watermarked<T> {
+    Watermarked {
+        watermark: watermark(),
+        value,
+    }
 }
 
 /// SplitMix64: a small deterministic generator.
@@ -106,13 +119,13 @@ impl Rng {
 struct AgentSpec {
     n: u128,
     label: Option<&'static str>,
-    state: AgentStateKind,
+    state: CanonicalStateKind,
     parent: Option<u128>,
     claim: Option<(HarnessFamily, Option<&'static str>, &'static str)>,
 }
 
 fn agent_specs() -> Vec<AgentSpec> {
-    use AgentStateKind::{Established, Provisional, Registered};
+    use CanonicalStateKind::{Established, Provisional, Registered};
     use HarnessFamily::{ClaudeCode, Codex, OhMyPi, Pi, Unknown};
     let spec = |n, label, state, parent, claim| AgentSpec {
         n,
@@ -286,7 +299,7 @@ fn edges() -> Vec<WeightedEdge> {
         .collect()
 }
 
-fn agents() -> Vec<AgentSummary> {
+fn agents() -> Vec<AgentNode> {
     let edges = edges();
     agent_specs()
         .into_iter()
@@ -299,116 +312,143 @@ fn agents() -> Vec<AgentSummary> {
                     .map(|e| e.stats.transmissions.get())
                     .sum()
             };
-            AgentSummary {
+            let mut claims = ClaimSet::default();
+            if let Some((family, version, user_agent)) = spec.claim {
+                claims.observe(
+                    HarnessClaim {
+                        family,
+                        version: version.map(str::to_owned),
+                        user_agent: user_agent.to_owned(),
+                    },
+                    ts(22 * HOUR_MICROS + u64::try_from(spec.n).expect("small") * 60_000_000),
+                );
+            }
+            AgentNode {
                 id,
                 label: spec
                     .label
                     .map(|l| AgentLabel::new(l).expect("fixture labels are valid")),
-                state: spec.state,
+                state_kind: spec.state,
                 parent: spec.parent.map(agent_id),
-                claims: spec
-                    .claim
-                    .into_iter()
-                    .map(|(family, version, user_agent)| ClaimSeen {
-                        claim: HarnessClaim {
-                            family,
-                            version: version.map(str::to_owned),
-                            user_agent: user_agent.to_owned(),
-                        },
-                        last_seen: ts(
-                            22 * HOUR_MICROS + u64::try_from(spec.n).expect("small") * 60_000_000
-                        ),
-                    })
-                    .collect(),
+                claims,
                 transmissions_in: sum(|e| e.to),
                 transmissions_out: sum(|e| e.from),
-                last_seen: ts(23 * HOUR_MICROS),
             }
         })
         .collect()
 }
 
-pub fn topology_view() -> TopologyView {
+fn agent_nodes() -> Vec<GraphNode> {
+    agents().into_iter().map(GraphNode::Agent).collect()
+}
+
+pub fn topology_graph() -> Watermarked<TopologyGraph> {
     let graph = TopologyGraph {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
-        nodes: Vec::new(),
+        nodes: agent_nodes(),
         edges: edges(),
     };
-    TopologyView::new(graph, agents(), watermark()).expect("every endpoint has a node")
+    graph.check_nodes().expect("one node per endpoint");
+    watermarked(graph)
 }
 
-pub fn empty_topology_view() -> TopologyView {
-    let graph = TopologyGraph {
+pub fn empty_topology_graph() -> Watermarked<TopologyGraph> {
+    watermarked(TopologyGraph {
         window: window(),
         weighting: Weighting::Transmissions,
         topic_version: TopicModelVersion(3),
         nodes: Vec::new(),
         edges: Vec::new(),
-    };
-    TopologyView::new(graph, Vec::new(), watermark()).expect("no endpoints")
+    })
 }
 
-fn channel_nodes() -> Vec<ChannelNode> {
+/// The fixture's channels: id number, origin, detection, policy and what
+/// names them. Each carries traffic, so each is a channels-mode node.
+fn channel_specs() -> Vec<(
+    u128,
+    CanonicalOriginKind,
+    DetectionKind,
+    PolicyKind,
+    ChannelShape,
+)> {
     let host = |h: &str| Host(h.to_owned());
     vec![
-        ChannelNode {
-            id: channel_id(1),
-            origin: OriginKind::Declared,
-            detection: DetectionKind::Active,
-            policy: PolicyKind::Sanctioned,
-            shape: ChannelShape::Pattern(ResourcePattern::PathPrefix {
+        (
+            1,
+            CanonicalOriginKind::DeclaredBeforeTraffic,
+            DetectionKind::Active,
+            PolicyKind::Sanctioned,
+            ChannelShape::Pattern(ResourcePattern::PathPrefix {
                 host: None,
                 prefix: "/srv/shared/handoff".to_owned(),
             }),
-        },
-        ChannelNode {
-            id: channel_id(2),
-            origin: OriginKind::Discovered,
-            detection: DetectionKind::Candidate,
-            policy: PolicyKind::Unreviewed,
-            shape: ChannelShape::Seed(Locator::Url {
+        ),
+        (
+            2,
+            CanonicalOriginKind::Discovered,
+            DetectionKind::Candidate,
+            PolicyKind::Unreviewed,
+            ChannelShape::Seed(Locator::Url {
                 scheme: "https".to_owned(),
                 host: host("pastebin.com"),
                 path: "/raw/x9Qe2LmP".to_owned(),
                 query: None,
             }),
-        },
-        ChannelNode {
-            id: channel_id(3),
-            origin: OriginKind::Discovered,
-            detection: DetectionKind::Active,
-            policy: PolicyKind::Unsanctioned,
-            shape: ChannelShape::Seed(Locator::Mcp {
+        ),
+        (
+            3,
+            CanonicalOriginKind::Discovered,
+            DetectionKind::Active,
+            PolicyKind::Unsanctioned,
+            ChannelShape::Seed(Locator::Mcp {
                 server: "linear".to_owned(),
                 tool: ToolName("get_issue".to_owned()),
                 target: Some("ENG-4411".to_owned()),
             }),
-        },
-        ChannelNode {
-            id: channel_id(4),
-            origin: OriginKind::Declared,
-            detection: DetectionKind::Observed,
-            policy: PolicyKind::Unreviewed,
-            shape: ChannelShape::Pattern(ResourcePattern::UrlPrefix {
+        ),
+        (
+            4,
+            CanonicalOriginKind::Promoted,
+            DetectionKind::Observed,
+            PolicyKind::Unreviewed,
+            ChannelShape::Pattern(ResourcePattern::UrlPrefix {
                 host: host("github.com"),
                 path_prefix: "/acme/ops-notes".to_owned(),
             }),
-        },
-        ChannelNode {
-            id: channel_id(5),
-            origin: OriginKind::Declared,
-            detection: DetectionKind::Unused,
-            policy: PolicyKind::Sanctioned,
-            shape: ChannelShape::Pattern(ResourcePattern::Host(host("wiki.internal"))),
-        },
+        ),
     ]
+}
+
+/// The channels' display names, as one `channel_names` call gives them.
+pub fn channel_names() -> ChannelNames {
+    ChannelNames::from_pairs(
+        channel_specs()
+            .into_iter()
+            .map(|(n, _, _, _, shape)| (channel_id(n), shape_name(&shape))),
+    )
+}
+
+fn channel_nodes() -> Vec<GraphNode> {
+    channel_specs()
+        .into_iter()
+        .map(|(n, origin_kind, detection_kind, policy_kind, shape)| {
+            GraphNode::Channel(ChannelNode {
+                id: channel_id(n),
+                label: None,
+                origin_kind,
+                detection_kind,
+                policy_kind,
+                locator_summary: NonBlank::new(&shape_name(&shape)).expect("names are not blank"),
+            })
+        })
+        .collect()
 }
 
 /// Writes by the sender and reads by the reader of every channel-routed
 /// edge, two accesses per transmission on each side.
-fn accesses() -> Vec<AccessEdge> {
+fn accesses() -> Vec<WeightedAccess> {
     let mut counts: BTreeMap<(AgentId, ChannelId, u8), u64> = BTreeMap::new();
     for edge in edges() {
         if let Route::Channel(channel) = edge.route {
@@ -420,7 +460,7 @@ fn accesses() -> Vec<AccessEdge> {
     let total: u64 = counts.values().sum();
     counts
         .into_iter()
-        .map(|((agent, channel, op), n)| AccessEdge {
+        .map(|((agent, channel, op), n)| WeightedAccess {
             agent,
             channel,
             op: if op == 0 {
@@ -434,64 +474,63 @@ fn accesses() -> Vec<AccessEdge> {
         .collect()
 }
 
-pub fn bipartite_view() -> BipartiteView {
-    let direct: Vec<WeightedEdge> = edges()
-        .into_iter()
-        .filter(|e| route_kind(&e.route) != RouteKind::Channel)
-        .collect();
-    let total: u64 = direct.iter().map(|e| e.stats.transmissions.get()).sum();
-    let direct = direct
-        .into_iter()
-        .map(|e| WeightedEdge {
-            share: Share::new(e.stats.transmissions.get() as f64 / total as f64)
-                .expect("share in [0, 1]"),
-            ..e
-        })
-        .collect();
-    BipartiteView::new(
-        window(),
-        Weighting::Transmissions,
-        TopicModelVersion(3),
-        agents(),
-        channel_nodes(),
-        accesses(),
-        direct,
-        watermark(),
-    )
-    .expect("every endpoint has a node")
+/// The channel-centred graph: every edge of [`topology_graph`], the
+/// accesses behind its channel-routed ones, and the channels as nodes.
+pub fn bipartite_graph() -> Watermarked<BipartiteGraph> {
+    let mut nodes = agent_nodes();
+    nodes.extend(channel_nodes());
+    let graph = BipartiteGraph::new(BipartiteParts {
+        window: window(),
+        weighting: Weighting::Transmissions,
+        topic_version: TopicModelVersion(3),
+        nodes,
+        accesses: accesses(),
+        transmissions: edges(),
+    })
+    .expect("every endpoint has a node");
+    watermarked(graph)
 }
 
-/// 96 buckets of 15 minutes over [`window`], busier in working hours.
-pub fn timeline() -> (TimeWindow, Timeline) {
-    let width = 15 * 60_000_000;
+/// 96 points of 15 minutes over [`window`], busier in working hours: the
+/// transmissions and matched-bytes series of one grid.
+pub fn timeline() -> (
+    TimeWindow,
+    Watermarked<TopologySeries>,
+    Watermarked<TopologySeries>,
+) {
+    let bucket = BucketWidth::from_micros(non_zero(5 * 60_000_000));
+    let step = SeriesStep::new(bucket, non_zero(15 * 60_000_000)).expect("a multiple of 5 min");
+    let grid = SeriesGrid::new(window(), step).expect("whole steps over the day");
     let mut rng = Rng(0x7131_E11E);
-    let buckets = (0..96u64)
-        .map(|i| {
-            let hour = i / 4;
-            let base: u64 = match hour {
-                0..=5 => 3,
-                6..=8 => 9 + (hour - 6) * 6,
-                9..=17 => 26 + (hour % 3) * 4,
-                18..=20 => 16 - (hour - 18) * 4,
-                _ => 5,
-            };
-            let transmissions = base + rng.below(base / 2 + 3);
-            let burst = if (54..=57).contains(&i) { 22 } else { 0 };
-            let transmissions = transmissions + burst;
-            TimelineBucket {
-                bucket: TimeWindow::new(ts(i * width), ts((i + 1) * width)).expect("bucket"),
-                transmissions,
-                matched_bytes: transmissions * (480 + rng.below(420)),
-            }
-        })
-        .collect();
+    let (mut transmissions, mut matched_bytes) = (Vec::new(), Vec::new());
+    for i in 0..96u64 {
+        let hour = i / 4;
+        let base: u64 = match hour {
+            0..=5 => 3,
+            6..=8 => 9 + (hour - 6) * 6,
+            9..=17 => 26 + (hour % 3) * 4,
+            18..=20 => 16 - (hour - 18) * 4,
+            _ => 5,
+        };
+        let count = base + rng.below(base / 2 + 3);
+        let burst = if (54..=57).contains(&i) { 22 } else { 0 };
+        let count = count + burst;
+        transmissions.push(count);
+        matched_bytes.push(count * (480 + rng.below(420)));
+    }
+    let series = |weighting, values| {
+        TopologySeries::new(
+            grid,
+            weighting,
+            TopicModelVersion(3),
+            SeriesGroups::Total(values),
+        )
+        .expect("one value per point")
+    };
     (
         window(),
-        Timeline {
-            bucket_width: Duration::from_secs(15 * 60),
-            buckets,
-            watermark: watermark(),
-        },
+        watermarked(series(Weighting::Transmissions, transmissions)),
+        watermarked(series(Weighting::MatchedBytes, matched_bytes)),
     )
 }
 
@@ -518,7 +557,7 @@ const CENTRES: [(f64, f64); 6] = [
 /// agents, four channels and six topics.
 pub fn projection() -> (ProjectionPoints, ProjectionTables) {
     let agents = agents();
-    let table_agents: Vec<&AgentSummary> = agents.iter().take(8).collect();
+    let table_agents: Vec<&AgentNode> = agents.iter().take(8).collect();
     let channels: Vec<ChannelId> = (1..=4).map(channel_id).collect();
     let topics: Vec<TopicId> = (1..=6).map(|n| TopicId::from_ulid(ulid(0x70, n))).collect();
     let mut rng = Rng(0x00DE_51C7);
@@ -579,11 +618,11 @@ pub fn projection() -> (ProjectionPoints, ProjectionTables) {
     .expect("fixture projection is consistent");
     let tables = ProjectionTables::new(
         &points,
-        table_agents.iter().map(|a| agent_name(a)).collect(),
-        channel_nodes()
+        table_agents.iter().map(|a| agent_node_name(a)).collect(),
+        channel_specs()
             .iter()
             .take(4)
-            .map(super::names::channel_node_name)
+            .map(|(_, _, _, _, shape)| shape_name(shape))
             .collect(),
         TOPIC_LABELS.iter().map(|l| Some((*l).to_owned())).collect(),
     )
@@ -636,24 +675,30 @@ fn json(value: &impl serde::Serialize) -> Vec<u8> {
 
 /// The fixture files, by name.
 fn fixture_files() -> Vec<(&'static str, Vec<u8>)> {
-    let (window, timeline) = timeline();
+    let (window, transmissions, matched_bytes) = timeline();
     let (points, tables) = projection();
     vec![
         (
             "topology-agents.json",
-            json(&TopologyPayload::agents(&topology_view())),
+            json(&TopologyPayload::agents(&topology_graph())),
         ),
         (
             "topology-channels.json",
-            json(&TopologyPayload::channels(&bipartite_view())),
+            json(&TopologyPayload::channels(
+                &bipartite_graph(),
+                &channel_names(),
+            )),
         ),
         (
             "topology-empty.json",
-            json(&TopologyPayload::agents(&empty_topology_view())),
+            json(&TopologyPayload::agents(&empty_topology_graph())),
         ),
         (
             "timeline.json",
-            json(&TimelinePayload::new(window.into(), &timeline)),
+            json(
+                &TimelinePayload::new(window.into(), &transmissions, &matched_bytes)
+                    .expect("one grid"),
+            ),
         ),
         (
             "projection.bin",

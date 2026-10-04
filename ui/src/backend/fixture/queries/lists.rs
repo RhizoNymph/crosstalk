@@ -20,7 +20,6 @@ use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
-use crate::contract::graph::route_kind;
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
     QualityRow,
@@ -276,7 +275,7 @@ pub fn quality(ctx: &Ctx, window: TimeWindow) -> Vec<QualityRow> {
         let Some(c) = confirmed(&t.state) else {
             continue;
         };
-        let route = route_kind(&t.route);
+        let route = crosstalk_spec::aggregates::edge::RouteKind::from(&t.route);
         let mut kinds: Vec<MatchKindName> = c
             .content()
             .iter()

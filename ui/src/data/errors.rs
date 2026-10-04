@@ -1,6 +1,6 @@
 //! HTTP statuses for errors on data routes.
 
-use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 use topcoat::router::error::{bad_request, forbidden, internal_server_error, not_found};
 
 use crate::error::UiError;
@@ -22,9 +22,16 @@ pub fn status_of(error: &UiError) -> ErrorStatus {
             QueryError::NotFound | QueryError::ProjectionNotRetained { .. } => {
                 ErrorStatus::NotFound
             }
+            // A linked view's version conflicts come from the URL (`v`,
+            // `t`): the element shows why, like an invalid input.
             QueryError::VersionNotRetained { .. }
             | QueryError::InvalidInput(_)
-            | QueryError::InvalidCursor => ErrorStatus::BadRequest,
+            | QueryError::InvalidCursor
+            | QueryError::Conflict(
+                ConflictKind::TopicVersionFitting { .. }
+                | ConflictKind::TopicVersionNotActivated { .. }
+                | ConflictKind::TopicsNotInVersion { .. },
+            ) => ErrorStatus::BadRequest,
             QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
         },
     }
@@ -50,7 +57,8 @@ pub fn query_error(error: impl Into<UiError>) -> topcoat::Error {
 mod tests {
     use crosstalk_spec::aggregates::topic::TopicModelVersion;
     use crosstalk_spec::ids::AgentId;
-    use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, Permission};
+    use crosstalk_spec::ids::TopicId;
+    use crosstalk_spec::interfaces::l8_surface::{InputError, Permission};
 
     use super::*;
 
@@ -95,6 +103,22 @@ mod tests {
         ];
         for (error, status) in cases {
             assert_eq!(status_of(&error), status, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn linked_view_version_conflicts_are_bad_requests() {
+        let version = TopicModelVersion(1);
+        for conflict in [
+            ConflictKind::TopicVersionFitting { version },
+            ConflictKind::TopicVersionNotActivated { version },
+            ConflictKind::TopicsNotInVersion {
+                version,
+                topics: vec![TopicId::from_ulid(3)],
+            },
+        ] {
+            let error = UiError::Query(QueryError::Conflict(conflict));
+            assert_eq!(status_of(&error), ErrorStatus::BadRequest, "{error:?}");
         }
     }
 }

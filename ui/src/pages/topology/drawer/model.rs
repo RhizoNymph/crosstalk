@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU32;
 
-use crosstalk_spec::aggregates::edge::{RouteKind, WeightedEdge, Weighting};
+use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, WeightedEdge, Weighting};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
@@ -18,7 +18,7 @@ use crate::backend::Backend;
 use crate::components::{agent_name, format_bytes, format_share, format_time, href};
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
-use crate::contract::graph::{TopologyView, TransmissionSelector, route_kind};
+use crate::contract::graph::TransmissionSelector;
 use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
@@ -151,7 +151,7 @@ pub fn edge_items(
             code: Selection::edge(e.from, e.to, &e.route).encode(),
             from: agents.name(e.from),
             to: agents.name(e.to),
-            route_kind: route_kind(&e.route),
+            route_kind: RouteKind::from(&e.route),
             route: route_text(&e.route, channels),
             share: format_share(e.share.get()),
             transmissions: e.stats.transmissions.get(),
@@ -207,10 +207,10 @@ async fn names_for(
 async fn listed(
     cx: &Cx,
     caller: &Caller,
-    view: &TopologyView,
+    graph: &TopologyGraph,
     keep: impl Fn(&WeightedEdge) -> bool,
 ) -> Vec<EdgeItem> {
-    let mut chosen: Vec<&WeightedEdge> = view.graph().edges.iter().filter(|e| keep(e)).collect();
+    let mut chosen: Vec<&WeightedEdge> = graph.edges.iter().filter(|e| keep(e)).collect();
     chosen.sort_by(|a, b| b.share.get().total_cmp(&a.share.get()));
     chosen.truncate(LISTED_EDGES);
     let (agents, channels) = names_for(cx, caller, &chosen).await;
@@ -232,8 +232,14 @@ pub async fn load(
     let cursor = parse_cursor(Some(cursor).filter(|c| !c.is_empty()))?;
     let backend = backend(cx);
     let view = backend
-        .topology(caller, &state.scope, state.weighting)
-        .await?;
+        .topology(
+            caller,
+            state.scope.window,
+            state.weighting,
+            &state.scope.topology_filter(),
+        )
+        .await?
+        .value;
     let drawer = match selection {
         Selection::None => Drawer::Empty {
             heaviest: listed(cx, caller, &view, |_| true).await,
@@ -254,7 +260,6 @@ pub async fn load(
             let names = agent_names(cx, caller, vec![from, to]).await;
             let channels = channel_names(cx, caller, route_channel(&route)).await;
             let stats = view
-                .graph()
                 .edges
                 .iter()
                 .find(|e| e.from == from && e.to == to && e.route == route)
@@ -273,7 +278,7 @@ pub async fn load(
                     url: agent_url(to, &state),
                     name: names.name(to),
                 },
-                route_kind: route_kind(&route),
+                route_kind: RouteKind::from(&route),
                 route: route_text(&route, &channels),
                 route_url: route_channel(&route).map(|c| channel_url(c, &state)),
                 stats,

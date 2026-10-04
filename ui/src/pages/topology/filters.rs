@@ -7,6 +7,7 @@
 //! offered even when the window no longer shows them.
 
 use crosstalk_spec::aggregates::edge::{RouteKind, Weighting};
+use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use topcoat::Result;
@@ -18,7 +19,7 @@ use crate::app::{backend, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, FACET, INPUT, LINK};
 use crate::components::href::state_pairs;
-use crate::components::{agent_name, href, route_kind_name, short_id};
+use crate::components::{agent_node_name, href, route_kind_name, short_id};
 use crate::contract::channels::ChannelListFilter;
 use crate::pages::common::lookup::agent_names;
 use crate::pages::common::transmissions::summary_name;
@@ -86,14 +87,26 @@ impl FilterChoices {
 /// page: the filter in the URL still applies.
 pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> FilterChoices {
     let backend = backend(cx);
-    let mut unfiltered = state.scope.clone();
-    unfiltered.filter = ViewFilter::default();
+    let unfiltered = ViewFilter::default().pinned(state.scope.topic_version);
 
     let mut agents: Vec<(AgentId, String)> = match backend
-        .topology(caller, &unfiltered, Weighting::Transmissions)
+        .topology(
+            caller,
+            state.scope.window,
+            Weighting::Transmissions,
+            &unfiltered,
+        )
         .await
     {
-        Ok(view) => view.nodes().iter().map(|n| (n.id, agent_name(n))).collect(),
+        Ok(graph) => graph
+            .value
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                GraphNode::Agent(agent) => Some((agent.id, agent_node_name(agent))),
+                GraphNode::Channel(_) => None,
+            })
+            .collect(),
         Err(error) => {
             tracing::warn!(error = ?error, "filter agent choices unavailable");
             Vec::new()

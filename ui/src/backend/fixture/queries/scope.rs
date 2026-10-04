@@ -1,8 +1,15 @@
-//! The scope filter, exactly as `contract/scope.rs` documents it: empty
-//! lists do not restrict, non-empty lists combine with AND, agents match the
-//! sender OR the reader after alias resolution, channels match after
-//! supersession, topics are read under the scope's version and outliers
-//! never match a topic filter.
+//! The scope filter of the lists not yet on the spec's linked-view
+//! semantics (transmission lists, search, topic stats, projection samples):
+//! empty lists do not restrict, non-empty lists combine with AND, agents
+//! match the sender OR the reader after alias resolution, channels match
+//! after supersession, topics are read under the scope's version and
+//! outliers never match a topic filter. Transmissions are tested by when
+//! they were opened, and unconfirmed ones are kept.
+//!
+//! The version is resolved by the same [`resolve_version`] every graph
+//! uses; graphs, series and the edge drill-down count through
+//! [`super::linked`] instead (confirmed transmissions by `Confirmed::at`,
+//! admitted by `TopologyFilter::admits`).
 
 use std::collections::HashSet;
 
@@ -13,12 +20,12 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
-use crate::contract::graph::route_kind;
 use crate::contract::verdict::Verdict;
 use crate::url::scope::Scope;
 use crosstalk_spec::aggregates::filter::FalseDetections;
 
-use super::{Ctx, retained};
+use super::Ctx;
+use super::linked::resolve_version;
 use crate::backend::fixture::world::TxRecord;
 
 pub struct Filter<'a> {
@@ -33,15 +40,16 @@ pub struct Filter<'a> {
 }
 
 impl<'a> Filter<'a> {
-    /// Fails with `VersionNotRetained` for a version the world does not
-    /// keep.
+    /// Resolves the scope's version as every linked view does
+    /// ([`resolve_version`]): unknown `NotFound`, not retained
+    /// `VersionNotRetained`, topics outside it `TopicsNotInVersion`.
     pub fn new(ctx: &'a Ctx<'a>, scope: &Scope) -> Result<Self> {
-        retained(ctx.world, scope.topic_version)?;
+        let version = resolve_version(ctx.world, &scope.topology_filter())?;
         let f = &scope.filter;
         Ok(Self {
             ctx,
             window: scope.window,
-            version: scope.topic_version,
+            version,
             agents: f.agents.iter().map(|a| ctx.agent(*a)).collect(),
             channels: f.channels.iter().map(|c| ctx.channel(*c)).collect(),
             routes: f.route_kinds.iter().copied().collect(),
@@ -71,7 +79,7 @@ impl<'a> Filter<'a> {
                 _ => return false,
             }
         }
-        if !self.routes.is_empty() && !self.routes.contains(&route_kind(&t.route)) {
+        if !self.routes.is_empty() && !self.routes.contains(&RouteKind::from(&t.route)) {
             return false;
         }
         if !self.topics.is_empty()
@@ -85,17 +93,5 @@ impl<'a> Filter<'a> {
             return false;
         }
         true
-    }
-
-    /// Whether an access by `agent` on `channel` (both resolved) passes the
-    /// agent, channel and route-kind parts of the filter.
-    pub fn keeps_access(&self, agent: AgentId, channel: ChannelId) -> bool {
-        (self.agents.is_empty() || self.agents.contains(&agent))
-            && (self.channels.is_empty() || self.channels.contains(&channel))
-            && (self.routes.is_empty() || self.routes.contains(&RouteKind::Channel))
-    }
-
-    pub fn has_topics(&self) -> bool {
-        !self.topics.is_empty()
     }
 }

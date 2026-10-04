@@ -7,7 +7,9 @@
 //! read by the drawer shard), the graph's own `value`, and the URL's `sel`
 //! key (rewritten with `history.replaceState`). A page load starts the
 //! signal from the URL, so a selected edge is citeable. The time brush
-//! navigates to the same view with the brushed window.
+//! navigates to the same view with the brushed window: its payload's bucket
+//! edges are all bucket boundaries, so a brushed window is aligned and the
+//! URL it navigates to is canonical.
 
 pub mod drawer;
 pub mod filters;
@@ -18,6 +20,8 @@ use crate::contract::present::Present;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::node::GraphNode;
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use topcoat::Result;
@@ -38,6 +42,7 @@ use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::view::view_state;
+use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{GraphMode, ViewState, format_time as rfc3339};
 
 pub const PATH: &str = "/topology";
@@ -47,13 +52,18 @@ const CONTEXT: Duration = Duration::from_secs(7 * 24 * 3600);
 const HOUR: u64 = 3_600_000_000;
 
 /// The window the time brush draws: the last week of data, widened to
-/// include the view's window, in hourly buckets (at most 1000).
-pub fn brush_window(window: TimeWindow, now: Timestamp) -> (TimeWindow, u32) {
+/// include the view's window and snapped outward to bucket boundaries, in
+/// hourly buckets (at most 1000). The view's window is aligned, so the
+/// brush's bucket edges include its ends.
+pub fn brush_window(window: TimeWindow, now: Timestamp, bucket: BucketWidth) -> (TimeWindow, u32) {
     let span = u64::try_from(CONTEXT.as_micros()).unwrap_or(u64::MAX);
-    let start = window
-        .start()
-        .min(Timestamp::from_micros(now.as_micros().saturating_sub(span)));
-    let end = window.end().max(now);
+    let start = align_down(
+        window
+            .start()
+            .min(Timestamp::from_micros(now.as_micros().saturating_sub(span))),
+        bucket,
+    );
+    let end = align_up(window.end().max(now), bucket);
     let context = TimeWindow::new(start, end).unwrap_or(window);
     let micros = context.end().as_micros() - context.start().as_micros();
     let hours = micros.div_ceil(HOUR).clamp(1, 1000);
@@ -61,8 +71,8 @@ pub fn brush_window(window: TimeWindow, now: Timestamp) -> (TimeWindow, u32) {
 }
 
 /// The `/data/timeline` URL for the brush.
-pub fn timeline_src(state: &ViewState, now: Timestamp) -> String {
-    let (window, buckets) = brush_window(state.scope.window, now);
+pub fn timeline_src(state: &ViewState, now: Timestamp, bucket: BucketWidth) -> String {
+    let (window, buckets) = brush_window(state.scope.window, now, bucket);
     let mut context = state.clone();
     context.scope.window = window;
     href(
@@ -95,19 +105,26 @@ async fn summary(
     state: &ViewState,
 ) -> std::result::Result<Summary, UiError> {
     require(caller, Permission::View)?;
-    let view = backend(cx)
-        .topology(caller, &state.scope, state.weighting)
+    let graph = backend(cx)
+        .topology(
+            caller,
+            state.scope.window,
+            state.weighting,
+            &state.scope.topology_filter(),
+        )
         .await?;
+    let value = &graph.value;
     Ok(Summary {
-        agents: view.nodes().len(),
-        edges: view.graph().edges.len(),
-        transmissions: view
-            .graph()
-            .edges
+        agents: value
+            .nodes
             .iter()
-            .map(|e| e.stats.transmissions.get())
-            .sum(),
-        watermark: format_time(view.watermark()),
+            .filter(|n| matches!(n, GraphNode::Agent(_)))
+            .count(),
+        edges: value.edges.len(),
+        transmissions: value.edges.iter().fold(0u64, |sum, e| {
+            sum.saturating_add(e.stats.transmissions.get())
+        }),
+        watermark: format_time(graph.watermark.at()),
     })
 }
 
@@ -261,11 +278,12 @@ const TOGGLE_OFF: &str = "rounded border border-zinc-300 px-2 py-0.5 text-xs tex
 async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<impl View> {
     let collapse = query.collapse;
     let topology_src = href("/data/topology", state, &[]);
-    let now = backend(cx)
+    let backend = backend(cx);
+    let now = backend
         .now(&caller(cx))
         .await
         .unwrap_or(state.scope.window.end());
-    let brush_src = timeline_src(state, now);
+    let brush_src = timeline_src(state, now, backend.bucket_width());
     let brush_from = rfc3339(state.scope.window.start());
     let brush_to = rfc3339(state.scope.window.end());
     let state_query = state.to_query();

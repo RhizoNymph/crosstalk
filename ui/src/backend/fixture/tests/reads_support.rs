@@ -48,6 +48,16 @@ pub async fn all_transmissions(scope: &Scope) -> Vec<TransmissionSummary> {
     .await
 }
 
+/// The grid the time brush asks for: `points` steps over `window` (fewer
+/// when they do not divide it), on the fixture's bucket width.
+pub fn grid(
+    window: crosstalk_spec::support::TimeWindow,
+    points: u32,
+) -> crosstalk_spec::aggregates::series::SeriesGrid {
+    crate::data::timeline::timeline_grid(window, super::super::clock::BUCKET, n(points))
+        .expect("grid")
+}
+
 pub fn sum_shares(shares: impl Iterator<Item = f64>) -> f64 {
     shares.sum()
 }

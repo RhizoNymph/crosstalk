@@ -3,6 +3,7 @@
 
 use std::num::NonZeroU32;
 
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
@@ -35,16 +36,18 @@ fn first<L>(limit: u32) -> PageRequest<L> {
 /// The heaviest edge of the fixture's default view, as a selection.
 async fn heaviest_edge() -> Selection {
     let backend = FixtureBackend::new(7);
-    let view = backend
+    let scope = fixture_state().scope;
+    let graph = backend
         .topology(
             &everyone(),
-            &fixture_state().scope,
+            scope.window,
             Weighting::Transmissions,
+            &scope.topology_filter(),
         )
         .await
         .expect("topology");
-    let edge = view
-        .graph()
+    let edge = graph
+        .value
         .edges
         .iter()
         .max_by(|a, b| a.share.get().total_cmp(&b.share.get()))
@@ -73,6 +76,11 @@ pub async fn wiki_channel() -> crosstalk_spec::ids::ChannelId {
     crate::testing::channel_id(crate::backend::fixture::ChannelKey::HijackedWiki)
 }
 
+/// The fixture's bucket width: five minutes.
+fn bucket() -> BucketWidth {
+    BucketWidth::from_micros(std::num::NonZeroU64::new(300_000_000).expect("five minutes"))
+}
+
 fn url(extra: &str) -> String {
     format!("/topology?{}{extra}", fixture_state().to_query())
 }
@@ -81,12 +89,57 @@ fn url(extra: &str) -> String {
 fn brush_shows_a_week_in_hours() {
     let state = fixture_state();
     let now = state.scope.window.end();
-    let (window, buckets) = brush_window(state.scope.window, now);
+    let (window, buckets) = brush_window(state.scope.window, now, bucket());
     assert_eq!(buckets, 168);
     assert_eq!(window.end(), now);
-    let src = timeline_src(&state, now);
+    let src = timeline_src(&state, now, bucket());
     assert!(src.starts_with("/data/timeline?from=2026-09-26T00:00:00Z&to=2026-10-03T00:00:00Z"));
     assert!(src.ends_with("&buckets=168"));
+}
+
+#[test]
+fn the_brush_window_is_aligned_whatever_the_present() {
+    let state = fixture_state();
+    // A wall clock between bucket boundaries.
+    let now = Timestamp::from_micros(state.scope.window.end().as_micros() + 61_000_000);
+    let (window, _) = brush_window(state.scope.window, now, bucket());
+    assert!(
+        crate::url::scope::is_aligned(window, bucket()),
+        "{window:?}"
+    );
+    assert!(window.end() >= now && window.start() <= state.scope.window.start());
+}
+
+/// What the brush's `change` handler navigates to: the page URL with
+/// `from` and `to` replaced by two of the payload's bucket edges.
+fn brushed(from: &str, to: &str) -> String {
+    let kept: Vec<String> = fixture_state()
+        .to_query()
+        .split('&')
+        .filter(|pair| !pair.starts_with("from=") && !pair.starts_with("to="))
+        .map(str::to_owned)
+        .collect();
+    format!("/topology?from={from}&to={to}&{}", kept.join("&"))
+}
+
+#[tokio::test]
+async fn a_brushed_window_is_canonical() {
+    let state = fixture_state();
+    let now = state.scope.window.end();
+    let reply = get(&timeline_src(&state, now, bucket())).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let payload: serde_json::Value = serde_json::from_str(&reply.body).expect("json");
+    let buckets = payload["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 168);
+    let from = buckets[100]["from"].as_str().expect("from");
+    let to = buckets[130]["to"].as_str().expect("to");
+    let reply = get(&brushed(from, to)).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "a brushed URL is served without a redirect: {:?}",
+        reply.location
+    );
 }
 
 #[tokio::test]

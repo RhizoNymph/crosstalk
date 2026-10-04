@@ -27,14 +27,30 @@
 //!
 //! Channels mode adds `{ "kind": "channel", "id", "name", "origin",
 //! "detection", "policy", "volume" }` nodes and `{ "kind": "access",
-//! "agent", "channel", "op": "read" | "write", "accesses", "share" }` edges;
-//! its transmission edges are the ones not routed through a channel. Access
-//! shares are normalised separately from transmission shares. Route codes
-//! are those of [`crate::url::route`].
+//! "agent", "channel", "op": "read" | "write", "accesses", "share" }` edges.
+//! Its transmission edges are the spec's channel-centred graph's edges not
+//! routed through a channel (those are drawn as accesses), with their shares
+//! of the whole filtered total, as in agents mode. Access shares are
+//! normalised separately from transmission shares. Route codes are those of
+//! [`crate::url::route`].
+//!
+//! The payload is read from the spec's graphs: agent nodes' `name` is
+//! [`agent_node_name`], channel nodes' `name` the channel's pattern or seed
+//! locator from one `channel_names` call (not the spec's `locator_summary`,
+//! which adds a resource count); `origin` is `declared` for a channel
+//! declared before traffic or promoted.
 
-use crosstalk_spec::aggregates::edge::{RouteKind, WeightedEdge, Weighting};
+use crosstalk_spec::aggregates::access::{BipartiteGraph, WeightedAccess};
+use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, WeightedEdge, Weighting};
+use crosstalk_spec::aggregates::node::{
+    AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
+};
+use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
+use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
+use crosstalk_spec::observed::agent::SeenClaim;
 use crosstalk_spec::support::TimeWindow;
 use serde::{Deserialize, Serialize};
 use topcoat::context::Cx;
@@ -42,15 +58,12 @@ use topcoat::router::content::Json;
 use topcoat::router::route;
 
 use super::errors::query_error;
-use super::names::channel_node_name;
 use super::query::view_state;
 use super::require;
 use crate::app::{backend, caller};
 use crate::backend::Backend;
-use crate::components::{agent_name, family_name};
-use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::channels::{DetectionKind, OriginKind};
-use crate::contract::graph::{AccessEdge, BipartiteView, ChannelNode, TopologyView};
+use crate::components::{agent_node_name, family_name};
+use crate::pages::common::transmissions::{ChannelNames, channel_names};
 use crate::url::route::encode;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::{GraphMode, format_time};
@@ -129,7 +142,8 @@ pub enum NodePayload {
 #[serde(rename_all = "camelCase")]
 pub struct AgentNodePayload {
     pub id: String,
-    /// The operator's label, else the id's tail (`components::agent_name`).
+    /// The operator's label, else the id's tail
+    /// (`components::agent_node_name`, as `components::agent_name`).
     pub name: String,
     pub state: AgentStateCode,
     /// The parent of a sub-agent. The contract includes canonical parents as
@@ -151,12 +165,12 @@ pub enum AgentStateCode {
     Established,
 }
 
-impl From<AgentStateKind> for AgentStateCode {
-    fn from(kind: AgentStateKind) -> Self {
+impl From<CanonicalStateKind> for AgentStateCode {
+    fn from(kind: CanonicalStateKind) -> Self {
         match kind {
-            AgentStateKind::Registered => Self::Registered,
-            AgentStateKind::Provisional => Self::Provisional,
-            AgentStateKind::Established => Self::Established,
+            CanonicalStateKind::Registered => Self::Registered,
+            CanonicalStateKind::Provisional => Self::Provisional,
+            CanonicalStateKind::Established => Self::Established,
         }
     }
 }
@@ -171,8 +185,8 @@ pub struct ClaimPayload {
     pub last_seen: String,
 }
 
-impl From<&ClaimSeen> for ClaimPayload {
-    fn from(seen: &ClaimSeen) -> Self {
+impl From<&SeenClaim> for ClaimPayload {
+    fn from(seen: &SeenClaim) -> Self {
         Self {
             harness: family_name(&seen.claim.family).to_owned(),
             version: seen.claim.version.clone(),
@@ -202,11 +216,14 @@ pub enum OriginCode {
     Discovered,
 }
 
-impl From<OriginKind> for OriginCode {
-    fn from(kind: OriginKind) -> Self {
+/// A promoted channel is declared: an operator gave it a pattern.
+impl From<CanonicalOriginKind> for OriginCode {
+    fn from(kind: CanonicalOriginKind) -> Self {
         match kind {
-            OriginKind::Declared => Self::Declared,
-            OriginKind::Discovered => Self::Discovered,
+            CanonicalOriginKind::DeclaredBeforeTraffic | CanonicalOriginKind::Promoted => {
+                Self::Declared
+            }
+            CanonicalOriginKind::Discovered => Self::Discovered,
         }
     }
 }
@@ -321,32 +338,37 @@ impl From<AccessKind> for AccessOpCode {
     }
 }
 
-fn agent_node(agent: &AgentSummary) -> NodePayload {
+fn agent_node(agent: &AgentNode) -> NodePayload {
     NodePayload::Agent(AgentNodePayload {
         id: agent.id.to_ulid(),
-        name: agent_name(agent),
-        state: agent.state.into(),
+        name: agent_node_name(agent),
+        state: agent.state_kind.into(),
         parent: agent.parent.map(UlidId::to_ulid),
         volume: agent
             .transmissions_in
             .saturating_add(agent.transmissions_out),
         transmissions_in: agent.transmissions_in,
         transmissions_out: agent.transmissions_out,
-        claims: agent.claims.iter().map(ClaimPayload::from).collect(),
+        claims: agent
+            .claims
+            .entries()
+            .iter()
+            .map(ClaimPayload::from)
+            .collect(),
     })
 }
 
-fn channel_node(channel: &ChannelNode, accesses: &[AccessEdge]) -> NodePayload {
+fn channel_node(channel: &ChannelNode, accesses: &[WeightedAccess], name: String) -> NodePayload {
     let volume = accesses
         .iter()
         .filter(|a| a.channel == channel.id)
         .fold(0u64, |sum, a| sum.saturating_add(a.accesses.get()));
     NodePayload::Channel(ChannelNodePayload {
         id: channel.id.to_ulid(),
-        name: channel_node_name(channel),
-        origin: channel.origin.into(),
-        detection: channel.detection.into(),
-        policy: channel.policy.into(),
+        name,
+        origin: channel.origin_kind.into(),
+        detection: channel.detection_kind.into(),
+        policy: channel.policy_kind.into(),
         volume,
     })
 }
@@ -356,14 +378,14 @@ fn transmission_edge(edge: &WeightedEdge) -> EdgePayload {
         from: edge.from.to_ulid(),
         to: edge.to.to_ulid(),
         route: encode(&edge.route),
-        route_kind: crate::contract::graph::route_kind(&edge.route).into(),
+        route_kind: RouteKind::from(&edge.route).into(),
         share: edge.share.get(),
         transmissions: edge.stats.transmissions.get(),
         matched_bytes: edge.stats.matched_bytes.get(),
     })
 }
 
-fn access_edge(access: &AccessEdge) -> EdgePayload {
+fn access_edge(access: &WeightedAccess) -> EdgePayload {
     EdgePayload::Access(AccessEdgePayload {
         agent: access.agent.to_ulid(),
         channel: access.channel.to_ulid(),
@@ -373,47 +395,61 @@ fn access_edge(access: &AccessEdge) -> EdgePayload {
     })
 }
 
+/// A graph's nodes, agents and channels in the graph's order. `name` names
+/// a channel node.
+fn nodes(
+    nodes: &[GraphNode],
+    accesses: &[WeightedAccess],
+    name: impl Fn(&ChannelNode) -> String,
+) -> Vec<NodePayload> {
+    nodes
+        .iter()
+        .map(|node| match node {
+            GraphNode::Agent(agent) => agent_node(agent),
+            GraphNode::Channel(channel) => channel_node(channel, accesses, name(channel)),
+        })
+        .collect()
+}
+
 impl TopologyPayload {
     /// Agents mode: agent nodes and transmission edges.
-    pub fn agents(view: &TopologyView) -> Self {
-        let graph = view.graph();
+    pub fn agents(graph: &Watermarked<TopologyGraph>) -> Self {
+        let value = &graph.value;
         Self {
             mode: ModeCode::Agents,
-            window: graph.window.into(),
-            weighting: graph.weighting.into(),
-            topic_version: graph.topic_version.0,
-            watermark: format_time(view.watermark()),
-            nodes: view.nodes().iter().map(agent_node).collect(),
-            edges: graph.edges.iter().map(transmission_edge).collect(),
+            window: value.window.into(),
+            weighting: value.weighting.into(),
+            topic_version: value.topic_version.0,
+            watermark: format_time(graph.watermark.at()),
+            // A topology graph has agent nodes only.
+            nodes: nodes(&value.nodes, &[], |c| c.locator_summary.as_str().to_owned()),
+            edges: value.edges.iter().map(transmission_edge).collect(),
         }
     }
 
-    /// Channels mode: agent and channel nodes, access edges, and the
-    /// transmissions not routed through a channel.
-    pub fn channels(view: &BipartiteView) -> Self {
-        let nodes = view
-            .agents()
-            .iter()
-            .map(agent_node)
-            .chain(
-                view.channels()
-                    .iter()
-                    .map(|c| channel_node(c, view.accesses())),
-            )
-            .collect();
-        let edges = view
+    /// Channels mode: agent and channel nodes (`names` names the channels),
+    /// access edges, and the transmissions not routed through a channel.
+    pub fn channels(graph: &Watermarked<BipartiteGraph>, names: &ChannelNames) -> Self {
+        let value = &graph.value;
+        let edges = value
             .accesses()
             .iter()
             .map(access_edge)
-            .chain(view.transmissions().iter().map(transmission_edge))
+            .chain(
+                value
+                    .transmissions()
+                    .iter()
+                    .filter(|e| !matches!(e.route, Route::Channel(_)))
+                    .map(transmission_edge),
+            )
             .collect();
         Self {
             mode: ModeCode::Channels,
-            window: view.window().into(),
-            weighting: view.weighting().into(),
-            topic_version: view.topic_version().0,
-            watermark: format_time(view.watermark()),
-            nodes,
+            window: value.window().into(),
+            weighting: value.weighting().into(),
+            topic_version: value.topic_version().0,
+            watermark: format_time(graph.watermark.at()),
+            nodes: nodes(value.nodes(), value.accesses(), |c| names.name(c.id)),
             edges,
         }
     }
@@ -425,20 +461,26 @@ async fn topology_data(cx: &Cx) -> topcoat::Result<Json<TopologyPayload>> {
     require(&caller, Permission::View)?;
     let state = view_state(cx).await?;
     let backend = backend(cx);
+    let (window, filter) = (state.scope.window, state.scope.topology_filter());
     let payload = match state.graph {
         GraphMode::Agents => {
-            let view = backend
-                .topology(&caller, &state.scope, state.weighting)
+            let graph = backend
+                .topology(&caller, window, state.weighting, &filter)
                 .await
                 .map_err(query_error)?;
-            TopologyPayload::agents(&view)
+            TopologyPayload::agents(&graph)
         }
         GraphMode::Channels => {
-            let view = backend
-                .channel_topology(&caller, &state.scope, state.weighting)
+            let graph = backend
+                .channel_topology(&caller, window, state.weighting, &filter)
                 .await
                 .map_err(query_error)?;
-            TopologyPayload::channels(&view)
+            let channels = graph.value.nodes().iter().filter_map(|node| match node {
+                GraphNode::Channel(channel) => Some(channel.id),
+                GraphNode::Agent(_) => None,
+            });
+            let names = channel_names(cx, &caller, channels).await;
+            TopologyPayload::channels(&graph, &names)
         }
     };
     tracing::debug!(
@@ -457,11 +499,11 @@ mod tests {
 
     #[test]
     fn agents_mode_maps_nodes_and_edges() {
-        let view = fixtures::topology_view();
-        let payload = TopologyPayload::agents(&view);
+        let graph = fixtures::topology_graph();
+        let payload = TopologyPayload::agents(&graph);
         assert_eq!(payload.mode, ModeCode::Agents);
-        assert_eq!(payload.nodes.len(), view.nodes().len());
-        assert_eq!(payload.edges.len(), view.graph().edges.len());
+        assert_eq!(payload.nodes.len(), graph.value.nodes.len());
+        assert_eq!(payload.edges.len(), graph.value.edges.len());
 
         let NodePayload::Agent(planner) = &payload.nodes[0] else {
             panic!("agent node expected");
@@ -492,13 +534,14 @@ mod tests {
             })
             .sum();
         assert!((share_sum - 1.0).abs() < 1e-9, "shares sum to {share_sum}");
+        assert_eq!(payload.watermark, format_time(graph.watermark.at()));
     }
 
     #[test]
     fn transmission_edges_carry_route_codes() {
-        let view = fixtures::topology_view();
-        let payload = TopologyPayload::agents(&view);
-        for (edge, source) in payload.edges.iter().zip(&view.graph().edges) {
+        let graph = fixtures::topology_graph();
+        let payload = TopologyPayload::agents(&graph);
+        for (edge, source) in payload.edges.iter().zip(&graph.value.edges) {
             let EdgePayload::Transmission(edge) = edge else {
                 panic!("agents mode has transmission edges only");
             };
@@ -514,8 +557,9 @@ mod tests {
 
     #[test]
     fn channels_mode_adds_channel_nodes_and_access_edges() {
-        let view = fixtures::bipartite_view();
-        let payload = TopologyPayload::channels(&view);
+        let graph = fixtures::bipartite_graph();
+        let names = fixtures::channel_names();
+        let payload = TopologyPayload::channels(&graph, &names);
         assert_eq!(payload.mode, ModeCode::Channels);
         let channels: Vec<&ChannelNodePayload> = payload
             .nodes
@@ -525,31 +569,73 @@ mod tests {
                 NodePayload::Agent(_) => None,
             })
             .collect();
-        assert_eq!(channels.len(), view.channels().len());
+        let channel_nodes = graph
+            .value
+            .nodes()
+            .iter()
+            .filter(|n| matches!(n, GraphNode::Channel(_)))
+            .count();
+        assert_eq!(channels.len(), channel_nodes);
         for channel in &channels {
-            let expected: u64 = view
+            let expected: u64 = graph
+                .value
                 .accesses()
                 .iter()
                 .filter(|a| a.channel.to_ulid() == channel.id)
                 .map(|a| a.accesses.get())
                 .sum();
             assert_eq!(channel.volume, expected);
+            assert!(!channel.name.starts_with("channel "), "named by lookup");
         }
         let accesses = payload
             .edges
             .iter()
             .filter(|e| matches!(e, EdgePayload::Access(_)))
             .count();
-        assert_eq!(accesses, view.accesses().len());
-        assert!(payload.edges.iter().all(|e| match e {
-            EdgePayload::Transmission(t) => t.route_kind != RouteKindCode::Channel,
-            EdgePayload::Access(_) => true,
-        }));
+        assert_eq!(accesses, graph.value.accesses().len());
+        // Channel-routed transmissions are drawn as accesses; the others
+        // keep their share of the whole filtered total.
+        let direct: Vec<&WeightedEdge> = graph
+            .value
+            .transmissions()
+            .iter()
+            .filter(|e| !matches!(e.route, Route::Channel(_)))
+            .collect();
+        let drawn: Vec<&TransmissionEdgePayload> = payload
+            .edges
+            .iter()
+            .filter_map(|e| match e {
+                EdgePayload::Transmission(t) => Some(t),
+                EdgePayload::Access(_) => None,
+            })
+            .collect();
+        assert_eq!(drawn.len(), direct.len());
+        assert!(drawn.iter().all(|t| t.route_kind != RouteKindCode::Channel));
+        for (payload, edge) in drawn.iter().zip(direct) {
+            assert!((payload.share - edge.share.get()).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn promoted_and_declared_channels_are_declared() {
+        assert_eq!(
+            OriginCode::from(CanonicalOriginKind::Promoted),
+            OriginCode::Declared
+        );
+        assert_eq!(
+            OriginCode::from(CanonicalOriginKind::DeclaredBeforeTraffic),
+            OriginCode::Declared
+        );
+        assert_eq!(
+            OriginCode::from(CanonicalOriginKind::Discovered),
+            OriginCode::Discovered
+        );
     }
 
     #[test]
     fn serializes_with_kind_tags_and_camel_case() {
-        let payload = TopologyPayload::channels(&fixtures::bipartite_view());
+        let payload =
+            TopologyPayload::channels(&fixtures::bipartite_graph(), &fixtures::channel_names());
         let json = serde_json::to_value(&payload).expect("serialize");
         assert_eq!(json["mode"], "channels");
         assert_eq!(json["weighting"], "tx");

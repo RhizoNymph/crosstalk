@@ -16,18 +16,44 @@ use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
 use crate::backend::fixture::world::TxRecord;
-use crate::contract::graph::route_kind;
 use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
 use crate::contract::topics::{TopicStats, TopicVersionRemap};
 use crate::url::scope::Scope;
+use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use super::graph::{bucket_of, buckets};
 use super::scope::Filter;
 use super::{Ctx, retained};
+
+/// `buckets` equal buckets over `window` (the last absorbs the remainder).
+/// Fewer when the window is shorter than `buckets` microseconds.
+fn buckets(window: TimeWindow, buckets: NonZeroU32) -> Vec<TimeWindow> {
+    let start = window.start().as_micros();
+    let span = window.end().as_micros() - start;
+    let n = u64::from(buckets.get()).min(span).max(1);
+    let width = span / n;
+    (0..n)
+        .filter_map(|i| {
+            let from = start + i * width;
+            let to = if i + 1 == n {
+                window.end().as_micros()
+            } else {
+                from + width
+            };
+            TimeWindow::new(Timestamp::from_micros(from), Timestamp::from_micros(to)).ok()
+        })
+        .collect()
+}
+
+/// The bucket index of `at` among `windows`.
+fn bucket_of(windows: &[TimeWindow], at: Timestamp) -> Option<usize> {
+    let i = windows.partition_point(|w| w.end() <= at);
+    windows.get(i).filter(|w| w.contains(at)).map(|_| i)
+}
 
 pub fn topics(ctx: &Ctx, version: TopicModelVersion) -> Result<Vec<Topic>> {
     retained(ctx.world, version)?;
@@ -172,7 +198,7 @@ pub fn project(
         categories.push(PointCategories {
             sender: index_of(&agents, *from).ok_or_else(missing)?,
             reader: index_of(&agents, *to).ok_or_else(missing)?,
-            route: route_kind(&record.transmission.route),
+            route: RouteKind::from(&record.transmission.route),
             channel: channel.and_then(|c| index_of(&channels, c)),
             topic: topic.and_then(|t| index_of(&topics, t)),
         });

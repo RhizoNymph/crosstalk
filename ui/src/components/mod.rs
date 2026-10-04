@@ -20,6 +20,7 @@ pub use paging::{PageLinks, pagination};
 pub use table::data_table;
 
 use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::aggregates::node::AgentNode;
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
 use crosstalk_spec::support::{Blake3, Timestamp};
 use topcoat::Result;
@@ -31,18 +32,23 @@ use crate::url::ulid::UlidId;
 
 /// An agent's display name: its label, else its id's last six characters.
 pub fn agent_name(agent: &AgentSummary) -> String {
-    display_name(agent.id, agent.label.as_ref())
+    display_name(agent.id, agent.label.as_ref().map(AgentLabel::as_str))
 }
 
 /// [`agent_name`] for a batch-looked-up name: the canonical agent's label,
 /// else its id's tail.
 pub fn agent_name_of(name: &AgentName) -> String {
-    display_name(name.id, name.label.as_ref())
+    display_name(name.id, name.label.as_ref().map(AgentLabel::as_str))
 }
 
-fn display_name(id: crosstalk_spec::ids::AgentId, label: Option<&AgentLabel>) -> String {
+/// [`agent_name`] for a graph's agent node.
+pub fn agent_node_name(node: &AgentNode) -> String {
+    display_name(node.id, node.label.as_ref().map(|label| label.as_str()))
+}
+
+fn display_name(id: crosstalk_spec::ids::AgentId, label: Option<&str>) -> String {
     match label {
-        Some(label) => label.as_str().to_owned(),
+        Some(label) => label.to_owned(),
         None => short_id(id.to_ulid()),
     }
 }

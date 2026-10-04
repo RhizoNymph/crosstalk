@@ -10,12 +10,16 @@ pub mod fixture;
 use std::collections::HashMap;
 use std::future::Future;
 
-use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::access::BipartiteGraph;
+use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
+use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::TimeWindow;
 
@@ -26,9 +30,7 @@ use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
 use crate::contract::evidence::TransmissionEvidence;
-use crate::contract::graph::{
-    BipartiteView, Timeline, TopologyView, TransmissionSelector, TransmissionSummary,
-};
+use crate::contract::graph::{TransmissionSelector, TransmissionSummary};
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
     QualityRow,
@@ -58,28 +60,59 @@ pub trait Backend: Send + Sync + 'static {
         caller: &Caller,
     ) -> impl Future<Output = Result<TopicModelVersion>> + Send;
 
-    // Topology (items 3, 4, 6).
+    // Topology, series and the overview: exactly `QueryApi`'s methods.
 
+    /// View. L7's exposed watermark. Pages show the watermark each
+    /// aggregate response carries, so only the tests call this yet.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "QueryApi's method; pages read response watermarks"
+        )
+    )]
+    fn watermark(&self, caller: &Caller) -> impl Future<Output = Result<Watermark>> + Send;
+
+    /// View. The graph over canonical agents for an aligned window, under
+    /// the version the filter's selector resolves to, with a node per
+    /// endpoint and ancestor.
     fn topology(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
         weighting: Weighting,
-    ) -> impl Future<Output = Result<TopologyView>> + Send;
+        filter: &TopologyFilter,
+    ) -> impl Future<Output = Result<Watermarked<TopologyGraph>>> + Send;
 
+    /// View. What `topology` counts for the window and filter, and the
+    /// queues (open alerts, unreviewed channels) as of the read.
+    fn overview(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+    ) -> impl Future<Output = Result<Watermarked<OverviewCounts>>> + Send;
+
+    /// View. Agents and channels as nodes, access edges, and the same
+    /// transmission edges as `topology`.
     fn channel_topology(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
         weighting: Weighting,
-    ) -> impl Future<Output = Result<BipartiteView>> + Send;
+        filter: &TopologyFilter,
+    ) -> impl Future<Output = Result<Watermarked<BipartiteGraph>>> + Send;
 
-    fn timeline(
+    /// View. One series per group, one value per grid point, counted as
+    /// `topology` counts the point's window.
+    fn series(
         &self,
         caller: &Caller,
-        scope: &Scope,
-        buckets: std::num::NonZeroU32,
-    ) -> impl Future<Output = Result<Timeline>> + Send;
+        grid: SeriesGrid,
+        weighting: Weighting,
+        grouping: SeriesGrouping,
+        filter: &TopologyFilter,
+    ) -> impl Future<Output = Result<Watermarked<TopologySeries>>> + Send;
 
     // Transmissions (items 1, 17, 22).
 

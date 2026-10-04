@@ -1,26 +1,26 @@
 //! Graph reads: every method answers for the default day and the whole
-//! week, views satisfy their invariants, and the scope filter behaves as
-//! `contract/scope.rs` documents.
+//! week, graphs satisfy the spec's invariants, and the filter behaves as
+//! `TopologyFilter::admits` defines.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crosstalk_spec::aggregates::edge::{RouteKind, Weighting};
+use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::node::GraphNode;
+use crosstalk_spec::aggregates::series::SeriesGrouping;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::interfaces::l8_surface::AlertFilter;
+use crosstalk_spec::interfaces::l8_surface::{AlertFilter, ConflictKind, QueryError};
 
 use super::super::clock::WATERMARK;
-use super::super::world::ChannelKey;
-use super::{day, first, researcher, shared, week};
+use super::super::world::{ChannelKey, confirmed};
+use super::{day, first, graph_of, node_ids, researcher, shared, week};
 use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditFilter, ProjectionJob};
 use crate::contract::search::SearchMode;
 use crate::contract::verdict::Verdict;
 use crate::url::scope::{Scope, ViewFilter};
-use crosstalk_spec::aggregates::filter::FalseDetections;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
 
@@ -28,28 +28,46 @@ use super::reads_support::*;
 async fn every_method_answers_for_the_day_and_the_week() {
     let b = shared();
     let c = researcher();
+    assert_eq!(
+        b.watermark(&c).await.map(|w| w.at()),
+        Ok(WATERMARK),
+        "the watermark"
+    );
     for scope in [day(), week()] {
-        let topo = b
-            .topology(&c, &scope, Weighting::Transmissions)
+        let filter = scope.topology_filter();
+        let topo = graph_of(b, &c, &scope, Weighting::Transmissions)
             .await
             .expect("topology");
-        assert!(!topo.graph().edges.is_empty());
+        assert!(!topo.value.edges.is_empty());
         let bip = b
-            .channel_topology(&c, &scope, Weighting::MatchedBytes)
+            .channel_topology(&c, scope.window, Weighting::MatchedBytes, &filter)
             .await
             .expect("bipartite");
-        assert!(!bip.accesses().is_empty() && !bip.channels().is_empty());
-        assert!(!bip.transmissions().is_empty());
-        let timeline = b.timeline(&c, &scope, n(24)).await.expect("timeline");
-        assert_eq!(timeline.buckets.len(), 24);
+        assert!(!bip.value.accesses().is_empty());
         assert!(
-            timeline
-                .buckets
+            bip.value
+                .nodes()
                 .iter()
-                .map(|b| b.transmissions)
-                .sum::<u64>()
-                > 0
+                .any(|n| matches!(n, GraphNode::Channel(_)))
         );
+        assert!(!bip.value.transmissions().is_empty());
+        let series = b
+            .series(
+                &c,
+                grid(scope.window, 24),
+                Weighting::Transmissions,
+                SeriesGrouping::Total,
+                &filter,
+            )
+            .await
+            .expect("series");
+        assert_eq!(series.value.grid().points().get(), 24);
+        assert!(series.value.total() > 0);
+        let overview = b
+            .overview(&c, scope.window, &filter)
+            .await
+            .expect("overview");
+        assert!(overview.value.activity.transmissions > 0);
         assert!(!all_transmissions(&scope).await.is_empty());
         let hits = b
             .search(
@@ -157,61 +175,134 @@ async fn topology_is_canonical_with_shares_summing_to_one() {
     let b = shared();
     for scope in [day(), week()] {
         for weighting in [Weighting::Transmissions, Weighting::MatchedBytes] {
-            let view = b
-                .topology(&researcher(), &scope, weighting)
+            let graph = graph_of(b, &researcher(), &scope, weighting)
                 .await
                 .expect("topology");
-            let edges = &view.graph().edges;
-            let total = sum_shares(edges.iter().map(|e| e.share.get()));
+            assert_eq!(graph.watermark.at(), WATERMARK);
+            let value = &graph.value;
+            assert_eq!(value.topic_version, scope.topic_version);
+            assert_eq!(value.check_nodes(), Ok(()));
+            let total = sum_shares(value.edges.iter().map(|e| e.share.get()));
             assert!((total - 1.0).abs() < 1e-9, "{total}");
-            assert!(edges.iter().all(|e| e.from != e.to), "no self-edges");
+            assert!(value.edges.iter().all(|e| e.from != e.to), "no self-edges");
             let state = b.state.read().await;
-            let node_ids: HashSet<_> = view.nodes().iter().map(|n| n.id).collect();
-            for node in view.nodes() {
-                assert!(!state.is_merged(node.id), "nodes are canonical");
-                if let Some(parent) = node.parent {
-                    assert!(node_ids.contains(&parent), "parents are included");
-                }
+            for id in node_ids(value) {
+                assert!(!state.is_merged(id), "nodes are canonical");
             }
             let mut keys = HashSet::new();
-            for e in edges {
+            for e in &value.edges {
                 assert!(
                     keys.insert((e.from, e.to, format!("{:?}", e.route))),
                     "one edge per key"
                 );
             }
-            assert_eq!(view.watermark(), WATERMARK);
         }
     }
 }
 
 #[tokio::test]
-async fn bipartite_view_normalises_accesses_and_transmissions_separately() {
-    let view = shared()
-        .channel_topology(&researcher(), &week(), Weighting::Transmissions)
+async fn agent_nodes_carry_labels_claims_and_parents() {
+    let graph = graph_of(shared(), &researcher(), &week(), Weighting::Transmissions)
+        .await
+        .expect("topology");
+    let agents: Vec<_> = graph
+        .value
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            GraphNode::Agent(a) => Some(a),
+            GraphNode::Channel(_) => None,
+        })
+        .collect();
+    assert!(
+        agents
+            .iter()
+            .any(|a| a.label.as_ref().is_some_and(|l| l.as_str() == "pi-scraper")),
+        "labels are the spec's"
+    );
+    assert!(agents.iter().any(|a| a.parent.is_some()), "sub-agents");
+    // A pi agent that also claims Claude Code shows both claims.
+    let scraper = agents
+        .iter()
+        .find(|a| a.label.as_ref().is_some_and(|l| l.as_str() == "pi-scraper"))
+        .expect("pi-scraper");
+    assert!(scraper.claims.entries().len() >= 2, "{:?}", scraper.claims);
+}
+
+#[tokio::test]
+async fn edges_count_confirmations_by_their_time() {
+    let b = shared();
+    let state = b.state.read().await;
+    let scope = day();
+    let canonical = |id| state.canonical_agent(id);
+    let expected = b
+        .world
+        .transmissions
+        .iter()
+        .filter_map(|r| confirmed(&r.transmission.state))
+        .filter(|c| scope.window.contains(c.at()))
+        .count();
+    let self_edges = b
+        .world
+        .transmissions
+        .iter()
+        .filter_map(|r| Some((r, confirmed(&r.transmission.state)?)))
+        .filter(|(r, c)| {
+            scope.window.contains(c.at()) && canonical(c.from()) == canonical(r.transmission.to)
+        })
+        .count();
+    drop(state);
+    let graph = graph_of(b, &researcher(), &scope, Weighting::Transmissions)
+        .await
+        .expect("topology");
+    let counted: u64 = graph
+        .value
+        .edges
+        .iter()
+        .map(|e| e.stats.transmissions.get())
+        .sum();
+    assert_eq!(counted as usize, expected - self_edges);
+}
+
+#[tokio::test]
+async fn the_channel_centred_view_shares_the_topology_edges() {
+    let b = shared();
+    let c = researcher();
+    let scope = week();
+    let graph = b
+        .channel_topology(
+            &c,
+            scope.window,
+            Weighting::Transmissions,
+            &scope.topology_filter(),
+        )
         .await
         .expect("bipartite");
-    let access_total = sum_shares(view.accesses().iter().map(|a| a.share.get()));
+    assert_eq!(graph.watermark.at(), WATERMARK);
+    let value = &graph.value;
+    let access_total = sum_shares(value.accesses().iter().map(|a| a.share.get()));
     assert!((access_total - 1.0).abs() < 1e-9);
-    let tx_total = sum_shares(view.transmissions().iter().map(|e| e.share.get()));
+    let tx_total = sum_shares(value.transmissions().iter().map(|e| e.share.get()));
     assert!((tx_total - 1.0).abs() < 1e-9);
-    assert!(
-        view.transmissions()
-            .iter()
-            .all(|e| !matches!(e.route, Route::Channel(_)))
-    );
-    let state = shared().state.read().await;
-    for node in view.channels() {
-        assert!(
-            state
-                .channels
-                .get(&node.id)
-                .is_some_and(|r| r.superseded.is_none())
-        );
+    let topology = graph_of(b, &c, &scope, Weighting::Transmissions)
+        .await
+        .expect("topology");
+    assert_eq!(value.transmissions(), topology.value.edges.as_slice());
+    let state = b.state.read().await;
+    for node in value.nodes() {
+        if let GraphNode::Channel(channel) = node {
+            assert!(
+                state
+                    .channels
+                    .get(&channel.id)
+                    .is_some_and(|r| r.superseded.is_none()),
+                "channel nodes are in force"
+            );
+        }
     }
     // The hijacked wiki shows its writers and readers.
     let wiki = channel(ChannelKey::HijackedWiki);
-    let ops: HashSet<_> = view
+    let ops: HashSet<_> = value
         .accesses()
         .iter()
         .filter(|a| a.channel == wiki)
@@ -221,101 +312,74 @@ async fn bipartite_view_normalises_accesses_and_transmissions_separately() {
 }
 
 #[tokio::test]
-async fn timeline_totals_match_the_graph() {
+async fn a_topic_filter_keeps_the_accesses_of_channels_it_flowed_through() {
     let b = shared();
-    let c = researcher();
-    for scope in [day(), week()] {
-        let view = b
-            .topology(&c, &scope, Weighting::Transmissions)
-            .await
-            .expect("topology");
-        let edge_tx: u64 = view
-            .graph()
-            .edges
-            .iter()
-            .map(|e| e.stats.transmissions.get())
-            .sum();
-        let edge_bytes: u64 = view
-            .graph()
-            .edges
-            .iter()
-            .map(|e| e.stats.matched_bytes.get())
-            .sum();
-        let timeline = b.timeline(&c, &scope, n(7)).await.expect("timeline");
-        assert_eq!(
-            timeline
-                .buckets
-                .iter()
-                .map(|b| b.transmissions)
-                .sum::<u64>(),
-            edge_tx
-        );
-        assert_eq!(
-            timeline
-                .buckets
-                .iter()
-                .map(|b| b.matched_bytes)
-                .sum::<u64>(),
-            edge_bytes
-        );
-        assert_eq!(
-            timeline.buckets.first().map(|b| b.bucket.start()),
-            Some(scope.window.start())
-        );
-        assert_eq!(
-            timeline.buckets.last().map(|b| b.bucket.end()),
-            Some(scope.window.end())
-        );
-        assert!(
-            timeline
-                .buckets
-                .windows(2)
-                .all(|w| w[0].bucket.end() == w[1].bucket.start())
-        );
-    }
+    let topic = b
+        .world
+        .topics
+        .theme_topic(TopicModelVersion(2), super::super::text::Theme::Credentials)
+        .expect("topic");
+    let scope = with(ViewFilter {
+        topics: vec![topic],
+        ..Default::default()
+    });
+    let graph = b
+        .channel_topology(
+            &researcher(),
+            scope.window,
+            Weighting::Transmissions,
+            &scope.topology_filter(),
+        )
+        .await
+        .expect("bipartite");
+    let routed: BTreeSet<_> = graph
+        .value
+        .transmissions()
+        .iter()
+        .filter_map(|e| match e.route {
+            Route::Channel(channel) => Some(channel),
+            _ => None,
+        })
+        .collect();
+    let accessed: BTreeSet<_> = graph.value.accesses().iter().map(|a| a.channel).collect();
+    assert!(!accessed.is_empty());
+    assert!(
+        routed.is_subset(&accessed),
+        "every channel the topic was routed through keeps its accesses"
+    );
 }
 
 #[tokio::test]
 async fn agent_filter_matches_sender_or_reader_after_alias_resolution() {
     let b = shared();
+    let c = researcher();
     let (cc0, al0) = (agent("cc0"), agent("al0"));
-    let by_canonical = b
-        .topology(
-            &researcher(),
-            &with(ViewFilter {
-                agents: vec![cc0],
-                ..Default::default()
-            }),
-            Weighting::Transmissions,
-        )
+    let filtered = |agent| {
+        with(ViewFilter {
+            agents: vec![agent],
+            ..Default::default()
+        })
+    };
+    let by_canonical = graph_of(b, &c, &filtered(cc0), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert!(!by_canonical.graph().edges.is_empty());
+    assert!(!by_canonical.value.edges.is_empty());
     assert!(
         by_canonical
-            .graph()
+            .value
             .edges
             .iter()
             .all(|e| e.from == cc0 || e.to == cc0)
     );
-    let by_alias = b
-        .topology(
-            &researcher(),
-            &with(ViewFilter {
-                agents: vec![al0],
-                ..Default::default()
-            }),
-            Weighting::Transmissions,
-        )
+    let by_alias = graph_of(b, &c, &filtered(al0), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert_eq!(by_canonical.graph().edges, by_alias.graph().edges);
+    assert_eq!(by_canonical.value.edges, by_alias.value.edges);
     // No node is a merged alias.
-    let all = b
-        .topology(&researcher(), &week(), Weighting::Transmissions)
+    let all = graph_of(b, &c, &week(), Weighting::Transmissions)
         .await
         .expect("topology");
-    assert!(all.nodes().iter().all(|n| n.id != al0));
+    assert!(node_ids(&all.value).iter().all(|n| *n != al0));
 }
 
 #[tokio::test]
@@ -323,16 +387,14 @@ async fn channel_filter_follows_supersession() {
     let b = shared();
     let notes = channel(ChannelKey::TeamNotes);
     let old = channel(ChannelKey::OldTeamNotes);
-    let by_new = all_transmissions(&with(ViewFilter {
-        channels: vec![notes],
-        ..Default::default()
-    }))
-    .await;
-    let by_old = all_transmissions(&with(ViewFilter {
-        channels: vec![old],
-        ..Default::default()
-    }))
-    .await;
+    let filtered = |channel| {
+        with(ViewFilter {
+            channels: vec![channel],
+            ..Default::default()
+        })
+    };
+    let by_new = all_transmissions(&filtered(notes)).await;
+    let by_old = all_transmissions(&filtered(old)).await;
     assert_eq!(by_new, by_old);
     assert!(
         by_new.iter().all(|t| t.route == Route::Channel(notes)),
@@ -348,6 +410,15 @@ async fn channel_filter_follows_supersession() {
         raw_old > 0 && by_new.len() > raw_old,
         "old traffic counts for the new channel"
     );
+    let c = researcher();
+    let graph_new = graph_of(b, &c, &filtered(notes), Weighting::Transmissions)
+        .await
+        .expect("topology");
+    let graph_old = graph_of(b, &c, &filtered(old), Weighting::Transmissions)
+        .await
+        .expect("topology");
+    assert!(!graph_new.value.edges.is_empty());
+    assert_eq!(graph_new.value.edges, graph_old.value.edges);
 }
 
 #[tokio::test]
@@ -389,7 +460,7 @@ async fn route_and_topic_filters_and_their_conjunction() {
     );
     assert!(both.len() < by_topic.len() && both.len() < by_route.len());
 
-    // Topics are read under the scope's version: v1 ids do not match v2.
+    // A v2 topic under v1 is refused, not silently matched against nothing.
     let v1_scope = Scope {
         topic_version: TopicModelVersion(1),
         ..with(ViewFilter {
@@ -397,7 +468,28 @@ async fn route_and_topic_filters_and_their_conjunction() {
             ..Default::default()
         })
     };
-    assert!(all_transmissions(&v1_scope).await.is_empty());
+    let conflict = QueryError::Conflict(ConflictKind::TopicsNotInVersion {
+        version: TopicModelVersion(1),
+        topics: vec![topic],
+    });
+    assert_eq!(
+        graph_of(shared(), &researcher(), &v1_scope, Weighting::Transmissions)
+            .await
+            .err(),
+        Some(conflict.clone())
+    );
+    assert_eq!(
+        shared()
+            .transmissions(
+                &researcher(),
+                &v1_scope,
+                &crate::contract::graph::TransmissionSelector::All,
+                &first(5)
+            )
+            .await
+            .err(),
+        Some(conflict)
+    );
 }
 
 #[tokio::test]
@@ -430,55 +522,25 @@ async fn verdict_filter_drops_false_detections() {
         .expect("withdrawn")
         .transmission;
     assert!(all.iter().any(|t| t.id == withdrawn && t.verdict.is_none()));
-}
-
-#[tokio::test]
-async fn unretained_topic_versions_are_typed_errors() {
-    let b = shared();
+    drop(state);
+    // The graph subtracts them too.
     let c = researcher();
-    let version = TopicModelVersion(9);
-    let scope = Scope {
-        topic_version: version,
-        ..week()
+    let include = graph_of(shared(), &c, &week(), Weighting::Transmissions)
+        .await
+        .expect("topology");
+    let exclude = graph_of(
+        shared(),
+        &c,
+        &with(ViewFilter {
+            false_detections: FalseDetections::Exclude,
+            ..Default::default()
+        }),
+        Weighting::Transmissions,
+    )
+    .await
+    .expect("topology");
+    let total = |edges: &[crosstalk_spec::aggregates::edge::WeightedEdge]| -> u64 {
+        edges.iter().map(|e| e.stats.transmissions.get()).sum()
     };
-    let expected = QueryError::VersionNotRetained { version };
-    assert_eq!(
-        b.topology(&c, &scope, Weighting::Transmissions).await.err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.channel_topology(&c, &scope, Weighting::Transmissions)
-            .await
-            .err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.timeline(&c, &scope, n(4)).await.err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.transmissions(&c, &scope, &TransmissionSelector::All, &first(5))
-            .await
-            .err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.search(&c, &search("deploy", SearchMode::Text), &scope, &first(5))
-            .await
-            .err(),
-        Some(expected.clone())
-    );
-    assert_eq!(b.topics(&c, version).await.err(), Some(expected.clone()));
-    assert_eq!(
-        b.topic_stats(&c, &scope, n(4)).await.err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.topic_remap(&c, version).await.err(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        b.fit_projection(&c, &scope, params(1, 10)).await.err(),
-        Some(expected)
-    );
+    assert!(total(&exclude.value.edges) < total(&include.value.edges));
 }

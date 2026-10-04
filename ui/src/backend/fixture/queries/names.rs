@@ -9,7 +9,7 @@ use crate::contract::agents::AgentName;
 use crate::contract::channels::ChannelName;
 
 use super::Ctx;
-use super::summaries;
+use super::nodes;
 
 /// Names of the known agents among `ids`, by the id asked for.
 pub fn agents(ctx: &Ctx, ids: &[AgentId]) -> HashMap<AgentId, AgentName> {
@@ -40,7 +40,7 @@ pub fn channels(ctx: &Ctx, ids: &[ChannelId]) -> HashMap<ChannelId, ChannelName>
                 *id,
                 ChannelName {
                     id: in_force,
-                    shape: summaries::node(ctx, record).shape,
+                    shape: nodes::shape(ctx, record),
                 },
             ))
         })

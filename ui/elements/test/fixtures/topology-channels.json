@@ -252,15 +252,6 @@
       "detection": "observed",
       "policy": "unreviewed",
       "volume": 25
-    },
-    {
-      "kind": "channel",
-      "id": "01K6HB7H000320002YXM000005",
-      "name": "wiki.internal/*",
-      "origin": "declared",
-      "detection": "unused",
-      "policy": "sanctioned",
-      "volume": 0
     }
   ],
   "edges": [
@@ -358,7 +349,7 @@
       "to": "01K6HB7H0002GG002YXM000002",
       "route": "dl.p2c",
       "routeKind": "delegation",
-      "share": 0.21505376344086022,
+      "share": 0.12048192771084337,
       "transmissions": 20,
       "matchedBytes": 14657
     },
@@ -368,7 +359,7 @@
       "to": "01K6HB7H0002GG002YXM000001",
       "route": "dl.c2p",
       "routeKind": "delegation",
-      "share": 0.1935483870967742,
+      "share": 0.10843373493975904,
       "transmissions": 18,
       "matchedBytes": 13232
     },
@@ -378,7 +369,7 @@
       "to": "01K6HB7H0002GG002YXM000003",
       "route": "dl.p2c",
       "routeKind": "delegation",
-      "share": 0.0967741935483871,
+      "share": 0.05421686746987952,
       "transmissions": 9,
       "matchedBytes": 6616
     },
@@ -388,7 +379,7 @@
       "to": "01K6HB7H0002GG002YXM000001",
       "route": "dl.c2p",
       "routeKind": "delegation",
-      "share": 0.07526881720430108,
+      "share": 0.04216867469879518,
       "transmissions": 7,
       "matchedBytes": 5228
     },
@@ -398,7 +389,7 @@
       "to": "01K6HB7H0002GG002YXM000001",
       "route": "dr.tool.mcp__github__get_pull_request",
       "routeKind": "direct",
-      "share": 0.06451612903225806,
+      "share": 0.03614457831325301,
       "transmissions": 6,
       "matchedBytes": 4534
     },
@@ -408,7 +399,7 @@
       "to": "01K6HB7H0002GG002YXM000009",
       "route": "dl.p2c",
       "routeKind": "delegation",
-      "share": 0.053763440860215055,
+      "share": 0.030120481927710843,
       "transmissions": 5,
       "matchedBytes": 3803
     },
@@ -418,7 +409,7 @@
       "to": "01K6HB7H0002GG002YXM00000C",
       "route": "dl.p2c",
       "routeKind": "delegation",
-      "share": 0.08602150537634409,
+      "share": 0.04819277108433735,
       "transmissions": 8,
       "matchedBytes": 6070
     },
@@ -428,7 +419,7 @@
       "to": "01K6HB7H0002GG002YXM000006",
       "route": "dl.c2p",
       "routeKind": "delegation",
-      "share": 0.08602150537634409,
+      "share": 0.04819277108433735,
       "transmissions": 8,
       "matchedBytes": 6292
     },
@@ -438,7 +429,7 @@
       "to": "01K6HB7H0002GG002YXM000005",
       "route": "un",
       "routeKind": "unobserved",
-      "share": 0.043010752688172046,
+      "share": 0.024096385542168676,
       "transmissions": 4,
       "matchedBytes": 3183
     },
@@ -448,7 +439,7 @@
       "to": "01K6HB7H0002GG002YXM000006",
       "route": "dr.user",
       "routeKind": "direct",
-      "share": 0.03225806451612903,
+      "share": 0.018072289156626505,
       "transmissions": 3,
       "matchedBytes": 2489
     },
@@ -458,7 +449,7 @@
       "to": "01K6HB7H0002GG002YXM000005",
       "route": "dr.sys",
       "routeKind": "direct",
-      "share": 0.021505376344086023,
+      "share": 0.012048192771084338,
       "transmissions": 2,
       "matchedBytes": 1832
     },
@@ -468,7 +459,7 @@
       "to": "01K6HB7H0002GG002YXM00000B",
       "route": "un",
       "routeKind": "unobserved",
-      "share": 0.03225806451612903,
+      "share": 0.018072289156626505,
       "transmissions": 3,
       "matchedBytes": 2267
     }

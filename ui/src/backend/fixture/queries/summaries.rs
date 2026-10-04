@@ -1,7 +1,7 @@
-//! Rows shared by lists and graphs: agent summaries, channel summaries and
-//! channel nodes, always over canonical agents and channels in force.
+//! List rows: agent summaries and channel summaries, always over canonical
+//! agents and channels in force. Graph nodes are in [`super::nodes`].
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
@@ -11,8 +11,7 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::fixture::store::ChannelRecord;
 use crate::contract::agents::{AgentState, AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
-use crate::contract::graph::{ChannelNode, ChannelShape};
+use crate::contract::channels::ChannelSummary;
 
 use super::Ctx;
 
@@ -99,65 +98,6 @@ pub fn agent(ctx: &Ctx, id: AgentId, counts: (u64, u64)) -> Option<AgentSummary>
         transmissions_out: counts.1,
         last_seen,
     })
-}
-
-/// Summaries for `ids` plus every canonical ancestor, in id order.
-pub fn agents_with_parents(
-    ctx: &Ctx,
-    ids: impl IntoIterator<Item = AgentId>,
-    counts: &Counts,
-) -> Vec<AgentSummary> {
-    let mut wanted: BTreeSet<AgentId> = BTreeSet::new();
-    for id in ids {
-        let mut current = Some(ctx.agent(id));
-        // Parent chains are short; the bound guards against a cycle.
-        for _ in 0..16 {
-            let Some(agent) = current else { break };
-            if !wanted.insert(agent) {
-                break;
-            }
-            current = ctx
-                .state
-                .agents
-                .get(&agent)
-                .and_then(|r| r.agent.parent)
-                .map(|p| ctx.agent(p))
-                .filter(|p| *p != agent);
-        }
-    }
-    wanted
-        .into_iter()
-        .filter_map(|id| agent(ctx, id, counts.get(&id).copied().unwrap_or_default()))
-        .collect()
-}
-
-pub fn node(ctx: &Ctx, record: &ChannelRecord) -> ChannelNode {
-    let channel = &record.channel;
-    let shape = match (channel.origin.pattern(), channel.origin.seed()) {
-        (Some(pattern), _) => ChannelShape::Pattern(pattern.clone()),
-        (None, seed) => {
-            let seed = seed.map_or(channel.id.as_ulid(), |seed| seed.resource.as_ulid());
-            match ctx
-                .world
-                .resource(crosstalk_spec::ids::ResourceId::from_ulid(seed))
-            {
-                Some(resource) => ChannelShape::Seed(resource.locator.clone()),
-                None => {
-                    ChannelShape::Seed(crosstalk_spec::derived::flow::resource::Locator::Opaque {
-                        tool: crosstalk_spec::observed::message::ToolName("unknown".to_owned()),
-                        key: format!("{seed:032x}"),
-                    })
-                }
-            }
-        }
-    };
-    ChannelNode {
-        id: channel.id,
-        origin: OriginKind::of(&channel.origin),
-        detection: DetectionKind::of(&channel.origin),
-        policy: policy_kind(&channel.policy),
-        shape,
-    }
 }
 
 /// The list row for a channel, counting the traffic of every channel

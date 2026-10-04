@@ -10,7 +10,7 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permis
 
 use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
-use super::{caller, collect, day, first, researcher, shared, week, window};
+use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
 use crate::backend::Backend;
 use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
@@ -108,7 +108,7 @@ async fn content_needs_the_content_permission() {
     );
     // Structure is still visible.
     assert!(
-        b.topology(&view, &week(), Weighting::Transmissions)
+        graph_of(b, &view, &week(), Weighting::Transmissions)
             .await
             .is_ok()
     );
@@ -125,7 +125,7 @@ async fn content_needs_the_content_permission() {
     );
     let content_only = caller(&[Permission::Content]);
     assert_eq!(
-        b.topology(&content_only, &week(), Weighting::Transmissions)
+        graph_of(b, &content_only, &week(), Weighting::Transmissions)
             .await
             .err(),
         Some(QueryError::Forbidden {
@@ -140,12 +140,11 @@ async fn edge_and_id_selectors() {
     let b = shared();
     let c = researcher();
     let scope = week();
-    let view = b
-        .topology(&c, &scope, Weighting::Transmissions)
+    let view = graph_of(b, &c, &scope, Weighting::Transmissions)
         .await
         .expect("topology");
     let edge = view
-        .graph()
+        .value
         .edges
         .iter()
         .max_by_key(|e| e.stats.transmissions)
@@ -509,8 +508,8 @@ async fn same_seed_same_answers() {
     let (a, b) = (super::fresh(), super::fresh());
     let c = researcher();
     assert_eq!(
-        a.topology(&c, &day(), Weighting::MatchedBytes).await,
-        b.topology(&c, &day(), Weighting::MatchedBytes).await
+        graph_of(&a, &c, &day(), Weighting::MatchedBytes).await,
+        graph_of(&b, &c, &day(), Weighting::MatchedBytes).await
     );
     assert_eq!(
         a.search(
@@ -529,10 +528,20 @@ async fn same_seed_same_answers() {
         .await
     );
     assert_eq!(
-        a.channel_topology(&c, &week(), Weighting::Transmissions)
-            .await,
-        b.channel_topology(&c, &week(), Weighting::Transmissions)
-            .await
+        a.channel_topology(
+            &c,
+            week().window,
+            Weighting::Transmissions,
+            &week().topology_filter()
+        )
+        .await,
+        b.channel_topology(
+            &c,
+            week().window,
+            Weighting::Transmissions,
+            &week().topology_filter()
+        )
+        .await
     );
     assert_eq!(
         a.agents(&c, &Default::default(), &first(100)).await,

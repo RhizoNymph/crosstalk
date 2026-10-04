@@ -25,12 +25,16 @@ mod tests;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::access::BipartiteGraph;
+use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
+use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
@@ -43,9 +47,7 @@ use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
 use crate::contract::evidence::TransmissionEvidence;
-use crate::contract::graph::{
-    BipartiteView, Timeline, TopologyView, TransmissionSelector, TransmissionSummary,
-};
+use crate::contract::graph::{TransmissionSelector, TransmissionSummary};
 use crate::contract::present::Present;
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
@@ -138,36 +140,56 @@ impl Backend for FixtureBackend {
         Ok(self.world.topics.latest())
     }
 
+    async fn watermark(&self, caller: &Caller) -> Result<Watermark> {
+        require(caller, Permission::View)?;
+        Ok(queries::graph::watermark())
+    }
+
     async fn topology(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
         weighting: Weighting,
-    ) -> Result<TopologyView> {
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<TopologyGraph>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::graph::topology(ctx, scope, weighting))
+        self.read(|ctx| queries::graph::topology(ctx, window, weighting, filter))
+            .await
+    }
+
+    async fn overview(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<OverviewCounts>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::overview(ctx, window, filter))
             .await
     }
 
     async fn channel_topology(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
         weighting: Weighting,
-    ) -> Result<BipartiteView> {
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<BipartiteGraph>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::graph::channel_topology(ctx, scope, weighting))
+        self.read(|ctx| queries::graph::channel_topology(ctx, window, weighting, filter))
             .await
     }
 
-    async fn timeline(
+    async fn series(
         &self,
         caller: &Caller,
-        scope: &Scope,
-        buckets: NonZeroU32,
-    ) -> Result<Timeline> {
+        grid: SeriesGrid,
+        weighting: Weighting,
+        grouping: SeriesGrouping,
+        filter: &TopologyFilter,
+    ) -> Result<Watermarked<TopologySeries>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::graph::timeline(ctx, scope, buckets))
+        self.read(|ctx| queries::series::series(ctx, grid, weighting, grouping, filter))
             .await
     }
 
@@ -243,7 +265,7 @@ impl Backend for FixtureBackend {
         params: ProjectionParams,
     ) -> Result<ProjectionId> {
         require(caller, Permission::Content)?;
-        queries::retained(&self.world, scope.topic_version)?;
+        queries::linked::resolve_version(&self.world, &scope.topology_filter())?;
         let mut state = self.state.write().await;
         let same = |p: &ProjectionPoints| p.meta().scope == *scope && p.meta().params == params;
         if let Some((id, _)) = state.projections.iter().find(|(_, p)| same(p)) {
