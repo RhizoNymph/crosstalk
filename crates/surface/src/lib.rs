@@ -3,8 +3,8 @@
 //!
 //! Implements [`crosstalk_spec::interfaces::l8_surface`]:
 //!
-//! - [`Surface`] implements `QueryApi` ([`query`]), `OperatorActions`
-//!   ([`actions`]) and `LiveFeed` ([`live`]) over any [`SurfaceStores`]:
+//! - [`Surface`] implements `QueryApi` (module `query`), `OperatorActions`
+//!   (module `actions`) and `LiveFeed` ([`live`]) over any [`SurfaceStores`]:
 //!   one associated type per spec store trait, read and written only
 //!   through the spec's traits.
 //! - [`live::FeedWriter`] runs the live feed's log; [`live::FeedHandle`]

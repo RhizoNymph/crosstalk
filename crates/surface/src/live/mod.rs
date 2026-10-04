@@ -2,10 +2,10 @@
 //! stores publish, streamed to each subscriber with resume, resync,
 //! heartbeats and an end reason.
 //!
-//! - [`log`]: the feed log of one epoch, pruned by retention.
-//! - [`writer`]: the task that owns the log and every stream's sending end
+//! - `log`: the feed log of one epoch, pruned by retention.
+//! - `writer`: the task that owns the log and every stream's sending end
 //!   ([`FeedWriter`]), and the bus consumer that feeds it.
-//! - [`stream`]: one subscriber's [`FeedStream`].
+//! - `stream`: one subscriber's [`FeedStream`].
 //!
 //! The surface's `subscribe` checks View, then asks the writer for a
 //! stream planned by `FeedWindow::resume`.

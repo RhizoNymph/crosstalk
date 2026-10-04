@@ -217,7 +217,14 @@ dependencies = [
 name = "crosstalk-api"
 version = "0.1.0"
 dependencies = [
+ "crosstalk-memory",
  "crosstalk-spec",
+ "crosstalk-surface",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -68,7 +68,7 @@ impl<A: AuditLog + Send + 'static> ExportAudit<A> {
     }
 }
 
-/// Records how an export ended: `Ended` through [`EndGuard::ended`], or
+/// Records how an export ended: `Ended` once the trailer is sent, or
 /// `Abandoned` when dropped first.
 #[derive(Debug)]
 pub struct EndGuard<A: AuditLog + Send + 'static> {
