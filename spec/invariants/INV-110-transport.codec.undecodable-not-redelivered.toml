@@ -10,7 +10,9 @@ it would be redelivered forever and stall the consumer. The bus terminates
 it and reports it once, logged with its stream sequence. This trades the
 message for liveness; it only arises from foreign publishers or version
 skew, since every in-tree publisher encodes with the same codec. MpscBus
-carries values and never decodes.
+also carries encoded envelopes and decodes strictly on delivery, so it
+follows the same rule: the message is reported once per group and
+terminated, never redelivered or dead-lettered.
 """
 
 [evidence]

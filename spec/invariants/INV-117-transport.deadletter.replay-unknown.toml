@@ -16,5 +16,5 @@ unit = "crosstalk_transport::tests::replay_of_unknown_dead_letter_is_rejected"
 dst = "crosstalk_transport::dst::concurrent_replays_of_one_letter_succeed_once"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-dst = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

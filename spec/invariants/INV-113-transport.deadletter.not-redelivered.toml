@@ -14,5 +14,5 @@ dst = "crosstalk_transport::dst::dead_lettered_envelope_not_redelivered"
 integration = "crosstalk_transport::integration::jetstream_dead_lettered_envelope_not_redelivered"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

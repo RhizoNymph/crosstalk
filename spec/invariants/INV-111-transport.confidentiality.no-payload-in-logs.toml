@@ -19,4 +19,4 @@ property = "crosstalk_transport::tests::error_values_omit_payload_bytes"
 
 [evidence-review]
 lint = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

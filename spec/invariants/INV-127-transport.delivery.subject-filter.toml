@@ -15,5 +15,5 @@ property = "crosstalk_transport::tests::subscription_yields_only_subscribed_subj
 integration = "crosstalk_transport::integration::jetstream_subject_filter"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

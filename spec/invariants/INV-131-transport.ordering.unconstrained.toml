@@ -17,4 +17,4 @@ a dependency fails a test.
 dst = "crosstalk_transport::dst::sim_bus_reaches_every_pairwise_order"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

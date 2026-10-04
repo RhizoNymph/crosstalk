@@ -26,6 +26,8 @@ Overview:
     of spec plus one empty library per implementation crate under crates/
     (crosstalk-<dir>), with the dependency rule between them enforced by an
     architecture test and every check run by scripts/check.sh (workspace).
+    crosstalk-transport has the in-process bus (MpscBus) with consumer
+    groups, retries, dead letters and envelope dedup (transport).
 
   subsystems:
     spec: >
@@ -43,7 +45,9 @@ Overview:
     transport: >
       Crate crosstalk-transport. L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
-      between components.
+      between components. The in-process bus is one tokio task owning
+      every consumer group, delivery and dead letter; envelopes cross it
+      as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
@@ -304,4 +308,25 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  transport:
+    description: >
+      The L2 in-process bus (MpscBus): consumer groups that each get every
+      envelope and share it among their subscriptions, at-least-once
+      delivery with ack, nack, ack timeouts and redelivery after a
+      consumer crash, backoff from the group's RetryPolicy, dead letters
+      stored before release after the retry budget, listed by cursor and
+      replayed to one group, bounded per-group capacity with waiting
+      publishers, envelopes encoded as wire JSON and decoded strictly (an
+      undecodable payload is reported once and terminated), a seeded
+      shuffled delivery order for simulation, structured config, and the
+      Dedup wrapper over a per-group handled-id record. Simulation tests
+      on tokio's paused clock with a seeded fault scenario.
+    entry_points:
+      - crates/transport/src/lib.rs
+      - crates/transport/src/bus/mod.rs
+      - crates/transport/src/bus/actor.rs
+      - crates/transport/src/config.rs
+      - crates/transport/src/dedup.rs
+    depends_on: [type_spec, wire_contract, workspace]
+    doc: docs/features/transport.md
 ```

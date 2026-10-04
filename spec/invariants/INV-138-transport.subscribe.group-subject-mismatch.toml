@@ -19,5 +19,5 @@ unit = "crosstalk_transport::tests::subscribe_rejects_different_subject_set"
 integration = "crosstalk_transport::integration::jetstream_rejects_group_subject_mismatch"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

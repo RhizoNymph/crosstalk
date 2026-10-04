@@ -16,5 +16,5 @@ dst = "crosstalk_transport::dst::exhausted_delivery_dead_lettered_before_release
 integration = "crosstalk_transport::integration::jetstream_dead_letter_survives_crash_at_exhaustion"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

@@ -15,5 +15,5 @@ property = "crosstalk_transport::tests::delivered_envelope_equals_published"
 integration = "crosstalk_transport::integration::jetstream_envelope_round_trips_across_redelivery"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }
