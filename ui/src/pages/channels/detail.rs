@@ -30,7 +30,6 @@ use crate::components::{
     PageLinks, empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header,
     short_id,
 };
-use crate::contract::alerts::Alert;
 use crate::contract::research::AuditSubject;
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
@@ -41,12 +40,14 @@ use crate::pages::common::action::{
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::common::links::{channel_url, transmission_url};
-use crate::pages::common::lookup::{OperatorNames, agent_names, operator_names, rule_names};
+use crate::pages::common::lookup::{OperatorNames, agent_names, operator_names};
 use crate::pages::common::paging::{PAGE_SIZE, page_request};
+use crate::pages::common::rules::rule_names;
 use crate::pages::common::transmissions::ChannelNames;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::alert::Alert;
 
 path_param!(channel_ulid);
 

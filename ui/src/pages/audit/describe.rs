@@ -6,7 +6,6 @@ use crate::components::locator::format_pattern;
 use crate::components::{badge::Badge, short_id};
 use crate::contract::actions::OperatorAction;
 use crate::contract::research::AuditedAction;
-use crate::contract::rules::OperatorRuleStatus;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 
@@ -63,10 +62,12 @@ fn describe_operator(action: &OperatorAction) -> String {
         OperatorAction::UpdateRule { name, .. } => {
             format!("updated rule \u{201c}{}\u{201d}", name.as_str())
         }
-        OperatorAction::SetRuleEnabled { status, .. } => match status {
-            OperatorRuleStatus::Enabled => "enabled rule".to_owned(),
-            OperatorRuleStatus::Disabled => "disabled rule".to_owned(),
-        },
+        OperatorAction::SetRuleEnabled { enabled, .. } => if *enabled {
+            "enabled rule"
+        } else {
+            "disabled rule"
+        }
+        .to_owned(),
     }
 }
 

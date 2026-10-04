@@ -1,52 +1,18 @@
-//! Lists and detail reads: alerts, audit and dead letters. Agents are in
-//! [`super::agents`], channels in [`super::channels`].
+//! Lists: audit and dead letters. Agents are in [`super::agents`],
+//! channels in [`super::channels`], alerts and rules in [`super::alerts`].
 
-use crosstalk_spec::aggregates::alert::AlertSubject;
-use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
-use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 
 use crate::backend::Result;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::Alert;
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction,
 };
 use crosstalk_spec::ids::MergeId;
-use crosstalk_spec::paging::{AlertList, AuditList, DeadLetterList, Page, PageRequest};
+use crosstalk_spec::paging::{AuditList, DeadLetterList, Page, PageRequest};
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};
-
-/// Whether an alert is about `channel`: its subject is the channel, or a
-/// transmission routed through it (both after supersession).
-fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
-    match alert.subject {
-        AlertSubject::Channel(c) => ctx.channel(c) == channel,
-        AlertSubject::Transmission(t) => ctx.world.tx(t).is_some_and(
-            |r| matches!(r.transmission.route, Route::Channel(c) if ctx.channel(c) == channel),
-        ),
-        AlertSubject::Agent(_) => false,
-    }
-}
-
-pub fn alerts(
-    ctx: &Ctx,
-    filter: &AlertFilter,
-    page: &PageRequest<AlertList>,
-) -> Result<Page<Alert, AlertList>> {
-    let channel = filter.channel.map(|c| ctx.channel(c));
-    let items = ctx
-        .state
-        .alerts
-        .iter()
-        .filter(|a| filter.states.is_empty() || filter.states.contains(&a.state.kind()))
-        .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
-        .map(|a| (newest_first(a.raised_at, a.id.as_ulid()), a.clone()))
-        .collect();
-    page::paginate("alerts", page::digest(filter), items, page)
-}
 
 /// Every entity an audit entry concerns: its subject, the agents of a merge
 /// or unmerge, and what it created.

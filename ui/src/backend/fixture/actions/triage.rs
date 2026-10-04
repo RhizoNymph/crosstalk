@@ -1,5 +1,6 @@
 //! Verdicts, alert triage and dead-letter replay (item 17).
 
+use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::derived::flow::verdict::{
     TransmissionVerdict, Verdict, VerdictLog, VerdictRecorded,
 };
@@ -11,7 +12,6 @@ use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
-use crate::contract::alerts::AlertState;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::effects;
@@ -58,18 +58,25 @@ pub fn record_verdict(state: &mut State, entry: TransmissionVerdict) -> Result<V
     recorded
 }
 
+/// An open alert becomes acknowledged. An acknowledged one already
+/// matches, so it is left as it is (the spec's `Unchanged`, which the
+/// contract's outcome cannot say yet); a resolved or suppressed one is
+/// `Conflict(AlertNotActive)`.
 pub fn acknowledge(state: &mut State, by: OperatorId, id: AlertId) -> Result<ActionOutcome> {
     let alert = state
         .alerts
         .iter_mut()
         .find(|a| a.id == id)
         .ok_or(QueryError::NotFound)?;
-    if alert.state != AlertState::Open {
-        return Err(QueryError::Conflict(ConflictKind::AlertNotActive {
-            alert: id,
-        }));
+    match alert.state {
+        AlertState::Open => alert.state = AlertState::Acknowledged { by, at: NOW },
+        AlertState::Acknowledged { .. } => {}
+        AlertState::Resolved { .. } | AlertState::Suppressed { .. } => {
+            return Err(QueryError::Conflict(ConflictKind::AlertNotActive {
+                alert: id,
+            }));
+        }
     }
-    alert.state = AlertState::Acknowledged { by, at: NOW };
     Ok(ActionOutcome::Applied)
 }
 

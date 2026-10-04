@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::agents::filter::AgentFilter;
 use crosstalk_spec::aggregates::agents::{AgentDetail, AgentName, AgentRow};
+use crosstalk_spec::aggregates::alert::{Alert, AlertRuleDef};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -50,24 +51,25 @@ use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, SearchRequest, TopicPage};
+use crosstalk_spec::interfaces::l8_surface::lists::{
+    AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
+};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, SinkInfo};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
 
 use super::{Backend, Result};
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::Alert;
 use crate::contract::present::Present;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
-use crate::contract::rules::{RuleDef, SinkInfo};
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
+    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
+    TopicList, TransmissionList,
 };
 
 use queries::{Ctx, require};
@@ -456,23 +458,29 @@ impl Backend for FixtureBackend {
         page: &PageRequest<AlertList>,
     ) -> Result<Page<Alert, AlertList>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::alerts(ctx, filter, page))
+        self.read(|ctx| queries::alerts::alerts(ctx, filter, page))
             .await
     }
 
     async fn alert(&self, caller: &Caller, id: AlertId) -> Result<Option<Alert>> {
         require(caller, Permission::View)?;
-        let state = self.state.read().await;
-        Ok(state.alerts.iter().find(|a| a.id == id).cloned())
+        self.read(|ctx| Ok(queries::alerts::alert(ctx, id))).await
     }
 
-    async fn rules(&self, caller: &Caller) -> Result<Vec<RuleDef>> {
+    async fn alert_rules(
+        &self,
+        caller: &Caller,
+        filter: &AlertRuleFilter,
+        page: &PageRequest<AlertRuleList>,
+    ) -> Result<Page<AlertRuleDef, AlertRuleList>> {
         require(caller, Permission::View)?;
-        Ok(self.state.read().await.rules.clone())
+        self.read(|ctx| queries::alerts::alert_rules(ctx, filter, page))
+            .await
     }
 
+    /// Govern: a delivery error can name the sink's endpoint.
     async fn sinks(&self, caller: &Caller) -> Result<Vec<SinkInfo>> {
-        require(caller, Permission::View)?;
+        require(caller, Permission::Govern)?;
         Ok(self.world.sinks.clone())
     }
 

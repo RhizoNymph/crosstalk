@@ -1,11 +1,13 @@
 //! Alerts as rows: state, who moved it there, rule name and subject link.
 
+use crosstalk_spec::aggregates::alert::{Alert, AlertState, SuppressReason};
 use crosstalk_spec::interfaces::l8_surface::AlertStateKind;
 
+use crate::backend::alert_state;
 use crate::components::{format_time, short_id};
-use crate::contract::alerts::{Alert, AlertState, SuppressReason};
 use crate::pages::common::links::{alert_subject, alert_url};
-use crate::pages::common::lookup::{OperatorNames, RuleNames};
+use crate::pages::common::lookup::OperatorNames;
+use crate::pages::common::rules::RuleNames;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
@@ -62,7 +64,7 @@ impl AlertRow {
             id: alert.id.to_ulid(),
             short: short_id(alert.id.to_ulid()),
             url: alert_url(alert.id, state),
-            state: alert.state.kind(),
+            state: alert_state::kind(&alert.state),
             state_detail,
             note,
             rule: rules.name(alert.rule),

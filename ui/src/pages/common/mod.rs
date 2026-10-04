@@ -7,5 +7,6 @@ pub mod form;
 pub mod links;
 pub mod lookup;
 pub mod paging;
+pub mod rules;
 pub mod topics;
 pub mod transmissions;

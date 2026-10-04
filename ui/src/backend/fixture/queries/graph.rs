@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, BipartiteParts, WeightedAccess};
-use crosstalk_spec::aggregates::alert;
 use crosstalk_spec::aggregates::edge::{
     EdgeStats, EdgeTotals, TopologyFilter, TopologyGraph, WeightedEdge, Weighting,
 };
@@ -26,7 +25,6 @@ use crosstalk_spec::support::{Share, TimeWindow};
 use crate::backend::Result;
 use crate::backend::fixture::clock::{BUCKET, WATERMARK};
 use crate::backend::fixture::store::ChannelRecord;
-use crate::contract::alerts::AlertState;
 
 use super::linked::{Counted, Linked};
 use super::{Ctx, nodes, route_key};
@@ -141,23 +139,11 @@ pub fn topology(
     graph(ctx, window, weighting, filter).map(watermarked)
 }
 
-/// What waits for an operator, as `QueueCounts::tally` defines it: alerts
-/// in state `Open`, and channels in force whose policy is unreviewed. The
-/// fixture's alerts are the contract's (one more suppress reason), so they
-/// are counted by the same rule here; channels go through `tally` itself.
+/// What waits for an operator: `QueueCounts::tally` over every stored
+/// alert and channel.
 fn queues(ctx: &Ctx) -> QueueCounts {
-    let open_alerts = ctx
-        .state
-        .alerts
-        .iter()
-        .filter(|a| matches!(a.state, AlertState::Open))
-        .count();
     let stored = ctx.state.channels.values().map(ChannelRecord::channel);
-    let channels = QueueCounts::tally(std::iter::empty::<&alert::Alert>(), stored);
-    QueueCounts {
-        open_alerts: u64::try_from(open_alerts).unwrap_or(u64::MAX),
-        unreviewed_channels: channels.unreviewed_channels,
-    }
+    QueueCounts::tally(&ctx.state.alerts, stored)
 }
 
 /// The overview: `EdgeTotals::of` the graph for the window and filter, and

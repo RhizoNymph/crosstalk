@@ -26,6 +26,7 @@ mod traffic;
 
 use std::collections::HashMap;
 
+use crosstalk_spec::aggregates::alert::AlertRuleConfig;
 use crosstalk_spec::aggregates::topic::{Assignment, EmbeddingModel, Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::topic_history::{
     TopicLineage, TopicVersionHistory, TopicVersionInfo,
@@ -34,10 +35,10 @@ use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TopicId, TransmissionId};
+use crosstalk_spec::interfaces::l8_surface::SinkInfo;
 use crosstalk_spec::observed::agent::ClaimSet;
 
 use crate::contract::research::Operator;
-use crate::contract::rules::SinkInfo;
 
 use super::store::State;
 use super::text::Theme;
@@ -241,7 +242,11 @@ pub struct World {
     /// its last access or transmission, else the exchange that created it.
     pub last_activity: HashMap<AgentId, crosstalk_spec::support::Timestamp>,
     pub topics: TopicModel,
+    /// The configured sinks, with how each one's last delivery went.
     pub sinks: Vec<SinkInfo>,
+    /// User rule configuration: the remap threshold a watched-topic rule
+    /// written without one takes.
+    pub rule_config: AlertRuleConfig,
     pub scenario: Scenario,
 }
 
@@ -297,6 +302,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         last_activity: HashMap::new(),
         topics: topic_model,
         sinks: Vec::new(),
+        rule_config: rules::config()?,
         scenario: Scenario {
             cast: cast.clone(),
             channels: plan.ids(),

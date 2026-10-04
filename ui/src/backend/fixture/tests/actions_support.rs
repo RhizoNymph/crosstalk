@@ -7,7 +7,7 @@ use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::researcher;
 use crate::contract::actions::OperatorAction;
-use crate::contract::alerts::AlertState;
+use crosstalk_spec::aggregates::alert::{Alert, AlertState};
 
 pub fn agent(b: &FixtureBackend, key: &str) -> AgentId {
     b.world.scenario.agent(key).expect("agent")
@@ -43,10 +43,7 @@ pub async fn alert_state(b: &FixtureBackend, id: AlertId) -> AlertState {
         .clone()
 }
 
-pub async fn find_alert(
-    b: &FixtureBackend,
-    f: impl Fn(&crate::contract::alerts::Alert) -> bool,
-) -> AlertId {
+pub async fn find_alert(b: &FixtureBackend, f: impl Fn(&Alert) -> bool) -> AlertId {
     b.state
         .read()
         .await

@@ -5,6 +5,7 @@
 //! same way within one response.
 
 pub mod agents;
+pub mod alerts;
 pub mod channels;
 pub mod evidence;
 pub mod graph;
@@ -20,7 +21,6 @@ pub mod transmissions;
 
 use std::collections::{BTreeMap, HashMap};
 
-use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aliases::{Aliases, Resolve};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::Verdict;
@@ -41,15 +41,6 @@ pub fn require(caller: &Caller, permission: Permission) -> Result<()> {
         Err(QueryError::Forbidden {
             missing: permission,
         })
-    }
-}
-
-/// Fails with `VersionNotRetained` unless the world keeps `version`.
-pub fn retained(world: &World, version: TopicModelVersion) -> Result<()> {
-    if world.topics.retains(version) {
-        Ok(())
-    } else {
-        Err(QueryError::VersionNotRetained { version })
     }
 }
 

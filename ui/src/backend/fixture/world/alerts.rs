@@ -2,20 +2,20 @@
 //! suppress reasons, deduplicated occurrence counts and every subject kind,
 //! consistent with each channel's policy history.
 
-use crosstalk_spec::aggregates::alert::AlertSubject;
+use crosstalk_spec::aggregates::alert::{
+    Alert, AlertState, AlertSubject, BuiltinRule, SuppressReason,
+};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId};
 use crosstalk_spec::support::Timestamp;
 
-use crate::backend::fixture::actions::effects;
+use crate::backend::fixture::actions::rules::set_enabled;
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, plus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
-use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::{Alert, AlertState, SuppressReason};
-use crate::contract::rules::{BuiltinRule, OperatorRuleStatus, RuleStatus};
+use crate::contract::actions::OperatorAction;
 
 use super::channels::{
     ChannelKey, ChannelPlan, MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT, SHARED_FILE_DECIDED_AT,
@@ -88,10 +88,10 @@ fn confirmed_on(
 pub fn populate(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     let rules = rules::build(world, state)?;
     let mut rng = Rng::fork(world.seed, "alerts");
-    channel_alerts(world, state, plan, &rules)?;
-    suspected(world, state, &rules, &mut rng);
+    channel_alerts(world, state, plan)?;
+    suspected(world, state, &mut rng);
     content(world, state, plan, &rules, &mut rng)?;
-    disable_refunds(world, state, &rules, &mut rng);
+    disable_refunds(world, state, &rules, &mut rng)?;
     state.alerts.sort_by_key(|a| (a.raised_at, a.id));
     Ok(())
 }
@@ -99,14 +99,9 @@ pub fn populate(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<
 /// New channels, traffic on unreviewed and unsanctioned channels
 /// (deduplicated per channel while active) and the unused sanctioned
 /// channel.
-fn channel_alerts(
-    world: &World,
-    state: &mut State,
-    plan: &ChannelPlan,
-    rules: &Rules,
-) -> Result<(), GenError> {
+fn channel_alerts(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
     use ChannelKey as K;
-    let new_channel = rules.builtin(BuiltinRule::NewChannel);
+    let new_channel = BuiltinRule::NewChannel.id();
     let deleted = || resolved(RESEARCHER, ago(3 * DAY), "the gist was deleted");
     let unsanctioned = || resolved(RESEARCHER, PASTEBIN_DECIDED_AT, "marked unsanctioned");
     for (key, alert_state) in [
@@ -141,7 +136,7 @@ fn channel_alerts(
         );
     }
 
-    let unreviewed = rules.builtin(BuiltinRule::UnreviewedTraffic);
+    let unreviewed = BuiltinRule::UnreviewedTraffic.id();
     let windows = [
         (K::HijackedWiki, unreviewed, START, NOW, AlertState::Open),
         (K::WikiTalk, unreviewed, START, NOW, AlertState::Open),
@@ -183,7 +178,7 @@ fn channel_alerts(
         ),
         (
             K::Pastebin,
-            rules.builtin(BuiltinRule::UnsanctionedTraffic),
+            BuiltinRule::UnsanctionedTraffic.id(),
             PASTEBIN_DECIDED_AT,
             NOW,
             AlertState::Open,
@@ -208,7 +203,7 @@ fn channel_alerts(
     }
 
     let unused = plan.id(K::ReleaseBucket)?;
-    let rule = rules.builtin(BuiltinRule::SanctionedUnused);
+    let rule = BuiltinRule::SanctionedUnused.id();
     raise(
         state,
         rule,
@@ -222,8 +217,8 @@ fn channel_alerts(
 
 /// Suspected (and since discarded) transmissions of the last three days.
 /// A second co-access deduplicates into the same alert.
-fn suspected(world: &World, state: &mut State, rules: &Rules, rng: &mut Rng) {
-    let rule = rules.builtin(BuiltinRule::SuspectedTransmission);
+fn suspected(world: &World, state: &mut State, rng: &mut Rng) {
+    let rule = BuiltinRule::SuspectedTransmission.id();
     for record in &world.transmissions {
         let t = &record.transmission;
         let (since, occurrences, alert_state) = match &t.state {
@@ -332,7 +327,12 @@ fn content(
 
 /// The refund rule raised a few alerts and was then disabled, which
 /// suppressed the ones still active.
-fn disable_refunds(world: &World, state: &mut State, rules: &Rules, rng: &mut Rng) {
+fn disable_refunds(
+    world: &World,
+    state: &mut State,
+    rules: &Rules,
+    rng: &mut Rng,
+) -> Result<(), GenError> {
     let refunds: Vec<&TxRecord> = world
         .transmissions
         .iter()
@@ -353,19 +353,12 @@ fn disable_refunds(world: &World, state: &mut State, rules: &Rules, rng: &mut Rn
         let subject = AlertSubject::Transmission(record.transmission.id);
         raise(state, rules.off, subject, at, 1, alert_state);
     }
+    let outcome = set_enabled(state, rules.off, false, OFF_RULE_DISABLED_AT)
+        .map_err(|e| GenError::invalid("set_enabled", e))?;
     let action = OperatorAction::SetRuleEnabled {
         id: rules.off,
-        status: OperatorRuleStatus::Disabled,
+        enabled: false,
     };
-    operator_action(
-        state,
-        OFF_RULE_DISABLED_AT,
-        RESEARCHER,
-        action,
-        ActionOutcome::Applied,
-    );
-    if let Some(rule) = state.rules.iter_mut().find(|r| r.id == rules.off) {
-        rule.status = RuleStatus::Disabled;
-    }
-    effects::suppress_rule_alerts(state, rules.off, OFF_RULE_DISABLED_AT);
+    operator_action(state, OFF_RULE_DISABLED_AT, RESEARCHER, action, outcome);
+    Ok(())
 }

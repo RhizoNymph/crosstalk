@@ -156,7 +156,14 @@ async fn every_method_answers_for_the_day_and_the_week() {
             .items()
             .is_empty()
     );
-    assert!(b.rules(&c).await.expect("rules").len() >= 9);
+    assert!(
+        b.alert_rules(&c, &Default::default(), &first(50))
+            .await
+            .expect("rules")
+            .items()
+            .len()
+            >= 9
+    );
     assert_eq!(b.sinks(&c).await.expect("sinks").len(), 3);
     assert!(
         !b.audit(&c, &AuditFilter::default(), &first(50))

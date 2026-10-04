@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use crosstalk_spec::aggregates::alert::{Alert, AlertRuleSet, RuleStatus};
 use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyHistory, Recorded};
 use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
@@ -12,9 +13,7 @@ use crosstalk_spec::ids::{ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::alerts::Alert;
 use crate::contract::research::AuditEntry;
-use crate::contract::rules::RuleDef;
 
 use super::clock::Mint;
 use super::identity::Identity;
@@ -101,8 +100,10 @@ pub struct State {
     /// Each judged transmission's append-only log. A transmission never
     /// judged has no entry: its log is empty.
     pub verdicts: BTreeMap<TransmissionId, VerdictLog>,
+    /// Every alert, oldest raise first.
     pub alerts: Vec<Alert>,
-    pub rules: Vec<RuleDef>,
+    /// Each built-in rule once, and the user rules; none is ever removed.
+    pub rules: AlertRuleSet,
     /// Append-only, oldest first.
     pub audit: Vec<AuditEntry>,
     pub dead_letters: Vec<DeadLetter>,
@@ -118,7 +119,8 @@ impl State {
             channels: channels.into_iter().map(|r| (r.channel.id, r)).collect(),
             verdicts: BTreeMap::new(),
             alerts: Vec::new(),
-            rules: Vec::new(),
+            // Generation replaces it with the configured settings.
+            rules: AlertRuleSet::new(|_| (RuleStatus::Enabled, Vec::new())),
             audit: Vec::new(),
             dead_letters: Vec::new(),
             projections: Vec::new(),

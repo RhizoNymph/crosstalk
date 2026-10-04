@@ -24,8 +24,9 @@ use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, note};
-use crate::pages::common::lookup::{operator_names, rule_names};
+use crate::pages::common::lookup::operator_names;
 use crate::pages::common::paging::page_request;
+use crate::pages::common::rules::rule_names;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -355,6 +356,44 @@ mod tests {
         }
         let reply = get(&format!("/alerts?{}&tab=muted", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn suppressed_alerts_say_why_in_words() {
+        let mut body = String::new();
+        let mut url = format!("/alerts?{}&tab=suppressed", state().to_query());
+        // Every suppressed alert, following the "Next page" links.
+        for _ in 0..50 {
+            let reply = get(&url).await;
+            assert_eq!(reply.status, StatusCode::OK);
+            body.push_str(&reply.body);
+            let Some(at) = reply.body.find(">Next page »</a>") else {
+                break;
+            };
+            let start = reply.body[..at].rfind("href=\"").expect("link") + 6;
+            let end = start + reply.body[start..].find('"').expect("link end");
+            url = reply.body[start..end].replace("&amp;", "&");
+        }
+        for reason in [
+            "channel sanctioned at",
+            "rule disabled at",
+            "rejected as a false detection at",
+        ] {
+            assert!(body.contains(reason), "{reason}");
+        }
+    }
+
+    #[tokio::test]
+    async fn one_channel_in_the_filter_narrows_the_inbox() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::testing::channel_id;
+
+        let bucket = channel_id(ChannelKey::ReleaseBucket).to_ulid();
+        let reply = get(&format!("/alerts?{}&c={bucket}", state().to_query())).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("Showing alerts about channel"));
+        assert!(reply.body.contains("Sanctioned channel unused"));
+        assert!(!reply.body.contains("Suspected transmission"));
     }
 
     #[tokio::test]

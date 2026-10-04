@@ -310,7 +310,7 @@ async fn alert_filter_by_state_and_channel() {
     assert!(!rows.is_empty());
     assert!(
         rows.iter()
-            .all(|a| a.state == crate::contract::alerts::AlertState::Open)
+            .all(|a| a.state == crosstalk_spec::aggregates::alert::AlertState::Open)
     );
     let wiki = channel(ChannelKey::HijackedWiki);
     let about = AlertFilter {

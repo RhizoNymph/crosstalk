@@ -5,7 +5,7 @@
 mod agents;
 mod channels;
 pub mod effects;
-mod rules;
+pub mod rules;
 mod triage;
 
 pub use triage::record_verdict;
@@ -68,7 +68,9 @@ fn apply(
             rule,
             sinks,
         } => rules::update(world, state, *id, name, rule, sinks),
-        OperatorAction::SetRuleEnabled { id, status } => rules::set_enabled(state, *id, *status),
+        OperatorAction::SetRuleEnabled { id, enabled } => {
+            rules::set_enabled(state, *id, *enabled, NOW)
+        }
     }
 }
 

@@ -35,6 +35,7 @@ use crate::error::UiError;
 use crate::pages::alerts::rules::form::DEFAULT_REMAP;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
+use crate::pages::common::rules::all_rules;
 use crate::pages::common::topics::{Trends, all_topics, topic_trends};
 use crate::pages::common::transmissions::Named;
 use crate::pages::explore::topics::watch_url;
@@ -150,7 +151,7 @@ async fn load(
             let from = topics?;
             let (_, next) =
                 all_topics(backend, caller, TopicVersionSelector::Pinned(lineage.to())).await?;
-            let rules = backend.rules(caller).await?;
+            let rules = all_rules(backend, caller).await?;
             let rows = remap_rows(&lineage, &from, &next, &rules, default_threshold()?, state);
             Some((lineage.to().0, rows))
         }

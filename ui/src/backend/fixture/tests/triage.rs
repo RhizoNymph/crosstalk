@@ -10,9 +10,9 @@ use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::research::{AuditOutcome, AuditedAction};
 use crate::url::scope::ViewFilter;
+use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
@@ -292,12 +292,21 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
             at: NOW
         }
     );
-    assert!(matches!(
-        b.act(&c, OperatorAction::Acknowledge { alert: open })
+    // Acknowledging it again matches the state already there (the spec's
+    // `Unchanged`): accepted, and the first acknowledgement stays.
+    let oncall = caller(&[Permission::View, Permission::Triage]);
+    assert!(
+        b.act(&oncall, OperatorAction::Acknowledge { alert: open })
             .await
-            .err(),
-        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
-    ));
+            .is_ok()
+    );
+    assert_eq!(
+        alert_state(&b, open).await,
+        AlertState::Acknowledged {
+            by: c.operator(),
+            at: NOW
+        }
+    );
     b.act(
         &c,
         OperatorAction::Resolve {

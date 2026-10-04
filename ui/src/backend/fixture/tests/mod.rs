@@ -10,6 +10,7 @@ mod lists;
 mod projections;
 mod promotion;
 mod reads_support;
+mod rules;
 mod scenarios;
 mod series;
 mod topics;

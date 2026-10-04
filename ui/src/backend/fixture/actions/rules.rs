@@ -1,75 +1,116 @@
-//! Rule management (item 18). Built-in rules can only be enabled or
-//! disabled; operator rules are validated against the retained topic
-//! versions and the configured sinks, and semantic queries are embedded
-//! with the fixture's model.
+//! Rule management as the spec's `AlertRuleStore` defines it. A user rule
+//! is resolved before it is stored: every sink must be configured, a
+//! watched-topic rule must name the current topic version and topics of
+//! it (`None` takes the configured remap threshold), and a semantic query
+//! is embedded with the fixture's model. Built-in rules can only be
+//! enabled or disabled; a stale rule is enabled only by updating it.
+//! Refusals map as `ActionError::from(RuleError)` does.
 
-use crosstalk_spec::ids::{AlertRuleId, OperatorId};
+use crosstalk_spec::aggregates::alert::{
+    AlertRule, AlertRuleDef, NotEditable, RuleDefinition, RuleName, SemanticQuery, UserRule,
+    WatchedTopics,
+};
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::ids::{AlertRuleId, OperatorId, SinkId, TopicId};
+use crosstalk_spec::interfaces::l6_analysis::RuleError;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
+use crosstalk_spec::support::{NonEmpty, Timestamp};
 
 use crate::backend::Result;
 use crate::backend::fixture::clock::NOW;
-use crate::backend::fixture::queries::retained;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::backend::fixture::world::topics::embed;
 use crate::contract::actions::ActionOutcome;
-use crate::contract::rules::{
-    OperatorRuleStatus, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, UserRule, UserRuleSpec,
-};
-use crosstalk_spec::ids::SinkId;
-use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
 
 use super::effects;
 
-/// Turns what an operator submitted into the rule to store. A
-/// watched-topic rule must watch topics of the current version (new
-/// confirmations are classified under it); a semantic query is embedded
-/// with the current model; every sink must exist.
-fn build(world: &World, spec: &UserRuleSpec, sinks: &[SinkId]) -> Result<UserRule> {
+/// How the surface reports a rule store refusal.
+fn refused(error: RuleError) -> QueryError {
+    ActionError::from(error).into()
+}
+
+/// What an operator wrote, resolved against the store as of `current`, the
+/// topic version rules are written against. Sinks are checked first, then
+/// the definition: an unknown version or topic is `UnknownTopics`, a known
+/// version other than `current` is `TopicVersionNotCurrent`, and text the
+/// embedder cannot take is `Embed`.
+pub fn resolve(
+    world: &World,
+    current: TopicModelVersion,
+    rule: &UserRule,
+    sinks: &[SinkId],
+) -> std::result::Result<RuleDefinition, RuleError> {
     if let Some(missing) = sinks
         .iter()
-        .find(|s| !world.sinks.iter().any(|k| k.id == **s))
+        .find(|s| !world.sinks.iter().any(|known| known.id == **s))
     {
-        return Err(QueryError::InvalidInput(InputError::UnknownSink {
-            sink: *missing,
-        }));
+        return Err(RuleError::UnknownSink(*missing));
     }
-    match spec {
-        UserRuleSpec::WatchedTopic {
-            version,
+    match rule {
+        UserRule::WatchedTopic {
             topics,
             remap_threshold,
         } => {
-            retained(world, *version)?;
-            if *version != world.topics.active() {
-                return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent {
+            let WatchedTopics {
+                version,
+                topics: ids,
+            } = topics;
+            if world.topics.history.get(*version).is_none() {
+                return Err(RuleError::UnknownTopics(ids.clone()));
+            }
+            if *version != current {
+                return Err(RuleError::TopicVersionNotCurrent {
                     requested: *version,
-                    current: world.topics.active(),
-                }));
+                    current,
+                });
             }
-            let known = |t| world.topics.topics_of(*version).any(|k| k.id == t);
-            if topics.iter().any(|t| !known(*t)) {
-                return Err(QueryError::InvalidInput(InputError::UnknownTopics));
+            let unknown: Vec<TopicId> = ids
+                .iter()
+                .filter(|t| !world.topics.topics_of(*version).any(|k| k.id == **t))
+                .copied()
+                .collect();
+            if let Some(unknown) = NonEmpty::from_vec(unknown) {
+                return Err(RuleError::UnknownTopics(unknown));
             }
-            Ok(UserRule::WatchedTopic {
-                version: *version,
+            Ok(RuleDefinition::WatchedTopic {
                 topics: topics.clone(),
-                remap_threshold: *remap_threshold,
+                remap_threshold: remap_threshold
+                    .unwrap_or(world.rule_config.default_remap_threshold),
             })
         }
-        UserRuleSpec::SemanticQuery { text, threshold } => {
-            let model = &world.topics.model;
+        UserRule::SemanticQuery { text, threshold } => {
             let embedding =
-                embed(model, world.seed, text.as_str()).map_err(|e| QueryError::Store {
-                    reason: format!("embedding the query failed: {e}"),
-                })?;
-            Ok(UserRule::SemanticQuery {
-                text: text.clone(),
-                model: model.clone(),
-                embedding,
+                embed(&world.topics.model, world.seed, text.as_str()).map_err(RuleError::Embed)?;
+            Ok(RuleDefinition::SemanticQuery {
+                query: SemanticQuery {
+                    text: text.clone(),
+                    embedding,
+                },
                 threshold: *threshold,
             })
         }
     }
+}
+
+/// Stores a new enabled, current user rule under `id`. Fails only on a
+/// fixture bug (a reserved or taken id).
+pub fn insert(
+    state: &mut State,
+    id: AlertRuleId,
+    name: RuleName,
+    created: (OperatorId, Timestamp),
+    definition: RuleDefinition,
+    sinks: Vec<SinkId>,
+) -> Result<()> {
+    let rule = AlertRuleDef::user(id, name, created, definition, sinks).map_err(|e| {
+        QueryError::Store {
+            reason: format!("rule id {:?} is reserved", e.0),
+        }
+    })?;
+    state.rules.insert(rule).map_err(|e| QueryError::Store {
+        reason: format!("storing rule {id:?}: {e:?}"),
+    })
 }
 
 pub fn create(
@@ -77,75 +118,67 @@ pub fn create(
     state: &mut State,
     by: OperatorId,
     name: &RuleName,
-    spec: &UserRuleSpec,
+    rule: &UserRule,
     sinks: &[SinkId],
 ) -> Result<ActionOutcome> {
-    let rule = build(world, spec, sinks)?;
+    let definition = resolve(world, world.topics.active(), rule, sinks).map_err(refused)?;
     let id = AlertRuleId::from_ulid(state.mint.ulid(NOW));
-    state.rules.push(RuleDef {
+    insert(
+        state,
         id,
-        name: name.clone(),
-        rule: RuleKind::User(rule),
-        status: RuleStatus::Enabled,
-        created: (RuleAuthor::Operator(by), NOW),
-        sinks: sinks.to_vec(),
-    });
+        name.clone(),
+        (by, NOW),
+        definition,
+        sinks.to_vec(),
+    )?;
     Ok(ActionOutcome::RuleCreated(id))
 }
 
-/// Replaces an operator rule's definition. A stale rule is re-targeted and
-/// enabled; any other keeps its status.
+/// `AlertRuleDef::update`: same kind only, creator kept; a stale rule is
+/// retargeted and enabled. A built-in rule is refused before anything is
+/// resolved. Its alerts are left as they are.
 pub fn update(
     world: &World,
     state: &mut State,
     id: AlertRuleId,
     name: &RuleName,
-    spec: &UserRuleSpec,
+    rule: &UserRule,
     sinks: &[SinkId],
 ) -> Result<ActionOutcome> {
-    let existing = state
+    let stored = state
         .rules
-        .iter()
-        .find(|r| r.id == id)
-        .ok_or(QueryError::NotFound)?;
-    if matches!(existing.rule, RuleKind::Builtin(_)) {
-        return Err(QueryError::Conflict(ConflictKind::RuleNotEditable {
-            rule: id,
-        }));
+        .get(id)
+        .ok_or_else(|| refused(RuleError::UnknownRule(id)))?;
+    if matches!(stored.rule(), AlertRule::Builtin(_)) {
+        return Err(refused(RuleError::NotEditable(NotEditable { rule: id })));
     }
-    let rule = build(world, spec, sinks)?;
-    if let Some(def) = state.rules.iter_mut().find(|r| r.id == id) {
-        def.name = name.clone();
-        def.rule = RuleKind::User(rule);
-        def.sinks = sinks.to_vec();
-        if matches!(def.status, RuleStatus::Stale(_)) {
-            def.status = RuleStatus::Enabled;
-        }
-    }
+    let definition = resolve(world, world.topics.active(), rule, sinks).map_err(refused)?;
+    state
+        .rules
+        .get_mut(id)
+        .ok_or_else(|| refused(RuleError::UnknownRule(id)))?
+        .update(name.clone(), definition, sinks.to_vec())
+        .map_err(|e| refused(RuleError::NotEditable(e)))?;
     Ok(ActionOutcome::Applied)
 }
 
-/// Enables or disables any rule. Disabling suppresses its active alerts. A
-/// stale rule is enabled only by updating it.
+/// `AlertRuleDef::set_enabled` on any rule: enabling a stale rule is
+/// refused and changes nothing; disabling suppresses the rule's active
+/// alerts at `at`.
 pub fn set_enabled(
     state: &mut State,
     id: AlertRuleId,
-    status: OperatorRuleStatus,
+    enabled: bool,
+    at: Timestamp,
 ) -> Result<ActionOutcome> {
-    let def = state
+    state
         .rules
-        .iter_mut()
-        .find(|r| r.id == id)
-        .ok_or(QueryError::NotFound)?;
-    if matches!(def.status, RuleStatus::Stale(_)) && status == OperatorRuleStatus::Enabled {
-        return Err(QueryError::Conflict(ConflictKind::RuleStale { rule: id }));
-    }
-    def.status = match status {
-        OperatorRuleStatus::Enabled => RuleStatus::Enabled,
-        OperatorRuleStatus::Disabled => RuleStatus::Disabled,
-    };
-    if status == OperatorRuleStatus::Disabled {
-        effects::suppress_rule_alerts(state, id, NOW);
+        .get_mut(id)
+        .ok_or_else(|| refused(RuleError::UnknownRule(id)))?
+        .set_enabled(enabled)
+        .map_err(|e| refused(RuleError::Stale(e)))?;
+    if !enabled {
+        effects::suppress_rule_alerts(state, id, at);
     }
     Ok(ActionOutcome::Applied)
 }

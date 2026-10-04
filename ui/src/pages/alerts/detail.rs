@@ -1,6 +1,7 @@
 //! `/alerts/{id}`: one alert: its rule, subject, state and the audit log of
 //! its triage. Posts acknowledge or resolve it and return here.
 
+use crosstalk_spec::aggregates::alert::{AlertRule, AlertRuleDef};
 use crosstalk_spec::ids::AlertId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use topcoat::Result;
@@ -21,14 +22,14 @@ use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
 };
 use crate::contract::research::{AuditFilter, AuditSubject};
-use crate::contract::rules::{RuleDef, RuleKind};
 use crate::error::UiError;
 use crate::pages::channels::sections::{HistoryRow, history_rows};
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
-use crate::pages::common::lookup::{RuleNames, operator_names};
+use crate::pages::common::lookup::operator_names;
+use crate::pages::common::rules::{RuleNames, all_rules};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -51,9 +52,9 @@ fn alert_id(cx: &Cx) -> Result<AlertId> {
 
 /// Where the alert's rule is shown: its edit page for an operator rule, the
 /// rules list for a built-in one (built-ins have no page of their own).
-pub fn rule_link(rule: Option<&RuleDef>, state: &ViewState) -> String {
+pub fn rule_link(rule: Option<&AlertRuleDef>, state: &ViewState) -> String {
     match rule {
-        Some(def) if matches!(def.rule, RuleKind::User(_)) => rule_url(def.id, state),
+        Some(def) if matches!(def.rule(), AlertRule::User { .. }) => rule_url(def.id(), state),
         _ => href(RULES_PATH, state, &[]),
     }
 }
@@ -75,9 +76,9 @@ async fn load(
     let Some(alert) = backend.alert(caller, id).await? else {
         return Ok(None);
     };
-    let rules = backend.rules(caller).await?;
+    let rules = all_rules(backend, caller).await?;
     let operators = operator_names(cx, caller).await;
-    let names = RuleNames::new(rules.iter().map(|r| (r.id, r.name.as_str().to_owned())));
+    let names = RuleNames::of(&rules);
     let filter = AuditFilter {
         subject: Some(AuditSubject::Alert(id)),
         ..AuditFilter::default()
@@ -90,10 +91,10 @@ async fn load(
         )
         .await
         .map_err(UiError::from)
-        .map(|page| history_rows(&page.items(), &operators));
+        .map(|page| history_rows(page.items(), &operators));
     Ok(Some(Loaded {
         row: AlertRow::new(&alert, &names, &operators, state),
-        rule_url: rule_link(rules.iter().find(|r| r.id == alert.rule), state),
+        rule_url: rule_link(rules.iter().find(|r| r.id() == alert.rule), state),
         history,
     }))
 }
@@ -255,10 +256,12 @@ mod tests {
 
     #[test]
     fn builtin_rules_link_to_the_rules_list() {
-        let user = watched(4, crate::contract::rules::RuleStatus::Enabled);
+        use crosstalk_spec::aggregates::alert::{BuiltinRule, RuleStatus};
+
+        let user = watched(4, RuleStatus::Enabled);
         assert!(rule_link(Some(&user), &state()).starts_with("/alerts/rules/"));
-        let mut builtin = user.clone();
-        builtin.rule = RuleKind::Builtin(crate::contract::rules::BuiltinRule::NewChannel);
+        let builtin =
+            AlertRuleDef::builtin(BuiltinRule::NewChannel, RuleStatus::Enabled, Vec::new());
         assert!(rule_link(Some(&builtin), &state()).starts_with("/alerts/rules?"));
         assert!(rule_link(None, &state()).starts_with("/alerts/rules?"));
     }

@@ -1,5 +1,6 @@
 //! `/alerts/rules`: built-in rules (enable or disable), operator rules
-//! (create, edit, enable, disable, update when stale) and sinks.
+//! (create, edit, enable, disable, update when stale) and, for `Govern`,
+//! sinks with their last delivery.
 
 pub mod edit;
 pub mod form;
@@ -7,32 +8,35 @@ pub mod model;
 
 use std::collections::HashMap;
 
+use crosstalk_spec::aggregates::alert::{AlertRuleDef, RuleStatus};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::AlertRuleId;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, SinkInfo};
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;
 use topcoat::router::page;
 use topcoat::view::{View, component, view};
 
-use self::model::{Detail, RuleRow, StatusKind, TopicLabels, delivery, sink_kind};
+use self::model::{
+    Detail, RuleRow, TopicLabels, delivery, sink_kind, status_label, status_tone, watched_topics,
+};
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, SECTION, SECTION_TITLE, SMALL_BUTTON};
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
-    content_hidden, data_table, empty_state, error_panel, flash_banner, href, page_header,
+    Tone, content_hidden, data_table, empty_state, error_panel, flash_banner, href, page_header,
     state_badge,
 };
 use crate::contract::actions::OperatorAction;
-use crate::contract::rules::{OperatorRuleStatus, RuleDef, RuleKind, SinkInfo, UserRule};
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, required};
 use crate::pages::common::lookup::{OperatorNames, operator_names};
+use crate::pages::common::rules::all_rules;
 use crate::pages::common::topics::all_topics;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
@@ -42,8 +46,10 @@ pub const PATH: &str = "/alerts/rules";
 
 /// Rules, sinks and the topic labels rules refer to.
 pub struct RulesData {
-    pub rules: Vec<RuleDef>,
-    pub sinks: Vec<SinkInfo>,
+    pub rules: Vec<AlertRuleDef>,
+    /// `None` without `Govern`: a delivery error can name a sink's
+    /// endpoint.
+    pub sinks: Option<Vec<SinkInfo>>,
     pub sink_names: HashMap<SinkId, String>,
     pub topics: TopicLabels,
     pub operators: OperatorNames,
@@ -68,19 +74,24 @@ async fn topic_labels(cx: &Cx, caller: &Caller, versions: Vec<TopicModelVersion>
 
 pub async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<RulesData, UiError> {
     require(caller, Permission::View)?;
-    let rules = backend(cx).rules(caller).await?;
-    let sinks = backend(cx).sinks(caller).await?;
+    let rules = all_rules(backend(cx), caller).await?;
+    let sinks = if can(caller, Permission::Govern) {
+        Some(backend(cx).sinks(caller).await?)
+    } else {
+        None
+    };
     let mut versions: Vec<TopicModelVersion> = rules
         .iter()
-        .filter_map(|r| match &r.rule {
-            RuleKind::User(UserRule::WatchedTopic { version, .. }) => Some(*version),
-            _ => None,
-        })
+        .filter_map(|r| watched_topics(r).map(|w| w.version))
         .collect();
     versions.sort_unstable_by_key(|v| v.0);
     versions.dedup();
     Ok(RulesData {
-        sink_names: sinks.iter().map(|s| (s.id, s.name.clone())).collect(),
+        sink_names: sinks
+            .iter()
+            .flatten()
+            .map(|s| (s.id, s.name.clone()))
+            .collect(),
         topics: topic_labels(cx, caller, versions).await,
         operators: operator_names(cx, caller).await,
         rules,
@@ -88,11 +99,9 @@ pub async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<RulesData, Ui
     })
 }
 
-pub fn status_code(status: OperatorRuleStatus) -> &'static str {
-    match status {
-        OperatorRuleStatus::Enabled => "enabled",
-        OperatorRuleStatus::Disabled => "disabled",
-    }
+/// The `status` a toggle posts: what the rule should become.
+pub fn status_code(enabled: bool) -> &'static str {
+    if enabled { "enabled" } else { "disabled" }
 }
 
 /// A validated enable or disable post.
@@ -101,12 +110,12 @@ pub fn parse_toggle(fields: &FormFields) -> std::result::Result<(OperatorAction,
         return Err(invalid("action", "unknown action"));
     }
     let rule = id::<AlertRuleId>(fields, "rule")?;
-    let (status, flash) = match required(fields, "status")? {
-        "enabled" => (OperatorRuleStatus::Enabled, Flash::RuleEnabled),
-        "disabled" => (OperatorRuleStatus::Disabled, Flash::RuleDisabled),
+    let (enabled, flash) = match required(fields, "status")? {
+        "enabled" => (true, Flash::RuleEnabled),
+        "disabled" => (false, Flash::RuleDisabled),
         other => return Err(invalid("status", format!("unknown status {other:?}"))),
     };
-    Ok((OperatorAction::SetRuleEnabled { id: rule, status }, flash))
+    Ok((OperatorAction::SetRuleEnabled { id: rule, enabled }, flash))
 }
 
 #[page("/alerts/rules")]
@@ -134,9 +143,9 @@ async fn rules_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View
 #[component]
 async fn toggle(action: String, rule: String, enabled: bool) -> Result<impl View> {
     let (status, label) = if enabled {
-        (status_code(OperatorRuleStatus::Disabled), "Disable")
+        (status_code(false), "Disable")
     } else {
-        (status_code(OperatorRuleStatus::Enabled), "Enable")
+        (status_code(true), "Enable")
     };
     Ok(view! {
         <form method="post" action=(action) class="inline">
@@ -188,15 +197,16 @@ async fn rules_page(
                 let (builtin, user): (Vec<RuleRow>, Vec<RuleRow>) = rows.into_iter().partition(|r| r.builtin);
                 let no_builtin = builtin.is_empty();
                 let no_user = user.is_empty();
-                let sinks: Vec<_> = data
-                    .sinks
-                    .iter()
-                    .map(|s| {
-                        let (text, tone) = delivery(s);
-                        (s.name.clone(), sink_kind(s.kind), text, tone)
-                    })
-                    .collect();
-                let no_sinks = sinks.is_empty();
+                let sinks: Option<Vec<_>> = data.sinks.as_ref().map(|sinks| {
+                    sinks
+                        .iter()
+                        .map(|s| {
+                            let (text, tone) = delivery(s);
+                            (s.name.clone(), sink_kind(s.kind), text, tone)
+                        })
+                        .collect()
+                });
+                let no_sinks = sinks.as_ref().is_some_and(Vec::is_empty);
                 <section class=(SECTION)>
                     <h2 class=(SECTION_TITLE)>"Built-in rules"</h2>
                     if no_builtin {
@@ -205,7 +215,7 @@ async fn rules_page(
                         data_table(
                             headers: &["Rule", "Raises an alert when", "Status", ""],
                             for row in builtin {
-                                let enabled = row.status == StatusKind::Enabled;
+                                let enabled = row.status == RuleStatus::Enabled;
                                 <tr class=(ROW)>
                                     <td class=(TD)>(row.name.clone())</td>
                                     <td class=(TD)>
@@ -214,7 +224,7 @@ async fn rules_page(
                                             _ => "",
                                         }
                                     </td>
-                                    <td class=(TD)>state_badge(label: row.status.label(), tone: row.status.tone())</td>
+                                    <td class=(TD)>state_badge(label: status_label(row.status), tone: status_tone(row.status))</td>
                                     <td class=(TD)>
                                         if govern {
                                             toggle(action: action_url.clone(), rule: row.id.clone(), enabled: enabled)
@@ -239,8 +249,8 @@ async fn rules_page(
                         data_table(
                             headers: &["Rule", "Matches", "Status", "Created", "Delivers to", ""],
                             for row in user {
-                                let enabled = row.status == StatusKind::Enabled;
-                                let stale = row.status == StatusKind::Stale;
+                                let enabled = row.status == RuleStatus::Enabled;
+                                let stale = row.stale.is_some();
                                 <tr class=(ROW)>
                                     <td class=(TD)>(row.name.clone())</td>
                                     <td class=(TD)>
@@ -260,8 +270,9 @@ async fn rules_page(
                                         }
                                     </td>
                                     <td class=(TD)>
-                                        state_badge(label: row.status.label(), tone: row.status.tone())
+                                        state_badge(label: status_label(row.status), tone: status_tone(row.status))
                                         if let Some(staleness) = row.stale.clone() {
+                                            <span class="ml-1">state_badge(label: "stale", tone: Tone::Warn)</span>
                                             <div class="mt-1 max-w-xs text-xs text-amber-800 dark:text-amber-300">(staleness.reason)</div>
                                             if let Some(topics) = staleness.topics {
                                                 <div class="text-xs text-zinc-500">(topics.join(", "))</div>
@@ -275,6 +286,10 @@ async fn rules_page(
                                             <div class="flex items-center justify-end gap-1.5">
                                                 if stale {
                                                     <a class=(SMALL_BUTTON) href=(row.edit_url.clone())>"Update…"</a>
+                                                    // Disabling is always allowed; enabling waits for an update.
+                                                    if enabled {
+                                                        toggle(action: action_url.clone(), rule: row.id.clone(), enabled: true)
+                                                    }
                                                 } else {
                                                     <a class=(SMALL_BUTTON) href=(row.edit_url.clone())>"Edit"</a>
                                                     toggle(action: action_url.clone(), rule: row.id.clone(), enabled: enabled)
@@ -289,10 +304,10 @@ async fn rules_page(
                 </section>
                 <section class=(SECTION)>
                     <h2 class=(SECTION_TITLE)>"Sinks"</h2>
-                    if no_sinks {
-                        empty_state(message: "No sinks are configured; alerts stay in the inbox.")
-                    } else {
-                        data_table(
+                    match sinks {
+                        None => empty_state(message: "Sinks and their deliveries need the Govern permission: a delivery error can name a sink's endpoint."),
+                        Some(_) if no_sinks => empty_state(message: "No sinks are configured; alerts stay in the inbox."),
+                        Some(sinks) => data_table(
                             headers: &["Sink", "Kind", "Last delivery"],
                             for (name, kind, text, tone) in sinks {
                                 <tr class=(ROW)>
@@ -301,7 +316,7 @@ async fn rules_page(
                                     <td class=(TD)>state_badge(label: &text, tone: tone)</td>
                                 </tr>
                             }
-                        )
+                        ),
                     }
                 </section>
             },
@@ -330,10 +345,7 @@ mod tests {
         assert_eq!(flash, Flash::RuleDisabled);
         assert!(matches!(
             action,
-            OperatorAction::SetRuleEnabled {
-                status: OperatorRuleStatus::Disabled,
-                ..
-            }
+            OperatorAction::SetRuleEnabled { enabled: false, .. }
         ));
         let bad = FormFields::from_pairs(&[
             ("action", "set-enabled"),
@@ -354,6 +366,60 @@ mod tests {
         assert!(reply.body.contains("Engineering chatter (v1)"));
         assert!(reply.body.contains("soc-webhook"));
         assert!(reply.body.contains("Watch topics…"));
+    }
+
+    #[tokio::test]
+    async fn stale_and_disabled_rules_read_as_such() {
+        let reply = get(&format!("/alerts/rules?{}", state().to_query())).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        let body = &reply.body;
+        let stale = body.find("Engineering chatter (v1)").expect("stale rule");
+        let row = &body[stale..stale + body[stale..].find("</tr>").expect("row end")];
+        assert!(row.contains(">enabled</span>"), "it went stale enabled");
+        assert!(row.contains(">stale</span>"));
+        assert!(row.contains("had no match at or above the remap threshold in topic version 2"));
+        assert!(
+            row.contains("Engineering chatter</div>"),
+            "the unmapped topic, named"
+        );
+        assert!(row.contains("Update…"));
+        assert!(
+            row.contains(">Disable</button>"),
+            "disabling is always allowed"
+        );
+        assert!(!row.contains(">Enable</button>"));
+        assert!(row.contains("inbox only"));
+        let refunds = body.find("Refund escalations").expect("refund rule");
+        let row = &body[refunds..refunds + body[refunds..].find("</tr>").expect("row end")];
+        assert!(row.contains(">disabled</span>") && row.contains(">Enable</button>"));
+        assert!(
+            body.contains("rejected with HTTP 503"),
+            "soc-webhook's last delivery"
+        );
+        assert!(body.contains("New channel"), "built-ins by their spec name");
+    }
+
+    #[tokio::test]
+    async fn enabling_the_stale_rule_is_refused_in_words() {
+        let session = crate::testing::Session::new();
+        let url = format!("/alerts/rules?{}", state().to_query());
+        let body = session.get(&url).await.body;
+        let stale = body.find("Engineering chatter (v1)").expect("stale rule");
+        let marker = "name=\"rule\" value=\"";
+        let at = stale + body[stale..].find(marker).expect("rule id") + marker.len();
+        let id = &body[at..at + 26];
+        let reply = session
+            .post(
+                &url,
+                &format!("action=set-enabled&rule={id}&status=enabled"),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert!(
+            reply
+                .body
+                .contains("is stale; update it to retarget and enable it")
+        );
     }
 
     #[tokio::test]

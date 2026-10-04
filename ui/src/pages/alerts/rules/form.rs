@@ -1,16 +1,17 @@
 //! The operator rule forms: watched topics and semantic queries. Both parse
-//! into a [`UserRuleSpec`]; the gateway embeds a semantic query's text, so
-//! the UI never handles embeddings.
+//! into the spec's [`RuleName`] and [`UserRule`]; the gateway embeds a
+//! semantic query's text (and refuses text too long to embed as
+//! `QueryTooLong`), so the UI never handles embeddings.
 
+use crosstalk_spec::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::TopicId;
-use crosstalk_spec::support::NonEmpty;
+use crosstalk_spec::support::{InvalidText, NonBlank, NonEmpty};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL};
 use crate::components::{content_hidden, error_panel, short_id};
-use crate::contract::rules::{QueryText, RuleName, UserRuleSpec};
 use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid, required, similarity};
 use crate::url::ulid::UlidId;
@@ -51,8 +52,18 @@ pub struct Choices {
     pub sinks: Vec<SinkId>,
 }
 
+/// Why a rule name was refused, in words.
+pub fn name_error(error: InvalidText) -> String {
+    match error {
+        InvalidText::Blank => "rule name is empty".to_owned(),
+        InvalidText::TooLong { max, .. } => format!("rule name is longer than {max} characters"),
+        InvalidText::ControlCharacter => "rule name holds a control character".to_owned(),
+    }
+}
+
+/// A rule name, checked as the spec's `RuleName` (`DisplayText<80>`).
 pub fn parse_name(fields: &FormFields) -> std::result::Result<RuleName, UiError> {
-    RuleName::new(fields.text("name").unwrap_or("")).map_err(|e| invalid("name", e))
+    RuleName::new(fields.text("name").unwrap_or("")).map_err(|e| invalid("name", name_error(e)))
 }
 
 pub fn parse_sinks(
@@ -73,11 +84,12 @@ pub fn parse_sinks(
 }
 
 /// A watched-topic rule. Topics must belong to the current version, which
-/// the form carries so a re-fit between opening and posting is caught.
+/// the form carries so a re-fit between opening and posting is caught. A
+/// blank remap threshold takes the configured default.
 pub fn parse_watched(
     fields: &FormFields,
     choices: &Choices,
-) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), UiError> {
+) -> std::result::Result<(RuleName, UserRule, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
     let version: u32 = required(fields, "version")?
         .parse()
@@ -101,23 +113,29 @@ pub fn parse_watched(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let topics =
         NonEmpty::from_vec(topics).ok_or_else(|| invalid("topic", "pick at least one topic"))?;
-    let rule = UserRuleSpec::WatchedTopic {
-        version: choices.version,
-        topics,
-        remap_threshold: similarity(fields, "remap_threshold")?,
+    let remap_threshold = match fields.text("remap_threshold") {
+        Some(_) => Some(similarity(fields, "remap_threshold")?),
+        None => None,
+    };
+    let rule = UserRule::WatchedTopic {
+        topics: WatchedTopics {
+            version: choices.version,
+            topics,
+        },
+        remap_threshold,
     };
     Ok((name, rule, parse_sinks(fields, &choices.sinks)?))
 }
 
-/// A semantic query rule: its text, checked as [`QueryText`], and the
-/// similarity threshold.
+/// A semantic query rule: its text, checked as [`NonBlank`], and the
+/// similarity threshold. How long the text may be is the embedder's to say.
 pub fn parse_semantic(
     fields: &FormFields,
     sinks: &[SinkId],
-) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), UiError> {
+) -> std::result::Result<(RuleName, UserRule, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
-    let text = QueryText::new(required(fields, "text")?).map_err(|e| invalid("text", e))?;
-    let rule = UserRuleSpec::SemanticQuery {
+    let text = NonBlank::new(required(fields, "text")?).map_err(|_| invalid("text", "required"))?;
+    let rule = UserRule::SemanticQuery {
         text,
         threshold: similarity(fields, "threshold")?,
     };
@@ -195,12 +213,12 @@ pub async fn rule_form(
             <input type="hidden" name="version" value=(version.to_string())>
             <label class="block">
                 <span class=(LABEL)>"Name"</span>
-                <input type="text" name="name" value=(name) required="" class=(format!("{INPUT} w-96"))>
+                <input type="text" name="name" value=(name) required="" maxlength=(RuleName::MAX_CHARS.to_string()) class=(format!("{INPUT} w-96"))>
             </label>
             if semantic {
                 <label class="block">
                     <span class=(LABEL)>"Describe what to look for"</span>
-                    <textarea name="text" rows="3" maxlength=(QueryText::MAX_CHARS.to_string()) required="" class=(format!("{INPUT} w-full"))>(text)</textarea>
+                    <textarea name="text" rows="3" required="" class=(format!("{INPUT} w-full"))>(text)</textarea>
                     <span class="mt-1 block text-xs text-zinc-500">"The gateway embeds this text; transmissions at or above the threshold raise an alert."</span>
                 </label>
                 <label class="block">
@@ -236,7 +254,7 @@ pub async fn rule_form(
                 </label>
             }
             <fieldset>
-                <legend class=(LABEL)>"Deliver to (none checked: every sink)"</legend>
+                <legend class=(LABEL)>"Deliver to (none checked: inbox only)"</legend>
                 if no_sinks {
                     <p class="mt-1 text-sm text-zinc-500">"No sinks are configured."</p>
                 } else {
@@ -289,14 +307,32 @@ mod tests {
         let (name, rule, sinks) = parse_watched(&fields, &choices()).expect("valid");
         assert_eq!(name.as_str(), "keys");
         assert_eq!(sinks, vec![SinkId::from_ulid(9)]);
-        let UserRuleSpec::WatchedTopic {
-            version, topics, ..
+        let UserRule::WatchedTopic {
+            topics: WatchedTopics { version, topics },
+            remap_threshold,
         } = rule
         else {
             panic!("watched topic rule");
         };
         assert_eq!(version, TopicModelVersion(3));
         assert_eq!(topics.first(), &TopicId::from_ulid(1));
+        assert!(remap_threshold.is_some_and(|t| (t.get() - 0.8).abs() < 1e-6));
+        let defaulted =
+            FormFields::from_pairs(&[("name", "keys"), ("version", "3"), ("topic", &t1)]);
+        assert!(
+            matches!(
+                parse_watched(&defaulted, &choices()),
+                Ok((
+                    _,
+                    UserRule::WatchedTopic {
+                        remap_threshold: None,
+                        ..
+                    },
+                    _
+                ))
+            ),
+            "a blank threshold takes the configured default"
+        );
     }
 
     #[test]
@@ -354,16 +390,11 @@ mod tests {
             parse_semantic(&blank, &[]).err(),
             Some(invalid("text", "required"))
         );
-        let long = "x".repeat(QueryText::MAX_CHARS + 1);
-        let too_long =
+        // How long the text may be is the embedder's to say (`QueryTooLong`).
+        let long = "x".repeat(5000);
+        let long_text =
             FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
-        assert_eq!(
-            parse_semantic(&too_long, &[]).err(),
-            Some(invalid(
-                "text",
-                crate::contract::rules::InvalidQueryText::TooLong
-            ))
-        );
+        assert!(parse_semantic(&long_text, &[]).is_ok());
         let sink = SinkId::from_ulid(9).to_ulid();
         let complete = FormFields::from_pairs(&[
             ("name", "Keys"),
@@ -375,7 +406,7 @@ mod tests {
             parse_semantic(&complete, &[SinkId::from_ulid(9)]).expect("valid");
         assert_eq!(name.as_str(), "Keys");
         assert_eq!(sinks, vec![SinkId::from_ulid(9)]);
-        let UserRuleSpec::SemanticQuery { text, threshold } = rule else {
+        let UserRule::SemanticQuery { text, threshold } = rule else {
             panic!("a semantic query")
         };
         assert_eq!(text.as_str(), "api keys");

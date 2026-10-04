@@ -6,7 +6,7 @@ use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use crosstalk_spec::observed::agent::{AgentLabel, MergeRequest};
 
-use super::rules::{OperatorRuleStatus, RuleName, UserRuleSpec};
+use crosstalk_spec::aggregates::alert::{RuleName, UserRule};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::MergeId;
 use crosstalk_spec::ids::SinkId;
@@ -53,24 +53,27 @@ pub enum OperatorAction {
         verdict: Option<Verdict>,
         note: Option<String>,
     },
-    /// The surface embeds a semantic query's text and stores the rule.
+    /// Create an enabled user rule; the store embeds a semantic query's
+    /// text. Exactly the spec's `CreateRule`.
     CreateRule {
         name: RuleName,
-        rule: UserRuleSpec,
+        rule: UserRule,
         sinks: Vec<SinkId>,
     },
-    /// Replaces an operator rule's definition, embedding a semantic query's
-    /// text again. Updating a stale rule re-targets it to the current
-    /// version and enables it.
+    /// Replace a user rule's name, definition and sinks, embedding a
+    /// semantic query's text again. A stale rule is retargeted and enabled.
+    /// Exactly the spec's `UpdateRule`.
     UpdateRule {
         id: AlertRuleId,
         name: RuleName,
-        rule: UserRuleSpec,
+        rule: UserRule,
         sinks: Vec<SinkId>,
     },
+    /// Enable or disable any rule; enabling a stale one is
+    /// `Conflict(RuleStale)`. Exactly the spec's `SetRuleEnabled`.
     SetRuleEnabled {
         id: AlertRuleId,
-        status: OperatorRuleStatus,
+        enabled: bool,
     },
 }
 

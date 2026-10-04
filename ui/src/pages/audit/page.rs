@@ -323,7 +323,7 @@ mod tests {
             by: Actor::Operator(OperatorId::from_ulid(2)),
             action: AuditedAction::Operator(OperatorAction::SetRuleEnabled {
                 id: AlertRuleId::from_ulid(7),
-                status: crate::contract::rules::OperatorRuleStatus::Disabled,
+                enabled: false,
             }),
             subject: Some(AuditSubject::Rule(AlertRuleId::from_ulid(7))),
             outcome: AuditOutcome::Applied(ActionOutcome::Applied),

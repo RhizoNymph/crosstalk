@@ -5,6 +5,7 @@
 //! `QueryError::Forbidden`; pages also check, to render the "content
 //! hidden" state instead of an error.
 
+pub mod alert_state;
 pub mod fixture;
 
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ use std::future::Future;
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::agents::filter::AgentFilter;
 use crosstalk_spec::aggregates::agents::{AgentDetail, AgentName, AgentRow};
+use crosstalk_spec::aggregates::alert::{Alert, AlertRuleDef};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -34,21 +36,22 @@ use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, SearchRequest, TopicPage};
+use crosstalk_spec::interfaces::l8_surface::lists::{
+    AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
+};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
-use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
+use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, SinkInfo};
 use crosstalk_spec::support::TimeWindow;
 
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::Alert;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
-use crate::contract::rules::{RuleDef, SinkInfo};
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
+    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
+    TopicList, TransmissionList,
 };
 
 pub type Result<T> = std::result::Result<T, QueryError>;
@@ -353,8 +356,12 @@ pub trait Backend: Send + Sync + 'static {
         ids: &IdBatch<ChannelId>,
     ) -> impl Future<Output = Result<HashMap<ChannelId, ChannelName>>> + Send;
 
-    // Alerts and rules (items 1, 18).
+    // Alerts, alert rules and sinks: exactly `QueryApi`'s methods.
 
+    /// View. The alerts `filter` keeps, newest first: states (any when
+    /// empty) and, for a channel, alerts whose subject is that channel or a
+    /// transmission routed through it, every side resolved through
+    /// supersession.
     fn alerts(
         &self,
         caller: &Caller,
@@ -362,15 +369,24 @@ pub trait Backend: Send + Sync + 'static {
         page: &PageRequest<AlertList>,
     ) -> impl Future<Output = Result<Page<Alert, AlertList>>> + Send;
 
-    /// One alert by id (item 25).
+    /// View. One alert as `alerts` lists it, its subject as raised. `None`
+    /// for an unknown id.
     fn alert(
         &self,
         caller: &Caller,
         id: AlertId,
     ) -> impl Future<Output = Result<Option<Alert>>> + Send;
 
-    fn rules(&self, caller: &Caller) -> impl Future<Output = Result<Vec<RuleDef>>> + Send;
+    /// View. Built-in rules first, in `BuiltinRule::ALL` order, then user
+    /// rules newest first; none is ever deleted.
+    fn alert_rules(
+        &self,
+        caller: &Caller,
+        filter: &AlertRuleFilter,
+        page: &PageRequest<AlertRuleList>,
+    ) -> impl Future<Output = Result<Page<AlertRuleDef, AlertRuleList>>> + Send;
 
+    /// Govern. Every configured sink and how its last delivery went.
     fn sinks(&self, caller: &Caller) -> impl Future<Output = Result<Vec<SinkInfo>>> + Send;
 
     // Research and pipeline (item 12).

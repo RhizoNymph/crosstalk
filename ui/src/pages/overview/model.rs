@@ -4,7 +4,7 @@
 
 use std::num::NonZeroU32;
 
-use crate::contract::alerts::Alert;
+use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Caller, Permission};
@@ -16,7 +16,8 @@ use crate::components::{format_bytes, format_time, href};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::require;
-use crate::pages::common::lookup::{agent_names, operator_names, rule_names};
+use crate::pages::common::lookup::{agent_names, operator_names};
+use crate::pages::common::rules::rule_names;
 use crate::pages::common::transmissions::channel_names;
 use crate::pages::topology::drawer::model::{EdgeItem, edge_items};
 use crate::url::view_state::ViewState;

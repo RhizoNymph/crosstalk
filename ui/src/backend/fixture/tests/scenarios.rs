@@ -15,8 +15,10 @@ use crosstalk_spec::observed::client::HarnessFamily;
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::shared;
-use crate::contract::alerts::{AlertState, SuppressReason};
-use crate::contract::rules::{BuiltinRule, RuleKind, RuleStatus, StaleReason, UserRule};
+use crosstalk_spec::aggregates::alert::{
+    AlertRule, AlertRuleKind, AlertState, BuiltinRule, RuleStatus, StaleReason, SuppressReason,
+    TopicWatch, WatchedTopics,
+};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::observed::agent::AgentState;
 
@@ -352,7 +354,7 @@ fn alerts_cover_every_state_reason_subject_and_dedup() {
             .any(|a| matches!(a.subject, AlertSubject::Agent(_)))
     );
     // Every alert references a rule that exists.
-    let rules: HashSet<_> = state.rules.iter().map(|r| r.id).collect();
+    let rules: HashSet<_> = state.rules.iter().map(|r| r.id()).collect();
     assert!(alerts.iter().all(|a| rules.contains(&a.rule)));
 }
 
@@ -360,28 +362,32 @@ fn alerts_cover_every_state_reason_subject_and_dedup() {
 fn rules_and_sinks() {
     let b = shared();
     let state = state_of(b);
-    let builtins: HashSet<BuiltinRule> = state
+    let builtins: Vec<BuiltinRule> = state
         .rules
         .iter()
-        .filter_map(|r| match r.rule {
-            RuleKind::Builtin(b) => Some(b),
-            RuleKind::User(_) => None,
+        .filter_map(|r| match r.rule() {
+            AlertRule::Builtin(b) => Some(*b),
+            AlertRule::User { .. } => None,
         })
         .collect();
-    assert_eq!(builtins, BuiltinRule::ALL.into_iter().collect());
-    assert!(state.rules.iter().any(|r| matches!(
-        (&r.rule, &r.status),
-        (RuleKind::User(UserRule::WatchedTopic { version, .. }), RuleStatus::Enabled) if version.0 == 2
-    )));
-    assert!(state.rules.iter().any(|r| matches!(
-        r.status,
-        RuleStatus::Stale(StaleReason::TopicsUnmapped { .. })
-    )));
+    assert_eq!(builtins, BuiltinRule::ALL.to_vec(), "each once, in order");
     assert!(
         state
             .rules
             .iter()
-            .any(|r| matches!(r.rule, RuleKind::User(UserRule::SemanticQuery { .. })))
+            .filter(|r| matches!(r.rule(), AlertRule::Builtin(_)))
+            .all(|r| r.sinks.len() == b.world.sinks.len()),
+        "built-ins deliver to every sink"
+    );
+    let v2 = TopicModelVersion(2);
+    assert!(state.rules.iter().any(|r| r.status == RuleStatus::Enabled
+        && r.stale_reason().is_none()
+        && crate::pages::alerts::rules::model::watched_topics(r).is_some_and(|w| w.version == v2)));
+    assert!(
+        state
+            .rules
+            .iter()
+            .any(|r| r.kind() == AlertRuleKind::SemanticQuery)
     );
     assert!(state.rules.iter().any(|r| r.status == RuleStatus::Disabled));
     let sinks = &b.world.sinks;
@@ -398,6 +404,71 @@ fn rules_and_sinks() {
             .count()
             == 2
     );
+}
+
+/// The v1 rule is stale exactly as `TopicLineage::remap` over the stored
+/// lineage leaves it: "Engineering chatter" unmapped in v2, while it is
+/// still enabled (it went stale while enabled).
+#[test]
+fn the_v1_rule_is_stale_as_its_lineage_says() {
+    use crosstalk_spec::aggregates::alert::ContentRule;
+
+    let b = shared();
+    let state = state_of(b);
+    let stale: Vec<_> = state
+        .rules
+        .iter()
+        .filter(|r| r.stale_reason().is_some())
+        .collect();
+    assert_eq!(stale.len(), 1);
+    let rule = stale[0];
+    assert_eq!(rule.status, RuleStatus::Enabled, "staleness is separate");
+    let AlertRule::User {
+        content:
+            ContentRule::WatchedTopic {
+                watch: TopicWatch::Stale { last, .. },
+                remap_threshold,
+            },
+        ..
+    } = rule.rule()
+    else {
+        panic!("a stale watched-topic rule: {rule:?}")
+    };
+    let lineage = b
+        .world
+        .topics
+        .lineage(TopicModelVersion(1))
+        .expect("v1 lineage");
+    let remapped = lineage.remap(last, *remap_threshold).expect("remap");
+    let chatter = b
+        .world
+        .topics
+        .topics_of(TopicModelVersion(1))
+        .find(|t| t.label == "Engineering chatter")
+        .expect("chatter")
+        .id;
+    assert_eq!(
+        Some(remapped.clone()),
+        match rule.rule() {
+            AlertRule::User {
+                content: ContentRule::WatchedTopic { watch, .. },
+                ..
+            } => Some(watch.clone()),
+            AlertRule::User { .. } | AlertRule::Builtin(_) => None,
+        }
+    );
+    assert_eq!(
+        *last,
+        WatchedTopics {
+            version: TopicModelVersion(1),
+            topics: crosstalk_spec::support::NonEmpty::new(chatter),
+        }
+    );
+    assert!(matches!(
+        rule.stale_reason(),
+        Some(StaleReason::TopicsUnmapped { version, topics })
+            if version == TopicModelVersion(2) && topics.iter().eq([&chatter])
+    ));
 }
 
 #[test]

@@ -1,21 +1,24 @@
-//! Alert sinks and rules: the five built-ins, a watched-topic rule on v2, a
-//! watched-topic rule left stale by the re-fit, a semantic query, and a
-//! semantic query that was later disabled.
+//! Alert sinks and rules: the five built-ins (delivering to every sink), a
+//! watched-topic rule on v2, a watched-topic rule on v1 left stale when v2
+//! was ready, a semantic query, and a semantic query that was later
+//! disabled. User rules are resolved and stored the way `CreateRule` stores
+//! them as of their creation, and the v1 rule is carried over to v2 with
+//! `AlertRuleDef::remap` over the catalog's lineage, so its staleness is
+//! exactly what `TopicLineage::remap` says.
 
+use crosstalk_spec::aggregates::alert::{
+    AlertRuleConfig, AlertRuleSet, RuleName, RuleStatus, UserRule, WatchedTopics,
+};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::ids::AlertRuleId;
-use crosstalk_spec::interfaces::l8_surface::SinkError;
-use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
+use crosstalk_spec::ids::{AlertRuleId, SinkId};
+use crosstalk_spec::interfaces::l8_surface::{SinkError, SinkInfo, SinkKind};
+use crosstalk_spec::support::{NonBlank, NonEmpty, Similarity, Timestamp};
 
+use crate::backend::fixture::actions::rules::{insert, resolve};
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::rules::{
-    BuiltinRule, QueryText, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, SinkInfo,
-    SinkKind, StaleReason, UserRule,
-};
-use crosstalk_spec::ids::SinkId;
 
 use super::history::{CONFIG_AT, OPERATOR_RESEARCHER, operator_action};
 use super::topics::{self, V1_UNMAPPED};
@@ -55,69 +58,39 @@ pub fn sinks(mint: &mut Mint) -> Vec<SinkInfo> {
     ]
 }
 
-fn name(text: &str) -> Result<RuleName, GenError> {
-    RuleName::new(text).map_err(|e| GenError::invalid("RuleName", e))
-}
-
-fn builtin_name(rule: BuiltinRule) -> &'static str {
-    match rule {
-        BuiltinRule::NewChannel => "New channel discovered",
-        BuiltinRule::UnreviewedTraffic => "Traffic on an unreviewed channel",
-        BuiltinRule::UnsanctionedTraffic => "Traffic on an unsanctioned channel",
-        BuiltinRule::SanctionedUnused => "Sanctioned channel unused",
-        BuiltinRule::SuspectedTransmission => "Suspected transmission",
-    }
-}
-
 fn similarity(value: f32) -> Result<Similarity, GenError> {
     Similarity::new(value).map_err(|e| GenError::invalid("Similarity", e))
 }
 
-/// A semantic query rule embedded the way `CreateRule` embeds one.
-fn semantic(world: &World, text: &str, threshold: f32) -> Result<UserRule, GenError> {
-    let text = QueryText::new(text).map_err(|e| GenError::invalid("QueryText", e))?;
+/// The configured remap threshold: the topics page's and the rule form's
+/// default.
+pub fn config() -> Result<AlertRuleConfig, GenError> {
+    Ok(AlertRuleConfig {
+        default_remap_threshold: similarity(topics::REMAP_THRESHOLD)?,
+    })
+}
+
+/// A semantic query rule as an operator writes it.
+fn semantic(text: &str, threshold: f32) -> Result<UserRule, GenError> {
     Ok(UserRule::SemanticQuery {
-        embedding: topics::embed(&world.topics.model, world.seed, text.as_str())?,
-        model: world.topics.model.clone(),
-        text,
+        text: NonBlank::new(text).map_err(|e| GenError::invalid("NonBlank", e))?,
         threshold: similarity(threshold)?,
     })
 }
 
-/// The ids of the generated rules, by role.
+/// The ids of the generated user rules, by role. Built-in rules have their
+/// fixed ids (`BuiltinRule::id`).
 pub struct Rules {
-    builtin: [AlertRuleId; 5],
     pub watch: AlertRuleId,
     pub stale: AlertRuleId,
     pub semantic: AlertRuleId,
     pub off: AlertRuleId,
 }
 
-impl Rules {
-    pub fn builtin(&self, rule: BuiltinRule) -> AlertRuleId {
-        let index = BuiltinRule::ALL
-            .iter()
-            .position(|r| *r == rule)
-            .unwrap_or(0);
-        self.builtin[index]
-    }
-}
-
-/// Adds every rule to `state`, auditing the operator-created ones.
+/// Every rule, stored in `state` and the operator-created ones audited.
 pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
-    let mut builtin = [AlertRuleId::from_ulid(0); 5];
-    for (slot, rule) in builtin.iter_mut().zip(BuiltinRule::ALL) {
-        let id = AlertRuleId::from_ulid(state.mint.ulid(CONFIG_AT));
-        *slot = id;
-        state.rules.push(RuleDef {
-            id,
-            name: name(builtin_name(rule))?,
-            rule: RuleKind::Builtin(rule),
-            status: RuleStatus::Enabled,
-            created: (RuleAuthor::Config, CONFIG_AT),
-            sinks: Vec::new(),
-        });
-    }
+    let every_sink: Vec<SinkId> = world.sinks.iter().map(|s| s.id).collect();
+    state.rules = AlertRuleSet::new(|_| (RuleStatus::Enabled, every_sink.clone()));
     let sink = |kind: SinkKind| {
         world
             .sinks
@@ -138,60 +111,62 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
         .nth(V1_UNMAPPED)
         .map(|t| t.id)
         .ok_or_else(|| GenError::Missing("unmapped v1 topic".to_owned()))?;
-    let watch_topics =
-        NonEmpty::from_vec(vec![topic(Theme::Credentials)?, topic(Theme::Injection)?])
-            .ok_or_else(|| GenError::Missing("watched topics".to_owned()))?;
+    let watched = WATCHED_THEMES
+        .into_iter()
+        .map(topic)
+        .collect::<Result<Vec<_>, _>>()?;
+    let watched = NonEmpty::from_vec(watched)
+        .ok_or_else(|| GenError::Missing("watched topics".to_owned()))?;
     let user = [
         (
             "Credentials and agent instructions",
             UserRule::WatchedTopic {
-                version: TopicModelVersion(2),
-                topics: watch_topics,
-                remap_threshold: similarity(topics::REMAP_THRESHOLD)?,
+                topics: WatchedTopics {
+                    version: TopicModelVersion(2),
+                    topics: watched,
+                },
+                remap_threshold: None,
             },
-            RuleStatus::Enabled,
             WATCH_RULE_AT,
             vec![sink(SinkKind::Slack)?, sink(SinkKind::Webhook)?],
         ),
         (
             "Engineering chatter (v1)",
             UserRule::WatchedTopic {
-                version: TopicModelVersion(1),
-                topics: NonEmpty::new(unmapped),
-                remap_threshold: similarity(topics::REMAP_THRESHOLD)?,
+                topics: WatchedTopics {
+                    version: TopicModelVersion(1),
+                    topics: NonEmpty::new(unmapped),
+                },
+                remap_threshold: Some(similarity(topics::REMAP_THRESHOLD)?),
             },
-            RuleStatus::Stale(StaleReason::TopicsUnmapped {
-                topics: NonEmpty::new(unmapped),
-            }),
             STALE_RULE_AT,
             Vec::new(),
         ),
         (
             "Exfiltration to paste sites",
             semantic(
-                world,
                 "credentials or scraped data posted to a public paste site",
                 0.82,
             )?,
-            RuleStatus::Enabled,
             SEMANTIC_RULE_AT,
             vec![sink(SinkKind::Webhook)?],
         ),
         (
             "Refund escalations",
-            semantic(world, "customer refund escalated between agents", 0.8)?,
-            RuleStatus::Enabled,
+            semantic("customer refund escalated between agents", 0.8)?,
             OFF_RULE_AT,
             vec![sink(SinkKind::Log)?],
         ),
     ];
     let mut ids = Vec::new();
-    for (text, rule, status, at, sinks) in user {
+    for (text, rule, at, sinks) in user {
         let id = AlertRuleId::from_ulid(state.mint.ulid(at));
-        let rule_name = name(text)?;
+        let name = RuleName::new(text).map_err(|e| GenError::invalid("RuleName", e))?;
+        let definition = resolve(world, topics::version_at(at), &rule, &sinks)
+            .map_err(|e| GenError::invalid("rule definition", e))?;
         let action = OperatorAction::CreateRule {
-            name: rule_name.clone(),
-            rule: rule.spec(),
+            name: name.clone(),
+            rule,
             sinks: sinks.clone(),
         };
         operator_action(
@@ -201,24 +176,48 @@ pub fn build(world: &World, state: &mut State) -> Result<Rules, GenError> {
             action,
             ActionOutcome::RuleCreated(id),
         );
-        state.rules.push(RuleDef {
+        insert(
+            state,
             id,
-            name: rule_name,
-            rule: RuleKind::User(rule),
-            status,
-            created: (RuleAuthor::Operator(OPERATOR_RESEARCHER), at),
+            name,
+            (OPERATOR_RESEARCHER, at),
+            definition,
             sinks,
-        });
+        )
+        .map_err(|e| GenError::invalid("rule", e))?;
         ids.push(id);
     }
     let [watch, stale, semantic, off] = ids[..] else {
         return Err(GenError::Missing("user rules".to_owned()));
     };
+    remap_to_v2(world, state, stale)?;
     Ok(Rules {
-        builtin,
         watch,
         stale,
         semantic,
         off,
     })
+}
+
+/// v2 became ready: the rule on v1 is carried over the stored lineage. Its
+/// "Engineering chatter" topic has no link at or above the threshold, so
+/// it goes stale; anything else is a fixture bug.
+fn remap_to_v2(world: &World, state: &mut State, id: AlertRuleId) -> Result<(), GenError> {
+    let lineage = world
+        .topics
+        .lineage(TopicModelVersion(1))
+        .ok_or_else(|| GenError::Missing("lineage from v1".to_owned()))?;
+    let rule = state
+        .rules
+        .get_mut(id)
+        .ok_or_else(|| GenError::Missing("the v1 rule".to_owned()))?;
+    rule.remap(lineage)
+        .map_err(|e| GenError::invalid("AlertRuleDef::remap", e))?;
+    if rule.stale_reason().is_none() {
+        return Err(GenError::invalid(
+            "AlertRuleDef::remap",
+            "the v1 rule should be stale in v2",
+        ));
+    }
+    Ok(())
 }

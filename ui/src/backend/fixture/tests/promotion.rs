@@ -22,9 +22,9 @@ use super::channels::{row, rows};
 use super::{caller, collect, fresh, graph_of, researcher, scope_with, shared, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::pages::channels::promote::patterns::candidates;
 use crate::url::scope::ViewFilter;
+use crosstalk_spec::aggregates::alert::{AlertState, SuppressReason};
 
 use super::actions_support::{alert_state, channel, find_alert};
 
@@ -409,7 +409,7 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
             .iter()
             .filter(|a| a.subject == AlertSubject::Channel(talk)
                 || a.subject == AlertSubject::Channel(wiki))
-            .all(|a| !a.state.is_active())
+            .all(|a| !crate::backend::alert_state::is_active(&a.state))
     );
     drop(state);
     // Refusals.

@@ -1,13 +1,14 @@
-//! Names for ids: operators from `operators`, rules from `rules`, agents
-//! from one `agent_names` call per `IdBatch`, and [`id_batches`] for name
-//! lookups over more ids than one `IdBatch` holds.
+//! Names for ids: operators from `operators`, agents from one
+//! `agent_names` call per `IdBatch`, and [`id_batches`] for name lookups
+//! over more ids than one `IdBatch` holds. Rule names are in
+//! [`super::rules`].
 
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::agents::AgentName;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
-use crosstalk_spec::ids::{AgentId, AlertRuleId, OperatorId};
+use crosstalk_spec::ids::{AgentId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use crosstalk_spec::observed::agent::MergeAuthor;
 use topcoat::context::Cx;
@@ -16,7 +17,6 @@ use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
 use crate::contract::research::Actor;
-use crate::contract::rules::RuleAuthor;
 use crate::url::ulid::UlidId;
 
 /// Operator display names. Unknown operators show as a short id.
@@ -49,13 +49,6 @@ impl OperatorNames {
         }
     }
 
-    pub fn rule_author(&self, by: RuleAuthor) -> String {
-        match by {
-            RuleAuthor::Config => "config".to_owned(),
-            RuleAuthor::Operator(id) => self.name(id),
-        }
-    }
-
     pub fn merge_author(&self, by: MergeAuthor) -> String {
         match by {
             MergeAuthor::Resolver => "identity resolver".to_owned(),
@@ -72,37 +65,6 @@ pub async fn operator_names(cx: &Cx, caller: &Caller) -> OperatorNames {
         Err(error) => {
             tracing::warn!(error = ?error, "operator names unavailable");
             OperatorNames::default()
-        }
-    }
-}
-
-/// Rule names by id. Unknown rules show as a short id.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RuleNames(HashMap<AlertRuleId, String>);
-
-impl RuleNames {
-    pub fn new(names: impl IntoIterator<Item = (AlertRuleId, String)>) -> Self {
-        Self(names.into_iter().collect())
-    }
-
-    pub fn name(&self, id: AlertRuleId) -> String {
-        self.0
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| format!("rule {}", short_id(id.to_ulid())))
-    }
-}
-
-pub async fn rule_names(cx: &Cx, caller: &Caller) -> RuleNames {
-    match backend(cx).rules(caller).await {
-        Ok(rules) => RuleNames::new(
-            rules
-                .into_iter()
-                .map(|r| (r.id, r.name.as_str().to_owned())),
-        ),
-        Err(error) => {
-            tracing::warn!(error = ?error, "rule names unavailable");
-            RuleNames::default()
         }
     }
 }

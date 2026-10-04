@@ -2,6 +2,9 @@
 //! rule, or edit one. Updating a stale rule re-targets it to the current
 //! topic version and enables it.
 
+use crosstalk_spec::aggregates::alert::{
+    AlertRule, AlertRuleDef, AlertRuleKind, ContentRule, RuleStatus,
+};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AlertRuleId, TopicId};
@@ -17,18 +20,18 @@ use super::PATH;
 use super::form::{
     Choices, RuleKindChoice, TopicOption, Values, parse_semantic, parse_watched, rule_form,
 };
-use super::model::{StatusKind, staleness};
+use super::model::{semantic_query, staleness, status_label, status_tone, watched_topics};
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::LINK;
-use crate::components::{error_panel, href, page_header, state_badge};
+use crate::components::{Tone, error_panel, href, page_header, state_badge};
 use crate::contract::actions::OperatorAction;
-use crate::contract::rules::{RuleDef, RuleKind, RuleStatus, UserRule};
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
+use crate::pages::common::rules::rule;
 use crate::pages::common::topics::{all_topics, default_version};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
@@ -119,58 +122,49 @@ async fn existing(
     cx: &Cx,
     caller: &Caller,
     id: AlertRuleId,
-) -> std::result::Result<RuleDef, UiError> {
-    let rule = backend(cx)
-        .rules(caller)
+) -> std::result::Result<AlertRuleDef, UiError> {
+    let found = rule(backend(cx), caller, id)
         .await?
-        .into_iter()
-        .find(|r| r.id == id)
         .ok_or(UiError::Query(QueryError::NotFound))?;
-    if matches!(rule.rule, RuleKind::Builtin(_)) {
+    if matches!(found.rule(), AlertRule::Builtin(_)) {
         return Err(UiError::Query(QueryError::Conflict(
             ConflictKind::RuleNotEditable { rule: id },
         )));
     }
-    Ok(rule)
+    Ok(found)
 }
 
-fn kind_of(rule: &RuleDef) -> RuleKindChoice {
-    match rule.rule {
-        RuleKind::User(UserRule::SemanticQuery { .. }) => RuleKindChoice::Semantic,
+fn kind_of(rule: &AlertRuleDef) -> RuleKindChoice {
+    match rule.kind() {
+        AlertRuleKind::SemanticQuery => RuleKindChoice::Semantic,
         _ => RuleKindChoice::Watched,
     }
 }
 
-/// The form's values for an existing rule. Topics are kept only when the
-/// rule is on the version the form offers.
-pub fn values_of(rule: &RuleDef, version: TopicModelVersion) -> Values {
-    let sinks = rule.sinks.iter().map(|s| s.to_ulid()).collect();
-    match &rule.rule {
-        RuleKind::User(UserRule::WatchedTopic {
-            version: rule_version,
-            topics,
-            remap_threshold,
-        }) => Values {
-            name: rule.name.as_str().to_owned(),
-            topics: if *rule_version == version {
-                topics.iter().map(|t| t.to_ulid()).collect()
-            } else {
-                Vec::new()
-            },
-            threshold: format!("{:.2}", remap_threshold.get()),
-            text: String::new(),
-            sinks,
+/// The form's values for an existing user rule. Topics are kept only when
+/// the rule watches the version the form offers, so a stale rule's are
+/// picked again.
+pub fn values_of(rule: &AlertRuleDef, version: TopicModelVersion) -> Values {
+    let threshold = match rule.rule() {
+        AlertRule::User { content, .. } => match content {
+            ContentRule::WatchedTopic {
+                remap_threshold, ..
+            } => format!("{:.2}", remap_threshold.get()),
+            ContentRule::SemanticQuery { threshold, .. } => format!("{:.2}", threshold.get()),
         },
-        RuleKind::User(UserRule::SemanticQuery {
-            text, threshold, ..
-        }) => Values {
-            name: rule.name.as_str().to_owned(),
-            topics: Vec::new(),
-            threshold: format!("{:.2}", threshold.get()),
-            text: text.as_str().to_owned(),
-            sinks,
-        },
-        RuleKind::Builtin(_) => Values::default(),
+        AlertRule::Builtin(_) => return Values::default(),
+    };
+    Values {
+        name: rule.name().to_owned(),
+        topics: watched_topics(rule)
+            .filter(|watched| watched.version == version)
+            .map(|watched| watched.topics.iter().map(|t| t.to_ulid()).collect())
+            .unwrap_or_default(),
+        threshold,
+        text: semantic_query(rule)
+            .map(|query| query.text.as_str().to_owned())
+            .unwrap_or_default(),
+        sinks: rule.sinks.iter().map(|s| s.to_ulid()).collect(),
     }
 }
 
@@ -271,7 +265,7 @@ struct Editor {
     values: Values,
     options: Options,
     /// The edited rule's status, and why it is stale.
-    status: Option<(StatusKind, Option<String>)>,
+    status: Option<(RuleStatus, Option<String>)>,
 }
 
 async fn editor(
@@ -297,15 +291,10 @@ async fn editor(
         ),
         Target::Existing(id) => {
             let rule = existing(cx, caller, *id).await?;
-            let status = match &rule.status {
-                RuleStatus::Enabled => (StatusKind::Enabled, None),
-                RuleStatus::Disabled => (StatusKind::Disabled, None),
-                RuleStatus::Stale(reason) => {
-                    (StatusKind::Stale, Some(staleness(reason, &None).reason))
-                }
-            };
+            let stale = rule.stale_reason().map(|r| staleness(&r, &None).reason);
+            let status = (rule.status, stale);
             (
-                format!("Edit \u{201c}{}\u{201d}", rule.name.as_str()),
+                format!("Edit \u{201c}{}\u{201d}", rule.name()),
                 kind_of(&rule),
                 rule_url(*id, state),
                 values_of(&rule, options.choices.version),
@@ -353,10 +342,10 @@ async fn rule_page(
                 error_panel(error: &error)
             },
             Ok(editor) => {
-                let submit = match (&editor.status, editor.kind) {
-                    (None, _) => "Create rule",
-                    (Some((StatusKind::Stale, _)), _) => "Update and re-enable",
-                    (Some(_), _) => "Save changes",
+                let submit = match &editor.status {
+                    None => "Create rule",
+                    Some((_, Some(_))) => "Update and re-enable",
+                    Some((_, None)) => "Save changes",
                 };
                 let version = editor.options.choices.version.0;
                 let watched = editor.kind == RuleKindChoice::Watched;
@@ -366,8 +355,9 @@ async fn rule_page(
                 )
                 if let Some((status, reason)) = editor.status {
                     <div class="mb-3 flex flex-wrap items-center gap-2 text-sm">
-                        state_badge(label: status.label(), tone: status.tone())
+                        state_badge(label: status_label(status), tone: status_tone(status))
                         if let Some(reason) = reason {
+                            state_badge(label: "stale", tone: Tone::Warn)
                             <span class="text-amber-800 dark:text-amber-300">(reason) " Saving re-targets the rule to version " (version) " and enables it."</span>
                         }
                     </div>
@@ -497,6 +487,61 @@ mod tests {
         let rules = session.get(&reply.location.expect("location")).await;
         assert!(rules.body.contains("\u{201c}tokens in a paste\u{201d}"));
         assert!(!rules.body.contains("api keys pasted in chat"));
+    }
+
+    #[tokio::test]
+    async fn names_and_texts_are_checked_where_the_spec_checks_them() {
+        let q = state().to_query();
+        let url = format!("/alerts/rules/new?{q}");
+        let long_name = "n".repeat(81);
+        let reply = post(
+            &url,
+            &format!("kind=semantic&name={long_name}&text=api+keys&threshold=0.7"),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply
+                .body
+                .contains("name: rule name is longer than 80 characters")
+        );
+        // The embedder, not the form, says how long a query may be.
+        let long_text = "key+".repeat(1200);
+        let reply = post(
+            &url,
+            &format!("kind=semantic&name=keys&text={long_text}&threshold=0.7"),
+        )
+        .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            reply.body
+        );
+        assert!(reply.body.contains("the text is too long to embed"));
+    }
+
+    #[tokio::test]
+    async fn watch_links_preselect_a_topic_of_the_current_version() {
+        use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+
+        let (version, topics) = all_topics(
+            crate::testing::world(),
+            &crate::testing::operator().caller(),
+            TopicVersionSelector::Current,
+        )
+        .await
+        .expect("topics");
+        assert_eq!(version, TopicModelVersion(2));
+        let topic = topics[0].id.to_ulid();
+        let q = state().to_query();
+        let reply = get(&format!("/alerts/rules/new?{q}&kind=watched&topic={topic}")).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert!(
+            reply.body.contains(&format!("value=\"{topic}\" checked")),
+            "{}",
+            reply.body
+        );
     }
 
     #[tokio::test]

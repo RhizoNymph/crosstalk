@@ -2,7 +2,9 @@
 //! topic rows from a version's sizes and trends, and the lineage to the
 //! next version with the rules it leaves stale.
 
-use crosstalk_spec::aggregates::alert::{TopicWatch, WatchedTopics};
+use crosstalk_spec::aggregates::alert::{
+    AlertRule, AlertRuleDef, ContentRule, StaleReason, TopicWatch, WatchedTopics,
+};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::topic_history::{
     FitRecord, TopicLineage, TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus,
@@ -11,7 +13,6 @@ use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::support::{NonEmpty, Similarity};
 
 use crate::components::{format_time, short_id};
-use crate::contract::rules::{RuleDef, RuleKind, RuleStatus, StaleReason, UserRule};
 use crate::pages::common::links::rule_url;
 use crate::pages::common::topics::Trends;
 use crate::pages::common::transmissions::Named;
@@ -168,34 +169,31 @@ fn carried(lineage: &TopicLineage, topic: TopicId, threshold: Similarity) -> Opt
     }
 }
 
-/// Whether the remap leaves `rule` stale over `topic`: a watched-topic rule
-/// on the lineage's source version that [`TopicLineage::remap`] (with the
-/// rule's own threshold) leaves stale with `topic` unmapped, or a rule
-/// already stale over it.
-fn stranded(rule: &RuleDef, lineage: &TopicLineage, topic: TopicId) -> bool {
-    let remapped = match &rule.rule {
-        RuleKind::User(UserRule::WatchedTopic {
-            version,
-            topics,
-            remap_threshold,
-        }) if *version == lineage.from() => {
-            let watched = WatchedTopics {
-                version: *version,
-                topics: topics.clone(),
-            };
-            matches!(
-                lineage.remap(&watched, *remap_threshold),
-                Ok(TopicWatch::Stale { unmapped, .. }) if unmapped.iter().any(|t| *t == topic)
-            )
-        }
+/// Whether the remap leaves `rule` stale over `topic`: a current
+/// watched-topic rule on the lineage's source version that
+/// [`TopicLineage::remap`] (with the rule's own threshold) leaves stale
+/// with `topic` unmapped, or a rule already stale over it in the lineage's
+/// target version.
+fn stranded(rule: &AlertRuleDef, lineage: &TopicLineage, topic: TopicId) -> bool {
+    let remapped = match rule.rule() {
+        AlertRule::User {
+            content:
+                ContentRule::WatchedTopic {
+                    watch: TopicWatch::Current(watched),
+                    remap_threshold,
+                },
+            ..
+        } if watched.version == lineage.from() => matches!(
+            lineage.remap(watched, *remap_threshold),
+            Ok(TopicWatch::Stale { unmapped, .. }) if unmapped.iter().any(|t| *t == topic)
+        ),
         _ => false,
     };
-    let reported = match &rule.status {
-        RuleStatus::Stale(StaleReason::TopicsUnmapped { topics }) => {
-            topics.iter().any(|t| *t == topic)
-        }
-        _ => false,
-    };
+    let reported = matches!(
+        rule.stale_reason(),
+        Some(StaleReason::TopicsUnmapped { version, topics })
+            if version == lineage.to() && topics.iter().any(|t| *t == topic)
+    );
     remapped || reported
 }
 
@@ -205,7 +203,7 @@ pub fn remap_rows(
     lineage: &TopicLineage,
     from_topics: &[Topic],
     to_topics: &[Topic],
-    rules: &[RuleDef],
+    rules: &[AlertRuleDef],
     threshold: Similarity,
     state: &ViewState,
 ) -> Vec<RemapRow> {
@@ -228,8 +226,8 @@ pub fn remap_rows(
                     .iter()
                     .filter(|rule| stranded(rule, lineage, topic))
                     .map(|rule| Named {
-                        url: rule_url(rule.id, state),
-                        name: rule.name.as_str().to_owned(),
+                        url: rule_url(rule.id(), state),
+                        name: rule.name().to_owned(),
                     })
                     .collect()
             };
@@ -254,6 +252,7 @@ mod tests {
     use std::collections::HashMap;
     use std::num::NonZeroU64;
 
+    use crosstalk_spec::aggregates::alert::{RuleDefinition, RuleName, RuleStatus};
     use crosstalk_spec::aggregates::edge::EdgeStats;
     use crosstalk_spec::aggregates::retention::{Pin, Retention};
     use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel};
@@ -265,7 +264,6 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::rules::{RuleAuthor, RuleName};
 
     fn model() -> EmbeddingModel {
         EmbeddingModel {
@@ -289,20 +287,24 @@ mod tests {
         Similarity::new(value).expect("similarity")
     }
 
-    fn watched(id: u128, topics: Vec<u128>) -> RuleDef {
-        RuleDef {
-            id: AlertRuleId::from_ulid(id),
-            name: RuleName::new("chatter").expect("name"),
-            rule: RuleKind::User(UserRule::WatchedTopic {
-                version: TopicModelVersion(1),
-                topics: NonEmpty::from_vec(topics.into_iter().map(TopicId::from_ulid).collect())
+    fn watched(id: u128, topics: Vec<u128>) -> AlertRuleDef {
+        AlertRuleDef::user(
+            AlertRuleId::from_ulid((1 << 100) + id),
+            RuleName::new("chatter").expect("name"),
+            (OperatorId::from_ulid(1), Timestamp::from_micros(0)),
+            RuleDefinition::WatchedTopic {
+                topics: WatchedTopics {
+                    version: TopicModelVersion(1),
+                    topics: NonEmpty::from_vec(
+                        topics.into_iter().map(TopicId::from_ulid).collect(),
+                    )
                     .expect("topics"),
+                },
                 remap_threshold: similarity(0.8),
-            }),
-            status: RuleStatus::Enabled,
-            created: (RuleAuthor::Config, Timestamp::from_micros(0)),
-            sinks: Vec::new(),
-        }
+            },
+            Vec::new(),
+        )
+        .expect("user rule")
     }
 
     fn hours(h: u64) -> Timestamp {
@@ -445,6 +447,16 @@ mod tests {
             Some(("Credentials".to_owned(), "0.91".to_owned()))
         );
         assert!(rows[1].stale_rules.is_empty());
+        // A rule the re-fit already left stale over the topic is listed too.
+        let mut stranded = watched(6, vec![1]);
+        stranded
+            .remap(&lineage)
+            .expect("a current rule on the lineage's version");
+        assert!(stranded.stale_reason().is_some());
+        stranded.set_enabled(false).expect("disabling is allowed");
+        assert_eq!(stranded.status, RuleStatus::Disabled);
+        let rows = remap_rows(&lineage, &from, &to, &[stranded], similarity(0.8), &state());
+        assert_eq!(rows[0].stale_rules.len(), 1);
         // A lower threshold carries Chatter over too.
         let lenient = remap_rows(&lineage, &from, &to, &[], similarity(0.7), &state());
         assert!(lenient.iter().all(|row| row.to.is_some()));

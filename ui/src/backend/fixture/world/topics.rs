@@ -10,6 +10,7 @@ use crosstalk_spec::aggregates::topic::{
     Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion,
 };
 use crosstalk_spec::ids::TopicId;
+use crosstalk_spec::interfaces::l6_analysis::EmbedError;
 use crosstalk_spec::support::{Similarity, Timestamp};
 
 use crate::backend::fixture::clock::{DAY, Mint, ago};
@@ -124,11 +125,19 @@ fn word_hash(word: &str) -> u64 {
     })
 }
 
+/// The longest text, in characters, the fixture's embedder takes: its
+/// model's context. Longer text is `EmbedError::TooLong`.
+pub const QUERY_CONTEXT_CHARS: usize = 1000;
+
 /// The fixture's embedder for query text (semantic query rules): the theme
 /// vectors weighted by how many of the text's words are in each theme's
 /// vocabulary, plus a little of each word's hashed axis. Deterministic for
-/// a seed; fails only when `model` is not the fixture's model shape.
-pub fn embed(model: &EmbeddingModel, seed: u64, query: &str) -> Result<Embedding, GenError> {
+/// a seed. Text longer than [`QUERY_CONTEXT_CHARS`] is `TooLong`; a
+/// `model` that is not the fixture's model shape is `Model`.
+pub fn embed(model: &EmbeddingModel, seed: u64, query: &str) -> Result<Embedding, EmbedError> {
+    if query.chars().count() > QUERY_CONTEXT_CHARS {
+        return Err(EmbedError::TooLong { index: 0 });
+    }
     let words = text::tokens(query);
     let vectors = theme_vectors(seed);
     let dimension = usize::from(DIMENSION);
@@ -146,7 +155,9 @@ pub fn embed(model: &EmbeddingModel, seed: u64, query: &str) -> Result<Embedding
             *slot += HASHED_WEIGHT;
         }
     }
-    embedding(model, sum)
+    embedding(model, sum).map_err(|e| EmbedError::Model {
+        reason: e.to_string(),
+    })
 }
 
 fn terms(themes: &[Theme]) -> Vec<(String, f32)> {
@@ -263,6 +274,12 @@ mod tests {
         assert!(
             embed(&model, 7, "zzz qqq").is_ok(),
             "unrelated text still embeds"
+        );
+        assert!(embed(&model, 7, &"é".repeat(QUERY_CONTEXT_CHARS)).is_ok());
+        assert_eq!(
+            embed(&model, 7, &"x".repeat(QUERY_CONTEXT_CHARS + 1)),
+            Err(EmbedError::TooLong { index: 0 }),
+            "longer than the model's context"
         );
     }
 }

@@ -23,8 +23,8 @@ use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, NOW, START, ago, minus, 
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::alerts::AlertState;
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
+use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictRecorded};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
