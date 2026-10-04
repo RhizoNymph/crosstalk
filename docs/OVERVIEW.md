@@ -134,9 +134,11 @@ Overview:
       transaction retries, and a database-per-test harness gated on
       TEST_DATABASE_URL), crosstalk-memory (in-memory reference stores and
       the model-based harnesses the Postgres stores reuse; L3 to L8 done),
-      crosstalk-sim (deterministic simulation) and crosstalk-testkit
-      (builders, recorded corpus, fake upstreams). Layer crates may depend
-      on store; memory, sim and testkit are their dev-dependencies only.
+      crosstalk-sim (deterministic simulation), crosstalk-testkit
+      (builders, recorded corpus, fake upstreams) and crosstalk-world (the
+      synthetic week the UI and the tests share, seeded through the write
+      traits). Layer crates may depend on store; memory, sim, testkit and
+      world are their dev-dependencies only.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -730,4 +732,33 @@ Features Index:
       - docs/infrastructure.md
     depends_on: [workspace, store, ingress, transport]
     doc: docs/features/deploy.md
+  world:
+    description: >
+      crosstalk-world (crates/world, TestSupport): the UI fixture's
+      synthetic week ported onto the spec's write traits. World::new(seed,
+      at) gives the config a host builds its stores with (operators, sinks,
+      built-in rules, embedding model and embedder, catalog retention,
+      bucket width, correlator timing) and the world's clock;
+      World::seed(&mut stores) declares config's channels, generates the
+      cast, channels, topics and about 5,000 transmissions with their
+      accesses, matches and encoded bodies, assembles every write the
+      pipeline, surface and config would have made as timed steps, and
+      runs them in time order through the write traits (operator actions
+      audited), returning the Scenario handles (agents by fixture key,
+      ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
+      anchor and store implementation; ids are ULIDs minted at their
+      entity's time. Tests seed the memory stores and assert every scenario
+      through the read traits; four channel-semantics tests wait for that
+      port. The feature doc lists the divergences from the UI fixture and
+      the gap list: fixture reads no store or spec trait answers.
+    entry_points:
+      - crates/world/src/lib.rs
+      - crates/world/src/seed.rs
+      - crates/world/src/stores.rs
+      - crates/world/src/generate/mod.rs
+      - crates/world/src/assemble/mod.rs
+      - crates/world/src/run/mod.rs
+      - crates/world/tests/support/mod.rs
+    depends_on: [type_spec, memory, transport, workspace]
+    doc: docs/features/world.md
 ```
