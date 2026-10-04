@@ -67,6 +67,24 @@ macro_rules! suite {
                 no_view_counts_a_transmission_within_one_agent,
                 agent_nodes_carry_labels_and_claims,
             }
+            channels {
+                the_default_list_is_every_channel_in_force,
+                listings_follow_cross_agent_traffic,
+                listings_split_channels_declarations_and_unconfirmed_ones,
+                a_declaration_without_traffic_is_never_active,
+                row_counts_are_the_resources_tally_and_the_graphs_routed_counts,
+                the_window_counts_but_never_filters,
+                resources_page_through_the_channel_in_force,
+                names_resolve_supersession_from_one_batch,
+                policy_histories_hold_every_decision,
+                an_unconfirmed_channel_lists_its_suspected_transmissions,
+                channel_transmissions_are_cross_agent_only,
+                channel_transmissions_need_view,
+                confirmed_only_changes_no_transmission_view,
+                a_merge_hides_the_channel_and_an_unmerge_restores_it,
+                alerts_on_a_hidden_channel_are_not_listed,
+                discovered_channels_raised_an_alert_and_hold_their_resources,
+            }
             series {
                 series_totals_match_the_graph,
                 grouped_series_sum_to_the_graph_and_its_edges,
