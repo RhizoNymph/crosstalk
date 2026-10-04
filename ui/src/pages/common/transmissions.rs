@@ -1,12 +1,19 @@
-//! Transmissions as rows, shared by the analysis pages (topology drawer,
-//! explore results, overview): route in words, channel names and a table.
+//! Transmissions as rows, shared by the analysis pages (explore results and
+//! hits, the evidence page's header): route in words, channel names, rows
+//! from the spec's `TransmissionSummary` and a table.
 
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{ChannelId, TransmissionId};
-use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::summary::{
+    TransmissionPage, TransmissionSelection, TransmissionStateKind, TransmissionSummary,
+};
+use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
+use crosstalk_spec::paging::{PageRequest, TransmissionList};
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::view::{View, component, view};
@@ -21,9 +28,8 @@ use crate::components::{
     data_table, format_bytes, format_time_short, kind_badge, route_badge, short_id,
 };
 use crate::contract::channels::ChannelSummary;
-use crate::contract::graph::{TransmissionStateKind, TransmissionSummary};
-use crate::contract::verdict::Verdict;
 use crate::data::names::{channel_name, locator_name, pattern_name};
+use crate::error::UiError;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
@@ -113,6 +119,23 @@ pub struct Named {
     pub name: String,
 }
 
+/// The rows of `ids` (newest id first), topics under `version`, from one
+/// `transmissions_by_id` call. Ids of no stored transmission are left out.
+/// An empty or oversized selection is refused before the call, as the
+/// surface's checked constructor refuses it.
+pub async fn summaries_by_id(
+    cx: &Cx,
+    caller: &Caller,
+    ids: Vec<TransmissionId>,
+    version: TopicVersionSelector,
+    page: &PageRequest<TransmissionList>,
+) -> Result<TransmissionPage, UiError> {
+    let selection = TransmissionSelection::new(ids).map_err(QueryError::from)?;
+    Ok(backend(cx)
+        .transmissions_by_id(caller, &selection, version, page)
+        .await?)
+}
+
 /// A transmission list row, display-ready.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransmissionRow {
@@ -143,23 +166,21 @@ impl TransmissionRow {
             url: agent_url(id, state),
             name: agents.name(id),
         };
+        let delivery = summary.state.delivery();
         Self {
             id: summary.id,
             url: transmission_url(summary.id, state),
             short: short_id(summary.id.to_ulid()),
-            from: summary.from.map(named),
+            from: delivery.map(|d| named(d.from)),
             to: named(summary.to),
-            route_kind: summary.route_kind,
+            route_kind: RouteKind::from(&summary.route),
             route: route_text(&summary.route, channels),
             route_url: route_channel(&summary.route).map(|c| channel_url(c, state)),
-            state: summary.state,
+            state: summary.state.kind(),
             opened: format_time_short(summary.opened_at),
-            matched_bytes: if summary.matched_bytes == 0 {
-                "—".to_owned()
-            } else {
-                format_bytes(summary.matched_bytes)
-            },
-            verdict: summary.verdict,
+            matched_bytes: delivery
+                .map_or_else(|| "—".to_owned(), |d| format_bytes(d.matched_bytes.get())),
+            verdict: summary.state.verdict(),
         }
     }
 }
@@ -176,7 +197,13 @@ pub async fn rows(
         caller,
         summaries
             .iter()
-            .flat_map(|s| s.from.into_iter().chain(std::iter::once(s.to)))
+            .flat_map(|s| {
+                s.state
+                    .delivery()
+                    .map(|d| d.from)
+                    .into_iter()
+                    .chain(std::iter::once(s.to))
+            })
             .collect::<Vec<_>>(),
     )
     .await;
@@ -241,7 +268,10 @@ pub async fn transmission_table(rows: Vec<TransmissionRow>) -> Result<impl View>
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use crosstalk_spec::ids::AgentId;
+    use crosstalk_spec::interfaces::l8_surface::summary::{Delivery, SummaryState, TopicUnder};
     use crosstalk_spec::observed::message::ToolName;
     use crosstalk_spec::support::Timestamp;
 
@@ -251,15 +281,10 @@ mod tests {
     fn summary(route: Route) -> TransmissionSummary {
         TransmissionSummary {
             id: TransmissionId::from_ulid(9),
-            from: None,
             to: AgentId::from_ulid(2),
-            route_kind: crosstalk_spec::aggregates::edge::RouteKind::from(&route),
             route,
-            state: TransmissionStateKind::Suspected,
             opened_at: Timestamp::from_micros(1_790_985_600_000_000),
-            topic: None,
-            matched_bytes: 0,
-            verdict: None,
+            state: SummaryState::Suspected { verdict: None },
         }
     }
 
@@ -312,5 +337,29 @@ mod tests {
                 .is_some_and(|u| u.starts_with("/channels/"))
         );
         assert_eq!(row.opened, "10-03 00:00");
+        assert_eq!(row.state, TransmissionStateKind::Suspected);
+    }
+
+    #[test]
+    fn confirmed_rows_name_the_sender_bytes_and_verdict() {
+        let names = AgentNames::from_pairs([(AgentId::from_ulid(1), "writer".to_owned())]);
+        let confirmed = TransmissionSummary {
+            state: SummaryState::Classified {
+                delivery: Delivery {
+                    from: AgentId::from_ulid(1),
+                    confirmed_at: Timestamp::from_micros(1_790_985_600_000_000),
+                    matched_bytes: NonZeroU64::new(2048).expect("bytes"),
+                },
+                topic: TopicUnder::Outlier,
+                verdict: Some(Verdict::FalseDetection),
+            },
+            ..summary(Route::Unobserved)
+        };
+        let row = TransmissionRow::new(&confirmed, &names, &ChannelNames::default(), &state());
+        assert_eq!(row.from.map(|f| f.name), Some("writer".to_owned()));
+        assert_eq!(row.matched_bytes, "2.0 KiB");
+        assert_eq!(row.verdict, Some(Verdict::FalseDetection));
+        assert_eq!(row.route_kind, RouteKind::Unobserved);
+        assert_eq!(row.state, TransmissionStateKind::Classified);
     }
 }

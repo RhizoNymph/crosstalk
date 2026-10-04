@@ -1,21 +1,25 @@
 //! `/transmissions/{id}`: why the gateway believes a transmission happened.
 //!
-//! The header (sender → reader, route, state with its data, times, topic
-//! under the current topic version) comes from the transmission list, so it
-//! renders with `View` alone. The matched text, the co-access timeline and
-//! the verdict log come from `transmission(id)`, which needs `Content`;
-//! without it those sections show their structure with the text hidden.
-//! Posting `set-verdict` records a verdict (`Triage` and `Content`).
+//! The header (sender → reader, route, state, times, matched bytes, topic
+//! under the view's topic version) is the transmission's row from
+//! `transmissions_by_id`, so it renders with `View` alone; with `Content`
+//! the state is told with its data from the evidence. The matched text and
+//! the co-access timeline come from `transmission_evidence`, which needs
+//! `Content`; without it those sections say so. The verdict log comes from
+//! `verdicts` (`View`). Posting `set-verdict` records a verdict (`Triage`
+//! and `Content`).
 
 pub mod model;
 pub mod sections;
 pub mod verdict;
 
-use crate::contract::present::Present;
 use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::TransmissionId;
+use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;
@@ -24,8 +28,8 @@ use topcoat::router::{StatusCode, page, path_param};
 use topcoat::view::{View, component, view};
 
 use self::model::{
-    CoAccessView, MatchView, Strength, co_access_views, co_accesses, confirmed_at, judgeable,
-    kind_text, match_views, named, named_agents, state_text, strength, title_id,
+    CoAccessView, MatchView, Strength, co_access_views, judgeable, kind_text, match_views, named,
+    named_agents, state_text, strength, title_id,
 };
 use self::sections::{co_access_section, matches_section};
 use self::verdict::{FormState, VerdictRow, verdict_rows, verdict_section};
@@ -36,8 +40,6 @@ use crate::components::{
     content_hidden, empty_state, error_panel, flash_banner, format_bytes, format_time, href,
     kind_badge, route_badge,
 };
-use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
-use crate::contract::verdict::Verdict;
 use crate::error::UiError;
 use crate::pages::common::action::{
     Failure, done, error_for, fields_for, general_error, perform, require, status_of,
@@ -46,13 +48,14 @@ use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::common::links::channel_url;
 use crate::pages::common::lookup::{agent_names, operator_names};
-use crate::pages::common::transmissions::{Named, channel_names, route_channel, route_text};
+use crate::pages::common::paging::first;
+use crate::pages::common::transmissions::{
+    Named, channel_names, route_channel, route_text, summaries_by_id,
+};
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::view_state;
-use crate::url::scope::{Scope, ViewFilter};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(tx_ulid);
 
@@ -79,7 +82,10 @@ pub enum TopicCell {
     /// Hidden without `Content`, or the label is unknown.
     Hidden,
     Outlier,
-    /// Not classified (yet) under the version.
+    /// Classified, but not under this version: only later versions assign
+    /// it.
+    Unassigned,
+    /// Not classified yet.
     Unclassified,
 }
 
@@ -110,14 +116,34 @@ struct Loaded {
     /// `None` without `Content`.
     matches: Option<Vec<MatchView>>,
     co_access: Option<Vec<CoAccessView>>,
-    verdicts: Option<Vec<VerdictRow>>,
+    /// Newest first.
+    verdicts: Vec<VerdictRow>,
     form: FormState,
 }
 
-/// Every transmission up to a day after the data's end.
-fn all_time(now: Timestamp) -> Option<TimeWindow> {
-    let end = Timestamp::from_micros(now.as_micros().saturating_add(86_400_000_000));
-    TimeWindow::new(Timestamp::from_micros(0), end).ok()
+/// The topic cell for a row's topic under the page's version.
+async fn topic_cell(
+    cx: &Cx,
+    caller: &Caller,
+    topic: Option<TopicUnder>,
+    version: crosstalk_spec::aggregates::topic::TopicModelVersion,
+) -> TopicCell {
+    match topic {
+        None => TopicCell::Unclassified,
+        Some(TopicUnder::Outlier) => TopicCell::Outlier,
+        Some(TopicUnder::Unassigned) => TopicCell::Unassigned,
+        Some(TopicUnder::Topic(_)) if !can(caller, Permission::Content) => TopicCell::Hidden,
+        Some(TopicUnder::Topic(topic)) => match backend(cx).topics(caller, version).await {
+            Ok(topics) => topics
+                .into_iter()
+                .find(|t| t.id == topic)
+                .map_or(TopicCell::Hidden, |t| TopicCell::Label(t.label)),
+            Err(error) => {
+                tracing::warn!(error = ?error, "topic label unavailable");
+                TopicCell::Hidden
+            }
+        },
+    }
 }
 
 async fn load(
@@ -129,114 +155,89 @@ async fn load(
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let content = can(caller, Permission::Content);
-    let version = backend.current_topic_version(caller).await?;
-    let window = all_time(backend.now(caller).await?).ok_or_else(|| {
-        UiError::Query(QueryError::Store {
-            reason: "empty window".to_owned(),
-        })
-    })?;
-    let scope = Scope {
-        window,
-        topic_version: version,
-        filter: ViewFilter::default(),
-    };
-    let listed = backend
-        .transmissions(
-            caller,
-            &scope,
-            &TransmissionSelector::Ids(vec![id]),
-            &crate::pages::common::paging::first(crate::pages::common::paging::PAGE_SIZE),
-        )
-        .await?;
-    let Some(summary) = listed.items().into_iter().find(|s| s.id == id) else {
+    let listed = summaries_by_id(
+        cx,
+        caller,
+        vec![id],
+        TopicVersionSelector::Pinned(state.scope.topic_version),
+        &first(1u16),
+    )
+    .await?;
+    let version = listed.topic_version;
+    let Some(summary) = listed.page.items().iter().find(|s| s.id == id).cloned() else {
         return Ok(None);
     };
     let evidence = if content {
-        backend.transmission(caller, id).await?
+        backend
+            .transmission_evidence(caller, id, ExcerptWindow::DEFAULT)
+            .await?
     } else {
         None
     };
+    let log = backend.verdicts(caller, id).await?;
 
-    let mut agents: Vec<_> = summary.from.into_iter().chain([summary.to]).collect();
+    let delivery = summary.state.delivery().copied();
+    let kind = summary.state.kind();
+    let mut agents: Vec<_> = delivery.map(|d| d.from).into_iter().collect();
+    agents.push(summary.to);
     if let Some(evidence) = &evidence {
-        agents.extend(named_agents(&evidence.matches, &evidence.accesses));
+        agents.extend(named_agents(evidence.matches(), evidence.accesses()));
     }
     let names = agent_names(cx, caller, agents).await;
     let channels = channel_names(cx, caller, route_channel(&summary.route)).await;
-    let topic = match summary.topic {
-        None if matches!(
-            summary.state,
-            TransmissionStateKind::Classified | TransmissionStateKind::Aggregated
-        ) =>
-        {
-            TopicCell::Outlier
-        }
-        None => TopicCell::Unclassified,
-        Some(_) if !content => TopicCell::Hidden,
-        Some(topic) => match backend.topics(caller, version).await {
-            Ok(topics) => topics
-                .into_iter()
-                .find(|t| t.id == topic)
-                .map_or(TopicCell::Hidden, |t| TopicCell::Label(t.label)),
-            Err(error) => {
-                tracing::warn!(error = ?error, "topic label unavailable");
-                TopicCell::Hidden
-            }
-        },
-    };
-    let edge_url = summary.from.map(|from| {
-        let sel = Selection::edge(from, summary.to, &summary.route).encode();
+    let topic = topic_cell(cx, caller, summary.state.topic(), version).await;
+    let edge_url = delivery.map(|d| {
+        let sel = Selection::edge(d.from, summary.to, &summary.route).encode();
         href(crate::pages::topology::PATH, state, &[("sel", &sel)])
     });
     let header = Header {
         short: title_id(id),
         full: id.to_ulid(),
-        from: summary.from.map(|f| named(f, &names, state)),
+        from: delivery.map(|d| named(d.from, &names, state)),
         to: named(summary.to, &names, state),
-        route_kind: summary.route_kind,
+        route_kind: RouteKind::from(&summary.route),
         route: route_text(&summary.route, &channels),
         route_url: route_channel(&summary.route).map(|c| channel_url(c, state)),
-        state: summary.state,
-        strength: strength(summary.state),
+        state: kind,
+        strength: strength(kind),
         state_text: match &evidence {
-            Some(evidence) => state_text(&evidence.transmission.state),
-            None => kind_text(summary.state).to_owned(),
+            Some(evidence) => state_text(&evidence.transmission().state),
+            None => kind_text(kind).to_owned(),
         },
         opened: format_time(summary.opened_at),
-        confirmed: evidence
-            .as_ref()
-            .and_then(|e| confirmed_at(&e.transmission.state))
-            .map(format_time),
-        matched: (summary.matched_bytes > 0).then(|| format_bytes(summary.matched_bytes)),
+        confirmed: delivery.map(|d| format_time(d.confirmed_at)),
+        matched: delivery.map(|d| format_bytes(d.matched_bytes.get())),
         version: version.0,
         topic,
-        verdict: summary.verdict,
+        verdict: summary.state.verdict(),
         edge_url,
     };
     let form = if !(can(caller, Permission::Triage) && content) {
         FormState::Closed("Recording a verdict needs the Triage and Content permissions.")
-    } else if !judgeable(summary.state) {
+    } else if !judgeable(kind) {
         FormState::Closed("Nothing to judge yet: the gateway is still gathering evidence.")
     } else {
         FormState::Open {
             action: href(&transmission_path(id), state, &[]),
         }
     };
-    let (matches, co_access, verdicts) = match evidence {
-        Some(evidence) => {
-            let operators = operator_names(cx, caller).await;
-            (
-                Some(match_views(&evidence.matches, &names, state)),
-                Some(co_access_views(
-                    &co_accesses(&evidence.transmission.state),
-                    &evidence.accesses,
-                    &names,
-                    state,
-                )),
-                Some(verdict_rows(&evidence.verdicts, &operators)),
-            )
+    let (matches, co_access) = match &evidence {
+        Some(evidence) => (
+            Some(match_views(evidence.matches(), &names, state)),
+            Some(co_access_views(
+                &evidence.transmission().state.co_accesses(),
+                evidence.accesses(),
+                &names,
+                state,
+            )),
+        ),
+        None => (None, None),
+    };
+    let verdicts = match &log {
+        Some(log) if !log.records().is_empty() => {
+            verdict_rows(log, &operator_names(cx, caller).await)
         }
-        None => (None, None, None),
+        _ => Vec::new(),
     };
     Ok(Some(Loaded {
         header,
@@ -438,6 +439,7 @@ async fn evidence_header(header: Header) -> Result<impl View> {
                         TopicCell::Label(label) => (label),
                         TopicCell::Hidden => content_hidden(),
                         TopicCell::Outlier => <span class="italic text-zinc-500">"outlier"</span>,
+                        TopicCell::Unassigned => <span class="italic text-zinc-500">"not classified under this version"</span>,
                         TopicCell::Unclassified => <span class="italic text-zinc-500">"not classified"</span>,
                     }
                 </dd>

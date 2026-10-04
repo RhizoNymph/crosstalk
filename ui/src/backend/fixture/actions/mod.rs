@@ -8,6 +8,8 @@ pub mod effects;
 mod rules;
 mod triage;
 
+pub use triage::record_verdict;
+
 use crosstalk_spec::interfaces::l8_surface::Caller;
 
 use crate::backend::Result;

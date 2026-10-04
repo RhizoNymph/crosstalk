@@ -8,7 +8,7 @@ use crosstalk_spec::observed::agent::MergeRequest;
 
 use super::agents::AgentLabel;
 use super::rules::{OperatorRuleStatus, RuleName, UserRuleSpec};
-use super::verdict::Verdict;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::MergeId;
 use crosstalk_spec::ids::SinkId;
 

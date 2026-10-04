@@ -1,6 +1,8 @@
 //! Verdicts, alert triage and dead-letter replay (item 17).
 
-use crosstalk_spec::derived::flow::transmission::TransmissionState;
+use crosstalk_spec::derived::flow::verdict::{
+    TransmissionVerdict, Verdict, VerdictLog, VerdictRecorded,
+};
 use crosstalk_spec::ids::{AlertId, EventId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 
@@ -10,14 +12,14 @@ use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::alerts::AlertState;
-use crate::contract::verdict::{TransmissionVerdict, Verdict};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::effects;
 
-/// Allowed on `Suspected`, `Discarded` and every state holding a
-/// `Confirmed`. A false detection suppresses the transmission's active
-/// alerts (`OperatorRejected`).
+/// Allowed on the states `TransmissionState::judgeable` accepts
+/// (`TransmissionVerdict::new` refuses the others). The verdict already
+/// current appends nothing; an appended false detection suppresses the
+/// transmission's active alerts (`OperatorRejected`).
 pub fn set_verdict(
     world: &World,
     state: &mut State,
@@ -27,29 +29,33 @@ pub fn set_verdict(
     note: Option<String>,
 ) -> Result<ActionOutcome> {
     let record = world.tx(transmission).ok_or(QueryError::NotFound)?;
-    match record.transmission.state {
-        TransmissionState::Suspected { .. }
-        | TransmissionState::Discarded { .. }
-        | TransmissionState::Confirmed(_)
-        | TransmissionState::Classified { .. }
-        | TransmissionState::Aggregated { .. } => {}
-        TransmissionState::Detected | TransmissionState::AwaitingContent { .. } => {
-            return Err(QueryError::Conflict(
-                ConflictKind::TransmissionNotJudgeable { transmission },
-            ));
-        }
-    }
-    state.verdicts.push(TransmissionVerdict {
-        transmission,
-        verdict,
-        by,
-        at: NOW,
-        note,
-    });
-    if verdict == Some(Verdict::FalseDetection) {
+    let entry =
+        TransmissionVerdict::new(&record.transmission, verdict, by, NOW, note).map_err(|_| {
+            QueryError::Conflict(ConflictKind::TransmissionNotJudgeable { transmission })
+        })?;
+    if record_verdict(state, entry)? != VerdictRecorded::Unchanged
+        && verdict == Some(Verdict::FalseDetection)
+    {
         effects::reject_transmission_alerts(state, transmission, NOW);
     }
     Ok(ActionOutcome::Applied)
+}
+
+/// Appends `entry` to its transmission's log ([`VerdictLog::record`]); a
+/// log is stored once it holds a record.
+pub fn record_verdict(state: &mut State, entry: TransmissionVerdict) -> Result<VerdictRecorded> {
+    let id = entry.transmission();
+    let mut log = state
+        .verdicts
+        .remove(&id)
+        .unwrap_or_else(|| VerdictLog::new(id));
+    let recorded = log.record(entry).map_err(|e| QueryError::Store {
+        reason: format!("verdict log of {id:?}: {e:?}"),
+    });
+    if log.revision().is_some() {
+        state.verdicts.insert(id, log);
+    }
+    recorded
 }
 
 pub fn acknowledge(state: &mut State, by: OperatorId, id: AlertId) -> Result<ActionOutcome> {

@@ -14,14 +14,13 @@ use crosstalk_spec::support::{NonEmpty, Similarity};
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
-use super::{caller, collect, first, fresh, graph_of, node_ids, researcher, scope_with, week};
+use super::{caller, first, fresh, graph_of, node_ids, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
 use crate::contract::agents::AgentState;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::graph::TransmissionSelector;
 use crate::contract::rules::{
     BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
     UserRuleSpec,
@@ -473,11 +472,7 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
             ..Default::default()
         },
     );
-    let rows = collect(500, async |p| {
-        b.transmissions(&c, &on_wiki, &TransmissionSelector::All, &p)
-            .await
-    })
-    .await;
+    let rows = super::reads_support::rows_in(&b, &on_wiki).await;
     assert_eq!(rows.len() as u64, before);
     assert!(rows.iter().all(|t| t.route == Route::Channel(new)));
     let view = graph_of(&b, &c, &week(), Weighting::Transmissions)

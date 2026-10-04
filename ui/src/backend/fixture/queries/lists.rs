@@ -6,14 +6,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::derived::provenance::matching::MatchKind;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
-use crate::backend::fixture::world::confirmed;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
 use crate::contract::alerts::Alert;
@@ -21,10 +19,8 @@ use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
 use crate::contract::research::{
-    Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
-    QualityRow,
+    Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction,
 };
-use crate::contract::verdict::Verdict;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::MergeId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -239,68 +235,6 @@ pub fn alerts(
         .map(|a| (newest_first(a.raised_at, a.id.as_ulid()), a.clone()))
         .collect();
     page::paginate("alerts", page::digest(filter), items, page)
-}
-
-fn match_kind_name(kind: &MatchKind) -> MatchKindName {
-    match kind {
-        MatchKind::Exact => MatchKindName::Exact,
-        MatchKind::Normalized => MatchKindName::Normalized,
-        MatchKind::Decoded(_) => MatchKindName::Decoded,
-        MatchKind::Semantic(_) => MatchKindName::Semantic,
-    }
-}
-
-/// Labelled and unlabelled confirmed transmissions in `window`, per route
-/// kind and match kind. A transmission with several match kinds counts once
-/// under each.
-pub fn quality(ctx: &Ctx, window: TimeWindow) -> Vec<QualityRow> {
-    let route_order = |r| match r {
-        crosstalk_spec::aggregates::edge::RouteKind::Channel => 0u8,
-        crosstalk_spec::aggregates::edge::RouteKind::Delegation => 1,
-        crosstalk_spec::aggregates::edge::RouteKind::Direct => 2,
-        crosstalk_spec::aggregates::edge::RouteKind::Unobserved => 3,
-    };
-    let kind_order = |k| match k {
-        MatchKindName::Exact => 0u8,
-        MatchKindName::Normalized => 1,
-        MatchKindName::Decoded => 2,
-        MatchKindName::Semantic => 3,
-    };
-    let mut rows: BTreeMap<(u8, u8), QualityRow> = BTreeMap::new();
-    for record in &ctx.world.transmissions {
-        let t = &record.transmission;
-        if !window.contains(t.opened_at) {
-            continue;
-        }
-        let Some(c) = confirmed(&t.state) else {
-            continue;
-        };
-        let route = crosstalk_spec::aggregates::edge::RouteKind::from(&t.route);
-        let mut kinds: Vec<MatchKindName> = c
-            .content()
-            .iter()
-            .map(|m| match_kind_name(m.kind()))
-            .collect();
-        kinds.sort_by_key(|k| kind_order(*k));
-        kinds.dedup();
-        for kind in kinds {
-            let row = rows
-                .entry((route_order(route), kind_order(kind)))
-                .or_insert(QualityRow {
-                    route,
-                    match_kind: kind,
-                    genuine: 0,
-                    false_detection: 0,
-                    unlabeled: 0,
-                });
-            match ctx.verdict(t.id) {
-                Some(Verdict::Genuine) => row.genuine += 1,
-                Some(Verdict::FalseDetection) => row.false_detection += 1,
-                None => row.unlabeled += 1,
-            }
-        }
-    }
-    rows.into_values().collect()
 }
 
 /// Every entity an audit entry concerns: its subject, the agents of a merge

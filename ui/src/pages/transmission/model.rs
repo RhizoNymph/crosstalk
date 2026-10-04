@@ -1,15 +1,17 @@
 //! The evidence page's view models: the transmission's state in words, its
-//! matches with their kind, carrier and excerpts, and its co-accesses.
+//! matches with their kind, carrier and excerpts (or the note that content
+//! retention dropped a body), and its co-accesses.
 
 use crosstalk_spec::derived::flow::evidence::CoAccess;
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::{Confirmed, TransmissionState};
 use crosstalk_spec::derived::provenance::matching::{Carrier, Codec, MatchKind};
 use crosstalk_spec::ids::AgentId;
+use crosstalk_spec::interfaces::l8_surface::evidence::{AccessDetail, MatchEvidence};
+use crosstalk_spec::interfaces::l8_surface::excerpt::{Excerpt, Excerpted};
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 
 use crate::components::{format_bytes, format_duration, format_time, short_id};
-use crate::contract::evidence::{AccessDetail, Excerpt, MatchEvidence};
-use crate::contract::graph::TransmissionStateKind;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::lookup::AgentNames;
 use crate::pages::common::transmissions::Named;
@@ -124,29 +126,6 @@ pub fn kind_text(kind: TransmissionStateKind) -> &'static str {
     }
 }
 
-/// When the transmission was confirmed, if it was.
-pub fn confirmed_at(state: &TransmissionState) -> Option<crosstalk_spec::support::Timestamp> {
-    match state {
-        TransmissionState::Confirmed(c)
-        | TransmissionState::Classified { confirmed: c, .. }
-        | TransmissionState::Aggregated { confirmed: c, .. } => Some(c.at()),
-        _ => None,
-    }
-}
-
-/// The co-access records a state carries.
-pub fn co_accesses(state: &TransmissionState) -> Vec<CoAccess> {
-    match state {
-        TransmissionState::Detected => Vec::new(),
-        TransmissionState::AwaitingContent { co_access, .. } => vec![*co_access],
-        TransmissionState::Suspected { co_access, .. }
-        | TransmissionState::Discarded { co_access, .. } => co_access.iter().copied().collect(),
-        TransmissionState::Confirmed(c)
-        | TransmissionState::Classified { confirmed: c, .. }
-        | TransmissionState::Aggregated { confirmed: c, .. } => c.co_access().to_vec(),
-    }
-}
-
 pub fn codec_name(codec: Codec) -> &'static str {
     match codec {
         Codec::Base64 => "base64",
@@ -193,21 +172,40 @@ pub struct ExcerptView {
     pub after: String,
     pub elided_before: Option<String>,
     pub elided_after: Option<String>,
+    /// The part of a long matched range not shown.
+    pub highlight_cut: Option<String>,
 }
 
-fn elided(bytes: u32) -> Option<String> {
-    (bytes > 0).then(|| format!("{} not shown", format_bytes(u64::from(bytes))))
+fn elided(bytes: u64) -> Option<String> {
+    (bytes > 0).then(|| format!("{} not shown", format_bytes(bytes)))
 }
 
 impl ExcerptView {
     pub fn new(excerpt: &Excerpt) -> Self {
-        let (before, after) = excerpt.elided();
         Self {
             before: excerpt.before().to_owned(),
             matched: excerpt.matched().to_owned(),
             after: excerpt.after().to_owned(),
-            elided_before: elided(before),
-            elided_after: elided(after),
+            elided_before: elided(excerpt.elided_before()),
+            elided_after: elided(excerpt.elided_after()),
+            highlight_cut: elided(excerpt.highlight_cut()),
+        }
+    }
+}
+
+/// One side of a match: its excerpt, or the note that content retention
+/// dropped the body it was cut from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuoteView {
+    Shown(ExcerptView),
+    BodyDropped,
+}
+
+impl QuoteView {
+    pub fn new(excerpted: &Excerpted) -> Self {
+        match excerpted {
+            Excerpted::Shown(excerpt) => Self::Shown(ExcerptView::new(excerpt)),
+            Excerpted::BodyDropped { .. } => Self::BodyDropped,
         }
     }
 }
@@ -219,8 +217,8 @@ pub struct MatchView {
     pub carrier: String,
     pub matched: String,
     pub sender: Named,
-    pub origin: ExcerptView,
-    pub read: ExcerptView,
+    pub origin: QuoteView,
+    pub read: QuoteView,
 }
 
 pub fn match_views(
@@ -232,15 +230,15 @@ pub fn match_views(
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let sender = m.content_match.origin_agent();
+            let content = m.content_match();
             MatchView {
                 number: i + 1,
-                kind: kind_label(m.content_match.kind()),
-                carrier: carrier_label(m.content_match.carrier()),
-                matched: format_bytes(u64::from(m.content_match.matched_bytes().get())),
-                sender: named(sender, names, state),
-                origin: ExcerptView::new(&m.origin),
-                read: ExcerptView::new(&m.read),
+                kind: kind_label(content.kind()),
+                carrier: carrier_label(content.carrier()),
+                matched: format_bytes(u64::from(content.matched_bytes().get())),
+                sender: named(content.origin_agent(), names, state),
+                origin: QuoteView::new(m.origin()),
+                read: QuoteView::new(m.read()),
             }
         })
         .collect()
@@ -277,11 +275,11 @@ fn side(
 ) -> Option<AccessSide> {
     accesses
         .iter()
-        .find(|a| a.access.id == id)
+        .find(|a| a.access().id == id)
         .map(|a| AccessSide {
-            agent: named(a.access.agent, names, state),
-            at: format_time(a.access.at),
-            resource: Some(a.resource.locator.clone()),
+            agent: named(a.agent(), names, state),
+            at: format_time(a.access().at),
+            resource: Some(a.resource().locator.clone()),
         })
 }
 
@@ -302,12 +300,12 @@ pub fn co_access_views(
 }
 
 /// The agents an evidence page names: matches' senders and every access's
-/// agent.
+/// canonical agent.
 pub fn named_agents(matches: &[MatchEvidence], accesses: &[AccessDetail]) -> Vec<AgentId> {
     matches
         .iter()
-        .map(|m| m.content_match.origin_agent())
-        .chain(accesses.iter().map(|a| a.access.agent))
+        .map(|m| m.content_match().origin_agent())
+        .chain(accesses.iter().map(AccessDetail::agent))
         .collect()
 }
 
@@ -350,7 +348,7 @@ mod tests {
 
     #[test]
     fn excerpts_split_around_the_highlight() {
-        let excerpt = Excerpt::new("say hello world".into(), 4..9, (12, 0)).expect("excerpt");
+        let excerpt = Excerpt::new("say hello world".into(), 4..9, 12, 0, 0).expect("excerpt");
         let view = ExcerptView::new(&excerpt);
         assert_eq!(
             (
@@ -362,6 +360,24 @@ mod tests {
         );
         assert_eq!(view.elided_before.as_deref(), Some("12 B not shown"));
         assert_eq!(view.elided_after, None);
+        assert_eq!(view.highlight_cut, None);
+    }
+
+    #[test]
+    fn a_dropped_body_is_a_note_not_text() {
+        use crosstalk_spec::ids::MessageHash;
+        use crosstalk_spec::support::Blake3;
+
+        let dropped = Excerpted::BodyDropped {
+            message: MessageHash::from_digest(Blake3::from_bytes([1; 32])),
+        };
+        assert_eq!(QuoteView::new(&dropped), QuoteView::BodyDropped);
+        let cut = Excerpt::new("abcdef".into(), 2..6, 0, 0, 4000).expect("excerpt");
+        let QuoteView::Shown(view) = QuoteView::new(&Excerpted::Shown(cut)) else {
+            panic!("shown");
+        };
+        assert_eq!(view.highlight_cut.as_deref(), Some("3.9 KiB not shown"));
+        assert_eq!(view.after, "");
     }
 
     #[test]
@@ -384,8 +400,8 @@ mod tests {
 
     #[test]
     fn detected_states_have_no_co_access_or_confirmation() {
-        assert!(co_accesses(&TransmissionState::Detected).is_empty());
-        assert_eq!(confirmed_at(&TransmissionState::Detected), None);
+        assert!(TransmissionState::Detected.co_accesses().is_empty());
+        assert!(TransmissionState::Detected.confirmed().is_none());
         let _ = Timestamp::from_micros(0);
     }
 }

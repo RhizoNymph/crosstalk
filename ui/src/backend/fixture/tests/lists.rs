@@ -1,11 +1,15 @@
-//! List, detail and content reads: pagination, permissions, selectors,
-//! evidence, search, topics, projections and determinism.
+//! List, detail and content reads: pagination, permissions, topics,
+//! projections, list filters and determinism. Transmission reads are in
+//! `transmissions`.
 
 use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permission};
 
 use super::super::clock::{DAY, ago};
@@ -14,9 +18,7 @@ use super::{caller, collect, day, first, graph_of, researcher, shared, week, win
 use crate::backend::Backend;
 use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
-use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
 use crate::contract::research::{AuditFilter, AuditSubject};
-use crate::contract::search::SearchMode;
 use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
@@ -28,15 +30,25 @@ async fn pagination_covers_every_item_exactly_once() {
     let c = researcher();
     let scope = week();
     let everything = all_transmissions(&scope).await;
+    let every_id = TransmissionSelection::new(
+        b.world
+            .transmissions
+            .iter()
+            .map(|t| t.transmission.id)
+            .collect(),
+    )
+    .expect("selection");
+    let v2 = TopicVersionSelector::Pinned(TopicModelVersion(2));
     let paged = collect(97, async |p| {
-        b.transmissions(&c, &scope, &TransmissionSelector::All, &p)
+        b.transmissions_by_id(&c, &every_id, v2, &p)
             .await
+            .map(|rows| rows.page)
     })
     .await;
     assert_eq!(paged, everything);
     assert!(
-        paged.windows(2).all(|w| w[0].opened_at >= w[1].opened_at),
-        "newest first"
+        paged.windows(2).all(|w| w[0].id > w[1].id),
+        "newest id first"
     );
     let ids: HashSet<_> = paged.iter().map(|t| t.id).collect();
     assert_eq!(ids.len(), paged.len());
@@ -57,7 +69,7 @@ async fn pagination_covers_every_item_exactly_once() {
     let channels = collect(4, async |p| b.channels(&c, &filter, &p).await).await;
     assert_eq!(channels.len(), 15);
     let request = search("the", SearchMode::Text);
-    let hits = collect(400, async |p| b.search(&c, &request, &scope, &p).await).await;
+    let hits = collect(400, async |p| search_in(b, &c, &request, &scope, &p).await).await;
     let unique: HashSet<_> = hits.iter().map(|h| h.transmission).collect();
     assert_eq!(unique.len(), hits.len());
     assert!(
@@ -85,7 +97,14 @@ async fn content_needs_the_content_permission() {
         .id;
     assert_eq!(b.transmission(&view, tx).await.err(), forbidden);
     assert_eq!(
-        b.search(
+        b.transmission_evidence(&view, tx, ExcerptWindow::DEFAULT)
+            .await
+            .err(),
+        forbidden
+    );
+    assert_eq!(
+        search_in(
+            b,
             &view,
             &search("deploy", SearchMode::Text),
             &week(),
@@ -112,11 +131,13 @@ async fn content_needs_the_content_permission() {
             .await
             .is_ok()
     );
+    let one = TransmissionSelection::new(vec![tx]).expect("selection");
     assert!(
-        b.transmissions(&view, &week(), &TransmissionSelector::All, &first(5))
+        b.transmissions_by_id(&view, &one, TopicVersionSelector::Current, &first(5))
             .await
             .is_ok()
     );
+    assert!(b.verdicts(&view, tx).await.is_ok(), "verdicts need View");
     assert_eq!(
         b.dead_letters(&view, &first(5)).await.err(),
         Some(QueryError::Forbidden {
@@ -133,138 +154,19 @@ async fn content_needs_the_content_permission() {
         })
     );
     assert!(b.transmission(&content_only, tx).await.is_ok());
-}
-
-#[tokio::test]
-async fn edge_and_id_selectors() {
-    let b = shared();
-    let c = researcher();
-    let scope = week();
-    let view = graph_of(b, &c, &scope, Weighting::Transmissions)
+    assert_eq!(
+        b.transmissions_by_id(
+            &content_only,
+            &one,
+            TopicVersionSelector::Current,
+            &first(5)
+        )
         .await
-        .expect("topology");
-    let edge = view
-        .value
-        .edges
-        .iter()
-        .max_by_key(|e| e.stats.transmissions)
-        .expect("edge");
-    let selector = TransmissionSelector::Edge {
-        from: edge.from,
-        to: edge.to,
-        route: edge.route.clone(),
-    };
-    let rows = b
-        .transmissions(&c, &scope, &selector, &first(BIG))
-        .await
-        .expect("edge rows")
-        .into_parts()
-        .0;
-    assert_eq!(rows.len() as u64, edge.stats.transmissions.get());
-    assert!(
-        rows.iter()
-            .all(|t| t.from == Some(edge.from) && t.to == edge.to && t.route == edge.route)
+        .err(),
+        Some(QueryError::Forbidden {
+            missing: Permission::View
+        })
     );
-    let ids: Vec<_> = rows.iter().take(5).map(|t| t.id).collect();
-    let picked = b
-        .transmissions(
-            &c,
-            &scope,
-            &TransmissionSelector::Ids(ids.clone()),
-            &first(BIG),
-        )
-        .await
-        .expect("ids")
-        .into_parts()
-        .0;
-    let got: HashSet<_> = picked.iter().map(|t| t.id).collect();
-    assert_eq!(got, ids.into_iter().collect());
-}
-
-#[tokio::test]
-async fn evidence_carries_excerpts_accesses_and_verdicts() {
-    let b = shared();
-    let c = researcher();
-    let record = b
-        .world
-        .transmissions
-        .iter()
-        .find(|t| t.is_confirmed() && matches!(t.transmission.route, Route::Channel(_)))
-        .expect("channel transmission");
-    let evidence = b
-        .transmission(&c, record.transmission.id)
-        .await
-        .expect("ok")
-        .expect("found");
-    assert!(!evidence.matches.is_empty());
-    for m in &evidence.matches {
-        assert!(!m.origin.matched().is_empty() && !m.read.matched().is_empty());
-    }
-    assert_eq!(evidence.accesses.len(), 2, "the write and the read");
-    let judged = b
-        .state
-        .read()
-        .await
-        .verdicts
-        .first()
-        .expect("verdict")
-        .transmission;
-    let judged = b
-        .transmission(&c, judged)
-        .await
-        .expect("ok")
-        .expect("found");
-    assert!(!judged.verdicts.is_empty());
-    let unknown = crosstalk_spec::ids::TransmissionId::from_ulid(1);
-    assert_eq!(b.transmission(&c, unknown).await, Ok(None));
-}
-
-#[tokio::test]
-async fn text_search_is_a_case_insensitive_substring() {
-    let b = shared();
-    let c = researcher();
-    let lower = collect(100, async |p| {
-        b.search(&c, &search("rollback", SearchMode::Text), &week(), &p)
-            .await
-    })
-    .await;
-    let upper = collect(100, async |p| {
-        b.search(&c, &search("ROLLBACK", SearchMode::Text), &week(), &p)
-            .await
-    })
-    .await;
-    assert!(!lower.is_empty());
-    assert_eq!(lower, upper);
-    for hit in &lower {
-        let record = b.world.tx(hit.transmission).expect("record");
-        let found = record.texts.iter().any(|t| {
-            [&t.origin, &t.read].iter().any(|e| {
-                format!("{}{}{}", e.before(), e.matched(), e.after())
-                    .to_lowercase()
-                    .contains("rollback")
-            })
-        });
-        assert!(found);
-        assert!(
-            hit.snippet.to_lowercase().contains("rollback"),
-            "{}",
-            hit.snippet
-        );
-    }
-    let semantic = b
-        .search(
-            &c,
-            &search("api key token", SearchMode::Semantic),
-            &week(),
-            &first(10),
-        )
-        .await
-        .expect("semantic")
-        .into_parts()
-        .0;
-    assert!(!semantic.is_empty());
-    let top = b.world.tx(semantic[0].transmission).expect("record");
-    assert_eq!(top.theme, super::super::text::Theme::Credentials);
 }
 
 #[tokio::test]
@@ -274,14 +176,7 @@ async fn topic_stats_count_confirmed_transmissions_per_topic() {
     let confirmed = all_transmissions(&week())
         .await
         .into_iter()
-        .filter(|t| {
-            matches!(
-                t.state,
-                TransmissionStateKind::Confirmed
-                    | TransmissionStateKind::Classified
-                    | TransmissionStateKind::Aggregated
-            )
-        })
+        .filter(|t| t.state.delivery().is_some())
         .count() as u64;
     let stats = b.topic_stats(&c, &week(), n(7)).await.expect("stats");
     assert_eq!(stats.len(), 11, "ten topics and the outliers");
@@ -491,19 +386,6 @@ async fn audit_filter_by_operator_subject_and_window() {
 }
 
 #[tokio::test]
-async fn detection_quality_counts_each_confirmed_transmission() {
-    let b = shared();
-    let rows = b
-        .detection_quality(&researcher(), week().window)
-        .await
-        .expect("quality");
-    assert!(rows.iter().any(|r| r.genuine > 0));
-    assert!(rows.iter().any(|r| r.false_detection > 0));
-    let kinds: HashSet<_> = rows.iter().map(|r| format!("{:?}", r.match_kind)).collect();
-    assert_eq!(kinds.len(), 4);
-}
-
-#[tokio::test]
 async fn same_seed_same_answers() {
     let (a, b) = (super::fresh(), super::fresh());
     let c = researcher();
@@ -512,14 +394,16 @@ async fn same_seed_same_answers() {
         graph_of(&b, &c, &day(), Weighting::MatchedBytes).await
     );
     assert_eq!(
-        a.search(
+        search_in(
+            &a,
             &c,
             &search("agents", SearchMode::Hybrid),
             &week(),
             &first(50)
         )
         .await,
-        b.search(
+        search_in(
+            &b,
             &c,
             &search("agents", SearchMode::Hybrid),
             &week(),
@@ -627,7 +511,7 @@ async fn agents_filter_by_state_claims_text_and_parent() {
     use crosstalk_spec::observed::client::HarnessFamily;
 
     use crate::contract::agents::{AgentListFilter, AgentStateKind};
-    use crate::contract::search::SearchText;
+    use crosstalk_spec::support::NonBlank;
 
     let b = shared();
     let c = researcher();
@@ -662,7 +546,7 @@ async fn agents_filter_by_state_claims_text_and_parent() {
             .any(|s| s.claim.family == HarnessFamily::ClaudeCode)
     }));
     let scraper = list(AgentListFilter {
-        text: SearchText::new("PI-SCRAPER").ok(),
+        text: NonBlank::new("PI-SCRAPER").ok(),
         ..AgentListFilter::default()
     })
     .await;

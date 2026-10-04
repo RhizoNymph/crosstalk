@@ -13,14 +13,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
 use crosstalk_spec::aggregates::filter::{
-    AccessSubject, FalseDetections, FilterSubject, TopologyFilter,
+    AccessSubject, FalseDetections, FilterSubject, TopicVersionSelector, TopologyFilter,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::{
     CompletedFit, FitRecord, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus,
 };
-use crosstalk_spec::aliases::{Aliases, Resolve};
+use crosstalk_spec::aliases::Aliases;
 use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::interfaces::l7_topology::EdgeQueryError;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -29,7 +30,6 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crate::backend::Result;
 use crate::backend::fixture::world::{TxRecord, World, confirmed};
 use crate::contract::topics;
-use crate::contract::verdict::Verdict;
 
 use super::Ctx;
 
@@ -118,6 +118,34 @@ pub fn resolve_version(world: &World, filter: &TopologyFilter) -> Result<TopicMo
     .map_err(QueryError::from)
 }
 
+/// The version `selector` resolves to, as a linked view resolves it (no
+/// topics to check): what `transmissions_by_id` reads topics under.
+pub fn resolve_selector(
+    world: &World,
+    selector: TopicVersionSelector,
+) -> Result<TopicModelVersion> {
+    resolve_version(
+        world,
+        &TopologyFilter {
+            topic_version: selector,
+            ..TopologyFilter::default()
+        },
+    )
+}
+
+/// The version a traversal's cursor pinned on its first page: still
+/// readable, or `VersionNotRetained` once retention dropped it. A version
+/// the catalog never had came from a cursor the fixture did not issue.
+pub fn pinned_version(world: &World, version: TopicModelVersion) -> Result<TopicModelVersion> {
+    if !world.topics.versions.iter().any(|v| v.version == version) {
+        return Err(QueryError::InvalidCursor);
+    }
+    if !world.topics.retains(version) {
+        return Err(QueryError::VersionNotRetained { version });
+    }
+    Ok(version)
+}
+
 /// A confirmed transmission as a graph counts it: resolved, in the window,
 /// not a self-edge.
 #[derive(Debug, Clone)]
@@ -137,10 +165,11 @@ pub struct Counted<'a> {
     pub false_detection: bool,
 }
 
-/// One linked view's window, filter and resolved version.
+/// One linked view's window (`None`: all time, as search may ask), filter
+/// and resolved version.
 pub struct Linked<'a> {
     pub ctx: &'a Ctx<'a>,
-    pub window: TimeWindow,
+    window: Option<TimeWindow>,
     pub filter: &'a TopologyFilter,
     pub version: TopicModelVersion,
 }
@@ -148,7 +177,22 @@ pub struct Linked<'a> {
 impl<'a> Linked<'a> {
     /// Resolves the filter's version once, for the whole view.
     pub fn new(ctx: &'a Ctx<'a>, window: TimeWindow, filter: &'a TopologyFilter) -> Result<Self> {
-        let version = resolve_version(ctx.world, filter)?;
+        Self::paged(ctx, Some(window), filter, None)
+    }
+
+    /// One page of a traversal: the first page resolves the filter's
+    /// version; a later one reads under the version its cursor `pinned`
+    /// ([`pinned_version`]), whatever is active now.
+    pub fn paged(
+        ctx: &'a Ctx<'a>,
+        window: Option<TimeWindow>,
+        filter: &'a TopologyFilter,
+        pinned: Option<TopicModelVersion>,
+    ) -> Result<Self> {
+        let version = match pinned {
+            Some(version) => pinned_version(ctx.world, version)?,
+            None => resolve_version(ctx.world, filter)?,
+        };
         Ok(Self {
             ctx,
             window,
@@ -157,28 +201,32 @@ impl<'a> Linked<'a> {
         })
     }
 
+    /// Whether `at` is in the view's window.
+    pub fn in_window(&self, at: Timestamp) -> bool {
+        self.window.is_none_or(|window| window.contains(at))
+    }
+
     /// Merges and supersessions as of this read.
     pub fn aliases(&self) -> impl Aliases + Copy + '_ {
-        let ctx = self.ctx;
-        Resolve {
-            agents: move |id| ctx.agent(id),
-            channels: move |id| ctx.channel(id),
-        }
+        self.ctx.aliases()
     }
 
     /// `record` as the graph sees it, before the filter: `None` unless it is
     /// confirmed in the window and not a self-edge after resolution.
     fn candidate(&self, record: &'a TxRecord) -> Option<Counted<'a>> {
+        self.resolved(record)
+            .filter(|counted| counted.from != counted.to)
+    }
+
+    /// `record` resolved, when it is confirmed in the window.
+    fn resolved(&self, record: &'a TxRecord) -> Option<Counted<'a>> {
         let confirmation = confirmed(&record.transmission.state)?;
         let at = confirmation.at();
-        if !self.window.contains(at) {
+        if !self.in_window(at) {
             return None;
         }
         let from = self.ctx.agent(confirmation.from());
         let to = self.ctx.agent(record.transmission.to);
-        if from == to {
-            return None;
-        }
         Some(Counted {
             record,
             from,
@@ -210,6 +258,19 @@ impl<'a> Linked<'a> {
             .transmissions
             .iter()
             .filter_map(|record| self.candidate(record))
+            .filter(|counted| self.admits(counted))
+            .collect()
+    }
+
+    /// Every confirmed transmission in the window the filter admits, self-edges
+    /// included (a graph drops them; search and projections do not), oldest
+    /// record first.
+    pub fn admitted(&self) -> Vec<Counted<'a>> {
+        self.ctx
+            .world
+            .transmissions
+            .iter()
+            .filter_map(|record| self.resolved(record))
             .filter(|counted| self.admits(counted))
             .collect()
     }

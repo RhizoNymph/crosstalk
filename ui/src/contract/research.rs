@@ -190,25 +190,6 @@ impl ProjectionPoints {
     }
 }
 
-/// Labelled and unlabelled detections per route and match kind (item 10).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QualityRow {
-    pub route: RouteKind,
-    pub match_kind: MatchKindName,
-    pub genuine: u64,
-    pub false_detection: u64,
-    pub unlabeled: u64,
-}
-
-/// A `MatchKind` without its payload, for grouping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MatchKindName {
-    Exact,
-    Normalized,
-    Decoded,
-    Semantic,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportDataset {
     Transmissions,

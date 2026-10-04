@@ -1,8 +1,10 @@
 //! Content matches with the text behind them: the sender's paragraph, and
 //! the reader's copy of its key sentence as it arrived (exact, re-cased,
-//! encoded or paraphrased).
+//! encoded or paraphrased), each stored as a message body with the span
+//! and match locations pointing into it.
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use crosstalk_spec::derived::provenance::matching::{Carrier, Codec, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::SpanLocation;
@@ -13,13 +15,18 @@ use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty, Similarity, Timestamp
 use crate::backend::fixture::clock::Mint;
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::{self, Theme, codec};
-use crate::contract::evidence::Excerpt;
 
+use super::blobs::{Holder, StoredBody};
 use super::{GenError, MatchText};
 
 pub struct BuiltMatch {
     pub content: ContentMatch,
     pub text: MatchText,
+    /// The sender's originated span: where L4 recorded it, and the body it
+    /// indexes.
+    pub origin: (SpanLocation, StoredBody),
+    /// The body the reader's copy arrived in (`ContentMatch::read_at`).
+    pub read: StoredBody,
 }
 
 /// The codec chains decoded matches use, in application order.
@@ -48,6 +55,20 @@ pub fn pick_kind(rng: &mut Rng) -> Result<MatchKind, GenError> {
         }
         _ => MatchKind::Exact,
     })
+}
+
+/// The part of the sender's reply holding a span, derived from the span id
+/// so the origin draws nothing from the generator.
+fn origin_part(span: SpanId) -> PartRef {
+    let raw = span.as_ulid().to_be_bytes();
+    let mut bytes = [0u8; 32];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = raw[i % raw.len()] ^ 0x5a;
+    }
+    PartRef {
+        message: MessageHash::from_digest(Blake3::from_bytes(bytes)),
+        index: u16::try_from(span.as_ulid() % 3).unwrap_or(0),
+    }
 }
 
 pub fn part(rng: &mut Rng) -> PartRef {
@@ -100,12 +121,13 @@ pub fn build(
     let key = paragraph.key_text().to_owned();
     let origin_before = len_u32(rng.below(1500) as usize, "elided")?;
     let origin_after = len_u32(rng.below(800) as usize, "elided")?;
-    let origin = Excerpt::new(
-        paragraph.text.clone(),
-        paragraph.key.clone(),
-        (origin_before, origin_after),
+    let key_at = paragraph.key.start;
+    let origin_range = ByteRange::new(
+        origin_before + len_u32(paragraph.key.start, "range")?,
+        origin_before + len_u32(paragraph.key.end, "range")?,
     )
-    .map_err(|e| GenError::invalid("Excerpt (origin)", e))?;
+    .map_err(|e| GenError::invalid("ByteRange (origin)", e))?;
+    let origin_text: Arc<str> = Arc::from(paragraph.text);
 
     let body = match &kind {
         MatchKind::Exact => key.clone(),
@@ -118,12 +140,8 @@ pub fn build(
     let read_text = format!("{prefix}{body}{suffix}");
     let highlight = prefix.len()..prefix.len() + body.len();
     let before = len_u32(rng.below(4000) as usize, "elided")?;
-    let read = Excerpt::new(
-        read_text,
-        highlight.clone(),
-        (before, len_u32(rng.below(600) as usize, "elided")?),
-    )
-    .map_err(|e| GenError::invalid("Excerpt (read)", e))?;
+    let after = len_u32(rng.below(600) as usize, "elided")?;
+    let read_text: Arc<str> = Arc::from(read_text);
 
     let start = before + len_u32(highlight.start, "range")?;
     let end = before + len_u32(highlight.end, "range")?;
@@ -135,13 +153,23 @@ pub fn build(
     };
     let matched =
         NonZeroU32::new(matched).ok_or_else(|| GenError::Missing("matched bytes".to_owned()))?;
+    let span = SpanId::from_ulid(mint.ulid(at));
+    let origin_at = origin_part(span);
+    let read_at = part(rng);
+    let read = StoredBody {
+        holder: Holder::of(&carrier),
+        part: read_at.index,
+        before,
+        core: Arc::clone(&read_text),
+        after,
+    };
     let content = ContentMatch::new(
-        SpanId::from_ulid(mint.ulid(at)),
+        span,
         from,
         to,
         exchange,
         SpanLocation {
-            part: part(rng),
+            part: read_at,
             range,
         },
         carrier,
@@ -149,8 +177,27 @@ pub fn build(
         matched,
     )
     .map_err(|e| GenError::invalid("ContentMatch", e))?;
+    let origin = StoredBody {
+        holder: Holder::Assistant,
+        part: origin_at.index,
+        before: origin_before,
+        core: Arc::clone(&origin_text),
+        after: origin_after,
+    };
     Ok(BuiltMatch {
         content,
-        text: MatchText { origin, read },
+        text: MatchText {
+            origin: origin_text,
+            key_at,
+            read: read_text,
+        },
+        origin: (
+            SpanLocation {
+                part: origin_at,
+                range: origin_range,
+            },
+            origin,
+        ),
+        read,
     })
 }

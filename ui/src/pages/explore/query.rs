@@ -11,11 +11,12 @@
 use topcoat::router::query_params;
 
 use super::lasso::ProjectionSelection;
-use crate::contract::search::{SearchMode, SearchText};
 use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
+use crosstalk_spec::support::NonBlank;
 
 #[query_params]
 pub struct RawExploreQuery {
@@ -70,6 +71,9 @@ impl ColorBy {
 
 pub const MODES: [SearchMode; 3] = [SearchMode::Hybrid, SearchMode::Text, SearchMode::Semantic];
 
+/// The mode without an `m` key.
+pub const DEFAULT_MODE: SearchMode = SearchMode::Hybrid;
+
 pub fn mode_code(mode: SearchMode) -> &'static str {
     match mode {
         SearchMode::Text => "text",
@@ -89,15 +93,28 @@ pub fn mode_label(mode: SearchMode) -> &'static str {
 /// Search text longer than this is rejected.
 pub const MAX_QUERY_CHARS: usize = 500;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExploreQuery {
-    pub text: Option<SearchText>,
+    pub text: Option<NonBlank>,
     pub mode: SearchMode,
     pub projection: Option<ProjectionId>,
     pub color: ColorBy,
     pub selection: ProjectionSelection,
     /// The selection's text as it came, for the signal.
     pub selection_text: String,
+}
+
+impl Default for ExploreQuery {
+    fn default() -> Self {
+        Self {
+            text: None,
+            mode: DEFAULT_MODE,
+            projection: None,
+            color: ColorBy::default(),
+            selection: ProjectionSelection::default(),
+            selection_text: String::new(),
+        }
+    }
 }
 
 impl ExploreQuery {
@@ -109,11 +126,11 @@ impl ExploreQuery {
                     format!("longer than {MAX_QUERY_CHARS} characters"),
                 ));
             }
-            Some(q) => SearchText::new(q).ok(),
+            Some(q) => NonBlank::new(q).ok(),
             None => None,
         };
         let mode = match raw.m.as_deref() {
-            None => SearchMode::default(),
+            None => DEFAULT_MODE,
             Some(m) => MODES
                 .into_iter()
                 .find(|mode| mode_code(*mode) == m)
@@ -158,7 +175,7 @@ impl ExploreQuery {
             ),
             (
                 "m",
-                if self.mode == SearchMode::default() {
+                if self.mode == DEFAULT_MODE {
                     String::new()
                 } else {
                     mode_code(self.mode).to_owned()
@@ -207,10 +224,7 @@ mod tests {
             ps: Some("lasso:0,0;1,0;1,1".into()),
         };
         let query = ExploreQuery::parse(&full).expect("parse");
-        assert_eq!(
-            query.text.as_ref().map(SearchText::as_str),
-            Some("api keys")
-        );
+        assert_eq!(query.text.as_ref().map(NonBlank::as_str), Some("api keys"));
         assert_eq!(query.mode, SearchMode::Semantic);
         assert_eq!(query.color, ColorBy::Route);
         assert!(matches!(query.selection, ProjectionSelection::Lasso(_)));

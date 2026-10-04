@@ -1,5 +1,7 @@
 //! State badges: a short label coloured by what it means to the operator.
 
+use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 use crosstalk_spec::interfaces::l8_surface::{AlertStateKind, PolicyKind};
 use crosstalk_spec::observed::agent::Strength;
 use topcoat::Result;
@@ -7,8 +9,6 @@ use topcoat::view::{View, component, view};
 
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind};
-use crate::contract::graph::TransmissionStateKind;
-use crate::contract::verdict::Verdict;
 
 /// What a badge's colour says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

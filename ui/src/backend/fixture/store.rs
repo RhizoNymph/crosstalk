@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use crosstalk_spec::derived::flow::channel::Channel;
-use crosstalk_spec::ids::{AgentId, ChannelId};
+use crosstalk_spec::derived::flow::verdict::VerdictLog;
+use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
@@ -14,7 +15,6 @@ use crate::contract::alerts::Alert;
 use crate::contract::channels::Supersession;
 use crate::contract::research::{AuditEntry, ProjectionPoints};
 use crate::contract::rules::RuleDef;
-use crate::contract::verdict::TransmissionVerdict;
 use crosstalk_spec::ids::ProjectionId;
 
 use super::clock::Mint;
@@ -40,8 +40,9 @@ pub struct State {
     pub merges: Vec<MergeRecord>,
     pub vetoes: Vec<MergeVeto>,
     pub channels: BTreeMap<ChannelId, ChannelRecord>,
-    /// Append-only, oldest first.
-    pub verdicts: Vec<TransmissionVerdict>,
+    /// Each judged transmission's append-only log. A transmission never
+    /// judged has no entry: its log is empty.
+    pub verdicts: BTreeMap<TransmissionId, VerdictLog>,
     pub alerts: Vec<Alert>,
     pub rules: Vec<RuleDef>,
     /// Append-only, oldest first.
@@ -58,7 +59,7 @@ impl State {
             merges: Vec::new(),
             vetoes: Vec::new(),
             channels: channels.into_iter().map(|r| (r.channel.id, r)).collect(),
-            verdicts: Vec::new(),
+            verdicts: BTreeMap::new(),
             alerts: Vec::new(),
             rules: Vec::new(),
             audit: Vec::new(),

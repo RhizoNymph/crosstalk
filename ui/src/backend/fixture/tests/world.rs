@@ -16,7 +16,7 @@ use super::super::FixtureBackend;
 use super::super::clock::{CORRELATION_WINDOW, NOW, START};
 use super::super::world::{co_accesses, confirmed};
 use super::{SEED, shared};
-use crate::contract::graph::TransmissionStateKind;
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 
 fn state_of(b: &FixtureBackend) -> tokio::sync::RwLockReadGuard<'_, super::super::store::State> {
     b.state.blocking_read()
@@ -115,7 +115,7 @@ fn every_transmission_state_is_present() {
     let kinds: HashSet<TransmissionStateKind> = w
         .transmissions
         .iter()
-        .map(|t| super::super::queries::transmissions::state_kind(&t.transmission.state))
+        .map(|t| TransmissionStateKind::of(&t.transmission.state))
         .collect();
     for kind in [
         TransmissionStateKind::Detected,
@@ -231,12 +231,19 @@ fn confirmed_transmissions_have_text_and_assignments() {
                 assert_eq!(record.assignments.len(), 3);
                 assert_eq!(record.assignments[0], Assignment::Outlier, "v0 is unfitted");
                 for (m, text) in c.content().iter().zip(&record.texts) {
-                    assert!(!text.origin.matched().is_empty());
-                    assert_eq!(
-                        text.read.matched().len() as u32,
-                        m.read_at().range.len().get(),
-                        "read range covers the highlight"
-                    );
+                    // The span and the match locate their text in the
+                    // stored bodies, as the evidence page cuts it.
+                    let origin = w.blobs.span(m.origin()).expect("span recorded");
+                    for (at, core) in [(origin, &text.origin), (m.read_at(), &text.read)] {
+                        let Some(body) = w.blobs.body(at.part.message) else {
+                            continue;
+                        };
+                        let part = body.part_text(at.part.index).expect("part text");
+                        let range = at.range.start() as usize..at.range.end() as usize;
+                        let located = part.get(range).expect("range in part");
+                        assert!(core.contains(located), "the location is in the text");
+                    }
+                    assert!(text.read.len() as u32 >= m.read_at().range.len().get());
                 }
             }
             None => {
@@ -270,9 +277,15 @@ fn decoded_matches_show_encoded_text() {
     let w = &shared().world;
     let found = w.transmissions.iter().any(|t| {
         confirmed(&t.transmission.state).is_some_and(|c| {
-            c.content().iter().zip(&t.texts).any(|(m, text)| {
+            c.content().iter().any(|m| {
+                let at = m.read_at();
+                let matched = w.blobs.body(at.part.message).and_then(|body| {
+                    let part = body.part_text(at.part.index).ok()?;
+                    part.get(at.range.start() as usize..at.range.end() as usize)
+                        .map(str::to_owned)
+                });
                 matches!(m.kind(), MatchKind::Decoded(chain) if chain.iter().copied().collect::<Vec<_>>() == vec![Codec::Base64, Codec::UrlEncoding])
-                    && text.read.matched().contains("%3D")
+                    && matched.is_some_and(|text| text.contains("%3D"))
             })
         })
     });

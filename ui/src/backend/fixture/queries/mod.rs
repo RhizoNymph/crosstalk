@@ -5,6 +5,7 @@
 //! same way within one response.
 
 pub mod content;
+pub mod evidence;
 pub mod graph;
 pub mod linked;
 pub mod lists;
@@ -13,6 +14,7 @@ pub mod nodes;
 pub mod page;
 pub mod promotion;
 pub mod scope;
+pub mod search;
 pub mod series;
 pub mod summaries;
 pub mod transmissions;
@@ -20,12 +22,13 @@ pub mod transmissions;
 use std::collections::{BTreeMap, HashMap};
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aliases::{Aliases, Resolve};
 use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 
 use crate::backend::Result;
-use crate::contract::verdict::Verdict;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::store::State;
@@ -81,14 +84,10 @@ impl<'a> Ctx<'a> {
             .keys()
             .map(|id| (*id, state.canonical_channel(*id)))
             .collect();
-        // The log is oldest first, so the last entry per transmission wins.
-        let mut latest: HashMap<TransmissionId, Option<Verdict>> = HashMap::new();
-        for entry in &state.verdicts {
-            latest.insert(entry.transmission, entry.verdict);
-        }
-        let verdicts = latest
-            .into_iter()
-            .filter_map(|(id, v)| v.map(|v| (id, v)))
+        let verdicts = state
+            .verdicts
+            .iter()
+            .filter_map(|(id, log)| log.current().map(|v| (*id, v)))
             .collect();
         Self {
             world,
@@ -106,6 +105,14 @@ impl<'a> Ctx<'a> {
 
     pub fn channel(&self, id: ChannelId) -> ChannelId {
         self.channels.get(&id).copied().unwrap_or(id)
+    }
+
+    /// Merges and supersessions as of this read.
+    pub fn aliases(&self) -> impl Aliases + Copy + '_ {
+        Resolve {
+            agents: move |id| self.agent(id),
+            channels: move |id| self.channel(id),
+        }
     }
 
     /// The route with its channel resolved through supersession.
@@ -140,7 +147,7 @@ impl<'a> Ctx<'a> {
             .collect()
     }
 
-    /// The verdict in force on a transmission.
+    /// The verdict in force on a transmission (`VerdictLog::current`).
     pub fn verdict(&self, id: TransmissionId) -> Option<Verdict> {
         self.verdicts.get(&id).copied()
     }

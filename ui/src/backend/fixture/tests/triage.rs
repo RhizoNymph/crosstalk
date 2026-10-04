@@ -12,11 +12,11 @@ use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
 use crate::contract::alerts::{AlertState, SuppressReason};
-use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditOutcome, AuditedAction};
-use crate::contract::verdict::Verdict;
 use crate::url::scope::ViewFilter;
-use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
@@ -215,13 +215,31 @@ async fn verdicts_judge_only_what_has_evidence() {
             ..Default::default()
         },
     );
-    let ids = TransmissionSelector::Ids(vec![tx]);
+    // The verdict already in force appends nothing.
+    let records = |b: &super::super::FixtureBackend| {
+        let state = b.state.try_read().expect("unlocked");
+        state.verdicts.get(&tx).map_or(0, |log| log.records().len())
+    };
+    let before = records(&b);
+    assert_eq!(b.act(&c, verdict.clone()).await, Ok(ActionOutcome::Applied));
+    assert_eq!(records(&b), before);
+    let one = TransmissionSelection::new(vec![tx]).expect("selection");
+    let row = b
+        .transmissions_by_id(&c, &one, TopicVersionSelector::Current, &first(5))
+        .await
+        .expect("rows")
+        .page
+        .into_parts()
+        .0;
+    assert_eq!(
+        row.first().and_then(|t| t.state.verdict()),
+        Some(Verdict::FalseDetection)
+    );
     assert!(
-        b.transmissions(&c, &excluded, &ids, &first(5))
+        super::reads_support::rows_in(&b, &excluded)
             .await
-            .expect("rows")
-            .items()
-            .is_empty()
+            .iter()
+            .all(|t| t.id != tx)
     );
     // Withdrawing it puts the transmission back.
     b.act(
@@ -234,14 +252,20 @@ async fn verdicts_judge_only_what_has_evidence() {
     )
     .await
     .expect("withdraw");
-    let rows = b
-        .transmissions(&c, &excluded, &ids, &first(5))
+    let rows: Vec<_> = super::reads_support::rows_in(&b, &excluded)
         .await
-        .expect("rows")
-        .into_parts()
-        .0;
+        .into_iter()
+        .filter(|t| t.id == tx)
+        .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].verdict, None);
+    assert_eq!(rows[0].state.verdict(), None);
+    let log = b.verdicts(&c, tx).await.expect("ok").expect("found");
+    assert_eq!(log.current(), None);
+    assert_eq!(
+        log.records().len(),
+        before + 1,
+        "the withdrawal is appended"
+    );
     // Judging needs Content as well as Triage.
     let triage = caller(&[Permission::View, Permission::Triage]);
     assert_eq!(

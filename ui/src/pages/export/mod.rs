@@ -68,7 +68,7 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
         Ok(()) => backend
             .detection_quality(&caller, state.scope.window)
             .await
-            .map(|rows| quality_lines(&rows))
+            .map(|quality| quality_lines(quality.rows()))
             .map_err(UiError::from),
         Err(error) => Err(error.clone()),
     };

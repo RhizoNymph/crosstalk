@@ -6,28 +6,31 @@
 
 use std::num::NonZeroU32;
 
-use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, WeightedEdge, Weighting};
+use crosstalk_spec::aggregates::edge::{
+    EdgeSelector, EdgeTransmission, RouteKind, TopologyGraph, WeightedEdge, Weighting,
+};
 use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::ids::{AgentId, ChannelId};
+use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
 use crosstalk_spec::observed::client::HarnessClaim;
 use topcoat::context::Cx;
 
 use crate::app::backend;
 use crate::backend::Backend;
-use crate::components::{agent_name, format_bytes, format_share, format_time, href};
+use crate::components::{
+    agent_name, format_bytes, format_share, format_time, format_time_short, href,
+};
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
-use crate::contract::graph::TransmissionSelector;
 use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
-use crate::pages::common::links::{agent_url, channel_url};
+use crate::pages::common::links::{agent_url, channel_url, transmission_url};
 use crate::pages::common::lookup::{AgentNames, agent_names};
 use crate::pages::common::paging::{Count, parse_cursor};
 use crate::pages::common::transmissions::summary_name;
 use crate::pages::common::transmissions::{
-    ChannelNames, Named, TransmissionRow, channel_names, route_channel, route_text, rows,
+    ChannelNames, Named, channel_names, route_channel, route_text,
 };
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
@@ -56,6 +59,29 @@ pub struct EdgeItem {
     pub transmissions: u64,
 }
 
+/// One transmission the edge counts. Its sender, reader and route are the
+/// edge's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeRow {
+    pub id: TransmissionId,
+    /// The evidence page.
+    pub url: String,
+    /// `Confirmed::at`.
+    pub confirmed: String,
+    pub matched: String,
+}
+
+impl EdgeRow {
+    pub fn new(row: &EdgeTransmission, state: &ViewState) -> Self {
+        Self {
+            id: row.transmission,
+            url: transmission_url(row.transmission, state),
+            confirmed: format_time_short(row.confirmed_at),
+            matched: format_bytes(row.matched_bytes.get()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EdgeStatsView {
     pub transmissions: u64,
@@ -74,7 +100,7 @@ pub struct EdgePanel {
     pub route_url: Option<String>,
     /// `None` when the edge carries nothing under the current filter.
     pub stats: Option<EdgeStatsView>,
-    pub rows: Vec<TransmissionRow>,
+    pub rows: Vec<EdgeRow>,
     pub next: Option<String>,
     pub paged: bool,
     /// The topology filtered to the edge's two agents.
@@ -249,14 +275,19 @@ pub async fn load(
                 after: cursor.clone(),
                 size: crate::pages::common::paging::size(DRAWER_PAGE.items()),
             };
-            let selector = TransmissionSelector::Edge {
-                from,
-                to,
-                route: route.clone(),
-            };
+            let selector = EdgeSelector::new(from, to, route.clone())
+                .map_err(|_| invalid("sel", "an edge joins two different agents"))?;
             let listed = backend
-                .transmissions(caller, &state.scope, &selector, &page)
-                .await?;
+                .edge_transmissions(
+                    caller,
+                    &selector,
+                    state.scope.window,
+                    &state.scope.topology_filter(),
+                    &page,
+                )
+                .await?
+                .value
+                .page;
             let names = agent_names(cx, caller, vec![from, to]).await;
             let channels = channel_names(cx, caller, route_channel(&route)).await;
             let stats = view
@@ -282,7 +313,11 @@ pub async fn load(
                 route: route_text(&route, &channels),
                 route_url: route_channel(&route).map(|c| channel_url(c, &state)),
                 stats,
-                rows: rows(cx, caller, listed.items(), &state).await,
+                rows: listed
+                    .items()
+                    .iter()
+                    .map(|row| EdgeRow::new(row, &state))
+                    .collect(),
                 next: listed.next().map(|c| c.token().to_owned()),
                 paged: cursor.is_some(),
                 focus_url: focus_url(&state, vec![from, to], Vec::new(), sel),

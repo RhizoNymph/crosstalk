@@ -8,6 +8,7 @@ mod lists;
 mod reads_support;
 mod scenarios;
 mod series;
+mod transmissions;
 mod triage;
 mod world;
 

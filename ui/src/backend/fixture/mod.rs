@@ -26,15 +26,25 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::access::BipartiteGraph;
-use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::edge::{
+    EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
+};
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
+use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
-use crosstalk_spec::interfaces::l6_analysis::SearchHit;
+use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
+use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchRequest;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
+use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
@@ -46,23 +56,19 @@ use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
-use crate::contract::evidence::TransmissionEvidence;
-use crate::contract::graph::{TransmissionSelector, TransmissionSummary};
 use crate::contract::present::Present;
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
-    QualityRow,
 };
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
 use crate::url::scope::Scope;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest, SearchList,
-    TransmissionList,
+    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
+    PageRequest, SearchList, TransmissionList,
 };
 
 use queries::{Ctx, require};
@@ -110,6 +116,20 @@ impl FixtureBackend {
     #[cfg(test)]
     pub fn scenario(&self) -> &world::Scenario {
         &self.world.scenario
+    }
+
+    /// Every transmission id the world holds, newest id first, for tests
+    /// that page through them with `transmissions_by_id`.
+    #[cfg(test)]
+    pub fn transmission_ids(&self) -> Vec<TransmissionId> {
+        let mut ids: Vec<TransmissionId> = self
+            .world
+            .transmissions
+            .iter()
+            .map(|t| t.transmission.id)
+            .collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
     }
 
     /// Runs a read under the state's read lock.
@@ -193,15 +213,28 @@ impl Backend for FixtureBackend {
             .await
     }
 
-    async fn transmissions(
+    async fn edge_transmissions(
         &self,
         caller: &Caller,
-        scope: &Scope,
-        selector: &TransmissionSelector,
-        page: &PageRequest<TransmissionList>,
-    ) -> Result<Page<TransmissionSummary, TransmissionList>> {
+        edge: &EdgeSelector,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        page: &PageRequest<EdgeTransmissionList>,
+    ) -> Result<Watermarked<EdgeTransmissionPage>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::transmissions::list(ctx, scope, selector, page))
+        self.read(|ctx| queries::transmissions::edge(ctx, edge, window, filter, page))
+            .await
+    }
+
+    async fn transmissions_by_id(
+        &self,
+        caller: &Caller,
+        selection: &TransmissionSelection,
+        version: TopicVersionSelector,
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<TransmissionPage> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::transmissions::by_id(ctx, selection, version, page))
             .await
     }
 
@@ -209,9 +242,30 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         id: TransmissionId,
+    ) -> Result<Option<Transmission>> {
+        require(caller, Permission::Content)?;
+        self.read(|ctx| Ok(queries::evidence::transmission(ctx, id)))
+            .await
+    }
+
+    async fn transmission_evidence(
+        &self,
+        caller: &Caller,
+        id: TransmissionId,
+        window: ExcerptWindow,
     ) -> Result<Option<TransmissionEvidence>> {
         require(caller, Permission::Content)?;
-        self.read(|ctx| Ok(queries::transmissions::evidence(ctx, id)))
+        self.read(|ctx| queries::evidence::evidence(ctx, id, window))
+            .await
+    }
+
+    async fn verdicts(
+        &self,
+        caller: &Caller,
+        transmission: TransmissionId,
+    ) -> Result<Option<VerdictLog>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::evidence::verdicts(ctx, transmission)))
             .await
     }
 
@@ -219,11 +273,12 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         request: &SearchRequest,
-        scope: &Scope,
+        window: Option<TimeWindow>,
+        filter: &TopologyFilter,
         page: &PageRequest<SearchList>,
-    ) -> Result<Page<SearchHit, SearchList>> {
+    ) -> Result<SearchResults> {
         require(caller, Permission::Content)?;
-        self.read(|ctx| queries::transmissions::search(ctx, request, scope, page))
+        self.read(|ctx| queries::search::search(ctx, request, window, filter, page))
             .await
     }
 
@@ -404,9 +459,9 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         window: TimeWindow,
-    ) -> Result<Vec<QualityRow>> {
+    ) -> Result<DetectionQuality> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::lists::quality(ctx, window)))
+        self.read(|ctx| Ok(queries::transmissions::quality(ctx, window)))
             .await
     }
 

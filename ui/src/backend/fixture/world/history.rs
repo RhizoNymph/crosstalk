@@ -24,7 +24,7 @@ use crate::backend::fixture::store::State;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::alerts::AlertState;
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
-use crate::contract::verdict::{TransmissionVerdict, Verdict};
+use crosstalk_spec::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictRecorded};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::channels::{
@@ -358,13 +358,13 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
         }
     }
     for (by, at, transmission, verdict, text) in log {
-        state.verdicts.push(TransmissionVerdict {
-            transmission,
-            verdict,
-            by,
-            at,
-            note: note(text),
-        });
+        let record = world
+            .tx(transmission)
+            .ok_or_else(|| GenError::Missing(format!("judged transmission {transmission:?}")))?;
+        let entry = TransmissionVerdict::new(&record.transmission, verdict, by, at, note(text))
+            .map_err(|e| GenError::invalid("TransmissionVerdict", e))?;
+        let recorded = crate::backend::fixture::actions::record_verdict(state, entry)
+            .map_err(|e| GenError::invalid("VerdictLog", e))?;
         operator_action(
             state,
             at,
@@ -376,11 +376,10 @@ fn verdicts(world: &World, state: &mut State) -> Result<(), GenError> {
             },
             ActionOutcome::Applied,
         );
-        if verdict == Some(Verdict::FalseDetection) {
+        if recorded != VerdictRecorded::Unchanged && verdict == Some(Verdict::FalseDetection) {
             effects::reject_transmission_alerts(state, transmission, at);
         }
     }
-    state.verdicts.sort_by_key(|v| v.at);
     Ok(())
 }
 

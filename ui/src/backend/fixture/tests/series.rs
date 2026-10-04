@@ -20,9 +20,8 @@ use super::super::clock::{MINUTE, NOW, START};
 use super::{caller, collect, day, first, graph_of, researcher, shared, week};
 use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::graph::TransmissionSelector;
-use crate::contract::search::SearchMode;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
 
 use super::reads_support::*;
 
@@ -250,16 +249,43 @@ async fn unknown_topic_versions_are_typed_errors() {
         unknown
     );
     assert_eq!(b.overview(&c, scope.window, &filter).await.err(), unknown);
+    let edge = crosstalk_spec::aggregates::edge::EdgeSelector::new(
+        agent("cc1"),
+        agent("pi1"),
+        crosstalk_spec::derived::flow::transmission::Route::Unobserved,
+    )
+    .expect("edge");
     assert_eq!(
-        b.transmissions(&c, &scope, &TransmissionSelector::All, &first(5))
+        b.edge_transmissions(&c, &edge, scope.window, &filter, &first(5))
             .await
             .err(),
         unknown
     );
+    let any = crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection::new(vec![
+        b.world.transmissions[0].transmission.id,
+    ])
+    .expect("selection");
     assert_eq!(
-        b.search(&c, &search("deploy", SearchMode::Text), &scope, &first(5))
-            .await
-            .err(),
+        b.transmissions_by_id(
+            &c,
+            &any,
+            crosstalk_spec::aggregates::filter::TopicVersionSelector::Pinned(version),
+            &first(5)
+        )
+        .await
+        .err(),
+        unknown
+    );
+    assert_eq!(
+        search_in(
+            b,
+            &c,
+            &search("deploy", SearchMode::Text),
+            &scope,
+            &first(5)
+        )
+        .await
+        .err(),
         unknown
     );
     assert_eq!(b.topic_stats(&c, &scope, n(4)).await.err(), unknown);

@@ -28,7 +28,7 @@ use crate::backend::fixture::text::Theme;
 
 use super::channels::{ChannelKey, ChannelPlan};
 use super::states::{self, Planned, Want, co_accesses, confirmed};
-use super::{Cast, GenError, TopicModel, TxRecord, evidence};
+use super::{Blobs, Cast, GenError, TopicModel, TxRecord, evidence};
 
 const TRANSMISSIONS: usize = 5000;
 const BURST: usize = 50;
@@ -87,6 +87,8 @@ pub struct Traffic {
     pub resource_channel: HashMap<ResourceId, ChannelId>,
     pub accesses: Vec<Access>,
     pub transmissions: Vec<TxRecord>,
+    /// The spans and bodies behind the transmissions' content matches.
+    pub blobs: Blobs,
 }
 
 /// What a channel's detection state is derived from.
@@ -137,6 +139,7 @@ struct Gen<'a> {
     topics: &'a TopicModel,
     accesses: Vec<Access>,
     transmissions: Vec<TxRecord>,
+    blobs: Blobs,
     resource_channel: HashMap<ResourceId, ChannelId>,
 }
 
@@ -155,6 +158,7 @@ pub fn generate(
         topics,
         accesses: Vec::new(),
         transmissions: Vec::new(),
+        blobs: Blobs::default(),
         resource_channel: HashMap::new(),
     };
     for _ in 0..TRANSMISSIONS {
@@ -243,7 +247,13 @@ impl Gen<'_> {
     }
 
     fn push(&mut self, planned: Planned) -> Result<(), GenError> {
-        let record = states::build(&mut self.rng, self.mint, self.topics, planned)?;
+        let record = states::build(
+            &mut self.rng,
+            self.mint,
+            self.topics,
+            &mut self.blobs,
+            planned,
+        )?;
         self.transmissions.push(record);
         Ok(())
     }
@@ -502,6 +512,7 @@ impl Gen<'_> {
             resource_channel: self.resource_channel,
             accesses: self.accesses,
             transmissions: self.transmissions,
+            blobs: self.blobs,
         }
     }
 }

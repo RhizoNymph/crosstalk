@@ -7,8 +7,8 @@ use crate::components::{badge::Badge, short_id};
 use crate::contract::actions::OperatorAction;
 use crate::contract::research::AuditedAction;
 use crate::contract::rules::OperatorRuleStatus;
-use crate::contract::verdict::Verdict;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 
 /// One line saying what the action did. Ids are short; the subject column
 /// links the full entity.

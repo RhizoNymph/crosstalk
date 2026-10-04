@@ -18,7 +18,7 @@ use super::shared;
 use crate::contract::agents::AgentState;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, RuleKind, RuleStatus, StaleReason, UserRule};
-use crate::contract::verdict::Verdict;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 
 fn state_of(b: &FixtureBackend) -> tokio::sync::RwLockReadGuard<'_, super::super::store::State> {
     b.state.blocking_read()
@@ -363,21 +363,19 @@ fn rules_and_sinks() {
 fn verdicts_audit_and_dead_letters() {
     let b = shared();
     let state = state_of(b);
+    let records = || state.verdicts.values().flat_map(|log| log.records());
+    assert!(records().any(|v| v.verdict() == Some(Verdict::Genuine)));
+    assert!(records().any(|v| v.verdict() == Some(Verdict::FalseDetection)));
     assert!(
-        state
-            .verdicts
-            .iter()
-            .any(|v| v.verdict == Some(Verdict::Genuine))
-    );
-    assert!(
-        state
-            .verdicts
-            .iter()
-            .any(|v| v.verdict == Some(Verdict::FalseDetection))
-    );
-    assert!(
-        state.verdicts.iter().any(|v| v.verdict.is_none()),
+        records().any(|v| v.verdict().is_none()),
         "one verdict is withdrawn"
+    );
+    assert!(
+        state
+            .verdicts
+            .iter()
+            .all(|(id, log)| log.transmission() == *id && log.revision().is_some()),
+        "each log is its transmission's, and holds a record"
     );
     let operators: HashSet<_> = state
         .audit

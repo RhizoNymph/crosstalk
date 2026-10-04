@@ -7,6 +7,7 @@
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{Cursor, Page, PageRequest};
 use crosstalk_spec::support::{NonEmpty, Timestamp};
@@ -30,6 +31,31 @@ pub fn digest(request: &impl Debug) -> u64 {
     let mut hasher = DefaultHasher::new();
     format!("{request:?}").hash(&mut hasher);
     hasher.finish()
+}
+
+/// The name of a list whose traversal pins a topic-model version: the
+/// version is part of the name its cursors carry, so a later page reads it
+/// back with [`pinned`] and a cursor of another version does not decode.
+pub fn versioned(list: &str, version: TopicModelVersion) -> String {
+    format!("{list}_v{}", version.0)
+}
+
+/// The version `page`'s cursor pinned for `list`; `None` on a first page.
+/// A cursor of another list is `InvalidCursor`.
+pub fn pinned<L>(list: &str, page: &PageRequest<L>) -> Result<Option<TopicModelVersion>> {
+    let Some(cursor) = &page.after else {
+        return Ok(None);
+    };
+    let (number, _) = cursor
+        .token()
+        .strip_prefix(list)
+        .and_then(|rest| rest.strip_prefix("_v"))
+        .and_then(|rest| rest.split_once('-'))
+        .ok_or(QueryError::InvalidCursor)?;
+    number
+        .parse::<u32>()
+        .map(|n| Some(TopicModelVersion(n)))
+        .map_err(|_| QueryError::InvalidCursor)
 }
 
 fn encode<L>(list: &str, request: u64, key: Key) -> Result<Cursor<L>> {
@@ -158,6 +184,30 @@ mod tests {
         assert_eq!(
             paginate("t", 1, items, &request(Some(junk), 1)).err(),
             Some(QueryError::InvalidCursor)
+        );
+    }
+
+    #[test]
+    fn versioned_cursors_carry_their_version() {
+        let items: Vec<(Key, u32)> = (0..4).map(|i| ((u64::from(i), 0), i)).collect();
+        assert_eq!(pinned("t", &request(None, 1)), Ok(None));
+        let list = versioned("t", TopicModelVersion(7));
+        let issued = paginate(&list, 1, items.clone(), &request(None, 1))
+            .expect("page")
+            .next()
+            .cloned();
+        let next = request(issued, 1);
+        assert_eq!(pinned("t", &next), Ok(Some(TopicModelVersion(7))));
+        assert!(paginate(&list, 1, items.clone(), &next).is_ok());
+        assert_eq!(
+            paginate(&versioned("t", TopicModelVersion(8)), 1, items, &next).err(),
+            Some(QueryError::InvalidCursor)
+        );
+        assert_eq!(pinned("other", &next), Err(QueryError::InvalidCursor));
+        let junk = Cursor::from_token("t_vx-1".to_owned()).expect("token");
+        assert_eq!(
+            pinned("t", &request(Some(junk), 1)),
+            Err(QueryError::InvalidCursor)
         );
     }
 

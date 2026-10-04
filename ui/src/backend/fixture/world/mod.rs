@@ -12,10 +12,12 @@
 
 mod agents;
 mod alerts;
+pub mod blobs;
 mod channels;
 mod drafts;
 mod evidence;
 mod history;
+mod retention;
 mod rules;
 mod states;
 pub mod topics;
@@ -30,7 +32,6 @@ use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TopicId, TransmissionId};
 
 use crate::contract::agents::ClaimSeen;
-use crate::contract::evidence::Excerpt;
 use crate::contract::research::Operator;
 use crate::contract::rules::SinkInfo;
 use crate::contract::topics::{TopicVersionInfo, TopicVersionRemap};
@@ -39,8 +40,12 @@ use super::store::State;
 use super::text::Theme;
 
 pub use agents::Cast;
+pub use blobs::Blobs;
 pub use channels::ChannelKey;
-pub use states::{co_accesses, confirmed};
+pub use retention::BodySide;
+#[cfg(test)]
+pub use states::co_accesses;
+pub use states::confirmed;
 
 #[cfg(test)]
 pub use history::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
@@ -63,11 +68,15 @@ impl GenError {
     }
 }
 
-/// The text behind one content match.
+/// The text behind one content match as the search index holds it: the
+/// sender's paragraph and the reader's copy as it arrived. The bodies the
+/// evidence page cuts excerpts from are in [`Blobs`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchText {
-    pub origin: Excerpt,
-    pub read: Excerpt,
+    pub origin: std::sync::Arc<str>,
+    /// Where the crossing sentence starts in `origin`.
+    pub key_at: usize,
+    pub read: std::sync::Arc<str>,
 }
 
 /// A transmission with what the fixture knows about it beyond the spec
@@ -87,24 +96,14 @@ pub struct TxRecord {
     /// Topic assignment per retained version, indexed by version number.
     /// Empty until confirmed (nothing to embed).
     pub assignments: Vec<Assignment>,
-    /// The full text of each excerpt (origin then read, per match),
-    /// lowercased, for search.
+    /// Each indexed text (origin then read, per match), lowercased, for
+    /// search.
     pub lower: Vec<String>,
 }
 
-/// An excerpt's whole text.
-pub fn excerpt_text(excerpt: &Excerpt) -> String {
-    format!(
-        "{}{}{}",
-        excerpt.before(),
-        excerpt.matched(),
-        excerpt.after()
-    )
-}
-
 impl TxRecord {
-    /// The excerpt texts in the order of `lower`.
-    pub fn excerpt(&self, index: usize) -> Option<&Excerpt> {
+    /// The indexed texts in the order of `lower`.
+    pub fn indexed(&self, index: usize) -> Option<&str> {
         let text = self.texts.get(index / 2)?;
         Some(if index.is_multiple_of(2) {
             &text.origin
@@ -117,8 +116,7 @@ impl TxRecord {
         self.lower = self
             .texts
             .iter()
-            .flat_map(|t| [excerpt_text(&t.origin), excerpt_text(&t.read)])
-            .map(|s| s.to_lowercase())
+            .flat_map(|t| [t.origin.to_lowercase(), t.read.to_lowercase()])
             .collect();
     }
 }
@@ -185,6 +183,9 @@ impl TopicModel {
 pub struct Scenario {
     pub cast: Cast,
     pub channels: HashMap<ChannelKey, ChannelId>,
+    /// Old transmissions whose sender's or reader's bodies content
+    /// retention dropped.
+    pub dropped: Vec<(TransmissionId, BodySide)>,
 }
 
 impl Scenario {
@@ -214,6 +215,8 @@ pub struct World {
     /// Oldest first.
     pub transmissions: Vec<TxRecord>,
     pub tx_index: HashMap<TransmissionId, usize>,
+    /// Span records and the message bodies content retention kept.
+    pub blobs: Blobs,
     /// Harness claims per agent id as recorded (not resolved).
     pub claims: HashMap<AgentId, Vec<ClaimSeen>>,
     /// Last access or transmission per agent id as recorded.
@@ -261,6 +264,7 @@ pub fn empty(seed: u64) -> (World, State) {
         access_transmissions: HashMap::new(),
         transmissions: Vec::new(),
         tx_index: HashMap::new(),
+        blobs: Blobs::default(),
         claims: HashMap::new(),
         last_activity: HashMap::new(),
         topics: TopicModel {
@@ -280,6 +284,7 @@ pub fn empty(seed: u64) -> (World, State) {
         scenario: Scenario {
             cast: Cast::default(),
             channels: HashMap::new(),
+            dropped: Vec::new(),
         },
     };
     let state = State::new(Vec::new(), Vec::new(), super::clock::Mint::new(seed));
@@ -298,6 +303,8 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         record.index_text();
     }
     let channel_records = channels::finish(&plan, &traffic)?;
+    let mut blobs = std::mem::take(&mut traffic.blobs);
+    let dropped = retention::drop_old_bodies(&traffic.transmissions, &mut blobs);
     let mut state = State::new(cast.records.clone(), channel_records, mint);
     state.merges = cast.merges.clone();
     state.vetoes = cast.vetoes.clone();
@@ -313,6 +320,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         access_transmissions: HashMap::new(),
         tx_index: index_by(&traffic.transmissions, |t| t.transmission.id),
         transmissions: traffic.transmissions,
+        blobs,
         claims: HashMap::new(),
         last_activity: HashMap::new(),
         topics: topic_model,
@@ -320,6 +328,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         scenario: Scenario {
             cast: cast.clone(),
             channels: plan.ids(),
+            dropped,
         },
     };
     world.access_transmissions = link_accesses(&world.transmissions);

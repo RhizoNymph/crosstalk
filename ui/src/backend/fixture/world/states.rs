@@ -15,7 +15,7 @@ use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
 
 use super::rules::{WATCH_RULE_AT, WATCHED_THEMES};
-use super::{GenError, TopicModel, TxRecord, evidence, topics};
+use super::{Blobs, GenError, TopicModel, TxRecord, evidence, topics};
 
 /// How long after a read the correlator waits for content evidence.
 pub const CONTENT_WINDOW: u64 = 15 * MINUTE;
@@ -134,6 +134,7 @@ pub fn build(
     rng: &mut Rng,
     mint: &mut Mint,
     topic_model: &TopicModel,
+    blobs: &mut Blobs,
     p: Planned,
 ) -> Result<TxRecord, GenError> {
     let id = TransmissionId::from_ulid(mint.ulid(p.at));
@@ -188,6 +189,10 @@ pub fn build(
                     kind,
                     at,
                 )?;
+                let (origin_at, origin) = built.origin;
+                blobs.record_span(built.content.origin(), origin_at);
+                blobs.store(origin_at.part.message, origin);
+                blobs.store(built.content.read_at().part.message, built.read);
                 record.texts.push(built.text);
                 matches.push(built.content);
             }

@@ -2,7 +2,8 @@
 //! page's selection signal changes.
 //!
 //! For an edge it shows the route, the edge's stats and share, and the
-//! transmissions counted into it (paged with a cursor signal); for an agent
+//! transmissions counted into it (`edge_transmissions`, newest confirmation
+//! first, paged with a cursor signal); for an agent
 //! or a channel a summary card with its heaviest edges; with nothing
 //! selected, the heaviest edges of the view. Edges listed here select
 //! themselves on click, updating the signal (and so the graph's highlight)
@@ -19,13 +20,12 @@ use topcoat::context::Cx;
 use topcoat::runtime::{Signal, shard};
 use topcoat::view::{View, view};
 
-use self::model::{Drawer, EdgeItem, load};
+use self::model::{Drawer, EdgeItem, EdgeRow, load};
 use crate::app::caller;
 use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{
     Tone, claim_badge, empty_state, error_panel, kind_badge, route_badge, state_badge,
 };
-use crate::pages::common::transmissions::TransmissionRow;
 
 const CARD: &str =
     "rounded border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950";
@@ -214,32 +214,25 @@ async fn edge_list(
     })
 }
 
-/// Transmissions as a narrow table: opened, state, bytes, verdict.
+/// The edge's transmissions as a narrow table: when each was confirmed
+/// (linking to its evidence) and its matched bytes.
 #[topcoat::view::component]
-async fn compact_rows(rows: Vec<TransmissionRow>) -> Result<impl View> {
+async fn compact_rows(rows: Vec<EdgeRow>) -> Result<impl View> {
     Ok(view! {
         <table class="w-full border-collapse overflow-hidden rounded border border-zinc-200 text-xs dark:border-zinc-800">
             <thead class="bg-zinc-50 text-left text-[10px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
                 <tr>
-                    <th class="px-2 py-1 font-medium">"Opened"</th>
-                    <th class="px-2 py-1 font-medium">"State"</th>
+                    <th class="px-2 py-1 font-medium">"Confirmed"</th>
                     <th class="px-2 py-1 text-right font-medium">"Matched"</th>
-                    <th class="px-2 py-1 font-medium">"Verdict"</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800">
                 for row in rows {
                     <tr class="hover:bg-zinc-50 dark:hover:bg-zinc-900/60">
                         <td class="whitespace-nowrap px-2 py-1">
-                            <a class=(LINK) href=(row.url)>(row.opened)</a>
+                            <a class=(LINK) href=(row.url)>(row.confirmed)</a>
                         </td>
-                        <td class="px-2 py-1">kind_badge(value: row.state)</td>
-                        <td class="px-2 py-1 text-right tabular-nums">(row.matched_bytes)</td>
-                        <td class="px-2 py-1">
-                            if let Some(verdict) = row.verdict {
-                                kind_badge(value: verdict)
-                            }
-                        </td>
+                        <td class="px-2 py-1 text-right tabular-nums">(row.matched)</td>
                     </tr>
                 }
             </tbody>

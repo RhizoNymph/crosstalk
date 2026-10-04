@@ -195,7 +195,7 @@ fn accesses(linked: &Linked) -> Result<Vec<WeightedAccess>> {
     let topics = linked.channel_topics();
     let mut sums: BTreeMap<(AgentId, ChannelId, u8), (AccessKind, u64)> = BTreeMap::new();
     for access in &ctx.world.accesses {
-        if !linked.window.contains(access.at) {
+        if !linked.in_window(access.at) {
             continue;
         }
         let Some(raw) = ctx.world.resource_channel.get(&access.resource) else {

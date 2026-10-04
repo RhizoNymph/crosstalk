@@ -1,5 +1,7 @@
-//! Detection quality for the window: labelled and unlabelled detections
-//! per route kind and match kind, with precision where verdicts exist.
+//! Detection quality for the window (the spec's `DetectionQuality`): every
+//! judgeable transmission opened in it, per route kind and detector call
+//! (confirmed by its strongest match class, suspected, discarded), by
+//! current verdict, with precision for confirmed evidence.
 
 use topcoat::Result;
 use topcoat::view::{View, component, view};
@@ -7,16 +9,19 @@ use topcoat::view::{View, component, view};
 use crate::components::form::{SECTION, SECTION_TITLE};
 use crate::components::table::{ROW, TD, TD_NUM};
 use crate::components::{data_table, empty_state, error_panel, route_badge};
-use crate::contract::research::{MatchKindName, QualityRow};
 use crate::error::UiError;
 use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::aggregates::quality::{MatchClass, QualityMatch, QualityRow};
 
-pub fn match_kind_name(kind: MatchKindName) -> &'static str {
+/// The detector's call in words.
+pub fn match_kind_name(kind: QualityMatch) -> &'static str {
     match kind {
-        MatchKindName::Exact => "exact",
-        MatchKindName::Normalized => "normalized",
-        MatchKindName::Decoded => "decoded",
-        MatchKindName::Semantic => "semantic",
+        QualityMatch::Content(MatchClass::Exact) => "exact",
+        QualityMatch::Content(MatchClass::Normalized) => "normalized",
+        QualityMatch::Content(MatchClass::Decoded) => "decoded",
+        QualityMatch::Content(MatchClass::Semantic) => "semantic",
+        QualityMatch::Suspected => "suspected (access only)",
+        QualityMatch::Discarded => "discarded",
     }
 }
 
@@ -34,43 +39,53 @@ pub struct QualityLine {
     pub genuine: u64,
     pub false_detection: u64,
     pub unlabeled: u64,
+    /// Over confirmed evidence only: a verdict on a suspected or discarded
+    /// transmission judges a call the detector did not make.
     pub precision: String,
 }
 
-fn line(route: Option<RouteKind>, kind: String, g: u64, f: u64, u: u64) -> QualityLine {
-    QualityLine {
-        route,
-        match_kind: kind,
-        genuine: g,
-        false_detection: f,
-        unlabeled: u,
-        precision: precision(g, f).map_or_else(|| "—".to_owned(), |p| format!("{:.0}%", p * 100.0)),
-    }
+fn percent(precision: Option<f64>) -> String {
+    precision.map_or_else(|| "—".to_owned(), |p| format!("{:.0}%", p * 100.0))
 }
 
-/// One line per row, then the totals.
+fn confirmed(row: &QualityRow) -> bool {
+    matches!(row.match_kind, QualityMatch::Content(_))
+}
+
+/// One line per row, then the totals. Precision is shown for confirmed
+/// rows, and on the totals line over the confirmed rows.
 pub fn quality_lines(rows: &[QualityRow]) -> Vec<QualityLine> {
     let mut lines: Vec<QualityLine> = rows
         .iter()
-        .map(|r| {
-            line(
-                Some(r.route),
-                match_kind_name(r.match_kind).to_owned(),
-                r.genuine,
-                r.false_detection,
-                r.unlabeled,
-            )
+        .map(|r| QualityLine {
+            route: Some(r.route_kind),
+            match_kind: match_kind_name(r.match_kind).to_owned(),
+            genuine: r.genuine,
+            false_detection: r.false_detection,
+            unlabeled: r.unlabeled,
+            precision: percent(
+                confirmed(r)
+                    .then(|| precision(r.genuine, r.false_detection))
+                    .flatten(),
+            ),
         })
         .collect();
     if !rows.is_empty() {
-        let sum = |f: fn(&QualityRow) -> u64| rows.iter().map(f).sum::<u64>();
-        lines.push(line(
-            None,
-            "all".to_owned(),
-            sum(|r| r.genuine),
-            sum(|r| r.false_detection),
-            sum(|r| r.unlabeled),
-        ));
+        let sum = |keep: fn(&QualityRow) -> bool, f: fn(&QualityRow) -> u64| {
+            rows.iter().filter(|r| keep(r)).map(f).sum::<u64>()
+        };
+        let all = |_: &QualityRow| true;
+        lines.push(QualityLine {
+            route: None,
+            match_kind: "all".to_owned(),
+            genuine: sum(all, |r| r.genuine),
+            false_detection: sum(all, |r| r.false_detection),
+            unlabeled: sum(all, |r| r.unlabeled),
+            precision: percent(precision(
+                sum(confirmed, |r| r.genuine),
+                sum(confirmed, |r| r.false_detection),
+            )),
+        });
     }
     lines
 }
@@ -83,12 +98,12 @@ pub async fn quality_section(
     Ok(view! {
         <section class=(format!("{SECTION} max-w-4xl"))>
             <h2 class=(SECTION_TITLE)>"Detection quality in this window"</h2>
-            <p class="mb-2 text-xs text-zinc-500">"Confirmed transmissions by route and match kind. Precision is genuine over labelled; unlabelled detections are not counted against it."</p>
+            <p class="mb-2 text-xs text-zinc-500">"Transmissions opened in this window that the detector made a call on, by route and call: confirmed (by its strongest match), suspected or discarded. Precision is genuine over labelled, for confirmed evidence; unlabelled detections are not counted against it."</p>
             match lines {
                 Err(error) => error_panel(error: &error),
-                Ok(_) if empty => empty_state(message: "No confirmed transmissions in this window."),
+                Ok(_) if empty => empty_state(message: "No judgeable transmissions in this window."),
                 Ok(lines) => data_table(
-                    headers: &["Route", "Match kind", "Genuine", "False detection", "Unlabelled", "Precision"],
+                    headers: &["Route", "Detector call", "Genuine", "False detection", "Unlabelled", "Precision"],
                     for l in lines {
                         <tr class=(if l.route.is_none() { "bg-zinc-50 font-medium dark:bg-zinc-900" } else { ROW })>
                             <td class=(TD)>
@@ -114,6 +129,16 @@ pub async fn quality_section(
 mod tests {
     use super::*;
 
+    fn row(route_kind: RouteKind, match_kind: QualityMatch, g: u64, f: u64, u: u64) -> QualityRow {
+        QualityRow {
+            route_kind,
+            match_kind,
+            genuine: g,
+            false_detection: f,
+            unlabeled: u,
+        }
+    }
+
     #[test]
     fn precision_needs_labels() {
         assert_eq!(precision(0, 0), None);
@@ -123,27 +148,55 @@ mod tests {
     #[test]
     fn lines_end_with_totals() {
         let rows = vec![
-            QualityRow {
-                route: RouteKind::Channel,
-                match_kind: MatchKindName::Decoded,
-                genuine: 3,
-                false_detection: 1,
-                unlabeled: 10,
-            },
-            QualityRow {
-                route: RouteKind::Direct,
-                match_kind: MatchKindName::Exact,
-                genuine: 0,
-                false_detection: 0,
-                unlabeled: 4,
-            },
+            row(
+                RouteKind::Channel,
+                QualityMatch::Content(MatchClass::Decoded),
+                3,
+                1,
+                10,
+            ),
+            row(
+                RouteKind::Direct,
+                QualityMatch::Content(MatchClass::Exact),
+                0,
+                0,
+                4,
+            ),
         ];
         let lines = quality_lines(&rows);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].precision, "75%");
+        assert_eq!(lines[0].match_kind, "decoded");
         assert_eq!(lines[1].precision, "—");
         assert_eq!(lines[2].route, None);
         assert_eq!((lines[2].genuine, lines[2].unlabeled), (3, 14));
         assert!(quality_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn precision_reads_confirmed_rows_only() {
+        let rows = vec![
+            row(
+                RouteKind::Channel,
+                QualityMatch::Content(MatchClass::Exact),
+                1,
+                1,
+                0,
+            ),
+            row(RouteKind::Channel, QualityMatch::Suspected, 0, 5, 2),
+            row(RouteKind::Channel, QualityMatch::Discarded, 4, 0, 1),
+        ];
+        let lines = quality_lines(&rows);
+        assert_eq!(lines[1].match_kind, "suspected (access only)");
+        assert_eq!(
+            (lines[1].precision.as_str(), lines[2].precision.as_str()),
+            ("—", "—")
+        );
+        let total = &lines[3];
+        assert_eq!(
+            (total.genuine, total.false_detection, total.unlabeled),
+            (5, 6, 3)
+        );
+        assert_eq!(total.precision, "50%", "over the confirmed row only");
     }
 }

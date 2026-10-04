@@ -1,10 +1,14 @@
 //! Search: the form and the paged hits, each with its score, snippet,
-//! sender → reader and route, linking to the evidence page.
+//! sender → reader and route, linking to the evidence page. Hits come from
+//! the spec's `search` over the view's window and filter; their rows from
+//! one `transmissions_by_id` call under the version the search resolved.
 
 use std::collections::HashMap;
 
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchRequest;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::view::{View, component, view};
@@ -16,11 +20,9 @@ use crate::components::form::{BUTTON_PRIMARY, INPUT};
 use crate::components::{
     PageLinks, empty_state, error_panel, pagination, route_badge, state_inputs,
 };
-use crate::contract::graph::TransmissionSelector;
-use crate::contract::search::SearchRequest;
 use crate::error::UiError;
 use crate::pages::common::links::transmission_url;
-use crate::pages::common::transmissions::{TransmissionRow, rows};
+use crate::pages::common::transmissions::{TransmissionRow, rows, summaries_by_id};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::paging::{Cursor, PageRequest, SearchList};
@@ -65,27 +67,34 @@ pub async fn load_hits(
         return Ok(None);
     };
     let request = SearchRequest {
-        text: text.clone(),
         mode: query.mode,
+        text: text.clone(),
     };
-    let backend = backend(cx);
-    let found = backend
-        .search(caller, &request, &state.scope, &page)
+    let results = backend(cx)
+        .search(
+            caller,
+            &request,
+            Some(state.scope.window),
+            &state.scope.topology_filter(),
+            &page,
+        )
         .await?;
+    let found = results.page;
     let ids: Vec<TransmissionId> = found.items().iter().map(|h| h.transmission).collect();
     let summaries = if ids.is_empty() {
         Vec::new()
     } else {
-        backend
-            .transmissions(
-                caller,
-                &state.scope,
-                &TransmissionSelector::Ids(ids.clone()),
-                &crate::pages::common::paging::first(page.size.get().get()),
-            )
-            .await?
-            .into_parts()
-            .0
+        summaries_by_id(
+            cx,
+            caller,
+            ids,
+            TopicVersionSelector::Pinned(results.topic_version),
+            &crate::pages::common::paging::first(page.size.get().get()),
+        )
+        .await?
+        .page
+        .into_parts()
+        .0
     };
     let mut by_id: HashMap<TransmissionId, TransmissionRow> = rows(cx, caller, &summaries, state)
         .await

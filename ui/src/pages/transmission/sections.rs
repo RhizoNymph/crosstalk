@@ -1,11 +1,12 @@
 //! The evidence page's sections: matched text side by side and the
 //! co-access timeline. Both need `Content`; without it they render their
-//! structure with the text replaced by the content-hidden marker.
+//! structure with the text replaced by the content-hidden marker. A side
+//! whose body content retention dropped says so instead of showing text.
 
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
-use super::model::{CoAccessView, ExcerptView, MatchView};
+use super::model::{CoAccessView, MatchView, QuoteView};
 use crate::components::form::{LINK, SECTION, SECTION_TITLE};
 use crate::components::{content_hidden, empty_state, locator_text};
 
@@ -18,24 +19,36 @@ const MARK: &str =
 const ELIDED: &str = "select-none italic text-zinc-400";
 
 #[component]
-async fn excerpt(title: &str, who: String, view: ExcerptView) -> Result<impl View> {
+async fn excerpt(title: &str, who: String, quote: QuoteView) -> Result<impl View> {
     Ok(view! {
         <div class=(PANE)>
             <div class=(PANE_HEAD)>
                 <span class="font-semibold uppercase tracking-wide">(title)</span>
                 <span class="truncate">(who)</span>
             </div>
-            <pre class=(TEXT)>
-                if let Some(cut) = view.elided_before {
-                    <span class=(ELIDED)>"[… " (cut) "]\n"</span>
-                }
-                (view.before)
-                <mark class=(MARK)>(view.matched)</mark>
-                (view.after)
-                if let Some(cut) = view.elided_after {
-                    <span class=(ELIDED)>"\n[" (cut) " …]"</span>
-                }
-            </pre>
+            match quote {
+                QuoteView::Shown(view) => {
+                    <pre class=(TEXT)>
+                        if let Some(cut) = view.elided_before {
+                            <span class=(ELIDED)>"[… " (cut) "]\n"</span>
+                        }
+                        (view.before)
+                        <mark class=(MARK)>(view.matched)</mark>
+                        if let Some(cut) = view.highlight_cut {
+                            <span class=(ELIDED)>" [… " (cut) " of the match]"</span>
+                        }
+                        (view.after)
+                        if let Some(cut) = view.elided_after {
+                            <span class=(ELIDED)>"\n[" (cut) " …]"</span>
+                        }
+                    </pre>
+                },
+                QuoteView::BodyDropped => {
+                    <p class="p-2 text-xs italic text-zinc-500" data-body-dropped="true">
+                        "Body dropped: content retention removed this message's text. The match, its location and its size are still recorded."
+                    </p>
+                },
+            }
         </div>
     })
 }
@@ -74,8 +87,8 @@ pub async fn matches_section(matches: Option<Vec<MatchView>>, reader: String) ->
                                     <span class="ml-auto tabular-nums text-zinc-500">(m.matched) " matched"</span>
                                 </div>
                                 <div class="grid gap-3 md:grid-cols-2">
-                                    excerpt(title: "Sender originated", who: m.sender.name, view: m.origin)
-                                    excerpt(title: "Reader read", who: reader.clone(), view: m.read)
+                                    excerpt(title: "Sender originated", who: m.sender.name, quote: m.origin)
+                                    excerpt(title: "Reader read", who: reader.clone(), quote: m.read)
                                 </div>
                             </article>
                         }

@@ -3,12 +3,14 @@
 //!
 //! A point shows that transmission; a lasso is resolved against the stored
 //! projection ([`Polygon::transmissions`]) and lists the transmissions
-//! inside it, paged. Transmissions are read under the projection's own
-//! scope, since that is what its points were sampled from. The shard checks
-//! `View` and `Content` and validates every argument itself.
+//! inside it, paged, from `transmissions_by_id`. Rows are read under the
+//! projection's own topic version, since that is what its points were
+//! sampled under. The shard checks `View` and `Content` and validates every
+//! argument itself.
 
 use std::num::NonZeroU32;
 
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use topcoat::Result;
 use topcoat::context::Cx;
@@ -20,12 +22,13 @@ use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{empty_state, error_panel, kind_badge, route_badge};
-use crate::contract::graph::TransmissionSelector;
 use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::paging::{Count, parse_cursor};
-use crate::pages::common::transmissions::{TransmissionRow, rows, transmission_table};
+use crate::pages::common::transmissions::{
+    TransmissionRow, rows, summaries_by_id, transmission_table,
+};
 use crate::pages::view::state_from_query;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::ProjectionId;
@@ -70,19 +73,20 @@ pub async fn load(
     let id = ProjectionId::parse_ulid(projection).map_err(|e| invalid("p", e))?;
     let backend = backend(cx);
     let points = backend.projection(caller, id).await?;
-    let scope = points.meta().scope.clone();
+    let version = TopicVersionSelector::Pinned(points.meta().scope.topic_version);
     match selection {
         ProjectionSelection::None => Ok(Results::Idle),
         ProjectionSelection::Point(tx) => {
-            let listed = backend
-                .transmissions(
-                    caller,
-                    &scope,
-                    &TransmissionSelector::Ids(vec![tx]),
-                    &crate::pages::common::paging::first(RESULTS_PAGE),
-                )
-                .await?;
-            let row = rows(cx, caller, &listed.items(), &state)
+            let listed = summaries_by_id(
+                cx,
+                caller,
+                vec![tx],
+                version,
+                &crate::pages::common::paging::first(RESULTS_PAGE),
+            )
+            .await?
+            .page;
+            let row = rows(cx, caller, listed.items(), &state)
                 .await
                 .into_iter()
                 .next();
@@ -104,9 +108,7 @@ pub async fn load(
                 after: cursor.clone(),
                 size: crate::pages::common::paging::size(RESULTS_PAGE.items()),
             };
-            let listed = backend
-                .transmissions(caller, &scope, &TransmissionSelector::Ids(ids), &page)
-                .await?;
+            let listed = summaries_by_id(cx, caller, ids, version, &page).await?.page;
             Ok(Results::Lasso {
                 selected,
                 of: points.len(),
@@ -135,7 +137,7 @@ pub async fn projection_results(
             match loaded {
                 Err(error) => error_panel(error: &error),
                 Ok(Results::Idle) => <p class="text-xs text-zinc-500">"Click a point, or shift-drag a lasso around a cluster, to list its transmissions here."</p>,
-                Ok(Results::Point(None)) => empty_state(message: "This transmission is not in the projection's scope any more."),
+                Ok(Results::Point(None)) => empty_state(message: "No stored transmission has this id any more."),
                 Ok(Results::Point(Some(row))) => {
                     <div class="rounded border border-zinc-200 p-3 text-sm dark:border-zinc-800">
                         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">"Selected point"</div>

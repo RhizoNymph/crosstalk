@@ -10,6 +10,9 @@ use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::series::SeriesGrouping;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
+use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, ConflictKind, QueryError};
 
 use super::super::clock::WATERMARK;
@@ -18,8 +21,6 @@ use super::{day, first, graph_of, node_ids, researcher, shared, week};
 use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
 use crate::contract::research::{AuditFilter, ProjectionJob};
-use crate::contract::search::SearchMode;
-use crate::contract::verdict::Verdict;
 use crate::url::scope::{Scope, ViewFilter};
 
 use super::reads_support::*;
@@ -69,15 +70,15 @@ async fn every_method_answers_for_the_day_and_the_week() {
             .expect("overview");
         assert!(overview.value.activity.transmissions > 0);
         assert!(!all_transmissions(&scope).await.is_empty());
-        let hits = b
-            .search(
-                &c,
-                &search("deploy", SearchMode::Hybrid),
-                &scope,
-                &first(20),
-            )
-            .await
-            .expect("search");
+        let hits = search_in(
+            b,
+            &c,
+            &search("deploy", SearchMode::Hybrid),
+            &scope,
+            &first(20),
+        )
+        .await
+        .expect("search");
         assert!(!hits.items().is_empty());
         let stats = b.topic_stats(&c, &scope, n(12)).await.expect("stats");
         assert!(stats.iter().map(|s| s.transmissions).sum::<u64>() > 0);
@@ -94,6 +95,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
             !b.detection_quality(&c, scope.window)
                 .await
                 .expect("quality")
+                .rows()
                 .is_empty()
         );
         let wiki = channel(ChannelKey::HijackedWiki);
@@ -430,7 +432,11 @@ async fn route_and_topic_filters_and_their_conjunction() {
     }))
     .await;
     assert!(!by_route.is_empty());
-    assert!(by_route.iter().all(|t| routes.contains(&t.route_kind)));
+    assert!(
+        by_route
+            .iter()
+            .all(|t| routes.contains(&RouteKind::from(&t.route)))
+    );
 
     let topic = shared()
         .world
@@ -444,7 +450,9 @@ async fn route_and_topic_filters_and_their_conjunction() {
     .await;
     assert!(!by_topic.is_empty());
     assert!(
-        by_topic.iter().all(|t| t.topic == Some(topic)),
+        by_topic
+            .iter()
+            .all(|t| t.state.topic() == Some(TopicUnder::Topic(topic))),
         "outliers never match"
     );
 
@@ -454,10 +462,10 @@ async fn route_and_topic_filters_and_their_conjunction() {
         ..Default::default()
     }))
     .await;
-    assert!(
-        both.iter()
-            .all(|t| t.topic == Some(topic) && routes.contains(&t.route_kind))
-    );
+    assert!(both.iter().all(|t| {
+        t.state.topic() == Some(TopicUnder::Topic(topic))
+            && routes.contains(&RouteKind::from(&t.route))
+    }));
     assert!(both.len() < by_topic.len() && both.len() < by_route.len());
 
     // A v2 topic under v1 is refused, not silently matched against nothing.
@@ -479,15 +487,15 @@ async fn route_and_topic_filters_and_their_conjunction() {
         Some(conflict.clone())
     );
     assert_eq!(
-        shared()
-            .transmissions(
-                &researcher(),
-                &v1_scope,
-                &crate::contract::graph::TransmissionSelector::All,
-                &first(5)
-            )
-            .await
-            .err(),
+        search_in(
+            shared(),
+            &researcher(),
+            &search("deploy", SearchMode::Text),
+            &v1_scope,
+            &first(5)
+        )
+        .await
+        .err(),
         Some(conflict)
     );
 }
@@ -497,7 +505,7 @@ async fn verdict_filter_drops_false_detections() {
     let all = all_transmissions(&week()).await;
     assert!(
         all.iter()
-            .any(|t| t.verdict == Some(Verdict::FalseDetection))
+            .any(|t| t.state.verdict() == Some(Verdict::FalseDetection))
     );
     let kept = all_transmissions(&with(ViewFilter {
         false_detections: FalseDetections::Exclude,
@@ -506,22 +514,25 @@ async fn verdict_filter_drops_false_detections() {
     .await;
     assert!(
         kept.iter()
-            .all(|t| t.verdict != Some(Verdict::FalseDetection))
+            .all(|t| t.state.verdict() != Some(Verdict::FalseDetection))
     );
     let dropped = all
         .iter()
-        .filter(|t| t.verdict == Some(Verdict::FalseDetection))
+        .filter(|t| t.state.verdict() == Some(Verdict::FalseDetection))
         .count();
     assert_eq!(kept.len() + dropped, all.len());
     // The withdrawn verdict leaves its transmission unlabelled.
     let state = shared().state.read().await;
     let withdrawn = state
         .verdicts
-        .iter()
-        .find(|v| v.verdict.is_none())
+        .values()
+        .find(|log| log.records().iter().any(|r| r.verdict().is_none()))
         .expect("withdrawn")
-        .transmission;
-    assert!(all.iter().any(|t| t.id == withdrawn && t.verdict.is_none()));
+        .transmission();
+    assert!(
+        all.iter()
+            .any(|t| t.id == withdrawn && t.state.verdict().is_none())
+    );
     drop(state);
     // The graph subtracts them too.
     let c = researcher();

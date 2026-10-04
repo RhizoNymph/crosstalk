@@ -11,15 +11,25 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use crosstalk_spec::aggregates::access::BipartiteGraph;
-use crosstalk_spec::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+use crosstalk_spec::aggregates::edge::{
+    EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
+};
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
+use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
-use crosstalk_spec::interfaces::l6_analysis::SearchHit;
+use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
+use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::lists::SearchRequest;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
+use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::TimeWindow;
 
@@ -29,21 +39,17 @@ use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
-use crate::contract::evidence::TransmissionEvidence;
-use crate::contract::graph::{TransmissionSelector, TransmissionSummary};
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
-    QualityRow,
 };
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
 use crate::url::scope::Scope;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest, SearchList,
-    TransmissionList,
+    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
+    PageRequest, SearchList, TransmissionList,
 };
 
 pub type Result<T> = std::result::Result<T, QueryError>;
@@ -114,32 +120,77 @@ pub trait Backend: Send + Sync + 'static {
         filter: &TopologyFilter,
     ) -> impl Future<Output = Result<Watermarked<TopologySeries>>> + Send;
 
-    // Transmissions (items 1, 17, 22).
+    // Transmissions, evidence, verdicts and search: exactly `QueryApi`'s
+    // methods.
 
-    fn transmissions(
+    /// View. The transmissions `topology` counts into one of its edges for
+    /// the same window and filter, newest confirmation first; the cursor
+    /// pins the version the first page resolved.
+    fn edge_transmissions(
         &self,
         caller: &Caller,
-        scope: &Scope,
-        selector: &TransmissionSelector,
-        page: &PageRequest<TransmissionList>,
-    ) -> impl Future<Output = Result<Page<TransmissionSummary, TransmissionList>>> + Send;
+        edge: &EdgeSelector,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        page: &PageRequest<EdgeTransmissionList>,
+    ) -> impl Future<Output = Result<Watermarked<EdgeTransmissionPage>>> + Send;
 
-    /// Needs `Content`.
+    /// View. One `TransmissionSummary::of` row per stored transmission of
+    /// the selection, newest id first, topics under `version` (resolved on
+    /// the first page, pinned by the cursor).
+    fn transmissions_by_id(
+        &self,
+        caller: &Caller,
+        selection: &TransmissionSelection,
+        version: TopicVersionSelector,
+        page: &PageRequest<TransmissionList>,
+    ) -> impl Future<Output = Result<TransmissionPage>> + Send;
+
+    /// Content. The stored record, ids as stored. The evidence page reads
+    /// it inside `transmission_evidence`, so only the tests call this yet.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "QueryApi's method; the evidence carries the transmission"
+        )
+    )]
     fn transmission(
         &self,
         caller: &Caller,
         id: TransmissionId,
+    ) -> impl Future<Output = Result<Option<Transmission>>> + Send;
+
+    /// Content. Each content match's excerpts cut with `window` from the
+    /// stored bodies (a dropped body is `Excerpted::BodyDropped`), and the
+    /// accesses behind the co-access records. `None` for an unknown id.
+    fn transmission_evidence(
+        &self,
+        caller: &Caller,
+        id: TransmissionId,
+        window: ExcerptWindow,
     ) -> impl Future<Output = Result<Option<TransmissionEvidence>>> + Send;
 
-    // Content (items 7, 9, 23). All need `Content`.
+    /// View. Every verdict record of the transmission, oldest first; an
+    /// empty log for one never judged, `None` for an unknown one.
+    fn verdicts(
+        &self,
+        caller: &Caller,
+        transmission: TransmissionId,
+    ) -> impl Future<Output = Result<Option<VerdictLog>>> + Send;
 
+    /// Content. A page of admitted hits in rank order, for transmissions
+    /// confirmed in `window` (when given) that `filter` admits.
     fn search(
         &self,
         caller: &Caller,
         request: &SearchRequest,
-        scope: &Scope,
+        window: Option<TimeWindow>,
+        filter: &TopologyFilter,
         page: &PageRequest<SearchList>,
-    ) -> impl Future<Output = Result<Page<SearchHit, SearchList>>> + Send;
+    ) -> impl Future<Output = Result<SearchResults>> + Send;
+
+    // Content (items 7, 9). All need `Content`.
 
     fn topic_versions(
         &self,
@@ -270,13 +321,15 @@ pub trait Backend: Send + Sync + 'static {
 
     fn sinks(&self, caller: &Caller) -> impl Future<Output = Result<Vec<SinkInfo>>> + Send;
 
-    // Research and pipeline (items 10, 12).
+    // Research and pipeline (item 12).
 
+    /// View. Operator verdicts tallied against the detector's calls for the
+    /// judgeable transmissions opened in `window`.
     fn detection_quality(
         &self,
         caller: &Caller,
         window: TimeWindow,
-    ) -> impl Future<Output = Result<Vec<QualityRow>>> + Send;
+    ) -> impl Future<Output = Result<DetectionQuality>> + Send;
 
     fn audit(
         &self,

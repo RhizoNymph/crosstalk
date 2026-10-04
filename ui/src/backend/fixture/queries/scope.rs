@@ -1,5 +1,5 @@
-//! The scope filter of the lists not yet on the spec's linked-view
-//! semantics (transmission lists, search, topic stats, projection samples):
+//! The scope filter of the reads not yet on the spec's linked-view
+//! semantics (topic stats, projection samples):
 //! empty lists do not restrict, non-empty lists combine with AND, agents
 //! match the sender OR the reader after alias resolution, channels match
 //! after supersession, topics are read under the scope's version and
@@ -7,7 +7,7 @@
 //! they were opened, and unconfirmed ones are kept.
 //!
 //! The version is resolved by the same [`resolve_version`] every graph
-//! uses; graphs, series and the edge drill-down count through
+//! uses; graphs, series, the edge drill-down and search count through
 //! [`super::linked`] instead (confirmed transmissions by `Confirmed::at`,
 //! admitted by `TopologyFilter::admits`).
 
@@ -20,9 +20,9 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
-use crate::contract::verdict::Verdict;
 use crate::url::scope::Scope;
 use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::derived::flow::verdict::Verdict;
 
 use super::Ctx;
 use super::linked::resolve_version;

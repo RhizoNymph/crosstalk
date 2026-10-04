@@ -162,8 +162,10 @@ brushing navigates to the same view with an aligned, canonical window.
 Selecting in the graph sets the `sel` signal: the graph highlights it, the
 URL's `sel` follows, and the drawer shard re-renders. An edge shows its
 route, transmissions, matched bytes and share, a link filtering to its two
-agents, and the transmissions counted into it, twelve per page with a
-cursor signal (rows link to the evidence page). An agent or channel shows
+agents, and the transmissions counted into it (`edge_transmissions`,
+newest confirmation first: confirmation time and matched bytes, the
+sender, reader and route being the edge's), twelve per page with a cursor
+signal (rows link to the evidence page). An agent or channel shows
 a summary card (state, claims, counts; origin, detection, policy) with a
 link to its page and its heaviest edges; with nothing selected, the
 heaviest edges of the view. Listed edges select themselves on click.
@@ -171,41 +173,52 @@ heaviest edges of the view. Listed edges select themselves on click.
 - Calls: `topology` (agents mode; header, drawer and filter choices) or
   `channel_topology` (bipartite), both with their nodes; `series` (twice,
   `Total`) for the time brush;
-  *`transmissions`* (`TransmissionSelector::Edge`), `agent`, `channel`,
+  `edge_transmissions`, `agent`, `channel`,
   *`channels`* and `topics` (filter choices), *`agent_names`*,
   *`channel_names`*.
 
 ### Transmission evidence (`/transmissions/{id}`)
 
-Why the gateway believes this transmission happened. The header gives
-sender → reader (with a "show edge" link to the topology), the route in
-words, the state with its data in a callout styled by strength (content
-evidence; access pattern only, dashed amber; discarded, muted; still
-gathering), opened and confirmed times, matched bytes and the topic under
-the current topic version. Each match shows its kind (decode chain spelled
-out, e.g. "decoded base64 → url"; semantic with its score), carrier and
-size, then the sender's originated text and the reader's input side by
-side with the matched part highlighted and elided bytes noted. The
-co-access timeline shows each write → read with agents, times, resource
-and lag. The verdict log (newest first, the one in force marked) and a
-form: genuine, false detection or withdraw, with a note.
+Why the gateway believes this transmission happened. The header is the
+transmission's row (`TransmissionSummary`, one `transmissions_by_id` call
+under the view's topic version `v`): sender → reader (with a "show edge"
+link to the topology), the route in words, the state in a callout styled
+by strength (content evidence; access pattern only, dashed amber;
+discarded, muted; still gathering), told with its data when the caller has
+`Content`, opened and confirmed times, matched bytes, the current verdict
+and the topic under `v` (an outlier, not classified yet, or classified
+only under later versions). Each match (`transmission_evidence` with the
+default 256-byte window) shows its kind (decode chain spelled out, e.g.
+"decoded base64 → url"; semantic with its score), carrier and size, then
+the sender's originated text and the reader's input side by side with the
+matched part highlighted and elided bytes noted (and the part of a very
+long match cut); a side whose message body content retention dropped
+(`Excerpted::BodyDropped`) says "Body dropped" instead of text. The
+co-access timeline shows each write → read with the accesses' canonical
+agents, times, resource and lag. The verdict log (`verdicts`, newest
+first, the one in force marked) and a form: genuine, false detection or
+withdraw, with a note.
 
-Without `Content` the header still renders (from the transmission list);
-excerpts are replaced by the content-hidden marker and the co-access and
-verdict sections say they need `Content`.
+Without `Content` the header still renders (state in words without its
+data, topic labels hidden), the matches and the co-access timeline say
+they need `Content`, and the verdict log is shown: verdicts hold no
+message content and need only `View`.
 
-- Calls: *`transmissions`* (`Ids`, for the structure), `transmission`,
-  `topics`, *`agent_names`*, *`channel_names`*, *`operators`*,
-  *`current_topic_version`*, *`now`*.
+- Calls: `transmissions_by_id` (one id), `transmission_evidence`,
+  `verdicts`, `topics`, *`agent_names`*, *`channel_names`*,
+  *`operators`*.
 - Actions: *`SetVerdict`* (`Triage` and `Content`; offered only on
   judgeable states, a conflict otherwise).
 
 ### Explore (`/explore`)
 
-Search and the UMAP projection, linked. The search form (`q`, `m`) lists
-hits twenty per page with score, route, sender → reader, time and snippet,
-each linking to its evidence; the page's hits are the projection's
-`data-highlight`. Without a projection (`p`) the page offers "Fit
+Search and the UMAP projection, linked. The search form (`q`, `m`) runs
+the spec's `search` over the view's window and filter (hits on
+transmissions confirmed in the window that the filter admits, in rank
+order) and lists hits twenty per page with score, route, sender → reader,
+time and snippet, each linking to its evidence; the hits' rows come from
+one `transmissions_by_id` call under the version the search resolved, and
+the page's hits are the projection's `data-highlight`. Without a projection (`p`) the page offers "Fit
 projection" (neighbours 15, min distance 0.1, seed 42, sample 5,000,
 editable), which posts `action=fit`, stores the projection for the view's
 scope and redirects with `p`; the projection's parameters and fit time are
@@ -215,13 +228,14 @@ select bound to the element (and `cb`). A point or lasso sets the `ps`
 signal; the results shard shows the point's transmission, or resolves the
 lasso against the stored projection (even-odd point-in-polygon in `f64`
 over the stored `f32` coordinates with the element's bounding-box test, so
-both sides select the same points) and lists those transmissions under
-the projection's own scope, paged. A topic sidebar lists the view
+both sides select the same points) and lists those transmissions'
+rows (`transmissions_by_id` under the projection's own topic version),
+paged. A topic sidebar lists the view
 version's topics by size with a trend sparkline and a "Watch" link to the
 rule form with that topic preselected. Everything here reads content, so
 the page needs `Content` and says so otherwise.
 
-- Calls: `search`, *`transmissions`* (`Ids`), *`fit_projection`*,
+- Calls: `search`, `transmissions_by_id`, *`fit_projection`*,
   *`projection_job`*, *`projection(id)`*, *`topic_stats`*, `topics`.
 
 ### Topics (`/topics`)
@@ -329,9 +343,11 @@ the backend embeds it, so editing the text re-embeds it.
   needs `Content` (the checkbox is disabled without it). The backend has no
   *`export`* yet: a valid post answers 501 with the exact `ExportRequest`
   that would be sent, an invalid one 422 with the input kept. Below it,
-  *`detection_quality`* for the window as route × match kind with genuine,
-  false detection, unlabelled and precision (genuine over labelled) and a
-  totals row.
+  `detection_quality` for the window (the spec's `DetectionQuality`: every
+  judgeable transmission opened in it) as route × detector call (confirmed
+  by its strongest match class, suspected, discarded) with genuine, false
+  detection, unlabelled and precision (genuine over labelled, for
+  confirmed rows) and a totals row (precision over the confirmed rows).
 - **Audit** (`/audit`): operator and config actions with actor, a one-line
   description, note, the entry's own subject (linked to its page; merges
   have none and link to the log filtered to them) and outcome (applied,
@@ -482,15 +498,15 @@ Element inputs and outputs (`value`, announced with `change`):
 | `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. Raises `recursion_limit` to 256: pages embedding shards nest component futures past the default depth for the `Send` check. |
 | `ui/src/app.rs` | `backend(cx)`, `caller(cx)`, `operator(cx)`, `can(caller, permission)`. `AppBackend` is the configured backend type. |
 | `ui/src/config.rs` | `Config`, `TrustedOperator` (builds the all-permissions `Caller`), `BackendConfig`. |
-| `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name and say so (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`, `RuleDef`; `alerts`: `Alert`, `AlertState`, `SuppressReason` with `OperatorRejected`; `agents`: `Agent`, `AgentState` whose `Merged` keeps `prior: ActiveAgentState`). Also: `UserRuleSpec` (what an operator submits) beside the stored `UserRule`, `AgentName`, `ChannelName`, `PromotionPreview`, `AgentListFilter`, `ChannelListFilter` (with `window`), `AuditEntry` with `subject` and `AuditOutcome::Applied(ActionOutcome)`. `graph` keeps only `TransmissionSelector`, `TransmissionSummary`, `TransmissionStateKind` (transmissions) and `ChannelShape` (channel names); graphs, series and the overview are the spec's. Checked constructors: `ProjectionPoints`, `Excerpt`, `AgentLabel`, `RuleName`, `QueryText`, `SearchText`, `ProjectionParams`. Removed when the gateway's types land. |
-| `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures: the present (`now`, `current_topic_version`), the spec's graph reads with `QueryApi`'s exact signatures (`watermark`, `topology`, `overview`, `channel_topology`, `series`, each `Watermarked`), transmissions, content, channels (`channels` with `ChannelListFilter`, `channel`, `channel_resources`, `promotion_preview`), agents (`agents` with `AgentListFilter`, `agent`), names (`agent_names`, `channel_names`), alerts (`alerts`, `alert`), rules, research, pipeline and `act`. |
-| `ui/src/backend/fixture/` | `FixtureBackend::new(seed)`: a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing every `Backend` method with real semantics. `world/` generates it through the spec's and contract's checked constructors: `agents` (cast and merge history), `drafts` and `channels` (channel table, detection from traffic), `traffic` and `states` (transmissions and accesses), `evidence` (matches and excerpts), `topics`, `rules`, `alerts`, `history` (operators, policy decisions, verdicts, audit, dead letters). `store` holds what actions change behind one `tokio::sync::RwLock` (agents keep their pre-merge state in `AgentState::Merged`, the audit log is plain `AuditEntry`s); `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors (`linked`: the one place a linked view resolves its filter's `TopicVersionSelector`, against the world's versions stated as a spec `TopicVersionHistory` (unknown `NotFound`, never activated `Conflict(TopicVersionNotActivated)`, not retained `VersionNotRetained`, foreign topics `Conflict(TopicsNotInVersion)`), and counts confirmed transmissions by `Confirmed::at` admitted by `TopologyFilter::admits`, accesses by `admits_access`; `graph`: `topology`, `channel_topology` and `overview` (`EdgeTotals::of` the graph, queues as `QueueCounts::tally` defines them) on bucket-aligned windows, checked by `TopologyGraph::check_nodes` / `BipartiteGraph::new`; `nodes`: agent nodes (spec label, canonical state, parent chain, `ClaimSet` over aliases) and channel nodes (`CanonicalOriginKind`, `DetectionKind`, `PolicyKind`, `locator_summary`); `series`: `EdgeStore::series` on the fixture's bucket width; `scope`: the opened-time filter the transmission lists, search and topic stats still use, resolving its version through `linked`; `names`: batch names; `promotion`: the plan shared by `promotion_preview` and `PromoteChannel`; `lists`: list filters, and audit subject matching derived from each entry's subject, action, outcome and the merge log); `actions/` applies and audits every action (subject and outcome recorded on the entry; a false-detection verdict suppresses the transmission's active alerts with `OperatorRejected`); `world/topics` also holds the fixture's text embedder (`embed`: theme vectors weighted by vocabulary hits plus hashed word axes), used for `CreateRule`/`UpdateRule` and the generated semantic rules; `text/` holds the message templates and codecs; `rng` is SplitMix64. The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels: declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; a `kv_put` tool only one agent uses (observed); an `s3://agent-scratch` prefix with only suspected traffic (candidate); and `notes.corp.internal/team-a/standup`, superseded by the operator-promoted declared channel `notes.corp.internal/team-a`. Topics: v0 (unfitted), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago); v1's "Engineering chatter" maps to nothing in v2. Rules: the five built-ins, a watched-topic rule on v2 (credentials and agent instructions), a stale v1 rule, a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators: `researcher` (the trusted operator in `config.json`) and `oncall` (view, content, triage); about 60 verdicts (one withdrawn), a few hundred audit entries including two rejected actions, and four dead letters. |
+| `ui/src/contract/` | The L8 additions, one module per area, numbered as in [The L8 contract](#the-l8-contract). Types that replace a spec type keep its name and say so (`TopologyFilter`, `OperatorAction`, `QueryError`, `RuleStatus`, `RuleDef`; `alerts`: `Alert`, `AlertState`, `SuppressReason` with `OperatorRejected`; `agents`: `Agent`, `AgentState` whose `Merged` keeps `prior: ActiveAgentState`). Also: `UserRuleSpec` (what an operator submits) beside the stored `UserRule`, `AgentName`, `ChannelName`, `PromotionPreview`, `AgentListFilter`, `ChannelListFilter` (with `window`), `AuditEntry` with `subject` and `AuditOutcome::Applied(ActionOutcome)`. `graph` keeps only `ChannelShape` (channel names); graphs, series, the overview, transmission rows, evidence, excerpts, verdicts, search requests and detection quality are the spec's (`OperatorAction::SetVerdict` carries the spec's `Verdict`; `AgentListFilter::text` is a spec `NonBlank`). Checked constructors: `ProjectionPoints`, `AgentLabel`, `RuleName`, `QueryText`, `ProjectionParams`. Removed when the gateway's types land. |
+| `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures: the present (`now`, `current_topic_version`), the spec's graph reads with `QueryApi`'s exact signatures (`watermark`, `topology`, `overview`, `channel_topology`, `series`, each `Watermarked`), transmissions, evidence, verdicts and search with `QueryApi`'s exact signatures (`edge_transmissions` (`Watermarked`), `transmissions_by_id`, `transmission`, `transmission_evidence`, `verdicts`, `search`, `detection_quality`), content (topics, stats, projections), channels (`channels` with `ChannelListFilter`, `channel`, `channel_resources`, `promotion_preview`), agents (`agents` with `AgentListFilter`, `agent`), names (`agent_names`, `channel_names`), alerts (`alerts`, `alert`), rules, research, pipeline and `act`. |
+| `ui/src/backend/fixture/` | `FixtureBackend::new(seed)`: a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing every `Backend` method with real semantics. `world/` generates it through the spec's and contract's checked constructors: `agents` (cast and merge history), `drafts` and `channels` (channel table, detection from traffic), `traffic` and `states` (transmissions and accesses), `evidence` (matches, with the origin span's and the read's locations into stored bodies), `blobs` (span records and the blob store: compact bodies built into the spec's `Message` on read, so `Message::part_text` indexes the generated text; `drop_body` for retention), `retention` (the dropped-bodies scenario), `topics`, `rules`, `alerts`, `history` (operators, policy decisions, verdicts, audit, dead letters). `store` holds what actions change behind one `tokio::sync::RwLock` (agents keep their pre-merge state in `AgentState::Merged`, verdicts are one spec `VerdictLog` per judged transmission, the audit log is plain `AuditEntry`s); `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors (`linked`: the one place a linked view resolves its filter's `TopicVersionSelector`, against the world's versions stated as a spec `TopicVersionHistory` (unknown `NotFound`, never activated `Conflict(TopicVersionNotActivated)`, not retained `VersionNotRetained`, foreign topics `Conflict(TopicsNotInVersion)`), and counts confirmed transmissions by `Confirmed::at` admitted by `TopologyFilter::admits`, accesses by `admits_access`; `graph`: `topology`, `channel_topology` and `overview` (`EdgeTotals::of` the graph, queues as `QueueCounts::tally` defines them) on bucket-aligned windows, checked by `TopologyGraph::check_nodes` / `BipartiteGraph::new`; `nodes`: agent nodes (spec label, canonical state, parent chain, `ClaimSet` over aliases) and channel nodes (`CanonicalOriginKind`, `DetectionKind`, `PolicyKind`, `locator_summary`); `series`: `EdgeStore::series` on the fixture's bucket width; `scope`: the opened-time filter topic stats and projection samples still use, resolving its version through `linked`; `transmissions`: `edge_transmissions` (what `linked` counts into the edge, newest confirmation first, `Watermarked`), `transmissions_by_id` (`TransmissionSummary::of` rows, newest id first, unknown ids left out) and `quality` (`DetectionQuality::tally` over every transmission with its current verdict), each traversal pinning its topic version in its cursors (`page::versioned`, `page::pinned`; a pinned version no longer retained is `VersionNotRetained`); `evidence`: `transmission`, `transmission_evidence` (`TransmissionEvidence::assemble`, excerpts by `Excerpted::of` from the span records and the blob store; a missing record is `Store`) and `verdicts`; `search`: a linked view over confirmed transmissions (optional window, filter before ranking, deterministic stand-in scores); `names`: batch names; `promotion`: the plan shared by `promotion_preview` and `PromoteChannel`; `lists`: list filters, and audit subject matching derived from each entry's subject, action, outcome and the merge log); `actions/` applies and audits every action (subject and outcome recorded on the entry; a verdict is a `TransmissionVerdict::new` appended with `VerdictLog::record`, a repeat appending nothing, and an appended false detection suppresses the transmission's active alerts with `OperatorRejected`); `world/topics` also holds the fixture's text embedder (`embed`: theme vectors weighted by vocabulary hits plus hashed word axes), used for `CreateRule`/`UpdateRule` and the generated semantic rules; `text/` holds the message templates and codecs; `rng` is SplitMix64. The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels: declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; a `kv_put` tool only one agent uses (observed); an `s3://agent-scratch` prefix with only suspected traffic (candidate); and `notes.corp.internal/team-a/standup`, superseded by the operator-promoted declared channel `notes.corp.internal/team-a`. Topics: v0 (unfitted), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago); v1's "Engineering chatter" maps to nothing in v2. Rules: the five built-ins, a watched-topic rule on v2 (credentials and agent instructions), a stale v1 rule, a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators: `researcher` (the trusted operator in `config.json`) and `oncall` (view, content, triage); about 60 verdicts (one withdrawn), the oldest six confirmed transmissions with their sender's or reader's message bodies dropped by content retention (alternating; `Scenario::dropped`), a few hundred audit entries including two rejected actions, and four dead letters. |
 | `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query). |
 | `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`defaults(cx)`: the default window and topic version from `Backend::now` and `current_topic_version`; async `view_state(cx)`: parse, default, redirect to canonical; async `current_state(cx)` for the layout; async `state_from_query(cx, query)`: a shard's view-state argument, parsed strictly), one module per screen. |
-| `ui/src/pages/common/` | Shared by the pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator and rule names; agent names from one `agent_names` call), `transmissions` (`TransmissionRow`, `rows`, `transmission_table`; `route_text`, `ChannelNames` from one `channel_names` call, `summary_name`). |
+| `ui/src/pages/common/` | Shared by the pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator and rule names; agent names from one `agent_names` call), `transmissions` (`summaries_by_id`: rows from one `transmissions_by_id` call, an empty or oversized selection refused as the spec's `TransmissionSelection` refuses it; `TransmissionRow` from a spec `TransmissionSummary`/`SummaryState`, `rows`, `transmission_table`; `route_text`, `ChannelNames` from one `channel_names` call, `summary_name`). |
 | `ui/src/pages/overview/` | `/`: `model` (`tiles` from one `overview` call; `load`: tiles, the heaviest edges of `topology`, newest open alerts), `mod` (the page). |
-| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush and drawer sharing the `sel` signal; `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`), `tests`. |
-| `ui/src/pages/transmission/` | `/transmissions/{id}` GET and POST `set-verdict`: `mod` (header, load), `model` (state in words, `Strength`, match kind and carrier labels, `ExcerptView`, co-access views), `sections` (matches side by side, co-access timeline), `verdict` (form, parser, log), `tests`. |
+| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush and drawer sharing the `sel` signal; `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`, `EdgeRow` from the spec's `EdgeTransmission`), `tests`. |
+| `ui/src/pages/transmission/` | `/transmissions/{id}` GET and POST `set-verdict`: `mod` (header from the transmission's `TransmissionSummary`, `TopicCell`, load), `model` (state in words, `Strength`, match kind and carrier labels, `ExcerptView` from a spec `Excerpt`, `QuoteView` (shown, or body dropped), co-access views from `AccessDetail`), `sections` (matches side by side, co-access timeline), `verdict` (form with the spec's `Verdict`, parser, rows from a `VerdictLog`), `tests`. |
 | `ui/src/pages/explore/` | `/explore` GET and POST `fit`: `mod` (page, `ProjectionPanel`, colour-by and selection signals), `query` (`q`, `m`, `p`, `cb`, `ps`), `lasso` (`Polygon`: parse, even-odd point-in-polygon, `select` over stored points; `ProjectionSelection`), `results` (the `projection_results` shard), `search` (hits, form), `topics` (sidebar, `watch_url`), `fit` (parameters and form), `tests`. |
 | `ui/src/pages/topics/` | `/topics`: `mod` (page, version picker, tables), `model` (`version_tabs`, `topic_rows`, `remap_rows` with stale rules). |
 | `ui/src/pages/export/` | `/export` GET and POST: `mod` (page, form, the "not available yet" outcome), `request` (form → `ExportRequest`, `describe`), `quality` (`quality_lines`, precision, table). |
@@ -593,7 +609,13 @@ What the UI needs from L8 beyond the current `QueryApi` and
    transmissions marked as false detections).
 Items 3, 4 and 6 have landed in the spec (`aggregates::node`,
 `aggregates::access`, `aggregates::series`, `QueryApi::{topology,
-channel_topology, series, overview}`) and the UI reads them directly.
+channel_topology, series, overview}`) and the UI reads them directly; so
+have the transmission lists of item 1, items 10, 22 and 23, and the read
+side of item 17 (`QueryApi::{edge_transmissions, transmissions_by_id,
+transmission, transmission_evidence, verdicts, search,
+detection_quality}`, `aggregates::quality`, `derived::flow::verdict`,
+`interfaces::l8_surface::{summary, evidence, excerpt}`). `SetVerdict` is
+still the contract's `OperatorAction` until the actions land.
 
 3. **Graph nodes.** `TopologyGraph` gains `nodes: Vec<GraphNode>`:
    `Agent { id, label, state_kind, parent, claims, transmissions_in,
