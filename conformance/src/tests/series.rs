@@ -30,7 +30,13 @@ async fn series<H: Harness>(
     grouping: SeriesGrouping,
 ) -> crosstalk_spec::aggregates::watermark::Watermarked<TopologySeries> {
     w.backend
-        .series(&w.lead, grid, weighting, grouping, &TopologyFilter::default())
+        .series(
+            &w.lead,
+            grid,
+            weighting,
+            grouping,
+            &TopologyFilter::default(),
+        )
         .await
         .unwrap_or_else(|e| panic!("series: {e:?}"))
 }
@@ -65,8 +71,19 @@ pub async fn series_totals_match_the_graph<H: Harness>(h: &H) {
 pub async fn grouped_series_sum_to_the_graph_and_its_edges<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let g = grid(w.bucket, w.extent, points(14));
-    let topology = graph(&w.backend, &w.lead, g.window(), Weighting::MatchedBytes, &TopologyFilter::default()).await;
-    for grouping in [SeriesGrouping::Topic, SeriesGrouping::RouteKind, SeriesGrouping::Edge] {
+    let topology = graph(
+        &w.backend,
+        &w.lead,
+        g.window(),
+        Weighting::MatchedBytes,
+        &TopologyFilter::default(),
+    )
+    .await;
+    for grouping in [
+        SeriesGrouping::Topic,
+        SeriesGrouping::RouteKind,
+        SeriesGrouping::Edge,
+    ] {
         let s = series(&w, g, Weighting::MatchedBytes, grouping).await;
         assert_eq!(s.value.groups().grouping(), grouping);
         assert_eq!(s.value.total(), topology.total(), "{grouping:?}");
@@ -93,7 +110,10 @@ pub async fn a_coarser_step_sums_the_finer_points<H: Harness>(h: &H) {
     let fine_buckets = extent_buckets.div_ceil(48).max(1);
     let fine = width * fine_buckets;
     let end = w.extent.end();
-    let span = window(Timestamp::from_micros(end.as_micros().saturating_sub(48 * fine)), end);
+    let span = window(
+        Timestamp::from_micros(end.as_micros().saturating_sub(48 * fine)),
+        end,
+    );
     let step = |micros: u64| {
         NonZeroU64::new(micros)
             .and_then(|m| SeriesStep::new(w.bucket, m).ok())
@@ -101,31 +121,46 @@ pub async fn a_coarser_step_sums_the_finer_points<H: Harness>(h: &H) {
     };
     let totals = async |micros: u64| -> Vec<u64> {
         let g = SeriesGrid::new(span, step(micros)).expect("grid");
-        match series(&w, g, Weighting::Transmissions, SeriesGrouping::Total).await.value.groups() {
+        match series(&w, g, Weighting::Transmissions, SeriesGrouping::Total)
+            .await
+            .value
+            .groups()
+        {
             SeriesGroups::Total(values) => values.clone(),
             other => panic!("{other:?}"),
         }
     };
     let fine_points = totals(fine).await;
     let coarse = totals(2 * fine).await;
-    let summed: Vec<u64> = fine_points.chunks(2).map(|pair| pair.iter().sum()).collect();
+    let summed: Vec<u64> = fine_points
+        .chunks(2)
+        .map(|pair| pair.iter().sum())
+        .collect();
     assert_eq!(coarse, summed);
 }
 
 /// A grid built for another bucket width is refused (INV-443).
 pub async fn a_grid_for_another_bucket_width_is_refused<H: Harness>(h: &H) {
     let w = World::everything(h).await;
-    let other = BucketWidth::from_micros(
-        NonZeroU64::new(w.bucket.as_micros().get() * 2).expect("width"),
-    );
+    let other =
+        BucketWidth::from_micros(NonZeroU64::new(w.bucket.as_micros().get() * 2).expect("width"));
     let width = other.as_micros().get();
     let start = Timestamp::from_micros(w.extent.start().as_micros().div_ceil(width) * width);
-    let span = window(start, Timestamp::from_micros(start.as_micros() + 12 * width));
+    let span = window(
+        start,
+        Timestamp::from_micros(start.as_micros() + 12 * width),
+    );
     let step = SeriesStep::new(other, other.as_micros()).expect("step");
     let g = SeriesGrid::new(span, step).expect("grid");
     assert_eq!(
         w.backend
-            .series(&w.lead, g, Weighting::Transmissions, SeriesGrouping::Total, &TopologyFilter::default())
+            .series(
+                &w.lead,
+                g,
+                Weighting::Transmissions,
+                SeriesGrouping::Total,
+                &TopologyFilter::default()
+            )
             .await
             .err(),
         Some(QueryError::InvalidInput(InputError::BucketWidthMismatch))
@@ -145,7 +180,12 @@ pub async fn the_overview_counts_the_graph<H: Harness>(h: &H) {
             .expect("overview");
         let topology = w
             .backend
-            .topology(&w.lead, span, Weighting::MatchedBytes, &TopologyFilter::default())
+            .topology(
+                &w.lead,
+                span,
+                Weighting::MatchedBytes,
+                &TopologyFilter::default(),
+            )
             .await
             .expect("topology");
         assert_eq!(overview.value.activity, EdgeTotals::of(&topology.value));
@@ -271,17 +311,37 @@ pub async fn watermarked_reads_carry_the_watermark<H: Harness>(h: &H) {
     let b = &w.backend;
     let c = &w.lead;
     let marks = [
-        b.topology(c, w.extent, Weighting::Transmissions, &f).await.map(|x| x.watermark),
-        b.channel_topology(c, w.extent, Weighting::Transmissions, &f).await.map(|x| x.watermark),
-        b.overview(c, w.extent, &f).await.map(|x| x.watermark),
-        b.series(c, grid(w.bucket, w.extent, points(4)), Weighting::Transmissions, SeriesGrouping::Total, &f)
+        b.topology(c, w.extent, Weighting::Transmissions, &f)
             .await
             .map(|x| x.watermark),
-        b.channels(c, &ChannelFilter::default(), &first(5)).await.map(|x| x.watermark),
-        b.channel(c, wiki, None).await.map(|x| x.expect("wiki").watermark),
-        b.channel_resources(c, wiki, w.extent, &first(5)).await.map(|x| x.watermark),
-        b.agents(c, &Default::default(), w.extent, &first(5)).await.map(|x| x.watermark),
-        b.topic_sizes(c, None, Some(w.extent)).await.map(|x| x.watermark),
+        b.channel_topology(c, w.extent, Weighting::Transmissions, &f)
+            .await
+            .map(|x| x.watermark),
+        b.overview(c, w.extent, &f).await.map(|x| x.watermark),
+        b.series(
+            c,
+            grid(w.bucket, w.extent, points(4)),
+            Weighting::Transmissions,
+            SeriesGrouping::Total,
+            &f,
+        )
+        .await
+        .map(|x| x.watermark),
+        b.channels(c, &ChannelFilter::default(), &first(5))
+            .await
+            .map(|x| x.watermark),
+        b.channel(c, wiki, None)
+            .await
+            .map(|x| x.expect("wiki").watermark),
+        b.channel_resources(c, wiki, w.extent, &first(5))
+            .await
+            .map(|x| x.watermark),
+        b.agents(c, &Default::default(), w.extent, &first(5))
+            .await
+            .map(|x| x.watermark),
+        b.topic_sizes(c, None, Some(w.extent))
+            .await
+            .map(|x| x.watermark),
     ];
     for (i, read) in marks.into_iter().enumerate() {
         assert_eq!(read, Ok(mark), "read {i}");

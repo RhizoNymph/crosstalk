@@ -51,6 +51,9 @@ pub fn scenario(
     Ok(bindings)
 }
 
+/// Whether a transmission's state is of one kind.
+type StatePredicate = fn(&TransmissionState) -> bool;
+
 /// Binds a transmission and its writer and reader roles.
 fn bind_tx(
     f: &Find<'_>,
@@ -284,7 +287,7 @@ fn bind_verdicts(f: &Find<'_>, b: &mut Bindings) -> Result<(), ProvisionError> {
         Some(agent("unjudged_writer")),
         agent("unjudged_reader"),
     )?;
-    let states: [(TransmissionRole, &str, fn(&TransmissionState) -> bool); 3] = [
+    let states: [(TransmissionRole, &str, StatePredicate); 3] = [
         (AWAITING, "awaiting", |s| {
             matches!(s, TransmissionState::AwaitingContent { .. })
         }),

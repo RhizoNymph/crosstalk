@@ -29,9 +29,7 @@ use crosstalk_spec::interfaces::l8_surface::{
 };
 
 use crate::harness::Harness;
-use crate::scenario::named::{
-    declared, hidden_channel, hijacked_wiki, promotion, suspected,
-};
+use crate::scenario::named::{declared, hidden_channel, hijacked_wiki, promotion, suspected};
 use crate::support::reads::{alerts, channel_row, channel_rows, counted, graph};
 use crate::support::windows::quiet;
 use crate::support::{World, collect, first};
@@ -101,9 +99,17 @@ pub async fn the_default_list_is_every_channel_in_force<H: Harness>(h: &H) {
         assert_eq!(row.last_activity(), None);
         assert_eq!(row.listing(), None);
         let by = channel_row(&w.backend, &w.lead, standing.into(), None).await;
-        assert!(by.supersession().is_none(), "it resolves to a channel in force");
+        assert!(
+            by.supersession().is_none(),
+            "it resolves to a channel in force"
+        );
     }
-    let promoted = channel_rows(&w.backend, &w.lead, &origins(vec![CanonicalOriginKind::Promoted])).await;
+    let promoted = channel_rows(
+        &w.backend,
+        &w.lead,
+        &origins(vec![CanonicalOriginKind::Promoted]),
+    )
+    .await;
     assert!(ids(&promoted).contains(&w.id(promotion::NOTES)));
     let declared_rows = channel_rows(
         &w.backend,
@@ -113,9 +119,18 @@ pub async fn the_default_list_is_every_channel_in_force<H: Harness>(h: &H) {
     .await;
     assert!(ids(&declared_rows).contains(&w.id(declared::UNUSED)));
     assert!(ids(&declared_rows).contains(&w.id(declared::IN_USE)));
-    let discovered = channel_rows(&w.backend, &w.lead, &origins(vec![CanonicalOriginKind::Discovered])).await;
+    let discovered = channel_rows(
+        &w.backend,
+        &w.lead,
+        &origins(vec![CanonicalOriginKind::Discovered]),
+    )
+    .await;
     assert!(ids(&discovered).contains(&w.id(hijacked_wiki::WIKI)));
-    assert!(discovered.iter().all(|r| matches!(r.channel().origin, ChannelOrigin::Discovered { .. })));
+    assert!(
+        discovered
+            .iter()
+            .all(|r| matches!(r.channel().origin, ChannelOrigin::Discovered { .. }))
+    );
 }
 
 /// Every row's listing and confirmation follow from its origin and its
@@ -159,9 +174,21 @@ pub async fn listings_split_channels_declarations_and_unconfirmed_ones<H: Harnes
     let declarations = of(ListingKind::Declaration).await;
     let unconfirmed = of(ListingKind::Unconfirmed).await;
     let confirmed = of(ListingKind::Confirmed).await;
-    assert!(declarations.iter().all(|r| r.listing() == Some(Listing::Declaration)));
-    assert!(unconfirmed.iter().all(|r| r.confirmation() == Some(Confirmation::Unconfirmed)));
-    assert!(confirmed.iter().all(|r| r.confirmation() == Some(Confirmation::Confirmed)));
+    assert!(
+        declarations
+            .iter()
+            .all(|r| r.listing() == Some(Listing::Declaration))
+    );
+    assert!(
+        unconfirmed
+            .iter()
+            .all(|r| r.confirmation() == Some(Confirmation::Unconfirmed))
+    );
+    assert!(
+        confirmed
+            .iter()
+            .all(|r| r.confirmation() == Some(Confirmation::Confirmed))
+    );
     assert!(ids(&declarations).contains(&w.id(declared::UNUSED)));
     assert!(ids(&unconfirmed).contains(&w.id(suspected::S3)));
     assert!(ids(&confirmed).contains(&w.id(hijacked_wiki::WIKI)));
@@ -199,7 +226,14 @@ pub async fn row_counts_are_the_resources_tally_and_the_graphs_routed_counts<H: 
             window: Some(window),
             ..ChannelFilter::default()
         };
-        let topology = graph(&w.backend, &w.lead, window, Weighting::Transmissions, &TopologyFilter::default()).await;
+        let topology = graph(
+            &w.backend,
+            &w.lead,
+            window,
+            Weighting::Transmissions,
+            &TopologyFilter::default(),
+        )
+        .await;
         let routed = ChannelCounts::routed(&topology);
         let listed = channel_rows(&w.backend, &w.lead, &filter).await;
         for row in &listed {
@@ -256,7 +290,10 @@ pub async fn the_window_counts_but_never_filters<H: Harness>(h: &H) {
     let all = channel_row(&w.backend, &w.lead, wiki, None).await;
     let recent = channel_row(&w.backend, &w.lead, wiki, Some(w.day())).await;
     let empty = channel_row(&w.backend, &w.lead, wiki, Some(before)).await;
-    let (all_counts, recent_counts) = (all.counts().expect("counts"), recent.counts().expect("counts"));
+    let (all_counts, recent_counts) = (
+        all.counts().expect("counts"),
+        recent.counts().expect("counts"),
+    );
     assert!(recent_counts.transmissions <= all_counts.transmissions);
     assert!(recent_counts.writers <= all_counts.writers);
     assert!(recent_counts.readers <= all_counts.readers);
@@ -296,13 +333,24 @@ pub async fn resources_page_through_the_channel_in_force<H: Harness>(h: &H) {
 /// pattern, a discovered one by its seed (INV-689).
 pub async fn names_resolve_supersession_from_one_batch<H: Harness>(h: &H) {
     let w = World::everything(h).await;
-    let (old, notes, wiki) = (w.id(promotion::OLD), w.id(promotion::NOTES), w.id(hijacked_wiki::WIKI));
+    let (old, notes, wiki) = (
+        w.id(promotion::OLD),
+        w.id(promotion::NOTES),
+        w.id(hijacked_wiki::WIKI),
+    );
     let batch = IdBatch::new([old, notes, wiki, ChannelId::from_ulid(1)]).expect("batch");
-    let names = w.backend.channel_names(&w.lead, &batch).await.expect("names");
+    let names = w
+        .backend
+        .channel_names(&w.lead, &batch)
+        .await
+        .expect("names");
     assert_eq!(names.len(), 3, "unknown ids are left out");
     assert_eq!(names[&old].id(), notes);
     assert_eq!(names[&old], names[&notes]);
-    assert_eq!(names[&notes].shape(), &ChannelShape::Pattern(promotion::pattern()));
+    assert_eq!(
+        names[&notes].shape(),
+        &ChannelShape::Pattern(promotion::pattern())
+    );
     let page = w
         .scenario
         .resource(hijacked_wiki::PAGE)
@@ -324,10 +372,20 @@ pub async fn policy_histories_hold_every_decision<H: Harness>(h: &H) {
             .expect("read")
             .expect("history")
     };
-    assert!(history(w.id(hijacked_wiki::WIKI)).await.entries().is_empty());
+    assert!(
+        history(w.id(hijacked_wiki::WIKI))
+            .await
+            .entries()
+            .is_empty()
+    );
     let config = history(w.id(declared::IN_USE)).await;
     assert!(!config.entries().is_empty());
-    assert!(config.entries().iter().all(|e| e.decision.by == PolicyAuthor::Config));
+    assert!(
+        config
+            .entries()
+            .iter()
+            .all(|e| e.decision.by == PolicyAuthor::Config)
+    );
     let notes = history(w.id(promotion::NOTES)).await;
     assert!(matches!(
         notes.latest().map(|e| (e.kind, e.decision.by)),
@@ -335,7 +393,12 @@ pub async fn policy_histories_hold_every_decision<H: Harness>(h: &H) {
     ));
     for row in channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await {
         let recorded = history(row.channel().id).await;
-        assert_eq!(row.channel().policy, recorded.current(), "{:?}", row.channel().id);
+        assert_eq!(
+            row.channel().policy,
+            recorded.current(),
+            "{:?}",
+            row.channel().id
+        );
     }
 }
 
@@ -363,24 +426,48 @@ pub async fn an_unconfirmed_channel_lists_its_suspected_transmissions<H: Harness
     let w = World::everything(h).await;
     let s3 = w.id(suspected::S3);
     let row = channel_row(&w.backend, &w.lead, s3, None).await;
-    assert_eq!(row.listing(), Some(Listing::Channel(Confirmation::Unconfirmed)));
+    assert_eq!(
+        row.listing(),
+        Some(Listing::Channel(Confirmation::Unconfirmed))
+    );
     let listed = channel_transmissions(&w, s3, Some(Confirmation::Unconfirmed)).await;
-    assert_eq!(listed.len() as u64, row.traffic().expect("in force").unconfirmed);
-    assert!(listed.iter().any(|t| t.summary().id == w.id(suspected::SUSPECTED)));
+    assert_eq!(
+        listed.len() as u64,
+        row.traffic().expect("in force").unconfirmed
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|t| t.summary().id == w.id(suspected::SUSPECTED))
+    );
     for t in &listed {
         assert_eq!(t.confirmation(), Confirmation::Unconfirmed);
-        assert!(t.senders().iter().all(|s| *s != t.summary().to), "a sender is never the reader");
+        assert!(
+            t.senders().iter().all(|s| *s != t.summary().to),
+            "a sender is never the reader"
+        );
         assert_eq!(t.summary().route, Route::Channel(s3));
     }
     let opened: Vec<_> = listed.iter().map(|t| t.summary().opened_at).collect();
     assert!(opened.windows(2).all(|p| p[0] >= p[1]), "newest first");
-    assert!(channel_transmissions(&w, s3, Some(Confirmation::Confirmed)).await.is_empty());
-    assert_eq!(channel_transmissions(&w, s3, None).await.len(), listed.len());
+    assert!(
+        channel_transmissions(&w, s3, Some(Confirmation::Confirmed))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        channel_transmissions(&w, s3, None).await.len(),
+        listed.len()
+    );
     let wiki = w.id(hijacked_wiki::WIKI);
     let confirmed = channel_transmissions(&w, wiki, Some(Confirmation::Confirmed)).await;
     assert_eq!(
         confirmed.len() as u64,
-        channel_row(&w.backend, &w.lead, wiki, None).await.traffic().expect("in force").confirmed
+        channel_row(&w.backend, &w.lead, wiki, None)
+            .await
+            .traffic()
+            .expect("in force")
+            .confirmed
     );
 }
 
@@ -389,8 +476,15 @@ pub async fn an_unconfirmed_channel_lists_its_suspected_transmissions<H: Harness
 pub async fn channel_transmissions_are_cross_agent_only<H: Harness>(h: &H) {
     let w = World::of(h, hidden_channel::scenario()).await;
     let listed = channel_transmissions(&w, w.id(hidden_channel::SELF_NOTES), None).await;
-    assert!(listed.iter().all(|t| t.summary().id != w.id(hidden_channel::BETWEEN)));
-    assert!(listed.is_empty(), "every transmission through it is within one agent");
+    assert!(
+        listed
+            .iter()
+            .all(|t| t.summary().id != w.id(hidden_channel::BETWEEN))
+    );
+    assert!(
+        listed.is_empty(),
+        "every transmission through it is within one agent"
+    );
 }
 
 /// A channel's transmissions need View (INV-765).
@@ -430,7 +524,12 @@ pub async fn confirmed_only_changes_no_transmission_view<H: Harness>(h: &H) {
         );
     }
     let activity = async |f: &TopologyFilter| {
-        w.backend.overview(&w.lead, w.extent, f).await.expect("overview").value.activity
+        w.backend
+            .overview(&w.lead, w.extent, f)
+            .await
+            .expect("overview")
+            .value
+            .activity
     };
     assert_eq!(activity(&include).await, activity(&exclude).await);
     assert_eq!(
@@ -446,7 +545,12 @@ fn hiding_merge<H: Harness>(w: &World<'_, H>) -> MergeId {
 
 async fn drawn<H: Harness>(w: &World<'_, H>, channel: ChannelId) -> bool {
     w.backend
-        .channel_topology(&w.lead, w.extent, Weighting::Transmissions, &TopologyFilter::default())
+        .channel_topology(
+            &w.lead,
+            w.extent,
+            Weighting::Transmissions,
+            &TopologyFilter::default(),
+        )
         .await
         .expect("graph")
         .value
@@ -468,7 +572,11 @@ pub async fn a_merge_hides_the_channel_and_an_unmerge_restores_it<H: Harness>(h:
     let listed = ids(&channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await);
     assert!(!listed.contains(&notes));
     assert!(!drawn(&w, notes).await);
-    let history = w.backend.policy_history(&w.lead, notes).await.expect("history");
+    let history = w
+        .backend
+        .policy_history(&w.lead, notes)
+        .await
+        .expect("history");
     assert!(history.is_some(), "its history is kept");
     let queues = async || {
         w.backend
@@ -479,23 +587,53 @@ pub async fn a_merge_hides_the_channel_and_an_unmerge_restores_it<H: Harness>(h:
             .queues
     };
     let before = queues().await;
-    let topology = graph(&w.backend, &w.lead, w.extent, Weighting::Transmissions, &TopologyFilter::default()).await;
-    assert!(topology.edges.iter().all(|e| e.route != Route::Channel(notes)));
+    let topology = graph(
+        &w.backend,
+        &w.lead,
+        w.extent,
+        Weighting::Transmissions,
+        &TopologyFilter::default(),
+    )
+    .await;
+    assert!(
+        topology
+            .edges
+            .iter()
+            .all(|e| e.route != Route::Channel(notes))
+    );
 
     let outcome = w
         .backend
-        .act(&w.lead, OperatorAction::Unmerge { merge: hiding_merge(&w) })
+        .act(
+            &w.lead,
+            OperatorAction::Unmerge {
+                merge: hiding_merge(&w),
+            },
+        )
         .await;
     assert_eq!(outcome, Ok(ActionOutcome::Applied));
     let back = channel_row(&w.backend, &w.lead, notes, None).await;
-    assert!(matches!(back.listing(), Some(Listing::Channel(_))), "{:?}", back.listing());
+    assert!(
+        matches!(back.listing(), Some(Listing::Channel(_))),
+        "{:?}",
+        back.listing()
+    );
     let relisted = ids(&channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await);
     assert!(relisted.contains(&notes));
     assert!(drawn(&w, notes).await);
     let after = queues().await;
     let unreviewed = u64::from(back.channel().policy.kind() == PolicyKind::Unreviewed);
-    assert_eq!(after.unreviewed_channels, before.unreviewed_channels + unreviewed);
-    assert_eq!(w.backend.policy_history(&w.lead, notes).await.expect("history"), history);
+    assert_eq!(
+        after.unreviewed_channels,
+        before.unreviewed_channels + unreviewed
+    );
+    assert_eq!(
+        w.backend
+            .policy_history(&w.lead, notes)
+            .await
+            .expect("history"),
+        history
+    );
 
     let again = OperatorAction::merge_agents(
         &w.lead,
@@ -503,10 +641,18 @@ pub async fn a_merge_hides_the_channel_and_an_unmerge_restores_it<H: Harness>(h:
         w.id(hidden_channel::OWNER),
     )
     .expect("two agents");
-    assert!(matches!(w.backend.act(&w.lead, again).await, Ok(ActionOutcome::Merged(_))));
-    assert_eq!(ids(&channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await), listed);
+    assert!(matches!(
+        w.backend.act(&w.lead, again).await,
+        Ok(ActionOutcome::Merged(_))
+    ));
     assert_eq!(
-        channel_row(&w.backend, &w.lead, notes, None).await.listing(),
+        ids(&channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await),
+        listed
+    );
+    assert_eq!(
+        channel_row(&w.backend, &w.lead, notes, None)
+            .await
+            .listing(),
         Some(Listing::Hidden)
     );
 }
@@ -520,13 +666,24 @@ pub async fn alerts_on_a_hidden_channel_are_not_listed<H: Harness>(h: &H) {
         states: Vec::new(),
         channel: Some(notes),
     };
-    assert!(alerts(&w.backend, &w.lead, &about).await.is_empty(), "hidden with its channel");
+    assert!(
+        alerts(&w.backend, &w.lead, &about).await.is_empty(),
+        "hidden with its channel"
+    );
     w.backend
-        .act(&w.lead, OperatorAction::Unmerge { merge: hiding_merge(&w) })
+        .act(
+            &w.lead,
+            OperatorAction::Unmerge {
+                merge: hiding_merge(&w),
+            },
+        )
         .await
         .expect("unmerge");
     let shown = alerts(&w.backend, &w.lead, &about).await;
-    assert!(!shown.is_empty(), "discovery raised an alert about it (INV-750)");
+    assert!(
+        !shown.is_empty(),
+        "discovery raised an alert about it (INV-750)"
+    );
     let again = OperatorAction::merge_agents(
         &w.lead,
         w.id(hidden_channel::OTHER_ID),
@@ -558,8 +715,10 @@ pub async fn discovered_channels_raised_an_alert_and_hold_their_resources<H: Har
         )
         .await;
         assert!(
-            raised.iter().any(|a| a.subject == AlertSubject::Channel(channel)
-                && a.rule == BuiltinRule::NewChannel.id()),
+            raised
+                .iter()
+                .any(|a| a.subject == AlertSubject::Channel(channel)
+                    && a.rule == BuiltinRule::NewChannel.id()),
             "{channel:?} raised NewChannel"
         );
     }

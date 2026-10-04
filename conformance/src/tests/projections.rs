@@ -63,7 +63,12 @@ async fn fit<H: Harness>(
         .await
         .unwrap_or_else(|e| panic!("fit: {e:?}"));
     let info = settled(w, id).await;
-    assert_eq!(info.status().kind(), ProjectionStatusKind::Ready, "{:?}", info.status());
+    assert_eq!(
+        info.status().kind(),
+        ProjectionStatusKind::Ready,
+        "{:?}",
+        info.status()
+    );
     w.backend
         .projection(&w.lead, id)
         .await
@@ -81,14 +86,21 @@ pub async fn every_fit_is_a_new_job_with_a_reproducible_frame<H: Harness>(h: &H)
     let version = current_version(&w.backend, &w.lead, w.extent).await;
     let first = fit(&w, w.extent, &f, params(42, 300)).await;
     let again = fit(&w, w.extent, &f, params(42, 300)).await;
-    assert_ne!(first.info().id(), again.info().id(), "each call records a new job");
+    assert_ne!(
+        first.info().id(),
+        again.info().id(),
+        "each call records a new job"
+    );
     assert_eq!(first.frame().columns(), again.frame().columns());
     assert_eq!(first.frame().tables(), again.frame().tables());
     let info = first.info();
     assert_eq!(info.requested_by(), w.lead.operator());
     let spec = info.spec();
     assert_eq!(spec.topic_version(), version);
-    assert_eq!(spec.filter().topic_version, TopicVersionSelector::Pinned(version));
+    assert_eq!(
+        spec.filter().topic_version,
+        TopicVersionSelector::Pinned(version)
+    );
     assert_eq!(spec.window(), w.extent);
     assert_eq!(spec.params(), params(42, 300));
     let ProjectionStatus::Ready(fitted) = info.status() else {
@@ -125,16 +137,28 @@ pub async fn samples_honour_the_window_and_filter<H: Harness>(h: &H) {
     };
     let window = w.day();
     let projection = fit(&w, window, &filter, params(1, 100_000)).await;
-    assert!(!projection.is_sampled(), "below the limit everything is kept");
+    assert!(
+        !projection.is_sampled(),
+        "below the limit everything is kept"
+    );
     let points: Vec<_> = projection.frame().points().collect();
     assert!(!points.is_empty());
     let ids: Vec<_> = points.iter().map(|p| p.transmission).collect();
     let version = projection.topic_version();
-    let summaries = rows(&w.backend, &w.lead, &ids, TopicVersionSelector::Pinned(version)).await;
+    let summaries = rows(
+        &w.backend,
+        &w.lead,
+        &ids,
+        TopicVersionSelector::Pinned(version),
+    )
+    .await;
     for point in &points {
         assert_eq!(point.route, RouteKind::Channel);
         assert!(window.contains(point.confirmed_at));
-        assert_ne!(point.from, point.to, "a transmission between two agents (INV-758)");
+        assert_ne!(
+            point.from, point.to,
+            "a transmission between two agents (INV-758)"
+        );
         let summary = summaries
             .iter()
             .find(|s| s.id == point.transmission)
@@ -154,7 +178,13 @@ pub async fn a_narrower_fit_keeps_what_it_admits_of_a_wider_sample<H: Harness>(h
     let f = TopologyFilter::default();
     let wide = fit(&w, w.extent, &f, params(42, 300)).await;
     let narrow = fit(&w, w.day(), &f, params(42, 300)).await;
-    let kept: HashSet<_> = narrow.frame().columns().transmissions.iter().copied().collect();
+    let kept: HashSet<_> = narrow
+        .frame()
+        .columns()
+        .transmissions
+        .iter()
+        .copied()
+        .collect();
     let expected: Vec<_> = wide
         .frame()
         .points()
@@ -170,14 +200,22 @@ pub async fn too_few_points_fail_the_job<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let id = w
         .backend
-        .fit_projection(&w.lead, quiet(w.bucket), &TopologyFilter::default(), params(1, 100))
+        .fit_projection(
+            &w.lead,
+            quiet(w.bucket),
+            &TopologyFilter::default(),
+            params(1, 100),
+        )
         .await
         .expect("recorded");
     let info = settled(&w, id).await;
     let ProjectionStatus::Failed { failure, .. } = info.status() else {
         panic!("failed: {:?}", info.status())
     };
-    assert!(matches!(failure, FitFailure::TooFewPoints { got: 0, .. }), "{failure:?}");
+    assert!(
+        matches!(failure, FitFailure::TooFewPoints { got: 0, .. }),
+        "{failure:?}"
+    );
     assert!(matches!(
         w.backend.projection(&w.lead, id).await,
         Err(QueryError::Conflict(ConflictKind::ProjectionFailed { projection, .. })) if projection == id
@@ -194,6 +232,9 @@ pub async fn jobs_list_newest_first<H: Harness>(h: &H) {
         .expect("fit");
     settled(&w, id).await;
     let jobs = crate::support::collect(5, async |p| w.backend.projections(&w.lead, &p).await).await;
-    assert!(jobs.windows(2).all(|p| p[0].id() > p[1].id()), "newest first");
+    assert!(
+        jobs.windows(2).all(|p| p[0].id() > p[1].id()),
+        "newest first"
+    );
     assert!(jobs.iter().any(|j| j.id() == id));
 }
