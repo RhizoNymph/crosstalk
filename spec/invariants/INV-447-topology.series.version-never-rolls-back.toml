@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.series.version-never-rolls-back"
-statement = "Once a graph or series query has reported topic_version v, no later graph or series query reports a topic_version older than v."
+statement = "Once a graph or series query with TopicVersionSelector::Current has reported topic_version v, no later graph or series query with Current reports a topic_version older than v."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -8,7 +8,9 @@ The UI draws the brush, the trend lines and the graph from separate
 queries. If a series could report an older version than a graph already
 seen, by-topic lines would use topic ids of a superseded fit next to a
 graph of the new one. Series read the same activation state as graphs, so
-the ordering of topology.version.never-rolls-back extends to both.
+the ordering of topology.version.never-rolls-back extends to both. A
+query that pins an older retained version reports it by request and is
+outside this rule.
 """
 
 [evidence]

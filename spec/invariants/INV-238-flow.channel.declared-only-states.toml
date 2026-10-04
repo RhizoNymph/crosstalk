@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.channel.declared-only-states"
+statement = "A discovered channel, including one later superseded, can never be in the AwaitingTraffic or Unused detection states."
+kind = "representation"
+requires = ["type"]
+rationale = """
+A discovered channel exists only because it was accessed, so "never used"
+is meaningless for it. `ChannelOrigin::Discovered` carries a
+`TrafficDetection` and a `Seed` (the resource and its first access), and
+`ChannelOrigin::Superseded` keeps the same, so the type cannot express a
+discovered channel awaiting traffic. Only a channel declared before any
+traffic carries a `DeclaredDetection` (`ChannelOrigin::Declared` with
+`DeclaredHistory::BeforeTraffic`), where "declared but unused" is
+representable.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::channel::ChannelOrigin"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

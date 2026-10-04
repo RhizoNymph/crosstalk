@@ -46,7 +46,7 @@ spec/types/
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
-│   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
+│   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes

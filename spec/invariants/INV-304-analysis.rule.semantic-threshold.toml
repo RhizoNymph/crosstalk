@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.rule.semantic-threshold"
+statement = "On a TransmissionClassified event with cause Confirmation, a SemanticQuery rule that evaluates (enabled, with QueryWatch::Current) drafts exactly when RuleContext::transmission_embedding returns an embedding whose similarity to the rule's query is at least the rule's threshold."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+SemanticQuery lets an operator watch for content near an example without
+waiting for the topic model to carve out a cluster. A transmission with no
+stored embedding drafts nothing rather than failing the consumer. The
+comparison is inclusive so a threshold of 1.0 still matches an exact
+duplicate.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::semantic_rule_drafts_at_threshold", "crosstalk::analysis::tests::semantic_rule_silent_without_embedding"]
+property = "crosstalk::analysis::tests::semantic_rule_drafts_iff_similarity_at_least_threshold"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

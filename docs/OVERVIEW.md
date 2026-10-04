@@ -92,8 +92,8 @@ Overview:
     discovered channels its pattern covers); verdicts to L5's verdict log,
     beside the detector's state (L6 suppresses a false detection's alerts;
     L6 and L7 views can exclude false detections at query time); merges,
-    unmerges of one merge record and renames to L3; rule management and
-    topic-version pins to L6. Every action call is recorded in the audit
+    unmerges of one merge record and renames to L3; rule management (a
+    stale rule is updated, never re-enabled) and topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes.
 
 Features Index:

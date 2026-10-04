@@ -40,7 +40,11 @@
 //!
 //! The correlator chooses routes in the precedence order documented on
 //! `Route`, using the `AgentDirectory` and agent parent links for
-//! `Delegation`.
+//! `Delegation`. Shards are keyed by canonical channel
+//! (`ChannelDirectory`), and on `ChannelPromoted` the evidence a shard holds
+//! for a superseded channel moves to the promoted channel's shard, so a
+//! write recorded before a promotion and a read recorded after it still
+//! meet.
 //!
 //! Promotion (`ChannelRegistry::promote`) follows
 //! [`promotion::plan`](crate::derived::flow::channel::promotion::plan): in

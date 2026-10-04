@@ -181,14 +181,18 @@ The types follow data through the stack:
    embedded and stored with its embedding, which carries the model) and
    returns the new id; `update` replaces a user rule's name, definition and
    sinks, and on a stale rule retargets and enables it; `set_enabled`
-   enables or disables any rule. A rule keeps its kind and is never
-   deleted. Staleness (`TopicWatch::Stale`, `QueryWatch::Stale`, reported as
+   enables or disables any rule, except that enabling a stale rule is
+   refused (`RuleError::Stale`, changing nothing) and disabling is always
+   allowed. A rule keeps its kind and is never deleted. Staleness (`TopicWatch::Stale`, `QueryWatch::Stale`, reported as
    a `StaleReason`) is separate from status and no operator action sets it.
    Every stored change to a rule bumps its `RuleRevision` and publishes
    `AlertRuleChanged`.
 8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
    `EdgeKey` bucket (per topic-model version, `BucketWidth` wide), activates
-   a version once it is complete and publishes `TopicVersionActivated`, and
+   a version once it is complete (it has processed as many distinct `Refit`
+   classifications under it as `TopicVersionReady` counts; `Confirmation`
+   classifications under it do not count) and publishes
+   `TopicVersionActivated`, and
    answers `TopologyGraph` queries over canonical agents with per-edge
    `Share`s. A series query takes a `SeriesGrid` (a bucket-aligned window
    cut into `SeriesStep`s, each a whole number of buckets), a `Weighting`, a
@@ -256,10 +260,10 @@ The types follow data through the stack:
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo` (`with_retention`), `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
-| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
+| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled` refusing a stale rule with `StaleRule`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `channel_topology`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `channel_topology`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
@@ -371,7 +375,10 @@ The types follow data through the stack:
 - Only user rules can be stale, and staleness is separate from the
   operator's enabled or disabled status: a re-fit or an embedding model
   change makes a rule stale, and only an update makes it current again,
-  which also enables it. A rule evaluates only when enabled and current.
+  which also enables it. Enabling a stale rule is refused
+  (`AlertRuleDef::set_enabled`, `StaleRule`) and disabling one is always
+  allowed; a rule that goes stale while enabled keeps its status. A rule
+  evaluates only when enabled and current.
   Once a disable returns, the rule has no active alerts and triage opens
   none for it.
 - L7 publishes `TopicVersionActivated { version, previous }` exactly once

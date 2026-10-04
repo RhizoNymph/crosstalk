@@ -134,9 +134,13 @@ pub trait EdgeStore {
         revision: VerdictRevision,
     ) -> Result<Observed, EdgeError>;
 
-    /// Switch queries to `version` once its buckets are complete. Ignores a
-    /// version older than the active one. Drops nothing: see
-    /// [`EdgeStore::drop_version`].
+    /// Switch queries to `version` once its buckets are complete: its
+    /// `TopicVersionReady` has arrived and the store has processed (applied,
+    /// or rejected as a self-edge) as many distinct transmissions classified
+    /// under it with cause `Refit` as the event counts. Classifications
+    /// under it with cause `Confirmation`, which follow the event, do not
+    /// count. Ignores a version older than the active one. Drops nothing:
+    /// see [`EdgeStore::drop_version`].
     async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError>;
 
     /// Delete every bucket and stored contribution of `version`, on

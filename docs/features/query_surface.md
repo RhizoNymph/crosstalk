@@ -94,7 +94,7 @@ match every variant with no wildcard arm.
 | `Acknowledge { alert }`, `Resolve { alert, note }` | Triage | the alert store; publishes `AlertChanged` and `Changed::Alert` | `Applied` / `Unchanged` | the alert |
 | `SetVerdict { transmission, verdict, note }` | Triage | `TransmissionVerdicts::set` (L5) | `Applied` / `Unchanged` | the transmission |
 | `CreateRule { name, rule, sinks }` | Govern | `AlertRuleStore::create` (L6) | `RuleCreated(AlertRuleId)` | the new rule |
-| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` (L6) | `Applied` / `Unchanged` | the rule |
+| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` (L6); enabling a stale rule is `Conflict(RuleStale)`, disabling is always allowed | `Applied` / `Unchanged` | the rule |
 | `PinTopicVersion { version }`, `UnpinTopicVersion { version }` | Govern | `TopicCatalog::pin`, `unpin` (L6) | `Applied` / `Unchanged` | the version |
 | `ReplayDeadLetter { group, id }` | Operate | `DeadLetterStore::replay` (L2) | `Applied` | none |
 
@@ -332,9 +332,10 @@ one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
 `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError` and
-`BusError` (the dead-letter list); for actions `PromotionRefusal` and
-`PromoteError`. The edge store's writes fail with `EdgeError`, which never
-reaches a query.
+`BusError` (the dead-letter list); for actions `PromotionRefusal`,
+`PromoteError` and `RuleError` (rule management; enabling a stale rule is
+`Conflict(RuleStale)`, since only `UpdateRule` can retarget it). The edge
+store's writes fail with `EdgeError`, which never reaches a query.
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
@@ -588,7 +589,7 @@ policy.
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
 | `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind`, `InputError` |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError` (to `QueryError`) and `PromotionRefusal`, `PromoteError` (to `ActionError`) |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError` (to `ActionError`) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
@@ -671,6 +672,11 @@ policy.
   `TopicVersionSelector::resolve` is the only resolution; a paged view's
   cursor pins its first page's version. A filter naming topics outside the
   resolved version is refused (`TopicsNotInVersion`), never answered empty.
+- Enabling a stale alert rule is refused with `Conflict(RuleStale)` and
+  changes nothing (`AlertRuleDef::set_enabled`, `RuleError::Stale`);
+  disabling any rule is always allowed, and only `UpdateRule` makes a stale
+  rule current again, enabling it. A rule that goes stale while enabled
+  keeps its status.
 - Every query error is a typed `QueryError` and every action error a typed
   `ActionError`, which converts to `QueryError` variant for variant; each
   store error maps to exactly one variant through the one `From` impl per

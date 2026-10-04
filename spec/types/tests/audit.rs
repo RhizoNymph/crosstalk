@@ -548,6 +548,7 @@ fn every_conflict() -> Vec<ConflictKind> {
             | ConflictKind::ChannelNotDiscovered { .. }
             | ConflictKind::PatternOverlaps { .. }
             | ConflictKind::RuleNotEditable { .. }
+            | ConflictKind::RuleStale { .. }
             | ConflictKind::TopicVersionNotCurrent { .. }
             | ConflictKind::TransmissionNotJudgeable { .. }
             | ConflictKind::TopicVersionFitting { .. }
@@ -585,6 +586,9 @@ fn every_conflict() -> Vec<ConflictKind> {
         },
         ConflictKind::RuleNotEditable {
             rule: AlertRuleId::from_ulid(5),
+        },
+        ConflictKind::RuleStale {
+            rule: AlertRuleId::from_ulid(7),
         },
         ConflictKind::TopicVersionNotCurrent {
             requested: version,

@@ -16,7 +16,9 @@
 //! [`RuleStatus`] and no operator action can set it. A rule evaluates only
 //! when enabled and current ([`AlertRuleDef::evaluates`]). Updating a stale
 //! rule retargets it to the current topic version or embedding model and
-//! enables it ([`AlertRuleDef::update`]).
+//! enables it ([`AlertRuleDef::update`]); enabling it without an update is
+//! refused ([`StaleRule`]), while disabling it is always allowed. A rule
+//! that goes stale while enabled keeps its status.
 //!
 //! A rule keeps its kind for life, so its alerts keep their meaning.
 //! Updating a rule leaves its alerts as they are.
@@ -433,8 +435,9 @@ impl AlertRule {
 }
 
 /// What an operator set. Staleness is separate ([`AlertRule::stale_reason`]),
-/// so a rule can be disabled and stale at once, and enabling a stale rule
-/// does not make it evaluate.
+/// so a rule can be disabled and stale at once, or enabled and stale when it
+/// went stale while enabled. Enabling a stale rule is refused
+/// ([`AlertRuleDef::set_enabled`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleStatus {
     Enabled,
@@ -470,6 +473,13 @@ pub struct ReservedRuleId(pub AlertRuleId);
 /// An update of a built-in rule, or one that would change a rule's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotEditable {
+    pub rule: AlertRuleId,
+}
+
+/// Enabling a stale rule. Update it instead, which retargets and enables
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaleRule {
     pub rule: AlertRuleId,
 }
 
@@ -575,15 +585,22 @@ impl AlertRuleDef {
         self.status == RuleStatus::Enabled && !self.rule.is_stale()
     }
 
-    /// Enable or disable. Staleness is untouched, so enabling a stale rule
-    /// leaves it stale.
-    pub fn set_enabled(&mut self, enabled: bool) -> Change {
+    /// Enable or disable. Enabling a stale rule is refused with
+    /// [`StaleRule`], changing nothing: it could not evaluate, and only
+    /// [`AlertRuleDef::update`] retargets it (which also enables it).
+    /// Disabling is always allowed, stale or not. Staleness is never
+    /// touched, so a rule that went stale while enabled stays enabled until
+    /// an operator disables or updates it.
+    pub fn set_enabled(&mut self, enabled: bool) -> Result<Change, StaleRule> {
+        if enabled && self.rule.is_stale() {
+            return Err(StaleRule { rule: self.id });
+        }
         let status = RuleStatus::of(enabled);
         if self.status == status {
-            return Change::Unchanged;
+            return Ok(Change::Unchanged);
         }
         self.status = status;
-        Change::Applied
+        Ok(Change::Applied)
     }
 
     /// Replace a user rule's name, definition and sinks, keeping its id,
