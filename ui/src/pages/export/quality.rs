@@ -81,7 +81,7 @@ pub async fn quality_section(
 ) -> Result<impl View> {
     let empty = lines.as_ref().is_ok_and(Vec::is_empty);
     Ok(view! {
-        <section class=(SECTION)>
+        <section class=(format!("{SECTION} max-w-4xl"))>
             <h2 class=(SECTION_TITLE)>"Detection quality in this window"</h2>
             <p class="mb-2 text-xs text-zinc-500">"Confirmed transmissions by route and match kind. Precision is genuine over labelled; unlabelled detections are not counted against it."</p>
             match lines {

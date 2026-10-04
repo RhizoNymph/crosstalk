@@ -192,9 +192,9 @@ async fn newest_alerts(
                         <tr class=(ROW)>
                             <td class=(TD)>
                                 <span class="mr-1.5">kind_badge(value: AlertStateKind::Open)</span>
-                                (row.rule)
+                                <a class=(LINK) href=(row.url)>(row.rule)</a>
                             </td>
-                            <td class=(TD)><a class=(LINK) href=(row.subject_url)>(row.subject_label)</a></td>
+                            <td class=(format!("{TD} whitespace-nowrap"))><a class=(LINK) href=(row.subject_url)>(row.subject_label)</a></td>
                             <td class=(TD_NUM)>(row.occurrences)</td>
                             <td class=(TD_MUTED)>(row.raised)</td>
                         </tr>
