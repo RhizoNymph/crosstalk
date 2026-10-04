@@ -345,11 +345,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rules_page_renders_empty_sections() {
+    async fn rules_page_renders_rules_and_sinks() {
         let reply = get(&format!("/alerts/rules?{}", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        assert!(reply.body.contains("No operator rules."));
-        assert!(reply.body.contains("No sinks are configured"));
+        assert!(reply.body.contains("Exfiltration to paste sites"));
+        assert!(reply.body.contains("Engineering chatter (v1)"));
+        assert!(reply.body.contains("soc-webhook"));
         assert!(reply.body.contains("Watch topics…"));
     }
 

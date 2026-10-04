@@ -216,7 +216,7 @@ mod tests {
         let url = format!("/pipeline?{}", state().to_query());
         let reply = get(&url).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("No dead letters"));
+        assert!(!reply.body.contains("No dead letters"));
         let reply = post(&url, "action=replay&group=l5&event=bad").await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(reply.body.contains("event: expected 26 characters"));
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(
             reply.status,
             StatusCode::NOT_FOUND,
-            "the stub backend has no dead letters"
+            "no dead letter has this event id"
         );
     }
 }

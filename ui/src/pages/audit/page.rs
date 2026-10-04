@@ -278,7 +278,10 @@ mod tests {
     #[tokio::test]
     async fn audit_page_renders_and_validates_filters() {
         let q = state().to_query();
-        let reply = get(&format!("/audit?{q}")).await;
+        let reply = get(&format!("/audit?{q}&span=all")).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert!(!reply.body.contains("No audit entries match these filters."));
+        let reply = get(&format!("/audit?{q}&span=all&op=01J9ZQ3W8D00000000000000ZZ")).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No audit entries match these filters."));
         let reply = get(&format!(

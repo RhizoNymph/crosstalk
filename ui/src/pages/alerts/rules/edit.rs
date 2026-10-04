@@ -399,7 +399,7 @@ mod tests {
         let reply = get(&format!("/alerts/rules/new?{q}&kind=watched")).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains("New watched-topic rule"));
-        assert!(reply.body.contains("No topics to pick from"));
+        assert!(!reply.body.contains("No topics to pick from"));
         let reply = get(&format!("/alerts/rules/new?{q}&kind=semantic")).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("not supported yet"));
@@ -411,7 +411,7 @@ mod tests {
     async fn rule_posts_validate() {
         let q = state().to_query();
         let url = format!("/alerts/rules/new?{q}");
-        let reply = post(&url, "kind=watched&name=keys&version=0&remap_threshold=0.8").await;
+        let reply = post(&url, "kind=watched&name=keys&version=2&remap_threshold=0.8").await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
             reply.body.contains("topic: pick at least one topic"),

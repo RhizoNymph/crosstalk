@@ -178,10 +178,11 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn empty_list_renders() {
+    async fn list_renders_agents_with_claims() {
         let reply = get(&format!("/agents?{}", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("No agents yet"));
+        assert!(reply.body.contains("pi-scraper"));
+        assert!(reply.body.contains("claims"));
         let reply = get(&format!("/agents?{}&cursor=a%20b", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     }

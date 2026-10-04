@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_tab_renders_empty() {
+    async fn every_tab_renders_alerts() {
         for tab in TABS {
             let reply = get(&format!(
                 "/alerts?{}&tab={}",
@@ -343,7 +343,10 @@ mod tests {
             ))
             .await;
             assert_eq!(reply.status, StatusCode::OK, "{tab:?}");
-            assert!(reply.body.contains("No alerts in this state."));
+            assert!(
+                !reply.body.contains("No alerts in this state."),
+                "the fixture has alerts in every state: {tab:?}"
+            );
         }
         let reply = get(&format!("/alerts?{}&tab=muted", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
