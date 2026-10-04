@@ -11,6 +11,7 @@ use super::super::harness::{
 };
 use super::super::{ULID_A, ULID_B, ULID_C, id};
 use super::{caller, operator};
+use crate::aggregates::alert::RuleQueryText;
 use crate::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::resource::{Host, ResourcePattern};
@@ -25,7 +26,7 @@ use crate::interfaces::l8_surface::{
     PolicyKind,
 };
 use crate::observed::agent::{AgentLabel, MergeAuthor, SelfMerge};
-use crate::support::{NonBlank, NonEmpty, Similarity};
+use crate::support::{NonEmpty, Similarity};
 use crate::wire::{DecodeErrorKind, decode_request};
 
 const AREA: &str = "surface_actions/actions";
@@ -54,7 +55,7 @@ fn watched_topic() -> UserRule {
 
 fn semantic_query() -> UserRule {
     UserRule::SemanticQuery {
-        text: NonBlank::new("ssh private keys or deploy tokens").expect("not blank"),
+        text: RuleQueryText::new("ssh private keys or deploy tokens").expect("valid query text"),
         threshold: Similarity::new(0.5).expect("in range"),
     }
 }

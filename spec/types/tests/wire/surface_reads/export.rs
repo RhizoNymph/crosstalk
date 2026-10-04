@@ -18,7 +18,7 @@ use super::fixtures::{
 use crate::aggregates::edge::{EdgeSelector, RouteKind, TopologyFilter};
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::{
-    Fitted, ProjectedPoint, ProjectionLimit, ProjectionParams, ProjectionSpec,
+    Fitted, PointRoute, ProjectedPoint, ProjectionLimit, ProjectionParams, ProjectionSpec,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -439,7 +439,7 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
                 transmission: tx(),
                 from: planner(),
                 to: coder(),
-                route: RouteKind::Channel,
+                route: PointRoute::Channel(wiki()),
                 topic: None,
                 confirmed_at: confirmed_at(),
                 x: Finite::new(3.25).expect("finite"),

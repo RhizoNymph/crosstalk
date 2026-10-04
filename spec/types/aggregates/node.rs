@@ -5,7 +5,7 @@
 //! of every agent endpoint (its parent, the parent's parent, …), each once.
 //! Ancestors let the UI collapse sub-agents into their parent; including the
 //! whole chain means every node's `parent` names a node in the same
-//! response. A [`TopologyGraph`] has agent nodes only. A
+//! response. A [`TopologyGraph`](crate::aggregates::edge::TopologyGraph) has agent nodes only. A
 //! [`BipartiteGraph`](crate::aggregates::access::BipartiteGraph) also has a
 //! channel node for every channel an access touches or a transmission is
 //! routed through.
@@ -19,14 +19,14 @@
 //! **Counts agree with edges.** An agent node's `transmissions_in` and
 //! `transmissions_out` are the transmissions of the response's transmission
 //! edges into and out of it, so a node that is only an ancestor has zero of
-//! both. [`TopologyGraph::check_nodes`] and `BipartiteGraph::new` check all
+//! both. [`TopologyGraph::new`](crate::aggregates::edge::TopologyGraph::new) and `BipartiteGraph::new` check all
 //! of the above except canonicity, which needs the directories.
 
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::aggregates::edge::{TopologyGraph, WeightedEdge};
+use crate::aggregates::edge::WeightedEdge;
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::derived::flow::channel::policy::PolicyKind;
 use crate::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
@@ -177,13 +177,15 @@ pub enum InvalidNodes {
     Counts(AgentId),
 }
 
-impl TopologyGraph {
-    /// Whether `nodes` holds exactly one agent node per edge endpoint and
-    /// ancestor, no channel node, and counts that agree with `edges`.
-    pub fn check_nodes(&self) -> Result<(), InvalidNodes> {
-        let endpoints = self.edges.iter().flat_map(|edge| [edge.from, edge.to]);
-        check_nodes(&self.nodes, endpoints, [], &self.edges)
-    }
+/// The agent-centred graph's node rule (`TopologyGraph::new` runs it):
+/// `nodes` holds exactly one agent node per edge endpoint and ancestor, no
+/// channel node, and counts that agree with `edges`.
+pub(crate) fn check_graph_nodes(
+    nodes: &[GraphNode],
+    edges: &[WeightedEdge],
+) -> Result<(), InvalidNodes> {
+    let endpoints = edges.iter().flat_map(|edge| [edge.from, edge.to]);
+    check_nodes(nodes, endpoints, [], edges)
 }
 
 /// The node rules shared by both graph kinds: `agents` and `channels` are

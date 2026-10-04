@@ -12,6 +12,7 @@ use crate::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, MergeId, ProjectionId, SinkId, TopicId,
     TransmissionId,
 };
+use crate::interfaces::l8_surface::export::ExportFormat;
 use crate::interfaces::l8_surface::{
     ActionError, ConflictKind, InputError, Permission, QueryError,
 };
@@ -171,6 +172,7 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::EmptySelection
             | InputError::ExcerptContextTooLong { .. }
             | InputError::TooManyIds { .. }
+            | InputError::UnsupportedFormat { .. }
             | InputError::MalformedRequest { .. } => input,
         }
     }
@@ -192,6 +194,9 @@ fn every_input_error() -> Vec<InputError> {
         InputError::TooManyIds {
             max: 1000,
             got: 1001,
+        },
+        InputError::UnsupportedFormat {
+            format: ExportFormat::Parquet,
         },
         InputError::MalformedRequest {
             kind: DecodeErrorKind::Data,

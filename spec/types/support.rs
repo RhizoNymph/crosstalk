@@ -480,6 +480,60 @@ impl<'de, const MAX: usize> Deserialize<'de> for DisplayText<MAX> {
     }
 }
 
+/// Text an operator writes for a model to read, such as a semantic alert
+/// rule's query: trimmed, non-empty and at most `MAX` characters (not
+/// bytes). Unlike [`DisplayText`] it may hold line breaks, since it is a
+/// query, not a label.
+///
+/// The bound is a character count a client can check before sending. It is
+/// not the model's context: a model may still refuse shorter text that
+/// tokenizes long (`EmbedError::TooLong`, `InvalidInput(QueryTooLong)`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryText<const MAX: usize>(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidQueryText {
+    Blank,
+    TooLong { max: usize, got: usize },
+}
+
+impl<const MAX: usize> QueryText<MAX> {
+    pub const MAX_CHARS: usize = MAX;
+
+    pub fn new(text: &str) -> Result<Self, InvalidQueryText> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidQueryText::Blank);
+        }
+        let chars = trimmed.chars().count();
+        if chars > MAX {
+            return Err(InvalidQueryText::TooLong {
+                max: MAX,
+                got: chars,
+            });
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A JSON string.
+impl<const MAX: usize> Serialize for QueryText<MAX> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+/// A JSON string that [`QueryText::new`] accepts, trimmed as it trims.
+impl<'de, const MAX: usize> Deserialize<'de> for QueryText<MAX> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "query text", |text| Self::new(&text))
+    }
+}
+
 /// At most `MAX` items of a longer list, and how long the whole list is.
 ///
 /// A capped list that looks complete invites a wrong decision ("these are all

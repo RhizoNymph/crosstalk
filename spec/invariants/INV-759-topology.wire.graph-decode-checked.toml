@@ -1,18 +1,18 @@
 [invariant]
 id = "topology.wire.graph-decode-checked"
-statement = "Decoding JSON into a TopologyGraph yields a value only when TopologyGraph::check passes: no self-edge, no (from, to, route) twice, every share its stat under the weighting over the total of that stat, and nodes as TopologyGraph::check_nodes requires; any other graph JSON is a decode error."
+statement = "Decoding JSON into a TopologyGraph yields a value only when TopologyGraph::new accepts its parts: no self-edge, no (from, to, route) twice, every share its stat under the weighting over the total of that stat, and nodes as the node rules require; any other graph JSON is a decode error."
 kind = "domain"
 property = "invariant"
 requires = ["unit"]
 rationale = """
-TopologyGraph keeps public fields (code and tests build graphs that break
-one rule at a time), so unlike BipartiteGraph its rules are not enforced
-at construction. EdgeStore::graph promises them, and the UI and other
-nodes render and sum a graph from the response alone: a graph with a
-missing node, a repeated edge or shares that do not add up would draw
-wrongly without any error. Decoding through TopologyGraph::check means
-the JSON cannot carry a graph the server would never return, so the
-decoding side can rely on the same rules as the producing side.
+TopologyGraph is a checked type like BipartiteGraph: private fields, built
+only through TopologyGraph::new (topology.graph.checked-construction), and
+its wire form is its parts, decoded through the same constructor. The UI
+and other nodes render and sum a graph from the response alone: a graph
+with a missing node, a repeated edge or shares that do not add up would
+draw wrongly without any error. Decoding through the constructor means the
+JSON cannot carry a graph the server could never build, so the decoding
+side relies on the same rules as the producing side.
 """
 
 [evidence]

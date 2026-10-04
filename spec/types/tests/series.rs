@@ -1,6 +1,8 @@
 use std::num::NonZeroU64;
 
-use crate::aggregates::edge::{EdgeStats, RouteKind, TopologyGraph, WeightedEdge, Weighting};
+use crate::aggregates::edge::{
+    EdgeStats, RouteKind, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
+};
 use crate::aggregates::series::{
     BucketWidth, InvalidGrid, InvalidSeries, InvalidStep, Series, SeriesEdge, SeriesGrid,
     SeriesGrouping, SeriesGroups, SeriesStep, TopologySeries,
@@ -221,7 +223,7 @@ fn edge_series_sum_to_graph_stats_and_total() {
         transmissions: n(transmissions),
         matched_bytes: n(matched_bytes),
     };
-    let graph = TopologyGraph {
+    let graph = TopologyGraph::new(TopologyGraphParts {
         window: grid().window(),
         weighting: Weighting::MatchedBytes,
         topic_version: TopicModelVersion(1),
@@ -242,7 +244,8 @@ fn edge_series_sum_to_graph_stats_and_total() {
                 share: Share::new(0.25).expect("in range"),
             },
         ],
-    };
+    })
+    .expect("a valid graph");
     let series = TopologySeries::new(
         grid(),
         Weighting::MatchedBytes,
@@ -264,8 +267,8 @@ fn edge_series_sum_to_graph_stats_and_total() {
     let SeriesGroups::ByEdge(edges) = series.groups() else {
         panic!("grouped by edge");
     };
-    for (one, graph_edge) in edges.iter().zip(&graph.edges) {
-        assert_eq!(one.sum(), graph.weighting.stat(graph_edge.stats).get());
+    for (one, graph_edge) in edges.iter().zip(graph.edges()) {
+        assert_eq!(one.sum(), graph.weighting().stat(graph_edge.stats).get());
     }
 }
 

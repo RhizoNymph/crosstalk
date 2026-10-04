@@ -13,7 +13,7 @@ use crate::aggregates::edge::RouteKind;
 use crate::aggregates::filter::{FalseDetections, TopicVersionSelector, TopologyFilter};
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
-    FitFailure, Fitted, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    FitFailure, Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
     ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crate::ids::{AgentId, ChannelId, ProjectionId, TransmissionId};
@@ -130,7 +130,7 @@ fn point(transmission: &str, topic_n: Option<usize>, x: f32, y: f32) -> Projecte
         transmission: id(TransmissionId::from_ulid_text, transmission),
         from: id(AgentId::from_ulid_text, ULID_A),
         to: id(AgentId::from_ulid_text, ULID_B),
-        route: RouteKind::Channel,
+        route: PointRoute::Channel(id(ChannelId::from_ulid_text, ULID_B)),
         topic: topic_n.map(topic),
         confirmed_at: at("10:42:17"),
         x: Finite::new(x).expect("finite"),
@@ -175,6 +175,41 @@ fn projections_page_golden() {
 #[test]
 fn projected_points_golden() {
     assert_golden(AREA, "projected_points", &points());
+}
+
+/// A point's route: its kind, and a channel route's channel. Adjacently
+/// tagged, so only a channel route carries data.
+#[test]
+fn point_routes_golden_with_every_variant() {
+    fn declared(route: PointRoute) -> PointRoute {
+        match route {
+            PointRoute::Channel(_)
+            | PointRoute::Delegation
+            | PointRoute::Direct
+            | PointRoute::Unobserved => route,
+        }
+    }
+    let routes: Vec<PointRoute> = [
+        PointRoute::Channel(id(ChannelId::from_ulid_text, ULID_B)),
+        PointRoute::Delegation,
+        PointRoute::Direct,
+        PointRoute::Unobserved,
+    ]
+    .into_iter()
+    .map(declared)
+    .collect();
+    assert_golden(AREA, "point_routes", &routes);
+    assert_rejected::<PointRoute>(r#"{"type": "channel"}"#, "missing field `data`");
+    assert_rejected::<PointRoute>(
+        r#"{"type": "channel", "data": "not a ulid"}"#,
+        "invalid ULID",
+    );
+    // A bare route kind, the shape a point once carried, is not a route.
+    assert_rejected::<PointRoute>(r#""channel""#, "expected adjacently tagged enum PointRoute");
+    assert_rejected::<PointRoute>(
+        &format!(r#"{{"type": "direct", "data": "{ULID_B}"}}"#),
+        "invalid type",
+    );
 }
 
 /// `QueryApi::projection` answers in two halves: the job record as JSON

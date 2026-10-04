@@ -51,6 +51,7 @@
 //! | `VerdictRow` | operator, time | 2 |
 //! | `ConfigChange`, `ConfigRecord` | config, permissions | 2 |
 //! | `Operator`, `PermissionSet` | permissions | 2 |
+//! | `Present` | the gateway's clock and config | 2 |
 //!
 //! `OperatorAction` is what the surface acts on and the audit log stores,
 //! after `OperatorAction::merge_agents` has stamped the caller into a merge.
@@ -155,7 +156,9 @@ use crate::interfaces::l8_surface::channels::{PromotionPreview, SupersededInto};
 use crate::interfaces::l8_surface::export::rows::VerdictRow;
 use crate::interfaces::l8_surface::export::{ExportHeader, ExportLine, ExportRecord};
 use crate::interfaces::l8_surface::operators::{Operator, OperatorDirectory, RequestIdentity};
-use crate::interfaces::l8_surface::{Caller, CallerSnapshot, OperatorAction, PermissionSet};
+use crate::interfaces::l8_surface::{
+    Caller, CallerSnapshot, OperatorAction, PermissionSet, Present,
+};
 use crate::observed::agent::{MergeAuthor, MergeRecord, MergeRequest, MergeVeto, Reversal};
 
 // Rule 1: authority never serializes, either way.
@@ -204,3 +207,4 @@ assert_not_impl!(ConfigChange: WireRequest);
 assert_not_impl!(ConfigRecord: WireRequest);
 assert_not_impl!(Operator: WireRequest);
 assert_not_impl!(PermissionSet: WireRequest);
+assert_not_impl!(Present: WireRequest);

@@ -94,6 +94,8 @@ fn alert_rule_filters_and_searches_golden() {
         }
     }
     let modes = [SearchMode::Text, SearchMode::Semantic, SearchMode::Hybrid].map(mode);
+    // A client that has not picked a mode searches both ways.
+    assert_eq!(SearchMode::default(), SearchMode::Hybrid);
     assert_golden(AREA, "search_modes", &modes.to_vec());
     let search = SearchRequest {
         mode: SearchMode::Hybrid,

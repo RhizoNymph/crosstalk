@@ -119,6 +119,12 @@
 //! trailer, reading only data settled before the watermark read at its
 //! start ([`export`]). It is not paged and every export is audited.
 //!
+//! **The present.** `present` returns what a client needs before it can
+//! build a valid request: the gateway's clock, the bucket width windows
+//! align to, the export formats it writes, the topic version rules are
+//! written against, the default remap threshold and the frame retention
+//! ([`present`]).
+//!
 //! **Errors.** Every method fails with a [`QueryError`]. How each store's
 //! error becomes one is defined once, by the `From` impls in
 //! [`query_errors`].
@@ -135,6 +141,7 @@ pub mod live;
 pub mod operators;
 pub mod overview;
 pub mod permissions;
+pub mod present;
 pub mod query_errors;
 pub mod sinks;
 pub mod summary;
@@ -161,7 +168,7 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, ChannelId, ProjectionId, TransmissionId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::paging::{
@@ -185,6 +192,7 @@ use summary::{TransmissionPage, TransmissionSelection};
 pub use actions::{ActionKind, ActionOutcome, ActionRequest, OperatorAction};
 pub use errors::{ActionError, ConflictKind, InputError, QueryError};
 pub use permissions::{Caller, CallerSnapshot, Permission, PermissionSet};
+pub use present::Present;
 pub use sinks::{AlertSink, SinkError, SinkInfo, SinkKind};
 
 /// The policy an operator asks for. The surface stamps the author and time
@@ -206,15 +214,9 @@ pub struct AlertFilter {
 
 impl WireRequest for AlertFilter {}
 
-/// On the wire, a string: `"acknowledged"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AlertStateKind {
-    Open,
-    Acknowledged,
-    Resolved,
-    Suppressed,
-}
+/// An alert state without its data, which `AlertFilter::states` matches
+/// ([`AlertState::kind`](crate::aggregates::alert::AlertState::kind)).
+pub use crate::aggregates::alert::AlertStateKind;
 
 /// Every method checks the caller's permission first and returns
 /// `Forbidden` without reading anything when it is missing. List methods
@@ -362,7 +364,8 @@ pub trait QueryApi {
     ) -> Result<BTreeMap<AgentId, AgentName>, QueryError>;
 
     /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
-    /// rules newest first. Every rule is listed: none is ever deleted.
+    /// rules newest first. Every rule is listed: none is ever deleted. One
+    /// rule by id is `alert_rule`.
     ///
     /// [`BuiltinRule::ALL`]: crate::aggregates::alert::BuiltinRule::ALL
     async fn alert_rules(
@@ -371,6 +374,16 @@ pub trait QueryApi {
         filter: &AlertRuleFilter,
         page: &PageRequest<AlertRuleList>,
     ) -> Result<Page<AlertRuleDef, AlertRuleList>, QueryError>;
+
+    /// View. One rule, for rule pages and alert and audit links: the same
+    /// value `alert_rules` lists under `id`, built-in or user, stale or
+    /// not. Rule ids are never aliased and no rule is ever deleted, so
+    /// `None` only for an id no rule ever had.
+    async fn alert_rule(
+        &self,
+        caller: &Caller,
+        id: AlertRuleId,
+    ) -> Result<Option<AlertRuleDef>, QueryError>;
 
     /// Govern. Every configured alert sink and how its last delivery went,
     /// for choosing a rule's sinks. Govern rather than View because a
@@ -404,6 +417,15 @@ pub trait QueryApi {
 
     /// View. L7's exposed watermark (`EdgeStore::watermark`).
     async fn watermark(&self, caller: &Caller) -> Result<Watermark, QueryError>;
+
+    /// View. Where the gateway is now and what it is configured with
+    /// ([`present`]): its wall clock, L7's bucket width (equal to
+    /// `EdgeStore::bucket_width`), the export formats it writes in offer
+    /// order, the topic-model version watched-topic rules are written
+    /// against (the one `CreateRule` and `UpdateRule` check), the default
+    /// remap threshold and the projection frame retention. Reads no
+    /// buckets, so it is not `Watermarked`.
+    async fn present(&self, caller: &Caller) -> Result<Present, QueryError>;
 
     /// View. Exactly [`EdgeStore::graph`], under the version the filter's
     /// selector resolves to.
@@ -671,7 +693,10 @@ pub trait QueryApi {
 
     /// View, or Content when `request` includes content or names a
     /// projection ([`ExportRequest::required_permission`]); without it,
-    /// `Forbidden { missing }` before anything is read. Reads L7's
+    /// `Forbidden { missing }` before anything is read. A format outside
+    /// `present`'s `export_formats` is then `InvalidInput(UnsupportedFormat)`
+    /// ([`ExportFormats::check`](export::ExportFormats::check)), also before
+    /// anything is read. Reads L7's
     /// watermark first, then plans the export (`ExportSource::plan`): the
     /// filter's version resolved and pinned as for any linked view (errors
     /// as for one), the window cut at the watermark, agent and channel
@@ -698,8 +723,12 @@ pub trait OperatorActions {
     /// ([`ActionRequest::into_action`]) before calling `act`. `SetPolicy` on
     /// a superseded channel is refused with `Conflict(ChannelSuperseded)`
     /// (read through `ChannelDirectory`) before `PolicyChanged` is
-    /// published; `PromoteChannel` maps the registry's refusal
-    /// (`ActionError::from`). A call that returns `Ok` or an `ActionError` other than `Store` leaves exactly one
+    /// published. Every refusal of the layer that owns an action's effect
+    /// maps through one `ActionError::from` ([`query_errors`]):
+    /// `RegistryError` for `SetPolicy`, `PromoteError` for
+    /// `PromoteChannel`, `ResolveError` for merges, unmerges and renames,
+    /// `VerdictError` for `SetVerdict`, `RuleError` for rule management,
+    /// `CatalogError` and `PinError` for pins. A call that returns `Ok` or an `ActionError` other than `Store` leaves exactly one
     /// operator audit entry, whose outcome is what it returns
     /// (`AuditOutcome::of`): a `Succeeded` entry is written in the same
     /// transaction as the action's effect, and a `Forbidden` or `Rejected`

@@ -124,8 +124,10 @@ impl AlertRuleFilter {
 
 impl WireRequest for AlertRuleFilter {}
 
-/// How `QueryApi::search` matches its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// How `QueryApi::search` matches its text. The default is `Hybrid`:
+/// it finds exact wording and paraphrase alike, so a search a client has
+/// not tuned misses neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
     /// Full-text only.
@@ -133,6 +135,7 @@ pub enum SearchMode {
     /// The text is embedded with the current model; vector similarity only.
     Semantic,
     /// Both, scored as the mean of the two.
+    #[default]
     Hybrid,
 }
 

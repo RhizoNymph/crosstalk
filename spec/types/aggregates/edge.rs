@@ -16,7 +16,7 @@ use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
-use crate::aggregates::node::{GraphNode, InvalidNodes};
+use crate::aggregates::node::{GraphNode, InvalidNodes, check_graph_nodes};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, TopicId, TransmissionId};
@@ -176,24 +176,31 @@ pub struct WeightedEdge {
 /// canonical channels (a `Route::Channel` names the channel after
 /// supersession).
 ///
-/// Invariant: the shares of `edges` sum to 1 (within float error) unless
-/// `edges` is empty. Each edge's share is its stat under `weighting` divided
-/// by the total of that stat across the window, after filtering.
+/// Built only through [`TopologyGraph::new`], which checks every rule:
 ///
-/// `nodes` describes every agent the edges name, and their ancestors, once
-/// each, with counts that agree with `edges` ([`TopologyGraph::check_nodes`],
-/// [`crate::aggregates::node`]). It holds no channel nodes; the
-/// channel-centred view does.
+/// - no edge is a self-edge and no (from, to, route) appears twice;
+/// - each edge's share is its stat under `weighting` divided by the total of
+///   that stat across the window, after filtering, so the shares sum to 1
+///   (within [`TopologyGraph::SHARE_TOLERANCE`]) unless there are no edges;
+/// - `nodes` describes every agent the edges name, and their ancestors, once
+///   each, with counts that agree with the edges
+///   ([`crate::aggregates::node`]). It holds no channel nodes; the
+///   channel-centred view does.
 ///
-/// [`TopologyGraph::check`] states all of these rules; `EdgeStore::graph`
-/// returns only graphs that pass it. The fields are public, so code can
-/// build a graph that fails it (tests do, to exercise one rule at a time),
-/// but JSON cannot: on the wire it is its fields, and decoding refuses a
-/// graph that fails [`TopologyGraph::check`] (through the private mirror
-/// `RawTopologyGraph`).
+/// On the wire it is its parts ([`TopologyGraphParts`]), decoded through
+/// the same constructor, so JSON cannot carry a graph that breaks a rule
+/// either.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", try_from = "RawTopologyGraph")]
+#[serde(try_from = "TopologyGraphParts", into = "TopologyGraphParts")]
 pub struct TopologyGraph {
+    parts: TopologyGraphParts,
+}
+
+/// The fields of a [`TopologyGraph`], before they are checked: its wire
+/// shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct TopologyGraphParts {
     pub window: TimeWindow,
     pub weighting: Weighting,
     /// The version the filter's selector resolved to.
@@ -202,36 +209,21 @@ pub struct TopologyGraph {
     pub edges: Vec<WeightedEdge>,
 }
 
-/// [`TopologyGraph`]'s fields, decoded without the checks.
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-struct RawTopologyGraph {
-    window: TimeWindow,
-    weighting: Weighting,
-    topic_version: TopicModelVersion,
-    nodes: Vec<GraphNode>,
-    edges: Vec<WeightedEdge>,
-}
-
-impl TryFrom<RawTopologyGraph> for TopologyGraph {
+impl TryFrom<TopologyGraphParts> for TopologyGraph {
     type Error = Rejected<InvalidGraph>;
 
-    fn try_from(raw: RawTopologyGraph) -> Result<Self, Self::Error> {
-        let graph = Self {
-            window: raw.window,
-            weighting: raw.weighting,
-            topic_version: raw.topic_version,
-            nodes: raw.nodes,
-            edges: raw.edges,
-        };
-        match graph.check() {
-            Ok(()) => Ok(graph),
-            Err(error) => Err(Rejected::new("topology graph", error)),
-        }
+    fn try_from(parts: TopologyGraphParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("topology graph", error))
     }
 }
 
-/// Why a [`TopologyGraph`] breaks its rules. Checks run in the order of the
+impl From<TopologyGraph> for TopologyGraphParts {
+    fn from(graph: TopologyGraph) -> Self {
+        graph.into_parts()
+    }
+}
+
+/// Why parts are not a [`TopologyGraph`]. Checks run in the order of the
 /// variants and the first failure is returned; `index` is the edge's
 /// position in `edges`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,13 +248,13 @@ impl TopologyGraph {
     /// How far a share may sit from its exact ratio (float error).
     pub const SHARE_TOLERANCE: f64 = 1e-9;
 
-    /// Whether the graph keeps every rule of the type: no self-edge, no
+    /// Check `parts` against every rule of the type: no self-edge, no
     /// (from, to, route) twice, each share its stat under `weighting` over
     /// the total of that stat (so the shares sum to 1 unless there are no
-    /// edges), and nodes as [`TopologyGraph::check_nodes`] requires.
-    pub fn check(&self) -> Result<(), InvalidGraph> {
+    /// edges), and nodes as [`crate::aggregates::node`] requires.
+    pub fn new(parts: TopologyGraphParts) -> Result<Self, InvalidGraph> {
         let mut seen = HashSet::new();
-        for (index, edge) in self.edges.iter().enumerate() {
+        for (index, edge) in parts.edges.iter().enumerate() {
             if edge.from == edge.to {
                 return Err(InvalidGraph::SelfEdge { index });
             }
@@ -270,14 +262,40 @@ impl TopologyGraph {
                 return Err(InvalidGraph::DuplicateEdge { index });
             }
         }
-        let weighting = self.weighting;
-        let total = stat_total(self.edges.iter().map(|edge| weighting.stat(edge.stats)));
-        for (index, edge) in self.edges.iter().enumerate() {
+        let weighting = parts.weighting;
+        let total = stat_total(parts.edges.iter().map(|edge| weighting.stat(edge.stats)));
+        for (index, edge) in parts.edges.iter().enumerate() {
             if !share_is(edge.share, weighting.stat(edge.stats), total) {
                 return Err(InvalidGraph::Share { index });
             }
         }
-        self.check_nodes().map_err(InvalidGraph::Nodes)
+        check_graph_nodes(&parts.nodes, &parts.edges).map_err(InvalidGraph::Nodes)?;
+        Ok(Self { parts })
+    }
+
+    pub fn window(&self) -> TimeWindow {
+        self.parts.window
+    }
+
+    pub fn weighting(&self) -> Weighting {
+        self.parts.weighting
+    }
+
+    /// The version the filter's selector resolved to.
+    pub fn topic_version(&self) -> TopicModelVersion {
+        self.parts.topic_version
+    }
+
+    pub fn nodes(&self) -> &[GraphNode] {
+        &self.parts.nodes
+    }
+
+    pub fn edges(&self) -> &[WeightedEdge] {
+        &self.parts.edges
+    }
+
+    pub fn into_parts(self) -> TopologyGraphParts {
+        self.parts
     }
 }
 
@@ -319,7 +337,7 @@ impl EdgeTotals {
     pub fn of(graph: &TopologyGraph) -> Self {
         let mut channels = Vec::new();
         let (mut transmissions, mut matched_bytes) = (0u64, 0u64);
-        for edge in &graph.edges {
+        for edge in graph.edges() {
             transmissions = transmissions.saturating_add(edge.stats.transmissions.get());
             matched_bytes = matched_bytes.saturating_add(edge.stats.matched_bytes.get());
             if let Route::Channel(channel) = edge.route
@@ -329,7 +347,7 @@ impl EdgeTotals {
             }
         }
         Self {
-            topic_version: graph.topic_version,
+            topic_version: graph.topic_version(),
             transmissions,
             matched_bytes,
             active_channels: u64::try_from(channels.len()).unwrap_or(u64::MAX),

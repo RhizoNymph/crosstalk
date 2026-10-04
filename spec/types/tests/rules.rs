@@ -3,6 +3,7 @@
 
 use std::num::NonZeroU16;
 
+use crate::aggregates::alert::RuleQueryText;
 use crate::aggregates::alert::{
     AlertRule, AlertRuleDef, AlertRuleKind, AlertRuleSet, BuiltinRule, ContentRule, InsertError,
     NotEditable, QueryWatch, ReservedRuleId, RuleDefinition, RuleName, RuleRemapError,
@@ -12,7 +13,7 @@ use crate::aggregates::alert::{
 use crate::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crate::aggregates::topic_history::{LineageEntry, LineageLink, RemapError, TopicLineage};
 use crate::ids::{AlertRuleId, OperatorId, SinkId, TopicId};
-use crate::support::{Change, NonBlank, NonEmpty, Similarity};
+use crate::support::{Change, NonEmpty, Similarity};
 use crate::tests::fixtures::at;
 
 fn rule_id(n: u128) -> AlertRuleId {
@@ -44,7 +45,7 @@ fn model(name: &str) -> EmbeddingModel {
 
 fn query(model_name: &str) -> SemanticQuery {
     SemanticQuery {
-        text: NonBlank::new("deploy keys").expect("not blank"),
+        text: RuleQueryText::new("deploy keys").expect("valid query text"),
         embedding: Embedding::new(model(model_name), vec![0.6, 0.8]).expect("unit vector"),
     }
 }
@@ -593,7 +594,7 @@ fn user_rule_kinds() {
     );
     assert_eq!(
         UserRule::SemanticQuery {
-            text: NonBlank::new("q").expect("not blank"),
+            text: RuleQueryText::new("q").expect("valid query text"),
             threshold: sim(0.5),
         }
         .kind(),

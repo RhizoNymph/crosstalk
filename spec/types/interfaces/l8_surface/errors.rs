@@ -21,6 +21,7 @@ use crate::ids::{
 use crate::wire::DecodeErrorKind;
 
 use super::Permission;
+use super::export::ExportFormat;
 
 /// Why a query failed. Every variant is something the UI can act on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +196,10 @@ pub enum InputError {
     /// transmission selection over `TransmissionSelection::MAX`. `max` is
     /// the bound that applied and `got` the distinct ids asked for.
     TooManyIds { max: usize, got: usize },
+    /// An export in a format the gateway does not write: one outside
+    /// `Present::export_formats`. Refused after the permission check and
+    /// before anything is read (`ExportFormats::check`).
+    UnsupportedFormat { format: ExportFormat },
     /// Client input the HTTP layer could not decode as the route's request
     /// type (`crate::wire::decode_request`): not JSON, cut short, or JSON of
     /// the wrong shape, including an unknown field or variant and a value a

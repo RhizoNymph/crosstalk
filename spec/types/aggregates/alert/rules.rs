@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crate::aggregates::topic_history::{RemapError, TopicLineage};
 use crate::ids::{AlertRuleId, OperatorId, SinkId, TopicId};
-use crate::support::{Change, DisplayText, NonBlank, NonEmpty, Similarity, Timestamp};
+use crate::support::{Change, DisplayText, NonEmpty, QueryText, Similarity, Timestamp};
 use crate::wire::{Rejected, WireRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -137,6 +137,18 @@ pub fn is_reserved_rule_id(id: AlertRuleId) -> bool {
 /// of control characters.
 pub type RuleName = DisplayText<80>;
 
+/// The most characters a semantic rule's query holds. A query describes
+/// what to watch for in a sentence or two; a thousand characters stays well
+/// inside the context of the embedding models the gateway runs, so a query
+/// within the bound is refused by the model (`QueryTooLong`) only in
+/// unusual scripts.
+pub const RULE_QUERY_MAX_CHARS: usize = 1_000;
+
+/// A semantic rule's query text: trimmed, non-empty, at most
+/// [`RULE_QUERY_MAX_CHARS`] characters ([`QueryText`]). A client checks it
+/// with [`QueryText::new`] before sending; decoding refuses longer text.
+pub type RuleQueryText = QueryText<RULE_QUERY_MAX_CHARS>;
+
 /// Topics of one topic-model version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -164,7 +176,7 @@ pub enum UserRule {
     },
     /// The store embeds `text` with the current embedding model.
     SemanticQuery {
-        text: NonBlank,
+        text: RuleQueryText,
         threshold: Similarity,
     },
 }
@@ -206,7 +218,7 @@ pub struct AlertRuleConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SemanticQuery {
-    pub text: NonBlank,
+    pub text: RuleQueryText,
     pub embedding: Embedding,
 }
 

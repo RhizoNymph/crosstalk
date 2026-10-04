@@ -116,7 +116,12 @@ through `EdgeStore::agent_traffic`; the surface joins them.
   as source, target or repointed agent, oldest first, reverted ones with
   their `Reversal`; every `MergeVeto` with an end in the cluster; and the
   `AgentLookup`: `Canonical`, or `Redirected { from: id }` when `id` is
-  merged. The detail is a whole value, like a policy history.
+  merged. The detail is a whole value, like a policy history. Every
+  alias's merge record is among them, unreverted and with the alias as
+  source (`AliasMergeMissing` otherwise), so `AgentCluster::merge_of(alias)`
+  always finds when and by whom an alias was merged (`MergeRecord::at`,
+  `by`). `MergedInto` names that record and does not copy its time or
+  author: one fact, one home.
 - **Merging a cluster into itself.** `OperatorAction::merge_agents(caller,
   from, into)` builds the action; one id twice is `SelfMerge`, which never
   becomes an action, so it never reaches `act` or the audit log, and the
@@ -427,7 +432,7 @@ area ([wire_contract.md](wire_contract.md)).
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/types/batch.rs` | Bounded id batches for name lookups | `IdBatch` (checked: distinct, ascending, at most `MAX` = 1,000), `TooManyIds` |
-| `spec/types/aggregates/agents/mod.rs` | Agent read models | `AgentProfile` (checked), `AgentProfileParts`, `InvalidProfile`, `AgentTraffic`, `AgentRow`, `AgentCluster` (checked), `AgentClusterParts`, `InvalidCluster`, `AgentLookup`, `AgentDetail`, `AgentName` (`of`); `CanonicalStateKind: From<ActiveAgentState>` |
+| `spec/types/aggregates/agents/mod.rs` | Agent read models | `AgentProfile` (checked), `AgentProfileParts`, `InvalidProfile`, `AgentTraffic`, `AgentRow`, `AgentCluster` (checked; `merge_of`), `AgentClusterParts`, `InvalidCluster` (incl. `AliasMergeMissing`), `AgentLookup`, `AgentDetail`, `AgentName` (`of`); `CanonicalStateKind: From<ActiveAgentState>` |
 | `spec/types/aggregates/agents/filter.rs` | The agents list filter | `AgentFilter` (`matches`, `text_matches`), `AgentText` |
 | `spec/types/interfaces/l3_reconstruction/agents.rs` | L3's agent reads | `AgentReads` (`list`, `cluster`, `names`), `ActivityStore` (`record`, `last_seen`), `AgentReadError` |
 | `spec/types/aggregates/edge.rs` (part) | What a graph counts in total | `EdgeTotals` (`of`), read by `EdgeStore::totals` |
@@ -449,7 +454,8 @@ area ([wire_contract.md](wire_contract.md)).
   default filter. `AgentProfile` and `AgentCluster` are checked (no self or
   alias parent, distinct aliases merged into the agent, a redirect only
   from an alias, children outside the cluster, merge records and vetoes
-  about the cluster, once each). `AgentFilter::matches` is the list's
+  about the cluster, once each, and every alias's own unreverted merge
+  record among them: `surface.agent.alias-merge-record-present`). `AgentFilter::matches` is the list's
   definition. `agent(id)` answers for `canonical(id)` and says when it
   redirected.
 - A merge of two ids of one cluster is `Conflict(MergeIntoSelf)`, refused by

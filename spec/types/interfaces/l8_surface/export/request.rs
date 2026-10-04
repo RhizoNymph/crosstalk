@@ -159,6 +159,85 @@ pub enum ExportFormat {
     Parquet,
 }
 
+/// The formats a gateway writes, in the order its export form offers them
+/// (`Present::export_formats`). A format the gateway does not write is
+/// refused before anything is read ([`ExportFormats::check`]), so a client
+/// that offers only these never meets the refusal.
+///
+/// Built only through [`ExportFormats::new`]: at least one format, none
+/// twice. On the wire, an array of strings, `["jsonl", "parquet"]`, decoded
+/// through the constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "Vec<ExportFormat>", into = "Vec<ExportFormat>")]
+pub struct ExportFormats(Vec<ExportFormat>);
+
+/// Why a list of formats is not an [`ExportFormats`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidExportFormats {
+    Empty,
+    Duplicate(ExportFormat),
+}
+
+/// An export asked for a format the gateway does not write
+/// (`InvalidInput(UnsupportedFormat)` through `QueryError::from`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedFormat {
+    pub format: ExportFormat,
+}
+
+impl TryFrom<Vec<ExportFormat>> for ExportFormats {
+    type Error = Rejected<InvalidExportFormats>;
+
+    fn try_from(formats: Vec<ExportFormat>) -> Result<Self, Self::Error> {
+        Self::new(formats).map_err(|error| Rejected::new("export formats", error))
+    }
+}
+
+impl From<ExportFormats> for Vec<ExportFormat> {
+    fn from(formats: ExportFormats) -> Self {
+        formats.0
+    }
+}
+
+impl ExportFormats {
+    /// The formats in offer order; refuses an empty list and a repeat.
+    pub fn new(formats: Vec<ExportFormat>) -> Result<Self, InvalidExportFormats> {
+        if formats.is_empty() {
+            return Err(InvalidExportFormats::Empty);
+        }
+        for (index, format) in formats.iter().enumerate() {
+            if formats[..index].contains(format) {
+                return Err(InvalidExportFormats::Duplicate(*format));
+            }
+        }
+        Ok(Self(formats))
+    }
+
+    /// In offer order; never empty.
+    pub fn as_slice(&self) -> &[ExportFormat] {
+        &self.0
+    }
+
+    /// The format a form selects by default: the first offered.
+    pub fn first(&self) -> ExportFormat {
+        self.0.first().copied().unwrap_or(ExportFormat::Jsonl)
+    }
+
+    pub fn offers(&self, format: ExportFormat) -> bool {
+        self.0.contains(&format)
+    }
+
+    /// `UnsupportedFormat` for a format not offered. `QueryApi::export`
+    /// runs it after the permission check and before reading anything.
+    pub fn check(&self, format: ExportFormat) -> Result<(), UnsupportedFormat> {
+        if self.offers(format) {
+            Ok(())
+        } else {
+            Err(UnsupportedFormat { format })
+        }
+    }
+}
+
 /// One export request.
 ///
 /// Built only through [`ExportRequest::new`], which refuses

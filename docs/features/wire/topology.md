@@ -75,18 +75,18 @@ string.
 `SeriesGrid`, `SeriesStep`, `EdgeKey`, `EdgeSelector`, `AgentProfile` and
 `AgentCluster` decode through their constructors, so each constructor
 error is a decode error (one rejection test per error variant).
-`TopologyGraph` keeps public fields (tests build graphs that break one
-rule at a time), so stage 0 decoded it field by field; it now decodes
-through `TopologyGraph::check` (a private `RawTopologyGraph` mirror), which
-states every rule the type documents and `EdgeStore::graph` promises: no
-self-edge, no (from, to, route) twice, each share its stat under the
-weighting over the total, and the node rules of `check_nodes` (nodes cover
-endpoints and ancestors, no duplicates, no channel node, counts agree).
-JSON of a graph the server would never return is a decode error
-(`topology.wire.graph-decode-checked`). The share helpers are shared with
-`BipartiteGraph::new` (one tolerance, `TopologyGraph::SHARE_TOLERANCE`).
-Turning `TopologyGraph` into a fully checked type (private fields, one
-constructor) is a follow-up.
+`TopologyGraph` is a checked type like `BipartiteGraph`: private fields
+behind accessors, built only by `TopologyGraph::new` from its
+`TopologyGraphParts`, which are its wire shape, so decoding runs the same
+constructor (`topology.graph.checked-construction`). It checks every rule
+`EdgeStore::graph` promises: no self-edge, no (from, to, route) twice,
+each share its stat under the weighting over the total, and the node rules
+(nodes cover endpoints and ancestors, no duplicates, no channel node,
+counts agree). JSON of a graph the server could never build is a decode
+error (`topology.wire.graph-decode-checked`). The share helpers are shared
+with `BipartiteGraph::new` (one tolerance,
+`TopologyGraph::SHARE_TOLERANCE`). The JSON is the same as when the
+fields were public.
 
 ## Maps keyed by ids
 
@@ -103,7 +103,7 @@ and `QueryApi::agent_names` and `channel_names` return
 
 | File | Role |
 | --- | --- |
-| `spec/types/aggregates/edge.rs` | `TopologyGraph` decoded through `check`; `EdgeKey`, `EdgeSelector` (a request), `Weighting` (a request) |
+| `spec/types/aggregates/edge.rs` | `TopologyGraph` (checked; `TopologyGraphParts` on the wire, decoded through `new`); `EdgeKey`, `EdgeSelector` (a request), `Weighting` (a request) |
 | `spec/types/interfaces/l7_topology.rs` | `EdgeStore::agent_traffic` as a `BTreeMap` |
 | `spec/types/interfaces/l2_transport.rs` | `DeadLetter`, `ConsumerGroup` (a request) |
 | `spec/types/tests/wire/topology/` | `mod.rs` (fixtures, JSON edit helpers), `filter.rs` (the linked views' requests), `graph.rs` (`TopologyGraph`, nodes, totals, `EdgeKey`, edge drill-down), `access.rs` (`BipartiteGraph`, `ResourceUse`), `series.rs`, `quality.rs` |

@@ -51,14 +51,33 @@ use crate::aggregates::topic_history::{
 };
 use crate::ids::OperatorId;
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 /// How many versions retention keeps beyond the pinned and pending ones.
 ///
 /// Built only through [`RetentionPolicy::new`], which rejects fewer than
-/// [`RetentionPolicy::MIN_KEEP_LAST`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// [`RetentionPolicy::MIN_KEEP_LAST`]. Config; on the wire only inside the
+/// audit log's `ConfigChange::SetTopicRetention`, as `{"keep_last": 3}`,
+/// decoded through the constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawRetentionPolicy")]
 pub struct RetentionPolicy {
     keep_last: NonZeroU32,
+}
+
+/// [`RetentionPolicy`]'s field, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawRetentionPolicy {
+    keep_last: u32,
+}
+
+impl TryFrom<RawRetentionPolicy> for RetentionPolicy {
+    type Error = Rejected<InvalidRetention>;
+
+    fn try_from(raw: RawRetentionPolicy) -> Result<Self, Self::Error> {
+        Self::new(raw.keep_last).map_err(|error| Rejected::new("retention policy", error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

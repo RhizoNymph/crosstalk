@@ -18,7 +18,8 @@ and the insight bus events (L6): `aggregates/alert/rules.rs`,
 | `AlertRuleDef`, `AlertRule`, `ContentRule`, `TopicWatch`, `QueryWatch`, `SemanticQuery`, `BuiltinRule`, `AlertRuleKind`, `RuleStatus`, `RuleRevision` | response (`alert_rules`) and bus payload (`AlertRuleChanged`); `AlertRuleDef` is stamped (its creator) |
 | `TopicVersionHistory`, `TopicVersionInfo`, `TopicVersionStatus`, `FitRecord`, `CompletedFit`, `Retention`, `Pin` | response (`topic_versions`); `Pin` is stamped |
 | `TopicSizes`, `TopicSize`, `TopicLineage`, `LineageEntry`, `LineageLink`, `Topic`, `Embedding`, `EmbeddingModel` | response (`topic_sizes`, `topic_lineage`, `topics`) |
-| `ProjectionInfo`, `ProjectionSpec`, `ProjectionStatus`, `Fitted`, `ProjectedPoint` | response (`projection_status`, `projections`, an export's point rows); `ProjectionInfo` and `ProjectionSpec` are stamped |
+| `ProjectionInfo`, `ProjectionSpec`, `ProjectionStatus`, `Fitted`, `ProjectedPoint`, `PointRoute` | response (`projection_status`, `projections`, an export's point rows); `ProjectionInfo` and `ProjectionSpec` are stamped |
+| `RetentionPolicy`, `FrameRetention` | inside an audit entry's `ConfigChange` (`SetTopicRetention`, `SetFrameRetention`); `FrameRetention` also in `Present` ([surface reads](surface_reads.md#the-present)) |
 | `SearchResults`, `SearchHit` | response (`search`) |
 | `InsightEvent`, `ClassificationCause`, `AlertRevision` | bus payload, inside `Envelope` |
 
@@ -27,7 +28,7 @@ and the insight bus events (L6): `aggregates/alert/rules.rs`,
 `Projection` and `ProjectionFrame` have no serde (see
 [`QueryApi::projection`](#queryapiprojection)). `AlertRuleSet`,
 `AlertRuleConfig`, `RuleDefinition`, `StaleReason`, `AlertDraft`,
-`TriageOutcome`, `RetentionPolicy`, `PinChange`, `TopicVersionStatusKind`,
+`TriageOutcome`, `PinChange`, `TopicVersionStatusKind`,
 `TopicAssignment`, `Assignment`, `SearchQuery`, `Sample`, the L6 traits
 and store errors are not on the wire: in-memory indexes, config,
 in-process values, and errors that reach a client as the `QueryError`
@@ -42,8 +43,24 @@ or a user rule under an id in the reserved range, is
 `invalid alert rule: BuiltinId` or `Reserved` (`InvalidRuleDef`), in a
 response and on the bus alike. `TopicVersionInfo`, `TopicVersionHistory`,
 `TopicSizes`, `LineageEntry`, `TopicLineage`, `Embedding`,
-`ProjectionLimit`, `ProjectionParams` and `ProjectionInfo` decode through
-their constructors, with a rejection test per constructor error.
+`ProjectionLimit`, `ProjectionParams`, `ProjectionInfo` and
+`RetentionPolicy` (`{"keep_last": 3}`, at least 2) decode through their
+constructors, with a rejection test per constructor error. A
+`FrameRetention` is whole microseconds and never zero.
+
+A semantic rule's text (`UserRule::SemanticQuery::text`,
+`SemanticQuery::text`) is a `RuleQueryText`: trimmed, non-empty and at most
+`RULE_QUERY_MAX_CHARS` (1,000) characters, so `"   "` is
+`invalid query text: Blank` and longer text
+`invalid query text: TooLong { max: 1000, got: .. }`. A client checks it
+with `RuleQueryText::new` before sending.
+
+A `ProjectedPoint`'s `route` is a `PointRoute`, adjacently tagged: a
+channel route carries its channel, `{"type": "channel", "data": "<id>"}`,
+and the others nothing, `{"type": "direct"}`; a bare kind string
+(`"channel"`), a channel route without its channel and another route with
+one are decode errors. The channel is the canonical one when the sample
+was read.
 `TopicVersionHistory` is `{"versions": [..]}`: the active version's index
 is found again from the statuses.
 
@@ -93,7 +110,10 @@ job is `ready` fetches its frame bytes, decodes them with
 same bytes for the canvas) and joins the two with `Projection::new`, which
 refuses a frame whose header disagrees with the job (id, topic version,
 watermark, limit, counts). `a_projection_travels_as_info_json_and_frame_bytes`
-pins that round trip. The routes themselves are HTTP routing, outside
+pins that round trip. The frame is format 2: its channels table and
+channel column let the canvas colour points by channel from the bytes
+alone, and one `channel_names` batch over the table names them; a decoder
+refuses format 1. The routes themselves are HTTP routing, outside
 this feature.
 
 ## Bus events
@@ -110,12 +130,14 @@ decode errors there too.
 | --- | --- |
 | `spec/types/aggregates/alert/mod.rs` | Alerts (`Alert`, `AlertState`, `AlertSubject`, `SuppressReason`, `AlertRevision`, …); re-exports every rule type, so `aggregates::alert::<Type>` paths are unchanged |
 | `spec/types/aggregates/alert/rules.rs` | Alert rules (`UserRule`, a request; `AlertRuleDef`, decoded through `builtin` or `load`), split out when `alert.rs` reached 1000 lines |
-| `spec/types/support.rs` | `Finite`, `NotFinite` |
-| `spec/types/aggregates/projection/mod.rs` | `ProjectionParams` (a request), `ProjectionSpec` (decoded pinned; stamped), `ProjectionInfo`, `ProjectedPoint` (`Finite` coordinates) |
+| `spec/types/support.rs` | `Finite`, `NotFinite`, `QueryText` (a semantic rule's text, as `RuleQueryText`) |
+| `spec/types/aggregates/projection/mod.rs` | `ProjectionParams` (a request), `ProjectionSpec` (decoded pinned; stamped), `ProjectionInfo`, `ProjectedPoint` (`Finite` coordinates, a `PointRoute`), `FrameRetention` |
+| `spec/types/aggregates/retention.rs` | `RetentionPolicy`, decoded through `RetentionPolicy::new` |
 | `spec/types/tests/wire/analysis/` | `rules.rs`, `topics.rs`, `projections.rs`, `insight.rs` |
-| `spec/types/tests/golden/{rules,topics,projections,insight}/` | 13, 10, 9 and 11 goldens |
+| `spec/types/tests/golden/{rules,topics,projections,insight}/` | 13, 10, 10 and 11 goldens |
 
 ## Invariants
 
-`canonical.wire.finite-floats`; the general wire invariants take the
-area's goldens and rejections as evidence.
+`canonical.wire.finite-floats`, `analysis.rule.query-text-bounded`,
+`analysis.projection.point-channel-matches-route`; the general wire
+invariants take the area's goldens and rejections as evidence.
