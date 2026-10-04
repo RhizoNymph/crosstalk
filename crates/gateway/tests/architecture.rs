@@ -13,7 +13,10 @@
 //!    dependencies.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client` and `eval` compose layer crates. `eval` (the evaluation
+//! `client`, `eval` and `ui` compose layer crates. `ui` (the operator UI,
+//! `crosstalk-ui`) is an application: today it depends on the spec alone,
+//! and it may later depend on `surface`, `api` or `client`; no layer crate
+//! may depend on it. `eval` (the evaluation
 //! harness, `crates/eval`) is registered before it exists: the rule
 //! classifies it, and the workspace check does not require it yet
 //! ([`Composer::required`]).
@@ -68,21 +71,24 @@ impl Layer {
     }
 }
 
-/// The crates allowed to wire layer crates together.
+/// The crates allowed to wire layer crates together: the gateway, its
+/// HTTP server and client, the evaluation harness, and the operator UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Composer {
     Api,
     Client,
     Eval,
     Gateway,
+    Ui,
 }
 
 impl Composer {
-    const ALL: [Composer; 4] = [
+    const ALL: [Composer; 5] = [
         Composer::Api,
         Composer::Client,
         Composer::Eval,
         Composer::Gateway,
+        Composer::Ui,
     ];
 
     fn dir(self) -> &'static str {
@@ -91,6 +97,7 @@ impl Composer {
             Composer::Client => "client",
             Composer::Eval => "eval",
             Composer::Gateway => "gateway",
+            Composer::Ui => "ui",
         }
     }
 
@@ -588,4 +595,24 @@ fn eval_composes_gateway_and_layers_and_is_not_yet_required() {
             .filter(|c| *c != Composer::Eval)
             .all(Composer::required)
     );
+}
+
+#[test]
+fn ui_is_an_application_that_may_compose_layers() {
+    assert_eq!(Role::of("crosstalk-ui"), Role::Composer(Composer::Ui));
+    assert!(Composer::Ui.required());
+    for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+        assert_eq!(check(&edge("ui", "spec", kind)), None);
+        for to in ["surface", "api", "client"] {
+            assert_eq!(check(&edge("ui", to, kind)), None, "ui -> {to}");
+        }
+        for layer in Layer::ALL {
+            assert_eq!(
+                check(&edge(layer.dir(), "ui", kind)),
+                Some(Violation::LayerOnComposer {
+                    edge: edge(layer.dir(), "ui", kind)
+                })
+            );
+        }
+    }
 }
