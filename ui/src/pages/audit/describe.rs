@@ -83,16 +83,6 @@ pub fn note(action: &AuditedAction) -> Option<&str> {
     }
 }
 
-/// Whether an entry changed a channel's policy: its policy history.
-pub fn is_policy_change(action: &AuditedAction) -> bool {
-    matches!(
-        action,
-        AuditedAction::Operator(
-            OperatorAction::SetPolicy { .. } | OperatorAction::PromoteChannel { .. }
-        ) | AuditedAction::Config { .. }
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
@@ -116,7 +106,6 @@ mod tests {
         });
         assert_eq!(describe(&action), "set policy to sanctioned");
         assert_eq!(note(&action), Some("team wiki"));
-        assert!(is_policy_change(&action));
     }
 
     #[test]
@@ -155,7 +144,6 @@ mod tests {
             alert: AlertId::from_ulid(3),
         });
         assert_eq!(describe(&ack), "acknowledged alert");
-        assert!(!is_policy_change(&ack));
     }
 
     #[test]

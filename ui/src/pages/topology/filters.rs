@@ -20,7 +20,6 @@ use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, FACET, INPUT, LINK};
 use crate::components::href::state_pairs;
 use crate::components::{agent_node_name, href, route_kind_name, short_id};
-use crate::contract::channels::ChannelListFilter;
 use crate::pages::common::lookup::agent_names;
 use crate::pages::common::topics::all_topics;
 use crate::pages::common::transmissions::summary_name;
@@ -29,6 +28,7 @@ use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 pub const ROUTE_KINDS: [RouteKind; 4] = [
     RouteKind::Channel,
@@ -129,13 +129,14 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
 
     let request = crate::pages::common::paging::first(crate::pages::common::paging::PAGE_SIZE);
     let mut channels: Vec<(ChannelId, String)> = match backend
-        .channels(caller, &ChannelListFilter::default(), &request)
+        .channels(caller, &ChannelFilter::default(), &request)
         .await
     {
         Ok(page) => page
+            .value
             .items()
             .iter()
-            .map(|s| (s.channel.id, summary_name(s)))
+            .map(|row| (row.channel().id, summary_name(row)))
             .collect(),
         Err(error) => {
             tracing::warn!(error = ?error, "filter channel choices unavailable");

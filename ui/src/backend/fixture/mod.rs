@@ -24,7 +24,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-use crosstalk_spec::aggregates::access::BipartiteGraph;
+use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -35,15 +35,19 @@ use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySer
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
+use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::derived::flow::channel::Declaration;
+use crosstalk_spec::derived::flow::channel::policy::{PolicyAuthor, PolicyHistory};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::{SearchRequest, TopicPage};
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, SearchRequest, TopicPage};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
@@ -54,9 +58,6 @@ use super::{Backend, Result};
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::alerts::Alert;
-use crate::contract::channels::{
-    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
-};
 use crate::contract::present::Present;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crate::contract::rules::{RuleDef, SinkInfo};
@@ -64,7 +65,7 @@ use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, ProjectionList, SearchList, TopicList, TransmissionList,
+    PageRequest, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
 };
 
 use queries::{Ctx, require};
@@ -341,40 +342,69 @@ impl Backend for FixtureBackend {
     async fn channels(
         &self,
         caller: &Caller,
-        filter: &ChannelListFilter,
+        filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
-    ) -> Result<Page<ChannelSummary, ChannelList>> {
+    ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::channels(ctx, filter, page))
+        self.read(|ctx| queries::channels::rows::list(ctx, filter, page))
             .await
     }
 
-    async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<ChannelSummary>> {
+    async fn channel(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        window: Option<TimeWindow>,
+    ) -> Result<Option<Watermarked<ChannelRow>>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::lists::channel(ctx, id))).await
+        self.read(|ctx| queries::channels::rows::one(ctx, id, window))
+            .await
+    }
+
+    async fn policy_history(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+    ) -> Result<Option<PolicyHistory>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::channels::policy_history(ctx, channel)))
+            .await
     }
 
     async fn channel_resources(
         &self,
         caller: &Caller,
-        id: ChannelId,
+        channel: ChannelId,
         window: TimeWindow,
-    ) -> Result<Vec<ResourceUse>> {
+        page: &PageRequest<ResourceUseList>,
+    ) -> Result<Watermarked<ResourceUsePage>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::channel_resources(ctx, id, window))
+        self.read(|ctx| queries::channels::resources::page(ctx, channel, window, page))
             .await
     }
 
+    /// The declaration `PromoteChannel` would record now (the caller, the
+    /// fixture's clock, `pattern`), previewed against the registry's
+    /// coverage.
     async fn promotion_preview(
         &self,
         caller: &Caller,
-        id: ChannelId,
+        channel: ChannelId,
         pattern: &ResourcePattern,
     ) -> Result<PromotionPreview> {
         require(caller, Permission::View)?;
+        let declaration = Declaration {
+            pattern: pattern.clone(),
+            by: PolicyAuthor::Operator(caller.operator()),
+            at: clock::NOW,
+        };
         let state = self.state.read().await;
-        let plan = queries::promotion::plan(&self.world, &state, id, pattern)?;
-        Ok(queries::promotion::preview(&self.world, plan, id))
+        PromotionPreview::from_registry(queries::channels::coverage(
+            &self.world,
+            &state,
+            channel,
+            &declaration,
+        ))
     }
 
     async fn agents(
@@ -405,11 +435,10 @@ impl Backend for FixtureBackend {
     async fn channel_names(
         &self,
         caller: &Caller,
-        ids: &[ChannelId],
+        ids: &IdBatch<ChannelId>,
     ) -> Result<HashMap<ChannelId, ChannelName>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::names::channels(ctx, ids)))
-            .await
+        self.read(|ctx| queries::channels::names(ctx, ids)).await
     }
 
     async fn alerts(

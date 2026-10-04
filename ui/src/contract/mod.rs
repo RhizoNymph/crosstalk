@@ -9,8 +9,6 @@
 pub mod actions;
 pub mod agents;
 pub mod alerts;
-pub mod channels;
-pub mod graph;
 pub mod present;
 pub mod research;
 pub mod rules;

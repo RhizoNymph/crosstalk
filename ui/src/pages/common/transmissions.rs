@@ -19,7 +19,7 @@ use topcoat::context::Cx;
 use topcoat::view::{View, component, view};
 
 use super::links::{agent_url, channel_url, transmission_url};
-use super::lookup::AgentNames;
+use super::lookup::{AgentNames, id_batches};
 use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::form::LINK;
@@ -27,20 +27,19 @@ use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, format_bytes, format_time_short, kind_badge, route_badge, short_id,
 };
-use crate::contract::channels::ChannelSummary;
 use crate::data::names::{channel_name, locator_name, pattern_name};
 use crate::error::UiError;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
-/// A channel list row's name: the declared pattern, else the seed
-/// resource, else the id's tail. Names follow `data::names`, as the graph
-/// shows them.
-pub fn summary_name(summary: &ChannelSummary) -> String {
-    match (summary.channel.origin.pattern(), &summary.seed) {
+/// A channel row's name: the declared pattern, else the seed resource,
+/// else the id's tail. Names follow `data::names`, as the graph shows them.
+pub fn summary_name(row: &ChannelRow) -> String {
+    match (row.channel().origin.pattern(), row.seed()) {
         (Some(pattern), _) => pattern_name(pattern),
         (None, Some(seed)) => locator_name(&seed.locator),
-        (None, None) => short_id(summary.channel.id.to_ulid()),
+        (None, None) => short_id(row.channel().id.to_ulid()),
     }
 }
 
@@ -63,28 +62,30 @@ impl ChannelNames {
     }
 }
 
-/// Names for every distinct channel in `ids`, in one `channel_names` call.
-/// A failed lookup degrades to short ids.
+/// Names for every distinct channel in `ids`: one `channel_names` call
+/// per `IdBatch` of them (one call for any page of rows). A failed lookup
+/// degrades to short ids.
 pub async fn channel_names(
     cx: &Cx,
     caller: &Caller,
     ids: impl IntoIterator<Item = ChannelId>,
 ) -> ChannelNames {
-    let mut wanted: Vec<ChannelId> = ids.into_iter().collect();
-    wanted.sort_unstable();
-    wanted.dedup();
-    if wanted.is_empty() {
-        return ChannelNames::default();
-    }
-    match backend(cx).channel_names(caller, &wanted).await {
-        Ok(names) => ChannelNames(
+    let mut names = HashMap::new();
+    let looked_up = async {
+        for batch in id_batches(ids)? {
+            names.extend(backend(cx).channel_names(caller, &batch).await?);
+        }
+        Ok::<_, QueryError>(())
+    };
+    match looked_up.await {
+        Ok(()) => ChannelNames(
             names
                 .iter()
                 .map(|(id, name)| (*id, channel_name(name)))
                 .collect(),
         ),
         Err(error) => {
-            tracing::warn!(error = ?error, channels = wanted.len(), "channel names unavailable");
+            tracing::warn!(error = ?error, "channel names unavailable");
             ChannelNames::default()
         }
     }

@@ -26,6 +26,7 @@ use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{
     Tone, claim_badge, empty_state, error_panel, kind_badge, route_badge, state_badge,
 };
+use crate::pages::channels::list::Activity;
 
 const CARD: &str =
     "rounded border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950";
@@ -133,6 +134,9 @@ pub async fn topology_drawer(
                     edge_list(title: "Its heaviest edges", items: panel.edges, sel: &sel, cursor: &cursor)
                 },
                 Ok((_, Drawer::Channel(panel))) => {
+                    let [writers, readers, transmissions] = panel.activity.cells();
+                    let last_activity = panel.activity.last();
+                    let superseded = panel.activity == Activity::Superseded;
                     <div class=(CARD)>
                         <div class=(HEAD)>"Channel"</div>
                         <p class="break-all font-mono text-sm font-medium">
@@ -142,15 +146,15 @@ pub async fn topology_drawer(
                             kind_badge(value: panel.origin)
                             kind_badge(value: panel.detection)
                             kind_badge(value: panel.policy)
-                            if panel.superseded {
+                            if superseded {
                                 state_badge(label: "superseded", tone: Tone::Muted)
                             }
                         </div>
                         <dl class=(format!("{DL} mt-2"))>
-                            <dt class=(DT)>"writers"</dt><dd class=(DD)>(panel.writers)</dd>
-                            <dt class=(DT)>"readers"</dt><dd class=(DD)>(panel.readers)</dd>
-                            <dt class=(DT)>"transmissions"</dt><dd class=(DD)>(panel.transmissions)</dd>
-                            <dt class=(DT)>"last activity"</dt><dd class=(DD)>(panel.last_activity)</dd>
+                            <dt class=(DT)>"writers"</dt><dd class=(DD)>(writers)</dd>
+                            <dt class=(DT)>"readers"</dt><dd class=(DD)>(readers)</dd>
+                            <dt class=(DT)>"transmissions"</dt><dd class=(DD)>(transmissions)</dd>
+                            <dt class=(DT)>"last activity"</dt><dd class=(DD)>(last_activity)</dd>
                         </dl>
                         <div class="mt-2 flex gap-3 text-xs">
                             <a class=(LINK) href=(panel.url)>"Open channel page"</a>

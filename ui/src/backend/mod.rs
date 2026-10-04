@@ -10,7 +10,7 @@ pub mod fixture;
 use std::collections::HashMap;
 use std::future::Future;
 
-use crosstalk_spec::aggregates::access::BipartiteGraph;
+use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -21,15 +21,18 @@ use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySer
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
+use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
+use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::{SearchRequest, TopicPage};
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, SearchRequest, TopicPage};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
@@ -38,16 +41,13 @@ use crosstalk_spec::support::TimeWindow;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::alerts::Alert;
-use crate::contract::channels::{
-    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
-};
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crate::contract::rules::{RuleDef, SinkInfo};
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, ProjectionList, SearchList, TopicList, TransmissionList,
+    PageRequest, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
 };
 
 pub type Result<T> = std::result::Result<T, QueryError>;
@@ -256,37 +256,61 @@ pub trait Backend: Send + Sync + 'static {
         id: ProjectionId,
     ) -> impl Future<Output = Result<Projection>> + Send;
 
-    // Channels and agents (items 1, 5).
+    // Channels and promotion: exactly `QueryApi`'s methods.
 
+    /// View. A page of the channels `filter` matches, newest first, each a
+    /// `ChannelRow`: in force with writers, readers and transmissions
+    /// counted in `filter.window` (all time when `None`), or superseded
+    /// with its supersession and no counts. An unaligned window is
+    /// `InvalidInput(UnalignedWindow)`.
     fn channels(
         &self,
         caller: &Caller,
-        filter: &ChannelListFilter,
+        filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
-    ) -> impl Future<Output = Result<Page<ChannelSummary, ChannelList>>> + Send;
+    ) -> impl Future<Output = Result<Watermarked<Page<ChannelRow, ChannelList>>>> + Send;
 
+    /// View. The channel stored under `id` as a row counted over `window`;
+    /// a superseded id answers with its own record and its supersession.
+    /// `None` for an unknown channel.
     fn channel(
         &self,
         caller: &Caller,
         id: ChannelId,
-    ) -> impl Future<Output = Result<Option<ChannelSummary>>> + Send;
+        window: Option<TimeWindow>,
+    ) -> impl Future<Output = Result<Option<Watermarked<ChannelRow>>>> + Send;
 
+    /// View. Every policy decision recorded for the channel, oldest first;
+    /// its last entry is the current policy. `None` for an unknown channel.
+    fn policy_history(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+    ) -> impl Future<Output = Result<Option<PolicyHistory>>> + Send;
+
+    /// View. A page of the resources of `channel`'s canonical channel
+    /// accessed in `window`, newest first, with canonical writers and
+    /// readers. Unknown is `NotFound`.
     fn channel_resources(
         &self,
         caller: &Caller,
-        id: ChannelId,
+        channel: ChannelId,
         window: TimeWindow,
-    ) -> impl Future<Output = Result<Vec<ResourceUse>>> + Send;
+        page: &PageRequest<ResourceUseList>,
+    ) -> impl Future<Output = Result<Watermarked<ResourceUsePage>>> + Send;
 
-    /// What `PromoteChannel` with `pattern` would do (item 26). Needs
-    /// `View`; an unknown channel is `NotFound`, while the reasons it would
-    /// be refused are reported in the preview.
+    /// View. What `PromoteChannel { channel, pattern, .. }` would do if the
+    /// caller sent it now: superseded, not discovered and overlapping are a
+    /// preview with that `conflict()`; unknown is `NotFound`, a pattern
+    /// missing the seed `InvalidInput(PatternMissesSeed)`.
     fn promotion_preview(
         &self,
         caller: &Caller,
-        id: ChannelId,
+        channel: ChannelId,
         pattern: &ResourcePattern,
     ) -> impl Future<Output = Result<PromotionPreview>> + Send;
+
+    // Agents (items 1, 5).
 
     fn agents(
         &self,
@@ -303,7 +327,7 @@ pub trait Backend: Send + Sync + 'static {
         id: AgentId,
     ) -> impl Future<Output = Result<Option<AgentDetail>>> + Send;
 
-    // Names (item 24). Both need `View`; unknown ids are left out.
+    // Names. Both need `View`; unknown ids are left out.
 
     /// Names for many agents at once, keyed by the id asked for. An alias
     /// is named by its canonical agent.
@@ -313,12 +337,13 @@ pub trait Backend: Send + Sync + 'static {
         ids: &[AgentId],
     ) -> impl Future<Output = Result<HashMap<AgentId, AgentName>>> + Send;
 
-    /// Names for many channels at once, keyed by the id asked for. A
-    /// superseded channel is named by the channel in force.
+    /// View. Exactly `QueryApi::channel_names`: for each known id of the
+    /// batch, keyed by that id, the name of the channel in force it
+    /// resolves to.
     fn channel_names(
         &self,
         caller: &Caller,
-        ids: &[ChannelId],
+        ids: &IdBatch<ChannelId>,
     ) -> impl Future<Output = Result<HashMap<ChannelId, ChannelName>>> + Send;
 
     // Alerts and rules (items 1, 18).

@@ -5,8 +5,7 @@
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 
-use crate::contract::channels::ChannelName;
-use crate::contract::graph::ChannelShape;
+use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelShape};
 
 /// A locator as one line: host and path for URLs, the path for files, the
 /// server and tool for MCP resources.
@@ -58,9 +57,10 @@ pub fn shape_name(shape: &ChannelShape) -> String {
     }
 }
 
-/// A batch-looked-up channel's name.
+/// A batch-looked-up channel's name: its pattern when declared, its seed
+/// locator when discovered.
 pub fn channel_name(name: &ChannelName) -> String {
-    shape_name(&name.shape)
+    shape_name(name.shape())
 }
 
 #[cfg(test)]

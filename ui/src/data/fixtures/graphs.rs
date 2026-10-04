@@ -26,9 +26,9 @@ use crosstalk_spec::observed::message::ToolName;
 use crosstalk_spec::support::{NonBlank, Share, TimeWindow};
 
 use super::{HOUR_MICROS, Rng, agent_id, channel_id, non_zero, ts, watermarked, window};
-use crate::contract::graph::ChannelShape;
 use crate::data::names::shape_name;
 use crate::pages::common::transmissions::ChannelNames;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelShape;
 
 struct AgentSpec {
     n: u128,

@@ -234,8 +234,13 @@ fn confirmed_transmissions_have_text_and_assignments() {
                 assert_eq!(c.content().iter().count(), record.texts.len());
                 assert_eq!(record.from, Some(c.from()));
                 assert_eq!(record.matched_bytes, c.matched_bytes().get());
-                assert_eq!(record.assignments.len(), 3);
-                assert_eq!(record.assignments[0], Assignment::Outlier, "v0 is unfitted");
+                // Only a classified transmission has a topic.
+                if matches!(record.transmission.state, TransmissionState::Confirmed(_)) {
+                    assert!(record.assignments.is_empty(), "not classified yet");
+                } else {
+                    assert_eq!(record.assignments.len(), 3);
+                    assert_eq!(record.assignments[0], Assignment::Outlier, "v0 is unfitted");
+                }
                 for (m, text) in c.content().iter().zip(&record.texts) {
                     // The span and the match locate their text in the
                     // stored bodies, as the evidence page cuts it.

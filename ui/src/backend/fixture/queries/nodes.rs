@@ -1,6 +1,6 @@
 //! Graph nodes as `crosstalk_spec::aggregates::node` defines them: one per
 //! endpoint and canonical ancestor, read from the agent and channel records
-//! at query time. Also the channel shape the name lookups share.
+//! at query time.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,17 +9,14 @@ use crosstalk_spec::aggregates::node::{
     AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
 };
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
-use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::observed::agent::{AgentLabel, ClaimSet};
-use crosstalk_spec::observed::message::ToolName;
 use crosstalk_spec::support::NonBlank;
 
 use crate::backend::Result;
 use crate::backend::fixture::store::ChannelRecord;
 use crate::contract::agents::AgentState;
-use crate::contract::graph::ChannelShape;
 use crate::data::names::{locator_name, pattern_name};
 
 use super::Ctx;
@@ -153,10 +150,7 @@ pub fn channel_nodes(
 }
 
 fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<ChannelNode> {
-    let channel = &record.channel;
-    if record.superseded.is_some() {
-        return Err(store("superseded channel as a node", channel.id));
-    }
+    let channel = record.channel();
     let origin_kind = CanonicalOriginKind::of(&channel.origin)
         .ok_or_else(|| store("superseded channel as a node", channel.id))?;
     Ok(ChannelNode {
@@ -173,7 +167,7 @@ fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<ChannelNode> {
 /// pattern of a channel declared before traffic, otherwise its seed's
 /// locator with the count of further resources (`… (+12)`).
 fn locator_summary(ctx: &Ctx, record: &ChannelRecord) -> Result<NonBlank> {
-    let channel = &record.channel;
+    let channel = record.channel();
     let text = match (&channel.origin, channel.origin.seed()) {
         (
             ChannelOrigin::Declared {
@@ -200,26 +194,4 @@ fn locator_summary(ctx: &Ctx, record: &ChannelRecord) -> Result<NonBlank> {
         (_, None) => return Err(store("channel without pattern or seed", channel.id)),
     };
     NonBlank::new(&text).map_err(|e| store("locator summary", e))
-}
-
-/// What a channel is named by: a declared channel's pattern, else its seed
-/// resource's locator.
-pub fn shape(ctx: &Ctx, record: &ChannelRecord) -> ChannelShape {
-    let channel = &record.channel;
-    match (channel.origin.pattern(), channel.origin.seed()) {
-        (Some(pattern), _) => ChannelShape::Pattern(pattern.clone()),
-        (None, seed) => {
-            let seed = seed.map_or(channel.id.as_ulid(), |seed| seed.resource.as_ulid());
-            match ctx
-                .world
-                .resource(crosstalk_spec::ids::ResourceId::from_ulid(seed))
-            {
-                Some(resource) => ChannelShape::Seed(resource.locator.clone()),
-                None => ChannelShape::Seed(Locator::Opaque {
-                    tool: ToolName("unknown".to_owned()),
-                    key: format!("{seed:032x}"),
-                }),
-            }
-        }
-    }
 }

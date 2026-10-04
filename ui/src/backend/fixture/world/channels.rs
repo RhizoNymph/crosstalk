@@ -1,28 +1,35 @@
 //! The channels: declared and discovered, in every detection state and
-//! policy, each with its resources and the agents that use it.
+//! policy, each with its resources, the agents that use it and its policy
+//! history.
 //!
 //! Detection is filled in after traffic is generated ([`finish`]), from the
 //! channel's actual first access, first cross access and transmissions.
+//! The world's one past promotion is then applied as the spec plans it
+//! ([`promotion::plan`]): the team-notes channel keeps its id and gains the
+//! pattern, and the discovered channels the pattern covers are superseded,
+//! their detection frozen at the promotion while later confirmations on
+//! them advance the promoted channel's ("Detection follows resolution").
 
 use std::collections::HashMap;
 
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
-use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
-use crosstalk_spec::derived::flow::channel::{
-    Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed,
+use crosstalk_spec::derived::flow::channel::policy::{
+    Policy, PolicyAuthor, PolicyDecision, PolicyHistory,
 };
-use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
+use crosstalk_spec::derived::flow::channel::promotion::{self, Registered};
+use crosstalk_spec::derived::flow::channel::{
+    Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed, Supersession,
+};
+use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::{AgentId, ChannelId, ResourceId};
 use crosstalk_spec::support::Timestamp;
 
 use crate::backend::fixture::clock::{DAY, Mint, NOW, minus, plus};
 use crate::backend::fixture::store::ChannelRecord;
 use crate::backend::fixture::text::Theme;
-use crate::contract::channels::Supersession;
 
-use super::drafts::{Target, drafts};
-use super::history::OPERATOR_RESEARCHER;
-use super::traffic::Traffic;
+use super::drafts::{DraftOrigin, Target, decisions, drafts, team_notes_promotion};
+use super::traffic::{ChannelStats, Traffic};
 use super::{Cast, GenError};
 
 pub use super::drafts::{
@@ -42,7 +49,9 @@ pub enum ChannelKey {
     DesignDocs,
     /// Declared, sanctioned, unused: `/mnt/shared/releases` on `nfs-01`.
     ReleaseBucket,
-    /// Declared by an operator's promotion; supersedes `OldTeamNotes`.
+    /// Discovered at `notes.corp.internal/team-a/retro`, then promoted by
+    /// the researcher with the `/team-a` prefix (sanctioned): declared,
+    /// same id, active. Its promotion superseded `OldTeamNotes`.
     TeamNotes,
     /// Discovered, unreviewed, active: a public wiki page agents use to
     /// coordinate (`wiki.example.org`).
@@ -63,7 +72,8 @@ pub enum ChannelKey {
     /// Discovered, unreviewed, candidate: an S3 prefix with cross accesses
     /// but no content match.
     S3Handoff,
-    /// Discovered, superseded by `TeamNotes`.
+    /// Discovered at `notes.corp.internal/team-a/standup`, unreviewed,
+    /// superseded by `TeamNotes`'s promotion (detection frozen there).
     OldTeamNotes,
 }
 
@@ -71,9 +81,7 @@ pub enum ChannelKey {
 pub struct ChannelSpec {
     pub key: ChannelKey,
     pub id: ChannelId,
-    /// `Some` for declared channels.
-    declared: Option<(ResourcePattern, PolicyAuthor, Timestamp)>,
-    policy: Policy,
+    origin: DraftOrigin,
     target: Target,
     /// Resources, as locators with their ids. A discovered channel's first
     /// resource is its seed.
@@ -101,10 +109,13 @@ impl ChannelPlan {
     }
 
     pub fn id(&self, key: ChannelKey) -> Result<ChannelId, GenError> {
+        self.spec(key).map(|s| s.id)
+    }
+
+    fn spec(&self, key: ChannelKey) -> Result<&ChannelSpec, GenError> {
         self.specs
             .iter()
             .find(|s| s.key == key)
-            .map(|s| s.id)
             .ok_or_else(|| GenError::Missing(format!("channel {key:?}")))
     }
 }
@@ -121,8 +132,7 @@ pub fn plan(mint: &mut Mint, cast: &Cast) -> Result<ChannelPlan, GenError> {
         specs.push(ChannelSpec {
             key: draft.key,
             id,
-            declared: draft.declared,
-            policy: draft.policy,
+            origin: draft.origin,
             target: draft.target,
             resources,
             from: draft.window.0,
@@ -137,112 +147,187 @@ pub fn plan(mint: &mut Mint, cast: &Cast) -> Result<ChannelPlan, GenError> {
     Ok(ChannelPlan { specs })
 }
 
-/// Fills in each channel's detection state from its generated traffic.
-pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord>, GenError> {
-    let team_notes = plan.id(ChannelKey::TeamNotes)?;
-    let mut out = Vec::new();
-    for spec in &plan.specs {
-        let stats = traffic.channel_stats(spec.id);
-        let detection = || -> Result<TrafficDetection, GenError> {
-            let missing = |what: &str| GenError::Missing(format!("{what} on {:?}", spec.key));
-            Ok(match spec.target {
-                Target::Observed | Target::Awaiting | Target::Unused => {
-                    TrafficDetection::Observed {
-                        first_access: stats.first_access.ok_or_else(|| missing("access"))?.0,
-                    }
-                }
-                Target::Candidate => TrafficDetection::Candidate {
-                    first_cross_access: stats
-                        .first_cross_access
-                        .ok_or_else(|| missing("cross access"))?,
+/// The traffic detection `spec`'s target state takes from `stats`.
+fn traffic_detection(
+    spec: &ChannelSpec,
+    stats: &ChannelStats,
+) -> Result<TrafficDetection, GenError> {
+    let missing = |what: &str| GenError::Missing(format!("{what} on {:?}", spec.key));
+    Ok(match spec.target {
+        Target::Observed | Target::Awaiting | Target::Unused => TrafficDetection::Observed {
+            first_access: stats.first_access.ok_or_else(|| missing("access"))?.0,
+        },
+        Target::Candidate => TrafficDetection::Candidate {
+            first_cross_access: stats
+                .first_cross_access
+                .ok_or_else(|| missing("cross access"))?,
+        },
+        Target::Active => {
+            let (since, _) = stats.first_confirmed.ok_or_else(|| missing("confirm"))?;
+            let (_, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
+            TrafficDetection::Active {
+                since,
+                last_transmission: last,
+            }
+        }
+        Target::Dormant => {
+            let (at, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
+            TrafficDetection::Dormant {
+                since: plus(at, DAY),
+                last_transmission: last,
+            }
+        }
+    })
+}
+
+/// A channel as discovered or declared, before any promotion, with its
+/// detection over `stats`.
+fn first_origin(
+    spec: &ChannelSpec,
+    traffic: &Traffic,
+    stats: &ChannelStats,
+) -> Result<(ChannelOrigin, Vec<ResourceId>, Timestamp), GenError> {
+    let resource_ids: Vec<ResourceId> = spec.resources.iter().map(|(id, _)| *id).collect();
+    match &spec.origin {
+        DraftOrigin::Declared { pattern, at } => {
+            let detection = match spec.target {
+                Target::Awaiting => DeclaredDetection::AwaitingTraffic,
+                Target::Unused => DeclaredDetection::Unused {
+                    since: minus(NOW, 6 * DAY),
                 },
-                Target::Active => {
-                    let (since, _) = stats.first_confirmed.ok_or_else(|| missing("confirm"))?;
-                    let (_, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
-                    TrafficDetection::Active {
-                        since,
-                        last_transmission: last,
-                    }
-                }
-                Target::Dormant => {
-                    let (at, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
-                    TrafficDetection::Dormant {
-                        since: plus(at, DAY),
-                        last_transmission: last,
-                    }
-                }
-            })
-        };
-        let resource_ids: Vec<ResourceId> = spec.resources.iter().map(|(id, _)| *id).collect();
-        let (origin, resources, created) = match &spec.declared {
-            Some((pattern, by, at)) => {
-                let detection = match spec.target {
-                    Target::Awaiting => DeclaredDetection::AwaitingTraffic,
-                    Target::Unused => DeclaredDetection::Unused {
-                        since: minus(NOW, 6 * DAY),
-                    },
-                    _ => DeclaredDetection::InUse(detection()?),
-                };
-                let origin = ChannelOrigin::Declared {
-                    declaration: Declaration {
-                        pattern: pattern.clone(),
-                        by: *by,
-                        at: *at,
-                    },
-                    history: DeclaredHistory::BeforeTraffic(detection),
-                };
-                (origin, resource_ids, *at)
-            }
-            None => {
-                let (first_access, first_at) = stats
-                    .first_access
-                    .ok_or_else(|| GenError::Missing(format!("access on {:?}", spec.key)))?;
-                let seed = *resource_ids
-                    .first()
-                    .ok_or_else(|| GenError::Missing(format!("seed of {:?}", spec.key)))?;
-                let origin = ChannelOrigin::Discovered {
-                    seed: Seed {
-                        resource: seed,
-                        first_access,
-                    },
-                    detection: detection()?,
-                };
-                (origin, resource_ids[1..].to_vec(), first_at)
-            }
-        };
-        let superseded = (spec.key == ChannelKey::OldTeamNotes).then_some(Supersession {
-            into: team_notes,
-            by: OPERATOR_RESEARCHER,
-            at: PROMOTE_AT,
-        });
-        out.push(ChannelRecord {
-            channel: Channel {
-                id: spec.id,
-                origin,
-                resources,
-                policy: spec.policy.clone(),
-            },
-            superseded,
-            created,
-        });
-    }
-    // A declared channel holds the resources of every channel it superseded.
-    let moved: Vec<(ChannelId, Vec<ResourceId>)> = out
-        .iter()
-        .filter_map(|r| {
-            let into = r.superseded?.into;
-            let mut ids = Vec::new();
-            if let ChannelOrigin::Discovered { seed, .. } = &r.channel.origin {
-                ids.push(seed.resource);
-            }
-            ids.extend(r.channel.resources.iter().copied());
-            Some((into, ids))
-        })
-        .collect();
-    for (into, ids) in moved {
-        if let Some(target) = out.iter_mut().find(|r| r.channel.id == into) {
-            target.channel.resources.extend(ids);
+                _ => DeclaredDetection::InUse(traffic_detection(spec, stats)?),
+            };
+            let origin = ChannelOrigin::Declared {
+                declaration: Declaration {
+                    pattern: pattern.clone(),
+                    by: PolicyAuthor::Config,
+                    at: *at,
+                },
+                history: DeclaredHistory::BeforeTraffic(detection),
+            };
+            Ok((origin, resource_ids, *at))
+        }
+        DraftOrigin::Discovered => {
+            let missing = |what: &str| GenError::Missing(format!("{what} of {:?}", spec.key));
+            let (first, first_at) = stats.first_access.ok_or_else(|| missing("access"))?;
+            let (seed, rest) = resource_ids.split_first().ok_or_else(|| missing("seed"))?;
+            // The seed's own first access created the channel; a seed the
+            // generator happened never to pick falls back to the channel's
+            // first access.
+            let (first_access, _) = traffic.first_access_of(*seed).unwrap_or((first, first_at));
+            let origin = ChannelOrigin::Discovered {
+                seed: Seed {
+                    resource: *seed,
+                    first_access,
+                },
+                detection: traffic_detection(spec, stats)?,
+            };
+            Ok((origin, rest.to_vec(), first_at))
         }
     }
+}
+
+/// Each channel's policy history from the decisions table, checked.
+fn histories(plan: &ChannelPlan) -> Result<HashMap<ChannelId, PolicyHistory>, GenError> {
+    let mut entries: HashMap<ChannelId, Vec<PolicyDecision>> = HashMap::new();
+    for (key, decision) in decisions() {
+        entries.entry(plan.id(key)?).or_default().push(decision);
+    }
+    entries
+        .into_iter()
+        .map(|(id, mut list)| {
+            list.sort_by_key(|d| d.decision.at);
+            PolicyHistory::from_entries(list)
+                .map(|history| (id, history))
+                .map_err(|e| GenError::invalid("PolicyHistory", e))
+        })
+        .collect()
+}
+
+/// Fills in each channel's detection state and policy history from its
+/// generated traffic, then applies the team-notes promotion.
+pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord>, GenError> {
+    let mut histories = histories(plan)?;
+    let mut out = Vec::new();
+    for spec in &plan.specs {
+        let own = traffic.channel_stats(spec.id, |routed, _| routed == spec.id);
+        let (origin, resources, created) = first_origin(spec, traffic, &own)?;
+        let channel = Channel {
+            id: spec.id,
+            origin,
+            resources,
+            policy: Policy::Unreviewed(None),
+        };
+        let history = histories.remove(&spec.id).unwrap_or_default();
+        out.push(ChannelRecord::new(channel, history, created));
+    }
+    promote(plan, traffic, &mut out)?;
     Ok(out)
+}
+
+/// Applies the world's past promotion exactly as `promotion::plan` decides
+/// it over the generated channels, recording its decision in the promoted
+/// channel's history.
+fn promote(
+    plan: &ChannelPlan,
+    traffic: &Traffic,
+    records: &mut [ChannelRecord],
+) -> Result<(), GenError> {
+    let (key, promotion) = team_notes_promotion();
+    let target = plan.id(key)?;
+    let seeds: HashMap<ResourceId, &Locator> = plan
+        .specs
+        .iter()
+        .flat_map(|s| s.resources.iter().map(|(id, l)| (*id, l)))
+        .collect();
+    let registry: Vec<Registered<'_>> = records
+        .iter()
+        .map(|r| Registered {
+            channel: r.channel(),
+            seed: r
+                .channel()
+                .origin
+                .seed()
+                .and_then(|seed| seeds.get(&seed.resource).copied()),
+        })
+        .collect();
+    let planned = promotion::plan(target, promotion.declaration(), &registry)
+        .map_err(|e| GenError::invalid("team notes promotion", e))?;
+    let absorbed: Vec<ChannelId> = planned.superseded_ids().collect();
+    let at = promotion.at();
+    let supersession = Supersession { by: target, at };
+    for record in records.iter_mut() {
+        let id = record.channel().id;
+        let spec = plan
+            .specs
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| GenError::Missing(format!("spec of channel {id:?}")))?;
+        let stats = if id == target {
+            // Its own confirmations, and those on the channels it absorbed
+            // that came after the promotion.
+            traffic.channel_stats(id, |routed, confirmed| {
+                routed == id || (absorbed.contains(&routed) && confirmed > at)
+            })
+        } else if absorbed.contains(&id) {
+            traffic.channel_stats(id, |routed, confirmed| routed == id && confirmed <= at)
+        } else {
+            continue;
+        };
+        let (discovered, _, _) = first_origin(spec, traffic, &stats)?;
+        let origin = if id == target {
+            discovered
+                .promoted(promotion.declaration().clone())
+                .map_err(|e| GenError::invalid("promoted origin", e))?
+        } else {
+            discovered
+                .superseded(supersession)
+                .map_err(|e| GenError::invalid("superseded origin", e))?
+        };
+        record.set_origin(origin);
+        if id == target {
+            record.record(promotion.decision().clone());
+        }
+    }
+    Ok(())
 }

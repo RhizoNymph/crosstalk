@@ -19,8 +19,8 @@ use crosstalk_spec::support::TimeWindow;
 use super::super::clock::{MINUTE, NOW, START};
 use super::{caller, collect, day, first, graph_of, researcher, shared, week};
 use crate::backend::Backend;
-use crate::contract::channels::ChannelListFilter;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::SearchMode;
 
 use super::reads_support::*;
@@ -356,13 +356,14 @@ async fn the_overview_counts_the_graph_and_the_queues() {
     let review = collect(500, async |p| {
         b.channels(
             &c,
-            &ChannelListFilter {
+            &ChannelFilter {
                 policies: vec![PolicyKind::Unreviewed],
-                ..ChannelListFilter::default()
+                ..ChannelFilter::default()
             },
             &p,
         )
         .await
+        .map(|rows| rows.value)
     })
     .await;
     assert!(!open.is_empty() && !review.is_empty());

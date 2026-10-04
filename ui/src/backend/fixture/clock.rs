@@ -7,7 +7,7 @@
 use std::num::NonZeroU64;
 
 use crosstalk_spec::aggregates::series::BucketWidth;
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::support::{EmptyWindow, TimeWindow, Timestamp};
 
 use super::rng::Rng;
 
@@ -38,6 +38,13 @@ pub const WATERMARK: Timestamp = Timestamp::from_micros(NOW.as_micros() - 10 * M
 /// The correlation window: a read further than this after a write is not a
 /// co-access.
 pub const CORRELATION_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// A bucket-aligned window holding every generated access and
+/// confirmation (`[START, NOW + BUCKET)`): what a read "over all time"
+/// counts in.
+pub fn all_time() -> Result<TimeWindow, EmptyWindow> {
+    TimeWindow::new(START, plus(NOW, BUCKET.as_micros().get()))
+}
 
 /// `NOW` minus `micros`.
 pub const fn ago(micros: u64) -> Timestamp {

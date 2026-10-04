@@ -1,11 +1,13 @@
 //! Names for ids: operators from `operators`, rules from `rules`, agents
-//! from one `agent_names` call.
+//! from one `agent_names` call, and [`id_batches`] for name lookups over
+//! more ids than one `IdBatch` holds.
 
 use std::collections::HashMap;
 
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
 use crosstalk_spec::ids::{AgentId, AlertRuleId, OperatorId};
-use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use crosstalk_spec::observed::agent::MergeAuthor;
 use topcoat::context::Cx;
 
@@ -147,9 +149,32 @@ pub async fn agent_names(
     }
 }
 
+/// The distinct ids of `ids`, ascending, as batches of at most
+/// `IdBatch::MAX`: one name lookup per batch. Empty when `ids` is.
+pub fn id_batches<T: Ord + Copy>(
+    ids: impl IntoIterator<Item = T>,
+) -> Result<Vec<IdBatch<T>>, QueryError> {
+    let mut all: Vec<T> = ids.into_iter().collect();
+    all.sort_unstable();
+    all.dedup();
+    all.chunks(IdBatch::<T>::MAX)
+        .map(|chunk| IdBatch::new(chunk.iter().copied()).map_err(QueryError::from))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_batches_split_at_the_batch_bound() {
+        let max = IdBatch::<u32>::MAX;
+        let ids = (0..u32::try_from(max).expect("bound") * 2 + 1).chain([0, 1]);
+        let batches = id_batches(ids).expect("batches");
+        let sizes: Vec<usize> = batches.iter().map(IdBatch::len).collect();
+        assert_eq!(sizes, vec![max, max, 1], "repeats are dropped first");
+        assert!(id_batches(Vec::<u32>::new()).expect("none").is_empty());
+    }
 
     #[test]
     fn unknown_operators_show_a_short_id() {

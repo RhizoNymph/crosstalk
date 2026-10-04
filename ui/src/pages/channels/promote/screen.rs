@@ -1,6 +1,7 @@
 //! The promotion page: candidate patterns, the chosen one's coverage, and
 //! the confirm form.
 
+use crosstalk_spec::derived::flow::channel::promotion::CappedResources;
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
@@ -18,25 +19,31 @@ use crate::components::badge::Badge;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::locator::{format_pattern, pattern_kind};
 use crate::components::{empty_state, error_panel, href, locator_text, page_header, short_id};
-use crate::data::names::channel_name;
 use crate::error::UiError;
 use crate::pages::channels::detail::channel_path;
 use crate::pages::channels::model::title;
 use crate::pages::common::action::{Failure, error_for, fields_for, require, status_of};
 use crate::pages::common::form::{POLICIES, invalid, policy, policy_code};
 use crate::pages::common::links::channel_url;
+use crate::pages::common::transmissions::channel_names;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
-/// What the chosen pattern would do, display-ready.
-struct Preview {
-    covered: Vec<Locator>,
-    uncovered: Vec<Locator>,
+/// What the chosen pattern would do, display-ready: what it would hold, or
+/// why `PromoteChannel` would be refused now.
+enum Preview {
+    Promotes(Coverage),
+    Refused(UiError),
+}
+
+/// The newest of each side of the coverage with exact totals, and every
+/// channel the promotion would supersede.
+struct Coverage {
+    covered: Side,
+    uncovered: Side,
     /// The other channels it supersedes: id, link and name.
     superseded: Vec<(String, String, String)>,
-    /// Why promotion would be refused now.
-    conflict: Option<UiError>,
 }
 
 struct Promotion {
@@ -47,8 +54,27 @@ struct Promotion {
     preview: Option<std::result::Result<Preview, UiError>>,
 }
 
+/// One side of a coverage: the newest locators, the exact total and how
+/// many are not shown.
+#[derive(Default)]
+struct Side {
+    shown: Vec<Locator>,
+    total: u64,
+    hidden: u64,
+}
+
+impl Side {
+    fn of(resources: Option<&CappedResources>) -> Self {
+        resources.map_or_else(Self::default, |capped| Self {
+            shown: capped.shown().iter().map(|r| r.locator.clone()).collect(),
+            total: capped.total(),
+            hidden: capped.hidden(),
+        })
+    }
+}
+
 /// Asks the backend what `pattern` would do, and names the channels it
-/// would supersede.
+/// would supersede (one `channel_names` call per `IdBatch` of them).
 async fn preview(
     cx: &Cx,
     caller: &Caller,
@@ -57,37 +83,28 @@ async fn preview(
     state: &ViewState,
 ) -> std::result::Result<Preview, UiError> {
     let preview = backend(cx).promotion_preview(caller, id, pattern).await?;
-    let names = backend(cx)
-        .channel_names(caller, &preview.superseded_channels)
-        .await?;
-    Ok(Preview {
-        covered: preview
-            .covered_resources
-            .into_iter()
-            .map(|r| r.locator)
-            .collect(),
-        uncovered: preview
-            .uncovered_resources
-            .into_iter()
-            .map(|r| r.locator)
-            .collect(),
-        superseded: preview
-            .superseded_channels
+    if let Some(kind) = preview.conflict() {
+        return Ok(Preview::Refused(UiError::Query(QueryError::Conflict(
+            kind.clone(),
+        ))));
+    }
+    let superseded = preview.superseded_channels();
+    let names = channel_names(cx, caller, superseded.as_slice().iter().copied()).await;
+    Ok(Preview::Promotes(Coverage {
+        covered: Side::of(preview.covered_resources()),
+        uncovered: Side::of(preview.uncovered_resources()),
+        superseded: superseded
+            .as_slice()
             .iter()
             .map(|other| {
                 (
                     short_id(other.to_ulid()),
                     channel_url(*other, state),
-                    names
-                        .get(other)
-                        .map_or_else(|| short_id(other.to_ulid()), channel_name),
+                    names.name(*other),
                 )
             })
             .collect(),
-        conflict: preview
-            .conflicts
-            .map(|kind| UiError::Query(QueryError::Conflict(kind))),
-    })
+    }))
 }
 
 async fn load(
@@ -98,11 +115,15 @@ async fn load(
     pattern: Option<&str>,
 ) -> std::result::Result<Option<Promotion>, UiError> {
     require(caller, Permission::View)?;
-    let Some(summary) = backend(cx).channel(caller, id).await? else {
+    let Some(row) = backend(cx)
+        .channel(caller, id, Some(state.scope.window))
+        .await?
+    else {
         return Ok(None);
     };
+    let row = row.value;
     require(caller, Permission::Govern)?;
-    let seed = promotable_seed(&summary)?.clone();
+    let seed = promotable_seed(&row)?.clone();
     let options = candidates(&seed);
     let selected = pick(&options, pattern).map_err(|reason| invalid("pattern", reason))?;
     let preview = match selected.and_then(|i| options.get(i)) {
@@ -110,7 +131,7 @@ async fn load(
         Some(pattern) => Some(preview(cx, caller, id, pattern, state).await),
     };
     Ok(Some(Promotion {
-        title: title(&summary),
+        title: title(&row),
         seed,
         options,
         selected,
@@ -185,7 +206,7 @@ pub async fn promote_page(
                 let selected_index = promotion.selected.map(|i| i.to_string());
                 page_header(
                     title: "Promote to a declared channel",
-                    subtitle: "A declared channel is matched by a pattern. Promotion supersedes this channel and every other discovered channel the pattern covers.",
+                    subtitle: "A declared channel is matched by a pattern. Promotion keeps this channel, attaches the pattern, and supersedes every other discovered channel whose seed it matches.",
                 )
                 <div class=(format!("{PANEL} mb-4 text-sm"))>
                     <span class=(LABEL)>"Seed resource"</span>
@@ -212,37 +233,49 @@ pub async fn promote_page(
                 match promotion.preview {
                     None => empty_state(message: "Pick a pattern to see what it covers."),
                     Some(Err(error)) => error_panel(error: &error),
-                    Some(Ok(preview)) => {
-                        let covered_count = preview.covered.len();
-                        let uncovered_count = preview.uncovered.len();
+                    Some(Ok(Preview::Refused(conflict))) => {
+                        <section class=(SECTION)>
+                            <h2 class=(SECTION_TITLE)>"2. Check what it covers"</h2>
+                            <p class="mb-2 text-sm">"Promotion with this pattern would be refused now:"</p>
+                            error_panel(error: &conflict)
+                        </section>
+                    },
+                    Some(Ok(Preview::Promotes(preview))) => {
+                        let covered_count = preview.covered.total;
+                        let covered_hidden = preview.covered.hidden;
+                        let uncovered_count = preview.uncovered.total;
+                        let uncovered_hidden = preview.uncovered.hidden;
                         let superseded_count = preview.superseded.len();
                         <section class=(SECTION)>
                             <h2 class=(SECTION_TITLE)>"2. Check what it covers"</h2>
-                            if let Some(conflict) = preview.conflict {
-                                <div class="mb-2">error_panel(error: &conflict)</div>
-                            }
                             <p class="mb-2 text-sm">
-                                "The declared channel would hold " <strong>(covered_count)</strong>
-                                " known resources: every resource of the channels it supersedes that the pattern matches."
+                                "The channel would hold " <strong>(covered_count)</strong>
+                                " known resources the pattern matches: its own and those of the channels it supersedes."
                             </p>
                             <ul class="mb-3 space-y-1 text-sm">
-                                for locator in preview.covered {
+                                for locator in preview.covered.shown {
                                     <li class="flex items-center gap-2">
                                         <span class="w-20 text-xs text-emerald-700 dark:text-emerald-400">"covered"</span>
                                         locator_text(locator: &locator)
                                     </li>
                                 }
                             </ul>
+                            if covered_hidden > 0 {
+                                <p class="mb-3 text-xs text-zinc-500">"… and " (covered_hidden) " older covered resources."</p>
+                            }
                             if uncovered_count > 0 {
-                                <p class="mb-1 text-sm">(uncovered_count) " resources of these channels fall outside the pattern; they stay with their superseded channel:"</p>
+                                <p class="mb-1 text-sm">(uncovered_count) " resources of these channels fall outside the pattern; they stay where they are stored and resolve to this channel, but no new resource outside the pattern will join:"</p>
                                 <ul class="mb-3 space-y-1 text-sm">
-                                    for locator in preview.uncovered {
+                                    for locator in preview.uncovered.shown {
                                         <li class="flex items-center gap-2">
                                             <span class="w-20 text-xs text-amber-700 dark:text-amber-400">"not covered"</span>
                                             locator_text(locator: &locator)
                                         </li>
                                     }
                                 </ul>
+                                if uncovered_hidden > 0 {
+                                    <p class="mb-3 text-xs text-zinc-500">"… and " (uncovered_hidden) " older resources outside the pattern."</p>
+                                }
                             }
                             if superseded_count == 0 {
                                 <p class="text-sm text-zinc-500">"No other discovered channel is covered."</p>

@@ -7,6 +7,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use crosstalk_spec::aggregates::edge::{EdgeKey, TopicSlot};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::insight::InsightEvent;
@@ -27,11 +28,8 @@ use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction
 use crosstalk_spec::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictRecorded};
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
-use super::channels::{
-    ChannelKey, ChannelPlan, DESIGN_DOCS_AT, MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT,
-    SHARED_FILE_DECIDED_AT,
-};
-use super::rules::MCP_SANCTIONED_AT;
+use super::channels::{ChannelKey, ChannelPlan, DESIGN_DOCS_AT, PASTEBIN_DECIDED_AT};
+use super::drafts::{decisions, team_notes_promotion};
 use super::states::confirmed;
 use super::{GenError, World};
 
@@ -179,65 +177,44 @@ fn configuration(world: &World, state: &mut State, plan: &ChannelPlan) -> Result
     Ok(())
 }
 
+/// The operator decisions in the channels' policy histories, and the
+/// promotion, as the audit log recorded the actions that made them.
 fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
-    use ChannelKey as K;
-    let researcher = OPERATOR_RESEARCHER;
-    let set = |channel, policy, text: &str| OperatorAction::SetPolicy {
-        channel,
-        policy,
-        note: note(text),
-    };
-    let mcp = plan.id(K::McpMemory)?;
-    let steps = [
-        (
-            MCP_SANCTIONED_AT,
-            set(mcp, PolicyKind::Sanctioned, "internal memory server"),
-        ),
-        (
-            PASTEBIN_DECIDED_AT,
-            set(
-                plan.id(K::Pastebin)?,
-                PolicyKind::Unsanctioned,
-                "credentials leaked through public pastes",
-            ),
-        ),
-        (
-            SHARED_FILE_DECIDED_AT,
-            set(
-                plan.id(K::SharedFile)?,
-                PolicyKind::Sanctioned,
-                "handoff directory used by the infra team",
-            ),
-        ),
-        (
-            MCP_RESET_AT,
-            set(
-                mcp,
-                PolicyKind::Unreviewed,
-                "reset: the memory server was upgraded and needs a new review",
-            ),
-        ),
-    ];
-    for (at, action) in steps {
-        operator_action(state, at, researcher, action, ActionOutcome::Applied);
+    for (key, decision) in decisions() {
+        let PolicyAuthor::Operator(by) = decision.decision.by else {
+            continue;
+        };
+        let action = OperatorAction::SetPolicy {
+            channel: plan.id(key)?,
+            policy: decision.kind,
+            note: decision.decision.note.clone(),
+        };
+        operator_action(
+            state,
+            decision.decision.at,
+            by,
+            action,
+            ActionOutcome::Applied,
+        );
     }
-    let old = plan.id(K::OldTeamNotes)?;
-    let pattern = match state
-        .channels
-        .get(&plan.id(K::TeamNotes)?)
-        .and_then(|r| r.channel.origin.pattern())
-    {
-        Some(pattern) => pattern.clone(),
-        None => return Err(GenError::Missing("team notes pattern".to_owned())),
+    let (key, promotion) = team_notes_promotion();
+    let channel = plan.id(key)?;
+    let PolicyAuthor::Operator(by) = promotion.declaration().by else {
+        return Err(GenError::Missing("the promotion's operator".to_owned()));
     };
     let promote = OperatorAction::PromoteChannel {
-        channel: old,
-        pattern,
-        policy: PolicyKind::Sanctioned,
-        note: note("team notes are an approved handoff space"),
+        channel,
+        pattern: promotion.pattern().clone(),
+        policy: promotion.decision().kind,
+        note: promotion.decision().decision.note.clone(),
     };
-    let declared = ActionOutcome::ChannelPromoted(plan.id(K::TeamNotes)?);
-    operator_action(state, PROMOTE_AT, researcher, promote, declared);
+    operator_action(
+        state,
+        promotion.at(),
+        by,
+        promote,
+        ActionOutcome::ChannelPromoted(channel),
+    );
     Ok(())
 }
 
@@ -477,7 +454,7 @@ fn dead_letters(world: &World, state: &mut State) -> Result<(), GenError> {
     if let Some(policy) = state
         .channels
         .get(&pastebin)
-        .map(|r| r.channel.policy.clone())
+        .map(|r| r.channel().policy.clone())
     {
         let at = PASTEBIN_DECIDED_AT;
         letters.push(DeadLetter {

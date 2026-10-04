@@ -2,8 +2,8 @@
 //!
 //! The operator picks a pattern derived from the seed locator
 //! (`?pattern=<n>`), sees which known resources it covers and which other
-//! discovered channels it would supersede, then confirms with a policy and
-//! a note.
+//! discovered channels it would supersede (`promotion_preview`), then
+//! confirms with a policy and a note. The promoted channel keeps its id.
 
 pub mod patterns;
 mod screen;
@@ -11,6 +11,7 @@ mod screen;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;
@@ -23,12 +24,12 @@ use super::detail::{channel_id, channel_path};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::channels::ChannelSummary;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, invalid, note, policy};
 use crate::pages::view::view_state;
+use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
@@ -43,25 +44,24 @@ struct PromoteQuery {
 }
 
 /// The seed of a channel that can be promoted: discovered, not superseded,
-/// with its seed resource known.
-pub fn promotable_seed(summary: &ChannelSummary) -> std::result::Result<&Locator, UiError> {
-    let channel = summary.channel.id;
-    if let Some(superseded) = summary.superseded {
+/// with its seed resource known. The refusals are the ones `PromoteChannel`
+/// would answer with.
+pub fn promotable_seed(row: &ChannelRow) -> std::result::Result<&Locator, UiError> {
+    let channel = row.channel().id;
+    if let Some(superseded) = row.supersession() {
         return Err(UiError::Query(QueryError::Conflict(
             ConflictKind::ChannelSuperseded {
                 channel,
-                by: superseded.into,
+                by: superseded.into(),
             },
         )));
     }
-    if !matches!(summary.channel.origin, ChannelOrigin::Discovered { .. }) {
+    if !matches!(row.channel().origin, ChannelOrigin::Discovered { .. }) {
         return Err(UiError::Query(QueryError::Conflict(
             ConflictKind::ChannelNotDiscovered { channel },
         )));
     }
-    summary
-        .seed
-        .as_ref()
+    row.seed()
         .map(|seed| &seed.locator)
         .ok_or_else(|| invalid("channel", "the seed resource of this channel is unknown"))
 }
@@ -89,19 +89,22 @@ pub fn parse(
     })
 }
 
+/// Promotes the channel; the promoted channel is the same one.
 async fn submit(
     cx: &Cx,
     channel: ChannelId,
+    state: &ViewState,
     fields: &FormFields,
 ) -> std::result::Result<ChannelId, UiError> {
     let caller = caller(cx);
-    let summary = backend(cx)
-        .channel(&caller, channel)
+    let row = backend(cx)
+        .channel(&caller, channel, Some(state.scope.window))
         .await?
-        .ok_or(UiError::Query(QueryError::NotFound))?;
-    let action = parse(channel, promotable_seed(&summary)?, fields)?;
+        .ok_or(UiError::Query(QueryError::NotFound))?
+        .value;
+    let action = parse(channel, promotable_seed(&row)?, fields)?;
     match perform(cx, action).await? {
-        ActionOutcome::ChannelPromoted(declared) => Ok(declared),
+        ActionOutcome::ChannelPromoted(promoted) => Ok(promoted),
         _ => Ok(channel),
     }
 }
@@ -120,10 +123,10 @@ async fn promote_get(cx: &Cx) -> Result<impl View> {
 async fn promote_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
     let state = view_state(cx).await?;
     let id = channel_id(cx)?;
-    let error = match submit(cx, id, &fields).await {
-        Ok(declared) => {
+    let error = match submit(cx, id, &state, &fields).await {
+        Ok(promoted) => {
             return Err(done(
-                &channel_path(declared),
+                &channel_path(promoted),
                 &state,
                 &[],
                 Flash::ChannelPromoted,
@@ -144,8 +147,7 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::channels::Supersession;
-    use crate::pages::channels::model::tests::{discovered, wiki};
+    use crate::pages::channels::model::tests::{declared, discovered, superseded, wiki};
     use crate::testing::{get, post};
 
     #[test]
@@ -180,16 +182,10 @@ mod tests {
 
     #[test]
     fn only_live_discovered_channels_with_a_seed_promote() {
-        let summary = discovered(1);
-        assert_eq!(promotable_seed(&summary), Ok(&wiki()));
-        let mut superseded = discovered(1);
-        superseded.superseded = Some(Supersession {
-            into: ChannelId::from_ulid(2),
-            by: crosstalk_spec::ids::OperatorId::from_ulid(1),
-            at: crosstalk_spec::support::Timestamp::from_micros(0),
-        });
+        let row = discovered(1);
+        assert_eq!(promotable_seed(&row), Ok(&wiki()));
         assert_eq!(
-            promotable_seed(&superseded),
+            promotable_seed(&superseded(1, 2)),
             Err(UiError::Query(QueryError::Conflict(
                 ConflictKind::ChannelSuperseded {
                     channel: ChannelId::from_ulid(1),
@@ -197,9 +193,14 @@ mod tests {
                 }
             )))
         );
-        let mut seedless = discovered(1);
-        seedless.seed = None;
-        assert!(promotable_seed(&seedless).is_err());
+        assert_eq!(
+            promotable_seed(&declared(3)),
+            Err(UiError::Query(QueryError::Conflict(
+                ConflictKind::ChannelNotDiscovered {
+                    channel: ChannelId::from_ulid(3),
+                }
+            )))
+        );
     }
 
     const ID: &str = "01J9ZQ3W8D0000000000000001";
@@ -248,10 +249,20 @@ mod tests {
         );
         let reply = session.post(&url, "pattern=2&policy=unsanctioned").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
-        let declared = reply.location.expect("location");
-        assert!(declared.starts_with("/channels/"));
-        assert!(!declared.contains(&wiki.to_ulid()));
+        let promoted = reply.location.expect("location");
+        assert!(
+            promoted.starts_with(&format!("/channels/{}?", wiki.to_ulid())),
+            "promotion keeps the channel's id: {promoted}"
+        );
         let reply = session.get(&format!("{url}&pattern=2")).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        assert!(reply.body.contains("already declared"), "{}", reply.body);
+        let talk_url = format!(
+            "/channels/{}/promote?{}&pattern=0",
+            talk.to_ulid(),
+            state().to_query()
+        );
+        let reply = session.get(&talk_url).await;
         assert_eq!(reply.status, StatusCode::CONFLICT);
         assert!(reply.body.contains("the channel is superseded"));
     }

@@ -17,9 +17,10 @@ use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
 use crate::backend::Backend;
 use crate::contract::agents::AgentState;
-use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::research::{AuditFilter, AuditSubject};
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 
 use super::reads_support::*;
 
@@ -61,11 +62,14 @@ async fn pagination_covers_every_item_exactly_once() {
     assert_eq!(alerts.len(), b.state.read().await.alerts.len());
     let audit = collect(33, async |p| b.audit(&c, &AuditFilter::default(), &p).await).await;
     assert_eq!(audit.len(), b.state.read().await.audit.len());
-    let filter = ChannelListFilter {
-        include_superseded: true,
+    let filter = ChannelFilter {
+        origin: OriginFilter::WithSuperseded(Vec::new()),
         ..Default::default()
     };
-    let channels = collect(4, async |p| b.channels(&c, &filter, &p).await).await;
+    let channels = collect(4, async |p| {
+        b.channels(&c, &filter, &p).await.map(|rows| rows.value)
+    })
+    .await;
     assert_eq!(channels.len(), 15);
     let request = search("the", SearchMode::Text);
     let hits = collect(400, async |p| search_in(b, &c, &request, &scope, &p).await).await;
@@ -186,45 +190,64 @@ async fn content_needs_the_content_permission() {
 async fn channel_list_filters() {
     let b = shared();
     let c = researcher();
-    let declared = ChannelListFilter {
-        origins: vec![OriginKind::Declared],
+    let list = async |filter: ChannelFilter| {
+        collect(50, async |p| {
+            b.channels(&c, &filter, &p).await.map(|rows| rows.value)
+        })
+        .await
+    };
+    let declared = ChannelFilter {
+        origin: OriginFilter::InForce(vec![
+            CanonicalOriginKind::DeclaredBeforeTraffic,
+            CanonicalOriginKind::Promoted,
+        ]),
         ..Default::default()
     };
-    let rows = collect(50, async |p| b.channels(&c, &declared, &p).await).await;
-    assert_eq!(rows.len(), 6);
-    let visible = collect(50, async |p| {
-        b.channels(&c, &ChannelListFilter::default(), &p).await
-    })
-    .await;
+    assert_eq!(list(declared).await.len(), 6);
+    let visible = list(ChannelFilter::default()).await;
     assert_eq!(
         visible.len(),
         14,
         "the superseded channel is hidden by default"
     );
     let old = channel(ChannelKey::OldTeamNotes);
-    assert!(visible.iter().all(|r| r.channel.id != old));
-    let unreviewed = ChannelListFilter {
+    assert!(visible.iter().all(|r| r.channel().id != old));
+    let unreviewed = ChannelFilter {
         policies: vec![crosstalk_spec::interfaces::l8_surface::PolicyKind::Unreviewed],
         ..Default::default()
     };
-    let queue = collect(50, async |p| b.channels(&c, &unreviewed, &p).await).await;
+    let queue = list(unreviewed).await;
     assert!(
         queue
             .iter()
-            .any(|r| r.channel.id == channel(ChannelKey::HijackedWiki))
+            .any(|r| r.channel().id == channel(ChannelKey::HijackedWiki))
     );
     let wiki = b
-        .channel(&c, channel(ChannelKey::HijackedWiki))
+        .channel(&c, channel(ChannelKey::HijackedWiki), None)
         .await
         .expect("ok")
-        .expect("wiki");
-    assert!(wiki.seed.is_some() && wiki.writers > 0 && wiki.readers > 0 && wiki.transmissions > 0);
+        .expect("wiki")
+        .value;
+    let counts = wiki.counts().expect("in force and active");
+    assert!(
+        wiki.seed().is_some()
+            && counts.writers > 0
+            && counts.readers > 0
+            && counts.transmissions > 0
+    );
     // The promoted channel holds the superseded channel's resources.
     let notes = b
-        .channel_resources(&c, channel(ChannelKey::TeamNotes), week().window)
+        .channel_resources(
+            &c,
+            channel(ChannelKey::TeamNotes),
+            week().window,
+            &first(50),
+        )
         .await
-        .expect("resources");
-    assert!(notes.iter().any(|u| matches!(&u.resource.locator,
+        .expect("resources")
+        .value
+        .page;
+    assert!(notes.items().iter().any(|u| matches!(&u.resource().locator,
         crosstalk_spec::derived::flow::resource::Locator::Url { path, .. } if path == "/team-a/standup")));
 }
 
@@ -372,10 +395,8 @@ async fn same_seed_same_answers() {
 }
 
 #[tokio::test]
-async fn names_resolve_aliases_and_supersession_in_one_call() {
-    use crosstalk_spec::ids::{AgentId, ChannelId};
-
-    use crate::contract::graph::ChannelShape;
+async fn agent_names_resolve_aliases_in_one_call() {
+    use crosstalk_spec::ids::AgentId;
 
     let b = shared();
     let c = researcher();
@@ -394,18 +415,6 @@ async fn names_resolve_aliases_and_supersession_in_one_call() {
     );
     assert_eq!(names[&alias].label, canonical.summary.label);
     assert_eq!(names[&plain].id, plain);
-
-    let (old, declared) = (
-        channel(ChannelKey::OldTeamNotes),
-        channel(ChannelKey::TeamNotes),
-    );
-    let names = b
-        .channel_names(&c, &[old, ChannelId::from_ulid(1)])
-        .await
-        .expect("names");
-    assert_eq!(names.len(), 1);
-    assert_eq!(names[&old].id, declared);
-    assert!(matches!(names[&old].shape, ChannelShape::Pattern(_)));
 
     let nobody = caller(&[Permission::Audit]);
     assert_eq!(
@@ -508,38 +517,4 @@ async fn agents_filter_by_state_claims_text_and_parent() {
         detail.children,
         "one level of the tree, in the detail's order"
     );
-}
-
-#[tokio::test]
-async fn channel_counts_follow_the_window() {
-    let b = shared();
-    let c = researcher();
-    let wiki = channel(ChannelKey::HijackedWiki);
-    let rows = async |window| {
-        let filter = ChannelListFilter {
-            window,
-            ..ChannelListFilter::default()
-        };
-        b.channels(&c, &filter, &first(BIG))
-            .await
-            .expect("channels")
-            .into_parts()
-            .0
-            .into_iter()
-            .find(|s| s.channel.id == wiki)
-            .expect("wiki")
-    };
-    let all = rows(None).await;
-    let recent = rows(Some(day().window)).await;
-    assert!(recent.transmissions < all.transmissions);
-    assert!(recent.transmissions > 0);
-    assert!(recent.writers <= all.writers && recent.readers <= all.readers);
-    assert_eq!(recent.last_activity, all.last_activity);
-    let empty = crosstalk_spec::support::TimeWindow::new(
-        crosstalk_spec::support::Timestamp::from_micros(1),
-        crosstalk_spec::support::Timestamp::from_micros(2),
-    )
-    .expect("window");
-    let none = rows(Some(empty)).await;
-    assert_eq!((none.transmissions, none.writers, none.readers), (0, 0, 0));
 }

@@ -131,14 +131,14 @@ fn channels_cover_every_origin_detection_and_policy() {
     let state = state_of(b);
     let ch = |key| {
         let id = b.world.scenario.channel(key).expect("channel");
-        state.channels.get(&id).expect("record").clone()
+        state.channels.get(&id).expect("record").channel().clone()
     };
     use ChannelKey as K;
     for key in [K::InternalWiki, K::Monorepo, K::IssueTracker] {
         let r = ch(key);
-        assert!(matches!(r.channel.policy, Policy::Sanctioned(_)), "{key:?}");
+        assert!(matches!(r.policy, Policy::Sanctioned(_)), "{key:?}");
         assert!(matches!(
-            r.channel.origin,
+            r.origin,
             ChannelOrigin::Declared {
                 history: DeclaredHistory::BeforeTraffic(DeclaredDetection::InUse(_)),
                 ..
@@ -146,7 +146,7 @@ fn channels_cover_every_origin_detection_and_policy() {
         ));
     }
     assert!(matches!(
-        ch(K::DesignDocs).channel.origin,
+        ch(K::DesignDocs).origin,
         ChannelOrigin::Declared {
             history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
             ..
@@ -154,14 +154,14 @@ fn channels_cover_every_origin_detection_and_policy() {
     ));
     let unused = ch(K::ReleaseBucket);
     assert!(matches!(
-        unused.channel.origin,
+        unused.origin,
         ChannelOrigin::Declared {
             history: DeclaredHistory::BeforeTraffic(DeclaredDetection::Unused { .. }),
             ..
         }
     ));
-    assert!(matches!(unused.channel.policy, Policy::Sanctioned(_)));
-    let discovered = |key| match ch(key).channel.origin {
+    assert!(matches!(unused.policy, Policy::Sanctioned(_)));
+    let discovered = |key| match ch(key).origin {
         ChannelOrigin::Discovered { detection, .. } => detection,
         ChannelOrigin::Declared { .. } | ChannelOrigin::Superseded { .. } => {
             panic!("{key:?} is not discovered")
@@ -172,21 +172,15 @@ fn channels_cover_every_origin_detection_and_policy() {
         TrafficDetection::Active { .. }
     ));
     assert!(matches!(
-        ch(K::HijackedWiki).channel.policy,
+        ch(K::HijackedWiki).policy,
         Policy::Unreviewed(None)
     ));
+    assert!(matches!(ch(K::Pastebin).policy, Policy::Unsanctioned(_)));
     assert!(matches!(
-        ch(K::Pastebin).channel.policy,
-        Policy::Unsanctioned(_)
-    ));
-    assert!(matches!(
-        ch(K::McpMemory).channel.policy,
+        ch(K::McpMemory).policy,
         Policy::Unreviewed(Some(_))
     ));
-    assert!(matches!(
-        ch(K::SharedFile).channel.policy,
-        Policy::Sanctioned(_)
-    ));
+    assert!(matches!(ch(K::SharedFile).policy, Policy::Sanctioned(_)));
     assert!(matches!(
         discovered(K::Gist),
         TrafficDetection::Dormant { .. }
@@ -200,8 +194,16 @@ fn channels_cover_every_origin_detection_and_policy() {
         TrafficDetection::Candidate { .. }
     ));
     let old = ch(K::OldTeamNotes);
-    let notes = b.world.scenario.channel(K::TeamNotes).expect("notes");
-    assert_eq!(old.superseded.map(|s| s.into), Some(notes));
+    let notes = ch(K::TeamNotes);
+    assert_eq!(old.origin.supersession().map(|s| s.by), Some(notes.id));
+    assert!(matches!(
+        notes.origin,
+        ChannelOrigin::Declared {
+            history: DeclaredHistory::Promoted { .. },
+            ..
+        }
+    ));
+    assert!(matches!(notes.policy, Policy::Sanctioned(_)));
 
     // Every locator variant appears among resources.
     let w = &b.world;
@@ -226,7 +228,7 @@ fn channels_cover_every_origin_detection_and_policy() {
             .any(|r| matches!(r.locator, Locator::Opaque { .. }))
     );
     // The hijacked wiki's seed is on wiki.example.org.
-    let seed = match ch(K::HijackedWiki).channel.origin {
+    let seed = match ch(K::HijackedWiki).origin {
         ChannelOrigin::Discovered { seed, .. } => seed.resource,
         ChannelOrigin::Declared { .. } | ChannelOrigin::Superseded { .. } => unreachable!(),
     };

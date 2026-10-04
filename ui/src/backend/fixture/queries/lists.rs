@@ -1,119 +1,28 @@
-//! Lists and detail reads: channels, agents, alerts, audit, detection
-//! quality and dead letters.
+//! Lists and detail reads: agents, alerts, audit and dead letters.
+//! Channels are in [`super::channels`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::alert::AlertSubject;
-use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
-use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
 use crate::contract::alerts::Alert;
-use crate::contract::channels::{
-    ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
-};
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction,
 };
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::MergeId;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
-use crosstalk_spec::paging::{
-    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest,
-};
+use crosstalk_spec::paging::{AgentList, AlertList, AuditList, DeadLetterList, Page, PageRequest};
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};
 use super::summaries;
-
-pub fn channels(
-    ctx: &Ctx,
-    filter: &ChannelListFilter,
-    page: &PageRequest<ChannelList>,
-) -> Result<Page<ChannelSummary, ChannelList>> {
-    let items = ctx
-        .state
-        .channels
-        .values()
-        .filter(|r| filter.include_superseded || r.superseded.is_none())
-        .filter(|r| {
-            let origin = &r.channel.origin;
-            (filter.origins.is_empty() || filter.origins.contains(&OriginKind::of(origin)))
-                && (filter.detections.is_empty()
-                    || filter.detections.contains(&DetectionKind::of(origin)))
-                && (filter.policies.is_empty()
-                    || filter.policies.contains(&policy_kind(&r.channel.policy)))
-        })
-        .map(|r| {
-            (
-                oldest_first(r.created, r.channel.id.as_ulid()),
-                summaries::channel(ctx, r, filter.window),
-            )
-        })
-        .collect();
-    page::paginate("channels", page::digest(filter), items, page)
-}
-
-pub fn channel(ctx: &Ctx, id: ChannelId) -> Option<ChannelSummary> {
-    ctx.state
-        .channels
-        .get(&id)
-        .map(|r| summaries::channel(ctx, r, None))
-}
-
-fn ranked(counts: HashMap<AgentId, u64>) -> Vec<(AgentId, u64)> {
-    let mut out: Vec<(AgentId, u64)> = counts.into_iter().collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    out
-}
-
-pub fn channel_resources(ctx: &Ctx, id: ChannelId, window: TimeWindow) -> Result<Vec<ResourceUse>> {
-    if !ctx.state.channels.contains_key(&id) {
-        return Err(QueryError::NotFound);
-    }
-    let members: HashSet<ChannelId> = ctx.channel_members(id).into_iter().collect();
-    /// Accesses per agent, writers then readers.
-    type Uses = (HashMap<AgentId, u64>, HashMap<AgentId, u64>);
-    let mut uses: BTreeMap<_, Uses> = BTreeMap::new();
-    for resource in &ctx.world.resources {
-        if ctx
-            .world
-            .resource_channel
-            .get(&resource.id)
-            .is_some_and(|c| members.contains(c))
-        {
-            uses.insert(resource.id, Default::default());
-        }
-    }
-    for access in &ctx.world.accesses {
-        if !window.contains(access.at) {
-            continue;
-        }
-        if let Some((writers, readers)) = uses.get_mut(&access.resource) {
-            let slot = match access.op.kind() {
-                AccessKind::Write => writers,
-                AccessKind::Read => readers,
-            };
-            *slot.entry(ctx.agent(access.agent)).or_default() += 1;
-        }
-    }
-    Ok(uses
-        .into_iter()
-        .filter_map(|(rid, (writers, readers))| {
-            Some(ResourceUse {
-                resource: ctx.world.resource(rid)?.clone(),
-                writers: ranked(writers),
-                readers: ranked(readers),
-            })
-        })
-        .collect())
-}
 
 /// Whether a summary passes the agents list filter.
 fn keeps(filter: &AgentListFilter, summary: &AgentSummary) -> bool {

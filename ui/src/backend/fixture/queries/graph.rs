@@ -25,6 +25,7 @@ use crosstalk_spec::support::{Share, TimeWindow};
 
 use crate::backend::Result;
 use crate::backend::fixture::clock::{BUCKET, WATERMARK};
+use crate::backend::fixture::store::ChannelRecord;
 use crate::contract::alerts::AlertState;
 
 use super::linked::{Counted, Linked};
@@ -143,9 +144,7 @@ pub fn topology(
 /// What waits for an operator, as `QueueCounts::tally` defines it: alerts
 /// in state `Open`, and channels in force whose policy is unreviewed. The
 /// fixture's alerts are the contract's (one more suppress reason), so they
-/// are counted by the same rule here; channels go through `tally` itself,
-/// after dropping superseded ones (the fixture keeps supersession beside
-/// the spec channel, not in its origin).
+/// are counted by the same rule here; channels go through `tally` itself.
 fn queues(ctx: &Ctx) -> QueueCounts {
     let open_alerts = ctx
         .state
@@ -153,13 +152,8 @@ fn queues(ctx: &Ctx) -> QueueCounts {
         .iter()
         .filter(|a| matches!(a.state, AlertState::Open))
         .count();
-    let in_force = ctx
-        .state
-        .channels
-        .values()
-        .filter(|r| r.superseded.is_none())
-        .map(|r| &r.channel);
-    let channels = QueueCounts::tally(std::iter::empty::<&alert::Alert>(), in_force);
+    let stored = ctx.state.channels.values().map(ChannelRecord::channel);
+    let channels = QueueCounts::tally(std::iter::empty::<&alert::Alert>(), stored);
     QueueCounts {
         open_alerts: u64::try_from(open_alerts).unwrap_or(u64::MAX),
         unreviewed_channels: channels.unreviewed_channels,

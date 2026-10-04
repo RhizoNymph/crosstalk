@@ -38,13 +38,14 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
 use crate::contract::agents::AgentName;
-use crate::contract::channels::ChannelName;
 use crate::error::UiError;
+use crate::pages::common::lookup::id_batches;
 use crate::pages::common::paging::size;
 use crate::pages::common::topics::all_topics;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelName;
 
 path_param!(id);
 
@@ -117,8 +118,8 @@ async fn channel_names<B: Backend>(
     ids: &[ChannelId],
 ) -> Result<HashMap<ChannelId, ChannelName>, UiError> {
     let mut names = HashMap::with_capacity(ids.len());
-    for chunk in ids.chunks(IdBatch::<ChannelId>::MAX) {
-        names.extend(backend.channel_names(caller, chunk).await?);
+    for batch in id_batches(ids.iter().copied())? {
+        names.extend(backend.channel_names(caller, &batch).await?);
     }
     Ok(names)
 }

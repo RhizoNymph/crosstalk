@@ -8,7 +8,8 @@ use topcoat::Result;
 use topcoat::view::{View, component, view};
 
 use crate::contract::agents::AgentStateKind;
-use crate::contract::channels::{DetectionKind, OriginKind};
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 
 /// What a badge's colour says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,17 +72,20 @@ impl Badge for PolicyKind {
     }
 }
 
-impl Badge for OriginKind {
+/// A channel's origin. A superseded channel was discovered; pages show its
+/// supersession beside this badge.
+impl Badge for CanonicalOriginKind {
     fn label(&self) -> &'static str {
         match self {
-            Self::Declared => "declared",
+            Self::DeclaredBeforeTraffic => "declared",
+            Self::Promoted => "promoted",
             Self::Discovered => "discovered",
         }
     }
 
     fn tone(&self) -> Tone {
         match self {
-            Self::Declared => Tone::Neutral,
+            Self::DeclaredBeforeTraffic | Self::Promoted => Tone::Neutral,
             Self::Discovered => Tone::Info,
         }
     }

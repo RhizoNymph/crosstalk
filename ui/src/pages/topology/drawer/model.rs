@@ -21,8 +21,9 @@ use crate::components::{
     agent_name, format_bytes, format_share, format_time, format_time_short, href,
 };
 use crate::contract::agents::AgentStateKind;
-use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
 use crate::error::UiError;
+use crate::pages::channels::list::Activity;
+use crate::pages::channels::model::origin_kind;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{agent_url, channel_url, transmission_url};
@@ -35,6 +36,8 @@ use crate::pages::common::transmissions::{
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::paging::PageRequest;
 
 /// Transmissions per drawer page: the drawer is narrow and short.
@@ -125,14 +128,12 @@ pub struct AgentPanel {
 pub struct ChannelPanel {
     pub name: String,
     pub url: String,
-    pub origin: OriginKind,
+    pub origin: CanonicalOriginKind,
     pub detection: DetectionKind,
     pub policy: PolicyKind,
-    pub superseded: bool,
-    pub writers: u32,
-    pub readers: u32,
-    pub transmissions: u64,
-    pub last_activity: String,
+    /// Counted in the view's window; a superseded channel's on its channel
+    /// in force.
+    pub activity: Activity,
     pub edges: Vec<EdgeItem>,
     pub focus_url: String,
 }
@@ -355,24 +356,22 @@ pub async fn load(
                 })
             }
         },
-        Selection::Channel(id) => match backend.channel(caller, id).await? {
+        Selection::Channel(id) => match backend
+            .channel(caller, id, Some(state.scope.window))
+            .await?
+        {
             None => Drawer::Missing("No channel has this id."),
-            Some(summary) => {
-                let channel = &summary.channel;
+            Some(row) => {
+                let row = row.value;
+                let channel = row.channel();
                 let canonical = channel.id;
                 Drawer::Channel(ChannelPanel {
-                    name: summary_name(&summary),
+                    name: summary_name(&row),
                     url: channel_url(canonical, &state),
-                    origin: OriginKind::of(&channel.origin),
-                    detection: DetectionKind::of(&channel.origin),
-                    policy: policy_kind(&channel.policy),
-                    superseded: summary.superseded.is_some(),
-                    writers: summary.writers,
-                    readers: summary.readers,
-                    transmissions: summary.transmissions,
-                    last_activity: summary
-                        .last_activity
-                        .map_or_else(|| "never".to_owned(), format_time),
+                    origin: origin_kind(&channel.origin),
+                    detection: channel.origin.detection_kind(),
+                    policy: channel.policy.kind(),
+                    activity: Activity::of(&row),
                     edges: listed(cx, caller, &view, |e| e.route == Route::Channel(canonical))
                         .await,
                     focus_url: focus_url(&state, Vec::new(), vec![canonical], sel),

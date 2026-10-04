@@ -1,115 +1,26 @@
-//! Governance actions: policy, promotion, merges, renames and rules.
+//! Governance actions: merges, renames and rules. Channel policy and
+//! promotion are in `channels`.
 
-use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::channel::detection::DeclaredDetection;
-use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor};
-use crosstalk_spec::derived::flow::channel::{ChannelOrigin, Declaration, DeclaredHistory};
-use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
-use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
+use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::support::{NonEmpty, Similarity};
 
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
-use super::super::world::ChannelKey;
-use super::{caller, first, fresh, graph_of, node_ids, researcher, scope_with, week};
+use super::{caller, fresh, graph_of, node_ids, researcher, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
 use crate::contract::agents::AgentState;
 use crate::contract::alerts::{AlertState, SuppressReason};
-use crate::contract::channels::ChannelListFilter;
 use crate::contract::rules::{
     BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
     UserRuleSpec,
 };
-use crate::url::scope::ViewFilter;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
-
-#[tokio::test]
-async fn sanctioning_suppresses_the_channels_own_alerts() {
-    let b = fresh();
-    let c = researcher();
-    let wiki = channel(&b, ChannelKey::HijackedWiki);
-    let channel_alert = find_alert(&b, |a| {
-        a.subject == AlertSubject::Channel(wiki) && a.state == AlertState::Open
-    })
-    .await;
-    let tx_alert = {
-        let state = b.state.read().await;
-        state
-            .alerts
-            .iter()
-            .find(|a| {
-                a.state == AlertState::Open
-                    && matches!(a.subject, AlertSubject::Transmission(t)
-                        if b.world.tx(t).is_some_and(|r| r.transmission.route == Route::Channel(wiki)))
-            })
-            .expect("transmission alert on the wiki")
-            .id
-    };
-    let outcome = b
-        .act(
-            &c,
-            OperatorAction::SetPolicy {
-                channel: wiki,
-                policy: PolicyKind::Sanctioned,
-                note: Some("ours".into()),
-            },
-        )
-        .await;
-    assert_eq!(outcome, Ok(ActionOutcome::Applied));
-    assert!(matches!(
-        alert_state(&b, channel_alert).await,
-        AlertState::Suppressed { reason: SuppressReason::ChannelSanctioned, at } if at == NOW
-    ));
-    assert_eq!(
-        alert_state(&b, tx_alert).await,
-        AlertState::Open,
-        "transmission alerts stay"
-    );
-    let summary = b.channel(&c, wiki).await.expect("ok").expect("channel");
-    assert!(matches!(
-        &summary.channel.policy,
-        Policy::Sanctioned(d) if d.by == PolicyAuthor::Operator(c.operator()) && d.at == NOW
-    ));
-    // Back to unreviewed is a reset: Unreviewed(Some).
-    b.act(
-        &c,
-        OperatorAction::SetPolicy {
-            channel: wiki,
-            policy: PolicyKind::Unreviewed,
-            note: None,
-        },
-    )
-    .await
-    .expect("reset");
-    let summary = b.channel(&c, wiki).await.expect("ok").expect("channel");
-    assert!(matches!(
-        summary.channel.policy,
-        Policy::Unreviewed(Some(_))
-    ));
-    // A superseded channel takes no policy.
-    let old = channel(&b, ChannelKey::OldTeamNotes);
-    let result = b
-        .act(
-            &c,
-            OperatorAction::SetPolicy {
-                channel: old,
-                policy: PolicyKind::Sanctioned,
-                note: None,
-            },
-        )
-        .await;
-    assert!(matches!(
-        result.err(),
-        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded { .. }))
-    ));
-}
 
 #[tokio::test]
 async fn merge_then_unmerge_restores_the_graph() {
@@ -324,218 +235,6 @@ async fn rename_labels_canonical_agents_only() {
         .err(),
         Some(QueryError::Conflict(ConflictKind::AgentMerged { .. }))
     ));
-}
-
-#[tokio::test]
-async fn promotion_previews_what_promote_then_does() {
-    let b = fresh();
-    let c = researcher();
-    let (wiki, talk) = (
-        channel(&b, ChannelKey::HijackedWiki),
-        channel(&b, ChannelKey::WikiTalk),
-    );
-    let pattern = ResourcePattern::UrlPrefix {
-        host: Host("wiki.example.org".to_owned()),
-        path_prefix: "/wiki".to_owned(),
-    };
-    let preview = b
-        .promotion_preview(&c, wiki, &pattern)
-        .await
-        .expect("preview");
-    assert_eq!(preview.conflicts, None);
-    assert_eq!(preview.superseded_channels, vec![talk]);
-    assert!(!preview.covered_resources.is_empty());
-    assert!(
-        preview
-            .covered_resources
-            .iter()
-            .all(|r| pattern.matches(&r.locator))
-    );
-    assert!(
-        preview
-            .uncovered_resources
-            .iter()
-            .all(|r| !pattern.matches(&r.locator))
-    );
-    let ActionOutcome::ChannelPromoted(new) = b
-        .act(
-            &c,
-            OperatorAction::PromoteChannel {
-                channel: wiki,
-                pattern: pattern.clone(),
-                policy: PolicyKind::Unreviewed,
-                note: None,
-            },
-        )
-        .await
-        .expect("promote")
-    else {
-        panic!("a promotion")
-    };
-    let declared = b.channel(&c, new).await.expect("ok").expect("declared");
-    let held: Vec<_> = preview.covered_resources.iter().map(|r| r.id).collect();
-    assert_eq!(declared.channel.resources, held, "the preview was exact");
-    // Afterwards the same preview reports why it would be refused.
-    let again = b
-        .promotion_preview(&c, wiki, &pattern)
-        .await
-        .expect("preview");
-    assert!(matches!(
-        again.conflicts,
-        Some(ConflictKind::ChannelSuperseded { .. })
-    ));
-    let declared_preview = b
-        .promotion_preview(&c, new, &pattern)
-        .await
-        .expect("preview");
-    assert!(matches!(
-        declared_preview.conflicts,
-        Some(ConflictKind::ChannelNotDiscovered { .. })
-    ));
-    let pastebin = channel(&b, ChannelKey::Pastebin);
-    let missed = b.promotion_preview(&c, pastebin, &pattern).await;
-    assert_eq!(
-        missed.err(),
-        Some(QueryError::InvalidInput(
-            crosstalk_spec::interfaces::l8_surface::InputError::PatternMissesSeed
-        ))
-    );
-    assert_eq!(
-        b.promotion_preview(&c, crosstalk_spec::ids::ChannelId::from_ulid(1), &pattern)
-            .await
-            .err(),
-        Some(QueryError::NotFound)
-    );
-}
-
-#[tokio::test]
-async fn promote_supersedes_covered_channels_and_graphs_follow() {
-    let b = fresh();
-    let c = researcher();
-    let (wiki, talk) = (
-        channel(&b, ChannelKey::HijackedWiki),
-        channel(&b, ChannelKey::WikiTalk),
-    );
-    let pattern = ResourcePattern::UrlPrefix {
-        host: Host("wiki.example.org".to_owned()),
-        path_prefix: "/wiki".to_owned(),
-    };
-    let before = b
-        .world
-        .transmissions
-        .iter()
-        .filter(|t| {
-            t.transmission.route == Route::Channel(wiki)
-                || t.transmission.route == Route::Channel(talk)
-        })
-        .count() as u64;
-    let outcome = b
-        .act(
-            &c,
-            OperatorAction::PromoteChannel {
-                channel: wiki,
-                pattern: pattern.clone(),
-                policy: PolicyKind::Sanctioned,
-                note: Some("our coordination page".into()),
-            },
-        )
-        .await
-        .expect("promote");
-    let ActionOutcome::ChannelPromoted(new) = outcome else {
-        panic!("{outcome:?}")
-    };
-    let summary = b.channel(&c, new).await.expect("ok").expect("new channel");
-    assert!(matches!(
-        &summary.channel.origin,
-        ChannelOrigin::Declared {
-            declaration: Declaration {
-                by: PolicyAuthor::Operator(_),
-                ..
-            },
-            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::InUse(_)),
-        }
-    ));
-    assert!(matches!(summary.channel.policy, Policy::Sanctioned(_)));
-    for old in [wiki, talk] {
-        let s = b.channel(&c, old).await.expect("ok").expect("old");
-        assert_eq!(s.superseded.map(|s| s.into), Some(new));
-    }
-    assert_eq!(
-        summary.transmissions, before,
-        "the new channel counts the old traffic"
-    );
-    // Graphs and lists follow.
-    let on_wiki = scope_with(
-        week().window,
-        ViewFilter {
-            channels: vec![wiki],
-            ..Default::default()
-        },
-    );
-    let rows = super::reads_support::rows_in(&b, &on_wiki).await;
-    assert_eq!(rows.len() as u64, before);
-    assert!(rows.iter().all(|t| t.route == Route::Channel(new)));
-    let view = graph_of(&b, &c, &week(), Weighting::Transmissions)
-        .await
-        .expect("topology");
-    assert!(
-        view.value
-            .edges
-            .iter()
-            .all(|e| e.route != Route::Channel(wiki) && e.route != Route::Channel(talk))
-    );
-    assert!(
-        view.value
-            .edges
-            .iter()
-            .any(|e| e.route == Route::Channel(new))
-    );
-    let listed = b
-        .channels(&c, &ChannelListFilter::default(), &first(100))
-        .await
-        .expect("list")
-        .into_parts()
-        .0;
-    assert!(
-        listed
-            .iter()
-            .all(|r| r.channel.id != wiki && r.channel.id != talk)
-    );
-    // Sanctioning through promotion suppresses the old channels' own alerts.
-    let state = b.state.read().await;
-    assert!(
-        state
-            .alerts
-            .iter()
-            .filter(|a| a.subject == AlertSubject::Channel(wiki))
-            .all(|a| !matches!(a.state, AlertState::Open | AlertState::Acknowledged { .. }))
-    );
-    drop(state);
-    // Conflicts.
-    let notes = channel(&b, ChannelKey::TeamNotes);
-    let promote = |channel, pattern| OperatorAction::PromoteChannel {
-        channel,
-        pattern,
-        policy: PolicyKind::Sanctioned,
-        note: None,
-    };
-    assert!(matches!(
-        b.act(&c, promote(wiki, pattern.clone())).await.err(),
-        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded { .. }))
-    ));
-    assert!(matches!(
-        b.act(&c, promote(notes, pattern.clone())).await.err(),
-        Some(QueryError::Conflict(
-            ConflictKind::ChannelNotDiscovered { .. }
-        ))
-    ));
-    let pastebin = channel(&b, ChannelKey::Pastebin);
-    assert_eq!(
-        b.act(&c, promote(pastebin, pattern)).await.err(),
-        Some(QueryError::InvalidInput(
-            crosstalk_spec::interfaces::l8_surface::InputError::PatternMissesSeed
-        ))
-    );
 }
 
 fn watch(b: &FixtureBackend, version: u32, theme: super::super::text::Theme) -> UserRuleSpec {

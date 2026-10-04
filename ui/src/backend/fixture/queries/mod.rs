@@ -4,6 +4,7 @@
 //! resolution and of the verdicts in force, so each record is resolved the
 //! same way within one response.
 
+pub mod channels;
 pub mod evidence;
 pub mod graph;
 pub mod linked;
@@ -12,7 +13,6 @@ pub mod names;
 pub mod nodes;
 pub mod page;
 pub mod projection;
-pub mod promotion;
 pub mod search;
 pub mod series;
 pub mod summaries;
@@ -131,20 +131,6 @@ impl<'a> Ctx<'a> {
     /// Canonical agents, in id order.
     pub fn canonical_agents(&self) -> impl Iterator<Item = AgentId> + '_ {
         self.members.keys().copied()
-    }
-
-    /// The raw channel ids whose traffic counts for `channel`: itself and
-    /// every channel superseded into it. A superseded channel counts only
-    /// its own.
-    pub fn channel_members(&self, channel: ChannelId) -> Vec<ChannelId> {
-        if self.channel(channel) != channel {
-            return vec![channel];
-        }
-        self.channels
-            .iter()
-            .filter(|(_, c)| **c == channel)
-            .map(|(id, _)| *id)
-            .collect()
     }
 
     /// The verdict in force on a transmission (`VerdictLog::current`).

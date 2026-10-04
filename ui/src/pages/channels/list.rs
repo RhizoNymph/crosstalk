@@ -1,14 +1,20 @@
-//! `/channels`: every channel with its origin, detection and policy, and the
-//! review queue of unreviewed channels.
+//! `/channels`: every channel with its origin, detection and policy, its
+//! writers, readers and transmissions in the view's window, and the review
+//! queue of unreviewed channels.
 
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
+use crosstalk_spec::interfaces::l8_surface::channels::{
+    ChannelActivity, ChannelCounts, ChannelRow, ChannelStanding,
+};
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
 use topcoat::view::{View, view};
 
-use super::model::{Shape, shape};
+use super::model::{Shape, origin_kind, shape};
 use super::query::{DETECTIONS, ListQuery, ORIGINS, RawListQuery, Tab};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
@@ -20,7 +26,6 @@ use crate::components::{
     format_time, href, kind_badge, locator_text, page_header, pagination, pattern_text, short_id,
     state_badge, tabs,
 };
-use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::POLICIES;
@@ -35,18 +40,59 @@ const PATH: &str = "/channels";
 
 /// A list row with everything it shows, owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChannelRow {
+pub struct ListRow {
     pub url: String,
     pub id: String,
     pub shape: OwnedShape,
-    pub origin: OriginKind,
+    pub origin: CanonicalOriginKind,
     pub detection: DetectionKind,
     pub policy: PolicyKind,
-    pub superseded: bool,
-    pub writers: u32,
-    pub readers: u32,
-    pub transmissions: u64,
-    pub last_activity: String,
+    pub activity: Activity,
+}
+
+/// A row's activity as its count cells show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// Superseded: its activity is counted on the channel in force.
+    Superseded,
+    /// In force and never accessed nor carrying a transmission.
+    Never,
+    /// In force: counts in the window, last activity over all time.
+    Seen { counts: ChannelCounts, last: String },
+}
+
+impl Activity {
+    pub fn of(row: &ChannelRow) -> Self {
+        match row.standing() {
+            ChannelStanding::Superseded(_) => Self::Superseded,
+            ChannelStanding::InForce(ChannelActivity::Never) => Self::Never,
+            ChannelStanding::InForce(ChannelActivity::Seen { last, counts }) => Self::Seen {
+                counts,
+                last: format_time(last),
+            },
+        }
+    }
+
+    /// Writers, readers and transmissions as cell text.
+    pub fn cells(&self) -> [String; 3] {
+        match self {
+            Self::Superseded => ["—".to_owned(), "—".to_owned(), "—".to_owned()],
+            Self::Never => ["0".to_owned(), "0".to_owned(), "0".to_owned()],
+            Self::Seen { counts, .. } => [
+                counts.writers.to_string(),
+                counts.readers.to_string(),
+                counts.transmissions.to_string(),
+            ],
+        }
+    }
+
+    pub fn last(&self) -> String {
+        match self {
+            Self::Superseded => "on its channel in force".to_owned(),
+            Self::Never => "never".to_owned(),
+            Self::Seen { last, .. } => last.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,31 +102,25 @@ pub enum OwnedShape {
     UnknownSeed,
 }
 
-pub fn row(summary: &ChannelSummary, state: &ViewState) -> ChannelRow {
-    let channel = &summary.channel;
-    ChannelRow {
+pub fn row(channel_row: &ChannelRow, state: &ViewState) -> ListRow {
+    let channel = channel_row.channel();
+    ListRow {
         url: channel_url(channel.id, state),
         id: short_id(channel.id.to_ulid()),
-        shape: match shape(summary) {
+        shape: match shape(channel_row) {
             Shape::Pattern(p) => OwnedShape::Pattern(p.clone()),
             Shape::Seed(l) => OwnedShape::Seed(l.clone()),
             Shape::UnknownSeed => OwnedShape::UnknownSeed,
         },
-        origin: OriginKind::of(&channel.origin),
-        detection: DetectionKind::of(&channel.origin),
-        policy: crate::contract::channels::policy_kind(&channel.policy),
-        superseded: summary.superseded.is_some(),
-        writers: summary.writers,
-        readers: summary.readers,
-        transmissions: summary.transmissions,
-        last_activity: summary
-            .last_activity
-            .map_or_else(|| "never".to_owned(), format_time),
+        origin: origin_kind(&channel.origin),
+        detection: channel.origin.detection_kind(),
+        policy: channel.policy.kind(),
+        activity: Activity::of(channel_row),
     }
 }
 
 struct Listing {
-    rows: Vec<ChannelRow>,
+    rows: Vec<ListRow>,
     next: Option<Cursor<ChannelList>>,
     current: Option<Cursor<ChannelList>>,
 }
@@ -93,9 +133,11 @@ async fn load(
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;
+    let filter = query.filter(Some(state.scope.window));
     let (items, next) = backend(cx)
-        .channels(&caller, &query.effective_filter(), &request)
+        .channels(&caller, &filter, &request)
         .await?
+        .value
         .into_parts();
     Ok(Listing {
         rows: items.iter().map(|s| row(s, state)).collect(),
@@ -141,7 +183,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
             (
                 o.label(),
                 list_href(&state, &query.toggle_origin(*o)),
-                query.filter.origins.contains(o),
+                query.origin_kinds().contains(o),
             )
         })
         .collect();
@@ -151,7 +193,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
             (
                 d.label(),
                 list_href(&state, &query.toggle_detection(*d)),
-                query.filter.detections.contains(d),
+                query.detections.contains(d),
             )
         })
         .collect();
@@ -161,13 +203,15 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
             (
                 p.label(),
                 list_href(&state, &query.toggle_policy(*p)),
-                query.filter.policies.contains(p),
+                query.policies.contains(p),
             )
         })
         .collect();
     let review = query.tab == Tab::Review;
     let superseded_href = list_href(&state, &query.toggle_superseded());
-    let superseded_on = query.filter.include_superseded;
+    let superseded_on = query.includes_superseded() && !query.superseded_only();
+    let only_href = list_href(&state, &query.toggle_superseded_only());
+    let only_on = query.superseded_only();
     let pairs = query.pairs();
     let empty = listing.as_ref().is_ok_and(|l| l.rows.is_empty());
 
@@ -198,6 +242,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                     }
                 </div>
                 filter_chip(label: "include superseded", href: superseded_href, active: superseded_on)
+                filter_chip(label: "superseded only", href: only_href, active: only_on)
             }
         </div>
         match listing {
@@ -223,6 +268,9 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                 data_table(
                     headers: &["Channel", "Origin", "Detection", "Policy", "Writers", "Readers", "Transmissions", "Last activity"],
                     for row in listing.rows {
+                        let [writers, readers, transmissions] = row.activity.cells();
+                        let superseded = row.activity == Activity::Superseded;
+                        let last = row.activity.last();
                         <tr class=(ROW)>
                             <td class=(TD)>
                                 <a href=(row.url) class="flex min-w-0 max-w-md flex-col gap-0.5">
@@ -235,17 +283,17 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
                                         <span class="font-mono text-[11px]">(row.id)</span>
                                     </span>
                                 </a>
-                                if row.superseded {
+                                if superseded {
                                     state_badge(label: "superseded", tone: Tone::Muted)
                                 }
                             </td>
                             <td class=(TD)>kind_badge(value: row.origin)</td>
                             <td class=(TD)>kind_badge(value: row.detection)</td>
                             <td class=(TD)>kind_badge(value: row.policy)</td>
-                            <td class=(TD_NUM)>(row.writers)</td>
-                            <td class=(TD_NUM)>(row.readers)</td>
-                            <td class=(TD_NUM)>(row.transmissions)</td>
-                            <td class=(TD_MUTED)>(row.last_activity)</td>
+                            <td class=(TD_NUM)>(writers)</td>
+                            <td class=(TD_NUM)>(readers)</td>
+                            <td class=(TD_NUM)>(transmissions)</td>
+                            <td class=(TD_MUTED)>(last)</td>
                         </tr>
                     }
                 )
@@ -253,7 +301,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
             },
         }
         <p class="mt-3 text-xs text-zinc-500">
-            "Channels are listed by current state; the time window applies to resources and traffic on each channel's page."
+            "Channels are listed by current state. Writers, readers and transmissions are counted in the selected window; a superseded channel's are counted on the channel in force."
         </p>
     })
 }
@@ -262,7 +310,7 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
 mod tests {
     use super::*;
     use crate::components::href::tests::state;
-    use crate::pages::channels::model::tests::{discovered, wiki};
+    use crate::pages::channels::model::tests::{discovered, superseded, wiki};
     use crate::testing::get;
     use topcoat::router::StatusCode;
 
@@ -272,12 +320,20 @@ mod tests {
         assert_eq!(row.shape, OwnedShape::Seed(wiki()));
         assert_eq!(row.policy, PolicyKind::Unreviewed);
         assert_eq!(row.detection, DetectionKind::Active);
-        assert_eq!((row.writers, row.readers, row.transmissions), (2, 3, 14));
+        assert_eq!(row.activity.cells(), ["2", "3", "14"].map(str::to_owned));
         assert!(
             row.url
                 .starts_with("/channels/00000000000000000000000007?from=")
         );
-        assert!(!row.superseded);
+        assert_ne!(row.activity, Activity::Superseded);
+    }
+
+    #[test]
+    fn superseded_rows_show_no_counts_of_their_own() {
+        let row = row(&superseded(7, 8), &state());
+        assert_eq!(row.activity, Activity::Superseded);
+        assert_eq!(row.activity.cells(), ["—", "—", "—"].map(str::to_owned));
+        assert_eq!(row.origin, CanonicalOriginKind::Discovered);
     }
 
     #[tokio::test]
@@ -299,6 +355,19 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.body.contains("No channels match these filters."));
+    }
+
+    #[tokio::test]
+    async fn superseded_channels_list_on_their_own() {
+        let state = state().to_query();
+        let reply = get(&format!("/channels?{state}&superseded=only")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("notes.corp.internal/team-a/standup"));
+        assert!(!reply.body.contains("wiki.example.org"));
+        let reply = get(&format!("/channels?{state}&origin=promoted")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("notes.corp.internal/team-a"));
+        assert!(!reply.body.contains("wiki.example.org"));
     }
 
     #[tokio::test]

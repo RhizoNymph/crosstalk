@@ -19,11 +19,11 @@ use super::super::clock::WATERMARK;
 use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
 use crate::backend::Backend;
-use crate::contract::channels::ChannelListFilter;
 use crate::contract::research::AuditFilter;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 use super::reads_support::*;
 
@@ -114,20 +114,23 @@ async fn every_method_answers_for_the_day_and_the_week() {
         );
         let wiki = channel(ChannelKey::HijackedWiki);
         let uses = b
-            .channel_resources(&c, wiki, scope.window)
+            .channel_resources(&c, wiki, scope.window, &first(50))
             .await
-            .expect("resources");
-        assert!(uses.iter().any(|u| !u.readers.is_empty()));
+            .expect("resources")
+            .value
+            .page;
+        assert!(uses.items().iter().any(|u| !u.readers().is_empty()));
     }
     assert!(
-        !b.channels(&c, &ChannelListFilter::default(), &first(50))
+        !b.channels(&c, &ChannelFilter::default(), &first(50))
             .await
             .expect("channels")
+            .value
             .items()
             .is_empty()
     );
     assert!(
-        b.channel(&c, channel(ChannelKey::Pastebin))
+        b.channel(&c, channel(ChannelKey::Pastebin), None)
             .await
             .expect("channel")
             .is_some()
@@ -328,10 +331,11 @@ async fn the_channel_centred_view_shares_the_topology_edges() {
     for node in value.nodes() {
         if let GraphNode::Channel(channel) = node {
             assert!(
-                state
-                    .channels
-                    .get(&channel.id)
-                    .is_some_and(|r| r.superseded.is_none()),
+                state.channels.get(&channel.id).is_some_and(|r| r
+                    .channel()
+                    .origin
+                    .supersession()
+                    .is_none()),
                 "channel nodes are in force"
             );
         }

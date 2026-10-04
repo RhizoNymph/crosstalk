@@ -1,8 +1,14 @@
 //! `/channels/{id}`: one channel's origin, detection, policy, resources,
-//! alerts and policy history. Posting `set-policy` changes its policy.
+//! alerts and policy history, counted in the view's window. Posting
+//! `set-policy` changes its policy.
 
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::ChannelOrigin;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, PolicyKind};
+use crosstalk_spec::paging::ResourceUseList;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;
@@ -10,24 +16,24 @@ use topcoat::router::error::not_found;
 use topcoat::router::{StatusCode, page, path_param};
 use topcoat::view::{View, component, view};
 
-use super::model::{DetectionDetail, decision, detection_detail, title};
+use super::list::Activity;
+use super::model::{DetectionDetail, detection_detail, origin_kind, origin_text, title};
 use super::policy::{self, policy_form};
 use super::sections::{
-    HistoryRow, ResourceRow, alerts_section, history_rows, history_section, resource_rows,
+    PolicyRow, Resources, alerts_section, policy_history_section, policy_rows, resource_rows,
     resources_section,
 };
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{
-    empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header, short_id,
+    PageLinks, empty_state, error_panel, flash_banner, format_time, href, kind_badge, page_header,
+    short_id,
 };
 use crate::contract::alerts::Alert;
-use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
-use crate::contract::research::{AuditFilter, AuditSubject};
+use crate::contract::research::AuditSubject;
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
-use crate::pages::audit::describe::is_policy_change;
 use crate::pages::audit::subject::subject_code;
 use crate::pages::common::action::{
     Failure, done, error_for, fields_for, general_error, perform, require, status_of,
@@ -36,7 +42,8 @@ use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::common::links::{channel_url, transmission_url};
 use crate::pages::common::lookup::{OperatorNames, agent_names, operator_names, rule_names};
-use crate::pages::common::paging::PAGE_SIZE;
+use crate::pages::common::paging::{PAGE_SIZE, page_request};
+use crate::pages::common::transmissions::ChannelNames;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -58,55 +65,66 @@ pub enum ChannelForm {
     Policy,
 }
 
+/// The channel in force that superseded this one, as its banner shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersededBanner {
+    pub url: String,
+    pub name: String,
+    pub by: String,
+    pub at: String,
+}
+
 /// Everything above the sections, owned and display-ready.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     pub title: String,
     pub id: String,
-    pub origin: OriginKind,
+    pub origin: CanonicalOriginKind,
+    pub origin_text: &'static str,
+    /// Only a discovered channel in force can be promoted.
+    pub discovered: bool,
     pub detection: DetectionKind,
     pub detection_detail: DetectionDetail,
     pub policy: PolicyKind,
     /// Who decided the policy, when, and their note.
     pub decision: Option<(String, String, Option<String>)>,
-    /// The declared channel that took this one over: link, label, by, at.
-    pub superseded: Option<(String, String, String, String)>,
-    pub writers: u32,
-    pub readers: u32,
-    pub transmissions: u64,
-    pub last_activity: String,
+    pub superseded: Option<SupersededBanner>,
+    /// Counted in the view's window.
+    pub activity: Activity,
 }
 
-pub fn header(summary: &ChannelSummary, operators: &OperatorNames, state: &ViewState) -> Header {
-    let channel = &summary.channel;
+/// The header of `row`. `channels` names the channel in force a
+/// superseded one resolves to.
+pub fn header(
+    row: &ChannelRow,
+    operators: &OperatorNames,
+    channels: &ChannelNames,
+    state: &ViewState,
+) -> Header {
+    let channel = row.channel();
     Header {
-        title: title(summary),
+        title: title(row),
         id: channel.id.to_ulid(),
-        origin: OriginKind::of(&channel.origin),
-        detection: DetectionKind::of(&channel.origin),
+        origin: origin_kind(&channel.origin),
+        origin_text: origin_text(&channel.origin),
+        discovered: matches!(channel.origin, ChannelOrigin::Discovered { .. }),
+        detection: channel.origin.detection_kind(),
         detection_detail: detection_detail(&channel.origin),
-        policy: policy_kind(&channel.policy),
-        decision: decision(&channel.policy).map(|d| {
+        policy: channel.policy.kind(),
+        decision: channel.policy.decision().map(|d| {
             (
                 operators.policy_author(d.by),
                 format_time(d.at),
                 d.note.clone(),
             )
         }),
-        superseded: summary.superseded.map(|s| {
-            (
-                channel_url(s.into, state),
-                format!("channel {}", short_id(s.into.to_ulid())),
-                operators.name(s.by),
-                format_time(s.at),
-            )
+        superseded: row.supersession().map(|s| SupersededBanner {
+            url: channel_url(s.into(), state),
+            name: channels.name(s.into()),
+            by: operators.name(s.by()),
+            at: format_time(s.at()),
         }),
-        writers: summary.writers,
-        readers: summary.readers,
-        transmissions: summary.transmissions,
-        last_activity: summary
-            .last_activity
-            .map_or_else(|| "never".to_owned(), format_time),
+        activity: Activity::of(row),
     }
 }
 
@@ -123,16 +141,50 @@ pub fn abilities(caller: &Caller, header: &Header) -> Abilities {
     let live = header.superseded.is_none();
     Abilities {
         set_policy: govern && live,
-        promote: govern && live && header.origin == OriginKind::Discovered,
+        promote: govern && live && header.discovered,
     }
 }
 
 struct Loaded {
     header: Header,
     abilities: Abilities,
-    resources: std::result::Result<Vec<ResourceRow>, UiError>,
+    resources: std::result::Result<Resources, UiError>,
     alerts: std::result::Result<Vec<AlertRow>, UiError>,
-    history: std::result::Result<Vec<HistoryRow>, UiError>,
+    history: std::result::Result<Vec<PolicyRow>, UiError>,
+}
+
+/// One page of the channel's resources in the view's window (the page's
+/// `cursor` key), its agents named in one lookup.
+async fn resources(
+    cx: &Cx,
+    caller: &Caller,
+    id: ChannelId,
+    state: &ViewState,
+) -> std::result::Result<Resources, UiError> {
+    let request = page_request::<ResourceUseList>(cx)?;
+    let page = backend(cx)
+        .channel_resources(caller, id, state.scope.window, &request)
+        .await?
+        .value;
+    let uses = page.page.items();
+    let agents = uses.iter().flat_map(|u| {
+        u.writers()
+            .iter()
+            .chain(u.readers())
+            .map(|entry| entry.agent)
+    });
+    let names = agent_names(cx, caller, agents.collect::<Vec<_>>()).await;
+    Ok(Resources {
+        rows: resource_rows(uses, &names, state),
+        links: PageLinks::new(
+            &channel_path(id),
+            state,
+            &[],
+            request.after.as_ref(),
+            page.page.next(),
+        ),
+        resolved_to: (page.channel != id).then(|| channel_url(page.channel, state)),
+    })
 }
 
 async fn load(
@@ -143,25 +195,18 @@ async fn load(
 ) -> std::result::Result<Option<Loaded>, UiError> {
     require(caller, Permission::View)?;
     let backend = backend(cx);
-    let Some(summary) = backend.channel(caller, id).await? else {
+    let Some(row) = backend
+        .channel(caller, id, Some(state.scope.window))
+        .await?
+    else {
         return Ok(None);
     };
+    let row = row.value;
     let operators = operator_names(cx, caller).await;
-    let header = header(&summary, &operators, state);
-
-    let resources = match backend
-        .channel_resources(caller, id, state.scope.window)
-        .await
-    {
-        Ok(uses) => {
-            let ids = uses
-                .iter()
-                .flat_map(|u| u.writers.iter().chain(u.readers.iter()).map(|(a, _)| *a));
-            let names = agent_names(cx, caller, ids.collect::<Vec<_>>()).await;
-            Ok(resource_rows(&uses, &names, state))
-        }
-        Err(error) => Err(error.into()),
-    };
+    let in_force = row.supersession().map(|s| s.into());
+    let channels = crate::pages::common::transmissions::channel_names(cx, caller, in_force).await;
+    let header = header(&row, &operators, &channels, state);
+    let resources = resources(cx, caller, id, state).await;
 
     let rules = rule_names(cx, caller).await;
     let filter = AlertFilter {
@@ -183,28 +228,11 @@ async fn load(
                 .collect()
         });
 
-    let audit_filter = AuditFilter {
-        operators: Vec::new(),
-        subject: Some(AuditSubject::Channel(id)),
-        window: None,
-    };
     let history = backend
-        .audit(
-            caller,
-            &audit_filter,
-            &crate::pages::common::paging::first(PAGE_SIZE),
-        )
+        .policy_history(caller, id)
         .await
         .map_err(UiError::from)
-        .map(|page| {
-            let entries: Vec<_> = page
-                .into_parts()
-                .0
-                .into_iter()
-                .filter(|e| is_policy_change(&e.action))
-                .collect();
-            history_rows(&entries, &operators)
-        });
+        .map(|history| history.map_or_else(Vec::new, |history| policy_rows(&history, &operators)));
 
     let abilities = abilities(caller, &header);
     Ok(Some(Loaded {
@@ -305,6 +333,8 @@ async fn channel_page(
                     .detection_detail
                     .last_transmission
                     .map(|t| transmission_url(t, &state));
+                let [writers, readers, transmissions] = header.activity.cells();
+                let last_activity = header.activity.last();
                 <header class="mb-4">
                     <h1 class="break-all font-mono text-base font-semibold">(header.title)</h1>
                     <p class="font-mono text-xs text-zinc-500">(header.id)</p>
@@ -314,6 +344,8 @@ async fn channel_page(
                         kind_badge(value: header.policy)
                     </div>
                     <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                        (header.origin_text)
+                        " "
                         (header.detection_detail.text)
                         if let Some(url) = last_transmission {
                             " "
@@ -321,18 +353,18 @@ async fn channel_page(
                         }
                     </p>
                     <dl class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-zinc-500">
-                        <div><dt class="inline">"writers "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(header.writers)</dd></div>
-                        <div><dt class="inline">"readers "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(header.readers)</dd></div>
-                        <div><dt class="inline">"transmissions "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(header.transmissions)</dd></div>
-                        <div><dt class="inline">"last activity "</dt><dd class="inline text-zinc-800 dark:text-zinc-200">(header.last_activity)</dd></div>
+                        <div><dt class="inline">"writers "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(writers)</dd></div>
+                        <div><dt class="inline">"readers "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(readers)</dd></div>
+                        <div><dt class="inline">"transmissions "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(transmissions)</dd></div>
+                        <div><dt class="inline">"last activity "</dt><dd class="inline text-zinc-800 dark:text-zinc-200">(last_activity)</dd></div>
                     </dl>
                 </header>
-                if let Some((url, label, by, at)) = header.superseded {
+                if let Some(banner) = header.superseded {
                     <div class="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
                         "Superseded by "
-                        <a class="font-medium underline" href=(url)>(label)</a>
-                        ", promoted by " (by) " at " (at) ". "
-                        "This channel takes no new resources; its traffic is counted on the declared channel."
+                        <a class="font-medium underline" href=(banner.url)>(banner.name)</a>
+                        ", promoted by " (banner.by) " at " (banner.at) ". "
+                        "This channel takes no new resources; its traffic and resources are counted on the channel in force."
                     </div>
                 }
                 if let Some(flash) = flash {
@@ -374,9 +406,9 @@ async fn channel_page(
                         }
                     </div>
                 </section>
-                resources_section(rows: loaded.resources)
+                resources_section(resources: loaded.resources)
                 alerts_section(rows: loaded.alerts, inbox_url: inbox_url)
-                history_section(rows: loaded.history, audit_url: audit_url)
+                policy_history_section(rows: loaded.history, audit_url: audit_url)
             },
         }
     })
@@ -391,8 +423,7 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::channels::Supersession;
-    use crate::pages::channels::model::tests::discovered;
+    use crate::pages::channels::model::tests::{discovered, superseded, with_policy};
     use crate::testing::{get, post};
 
     fn caller(permissions: Vec<Permission>) -> Caller {
@@ -401,30 +432,39 @@ mod tests {
 
     #[test]
     fn header_shows_decision_and_supersession() {
-        let mut summary = discovered(1);
-        summary.channel.policy = Policy::Sanctioned(Decision {
-            by: PolicyAuthor::Operator(OperatorId::from_ulid(3)),
-            at: Timestamp::from_micros(1_790_985_600_000_000),
-            note: Some("team wiki".into()),
-        });
-        summary.superseded = Some(Supersession {
-            into: ChannelId::from_ulid(2),
-            by: OperatorId::from_ulid(3),
-            at: Timestamp::from_micros(1_790_985_600_000_000),
-        });
+        let decided = with_policy(
+            1,
+            Policy::Sanctioned(Decision {
+                by: PolicyAuthor::Operator(OperatorId::from_ulid(3)),
+                at: Timestamp::from_micros(1_790_985_600_000_000),
+                note: Some("team wiki".into()),
+            }),
+        );
         let operators = OperatorNames::new([(OperatorId::from_ulid(3), "ada".to_owned())]);
-        let header = header(&summary, &operators, &state());
+        let names = ChannelNames::default();
+        let shown = header(&decided, &operators, &names, &state());
         assert_eq!(
-            header.decision,
+            shown.decision,
             Some((
                 "ada".to_owned(),
                 "2026-10-03 00:00:00 UTC".to_owned(),
                 Some("team wiki".to_owned())
             ))
         );
-        let (url, label, by, _) = header.superseded.clone().expect("superseded");
-        assert!(url.starts_with("/channels/00000000000000000000000002?"));
-        assert_eq!((label.as_str(), by.as_str()), ("channel …000002", "ada"));
+        let names =
+            ChannelNames::from_pairs([(ChannelId::from_ulid(2), "wiki.example.org/*".to_owned())]);
+        let header = header(&superseded(1, 2), &operators, &names, &state());
+        let banner = header.superseded.clone().expect("superseded");
+        assert!(
+            banner
+                .url
+                .starts_with("/channels/00000000000000000000000002?")
+        );
+        assert_eq!(
+            (banner.name.as_str(), banner.by.as_str()),
+            ("wiki.example.org/*", "ada")
+        );
+        assert_eq!(header.activity, Activity::Superseded);
         let abilities = abilities(&caller(vec![Permission::View, Permission::Govern]), &header);
         assert_eq!(
             abilities,
@@ -438,7 +478,12 @@ mod tests {
 
     #[test]
     fn actions_need_govern() {
-        let header = header(&discovered(1), &OperatorNames::default(), &state());
+        let header = header(
+            &discovered(1),
+            &OperatorNames::default(),
+            &ChannelNames::default(),
+            &state(),
+        );
         assert_eq!(
             abilities(&caller(vec![Permission::View]), &header),
             Abilities {
@@ -498,12 +543,20 @@ mod tests {
         let wiki = channel_id(ChannelKey::HijackedWiki);
         let c = operator().caller();
         let uses = world()
-            .channel_resources(&c, wiki, state().scope.window)
+            .channel_resources(
+                &c,
+                wiki,
+                state().scope.window,
+                &crate::pages::common::paging::first(PAGE_SIZE),
+            )
             .await
-            .expect("resources");
+            .expect("resources")
+            .value
+            .page;
         let ids: Vec<_> = uses
+            .items()
             .iter()
-            .flat_map(|u| u.writers.iter().chain(u.readers.iter()).map(|(a, _)| *a))
+            .flat_map(|u| u.writers().iter().chain(u.readers()).map(|e| e.agent))
             .collect();
         let names = world().agent_names(&c, &ids).await.expect("names");
         let label = names
@@ -518,5 +571,41 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains(label.as_str()), "{label:?}");
+    }
+
+    #[tokio::test]
+    async fn a_superseded_channel_names_its_channel_in_force_and_histories_show() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::testing::channel_id;
+
+        let old = channel_id(ChannelKey::OldTeamNotes);
+        let notes = channel_id(ChannelKey::TeamNotes);
+        let page = |id: ChannelId| format!("/channels/{}?{}", id.to_ulid(), state().to_query());
+        let reply = get(&page(old)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("Superseded by"));
+        assert!(
+            reply.body.contains("notes.corp.internal/team-a*"),
+            "the banner names the channel in force"
+        );
+        assert!(reply.body.contains(&notes.to_ulid()));
+        assert!(
+            !reply.body.contains("Set policy"),
+            "a superseded channel takes no policy"
+        );
+        let reply = get(&page(notes)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("promoted"));
+        assert!(
+            reply
+                .body
+                .contains("team notes are an approved handoff space")
+        );
+        let reply = get(&page(channel_id(ChannelKey::McpMemory))).await;
+        assert!(reply.body.contains("reset to unreviewed"));
+        assert!(
+            reply.body.contains("internal memory server"),
+            "older decisions stay"
+        );
     }
 }

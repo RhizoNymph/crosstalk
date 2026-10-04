@@ -1,17 +1,12 @@
-//! List rows: agent summaries and channel summaries, always over canonical
-//! agents and channels in force. Graph nodes are in [`super::nodes`].
+//! List rows: agent summaries, always over canonical agents. Channel rows
+//! are in [`super::channels`], graph nodes in [`super::nodes`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crosstalk_spec::derived::flow::access::AccessKind;
-use crosstalk_spec::derived::flow::channel::ChannelOrigin;
-use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::ids::AgentId;
+use crosstalk_spec::support::Timestamp;
 
-use crate::backend::fixture::store::ChannelRecord;
 use crate::contract::agents::{AgentState, AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::channels::ChannelSummary;
 
 use super::Ctx;
 
@@ -98,56 +93,4 @@ pub fn agent(ctx: &Ctx, id: AgentId, counts: (u64, u64)) -> Option<AgentSummary>
         transmissions_out: counts.1,
         last_seen,
     })
-}
-
-/// The list row for a channel, counting the traffic of every channel
-/// superseded into it; within `window` when one is given. `last_activity`
-/// is always the latest overall.
-pub fn channel(ctx: &Ctx, record: &ChannelRecord, window: Option<TimeWindow>) -> ChannelSummary {
-    let counted = |at| window.is_none_or(|w: TimeWindow| w.contains(at));
-    let members: HashSet<ChannelId> = ctx.channel_members(record.channel.id).into_iter().collect();
-    let mut writers = HashSet::new();
-    let mut readers = HashSet::new();
-    let mut last_activity: Option<Timestamp> = None;
-    for access in &ctx.world.accesses {
-        let on = ctx
-            .world
-            .resource_channel
-            .get(&access.resource)
-            .is_some_and(|c| members.contains(c));
-        if !on {
-            continue;
-        }
-        last_activity = last_activity.max(Some(access.at));
-        if !counted(access.at) {
-            continue;
-        }
-        let agent = ctx.agent(access.agent);
-        match access.op.kind() {
-            AccessKind::Write => writers.insert(agent),
-            AccessKind::Read => readers.insert(agent),
-        };
-    }
-    let transmissions = ctx
-        .world
-        .transmissions
-        .iter()
-        .filter(|t| matches!(t.transmission.route, Route::Channel(c) if members.contains(&c)))
-        .filter(|t| counted(t.transmission.opened_at))
-        .count();
-    let seed = match &record.channel.origin {
-        ChannelOrigin::Discovered { seed, .. } | ChannelOrigin::Superseded { seed, .. } => {
-            ctx.world.resource(seed.resource).cloned()
-        }
-        ChannelOrigin::Declared { .. } => None,
-    };
-    ChannelSummary {
-        channel: record.channel.clone(),
-        seed,
-        superseded: record.superseded,
-        writers: u32::try_from(writers.len()).unwrap_or(u32::MAX),
-        readers: u32::try_from(readers.len()).unwrap_or(u32::MAX),
-        transmissions: transmissions as u64,
-        last_activity,
-    }
 }

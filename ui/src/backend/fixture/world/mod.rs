@@ -98,7 +98,8 @@ pub struct TxRecord {
     /// The accesses named by its co-access records.
     pub accesses: Vec<AccessId>,
     /// Topic assignment per version, indexed by version number; a dropped
-    /// version's are never read. Empty until confirmed (nothing to embed).
+    /// version's are never read. Empty until classified (a confirmed
+    /// transmission not yet classified has no topic).
     pub assignments: Vec<Assignment>,
     /// Each indexed text (origin then read, per match), lowercased, for
     /// search.

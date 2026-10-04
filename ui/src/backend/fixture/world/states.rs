@@ -214,7 +214,14 @@ pub fn build(
                     && WATCHED_THEMES.contains(&p.theme),
             };
             match p.want {
-                Want::Confirmed => TransmissionState::Confirmed(confirmed),
+                Want::Confirmed => {
+                    // Not classified yet: it has no topic under any version
+                    // (the spec's `FilterSubject::topic` is `None` for it).
+                    // The assignment is still drawn so the stream of random
+                    // draws does not depend on the state.
+                    record.assignments.clear();
+                    TransmissionState::Confirmed(confirmed)
+                }
                 Want::Classified => TransmissionState::Classified {
                     confirmed,
                     classification,

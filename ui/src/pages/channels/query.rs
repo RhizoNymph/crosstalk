@@ -1,11 +1,18 @@
 //! The channel list's own query keys: `tab`, `origin`, `detection`,
 //! `policy` and `superseded`. List keys hold comma-separated codes, like the
-//! shared view state's filter keys.
+//! shared view state's filter keys. `origin` and `superseded` together are
+//! the spec's `OriginFilter`: origin codes `declared` (before traffic),
+//! `promoted` and `discovered`; `superseded=1` adds superseded channels,
+//! `superseded=only` lists only them (with no origin codes, since a
+//! superseded channel has no origin kind of its own).
 
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
+use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::support::TimeWindow;
 use topcoat::router::query_params;
 
-use crate::contract::channels::{ChannelListFilter, DetectionKind, OriginKind};
 use crate::error::UiError;
 use crate::pages::common::form::{POLICIES, invalid, policy_code};
 
@@ -27,7 +34,11 @@ pub enum Tab {
     Review,
 }
 
-pub const ORIGINS: [OriginKind; 2] = [OriginKind::Discovered, OriginKind::Declared];
+pub const ORIGINS: [CanonicalOriginKind; 3] = [
+    CanonicalOriginKind::Discovered,
+    CanonicalOriginKind::Promoted,
+    CanonicalOriginKind::DeclaredBeforeTraffic,
+];
 
 pub const DETECTIONS: [DetectionKind; 6] = [
     DetectionKind::Active,
@@ -38,10 +49,11 @@ pub const DETECTIONS: [DetectionKind; 6] = [
     DetectionKind::Unused,
 ];
 
-pub fn origin_code(origin: OriginKind) -> &'static str {
+pub fn origin_code(origin: CanonicalOriginKind) -> &'static str {
     match origin {
-        OriginKind::Declared => "declared",
-        OriginKind::Discovered => "discovered",
+        CanonicalOriginKind::DeclaredBeforeTraffic => "declared",
+        CanonicalOriginKind::Promoted => "promoted",
+        CanonicalOriginKind::Discovered => "discovered",
     }
 }
 
@@ -56,11 +68,14 @@ pub fn detection_code(detection: DetectionKind) -> &'static str {
     }
 }
 
-/// The parsed list query.
+/// The parsed list query: everything of the spec's `ChannelFilter` but
+/// the window, which is the view's.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListQuery {
     pub tab: Tab,
-    pub filter: ChannelListFilter,
+    pub origin: OriginFilter,
+    pub detections: Vec<DetectionKind>,
+    pub policies: Vec<PolicyKind>,
 }
 
 fn parse_codes<T: Copy>(
@@ -93,37 +108,66 @@ impl ListQuery {
             Some("review") => Tab::Review,
             Some(other) => return Err(invalid("tab", format!("unknown tab {other:?}"))),
         };
-        let include_superseded = match raw.superseded.as_deref() {
-            None | Some("0") => false,
-            Some("1") => true,
-            Some(_) => return Err(invalid("superseded", "expected 0 or 1")),
+        let kinds = parse_codes(raw.origin.as_deref(), "origin", &ORIGINS, origin_code)?;
+        let origin = match raw.superseded.as_deref() {
+            None | Some("0") => OriginFilter::InForce(kinds),
+            Some("1") => OriginFilter::WithSuperseded(kinds),
+            Some("only") if kinds.is_empty() => OriginFilter::Superseded,
+            Some("only") => {
+                return Err(invalid(
+                    "superseded",
+                    "superseded channels have no origin kind; drop the origin filter",
+                ));
+            }
+            Some(_) => return Err(invalid("superseded", "expected 0, 1 or only")),
         };
         Ok(Self {
             tab,
-            filter: ChannelListFilter {
-                origins: parse_codes(raw.origin.as_deref(), "origin", &ORIGINS, origin_code)?,
-                detections: parse_codes(
-                    raw.detection.as_deref(),
-                    "detection",
-                    &DETECTIONS,
-                    detection_code,
-                )?,
-                policies: parse_codes(raw.policy.as_deref(), "policy", &POLICIES, policy_code)?,
-                include_superseded,
-                window: None,
-            },
+            origin,
+            detections: parse_codes(
+                raw.detection.as_deref(),
+                "detection",
+                &DETECTIONS,
+                detection_code,
+            )?,
+            policies: parse_codes(raw.policy.as_deref(), "policy", &POLICIES, policy_code)?,
         })
     }
 
-    /// The filter sent to the backend: the review queue fixes the policy and
-    /// leaves superseded channels out.
-    pub fn effective_filter(&self) -> ChannelListFilter {
+    /// The origin kinds the filter lists; none for superseded only.
+    pub fn origin_kinds(&self) -> &[CanonicalOriginKind] {
+        match &self.origin {
+            OriginFilter::InForce(kinds) | OriginFilter::WithSuperseded(kinds) => kinds,
+            OriginFilter::Superseded => &[],
+        }
+    }
+
+    pub fn includes_superseded(&self) -> bool {
+        matches!(
+            self.origin,
+            OriginFilter::WithSuperseded(_) | OriginFilter::Superseded
+        )
+    }
+
+    pub fn superseded_only(&self) -> bool {
+        self.origin == OriginFilter::Superseded
+    }
+
+    /// The filter sent to the backend, counting in `window`: the review
+    /// queue fixes the policy and leaves superseded channels out.
+    pub fn filter(&self, window: Option<TimeWindow>) -> ChannelFilter {
         match self.tab {
-            Tab::All => self.filter.clone(),
-            Tab::Review => ChannelListFilter {
+            Tab::All => ChannelFilter {
+                origin: self.origin.clone(),
+                detections: self.detections.clone(),
+                policies: self.policies.clone(),
+                window,
+            },
+            Tab::Review => ChannelFilter {
+                origin: OriginFilter::InForce(self.origin_kinds().to_vec()),
+                detections: self.detections.clone(),
                 policies: vec![PolicyKind::Unreviewed],
-                include_superseded: false,
-                ..self.filter.clone()
+                window,
             },
         }
     }
@@ -142,8 +186,7 @@ impl ListQuery {
             (
                 "origin",
                 join(
-                    self.filter
-                        .origins
+                    self.origin_kinds()
                         .iter()
                         .map(|o| origin_code(*o))
                         .collect(),
@@ -151,30 +194,18 @@ impl ListQuery {
             ),
             (
                 "detection",
-                join(
-                    self.filter
-                        .detections
-                        .iter()
-                        .map(|d| detection_code(*d))
-                        .collect(),
-                ),
+                join(self.detections.iter().map(|d| detection_code(*d)).collect()),
             ),
             (
                 "policy",
-                join(
-                    self.filter
-                        .policies
-                        .iter()
-                        .map(|p| policy_code(*p))
-                        .collect(),
-                ),
+                join(self.policies.iter().map(|p| policy_code(*p)).collect()),
             ),
             (
                 "superseded",
-                if self.filter.include_superseded {
-                    "1".to_owned()
-                } else {
-                    String::new()
+                match self.origin {
+                    OriginFilter::InForce(_) => String::new(),
+                    OriginFilter::WithSuperseded(_) => "1".to_owned(),
+                    OriginFilter::Superseded => "only".to_owned(),
                 },
             ),
         ]
@@ -187,27 +218,51 @@ impl ListQuery {
         }
     }
 
-    pub fn toggle_origin(&self, origin: OriginKind) -> Self {
+    /// Adds or removes an origin kind; from superseded only, lists the
+    /// channels in force of that kind.
+    pub fn toggle_origin(&self, origin: CanonicalOriginKind) -> Self {
         let mut next = self.clone();
-        next.filter.origins = toggle(&self.filter.origins, origin);
+        next.origin = match &self.origin {
+            OriginFilter::InForce(kinds) => OriginFilter::InForce(toggle(kinds, origin)),
+            OriginFilter::WithSuperseded(kinds) => {
+                OriginFilter::WithSuperseded(toggle(kinds, origin))
+            }
+            OriginFilter::Superseded => OriginFilter::InForce(vec![origin]),
+        };
         next
     }
 
     pub fn toggle_detection(&self, detection: DetectionKind) -> Self {
         let mut next = self.clone();
-        next.filter.detections = toggle(&self.filter.detections, detection);
+        next.detections = toggle(&self.detections, detection);
         next
     }
 
     pub fn toggle_policy(&self, policy: PolicyKind) -> Self {
         let mut next = self.clone();
-        next.filter.policies = toggle(&self.filter.policies, policy);
+        next.policies = toggle(&self.policies, policy);
         next
     }
 
+    /// Includes or leaves out superseded channels, keeping the origin kinds.
     pub fn toggle_superseded(&self) -> Self {
         let mut next = self.clone();
-        next.filter.include_superseded = !self.filter.include_superseded;
+        next.origin = match &self.origin {
+            OriginFilter::InForce(kinds) => OriginFilter::WithSuperseded(kinds.clone()),
+            OriginFilter::WithSuperseded(kinds) => OriginFilter::InForce(kinds.clone()),
+            OriginFilter::Superseded => OriginFilter::InForce(Vec::new()),
+        };
+        next
+    }
+
+    /// Lists only superseded channels, or goes back to every channel in
+    /// force.
+    pub fn toggle_superseded_only(&self) -> Self {
+        let mut next = self.clone();
+        next.origin = match &self.origin {
+            OriginFilter::Superseded => OriginFilter::InForce(Vec::new()),
+            OriginFilter::InForce(_) | OriginFilter::WithSuperseded(_) => OriginFilter::Superseded,
+        };
         next
     }
 }
@@ -242,6 +297,7 @@ mod tests {
     fn empty_query_is_unfiltered() {
         let query = ListQuery::parse(&raw("", "", "")).expect("parse");
         assert_eq!(query, ListQuery::default());
+        assert_eq!(query.filter(None), ChannelFilter::default());
         assert!(query.pairs().iter().all(|(_, v)| v.is_empty()));
     }
 
@@ -249,13 +305,29 @@ mod tests {
     fn lists_parse_and_render_back() {
         let query =
             ListQuery::parse(&raw("discovered", "active,candidate", "unreviewed")).expect("parse");
-        assert_eq!(query.filter.origins, vec![OriginKind::Discovered]);
         assert_eq!(
-            query.filter.detections,
+            query.origin,
+            OriginFilter::InForce(vec![CanonicalOriginKind::Discovered])
+        );
+        assert_eq!(
+            query.detections,
             vec![DetectionKind::Active, DetectionKind::Candidate]
         );
         let pairs = query.pairs();
         assert!(pairs.contains(&("detection", "active,candidate".to_owned())));
+        let promoted = ListQuery::parse(&raw("promoted,declared", "", "")).expect("parse");
+        assert_eq!(
+            promoted.origin_kinds(),
+            [
+                CanonicalOriginKind::Promoted,
+                CanonicalOriginKind::DeclaredBeforeTraffic
+            ]
+        );
+        assert!(
+            promoted
+                .pairs()
+                .contains(&("origin", "promoted,declared".to_owned()))
+        );
     }
 
     #[test]
@@ -270,31 +342,61 @@ mod tests {
     }
 
     #[test]
+    fn superseded_maps_onto_the_origin_filter() {
+        let with = |origin: &str, superseded: &str| RawListQuery {
+            superseded: Some(superseded.to_owned()),
+            ..raw(origin, "", "")
+        };
+        let both = ListQuery::parse(&with("declared", "1")).expect("parse");
+        assert_eq!(
+            both.origin,
+            OriginFilter::WithSuperseded(vec![CanonicalOriginKind::DeclaredBeforeTraffic])
+        );
+        let only = ListQuery::parse(&with("", "only")).expect("parse");
+        assert_eq!(only.origin, OriginFilter::Superseded);
+        assert!(only.pairs().contains(&("superseded", "only".to_owned())));
+        assert!(ListQuery::parse(&with("discovered", "only")).is_err());
+        assert!(ListQuery::parse(&with("", "yes")).is_err());
+    }
+
+    #[test]
     fn review_queue_fixes_policy_and_hides_superseded() {
         let mut query = ListQuery::parse(&raw("discovered", "", "sanctioned")).expect("parse");
-        query.filter.include_superseded = true;
-        let filter = query.with_tab(Tab::Review).effective_filter();
+        query.origin = OriginFilter::WithSuperseded(vec![CanonicalOriginKind::Discovered]);
+        let filter = query.with_tab(Tab::Review).filter(None);
         assert_eq!(filter.policies, vec![PolicyKind::Unreviewed]);
-        assert!(!filter.include_superseded);
-        assert_eq!(filter.origins, vec![OriginKind::Discovered]);
+        assert_eq!(
+            filter.origin,
+            OriginFilter::InForce(vec![CanonicalOriginKind::Discovered])
+        );
+        let only = ListQuery {
+            origin: OriginFilter::Superseded,
+            ..ListQuery::default()
+        };
+        assert_eq!(
+            only.with_tab(Tab::Review).filter(None).origin,
+            OriginFilter::InForce(Vec::new())
+        );
     }
 
     #[test]
     fn toggles_add_and_remove() {
-        let query = ListQuery::default().toggle_origin(OriginKind::Declared);
-        assert_eq!(query.filter.origins, vec![OriginKind::Declared]);
-        assert!(
-            query
-                .toggle_origin(OriginKind::Declared)
-                .filter
-                .origins
-                .is_empty()
+        let declared = CanonicalOriginKind::DeclaredBeforeTraffic;
+        let query = ListQuery::default().toggle_origin(declared);
+        assert_eq!(query.origin_kinds(), [declared]);
+        assert!(query.toggle_origin(declared).origin_kinds().is_empty());
+        let with = query.toggle_superseded();
+        assert_eq!(with.origin, OriginFilter::WithSuperseded(vec![declared]));
+        assert_eq!(with.toggle_superseded(), query);
+        let only = with.toggle_superseded_only();
+        assert!(only.superseded_only() && only.includes_superseded());
+        assert_eq!(
+            only.toggle_origin(declared).origin,
+            OriginFilter::InForce(vec![declared])
         );
-        assert!(
-            ListQuery::default()
-                .toggle_superseded()
-                .filter
-                .include_superseded
+        assert_eq!(
+            only.toggle_superseded_only().origin,
+            OriginFilter::InForce(Vec::new())
         );
     }
 }

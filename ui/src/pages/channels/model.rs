@@ -1,17 +1,18 @@
 //! Channel data as the pages show it: what a channel is matched by, its
-//! detection in words, and its policy decision.
+//! origin and detection in words, and its policy decisions.
 
 use std::time::Duration;
 
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
-use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy};
+use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::TransmissionId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
 use crate::components::format_time;
 use crate::components::locator::{format_locator, format_pattern};
-use crate::contract::channels::ChannelSummary;
 
 /// What identifies a channel to a reader: a declared channel's pattern, or a
 /// discovered channel's seed resource.
@@ -23,8 +24,8 @@ pub enum Shape<'a> {
     UnknownSeed,
 }
 
-pub fn shape(summary: &ChannelSummary) -> Shape<'_> {
-    match (summary.channel.origin.pattern(), &summary.seed) {
+pub fn shape(row: &ChannelRow) -> Shape<'_> {
+    match (row.channel().origin.pattern(), row.seed()) {
         (Some(pattern), _) => Shape::Pattern(pattern),
         (None, Some(seed)) => Shape::Seed(&seed.locator),
         (None, None) => Shape::UnknownSeed,
@@ -32,11 +33,36 @@ pub fn shape(summary: &ChannelSummary) -> Shape<'_> {
 }
 
 /// The channel's name in titles.
-pub fn title(summary: &ChannelSummary) -> String {
-    match shape(summary) {
+pub fn title(row: &ChannelRow) -> String {
+    match shape(row) {
         Shape::Pattern(pattern) => format_pattern(pattern),
         Shape::Seed(locator) => format_locator(locator),
         Shape::UnknownSeed => "discovered channel".to_owned(),
+    }
+}
+
+/// How a channel came to be, as its origin badge shows it. A superseded
+/// channel was discovered; pages show its supersession beside the badge.
+pub fn origin_kind(origin: &ChannelOrigin) -> CanonicalOriginKind {
+    CanonicalOriginKind::of(origin).unwrap_or(CanonicalOriginKind::Discovered)
+}
+
+/// The origin in words: declared before traffic, promoted from its seed,
+/// discovered, or superseded.
+pub fn origin_text(origin: &ChannelOrigin) -> &'static str {
+    match origin {
+        ChannelOrigin::Declared {
+            history: DeclaredHistory::BeforeTraffic(_),
+            ..
+        } => "Declared before any traffic.",
+        ChannelOrigin::Declared {
+            history: DeclaredHistory::Promoted { .. },
+            ..
+        } => "Discovered from its seed resource, then promoted to a declared channel.",
+        ChannelOrigin::Discovered { .. } => "Discovered from its seed resource.",
+        ChannelOrigin::Superseded { .. } => {
+            "Discovered from its seed resource; superseded by a promotion."
+        }
     }
 }
 
@@ -120,20 +146,25 @@ pub fn format_lag(lag: Duration) -> String {
     }
 }
 
-/// The decision behind a policy; `None` for a channel never reviewed.
-pub fn decision(policy: &Policy) -> Option<&Decision> {
-    match policy {
-        Policy::Unreviewed(decision) => decision.as_ref(),
-        Policy::Sanctioned(decision) | Policy::Unsanctioned(decision) => Some(decision),
+/// One policy history entry in words: what the decision set.
+pub fn decision_text(entry: &PolicyDecision) -> &'static str {
+    match entry.kind {
+        PolicyKind::Unreviewed => "reset to unreviewed",
+        PolicyKind::Sanctioned => "sanctioned",
+        PolicyKind::Unsanctioned => "unsanctioned",
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crosstalk_spec::derived::flow::channel::Channel;
-    use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
+    use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
+    use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
+    use crosstalk_spec::derived::flow::channel::{Channel, Declaration, Seed, Supersession};
     use crosstalk_spec::derived::flow::resource::{Host, Resource};
-    use crosstalk_spec::ids::{AccessId, ChannelId, ResourceId};
+    use crosstalk_spec::ids::{AccessId, ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::interfaces::l8_surface::channels::{
+        ChannelActivity, ChannelCounts, ChannelStanding, SupersededInto,
+    };
     use crosstalk_spec::support::Timestamp;
 
     use super::*;
@@ -147,71 +178,161 @@ pub(crate) mod tests {
         }
     }
 
-    /// A discovered, active, unreviewed channel seeded by [`wiki`].
-    pub fn discovered(id: u128) -> ChannelSummary {
-        ChannelSummary {
-            channel: Channel {
-                id: ChannelId::from_ulid(id),
-                origin: ChannelOrigin::Discovered {
-                    seed: crosstalk_spec::derived::flow::channel::Seed {
-                        resource: ResourceId::from_ulid(id),
-                        first_access: AccessId::from_ulid(1),
-                    },
-                    detection: TrafficDetection::Active {
-                        since: Timestamp::from_micros(1_790_985_600_000_000),
-                        last_transmission: TransmissionId::from_ulid(9),
-                    },
-                },
-                resources: Vec::new(),
-                policy: Policy::Unreviewed(None),
-            },
-            seed: Some(Resource {
-                id: ResourceId::from_ulid(id),
-                locator: wiki(),
-                first_seen: Timestamp::from_micros(1_790_900_000_000_000),
-            }),
-            superseded: None,
-            writers: 2,
-            readers: 3,
-            transmissions: 14,
-            last_activity: Some(Timestamp::from_micros(1_790_985_000_000_000)),
+    fn seed(id: u128) -> Seed {
+        Seed {
+            resource: ResourceId::from_ulid(id),
+            first_access: AccessId::from_ulid(1),
         }
+    }
+
+    fn active() -> TrafficDetection {
+        TrafficDetection::Active {
+            since: Timestamp::from_micros(1_790_985_600_000_000),
+            last_transmission: TransmissionId::from_ulid(9),
+        }
+    }
+
+    fn seed_resource(id: u128) -> Resource {
+        Resource {
+            id: ResourceId::from_ulid(id),
+            locator: wiki(),
+            first_seen: Timestamp::from_micros(1_790_900_000_000_000),
+        }
+    }
+
+    /// A discovered, active, unreviewed channel seeded by [`wiki`], with
+    /// two writers, three readers and 14 transmissions in the window.
+    pub fn discovered(id: u128) -> ChannelRow {
+        let channel = Channel {
+            id: ChannelId::from_ulid(id),
+            origin: ChannelOrigin::Discovered {
+                seed: seed(id),
+                detection: active(),
+            },
+            resources: Vec::new(),
+            policy: Policy::Unreviewed(None),
+        };
+        let standing = ChannelStanding::InForce(ChannelActivity::Seen {
+            last: Timestamp::from_micros(1_790_985_000_000_000),
+            counts: ChannelCounts {
+                writers: 2,
+                readers: 3,
+                transmissions: 14,
+            },
+        });
+        ChannelRow::new(channel, Some(seed_resource(id)), standing).expect("row")
+    }
+
+    /// `discovered(id)` with `policy`.
+    pub fn with_policy(id: u128, policy: Policy) -> ChannelRow {
+        let row = discovered(id);
+        let mut channel = row.channel().clone();
+        channel.policy = policy;
+        ChannelRow::new(channel, row.seed().cloned(), row.standing()).expect("row")
+    }
+
+    /// The channel `promoted`, promoted by operator 3, and `id`, a
+    /// discovered channel it superseded.
+    pub fn superseded(id: u128, promoted: u128) -> ChannelRow {
+        let at = Timestamp::from_micros(1_790_985_600_000_000);
+        let by = Channel {
+            id: ChannelId::from_ulid(promoted),
+            origin: ChannelOrigin::Declared {
+                declaration: Declaration {
+                    pattern: ResourcePattern::Host(Host("wiki.example.org".into())),
+                    by: PolicyAuthor::Operator(OperatorId::from_ulid(3)),
+                    at,
+                },
+                history: DeclaredHistory::Promoted {
+                    from: seed(promoted),
+                    detection: active(),
+                },
+            },
+            resources: Vec::new(),
+            policy: Policy::Unreviewed(None),
+        };
+        let supersession = Supersession { by: by.id, at };
+        let channel = Channel {
+            id: ChannelId::from_ulid(id),
+            origin: ChannelOrigin::Superseded {
+                seed: seed(id),
+                detection: active(),
+                supersession,
+            },
+            resources: Vec::new(),
+            policy: Policy::Unreviewed(None),
+        };
+        let into = SupersededInto::of(supersession, &by).expect("supersession");
+        ChannelRow::new(
+            channel,
+            Some(seed_resource(id)),
+            ChannelStanding::Superseded(into),
+        )
+        .expect("row")
+    }
+
+    /// A channel declared in config before any traffic, never active.
+    pub fn declared(id: u128) -> ChannelRow {
+        let channel = Channel {
+            id: ChannelId::from_ulid(id),
+            origin: ChannelOrigin::Declared {
+                declaration: Declaration {
+                    pattern: ResourcePattern::Host(Host("wiki.example.org".into())),
+                    by: PolicyAuthor::Config,
+                    at: Timestamp::from_micros(0),
+                },
+                history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
+            },
+            resources: Vec::new(),
+            policy: Policy::Unreviewed(None),
+        };
+        ChannelRow::new(
+            channel,
+            None,
+            ChannelStanding::InForce(ChannelActivity::Never),
+        )
+        .expect("row")
     }
 
     #[test]
     fn discovered_channels_are_named_by_their_seed() {
-        let summary = discovered(1);
-        assert_eq!(shape(&summary), Shape::Seed(&wiki()));
+        let row = discovered(1);
+        assert_eq!(shape(&row), Shape::Seed(&wiki()));
+        assert_eq!(title(&row), "https://wiki.example.org/team/agents/notes");
         assert_eq!(
-            title(&summary),
-            "https://wiki.example.org/team/agents/notes"
+            origin_kind(&row.channel().origin),
+            CanonicalOriginKind::Discovered
         );
-        let mut unknown = discovered(1);
-        unknown.seed = None;
-        assert_eq!(shape(&unknown), Shape::UnknownSeed);
     }
 
     #[test]
     fn declared_channels_are_named_by_their_pattern() {
-        let mut summary = discovered(1);
-        summary.channel.origin = ChannelOrigin::Declared {
-            declaration: crosstalk_spec::derived::flow::channel::Declaration {
-                pattern: ResourcePattern::Host(Host("wiki.example.org".into())),
-                by: PolicyAuthor::Config,
-                at: Timestamp::from_micros(0),
-            },
-            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
-        };
-        assert_eq!(title(&summary), "wiki.example.org/…");
+        let row = declared(1);
+        assert_eq!(title(&row), "wiki.example.org/…");
         assert_eq!(
-            detection_detail(&summary.channel.origin).text,
+            detection_detail(&row.channel().origin).text,
             "Declared; no traffic yet."
+        );
+        assert_eq!(
+            origin_kind(&row.channel().origin),
+            CanonicalOriginKind::DeclaredBeforeTraffic
         );
     }
 
     #[test]
+    fn superseded_channels_read_as_discovered_and_say_so() {
+        let row = superseded(1, 2);
+        assert_eq!(
+            origin_kind(&row.channel().origin),
+            CanonicalOriginKind::Discovered
+        );
+        assert!(origin_text(&row.channel().origin).contains("superseded"));
+        assert_eq!(row.counts(), None, "a superseded row has no counts");
+    }
+
+    #[test]
     fn active_detection_points_at_its_last_transmission() {
-        let detail = detection_detail(&discovered(1).channel.origin);
+        let detail = detection_detail(&discovered(1).channel().origin);
         assert_eq!(detail.last_transmission, Some(TransmissionId::from_ulid(9)));
         assert!(
             detail
@@ -229,13 +350,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn unreviewed_without_decision_has_none() {
-        assert_eq!(decision(&Policy::Unreviewed(None)), None);
-        let made = Decision {
-            by: PolicyAuthor::Config,
-            at: Timestamp::from_micros(0),
-            note: None,
+    fn decisions_read_as_what_they_set() {
+        let entry = |kind| PolicyDecision {
+            kind,
+            decision: Decision {
+                by: PolicyAuthor::Config,
+                at: Timestamp::from_micros(0),
+                note: None,
+            },
         };
-        assert_eq!(decision(&Policy::Sanctioned(made.clone())), Some(&made));
+        assert_eq!(decision_text(&entry(PolicyKind::Sanctioned)), "sanctioned");
+        assert_eq!(
+            decision_text(&entry(PolicyKind::Unreviewed)),
+            "reset to unreviewed"
+        );
     }
 }

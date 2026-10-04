@@ -1,22 +1,26 @@
 //! The sections of the channel page: resources with their writers and
-//! readers, policy history, and the channel's alerts.
+//! readers, policy history, and the channel's alerts. Also the audit
+//! history rows the alert page shares.
 
+use crosstalk_spec::aggregates::access::{AgentAccesses, ResourceUse};
+use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::ids::AgentId;
-use crosstalk_spec::interfaces::l8_surface::AlertStateKind;
+use crosstalk_spec::interfaces::l8_surface::{AlertStateKind, PolicyKind};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
+use crate::components::PageLinks;
 use crate::components::form::{LINK, SECTION, SECTION_TITLE};
+use crate::components::pagination;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, empty_state, error_panel, format_time, kind_badge, locator_text,
 };
-use crate::contract::channels::ResourceUse;
 use crate::contract::research::{AuditEntry, AuditOutcome};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::audit::describe::{describe, note};
+use crate::pages::channels::model::decision_text;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::lookup::{AgentNames, OperatorNames};
 use crate::url::view_state::ViewState;
@@ -37,17 +41,16 @@ pub struct ResourceRow {
     pub readers: Vec<AgentUse>,
 }
 
-fn agent_uses(uses: &[(AgentId, u64)], names: &AgentNames, state: &ViewState) -> Vec<AgentUse> {
-    let mut out: Vec<AgentUse> = uses
-        .iter()
-        .map(|(id, count)| AgentUse {
-            url: agent_url(*id, state),
-            name: names.name(*id),
-            count: *count,
+/// Writers or readers in the spec's order: most accesses first, ties by
+/// agent id.
+fn agent_uses(uses: &[AgentAccesses], names: &AgentNames, state: &ViewState) -> Vec<AgentUse> {
+    uses.iter()
+        .map(|entry| AgentUse {
+            url: agent_url(entry.agent, state),
+            name: names.name(entry.agent),
+            count: entry.accesses.get(),
         })
-        .collect();
-    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
-    out
+        .collect()
 }
 
 pub fn resource_rows(
@@ -57,12 +60,23 @@ pub fn resource_rows(
 ) -> Vec<ResourceRow> {
     uses.iter()
         .map(|u| ResourceRow {
-            locator: u.resource.locator.clone(),
-            first_seen: format_time(u.resource.first_seen),
-            writers: agent_uses(&u.writers, names, state),
-            readers: agent_uses(&u.readers, names, state),
+            locator: u.resource().locator.clone(),
+            first_seen: format_time(u.resource().first_seen),
+            writers: agent_uses(u.writers(), names, state),
+            readers: agent_uses(u.readers(), names, state),
         })
         .collect()
+}
+
+/// One page of the channel's resources in the window, with links to the
+/// other pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resources {
+    pub rows: Vec<ResourceRow>,
+    pub links: PageLinks,
+    /// The channel in force the resources were read for, when the page
+    /// asked for a superseded one.
+    pub resolved_to: Option<String>,
 }
 
 #[component]
@@ -86,23 +100,93 @@ async fn agent_list(uses: Vec<AgentUse>) -> Result<impl View> {
 
 #[component]
 pub async fn resources_section(
-    rows: std::result::Result<Vec<ResourceRow>, UiError>,
+    resources: std::result::Result<Resources, UiError>,
+) -> Result<impl View> {
+    let empty = resources.as_ref().is_ok_and(|r| r.rows.is_empty());
+    Ok(view! {
+        <section class=(SECTION)>
+            <h2 class=(SECTION_TITLE)>"Resources in this window"</h2>
+            match resources {
+                Err(error) => error_panel(error: &error),
+                Ok(_) if empty => empty_state(message: "No resource of this channel was accessed in the selected window."),
+                Ok(resources) => {
+                    if let Some(url) = resources.resolved_to {
+                        <p class="mb-2 text-xs text-zinc-500">
+                            "Resources of the "
+                            <a class=(LINK) href=(url)>"channel in force"</a>
+                            ", which holds this channel's resources."
+                        </p>
+                    }
+                    data_table(
+                    headers: &["Resource", "First seen", "Writers", "Readers"],
+                        for row in resources.rows {
+                            <tr class=(ROW)>
+                                <td class=(TD)><div class="max-w-md">locator_text(locator: &row.locator)</div></td>
+                                <td class=(TD_MUTED)>(row.first_seen)</td>
+                                <td class=(TD)>agent_list(uses: row.writers)</td>
+                                <td class=(TD)>agent_list(uses: row.readers)</td>
+                            </tr>
+                        }
+                    )
+                    pagination(links: resources.links)
+                },
+            }
+        </section>
+    })
+}
+
+/// One decision of the channel's policy history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRow {
+    pub at: String,
+    pub by: String,
+    pub kind: PolicyKind,
+    pub what: &'static str,
+    pub note: Option<String>,
+}
+
+/// The history's decisions, newest first, the current one on top.
+pub fn policy_rows(history: &PolicyHistory, operators: &OperatorNames) -> Vec<PolicyRow> {
+    history
+        .entries()
+        .iter()
+        .rev()
+        .map(|entry| PolicyRow {
+            at: format_time(entry.decision.at),
+            by: operators.policy_author(entry.decision.by),
+            kind: entry.kind,
+            what: decision_text(entry),
+            note: entry.decision.note.clone(),
+        })
+        .collect()
+}
+
+#[component]
+pub async fn policy_history_section(
+    rows: std::result::Result<Vec<PolicyRow>, UiError>,
+    audit_url: String,
 ) -> Result<impl View> {
     let empty = rows.as_ref().is_ok_and(Vec::is_empty);
     Ok(view! {
         <section class=(SECTION)>
-            <h2 class=(SECTION_TITLE)>"Resources in this window"</h2>
+            <h2 class=(SECTION_TITLE)>
+                "Policy history"
+                <a class=(format!("{LINK} ml-2 normal-case tracking-normal font-normal")) href=(audit_url)>"full audit log"</a>
+            </h2>
             match rows {
                 Err(error) => error_panel(error: &error),
-                Ok(_) if empty => empty_state(message: "No resource of this channel was accessed in the selected window."),
+                Ok(_) if empty => empty_state(message: "No policy decision has been recorded for this channel."),
                 Ok(rows) => data_table(
-                    headers: &["Resource", "First seen", "Writers", "Readers"],
+                    headers: &["When", "By", "Decision", "Note"],
                     for row in rows {
                         <tr class=(ROW)>
-                            <td class=(TD)><div class="max-w-md">locator_text(locator: &row.locator)</div></td>
-                            <td class=(TD_MUTED)>(row.first_seen)</td>
-                            <td class=(TD)>agent_list(uses: row.writers)</td>
-                            <td class=(TD)>agent_list(uses: row.readers)</td>
+                            <td class=(TD_MUTED)>(row.at)</td>
+                            <td class=(TD)>(row.by)</td>
+                            <td class=(TD)>
+                                kind_badge(value: row.kind)
+                                <span class="ml-1 text-xs text-zinc-500">(row.what)</span>
+                            </td>
+                            <td class=(TD)>(row.note.unwrap_or_default())</td>
                         </tr>
                     }
                 ),
@@ -111,7 +195,7 @@ pub async fn resources_section(
     })
 }
 
-/// One entry of the policy history.
+/// One audit entry about a subject (the alert page's history).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRow {
     pub at: String,
@@ -136,43 +220,6 @@ pub fn history_rows(entries: &[AuditEntry], operators: &OperatorNames) -> Vec<Hi
             },
         })
         .collect()
-}
-
-#[component]
-pub async fn history_section(
-    rows: std::result::Result<Vec<HistoryRow>, UiError>,
-    audit_url: String,
-) -> Result<impl View> {
-    let empty = rows.as_ref().is_ok_and(Vec::is_empty);
-    Ok(view! {
-        <section class=(SECTION)>
-            <h2 class=(SECTION_TITLE)>
-                "Policy history"
-                <a class=(format!("{LINK} ml-2 normal-case tracking-normal font-normal")) href=(audit_url)>"full audit log"</a>
-            </h2>
-            match rows {
-                Err(error) => error_panel(error: &error),
-                Ok(_) if empty => empty_state(message: "No policy decision has been recorded for this channel."),
-                Ok(rows) => data_table(
-                    headers: &["When", "By", "Change", "Note", "Outcome"],
-                    for row in rows {
-                        <tr class=(ROW)>
-                            <td class=(TD_MUTED)>(row.at)</td>
-                            <td class=(TD)>(row.by)</td>
-                            <td class=(TD)>(row.what)</td>
-                            <td class=(TD)>(row.note.unwrap_or_default())</td>
-                            <td class=(TD)>
-                                match row.outcome {
-                                    Ok(()) => <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>,
-                                    Err(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
-                                }
-                            </td>
-                        </tr>
-                    }
-                ),
-            }
-        </section>
-    })
 }
 
 #[component]
@@ -215,7 +262,7 @@ pub async fn alerts_section(
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::derived::flow::resource::Resource;
-    use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId, ResourceId};
     use crosstalk_spec::interfaces::l8_surface::{PolicyKind, QueryError};
     use crosstalk_spec::support::Timestamp;
 
@@ -223,17 +270,27 @@ mod tests {
     use crate::components::href::tests::state;
     use crate::pages::channels::model::tests::wiki;
 
+    fn accesses(agent: u128, n: u64) -> AgentAccesses {
+        AgentAccesses {
+            agent: AgentId::from_ulid(agent),
+            accesses: std::num::NonZeroU64::new(n).expect("accesses"),
+        }
+    }
+
     #[test]
     fn writers_sort_by_volume_and_use_names() {
-        let uses = vec![ResourceUse {
-            resource: Resource {
-                id: ResourceId::from_ulid(1),
-                locator: wiki(),
-                first_seen: Timestamp::from_micros(0),
-            },
-            writers: vec![(AgentId::from_ulid(1), 2), (AgentId::from_ulid(2), 9)],
-            readers: vec![],
-        }];
+        let uses = vec![
+            ResourceUse::new(
+                Resource {
+                    id: ResourceId::from_ulid(1),
+                    locator: wiki(),
+                    first_seen: Timestamp::from_micros(0),
+                },
+                vec![accesses(1, 2), accesses(2, 9)],
+                vec![],
+            )
+            .expect("use"),
+        ];
         let names = AgentNames::from_pairs([(AgentId::from_ulid(2), "planner".to_owned())]);
         let rows = resource_rows(&uses, &names, &state());
         assert_eq!(rows[0].writers[0].name, "planner");
@@ -279,6 +336,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn policy_history_lists_the_current_decision_first() {
+        use crosstalk_spec::derived::flow::channel::policy::{
+            Decision, PolicyAuthor, PolicyDecision,
+        };
+
+        let decision = |kind, by, micros| PolicyDecision {
+            kind,
+            decision: Decision {
+                by,
+                at: Timestamp::from_micros(micros),
+                note: None,
+            },
+        };
+        let ada = OperatorId::from_ulid(3);
+        let history = PolicyHistory::from_entries(vec![
+            decision(PolicyKind::Sanctioned, PolicyAuthor::Config, 1),
+            decision(PolicyKind::Unreviewed, PolicyAuthor::Operator(ada), 2),
+        ])
+        .expect("history");
+        let operators = OperatorNames::new([(ada, "ada".to_owned())]);
+        let rows = policy_rows(&history, &operators);
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.by.as_str(), r.what))
+                .collect::<Vec<_>>(),
+            [("ada", "reset to unreviewed"), ("config", "sanctioned")]
+        );
+    }
+
     #[tokio::test]
     async fn sections_render_their_rows() {
         use topcoat::view::view;
@@ -296,24 +383,38 @@ mod tests {
             }],
             readers: Vec::new(),
         }];
-        let html = render(view! { cx => resources_section(rows: Ok(rows)) }, cx).await;
-        assert!(html.contains("https://wiki.example.org/team/agents/notes"));
-        assert!(html.contains(">planner</a>"));
-        assert!(html.contains("none"), "no readers");
-
-        let history = vec![HistoryRow {
-            at: "t".into(),
-            by: "ada".into(),
-            what: "set policy to sanctioned".into(),
-            note: None,
-            outcome: Err("the channel is superseded".into()),
-        }];
+        let resources = Resources {
+            rows,
+            links: PageLinks {
+                first: None,
+                next: Some("/channels/C?cursor=x".into()),
+            },
+            resolved_to: Some("/channels/D".into()),
+        };
         let html = render(
-            view! { cx => history_section(rows: Ok(history), audit_url: "/audit".to_owned()) },
+            view! { cx => resources_section(resources: Ok(resources)) },
             cx,
         )
         .await;
-        assert!(html.contains("rejected: the channel is superseded"));
+        assert!(html.contains("https://wiki.example.org/team/agents/notes"));
+        assert!(html.contains(">planner</a>"));
+        assert!(html.contains("none"), "no readers");
+        assert!(html.contains("Next page"), "the next page is linked");
+        assert!(html.contains("channel in force"));
+
+        let history = vec![PolicyRow {
+            at: "t".into(),
+            by: "ada".into(),
+            kind: PolicyKind::Unreviewed,
+            what: "reset to unreviewed",
+            note: Some("upgraded".into()),
+        }];
+        let html = render(
+            view! { cx => policy_history_section(rows: Ok(history), audit_url: "/audit".to_owned()) },
+            cx,
+        )
+        .await;
+        assert!(html.contains("reset to unreviewed") && html.contains("upgraded"));
 
         let html = render(
             view! { cx => alerts_section(rows: Err(UiError::Query(QueryError::NotFound)), inbox_url: "/alerts".to_owned()) },

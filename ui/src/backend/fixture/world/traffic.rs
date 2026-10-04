@@ -101,7 +101,24 @@ pub struct ChannelStats {
 }
 
 impl Traffic {
-    pub fn channel_stats(&self, channel: ChannelId) -> ChannelStats {
+    /// The first access of `resource`, if it was ever accessed.
+    pub fn first_access_of(&self, resource: ResourceId) -> Option<(AccessId, Timestamp)> {
+        self.accesses
+            .iter()
+            .find(|a| a.resource == resource)
+            .map(|a| (a.id, a.at))
+    }
+
+    /// `channel`'s first access and first cross access, and the
+    /// confirmations `counts` keeps: given the channel a transmission's
+    /// route names and its `Confirmed::at`, whether its confirmation moves
+    /// `channel`'s detection (a superseded channel's is frozen at its
+    /// supersession; later confirmations move its superseding channel's).
+    pub fn channel_stats(
+        &self,
+        channel: ChannelId,
+        counts: impl Fn(ChannelId, Timestamp) -> bool,
+    ) -> ChannelStats {
         let mut stats = ChannelStats {
             first_access: self
                 .accesses
@@ -111,13 +128,15 @@ impl Traffic {
             ..ChannelStats::default()
         };
         for record in &self.transmissions {
-            if record.transmission.route != Route::Channel(channel) {
+            let Route::Channel(routed) = record.transmission.route else {
                 continue;
-            }
-            if stats.first_cross_access.is_none() {
+            };
+            if routed == channel && stats.first_cross_access.is_none() {
                 stats.first_cross_access = co_accesses(&record.transmission.state).first().copied();
             }
-            if let Some(c) = confirmed(&record.transmission.state) {
+            if let Some(c) = confirmed(&record.transmission.state)
+                && counts(routed, c.at())
+            {
                 let entry = (c.at(), record.transmission.id);
                 if stats.first_confirmed.is_none_or(|f| entry.0 < f.0) {
                     stats.first_confirmed = Some(entry);
