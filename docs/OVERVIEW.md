@@ -162,6 +162,11 @@ Overview:
       unscored until L3 to L5 consume the bus) produces spec Transmissions;
       the scorer aligns them with the labels and reports per dataset,
       route, carrier, match class and tier against regression gates.
+    e2e: >
+      Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
+      scripted two-agent Claude Code scenario as wire traffic, captured
+      through L0 and L1, fed through Pipeline::ingest, and asserted through
+      the L8 surface; the scenario is reusable for demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -890,4 +895,29 @@ Features Index:
       - crates/eval/src/bin/ct-eval/main.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
+  e2e_smoke:
+    description: >
+      crosstalk-e2e (a composer): the end-to-end smoke. A deterministic
+      wiki relay scenario as Claude Code HTTP traffic (agent A writes a
+      shared wiki page with a distinctive sentence through Write, agent B
+      reads it through Read and repeats it; two sessions, two API keys),
+      captured through L0's route table, identifier and adapter and L1's
+      normalizer into NormalizedExchanges, fed through Pipeline::ingest in
+      time order, and read back only through QueryApi (agents by session,
+      the A to B channel edge, the confirmed transmission, its evidence,
+      the discovered channel). The composition is shaped like
+      crosstalk_gateway::live::Live and is wired today from InProcess plus
+      a pipeline over its blob store and bus; the assertions needing L3 to
+      L7 are ignored until Live composes them. The scenario and readers are
+      a library, so a UI demo can feed the same traffic into a running
+      Live.
+    entry_points:
+      - crates/e2e/src/lib.rs
+      - crates/e2e/src/scenario/mod.rs
+      - crates/e2e/src/capture.rs
+      - crates/e2e/src/compose.rs
+      - crates/e2e/src/read.rs
+      - crates/e2e/tests/smoke/main.rs
+    depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
+    doc: docs/features/e2e_smoke.md
 ```

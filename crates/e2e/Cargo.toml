@@ -1,0 +1,25 @@
+[package]
+name = "crosstalk-e2e"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "End-to-end smoke harness: a scripted Claude Code scenario as captured traffic, fed through the gateway pipeline and read back through the L8 surface."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+crosstalk-api = { path = "../api" }
+crosstalk-canonical = { path = "../canonical" }
+crosstalk-gateway = { path = "../gateway" }
+crosstalk-ingress = { path = "../ingress" }
+crosstalk-memory = { path = "../memory" }
+crosstalk-surface = { path = "../surface" }
+crosstalk-transport = { path = "../transport" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
