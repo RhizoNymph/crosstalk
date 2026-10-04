@@ -7,7 +7,12 @@
 //! export starts, and that resolution (and the copy of current verdicts a
 //! `FalseDetections::Exclude` filter reads) holds for the whole export. A
 //! projection point keeps what its frame stored at fit time. Every topic a
-//! row names belongs to the header's topic version.
+//! row names belongs to the header's topic version. A transmission whose
+//! sender and reader resolve to one agent under that resolution is in no
+//! dataset, as in every view: [`TransmissionRow::new`] refuses it, and
+//! edge, topic and projection rows come from views that drop it. An access
+//! row's channel is the channel holding its resource under that
+//! resolution, listed as a channel, as `channel_topology` draws it.
 //!
 //! **Order.** Each dataset's rows are sent in ascending [`RowKey`] order, and
 //! no two rows of one export share a key, so the rows of an export are a
@@ -57,7 +62,7 @@ use crate::aggregates::projection::{ProjectedPoint, Projection};
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aliases::Aliases;
 use crate::derived::flow::access::AccessKind;
-use crate::derived::flow::transmission::Transmission;
+use crate::derived::flow::transmission::{Crossing, Transmission};
 use crate::derived::flow::verdict::{Verdict, VerdictLog, VerdictRevision};
 use crate::ids::{AgentId, ChannelId, OperatorId, TopicId, TransmissionId};
 use crate::interfaces::l8_surface::evidence::{MatchQuotes, TransmissionEvidence};
@@ -74,14 +79,14 @@ use super::request::ExportDatasetKind;
 /// lists for it, resolved with the aliases captured when the export started
 /// and with its topic under the header's version, the strongest class of
 /// its content matches and, when the request includes content, its topic
-/// label and quoted text. When its sender and reader have since been merged
-/// they are equal (the topology graph drops such a transmission; the export
-/// lists it).
+/// label and quoted text.
 ///
 /// Built only through [`TransmissionRow::new`] and [`TransmissionRow::of`],
 /// which take a confirmed summary (`Confirmed`, `Classified` or
 /// `Aggregated`): the dataset holds confirmed transmissions, ordered and
-/// windowed by `Confirmed::at`, so every row has a [`Delivery`].
+/// windowed by `Confirmed::at`, so every row has a [`Delivery`]. Its sender
+/// and reader are different agents: a transmission whose two agents have
+/// since merged into one is a transmission nowhere, so it is not a row.
 ///
 /// On the wire, `{"summary": .., "strongest": .., "content": ..}`: the
 /// delivery is the summary's, so it is not written twice, and decoding goes
@@ -101,6 +106,8 @@ pub enum InvalidTransmissionRow {
     /// The transmission is not confirmed, so it has no `Confirmed::at` to
     /// order and window it by.
     NotConfirmed(TransmissionStateKind),
+    /// Its sender and reader resolve to this one agent.
+    WithinOneAgent(AgentId),
 }
 
 /// [`TransmissionRow`]'s wire form: its fields without the delivery, which
@@ -141,6 +148,9 @@ impl TransmissionRow {
         let Some(&delivery) = summary.state.delivery() else {
             return Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()));
         };
+        if delivery.from == summary.to {
+            return Err(InvalidTransmissionRow::WithinOneAgent(summary.to));
+        }
         Ok(Self {
             summary,
             delivery,
@@ -446,7 +456,7 @@ pub fn projection_rows(
         .zip(0_u32..)
         .map(|(point, index)| {
             let content = labels.map(|labels| LabelContent {
-                topic_label: point.topic.and_then(|topic| labels.get(&topic).cloned()),
+                topic_label: point.topic().and_then(|topic| labels.get(&topic).cloned()),
             });
             ExportRow::Point(PointRow {
                 index,
@@ -467,13 +477,20 @@ pub enum VerdictRowsError {
 /// The rows of a verdicts export for one transmission: one per record of
 /// its log, oldest first, each with the transmission's route kind and the
 /// detector's current call. A transmission whose state takes no verdict
-/// has an empty log and so no rows.
+/// has an empty log and so no rows, and so has one whose sender and reader
+/// resolve to one agent under `aliases` (the export's resolution,
+/// [`Crossing::WithinOneAgent`]): it is a transmission nowhere, as in
+/// [`DetectionQuality::tally`](crate::aggregates::quality::DetectionQuality::tally).
 pub fn verdict_rows(
     transmission: &Transmission,
     log: &VerdictLog,
+    aliases: impl Aliases,
 ) -> Result<Vec<ExportRow>, VerdictRowsError> {
     if log.transmission() != transmission.id {
         return Err(VerdictRowsError::OtherTransmission);
+    }
+    if transmission.crossing(aliases) == Crossing::WithinOneAgent {
+        return Ok(Vec::new());
     }
     let Ok(judgeable) = transmission.state.judgeable() else {
         return Ok(Vec::new());

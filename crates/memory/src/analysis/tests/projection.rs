@@ -6,7 +6,7 @@ use std::time::Duration;
 use crosstalk_spec::aggregates::filter::TopologyFilter;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, InvalidProjectionInfo, InvalidTransition, PointRoute, ProjectedPoint,
+    FitFailure, InvalidProjectionInfo, InvalidTransition, PointParts, PointRoute, ProjectedPoint,
     ProjectionInfo, ProjectionLimit, ProjectionMismatch, ProjectionParams, ProjectionSpec,
     ProjectionStatus, ProjectionStatusKind,
 };
@@ -65,15 +65,18 @@ fn frame(id: ProjectionId, points: u64, matching: u64, w: u64) -> ProjectionFram
         matching,
     };
     let points: Vec<ProjectedPoint> = (0..points)
-        .map(|n| ProjectedPoint {
-            transmission: transmission(n),
-            from: agent(1),
-            to: agent(2),
-            route: PointRoute::Direct,
-            topic: None,
-            confirmed_at: at(n),
-            x: Finite::new(0.5).unwrap(),
-            y: Finite::new(-0.5).unwrap(),
+        .map(|n| {
+            ProjectedPoint::new(PointParts {
+                transmission: transmission(n),
+                from: agent(1),
+                to: agent(2),
+                route: PointRoute::Direct,
+                topic: None,
+                confirmed_at: at(n),
+                x: Finite::new(0.5).unwrap(),
+                y: Finite::new(-0.5).unwrap(),
+            })
+            .unwrap()
         })
         .collect();
     ProjectionFrame::from_points(header, &points).unwrap()

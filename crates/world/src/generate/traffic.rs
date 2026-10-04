@@ -95,12 +95,17 @@ pub struct Traffic {
     /// Every resource with its first sighting, by channel plan order then
     /// the lone entry.
     pub resources: Vec<Resource>,
-    /// The channel each resource is on (the lone entry's own channel
-    /// included, on today's spec).
+    /// The planned channel of each resource a channel's traffic uses: a
+    /// declared channel's resources are on it from their first sighting, a
+    /// discovered channel's seed from its first cross-agent transmission.
+    /// The lone entry, on no channel, has none.
     pub resource_channel: BTreeMap<ResourceId, ChannelId>,
-    /// `cc7`'s key-value entry.
+    /// `cc7`'s key-value entry: a resource only one agent uses, so never a
+    /// channel.
     pub lone: ResourceId,
-    /// The channel today's spec discovers for it.
+    /// The id minted for a channel of the lone entry, which no write ever
+    /// creates: `ChannelKey::Scratch`, kept so readers can check that no
+    /// such channel exists.
     pub scratch: ChannelId,
     /// Oldest first.
     pub accesses: Vec<Access>,
@@ -258,12 +263,13 @@ impl Gen<'_> {
         Ok(())
     }
 
-    /// Records an access of `resource`, which is on `channel`.
+    /// Records an access of `resource`, which `channel`'s traffic uses
+    /// (`None` for a resource no channel's traffic uses).
     fn access(
         &mut self,
         agent: AgentId,
         resource: (ResourceId, &Locator),
-        channel: ChannelId,
+        channel: Option<ChannelId>,
         at: Timestamp,
         kind: AccessKind,
     ) -> Result<Access, WorldError> {
@@ -291,7 +297,9 @@ impl Gen<'_> {
             via,
             op,
         };
-        self.resource_channel.insert(resource.0, channel);
+        if let Some(channel) = channel {
+            self.resource_channel.insert(resource.0, channel);
+        }
         self.accesses.push(access.clone());
         Ok(access)
     }
@@ -324,8 +332,8 @@ impl Gen<'_> {
         }
         let resource = (rid, &locator);
         let write_at = minus(at, self.rng.between(2 * MINUTE, 20 * HOUR)).max(earliest);
-        let write = self.access(writer, resource, spec.id, write_at, AccessKind::Write)?;
-        let read = self.access(reader, resource, spec.id, at, AccessKind::Read)?;
+        let write = self.access(writer, resource, Some(spec.id), write_at, AccessKind::Write)?;
+        let read = self.access(reader, resource, Some(spec.id), at, AccessKind::Read)?;
         let co_access = |w: &Access| {
             CoAccess::new(w, &read, CORRELATION_WINDOW)
                 .map_err(|e| WorldError::invalid("CoAccess", e))
@@ -339,7 +347,13 @@ impl Gen<'_> {
         {
             let second_at = minus(write_at, self.rng.between(MINUTE, 2 * HOUR)).max(earliest);
             if second_at < write_at {
-                let w2 = self.access(second, resource, spec.id, second_at, AccessKind::Write)?;
+                let w2 = self.access(
+                    second,
+                    resource,
+                    Some(spec.id),
+                    second_at,
+                    AccessKind::Write,
+                )?;
                 co.push(co_access(&w2)?);
                 accesses.push(w2.id);
             }
@@ -479,7 +493,7 @@ impl Gen<'_> {
                 let Some((rid, locator)) = self.rng.pick(&spec.resources).cloned() else {
                     continue;
                 };
-                self.access(agent, (rid, &locator), spec.id, at, kind)?;
+                self.access(agent, (rid, &locator), Some(spec.id), at, kind)?;
             }
         }
         self.lone()
@@ -498,7 +512,7 @@ impl Gen<'_> {
             } else {
                 AccessKind::Read
             };
-            self.access(agent, (id, &locator), self.scratch, at, kind)?;
+            self.access(agent, (id, &locator), None, at, kind)?;
         }
         Ok(())
     }

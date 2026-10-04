@@ -179,10 +179,14 @@ pub trait TopicCatalog {
 
     /// Each of `version`'s topics, and its outliers, with the transmissions
     /// assigned to them under `version`; with a window, only transmissions
-    /// confirmed in it. Every topic of the version is listed once. Fails with
-    /// `StillFitting` for a version that is not ready yet. For a dropped
-    /// version, returns without a window the all-time sizes frozen when it
-    /// was dropped, and with a window `VersionNotRetained`.
+    /// confirmed in it; in either case only transmissions whose sender and
+    /// reader resolve to different agents at the read (through
+    /// `AgentDirectory`: one whose agents have since merged into one counts
+    /// nowhere, `analysis.sizes.match-cross-agent-assignments`). Every topic
+    /// of the version is listed once. Fails with `StillFitting` for a
+    /// version that is not ready yet. For a dropped version, returns without
+    /// a window the all-time sizes frozen when it was dropped (merges up to
+    /// then applied), and with a window `VersionNotRetained`.
     fn sizes(
         &self,
         version: TopicModelVersion,

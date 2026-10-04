@@ -8,8 +8,8 @@ use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::ids::{
-    AccessId, AgentId, AlertRuleId, AuditId, ChannelId, OperatorId, ProjectionId, SinkId, TopicId,
-    TransmissionId,
+    AccessId, AgentId, AlertRuleId, AuditId, ChannelId, OperatorId, ProjectionId, ResourceId,
+    SinkId, TopicId, TransmissionId,
 };
 use crosstalk_spec::support::{Similarity, TimeWindow, Timestamp};
 
@@ -35,6 +35,10 @@ pub fn transmission(n: u64) -> TransmissionId {
 
 pub fn access(n: u64) -> AccessId {
     AccessId::from_ulid(raw(n))
+}
+
+pub fn resource(n: u64) -> ResourceId {
+    ResourceId::from_ulid(raw(n))
 }
 
 pub fn topic_id(n: u64) -> TopicId {

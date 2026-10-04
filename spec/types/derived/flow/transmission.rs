@@ -38,6 +38,15 @@
 //!
 //! The sender is unknown until content evidence arrives, so it lives inside
 //! [`Confirmed`], not on the transmission itself.
+//!
+//! **Only between different agents.** A transmission is between two
+//! different agents when it is recorded: `ContentMatch::new` refuses a match
+//! whose reader is its origin agent and `CoAccess::new` a write and read by
+//! one agent. Merges are aliases resolved at read time, so two ids of one
+//! transmission can later resolve to one agent. Such a transmission counts
+//! nowhere: not in a graph, series, search, projection, export, channel's
+//! traffic or count. [`Transmission::crossing`] is the one definition every
+//! reader applies.
 
 use std::num::NonZeroU64;
 
@@ -176,6 +185,57 @@ pub enum TransmissionState {
         at: Timestamp,
         co_access: NonEmpty<CoAccess>,
     },
+}
+
+/// Whether a transmission is between two different agents once merged
+/// agents resolve, as [`Transmission::crossing`] decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Crossing {
+    /// `Detected`: no evidence names a sender yet, so it is not traffic.
+    Unknown,
+    /// A sender its evidence names and its reader resolve to two different
+    /// agents: a transmission every reader counts.
+    Crosses,
+    /// Every sender its evidence names resolves to its reader: ids since
+    /// merged into one agent. Counted nowhere; an unmerge can make it cross
+    /// again.
+    WithinOneAgent,
+}
+
+impl Transmission {
+    /// Whether this transmission crosses agents under `aliases`. A
+    /// confirmed (or classified, or aggregated) one crosses when
+    /// `Confirmed::from` and the reader resolve to different agents; one
+    /// backed only by co-access records (`AwaitingContent`, `Suspected`,
+    /// `Discarded`) crosses when the writer of at least one of them
+    /// ([`CoAccess::writer`]) resolves to an agent other than the reader.
+    /// `Detected` is `Unknown`.
+    pub fn crossing(&self, aliases: impl Aliases) -> Crossing {
+        let reader = aliases.agent(self.to);
+        let crosses = |from: AgentId| aliases.agent(from) != reader;
+        let verdict = |any: bool| {
+            if any {
+                Crossing::Crosses
+            } else {
+                Crossing::WithinOneAgent
+            }
+        };
+        match &self.state {
+            TransmissionState::Detected => Crossing::Unknown,
+            TransmissionState::Confirmed(confirmed)
+            | TransmissionState::Classified { confirmed, .. }
+            | TransmissionState::Aggregated { confirmed, .. } => verdict(crosses(confirmed.from())),
+            TransmissionState::AwaitingContent { .. }
+            | TransmissionState::Suspected { .. }
+            | TransmissionState::Discarded { .. } => verdict(
+                self.state
+                    .co_accesses()
+                    .iter()
+                    .map(CoAccess::writer)
+                    .any(crosses),
+            ),
+        }
+    }
 }
 
 /// A transition that applies only to a suspected transmission.

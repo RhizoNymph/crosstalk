@@ -11,6 +11,7 @@
     "topic_version": {
       "type": "current"
     },
-    "false_detections": "include"
+    "false_detections": "include",
+    "unconfirmed_channels": "include"
   }
 }

@@ -2,7 +2,8 @@
 //! `crosstalk_spec::interfaces::l8_surface::channels` defines it.
 //!
 //! ```text
-//! in force:   writers, readers = ChannelCounts::tally(full resource_use(channel, window))
+//! in force:   traffic          = the CrossTraffic ChannelReads returned with the channel (all time)
+//!             writers, readers = ChannelCounts::tally(full resource_use(channel, window))
 //!             transmissions    = ChannelCounts::routed(graph(window, default filter))[channel]
 //!             last             = max(latest access, latest confirmation), over all time
 //! superseded: SupersededInto::of(own supersession, the superseding channel), no counts
@@ -14,20 +15,22 @@
 //! was accessed in the window: the latest access is the largest `t` for
 //! which the window `[t, end of time)` lists any resource, found by
 //! bisection (at most 64 one-item reads). The latest confirmation is the
-//! `Confirmed::at` of the transmission the channel's detection last
-//! confirmed (`Active` or `Dormant`), which detection-follows-resolution
-//! keeps on the channel in force for its superseded channels too.
+//! `Confirmed::at` of the transmission the channel's detection last names
+//! (`TrafficDetection::last_transmission`, the last cross-agent
+//! transmission opened or confirmed through it), when that one is
+//! confirmed: detection-follows-resolution keeps it on the channel in force
+//! for its superseded channels too. When it was only opened, the read that
+//! opened it is an access, which the latest access already counts.
 
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::access::ResourceUse;
 use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
 use crosstalk_spec::derived::flow::channel::Channel;
-use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
-use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
+use crosstalk_spec::interfaces::l5_flow::channels::{ChannelReads, ChannelWithTraffic};
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -60,14 +63,15 @@ impl<S: SurfaceStores> Surface<S> {
         Ok(ChannelCounts::routed(&graph.value))
     }
 
-    /// The row of `channel`, counted over `window` (aligned; all time is
-    /// [`Surface::all_time`]) with `routed` read for that window.
+    /// The row of `read`'s channel, counted over `window` (aligned; all
+    /// time is [`Surface::all_time`]) with `routed` read for that window.
     pub(crate) async fn channel_row(
         &self,
-        channel: Channel,
+        read: ChannelWithTraffic,
         window: TimeWindow,
         routed: &Routed,
     ) -> Result<ChannelRow, QueryError> {
+        let (channel, traffic) = read.into_parts();
         let all_time = self.all_time()?;
         let seed = self.seed_resource(&channel, all_time).await?;
         let standing = match channel.origin.supersession() {
@@ -83,12 +87,18 @@ impl<S: SurfaceStores> Surface<S> {
                             channel.id, supersession.by
                         ))
                     })?;
-                let into = SupersededInto::of(supersession, &superseding).map_err(|error| {
-                    store(format!("supersession of {:?}: {error:?}", channel.id))
-                })?;
+                let into =
+                    SupersededInto::of(supersession, superseding.channel()).map_err(|error| {
+                        store(format!("supersession of {:?}: {error:?}", channel.id))
+                    })?;
                 ChannelStanding::Superseded(into)
             }
-            None => ChannelStanding::InForce(self.activity(&channel, window, routed).await?),
+            None => ChannelStanding::InForce {
+                // In force, the registry returned its traffic; none only
+                // when superseded.
+                traffic: traffic.unwrap_or_default(),
+                activity: self.activity(&channel, window, routed).await?,
+            },
         };
         ChannelRow::new(channel.clone(), seed, standing)
             .map_err(|error| store(format!("row of channel {:?}: {error:?}", channel.id)))
@@ -209,24 +219,18 @@ impl<S: SurfaceStores> Surface<S> {
         Ok(Some(Timestamp::from_micros(low)))
     }
 
-    /// When the transmission the channel's detection last confirmed was
-    /// confirmed; `None` before any confirmation.
+    /// When the transmission the channel's detection last names was
+    /// confirmed; `None` when it is not confirmed (module docs).
     async fn latest_confirmation(
         &self,
         channel: &Channel,
     ) -> Result<Option<Timestamp>, QueryError> {
-        let last = match channel.origin.traffic() {
-            Some(
-                TrafficDetection::Active {
-                    last_transmission, ..
-                }
-                | TrafficDetection::Dormant {
-                    last_transmission, ..
-                },
-            ) => *last_transmission,
-            Some(TrafficDetection::Observed { .. } | TrafficDetection::Candidate { .. }) | None => {
-                return Ok(None);
-            }
+        let Some(last) = channel
+            .origin
+            .traffic()
+            .map(|detection| detection.last_transmission())
+        else {
+            return Ok(None);
         };
         let transmission = self.stores.transmissions().transmission(last).await?;
         Ok(transmission.and_then(|transmission| {

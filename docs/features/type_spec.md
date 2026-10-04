@@ -147,13 +147,23 @@ The types follow data through the stack:
    its character boundaries, so the surface can cut evidence excerpts from
    the stored bodies.
 6. **L5 flow.** `ResourceExtractor`s turn tool calls and results into
-   `ExtractedAccess`es. The `ChannelRegistry` maps each `Locator` to a known,
-   declared or new channel, and the consumer writes what it saw through
-   `ChannelTraffic` (`l5_flow/channels.rs`): `discover` (a channel for a
-   `New` locator), `add_resource`, `record_access`, `set_detection`
-   (`DetectionUpdate`) and `confirm` (advancing the canonical channel's
-   detection); `ChannelReads` returns a stored channel by id and a
-   `ChannelFilter`ed page of them. Each transmission state the correlator
+   `ExtractedAccess`es. The `ChannelRegistry` maps each `Locator` to a known
+   or declared channel, or to none (`ChannelLookup::NoChannel`): a channel
+   exists only once a transmission between different agents goes through
+   it ([channel_semantics.md](channel_semantics.md)), so a lookup creates
+   nothing. The consumer writes what it saw through `ChannelTraffic`
+   (`l5_flow/channels.rs`): `add_resource` (on the channel its lookup
+   names, or on none), `record_access` (on the resource, channel or not),
+   `discover` (a discovered channel from a resource on no channel, for the
+   cross-agent transmission a co-access opened on it; the registry
+   publishes `ChannelDiscovered`), `record_transmission` (each channel
+   transmission's state, advancing the canonical channel's detection when
+   one opens or confirms) and `set_detection` (`DetectionUpdate`);
+   `ChannelReads` returns a stored channel by id and a `ChannelFilter`ed
+   page of them, each with its cross-agent traffic tallied at the read
+   (`ChannelWithTraffic`; its `Listing` and `Confirmation` follow, so a
+   merge can hide a discovered channel), newest `created_at` first, and a
+   channel's crossing transmissions. Each transmission state the correlator
    decides is stored with `TransmissionStore::save`
    (`l5_flow/transmissions.rs`), which keeps its verdict log. The
    `Correlator` turns accesses, content matches and clock ticks into
@@ -178,7 +188,7 @@ The types follow data through the stack:
    decision is recorded in its history, and every other discovered channel
    whose seed the pattern matches becomes `Superseded` by it. Lookups never
    return a superseded channel, so each `AccessRecorded { access, channel }`
-   names a canonical channel. A superseded channel's detection is frozen: a
+   names a canonical channel, or none for a resource on no channel. A superseded channel's detection is frozen: a
    confirmation of a transmission whose stored route names it, late or
    not, advances the detection of the channel it resolves to
    (`TrafficDetection::Active::last_transmission` on the superseding
@@ -222,8 +232,10 @@ The types follow data through the stack:
    `TopicLifecycle` (`l6_analysis/lifecycle.rs`): `begin_fit`,
    `complete_fit` (topics and the lineage), `fail_fit`, `mark_ready`,
    `mark_active` (a `CatalogActivation`) and `assign` (a
-   `StoredAssignment`). `TopicSizes` count topic
-   assignments per topic (outliers apart), optionally over a window. The
+   `StoredAssignment`, with the transmission's sender and reader).
+   `TopicSizes` count topic assignments per topic (outliers apart),
+   optionally over a window, of transmissions whose agents resolve apart
+   at the read. The
    `SearchIndex` takes a `TopologyFilter`, pages hits in (score, id) order
    and reports the topic-model version it resolved (`SearchResults`); its
    write side is `SearchCorpus` (`l6_analysis/corpus.rs`: `index` an
@@ -297,9 +309,12 @@ The types follow data through the stack:
    on each strict advance, and refuses a contribution into a final bucket
    (`LateContribution`). Graph, totals, series and drill-down results come
    back `Watermarked`. `EdgeStore::apply_access` counts each `AccessRecorded`
-   into an `AccessEdge` bucket (agent, channel, op, bucket), idempotent on
-   the access id, and `EdgeStore::channel_topology` answers the
-   channel-centred graph. `EdgeStore::agent_traffic` gives listed agents'
+   into an `AccessEdge` bucket (agent, resource, op, bucket), idempotent on
+   the access id, whether or not the resource is on a channel yet, and
+   `EdgeStore::channel_topology` answers the channel-centred graph,
+   resolving each bucket's resource to the canonical channel holding it
+   (`NodeFacts::channel_of`) and drawing only channels listed as channels
+   (`ChannelFacts::listing`), with their confirmation. `EdgeStore::agent_traffic` gives listed agents'
    transmissions in and out over a window, equal to their node counts in
    `graph` under the default filter (for agent rows). Every query resolves stored agents and
    channels through the two directories and fills graph nodes from
@@ -338,8 +353,10 @@ The types follow data through the stack:
   promotions, verdict records, triage outcomes, rules going stale,
   retention drops, edge activation, watermark advances), and returns a
   typed outcome; no store method returns an event for its caller to
-  publish. Events announcing a consumer's own computation (a lookup's
-  `New` behind `ChannelDiscovered`, correlator updates, classifications,
+  publish. Whether a discovery creates a channel is decided inside the
+  registry (a concurrent discovery may have won), so the registry
+  publishes `ChannelDiscovered`. Events announcing a consumer's own
+  computation (`AccessRecorded`, correlator updates, classifications,
   new evidence behind `AgentSeen`) are the consumer's, published once the
   write commits. `TopicVersionDropped` is the topic catalog's.
 - **Time is an argument.** Every store method whose effect or answer
@@ -409,21 +426,22 @@ The types follow data through the stack:
 | `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec`, `Carrier`, `InvalidMatch` |
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern` (`matches`, `overlaps`), `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
-| `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
+| `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess` (`writer`), `InvalidCoAccess` |
 | `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `settle_after`), `InvalidTiming` |
-| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`, `confirmed`, `co_accesses`), `Confirmed`, `Classification` |
-| `spec/types/derived/flow/channel/mod.rs` | Channels, promotion and supersession | `Channel` (`canonical`), `ChannelOrigin` (`promoted`, `superseded`, `seed`, `detection_kind`), `Supersession`, `NotPromotable`, `NotSupersedable`, `Declaration`, `DeclaredHistory`, `Seed` |
-| `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection`, `DetectionKind` |
+| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission` (`crossing`), `Crossing`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`, `confirmed`, `co_accesses`), `Confirmed`, `Classification` |
+| `spec/types/derived/flow/channel/mod.rs` | Channels, promotion and supersession | `Channel` (`canonical`), `ChannelOrigin` (`promoted`, `superseded`, `seed`, `detection_kind`, `created_at`), `Supersession`, `NotPromotable`, `NotSupersedable`, `Declaration`, `DeclaredHistory`, `Seed` (resource, first cross-agent transmission, `opened_at`) |
+| `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` (`Active`, `Dormant`; `last_transmission`), `DetectionKind` |
+| `spec/types/derived/flow/channel/confirmation.rs` | What a channel's cross-agent traffic shows, read at query time ([channel_semantics.md](channel_semantics.md)) | `Confirmation`, `CrossTraffic` (`tally`), `Listing` (`of`), `ListingKind` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
 | `spec/types/aggregates/edge.rs` | Topology edges, their totals and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph` (checked: built only by `new` from `TopologyGraphParts`, its wire shape; accessors `window`, `weighting`, `topic_version`, `nodes`, `edges`, `into_parts`; `InvalidGraph`), `EdgeTotals` (`of`), `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic` (term weights `Finite`), `TopicModelVersion` (a wire request), `TopicAssignment`, `Assignment` (neither on the wire) |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo` (`with_retention`), `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
 | `spec/types/aggregates/alert/rules.rs` | Alert rules (re-exported from `aggregates::alert`) | `BuiltinRule`, `UserRule` (a wire request), `RuleDefinition`, `RuleName`, `RuleQueryText` (a semantic rule's text, at most `RULE_QUERY_MAX_CHARS`), `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked, decoded through `builtin` or `load`; `evaluates`, `set_enabled` refusing a stale rule with `StaleRule`, `update`, `remap`, `embedding_model_changed`), `InvalidRuleDef`, `AlertRuleSet`, `RuleStatus`, `RuleRevision` |
-| `spec/types/aggregates/alert/mod.rs` | Alerts | `AlertSubject`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState` (`kind`, `is_active`), `AlertStateKind` (`ALL`, `is_active`; re-exported by L8), `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
+| `spec/types/aggregates/alert/mod.rs` | Alerts | `AlertSubject` (`resolved`, `shown`), `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState` (`kind`, `is_active`), `AlertStateKind` (`ALL`, `is_active`; re-exported by L8), `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge`, `rename` and `resolve` (over derived evidence), `EvidenceDeriver`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError`, and in `l3_reconstruction/lifecycle.rs` `AgentLifecycle` (`NewAgent`, `AgentOrigin`, `Advance`, `AgentLifecycleError`) (L3); `ChannelDirectory`, `ChannelRegistry::declare`, `set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use`, in `l5_flow/channels.rs` `ChannelTraffic` (`DetectionUpdate`, `TrafficError`) and `ChannelReads`, in `l5_flow/transmissions.rs` `TransmissionStore` (`TransmissionStoreError`) (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), in `l6_analysis/lifecycle.rs` `TopicLifecycle` (`StoredAssignment`, `CatalogActivation`, `TopicLifecycleError`), in `l6_analysis/corpus.rs` `SearchCorpus` (`IndexedTransmission`, `CorpusError`), in `l6_analysis/alerts.rs` `AlertRuleMaintenance`, `AlertActions` (`AlertActionError`) and `AlertReads` (`AlertReadError`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `version_ready`, `activate` (`Activation`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `NodeFacts` (`AgentFacts`, `ChannelFacts`), `WatermarkRead`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge`, `rename` and `resolve` (over derived evidence), `EvidenceDeriver`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError`, and in `l3_reconstruction/lifecycle.rs` `AgentLifecycle` (`NewAgent`, `AgentOrigin`, `Advance`, `AgentLifecycleError`) (L3); `ChannelDirectory`, `ChannelRegistry::declare`, `set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use`, `ChannelLookup` (incl. `NoChannel`), `OpensOn`, `Discovery`, in `l5_flow/channels.rs` `ChannelTraffic` (`add_resource`, `record_access`, `discover`, `record_transmission`, `set_detection`; `DetectionUpdate`, `TrafficError`), `ChannelReads` (`channel`, `channels`, `transmissions`) and `ChannelWithTraffic`, in `l5_flow/transmissions.rs` `TransmissionStore` (`TransmissionStoreError`) (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), in `l6_analysis/lifecycle.rs` `TopicLifecycle` (`StoredAssignment`, `CatalogActivation`, `TopicLifecycleError`), in `l6_analysis/corpus.rs` `SearchCorpus` (`IndexedTransmission`, `CorpusError`), in `l6_analysis/alerts.rs` `AlertRuleMaintenance`, `AlertActions` (`AlertActionError`) and `AlertReads` (`AlertReadError`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `version_ready`, `activate` (`Activation`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `NodeFacts` (`AgentFacts`, `ChannelFacts` with its `listing`, `channel_of`), `WatermarkRead`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`, `encoding/` (the message encoding and canonical JSON: pinned vectors in `tests/golden/encoding/`, round trips, the exact-inverse decode, RFC 8785), `secrets.rs` (keyed digests, rotation overlaps, a secret never shown), `minting.rs` (ULID monotonicity and uniqueness); the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
 | `spec/types/tests/send.rs`, `tests/send/{pipeline,detection,surface}.rs` | Compile-time check that every async trait method's future is `Send` and every associated stream or handle `Send + 'static`: an uninhabited `Dummy` implementing each trait with `async fn`, and one check function generic over each trait | `Dummy`, `assert_send`, `assert_send_static`, `arg` (test-only) |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
@@ -525,9 +543,15 @@ The types follow data through the stack:
 - No `EdgeKey` is a self-edge (`EdgeKey::new`); every `Embedding` has its
   model's dimension and unit norm (`Embedding::new`).
 - A channel declared before traffic has `DeclaredDetection`; a discovered
-  or promoted channel has `TrafficDetection`. So a declared, never-used
-  channel is representable and a discovered or promoted, never-accessed one
-  is not. Promotion keeps the channel's id, resources and detection, records
+  or promoted channel has `TrafficDetection` (`Active` or `Dormant`). So a
+  declared, never-used channel is representable and a discovered or
+  promoted one without a cross-agent transmission is not (as stored: a
+  merge can still leave one without crossing traffic at read time, which
+  hides a discovered channel). A transmission is between two different
+  agents (`Transmission::crossing`); one whose agents have since merged
+  into one counts nowhere: no filter admits it, no row, point, size,
+  quality count or export holds it
+  ([channel_semantics.md](channel_semantics.md)). Promotion keeps the channel's id, resources and detection, records
   the operator's policy decision, and supersedes exactly the other
   discovered channels whose seed its pattern matches; its pattern matches
   its seed and overlaps no other declared pattern (`ResourcePattern::overlaps`
@@ -615,8 +639,8 @@ The types follow data through the stack:
   as the operator set it. The lineage is stored before
   `TopicVersionReady`.
 - `TopicSizes` list every topic of the version once (`TopicSizes::new`) and
-  count topic assignments, so unlike series they keep transmissions between
-  agents later merged into one.
+  count topic assignments of transmissions between different agents,
+  resolved at the read like series.
 - `CorrelationTiming` durations are non-zero. `Confirmed::at` is the
   reader exchange's start. The watermark is
   `align_down(min(ticked_through − settle_after, oldest_pending))`, never

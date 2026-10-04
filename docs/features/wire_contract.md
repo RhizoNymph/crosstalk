@@ -217,6 +217,20 @@ checks what it can know about itself (at most `PageSize::MAX` items, items
 whenever there is a next cursor); the size it was requested with is not
 on the wire.
 
+Where a constructor needs what the value does not hold, decoding checks
+what the value can know about itself. The channel semantics add three such
+decodes: a `ChannelTransmission` checks its senders (ascending and
+distinct, none its summary's reader, and a confirmed summary's senders
+exactly its delivery's sender), since `ChannelTransmission::of` reads the
+transmission and the aliases; a `ProjectedPoint` decodes through
+`ProjectedPoint::new` from its `PointParts`, refusing a point whose sender
+is its reader (`analysis.projection.point-cross-agent`); and a
+`ChannelRow` refuses cross-agent traffic on a channel whose stored
+detection has none (`TrafficWithoutDetection`,
+`surface.channels.listing-from-traffic`). A row's `Listing` and
+`Confirmation` are derived from its traffic and never sent
+([surface reads](wire/surface_reads.md#channel-rows-and-a-channels-transmissions)).
+
 ### Requests, responses and authority
 
 - **Requests** implement `WireRequest` (`Serialize + DeserializeOwned`):
@@ -226,7 +240,8 @@ on the wire.
   `SeriesGrouping`, `AgentFilter`, `ResourcePattern`, `TopicModelVersion`,
   `ProjectionParams`, `UserRule`, `ChannelFilter`, `AlertRuleFilter`,
   `SearchRequest`, `AuditFilter`, `ConsumerGroup`,
-  `TransmissionSelection`, `ExcerptWindow`, `ExportRequest`,
+  `TransmissionSelection`, `ChannelTransmissionFilter`, `ExcerptWindow`,
+  `ExportRequest`,
   `ActionRequest`, and the [HTTP API](http_api.md)'s `POST` read bodies
   (`GraphBody`, `OverviewBody`, `EdgeTransmissionsBody`,
   `TransmissionsBody`, `SeriesBody`, `SearchBody`, `FitProjectionBody`). The
@@ -391,9 +406,12 @@ branch.
 `transmissions_by_id` call away, by their ids, when a view needs them); `Watermark`'s field stays
 public, since a watermark does not know the bucket width it must align
 to, so no constructor of its own can check the boundary. The open
-semantics the UI's list names (self-edges in search, `edge_transmissions`
-alignment, `channels` over all time, a watched-topic rule on an unknown
-version) are not answered here.
+semantics the UI's list names (`edge_transmissions` alignment, `channels`
+over all time, a watched-topic rule on an unknown version) are not
+answered here. Self-edges in search are answered by the channel semantics:
+`TopologyFilter::admits` never admits a transmission whose sender and
+reader resolve to one agent, so no view, search included, lists one
+(`topology.filter.cross-agent-only`).
 
 ## Areas
 
@@ -444,7 +462,7 @@ is in its golden.
 | `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
 | `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
-| `spec/types/tests/golden/<area>/` | 377 goldens: 376 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`); plus `encoding/vectors.json`, the pinned message encodings ([spec_primitives.md](spec_primitives.md)) | — |
+| `spec/types/tests/golden/<area>/` | 388 goldens: 387 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`); plus `encoding/vectors.json`, the pinned message encodings ([spec_primitives.md](spec_primitives.md)) | — |
 
 ## Invariants and constraints
 

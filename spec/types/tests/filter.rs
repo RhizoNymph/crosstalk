@@ -5,6 +5,7 @@ use crate::aggregates::alert::{
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{FalseDetections, FilterSubject, TopicVersionSelector};
 use crate::aggregates::node::CanonicalStateKind;
+use crate::derived::flow::channel::confirmation::CrossTraffic;
 use crate::derived::flow::channel::detection::DeclaredDetection;
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::{Channel, ChannelOrigin, Declaration, DeclaredHistory};
@@ -19,7 +20,7 @@ use crate::observed::agent::{
     ActiveAgentState, Agent, AgentState, ClaimSet, IdentityEvidence, MergedInto,
 };
 use crate::support::{Blake3, NonEmpty};
-use crate::tests::fixtures::{agent, at, channel};
+use crate::tests::fixtures::{agent, at, channel, channel_row};
 
 fn topic(n: u128) -> TopicId {
     TopicId::from_ulid(n)
@@ -172,6 +173,10 @@ fn channel_filter_matches_policy_kind() {
         policies: vec![PolicyKind::Unreviewed],
         ..ChannelFilter::default()
     };
+    let (reset, sanctioned) = (
+        channel_row(reset, CrossTraffic::NONE),
+        channel_row(sanctioned, CrossTraffic::NONE),
+    );
     assert!(filter.matches(&reset));
     assert!(!filter.matches(&sanctioned));
     assert!(ChannelFilter::default().matches(&sanctioned));

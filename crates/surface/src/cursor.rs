@@ -1,5 +1,7 @@
-//! The cursors the surface issues itself, for the one list no store pages:
-//! `QueryApi::transmissions_by_id`.
+//! The cursors the surface issues itself: for the one list no store pages,
+//! `QueryApi::transmissions_by_id`, and for `QueryApi::channel_transmissions`,
+//! whose cursor wraps the registry's with the topic-model version the first
+//! page resolved.
 //!
 //! A token carries the resume point (the topic-model version the first page
 //! resolved and the last id served) and a digest of the request it was
@@ -12,6 +14,8 @@
 //! ```text
 //! token = hex(version u32 BE ‖ last id u128 BE ‖ request digest 32 B) "_" hex(MAC 16 B)
 //! MAC   = BLAKE3-keyed(key, payload)[..16]
+//!
+//! wrapped = hex(version u32 BE ‖ request digest 32 B ‖ inner cursor token) "_" hex(MAC 16 B)
 //! ```
 
 use std::collections::VecDeque;
@@ -82,6 +86,45 @@ impl CursorKey {
             version: TopicModelVersion(version),
             after,
         })
+    }
+
+    /// A cursor carrying `version` and a store's cursor `inner`, for the
+    /// request whose digest is `request`. `None` when the result would be
+    /// longer than a cursor may be.
+    pub fn wrap<L, I>(
+        &self,
+        version: TopicModelVersion,
+        inner: &Cursor<I>,
+        request: &[u8; 32],
+    ) -> Option<Cursor<L>> {
+        let mut payload = Vec::with_capacity(4 + 32 + inner.token().len());
+        payload.extend_from_slice(&version.0.to_be_bytes());
+        payload.extend_from_slice(request);
+        payload.extend_from_slice(inner.token().as_bytes());
+        let mac = self.mac(&payload);
+        Cursor::from_token(format!("{}_{}", hex(&payload), hex(&mac))).ok()
+    }
+
+    /// The version and store cursor of `cursor`, if this key wrapped them
+    /// for the request whose digest is `request`.
+    pub fn unwrap<L, I>(
+        &self,
+        cursor: &Cursor<L>,
+        request: &[u8; 32],
+    ) -> Option<(TopicModelVersion, Cursor<I>)> {
+        let (payload, mac) = cursor.token().split_once('_')?;
+        let payload = from_hex(payload).ok()?;
+        let mac = from_hex(mac).ok()?;
+        if payload.len() <= 4 + 32 || mac.len() != MAC_LEN {
+            return None;
+        }
+        if self.mac(&payload) != mac.as_slice() || payload[4..36] != request[..] {
+            return None;
+        }
+        let version = u32::from_be_bytes(payload[..4].try_into().ok()?);
+        let inner = String::from_utf8(payload[36..].to_vec()).ok()?;
+        let inner = Cursor::from_token(inner).ok()?;
+        Some((TopicModelVersion(version), inner))
     }
 
     fn mac(&self, payload: &[u8]) -> [u8; MAC_LEN] {

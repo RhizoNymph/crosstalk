@@ -32,7 +32,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aliases::Aliases;
-use crate::derived::flow::transmission::{Confirmed, Route, Transmission, TransmissionState};
+use crate::derived::flow::transmission::{
+    Confirmed, Crossing, Route, Transmission, TransmissionState,
+};
 use crate::derived::flow::verdict::Verdict;
 use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::paging::{Page, TransmissionList};
@@ -144,6 +146,21 @@ impl TransmissionStateKind {
 }
 
 impl TransmissionSummary {
+    /// The row `QueryApi::transmissions_by_id` lists for `transmission`:
+    /// [`TransmissionSummary::of`], or `None` when the transmission does
+    /// not cross agents under `aliases` ([`Crossing::WithinOneAgent`]: its
+    /// sender and reader have since merged into one agent), which no view
+    /// lists. A `Detected` one names no sender yet and is listed.
+    pub fn listed(
+        transmission: &Transmission,
+        aliases: impl Aliases + Copy,
+        verdict: impl FnOnce(TransmissionId) -> Option<Verdict>,
+        topic: impl FnOnce(TransmissionId) -> TopicUnder,
+    ) -> Option<Self> {
+        (transmission.crossing(aliases) != Crossing::WithinOneAgent)
+            .then(|| Self::of(transmission, aliases, verdict, topic))
+    }
+
     /// The row for `transmission`. `aliases` resolves the reader, the
     /// sender and the route's channel. `verdict` is the current verdict
     /// (`VerdictLog::current`), read only for a judgeable state; `topic` is
