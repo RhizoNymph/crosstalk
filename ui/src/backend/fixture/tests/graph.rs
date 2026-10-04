@@ -606,3 +606,114 @@ async fn verdict_filter_drops_false_detections() {
     };
     assert!(total(&exclude.value.edges) < total(&include.value.edges));
 }
+
+#[tokio::test]
+async fn channel_graph_draws_only_listed_channels() {
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+    use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+
+    let b = shared();
+    let c = researcher();
+    let scope = week();
+    let graph = async |unconfirmed| {
+        let mut filter = scope.topology_filter();
+        filter.unconfirmed_channels = unconfirmed;
+        b.channel_topology(&c, scope.window, Weighting::Transmissions, &filter)
+            .await
+            .expect("graph")
+            .value
+    };
+    let all = graph(UnconfirmedChannels::Include).await;
+    let nodes: Vec<_> = all
+        .nodes()
+        .iter()
+        .filter_map(|n| match n {
+            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
+            GraphNode::Agent(_) => None,
+        })
+        .collect();
+    let id = |key| b.world.scenario.channel(key).expect("channel");
+    let s3 = id(ChannelKey::S3Handoff);
+    assert!(nodes.contains(&(s3, Confirmation::Unconfirmed)), "marked");
+    for absent in [
+        ChannelKey::SelfNotes,
+        ChannelKey::DesignDocs,
+        ChannelKey::ReleaseBucket,
+    ] {
+        assert!(
+            nodes.iter().all(|(n, _)| *n != id(absent)),
+            "{absent:?} is not drawn"
+        );
+    }
+    assert!(
+        nodes
+            .iter()
+            .filter(|(n, _)| *n != s3)
+            .all(|(_, confirmation)| *confirmation == Confirmation::Confirmed)
+    );
+    // The resource only cc7 uses has no node and no access edge: its
+    // accesses never reach a channel.
+    let cc7 = b.world.scenario.agent("cc7").expect("cc7");
+    let lone_accesses = b
+        .world
+        .accesses
+        .iter()
+        .filter(|a| a.resource == b.world.scenario.lone_resource)
+        .count() as u64;
+    let cc7_drawn: u64 = all
+        .accesses()
+        .iter()
+        .filter(|a| a.agent == cc7)
+        .map(|a| a.accesses.get())
+        .sum();
+    let cc7_on_channels = b
+        .world
+        .accesses
+        .iter()
+        .filter(|a| a.agent == cc7 && scope.window.contains(a.at))
+        .filter(|a| b.world.resource_channel.contains_key(&a.resource))
+        .count() as u64;
+    assert!(lone_accesses > 0);
+    assert!(
+        cc7_drawn <= cc7_on_channels,
+        "none of the lone accesses is drawn"
+    );
+    // Confirmed only drops the unconfirmed channel and nothing else.
+    let confirmed = graph(UnconfirmedChannels::Exclude).await;
+    let kept: Vec<_> = confirmed
+        .nodes()
+        .iter()
+        .filter_map(|n| match n {
+            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
+            GraphNode::Agent(_) => None,
+        })
+        .collect();
+    let expected: Vec<_> = nodes.iter().copied().filter(|(n, _)| *n != s3).collect();
+    assert_eq!(kept, expected);
+    assert!(confirmed.accesses().iter().all(|a| a.channel != s3));
+    assert_eq!(confirmed.transmissions(), all.transmissions());
+}
+
+#[tokio::test]
+async fn no_view_lists_a_transmission_within_one_agent() {
+    use crosstalk_spec::derived::flow::transmission::Crossing;
+
+    let b = shared();
+    let c = researcher();
+    let scope = week();
+    let state = b.state.read().await;
+    let ctx = super::super::queries::Ctx::new(&b.world, &state);
+    let within: HashSet<_> = b
+        .world
+        .transmissions
+        .iter()
+        .filter(|t| ctx.crossing(&t.transmission) == Crossing::WithinOneAgent)
+        .map(|t| t.transmission.id)
+        .collect();
+    drop(state);
+    assert!(!within.is_empty(), "merges left some within one agent");
+    let request = search("the", SearchMode::Text);
+    let hits = super::collect(400, async |p| search_in(b, &c, &request, &scope, &p).await).await;
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| !within.contains(&h.transmission)));
+}

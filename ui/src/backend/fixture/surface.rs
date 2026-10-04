@@ -31,6 +31,9 @@ use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
+};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -54,9 +57,9 @@ use crate::contract::present::Present;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
-    TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
+    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
+    SearchList, TopicList, TransmissionList,
 };
 
 use super::queries::require;
@@ -296,6 +299,19 @@ impl QueryApi for FixtureBackend {
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::channels::rows::list(ctx, filter, page))
+            .await
+    }
+
+    async fn channel_transmissions(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        version: TopicVersionSelector,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<ChannelTransmissionPage> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::channels::transmissions::page(ctx, channel, filter, version, page))
             .await
     }
 

@@ -105,7 +105,7 @@ pub fn populate(world: &World, state: &mut State) -> Result<(), GenError> {
                 access.at,
                 BusEvent::Detect(DetectEvent::AccessRecorded {
                     access: access.clone(),
-                    channel,
+                    channel: Some(channel),
                 }),
             ),
             attempts: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),

@@ -7,7 +7,8 @@
 //! A transmission is counted by its confirmation (`Confirmed::at` in the
 //! window, `Confirmed::from` as its sender), with both agents resolved
 //! through merges and its route's channel through supersession; one whose
-//! two agents resolve to one agent is a self-edge and counts nothing.
+//! two agents resolve to one agent is a self-edge and counts nothing, in
+//! any view (`TopologyFilter::admits` refuses it).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -18,6 +19,7 @@ use crosstalk_spec::aggregates::filter::{
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::TopicVersionHistory;
 use crosstalk_spec::aliases::Aliases;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
@@ -240,9 +242,10 @@ impl<'a> Linked<'a> {
             .collect()
     }
 
-    /// Every confirmed transmission in the window the filter admits, self-edges
-    /// included (a graph drops them; search and projections do not), oldest
-    /// record first.
+    /// Every confirmed transmission in the window the filter admits, oldest
+    /// record first. `TopologyFilter::admits` admits no transmission whose
+    /// agents resolve to one, so search, projections and exports drop those
+    /// as the graph does.
     pub fn admitted(&self) -> Vec<Counted<'a>> {
         self.ctx
             .world
@@ -278,17 +281,20 @@ impl<'a> Linked<'a> {
             .collect()
     }
 
-    /// Whether an access by canonical `agent` on canonical `channel` passes,
-    /// exactly as [`TopologyFilter::admits_access`] defines.
+    /// Whether an access by canonical `agent` on canonical `channel`, whose
+    /// confirmation is `confirmation`, passes, exactly as
+    /// [`TopologyFilter::admits_access`] defines.
     pub fn admits_access(
         &self,
         agent: AgentId,
         channel: ChannelId,
+        confirmation: Confirmation,
         topics: &BTreeMap<ChannelId, Vec<TopicId>>,
     ) -> bool {
         let subject = AccessSubject {
             agent,
             channel,
+            confirmation,
             channel_topics: topics.get(&channel).map_or(&[], Vec::as_slice),
         };
         self.filter.admits_access(&subject, self.aliases())

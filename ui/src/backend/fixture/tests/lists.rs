@@ -13,6 +13,7 @@ use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Permission};
 
 use super::super::clock::{DAY, ago};
+use super::super::queries::{self, Ctx};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
@@ -72,7 +73,16 @@ async fn pagination_covers_every_item_exactly_once() {
         b.alerts(&c, &AlertFilter::default(), &p).await
     })
     .await;
-    assert_eq!(alerts.len(), b.state.read().await.alerts.len());
+    let shown = {
+        let state = b.state.read().await;
+        let ctx = Ctx::new(&b.world, &state);
+        state
+            .alerts
+            .iter()
+            .filter(|alert| queries::alerts::shown(&ctx, alert))
+            .count()
+    };
+    assert_eq!(alerts.len(), shown);
     let audit = collect(33, async |p| b.audit(&c, &AuditFilter::default(), &p).await).await;
     assert_eq!(audit.len(), b.state.read().await.audit.entries().len());
     let filter = ChannelFilter {
@@ -83,7 +93,11 @@ async fn pagination_covers_every_item_exactly_once() {
         b.channels(&c, &filter, &p).await.map(|rows| rows.value)
     })
     .await;
-    assert_eq!(channels.len(), 15);
+    assert_eq!(
+        channels.len(),
+        14,
+        "every stored channel but the hidden one"
+    );
     let request = search("the", SearchMode::Text);
     let hits = collect(400, async |p| search_in(b, &c, &request, &scope, &p).await).await;
     let unique: HashSet<_> = hits.iter().map(|h| h.transmission).collect();
@@ -220,8 +234,8 @@ async fn channel_list_filters() {
     let visible = list(ChannelFilter::default()).await;
     assert_eq!(
         visible.len(),
-        14,
-        "the superseded channel is hidden by default"
+        13,
+        "the superseded channel and the merged-away one are not listed by default"
     );
     let old = channel(ChannelKey::OldTeamNotes);
     assert!(visible.iter().all(|r| r.channel().id != old));

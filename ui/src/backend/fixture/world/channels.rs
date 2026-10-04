@@ -3,7 +3,11 @@
 //! history.
 //!
 //! Detection is filled in after traffic is generated ([`finish`]), from the
-//! channel's actual first access, first cross access and transmissions.
+//! channel's cross-agent transmissions: a discovered channel is created by
+//! its first one (its seed transmission), which is also when `NewChannel`
+//! fires. Whether that traffic is confirmed is not stored: queries read it
+//! from the transmissions with merges resolved, so `SelfNotes` is hidden
+//! while `al1` stays merged into `cx1`.
 //! The world's one past promotion is then applied as the spec plans it
 //! ([`promotion::plan`]): the team-notes channel keeps its id and gains the
 //! pattern, and the discovered channels the pattern covers are superseded,
@@ -64,12 +68,16 @@ pub enum ChannelKey {
     SharedFile,
     /// Discovered, unreviewed, dormant: `gist.example.com`.
     Gist,
-    /// Discovered, unreviewed, observed: a key-value tool only one agent
-    /// uses.
-    KvScratch,
-    /// Discovered, unreviewed, candidate: an S3 prefix with cross accesses
-    /// but no content match.
+    /// Discovered, unreviewed, active and unconfirmed: an S3 object one
+    /// agent writes and two others read, with no content match, so every
+    /// transmission through it is suspected (or discarded, or awaiting
+    /// content).
     S3Handoff,
+    /// Discovered at `/home/dev/.codex/handoff.md` on `devbox-7`,
+    /// unreviewed, dormant: its only cross-agent traffic is between `al1`
+    /// and `cx1`, which an operator later merged, so it is hidden while the
+    /// merge stands and listed again if it is reverted.
+    SelfNotes,
     /// Discovered at `notes.corp.internal/team-a/standup`, unreviewed,
     /// superseded by `TeamNotes`'s promotion (detection frozen there).
     OldTeamNotes,
@@ -145,35 +153,33 @@ pub fn plan(mint: &mut Mint, cast: &Cast) -> Result<ChannelPlan, GenError> {
     Ok(ChannelPlan { specs })
 }
 
-/// The traffic detection `spec`'s target state takes from `stats`.
+/// The traffic detection `spec`'s target state takes from `stats`: active
+/// since its first cross-agent transmission, dormant a day after its last.
 fn traffic_detection(
     spec: &ChannelSpec,
     stats: &ChannelStats,
 ) -> Result<TrafficDetection, GenError> {
     let missing = |what: &str| GenError::Missing(format!("{what} on {:?}", spec.key));
+    let (since, _) = stats
+        .first
+        .ok_or_else(|| missing("cross-agent transmission"))?;
+    let (last_at, last) = stats
+        .last
+        .ok_or_else(|| missing("cross-agent transmission"))?;
     Ok(match spec.target {
-        Target::Observed | Target::Awaiting | Target::Unused => TrafficDetection::Observed {
-            first_access: stats.first_access.ok_or_else(|| missing("access"))?.0,
+        Target::Active => TrafficDetection::Active {
+            since,
+            last_transmission: last,
         },
-        Target::Candidate => TrafficDetection::Candidate {
-            first_cross_access: stats
-                .first_cross_access
-                .ok_or_else(|| missing("cross access"))?,
+        Target::Dormant => TrafficDetection::Dormant {
+            since: plus(last_at, DAY),
+            last_transmission: last,
         },
-        Target::Active => {
-            let (since, _) = stats.first_confirmed.ok_or_else(|| missing("confirm"))?;
-            let (_, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
-            TrafficDetection::Active {
-                since,
-                last_transmission: last,
-            }
-        }
-        Target::Dormant => {
-            let (at, last) = stats.last_confirmed.ok_or_else(|| missing("confirm"))?;
-            TrafficDetection::Dormant {
-                since: plus(at, DAY),
-                last_transmission: last,
-            }
+        Target::Awaiting | Target::Unused => {
+            return Err(GenError::Missing(format!(
+                "a traffic state for {:?}, which has traffic",
+                spec.key
+            )));
         }
     })
 }
@@ -207,20 +213,23 @@ fn first_origin(
         }
         DraftOrigin::Discovered => {
             let missing = |what: &str| GenError::Missing(format!("{what} of {:?}", spec.key));
-            let (first, first_at) = stats.first_access.ok_or_else(|| missing("access"))?;
+            let first = stats
+                .first
+                .ok_or_else(|| missing("cross-agent transmission"))?;
             let (seed, rest) = resource_ids.split_first().ok_or_else(|| missing("seed"))?;
-            // The seed's own first access created the channel; a seed the
-            // generator happened never to pick falls back to the channel's
-            // first access.
-            let (first_access, _) = traffic.first_access_of(*seed).unwrap_or((first, first_at));
+            // The first cross-agent transmission through the seed created
+            // the channel; a seed the generator happened never to route one
+            // through falls back to the channel's first.
+            let (created, first_transmission) =
+                traffic.first_crossing_through(*seed).unwrap_or(first);
             let origin = ChannelOrigin::Discovered {
                 seed: Seed {
                     resource: *seed,
-                    first_access,
+                    first_transmission,
                 },
                 detection: traffic_detection(spec, stats)?,
             };
-            Ok((origin, rest.to_vec(), first_at))
+            Ok((origin, rest.to_vec(), created))
         }
     }
 }
@@ -248,7 +257,7 @@ pub fn finish(plan: &ChannelPlan, traffic: &Traffic) -> Result<Vec<ChannelRecord
     let mut histories = histories(plan)?;
     let mut out = Vec::new();
     for spec in &plan.specs {
-        let own = traffic.channel_stats(spec.id, |routed, _| routed == spec.id);
+        let own = traffic.channel_stats(|routed, _| routed == spec.id);
         let (origin, resources, created) = first_origin(spec, traffic, &own)?;
         let channel = Channel {
             id: spec.id,
@@ -302,13 +311,13 @@ fn promote(
             .find(|s| s.id == id)
             .ok_or_else(|| GenError::Missing(format!("spec of channel {id:?}")))?;
         let stats = if id == target {
-            // Its own confirmations, and those on the channels it absorbed
-            // that came after the promotion.
-            traffic.channel_stats(id, |routed, confirmed| {
-                routed == id || (absorbed.contains(&routed) && confirmed > at)
+            // Its own traffic, and that on the channels it absorbed that
+            // came after the promotion.
+            traffic.channel_stats(|routed, advanced| {
+                routed == id || (absorbed.contains(&routed) && advanced > at)
             })
         } else if absorbed.contains(&id) {
-            traffic.channel_stats(id, |routed, confirmed| routed == id && confirmed <= at)
+            traffic.channel_stats(|routed, advanced| routed == id && advanced <= at)
         } else {
             continue;
         };

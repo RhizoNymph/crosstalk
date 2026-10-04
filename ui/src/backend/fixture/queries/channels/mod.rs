@@ -1,10 +1,12 @@
 //! Channel reads as `QueryApi` defines them: rows ([`rows`]), a channel's
-//! resources and who used them ([`resources`]), names, policy history and
+//! resources and who used them ([`resources`]), its cross-agent
+//! transmissions ([`transmissions`]), names, policy history and
 //! the promotion preview, all over the stored channels as the registry
 //! would read them ([`registry`]).
 
 pub mod resources;
 pub mod rows;
+pub mod transmissions;
 
 use std::collections::HashMap;
 

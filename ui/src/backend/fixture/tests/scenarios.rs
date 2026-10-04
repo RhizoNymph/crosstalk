@@ -200,13 +200,17 @@ fn channels_cover_every_origin_detection_and_policy() {
         TrafficDetection::Dormant { .. }
     ));
     assert!(matches!(
-        discovered(K::KvScratch),
-        TrafficDetection::Observed { .. }
+        discovered(K::S3Handoff),
+        TrafficDetection::Active { .. }
     ));
     assert!(matches!(
-        discovered(K::S3Handoff),
-        TrafficDetection::Candidate { .. }
+        discovered(K::SelfNotes),
+        TrafficDetection::Dormant { .. }
     ));
+    // The key-value entry only cc7 uses is a resource on no channel.
+    let lone = b.world.scenario.lone_resource;
+    assert!(b.world.resource(lone).is_some());
+    assert!(!b.world.resource_channel.contains_key(&lone));
     let old = ch(K::OldTeamNotes);
     let notes = ch(K::TeamNotes);
     assert_eq!(old.origin.supersession().map(|s| s.by), Some(notes.id));

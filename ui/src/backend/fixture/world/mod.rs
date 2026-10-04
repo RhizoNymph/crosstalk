@@ -182,6 +182,8 @@ impl TopicModel {
 pub struct Scenario {
     pub cast: Cast,
     pub channels: HashMap<ChannelKey, ChannelId>,
+    /// The key-value entry only `cc7` uses: a resource on no channel.
+    pub lone_resource: ResourceId,
     /// Old transmissions whose sender's or reader's bodies content
     /// retention dropped.
     pub dropped: Vec<(TransmissionId, BodySide)>,
@@ -290,6 +292,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
         scenario: Scenario {
             cast: cast.clone(),
             channels: plan.ids(),
+            lone_resource: traffic.lone,
             dropped,
         },
     };
