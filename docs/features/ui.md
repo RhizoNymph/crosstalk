@@ -210,6 +210,8 @@ and the gap traits' methods as `Present::now` and so on. Name lookups
 (`agent_names`, `channel_names`) are one call per `IdBatch` of the ids a
 page shows (`pages::common::lookup::id_batches`).
 
+The agent conversation view (`/agents/{id}/conversations`, `/conversations/{id}`) is in design: see [conversation_view.md](conversation_view.md).
+
 ### Overview (`/`)
 
 Counts from one `overview` call: the window's activity under the view's
