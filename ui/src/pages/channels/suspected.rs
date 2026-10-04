@@ -29,7 +29,7 @@ use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{agent_url, transmission_url};
 use crate::pages::common::lookup::{AgentNames, agent_names};
-use crate::pages::common::paging::{PAGE_SIZE, parse_cursor, size};
+use crate::pages::common::paging::{parse_cursor, size};
 use crate::pages::transmission::verdict::Choice;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -37,6 +37,10 @@ use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
 /// The query key this section pages by.
 pub const CURSOR_KEY: &str = "tcursor";
+
+/// Rows per page: a review list, kept short beside the page's other
+/// sections.
+pub const SUSPECTED_PAGE: u16 = 20;
 
 #[query_params]
 struct SuspectedQuery {
@@ -111,7 +115,7 @@ pub async fn load(
     let after: Option<Cursor<ChannelTransmissionList>> =
         parse_cursor(raw.tcursor.as_deref()).map_err(|_| invalid(CURSOR_KEY, "not a cursor"))?;
     let request = PageRequest {
-        size: size(PAGE_SIZE),
+        size: size(SUSPECTED_PAGE),
         after,
     };
     let filter = ChannelTransmissionFilter {
