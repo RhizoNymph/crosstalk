@@ -12,6 +12,8 @@
 //! - [`Dedup`] wraps any subscription with envelope-level deduplication over
 //!   a [`HandledIds`] record ([`MemoryHandledIds`] on this bus).
 //! - [`BusConfig`] sizes the bus and gives the default [`RetryPolicy`].
+//! - [`blob`] is the content-addressed [`BlobStore`]: [`blob::FsBlobStore`]
+//!   on the filesystem and [`blob::MemoryBlobStore`] in memory.
 //!
 //! Roadmap: P2.1 (L2 transport: in-process bus) and P2.2 (blob store). A layer
 //! crate and infrastructure: other layer crates may use it only as a
@@ -21,6 +23,7 @@
 //! [`Subscription`]: crosstalk_spec::interfaces::l2_transport::Subscription
 //! [`DeadLetterStore`]: crosstalk_spec::interfaces::l2_transport::DeadLetterStore
 //! [`RetryPolicy`]: crosstalk_spec::interfaces::l2_transport::RetryPolicy
+//! [`BlobStore`]: crosstalk_spec::interfaces::l2_transport::BlobStore
 
 mod bus;
 mod codec;

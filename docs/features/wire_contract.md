@@ -78,7 +78,7 @@ UI (topcoat, crosstalk-spec types)                 gateway
   action:   ActionRequest ── decode_request ──▶ into_action(&Caller) ──▶ OperatorAction ──▶ OperatorActions::act
 
 node A ── NATS: Envelope JSON ──▶ node B: serde_json::from_slice::<Envelope>
-                                     unknown field or variant ─▶ decode error ─▶ nack, retry, dead letter
+                                     unknown field or variant ─▶ decode error ─▶ Err(BusError::Decode) once per group, then dropped and logged
 ```
 
 ### Conventions
@@ -144,10 +144,13 @@ Every struct and every adjacently tagged enum sets
 `deny_unknown_fields`, and serde refuses unknown variants, so:
 
 - a node that receives an event from a newer node with a field or variant
-  it does not know fails to decode it, so the consumer nacks the delivery
-  and, once its retries are exhausted, it is dead-lettered
-  (`l2_transport`), where an operator sees it, instead of being applied
-  without the new data;
+  it does not know fails to decode it. An undecodable payload has no
+  `Envelope`, so it has no delivery to nack and cannot become a
+  `DeadLetter`, which holds an `Envelope`. Instead each consumer group
+  gets it once as `Err(BusError::Decode)`, and the message is then
+  dropped and logged, never redelivered (INV-110,
+  `transport.codec.undecodable-not-redelivered`). An operator sees it in
+  the log, and it is never applied without the new data;
 - a client request with a misspelt field, or with a field the server
   stamps (an author, a time), is a `MalformedRequest`, never a value with
   the field silently dropped.
