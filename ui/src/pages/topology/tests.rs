@@ -35,7 +35,7 @@ fn first<L>(limit: u32) -> PageRequest<L> {
 
 /// The heaviest edge of the fixture's default view, as a selection.
 async fn heaviest_edge() -> Selection {
-    let backend = FixtureBackend::new(7);
+    let backend = FixtureBackend::try_new(7).expect("fixture generates");
     let scope = fixture_state().scope;
     let graph = backend
         .topology(
@@ -56,7 +56,7 @@ async fn heaviest_edge() -> Selection {
 }
 
 pub async fn agent_labelled(label: &str) -> crosstalk_spec::ids::AgentId {
-    let backend = FixtureBackend::new(7);
+    let backend = FixtureBackend::try_new(7).expect("fixture generates");
     let page = backend
         .agents(
             &everyone(),

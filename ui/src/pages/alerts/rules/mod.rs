@@ -7,6 +7,7 @@ pub mod model;
 
 use std::collections::HashMap;
 
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::AlertRuleId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
@@ -32,6 +33,7 @@ use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, required};
 use crate::pages::common::lookup::{OperatorNames, operator_names};
+use crate::pages::common::topics::all_topics;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::ids::SinkId;
@@ -54,8 +56,8 @@ async fn topic_labels(cx: &Cx, caller: &Caller, versions: Vec<TopicModelVersion>
     }
     let mut labels = HashMap::new();
     for version in versions {
-        match backend(cx).topics(caller, version).await {
-            Ok(topics) => labels.extend(topics.into_iter().map(|t| (t.id, t.label))),
+        match all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version)).await {
+            Ok((_, topics)) => labels.extend(topics.into_iter().map(|t| (t.id, t.label))),
             Err(error) => {
                 tracing::warn!(error = ?error, version = version.0, "topic labels unavailable")
             }

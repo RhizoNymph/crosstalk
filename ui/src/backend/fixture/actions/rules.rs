@@ -40,10 +40,10 @@ fn build(world: &World, spec: &UserRuleSpec, sinks: &[SinkId]) -> Result<UserRul
             remap_threshold,
         } => {
             retained(world, *version)?;
-            if *version != world.topics.latest() {
+            if *version != world.topics.active() {
                 return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent {
                     requested: *version,
-                    current: world.topics.latest(),
+                    current: world.topics.active(),
                 }));
             }
             let known = |t| world.topics.topics_of(*version).any(|k| k.id == t);

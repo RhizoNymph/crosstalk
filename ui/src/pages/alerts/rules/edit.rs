@@ -2,6 +2,7 @@
 //! rule, or edit one. Updating a stale rule re-targets it to the current
 //! topic version and enables it.
 
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AlertRuleId, TopicId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
@@ -28,6 +29,7 @@ use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
+use crate::pages::common::topics::{all_topics, default_version};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -66,12 +68,12 @@ pub enum Target {
     Existing(AlertRuleId),
 }
 
-/// The topic version to pick topics from: the newest fitted one.
+/// The topic version to pick topics from: the history's active one.
 async fn current_version(
     cx: &Cx,
     caller: &Caller,
 ) -> std::result::Result<TopicModelVersion, UiError> {
-    Ok(backend(cx).current_topic_version(caller).await?)
+    Ok(default_version(backend(cx), caller).await?)
 }
 
 /// The topics and sinks a form may pick. Topics need `Content`: their
@@ -86,7 +88,9 @@ async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiErr
     let version = current_version(cx, caller).await?;
     let sinks = backend(cx).sinks(caller).await?;
     let topics = if can(caller, Permission::Content) {
-        backend(cx).topics(caller, version).await?
+        all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version))
+            .await?
+            .1
     } else {
         Vec::new()
     };

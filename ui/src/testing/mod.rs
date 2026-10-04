@@ -66,7 +66,7 @@ pub fn router() -> Router {
     Router::builder()
         .discover()
         .app_context(operator())
-        .app_context(FixtureBackend::new(SEED))
+        .app_context(FixtureBackend::try_new(SEED).expect("fixture generates"))
         .assets(assets())
         .runtime()
         .build()
@@ -104,7 +104,7 @@ fn assets() -> AssetConfig {
 pub fn cx() -> Cx {
     let mut app = AppContext::new();
     app.insert(operator());
-    app.insert(FixtureBackend::new(SEED));
+    app.insert(FixtureBackend::try_new(SEED).expect("fixture generates"));
     Cx::new(Arc::new(app))
 }
 
@@ -118,7 +118,7 @@ pub async fn render(view: impl View, cx: &Cx) -> String {
 /// Never act on it: tests share it.
 pub fn world() -> &'static FixtureBackend {
     static WORLD: OnceLock<FixtureBackend> = OnceLock::new();
-    WORLD.get_or_init(|| FixtureBackend::new(SEED))
+    WORLD.get_or_init(|| FixtureBackend::try_new(SEED).expect("fixture generates"))
 }
 
 /// The id of a scenario agent by its fixture key (`pi2`, `al3`, …).

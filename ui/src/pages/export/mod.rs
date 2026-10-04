@@ -72,18 +72,20 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
             .map_err(UiError::from),
         Err(error) => Err(error.clone()),
     };
-    // Versions to export under; listing them reads topic metadata, which
-    // needs Content. Without it the view's version is the only choice.
-    let versions: Vec<u32> = if content {
-        match backend.topic_versions(&caller).await {
-            Ok(versions) => versions.iter().map(|v| v.version.0).collect(),
-            Err(error) => {
-                tracing::warn!(error = ?error, "topic versions unavailable");
-                vec![state.scope.topic_version.0]
-            }
+    // Versions to export under: those whose data retention still keeps
+    // (the history needs only View). If it cannot be read, the view's
+    // version is the only choice.
+    let versions: Vec<u32> = match backend.topic_versions(&caller).await {
+        Ok(history) => history
+            .versions()
+            .iter()
+            .filter(|info| info.retention().is_retained())
+            .map(|info| info.version().0)
+            .collect(),
+        Err(error) => {
+            tracing::warn!(error = ?error, "topic versions unavailable");
+            vec![state.scope.topic_version.0]
         }
-    } else {
-        vec![state.scope.topic_version.0]
     };
     let (status, outcome, retained) = match submitted {
         None => (None, None, None),

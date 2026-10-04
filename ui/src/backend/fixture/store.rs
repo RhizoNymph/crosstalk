@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo};
 use crosstalk_spec::derived::flow::channel::Channel;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
 use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
@@ -13,9 +14,8 @@ use crosstalk_spec::support::Timestamp;
 use crate::contract::agents::{Agent, AgentLabel, AgentState, MergeRecord, MergeVeto};
 use crate::contract::alerts::Alert;
 use crate::contract::channels::Supersession;
-use crate::contract::research::{AuditEntry, ProjectionPoints};
+use crate::contract::research::AuditEntry;
 use crate::contract::rules::RuleDef;
-use crosstalk_spec::ids::ProjectionId;
 
 use super::clock::Mint;
 
@@ -33,6 +33,32 @@ pub struct ChannelRecord {
     pub created: Timestamp,
 }
 
+/// A projection job as the store keeps it: a ready job with its frame, or
+/// the record of a job in any other status (queued, fitting, failed, or
+/// expired with its frame dropped).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Job {
+    Ready(Box<Projection>),
+    Record(Box<ProjectionInfo>),
+}
+
+impl Job {
+    pub fn ready(projection: Projection) -> Self {
+        Self::Ready(Box::new(projection))
+    }
+
+    pub fn record(info: ProjectionInfo) -> Self {
+        Self::Record(Box::new(info))
+    }
+
+    pub fn info(&self) -> &ProjectionInfo {
+        match self {
+            Self::Ready(projection) => projection.info(),
+            Self::Record(info) => info,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct State {
     pub agents: BTreeMap<AgentId, AgentRecord>,
@@ -48,7 +74,8 @@ pub struct State {
     /// Append-only, oldest first.
     pub audit: Vec<AuditEntry>,
     pub dead_letters: Vec<DeadLetter>,
-    pub projections: Vec<(ProjectionId, ProjectionPoints)>,
+    /// Projection jobs, oldest first.
+    pub projections: Vec<Job>,
     pub mint: Mint,
 }
 

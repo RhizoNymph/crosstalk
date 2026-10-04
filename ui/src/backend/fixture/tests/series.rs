@@ -288,15 +288,30 @@ async fn unknown_topic_versions_are_typed_errors() {
         .err(),
         unknown
     );
-    assert_eq!(b.topic_stats(&c, &scope, n(4)).await.err(), unknown);
     assert_eq!(
-        b.fit_projection(&c, &scope, params(1, 10)).await.err(),
+        b.fit_projection(&c, scope.window, &filter, params(1, 10))
+            .await
+            .err(),
         unknown
     );
-    // Reads of one version's topics still report it as not retained.
-    let not_retained = Some(QueryError::VersionNotRetained { version });
-    assert_eq!(b.topics(&c, version).await.err(), not_retained);
-    assert_eq!(b.topic_remap(&c, version).await.err(), not_retained);
+    // The catalog's reads: an unknown version is `NotFound` too.
+    assert_eq!(
+        b.topic_sizes(&c, Some(version), Some(scope.window))
+            .await
+            .err(),
+        unknown
+    );
+    assert_eq!(
+        b.topics(
+            &c,
+            crosstalk_spec::aggregates::filter::TopicVersionSelector::Pinned(version),
+            &first(5)
+        )
+        .await
+        .err(),
+        unknown
+    );
+    assert_eq!(b.topic_lineage(&c, version).await.err(), unknown);
 }
 
 #[tokio::test]

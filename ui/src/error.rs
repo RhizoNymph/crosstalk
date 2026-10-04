@@ -183,7 +183,8 @@ fn conflict(kind: &ConflictKind) -> String {
     }
 }
 
-fn fit_failure(failure: &FitFailure) -> String {
+/// Why a projection's fit failed, in words.
+pub fn fit_failure(failure: &FitFailure) -> String {
     match failure {
         FitFailure::TooFewPoints { needed, got } => {
             format!("{got} points sampled, it needs more than {needed}")

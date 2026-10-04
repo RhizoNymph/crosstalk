@@ -1,17 +1,22 @@
-//! `/topics`: the topic model's versions, the topics of one version with
-//! their terms, size and trend over the view's window, and the remap to the
-//! next version (which topics found no match, and which watched-topic
-//! rules that leaves stale).
+//! `/topics`: the topic model's versions (`topic_versions`), the topics of
+//! one version (`topics`) with their terms, size over the view's window
+//! (`topic_sizes`) and trend (`series` grouped by topic), and the lineage
+//! to the next version (`topic_lineage`): which topics `TopicLineage::remap`
+//! carries over at the rule form's default threshold, and which
+//! watched-topic rules it leaves stale.
 //!
 //! `ver` picks the version shown (default: the view's `v`); a link sets the
-//! view's `v` to it so every page reads that version. Topic labels and
-//! terms come from message text, so the page needs `Content`; without it
-//! the page says so.
+//! view's `v` to it so every page reads that version. A version retention
+//! dropped keeps its topics and lineage but has no sizes over a window: its
+//! table shows the typed error (409). Topic labels and terms come from
+//! message text, so the page needs `Content`; without it the page says so.
 
 pub mod model;
 
-use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
+use crosstalk_spec::support::Similarity;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
@@ -23,12 +28,16 @@ use crate::backend::Backend;
 use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::sparkline::sparkline;
 use crate::components::table::{ROW, TD, TD_NUM};
-use crate::components::{Tab, data_table, empty_state, error_panel, href, page_header, segmented};
+use crate::components::{
+    Tab, data_table, empty_state, error_panel, format_time, href, page_header, segmented,
+};
 use crate::error::UiError;
+use crate::pages::alerts::rules::form::DEFAULT_REMAP;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
+use crate::pages::common::topics::{Trends, all_topics, topic_trends};
 use crate::pages::common::transmissions::Named;
-use crate::pages::explore::topics::{TREND_BUCKETS, watch_url};
+use crate::pages::explore::topics::watch_url;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 
@@ -51,13 +60,65 @@ pub fn parse_version(
     .transpose()
 }
 
+/// The selected version's topics in the window.
+struct Table {
+    rows: Vec<TopicRow>,
+    /// "final up to …" for the sizes.
+    watermark: String,
+}
+
 struct Loaded {
     tabs: Vec<VersionTab>,
     selected: TopicModelVersion,
-    /// The selected version's topics; an error when it is not retained.
-    topics: std::result::Result<Vec<TopicRow>, UiError>,
-    /// The remap to the next version: its number and rows.
+    /// The selected version's topics; an error when the version is
+    /// unknown, or dropped (no sizes over a window).
+    topics: std::result::Result<Table, UiError>,
+    /// The lineage to the next version: its number and rows.
     remap: Option<(u32, Vec<RemapRow>)>,
+}
+
+/// The remap threshold the table maps at: the rule form's default.
+fn default_threshold() -> std::result::Result<Similarity, UiError> {
+    DEFAULT_REMAP
+        .parse::<f32>()
+        .ok()
+        .and_then(|value| Similarity::new(value).ok())
+        .ok_or_else(|| {
+            invalid(
+                "remap_threshold",
+                "the default threshold is not a similarity",
+            )
+        })
+}
+
+/// The rows of the selected version's `topics`: sizes over the window,
+/// then trends (a version never activated has sizes but no series; it
+/// shows no trend).
+async fn table(
+    cx: &Cx,
+    caller: &Caller,
+    state: &ViewState,
+    (selected, topics): (TopicModelVersion, &[Topic]),
+    watched_version: TopicModelVersion,
+) -> std::result::Result<Table, UiError> {
+    let backend = backend(cx);
+    let sizes = backend
+        .topic_sizes(caller, Some(selected), Some(state.scope.window))
+        .await?;
+    let trends = match topic_trends(backend, caller, state.scope.window, selected).await {
+        Ok(trends) => trends,
+        Err(error) => {
+            tracing::warn!(error = %error, version = selected.0, "topic trends unavailable");
+            Trends::default()
+        }
+    };
+    let rows = topic_rows(topics, &sizes.value, &trends, |id| {
+        (selected == watched_version).then(|| watch_url(id, state))
+    });
+    Ok(Table {
+        rows,
+        watermark: format!("final up to {}", format_time(sizes.watermark.at())),
+    })
 }
 
 async fn load(
@@ -67,40 +128,39 @@ async fn load(
     selected: TopicModelVersion,
 ) -> std::result::Result<Loaded, UiError> {
     let backend = backend(cx);
-    let versions = backend.topic_versions(caller).await?;
-    let tabs = version_tabs(&versions, state.scope.topic_version);
-    let newest = tabs.iter().find(|t| t.newest).map(|t| t.version);
-    let mut scope = state.scope.clone();
-    scope.topic_version = selected;
-    let topics = match backend.topics(caller, selected).await {
-        Ok(topics) => {
-            let stats = backend.topic_stats(caller, &scope, TREND_BUCKETS).await?;
-            let rows = topic_rows(&topics, &stats, |id| {
-                (Some(selected.0) == newest).then(|| watch_url(id, state))
-            });
-            let remap = match backend.topic_remap(caller, selected).await? {
-                Some(remap) => {
-                    let next = backend.topics(caller, remap.to).await.unwrap_or_default();
-                    let rules = backend.rules(caller).await?;
-                    Some((
-                        remap.to.0,
-                        remap_rows(&remap, &topics, &next, &rules, state),
-                    ))
-                }
-                None => None,
-            };
-            Ok((rows, remap))
-        }
-        Err(error) => Err(UiError::from(error)),
+    let history = backend.topic_versions(caller).await?;
+    let tabs = version_tabs(&history, state.scope.topic_version);
+    // New watched-topic rules name the version the rule form picks topics
+    // from: the active one.
+    let active = history.active().version();
+    let topics: std::result::Result<Vec<Topic>, UiError> = if history.get(selected).is_some() {
+        all_topics(backend, caller, TopicVersionSelector::Pinned(selected))
+            .await
+            .map(|(_, topics)| topics)
+            .map_err(UiError::from)
+    } else {
+        Err(UiError::Query(QueryError::NotFound))
     };
-    let (topics, remap) = match topics {
-        Ok((rows, remap)) => (Ok(rows), remap),
-        Err(error) => (Err(error), None),
+    let table = match &topics {
+        Ok(topics) => table(cx, caller, state, (selected, topics), active).await,
+        Err(error) => Err(error.clone()),
+    };
+    let remap = match backend.topic_lineage(caller, selected).await {
+        Ok(Some(lineage)) => {
+            let from = topics?;
+            let (_, next) =
+                all_topics(backend, caller, TopicVersionSelector::Pinned(lineage.to())).await?;
+            let rules = backend.rules(caller).await?;
+            let rows = remap_rows(&lineage, &from, &next, &rules, default_threshold()?, state);
+            Some((lineage.to().0, rows))
+        }
+        Ok(None) | Err(QueryError::NotFound) => None,
+        Err(error) => return Err(error.into()),
     };
     Ok(Loaded {
         tabs,
         selected,
-        topics,
+        topics: table,
         remap,
     })
 }
@@ -163,10 +223,11 @@ fn picker(state: &ViewState, tabs: &[VersionTab], selected: TopicModelVersion) -
             .iter()
             .map(|t| Tab {
                 label: format!(
-                    "{}{}{}",
+                    "{}{}{}{}",
                     t.label,
                     if t.pinned { " · pinned" } else { "" },
-                    if t.newest { " · newest" } else { "" }
+                    if t.newest { " · newest" } else { "" },
+                    if t.dropped { " · dropped" } else { "" }
                 ),
                 href: href(PATH, state, &[("ver", &t.version.to_string())]),
                 active: t.version == selected.0,
@@ -214,18 +275,25 @@ async fn topics_body(cx: &Cx, state: ViewState, selected: TopicModelVersion) -> 
 }
 
 #[component]
-async fn topic_table(topics: std::result::Result<Vec<TopicRow>, UiError>) -> Result<impl View> {
-    let empty = topics.as_ref().is_ok_and(Vec::is_empty);
+async fn topic_table(topics: std::result::Result<Table, UiError>) -> Result<impl View> {
+    let empty = topics.as_ref().is_ok_and(|t| t.rows.is_empty());
+    let watermark = topics
+        .as_ref()
+        .map(|t| t.watermark.clone())
+        .unwrap_or_default();
     Ok(view! {
         <section class=(SECTION)>
-            <h2 class=(SECTION_TITLE)>"Topics in the window"</h2>
+            <h2 class=(SECTION_TITLE)>
+                "Topics in the window"
+                <span class="ml-2 font-normal normal-case tracking-normal">(watermark)</span>
+            </h2>
             match topics {
                 Err(error) => {
                     (status_of(&error))
                     error_panel(error: &error)
                 },
                 Ok(_) if empty => empty_state(message: "This version has no topics: it was never fitted to traffic."),
-                Ok(rows) => data_table(
+                Ok(Table { rows, .. }) => data_table(
                     headers: &["Topic", "Top terms", "Transmissions", "Trend", ""],
                     for row in rows {
                         <tr class=(ROW)>
@@ -343,6 +411,7 @@ mod tests {
         assert!(reply.body.contains("Credentials and API keys"));
         assert!(reply.body.contains(">Watch</a>"));
         assert!(reply.body.contains("<polyline"));
+        assert!(reply.body.contains("final up to 2026-10-02 23:50:00 UTC"));
         assert!(
             !reply.body.contains("Remap v2"),
             "the newest version has no successor"
@@ -368,13 +437,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unfitted_and_unknown_versions() {
+    async fn dropped_and_unknown_versions() {
+        // v0 (unfitted) was dropped by retention when v2 was activated: no
+        // sizes over a window, but its lineage to v1 is still listed.
         let reply = get(&url("&ver=0")).await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        assert!(reply.body.contains("never fitted"));
-        let reply = get(&url("&ver=9")).await;
         assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert!(reply.body.contains("v0 · dropped"));
         assert!(reply.body.contains("no longer retained"));
+        assert!(reply.body.contains("Remap v0 → v1"));
+        assert!(reply.body.contains("No topics to carry over."));
+        let reply = get(&url("&ver=9")).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
         let reply = get(&url("&ver=x")).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     }

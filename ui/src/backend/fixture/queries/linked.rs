@@ -16,9 +16,7 @@ use crosstalk_spec::aggregates::filter::{
     AccessSubject, FalseDetections, FilterSubject, TopicVersionSelector, TopologyFilter,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::aggregates::topic_history::{
-    CompletedFit, FitRecord, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus,
-};
+use crosstalk_spec::aggregates::topic_history::TopicVersionHistory;
 use crosstalk_spec::aliases::Aliases;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::Verdict;
@@ -29,50 +27,8 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::Result;
 use crate::backend::fixture::world::{TxRecord, World, confirmed};
-use crate::contract::topics;
 
 use super::Ctx;
-
-/// The catalog's history as the spec states it: version 0 unfitted, every
-/// version activated when its fit returned and superseded by the next one's
-/// activation, the newest active. The world records fit times only.
-pub fn history(versions: &[topics::TopicVersionInfo]) -> Result<TopicVersionHistory> {
-    let invalid = |what: &str, detail: String| QueryError::Store {
-        reason: format!("fixture topic history: {what}: {detail}"),
-    };
-    let fit = |info: &topics::TopicVersionInfo| {
-        if info.version == TopicModelVersion(0) {
-            FitRecord::Unfitted
-        } else {
-            FitRecord::Fitted(CompletedFit {
-                started_at: info.fitted_at,
-                fitted_at: info.fitted_at,
-                ready_at: info.fitted_at,
-                topics: info.topics,
-            })
-        }
-    };
-    let mut out = Vec::with_capacity(versions.len());
-    for (index, info) in versions.iter().enumerate() {
-        let status = match versions.get(index + 1) {
-            Some(next) => TopicVersionStatus::Superseded {
-                fit: fit(info),
-                activated_at: Some(info.fitted_at),
-                by: next.version,
-                superseded_at: next.fitted_at,
-            },
-            None => TopicVersionStatus::Active {
-                fit: fit(info),
-                activated_at: info.fitted_at,
-            },
-        };
-        out.push(
-            TopicVersionInfo::new(info.version, status)
-                .map_err(|e| invalid("version", format!("{e:?}")))?,
-        );
-    }
-    TopicVersionHistory::new(out).map_err(|e| invalid("history", format!("{e:?}")))
-}
 
 /// The version a linked view is computed under, as the edge store resolves
 /// it: the selector resolved against `history` (unknown, fitting, never
@@ -96,15 +52,14 @@ pub fn resolve(
     }
 }
 
-/// [`resolve`] over the world's topic model, mapped to the surface's
-/// errors: unknown `NotFound`, never activated
-/// `Conflict(TopicVersionNotActivated)`, not retained `VersionNotRetained`,
-/// topics outside the version `Conflict(TopicsNotInVersion)`.
+/// [`resolve`] over the world's catalog, mapped to the surface's errors:
+/// unknown `NotFound`, never activated `Conflict(TopicVersionNotActivated)`,
+/// dropped by retention `VersionNotRetained`, topics outside the version
+/// `Conflict(TopicsNotInVersion)`.
 pub fn resolve_version(world: &World, filter: &TopologyFilter) -> Result<TopicModelVersion> {
-    let history = history(&world.topics.versions)?;
     resolve(
         filter,
-        &history,
+        &world.topics.history,
         |version| world.topics.retains(version),
         |topic| {
             world
@@ -137,7 +92,7 @@ pub fn resolve_selector(
 /// readable, or `VersionNotRetained` once retention dropped it. A version
 /// the catalog never had came from a cursor the fixture did not issue.
 pub fn pinned_version(world: &World, version: TopicModelVersion) -> Result<TopicModelVersion> {
-    if !world.topics.versions.iter().any(|v| v.version == version) {
+    if world.topics.info(version).is_none() {
         return Err(QueryError::InvalidCursor);
     }
     if !world.topics.retains(version) {
@@ -319,31 +274,60 @@ impl<'a> Linked<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
-
     use crosstalk_spec::aggregates::filter::TopicVersionSelector;
-    use crosstalk_spec::aggregates::topic::EmbeddingModel;
+    use crosstalk_spec::aggregates::topic_history::{
+        CompletedFit, FitRecord, TopicVersionInfo, TopicVersionStatus,
+    };
     use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 
     use super::*;
 
     const HOUR: u64 = 3_600_000_000;
 
-    fn info(version: u32, hours: u64) -> topics::TopicVersionInfo {
-        topics::TopicVersionInfo {
-            version: TopicModelVersion(version),
-            fitted_at: Timestamp::from_micros(hours * HOUR),
-            embedding_model: EmbeddingModel {
-                name: "test".to_owned(),
-                dimension: NonZeroU16::MIN,
-            },
-            topics: version * 3,
-            pinned: false,
-        }
+    fn fit(hours: u64, topics: u32) -> FitRecord {
+        let at = Timestamp::from_micros(hours * HOUR);
+        FitRecord::Fitted(CompletedFit {
+            started_at: at,
+            fitted_at: at,
+            ready_at: at,
+            topics,
+        })
     }
 
+    /// v0 active from hour 1, v1 from hour 2, v2 from hour 3.
     fn world_history() -> TopicVersionHistory {
-        history(&[info(0, 1), info(1, 2), info(2, 3)]).expect("history")
+        let at = |hours: u64| Timestamp::from_micros(hours * HOUR);
+        TopicVersionHistory::new(vec![
+            TopicVersionInfo::new(
+                TopicModelVersion(0),
+                TopicVersionStatus::Superseded {
+                    fit: FitRecord::Unfitted,
+                    activated_at: Some(at(1)),
+                    by: TopicModelVersion(1),
+                    superseded_at: at(2),
+                },
+            )
+            .expect("v0"),
+            TopicVersionInfo::new(
+                TopicModelVersion(1),
+                TopicVersionStatus::Superseded {
+                    fit: fit(2, 3),
+                    activated_at: Some(at(2)),
+                    by: TopicModelVersion(2),
+                    superseded_at: at(3),
+                },
+            )
+            .expect("v1"),
+            TopicVersionInfo::new(
+                TopicModelVersion(2),
+                TopicVersionStatus::Active {
+                    fit: fit(3, 6),
+                    activated_at: at(3),
+                },
+            )
+            .expect("v2"),
+        ])
+        .expect("history")
     }
 
     fn filter(selector: TopicVersionSelector, topics: Vec<TopicId>) -> TopologyFilter {

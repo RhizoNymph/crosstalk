@@ -5,10 +5,12 @@
 //! the results shard resolves on the server and the URL keeps
 //! (`history.replaceState`). Colour-by is a signal bound to
 //! `data-color-by`, also mirrored into the URL (`cb`). Without a projection
-//! id (`p`) the page offers to fit one for the view's scope; posting
-//! `action=fit` stores it and redirects here with `p`. Every part of the
-//! page reads message content, so it needs `Content`; without it the page
-//! says so instead of failing.
+//! id (`p`) the page offers to fit one for the view's window and filter;
+//! posting `action=fit` records the job (`fit_projection`) and redirects
+//! here with `p`. The panel follows the job's `ProjectionInfo`: queued,
+//! fitting, failed (why), expired (fit it again) or ready. Every part of
+//! the page reads message content, so it needs `Content`; without it the
+//! page says so instead of failing.
 
 pub mod fit;
 pub mod lasso;
@@ -17,6 +19,9 @@ pub mod results;
 pub mod search;
 pub mod topics;
 
+use crosstalk_spec::aggregates::projection::{
+    Fitted, ProjectionInfo, ProjectionParams, ProjectionStatus,
+};
 use crosstalk_spec::interfaces::l8_surface::Permission;
 use topcoat::Result;
 use topcoat::context::Cx;
@@ -34,9 +39,8 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{INPUT, LABEL, PANEL};
 use crate::components::{PageLinks, error_panel, flash_banner, format_time, href, page_header};
-use crate::contract::research::ProjectionJob;
 use crate::data::elements::PROJECTION_JS;
-use crate::error::UiError;
+use crate::error::{UiError, fit_failure};
 use crate::pages::common::action::{Failure, done, error_for, fields_for, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
@@ -63,8 +67,16 @@ pub enum ProjectionPanel {
     NotFitted,
     Missing,
     Unavailable(UiError),
+    /// Queued or fitting, in words.
     Pending(String),
+    /// Why the fit failed.
     Failed(String),
+    /// The frame was dropped after the retention period; the form is
+    /// filled with the job's parameters, to fit it again.
+    Expired {
+        meta: String,
+        params: FormFields,
+    },
     Ready {
         id: ProjectionId,
         meta: String,
@@ -73,35 +85,65 @@ pub enum ProjectionPanel {
     },
 }
 
-/// The panel for the query's projection.
+/// What a fit was asked to do and what it read, in one line.
+fn meta(info: &ProjectionInfo, fitted: &Fitted) -> String {
+    let spec = info.spec();
+    let params = spec.params();
+    format!(
+        "{} · v{} · {} neighbours · min distance {} · seed {} · {} of {} transmissions (sample ≤ {}) · fitted {}",
+        spec.embedding_model().name,
+        spec.topic_version().0,
+        params.neighbors(),
+        params.min_dist(),
+        params.seed(),
+        fitted.points,
+        fitted.matching,
+        params.limit().get(),
+        format_time(fitted.fitted_at)
+    )
+}
+
+/// The fit form's fields for `params`.
+pub fn form_fields(params: ProjectionParams) -> FormFields {
+    let milli = params.min_dist_milli();
+    let min_dist = format!("{}.{:03}", milli / 1_000, milli % 1_000);
+    FormFields::from_pairs(&[
+        ("neighbors", &params.neighbors().to_string()),
+        ("min_dist", &min_dist),
+        ("seed", &params.seed().to_string()),
+        ("sample_limit", &params.limit().get().to_string()),
+    ])
+}
+
+/// The panel for the query's projection, from its job's status.
 pub fn panel(
-    job: Option<std::result::Result<ProjectionJob, UiError>>,
+    job: Option<std::result::Result<ProjectionInfo, UiError>>,
     state: &ViewState,
-    id: Option<ProjectionId>,
 ) -> ProjectionPanel {
-    match (job, id) {
-        (None, _) | (_, None) => ProjectionPanel::NotFitted,
-        (Some(Err(UiError::Query(QueryError::NotFound))), _) => ProjectionPanel::Missing,
-        (Some(Err(error)), _) => ProjectionPanel::Unavailable(error),
-        (Some(Ok(ProjectionJob::Queued)), _) => {
-            ProjectionPanel::Pending("Queued for fitting.".to_owned())
+    let info = match job {
+        None => return ProjectionPanel::NotFitted,
+        Some(Err(UiError::Query(QueryError::NotFound))) => return ProjectionPanel::Missing,
+        Some(Err(error)) => return ProjectionPanel::Unavailable(error),
+        Some(Ok(info)) => info,
+    };
+    match info.status() {
+        ProjectionStatus::Queued => ProjectionPanel::Pending(format!(
+            "Queued for fitting since {}.",
+            format_time(info.requested_at())
+        )),
+        ProjectionStatus::Fitting { started_at } => {
+            ProjectionPanel::Pending(format!("Fitting since {}.", format_time(*started_at)))
         }
-        (Some(Ok(ProjectionJob::Running { done, total })), _) => {
-            ProjectionPanel::Pending(format!("Fitting: {done} of {total} done."))
-        }
-        (Some(Ok(ProjectionJob::Failed { reason })), _) => ProjectionPanel::Failed(reason),
-        (Some(Ok(ProjectionJob::Ready(meta))), Some(id)) => ProjectionPanel::Ready {
-            id,
-            meta: format!(
-                "{} · {} neighbours · min distance {} · seed {} · sample ≤ {} · fitted {}",
-                meta.embedding_model.name,
-                meta.params.neighbors,
-                meta.params.min_dist(),
-                meta.params.seed,
-                meta.params.sample_limit,
-                format_time(meta.fitted_at)
-            ),
-            stale: meta.scope != state.scope,
+        ProjectionStatus::Failed { failure, .. } => ProjectionPanel::Failed(fit_failure(failure)),
+        ProjectionStatus::Expired { fitted, .. } => ProjectionPanel::Expired {
+            meta: meta(&info, fitted),
+            params: form_fields(info.spec().params()),
+        },
+        ProjectionStatus::Ready(fitted) => ProjectionPanel::Ready {
+            id: info.id(),
+            meta: meta(&info, fitted),
+            stale: info.spec().window() != state.scope.window
+                || *info.spec().filter() != state.scope.topology_filter(),
         },
     }
 }
@@ -149,7 +191,12 @@ async fn explore_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
                 let params = fit::parse(&fields)?;
                 require(&caller, Permission::Content)?;
                 let id = backend(cx)
-                    .fit_projection(&caller, &state.scope, params)
+                    .fit_projection(
+                        &caller,
+                        state.scope.window,
+                        &state.scope.topology_filter(),
+                        params,
+                    )
                     .await?;
                 Ok::<_, UiError>((query.clone(), id))
             }
@@ -260,13 +307,13 @@ async fn explore_body(
     let job = match query.projection {
         Some(id) => Some(
             backend
-                .projection_job(&caller, id)
+                .projection_status(&caller, id)
                 .await
                 .map_err(UiError::from),
         ),
         None => None,
     };
-    let panel = panel(job, &state, query.projection);
+    let panel = panel(job, &state);
     let topics = load_topics(cx, &caller, &state).await;
     let topics_url = href("/topics", &state, &[]);
     let action = href(PATH, &state, &borrowed(&pairs));
@@ -297,6 +344,11 @@ async fn projection_section(
     fit_error: Option<UiError>,
     fit_fields: Option<FormFields>,
 ) -> Result<impl View> {
+    // An expired projection's form starts from its own parameters.
+    let fit_fields = match &panel {
+        ProjectionPanel::Expired { params, .. } => fit_fields.or_else(|| Some(params.clone())),
+        _ => fit_fields,
+    };
     let initial_color = query.color.code().to_owned();
     let color = signal(cx, move || initial_color);
     let initial_selection = query.selection_text.clone();
@@ -359,6 +411,10 @@ async fn projection_section(
                         ProjectionPanel::Unavailable(error) => <div class="mb-2">error_panel(error: &error)</div>,
                         ProjectionPanel::Pending(status) => <p class="mb-2 text-sm">(status) " Reload to check again."</p>,
                         ProjectionPanel::Failed(reason) => <p class="mb-2 text-sm text-red-700 dark:text-red-300">"Fitting failed: " (reason)</p>,
+                        ProjectionPanel::Expired { meta, .. } => {
+                            <p class="mb-1 text-sm">"This projection was fitted too long ago and its points are gone. Its parameters are below: fit it again with the same seed."</p>
+                            <p class="mb-2 text-xs text-zinc-500">(meta)</p>
+                        },
                         _ => {
                             <p class="text-sm font-medium">"No projection yet"</p>
                             <p class="mb-3 text-xs text-zinc-500">"A projection places this view's transmissions by the similarity of their text. It is stored with its parameters and seed, so the link reproduces it."</p>

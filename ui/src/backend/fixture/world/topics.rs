@@ -1,7 +1,8 @@
 //! The topic model: v0 (unfitted, every transmission an outlier), v1 (six
 //! broad topics) and v2 (one topic per theme). v1's "Engineering chatter"
-//! spans three v2 topics and maps to none of them, which is what leaves a
-//! watched-topic rule stale.
+//! spans three v2 topics and its best link in v2 is below the remap
+//! threshold, which is what leaves a watched-topic rule stale. The version
+//! history and the lineage are built in [`super::catalog`].
 
 use std::num::NonZeroU16;
 
@@ -14,15 +15,15 @@ use crosstalk_spec::support::{Similarity, Timestamp};
 use crate::backend::fixture::clock::{DAY, Mint, ago};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::{self, Theme};
-use crate::contract::topics::{TopicRemap, TopicVersionInfo, TopicVersionRemap};
 
-use super::history::CONFIG_AT;
-use super::{GenError, TopicModel};
+use super::{GenError, TopicModel, catalog};
 
+/// When v1 was activated; its fit returned ten minutes earlier.
 pub const V1_AT: Timestamp = ago(6 * DAY);
+/// When v2 was activated.
 pub const V2_AT: Timestamp = ago(2 * DAY);
-/// A topic maps to the next version's most similar topic only at or above
-/// this similarity.
+/// The watched-topic rules' remap threshold: a topic carries over to its
+/// best link in the next version only at or above this similarity.
 pub const REMAP_THRESHOLD: f32 = 0.8;
 const DIMENSION: u16 = 16;
 
@@ -50,7 +51,7 @@ pub fn model() -> Result<EmbeddingModel, GenError> {
     })
 }
 
-/// The version the model had at `at`.
+/// The version that was active at `at`.
 pub fn version_at(at: Timestamp) -> TopicModelVersion {
     if at >= V2_AT {
         TopicModelVersion(2)
@@ -176,7 +177,7 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
             label: (*label).to_owned(),
             terms: terms(themes),
             centroid: mix(&model, seed, themes)?,
-            fitted_at: V1_AT,
+            fitted_at: catalog::fitted_at(V1_AT),
         });
     }
     let mut v2_theme = vec![None; Theme::ALL.len()];
@@ -191,74 +192,20 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
             label: theme.label().to_owned(),
             terms: terms(&[theme]),
             centroid: mix(&model, seed, &[theme])?,
-            fitted_at: V2_AT,
+            fitted_at: catalog::fitted_at(V2_AT),
         });
     }
-    let remaps = vec![
-        TopicVersionRemap {
-            from: TopicModelVersion(0),
-            to: TopicModelVersion(1),
-            remaps: Vec::new(),
-        },
-        remap(&topics, TopicModelVersion(1), TopicModelVersion(2))?,
-    ];
-    let count = |v: u32| u32::try_from(topics.iter().filter(|t| t.version.0 == v).count());
-    let versions = vec![
-        TopicVersionInfo {
-            version: TopicModelVersion(0),
-            fitted_at: CONFIG_AT,
-            embedding_model: model.clone(),
-            topics: 0,
-            pinned: false,
-        },
-        TopicVersionInfo {
-            version: TopicModelVersion(1),
-            fitted_at: V1_AT,
-            embedding_model: model.clone(),
-            topics: count(1).map_err(|e| GenError::invalid("topic count", e))?,
-            pinned: true,
-        },
-        TopicVersionInfo {
-            version: TopicModelVersion(2),
-            fitted_at: V2_AT,
-            embedding_model: model.clone(),
-            topics: count(2).map_err(|e| GenError::invalid("topic count", e))?,
-            pinned: false,
-        },
+    let lineages = vec![
+        catalog::lineage(&topics, TopicModelVersion(0), TopicModelVersion(1))?,
+        catalog::lineage(&topics, TopicModelVersion(1), TopicModelVersion(2))?,
     ];
     Ok(TopicModel {
         model,
-        versions,
+        history: catalog::history(&topics)?,
         topics,
-        remaps,
+        lineages,
         theme_topics: vec![vec![None; Theme::ALL.len()], v1_theme, v2_theme],
     })
-}
-
-/// Each topic of `from` mapped to the most similar topic of `to`, if that
-/// reaches [`REMAP_THRESHOLD`].
-fn remap(
-    topics: &[Topic],
-    from: TopicModelVersion,
-    to: TopicModelVersion,
-) -> Result<TopicVersionRemap, GenError> {
-    let mut remaps = Vec::new();
-    for old in topics.iter().filter(|t| t.version == from) {
-        let best = topics
-            .iter()
-            .filter(|t| t.version == to)
-            .map(|t| (t.id, similarity(&old.centroid, &t.centroid)))
-            .max_by(|a, b| a.1.total_cmp(&b.1));
-        let to = match best {
-            Some((id, score)) if score >= REMAP_THRESHOLD => Some((
-                id,
-                Similarity::new(score).map_err(|e| GenError::invalid("Similarity", e))?,
-            )),
-            _ => None,
-        };
-        remaps.push(TopicRemap { from: old.id, to });
-    }
-    Ok(TopicVersionRemap { from, to, remaps })
 }
 
 /// The assignment of one confirmed transmission on `theme` under every
@@ -268,15 +215,16 @@ pub fn assign(
     theme: Theme,
     rng: &mut Rng,
 ) -> Result<Vec<Assignment>, GenError> {
-    let mut out = Vec::with_capacity(model.versions.len());
-    for info in &model.versions {
-        let outlier_rate = match (info.version.0, theme) {
+    let versions = model.history.versions();
+    let mut out = Vec::with_capacity(versions.len());
+    for info in versions {
+        let outlier_rate = match (info.version().0, theme) {
             (0, _) => 1.0,
             (1, _) => 0.07,
             (_, Theme::Injection) => 0.1,
             _ => 0.05,
         };
-        let topic = model.theme_topic(info.version, theme);
+        let topic = model.theme_topic(info.version(), theme);
         let assignment = match topic {
             Some(topic) if !rng.chance(outlier_rate) => Assignment::Topic {
                 topic,

@@ -23,14 +23,17 @@ pub fn status_of(error: &UiError) -> ErrorStatus {
                 ErrorStatus::NotFound
             }
             // A linked view's version conflicts come from the URL (`v`,
-            // `t`): the element shows why, like an invalid input.
+            // `t`), and so does a projection not ready or failed (`p`): the
+            // element shows why, like an invalid input.
             QueryError::VersionNotRetained { .. }
             | QueryError::InvalidInput(_)
             | QueryError::InvalidCursor
             | QueryError::Conflict(
                 ConflictKind::TopicVersionFitting { .. }
                 | ConflictKind::TopicVersionNotActivated { .. }
-                | ConflictKind::TopicsNotInVersion { .. },
+                | ConflictKind::TopicsNotInVersion { .. }
+                | ConflictKind::ProjectionNotReady { .. }
+                | ConflictKind::ProjectionFailed { .. },
             ) => ErrorStatus::BadRequest,
             QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
         },
@@ -104,6 +107,32 @@ mod tests {
         for (error, status) in cases {
             assert_eq!(status_of(&error), status, "{error:?}");
         }
+    }
+
+    #[test]
+    fn unusable_projections_are_bad_requests() {
+        use crosstalk_spec::aggregates::projection::{FitFailure, ProjectionStatusKind};
+        use crosstalk_spec::ids::ProjectionId;
+        let projection = ProjectionId::from_ulid(9);
+        for conflict in [
+            ConflictKind::ProjectionNotReady {
+                projection,
+                status: ProjectionStatusKind::Queued,
+            },
+            ConflictKind::ProjectionFailed {
+                projection,
+                failure: FitFailure::NonFiniteLayout,
+            },
+        ] {
+            let error = UiError::Query(QueryError::Conflict(conflict));
+            assert_eq!(status_of(&error), ErrorStatus::BadRequest, "{error:?}");
+        }
+        assert_eq!(
+            status_of(&UiError::Query(QueryError::ProjectionNotRetained {
+                projection
+            })),
+            ErrorStatus::NotFound
+        );
     }
 
     #[test]

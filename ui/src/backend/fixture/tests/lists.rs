@@ -19,7 +19,6 @@ use crate::backend::Backend;
 use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::research::{AuditFilter, AuditSubject};
-use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
@@ -114,17 +113,31 @@ async fn content_needs_the_content_permission() {
         .err(),
         forbidden
     );
-    assert_eq!(b.topic_versions(&view).await.err(), forbidden);
-    assert_eq!(b.topics(&view, TopicModelVersion(2)).await.err(), forbidden);
-    assert_eq!(b.topic_stats(&view, &week(), n(3)).await.err(), forbidden);
     assert_eq!(
-        b.topic_remap(&view, TopicModelVersion(1)).await.err(),
+        b.topics(&view, TopicVersionSelector::Current, &first(5))
+            .await
+            .err(),
         forbidden
     );
+    let scope = week();
     assert_eq!(
-        b.fit_projection(&view, &week(), params(1, 5)).await.err(),
+        b.fit_projection(&view, scope.window, &scope.topology_filter(), params(1, 5))
+            .await
+            .err(),
         forbidden
     );
+    let any = crosstalk_spec::ids::ProjectionId::from_ulid(5);
+    assert_eq!(b.projection_status(&view, any).await.err(), forbidden);
+    assert_eq!(b.projections(&view, &first(5)).await.err(), forbidden);
+    assert_eq!(b.projection(&view, any).await.err(), forbidden);
+    // The topic history, sizes and lineage hold no content.
+    assert!(b.topic_versions(&view).await.is_ok());
+    assert!(
+        b.topic_sizes(&view, None, Some(week().window))
+            .await
+            .is_ok()
+    );
+    assert!(b.topic_lineage(&view, TopicModelVersion(1)).await.is_ok());
     // Structure is still visible.
     assert!(
         graph_of(b, &view, &week(), Weighting::Transmissions)
@@ -166,81 +179,6 @@ async fn content_needs_the_content_permission() {
         Some(QueryError::Forbidden {
             missing: Permission::View
         })
-    );
-}
-
-#[tokio::test]
-async fn topic_stats_count_confirmed_transmissions_per_topic() {
-    let b = shared();
-    let c = researcher();
-    let confirmed = all_transmissions(&week())
-        .await
-        .into_iter()
-        .filter(|t| t.state.delivery().is_some())
-        .count() as u64;
-    let stats = b.topic_stats(&c, &week(), n(7)).await.expect("stats");
-    assert_eq!(stats.len(), 11, "ten topics and the outliers");
-    assert_eq!(
-        stats.iter().map(|s| s.transmissions).sum::<u64>(),
-        confirmed
-    );
-    for s in &stats {
-        assert_eq!(s.trend.len(), 7);
-        assert_eq!(s.trend.iter().sum::<u64>(), s.transmissions);
-    }
-    let v0 = b
-        .topic_stats(
-            &c,
-            &Scope {
-                topic_version: TopicModelVersion(0),
-                ..week()
-            },
-            n(7),
-        )
-        .await
-        .expect("v0");
-    assert_eq!(v0.len(), 1);
-    assert_eq!(v0[0].topic, None);
-    assert_eq!(v0[0].transmissions, confirmed);
-}
-
-#[tokio::test]
-async fn projections_are_deterministic_stored_and_sampled() {
-    let c = researcher();
-    let a = super::fresh();
-    let b = super::fresh();
-    let id_a = a
-        .fit_projection(&c, &week(), params(42, 300))
-        .await
-        .expect("fit");
-    let again = a
-        .fit_projection(&c, &week(), params(42, 300))
-        .await
-        .expect("fit");
-    assert_eq!(id_a, again, "the same request reuses the stored projection");
-    let id_b = b
-        .fit_projection(&c, &week(), params(42, 300))
-        .await
-        .expect("fit");
-    let (pa, pb) = (
-        a.projection(&c, id_a).await.expect("a"),
-        b.projection(&c, id_b).await.expect("b"),
-    );
-    assert_eq!(pa.xs(), pb.xs());
-    assert_eq!(pa.transmissions(), pb.transmissions());
-    assert_eq!(pa.len(), 300);
-    let other = a
-        .fit_projection(&c, &week(), params(43, 300))
-        .await
-        .expect("fit");
-    let po = a.projection(&c, other).await.expect("other");
-    assert_ne!(pa.transmissions(), po.transmissions());
-    assert!(pa.categories().iter().any(|p| p.topic.is_some()));
-    assert!(pa.categories().iter().any(|p| p.channel.is_some()));
-    let missing = crosstalk_spec::ids::ProjectionId::from_ulid(5);
-    assert_eq!(
-        a.projection(&c, missing).await.err(),
-        Some(QueryError::NotFound)
     );
 }
 

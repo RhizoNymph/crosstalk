@@ -19,7 +19,7 @@ fn everyone() -> Caller {
 /// Every transmission of the fixture world, newest id first, paged through
 /// `transmissions_by_id` under the fixture view's version.
 async fn transmissions(limit: u32) -> Vec<TransmissionSummary> {
-    let backend = FixtureBackend::new(7);
+    let backend = FixtureBackend::try_new(7).expect("fixture generates");
     let ids = TransmissionSelection::new(backend.transmission_ids()).expect("selection");
     let version = TopicVersionSelector::Pinned(
         crate::pages::topology::tests::fixture_state()
@@ -60,7 +60,7 @@ async fn first_in(kind: TransmissionStateKind) -> TransmissionId {
 
 /// A confirmed transmission with a decoded match of two codecs.
 async fn decoded_twice() -> TransmissionId {
-    let backend = FixtureBackend::new(7);
+    let backend = FixtureBackend::try_new(7).expect("fixture generates");
     for summary in transmissions(5000).await {
         if summary.state.kind() != TransmissionStateKind::Aggregated {
             continue;

@@ -49,6 +49,7 @@ use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::common::links::channel_url;
 use crate::pages::common::lookup::{agent_names, operator_names};
 use crate::pages::common::paging::first;
+use crate::pages::common::topics::all_topics;
 use crate::pages::common::transmissions::{
     Named, channel_names, route_channel, route_text, summaries_by_id,
 };
@@ -133,16 +134,18 @@ async fn topic_cell(
         Some(TopicUnder::Outlier) => TopicCell::Outlier,
         Some(TopicUnder::Unassigned) => TopicCell::Unassigned,
         Some(TopicUnder::Topic(_)) if !can(caller, Permission::Content) => TopicCell::Hidden,
-        Some(TopicUnder::Topic(topic)) => match backend(cx).topics(caller, version).await {
-            Ok(topics) => topics
-                .into_iter()
-                .find(|t| t.id == topic)
-                .map_or(TopicCell::Hidden, |t| TopicCell::Label(t.label)),
-            Err(error) => {
-                tracing::warn!(error = ?error, "topic label unavailable");
-                TopicCell::Hidden
+        Some(TopicUnder::Topic(topic)) => {
+            match all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version)).await {
+                Ok((_, topics)) => topics
+                    .into_iter()
+                    .find(|t| t.id == topic)
+                    .map_or(TopicCell::Hidden, |t| TopicCell::Label(t.label)),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "topic label unavailable");
+                    TopicCell::Hidden
+                }
             }
-        },
+        }
     }
 }
 

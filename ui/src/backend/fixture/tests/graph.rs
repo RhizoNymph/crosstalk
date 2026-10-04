@@ -20,8 +20,10 @@ use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
 use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::research::{AuditFilter, ProjectionJob};
+use crate::contract::research::AuditFilter;
 use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
 
 use super::reads_support::*;
 
@@ -80,17 +82,29 @@ async fn every_method_answers_for_the_day_and_the_week() {
         .await
         .expect("search");
         assert!(!hits.items().is_empty());
-        let stats = b.topic_stats(&c, &scope, n(12)).await.expect("stats");
-        assert!(stats.iter().map(|s| s.transmissions).sum::<u64>() > 0);
+        let sizes = b
+            .topic_sizes(&c, None, Some(scope.window))
+            .await
+            .expect("sizes");
+        assert!(sizes.value.topics().iter().any(|size| size.stats.is_some()));
         let id = b
-            .fit_projection(&c, &scope, params(1, 500))
+            .fit_projection(&c, scope.window, &filter, params(1, 500))
             .await
             .expect("fit");
-        assert!(matches!(
-            b.projection_job(&c, id).await,
-            Ok(ProjectionJob::Ready(_))
-        ));
-        assert!(!b.projection(&c, id).await.expect("points").is_empty());
+        assert_eq!(
+            b.projection_status(&c, id)
+                .await
+                .map(|info| info.status().kind()),
+            Ok(ProjectionStatusKind::Ready)
+        );
+        assert!(
+            b.projection(&c, id)
+                .await
+                .expect("projection")
+                .frame()
+                .count()
+                > 0
+        );
         assert!(
             !b.detection_quality(&c, scope.window)
                 .await
@@ -150,25 +164,45 @@ async fn every_method_answers_for_the_day_and_the_week() {
             .items()
             .is_empty()
     );
-    assert_eq!(b.topic_versions(&c).await.expect("versions").len(), 3);
     assert_eq!(
-        b.topics(&c, TopicModelVersion(2))
+        b.topic_versions(&c)
             .await
-            .expect("topics")
+            .expect("versions")
+            .versions()
             .len(),
+        3
+    );
+    assert_eq!(
+        b.topics(
+            &c,
+            TopicVersionSelector::Pinned(TopicModelVersion(2)),
+            &first(50)
+        )
+        .await
+        .expect("topics")
+        .page
+        .items()
+        .len(),
         10
     );
     assert!(
-        b.topic_remap(&c, TopicModelVersion(1))
+        b.topic_lineage(&c, TopicModelVersion(1))
             .await
-            .expect("remap")
+            .expect("lineage")
             .is_some()
     );
     assert!(
-        b.topic_remap(&c, TopicModelVersion(2))
+        b.topic_lineage(&c, TopicModelVersion(2))
             .await
-            .expect("remap")
+            .expect("lineage")
             .is_none()
+    );
+    assert!(
+        !b.projections(&c, &first(50))
+            .await
+            .expect("jobs")
+            .items()
+            .is_empty()
     );
 }
 

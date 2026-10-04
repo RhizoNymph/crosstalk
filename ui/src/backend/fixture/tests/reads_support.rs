@@ -1,7 +1,15 @@
 //! Helpers shared by the read tests.
 
-use std::num::{NonZeroU16, NonZeroU32};
+use std::collections::HashSet;
+use std::num::NonZeroU32;
 
+use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::projection::{ProjectionLimit, ProjectionParams};
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::lists::{SearchMode, SearchRequest};
@@ -10,12 +18,11 @@ use crosstalk_spec::paging::{Page, PageRequest, SearchList};
 use crosstalk_spec::support::NonBlank;
 
 use super::super::FixtureBackend;
-use super::super::queries::scope::Filter;
+use super::super::queries::linked::resolve_version;
 use super::super::queries::{Ctx, transmissions};
-use super::super::world::ChannelKey;
+use super::super::world::{ChannelKey, TxRecord};
 use super::{scope_with, shared, week};
 use crate::backend::{Backend, Result};
-use crate::contract::research::ProjectionParams;
 use crate::url::scope::{Scope, ViewFilter};
 
 pub const BIG: u32 = 100_000;
@@ -25,7 +32,8 @@ pub fn n(value: u32) -> NonZeroU32 {
 }
 
 pub fn params(seed: u64, limit: u32) -> ProjectionParams {
-    ProjectionParams::new(NonZeroU16::new(15).expect("15"), 0.1, seed, n(limit)).expect("params")
+    ProjectionParams::new(ProjectionLimit::new(limit).expect("limit"), 15, 100, seed)
+        .expect("params")
 }
 
 pub fn search(text: &str, mode: SearchMode) -> SearchRequest {
@@ -67,13 +75,85 @@ pub fn with(filter: ViewFilter) -> Scope {
     scope_with(week().window, filter)
 }
 
+/// A reference filter over the world's records, independent of the linked
+/// views: empty lists do not restrict, non-empty lists combine with AND,
+/// agents match the sender OR the reader after alias resolution, channels
+/// match after supersession, topics are read under the scope's version and
+/// outliers never match a topic filter. Transmissions are tested by when
+/// they were opened, and unconfirmed ones are kept.
+pub struct ScopeFilter<'a> {
+    ctx: &'a Ctx<'a>,
+    window: crosstalk_spec::support::TimeWindow,
+    pub version: TopicModelVersion,
+    agents: HashSet<AgentId>,
+    channels: HashSet<ChannelId>,
+    routes: HashSet<RouteKind>,
+    topics: HashSet<TopicId>,
+    exclude_false: bool,
+}
+
+impl<'a> ScopeFilter<'a> {
+    /// Resolves the scope's version as every linked view does.
+    pub fn new(ctx: &'a Ctx<'a>, scope: &Scope) -> Result<Self> {
+        let version = resolve_version(ctx.world, &scope.topology_filter())?;
+        let f = &scope.filter;
+        Ok(Self {
+            ctx,
+            window: scope.window,
+            version,
+            agents: f.agents.iter().map(|a| ctx.agent(*a)).collect(),
+            channels: f.channels.iter().map(|c| ctx.channel(*c)).collect(),
+            routes: f.route_kinds.iter().copied().collect(),
+            topics: f.topics.iter().copied().collect(),
+            exclude_false: f.false_detections == FalseDetections::Exclude,
+        })
+    }
+
+    /// Whether a transmission is in the scope. Unconfirmed transmissions
+    /// match an agent filter by their reader only, and never match a topic
+    /// filter.
+    pub fn keeps(&self, record: &TxRecord) -> bool {
+        let t = &record.transmission;
+        if !self.window.contains(t.opened_at) {
+            return false;
+        }
+        if !self.agents.is_empty() {
+            let to = self.ctx.agent(t.to);
+            let from = record.from.map(|f| self.ctx.agent(f));
+            if !self.agents.contains(&to) && !from.is_some_and(|f| self.agents.contains(&f)) {
+                return false;
+            }
+        }
+        if !self.channels.is_empty() {
+            match &t.route {
+                Route::Channel(c) if self.channels.contains(&self.ctx.channel(*c)) => {}
+                _ => return false,
+            }
+        }
+        if !self.routes.is_empty() && !self.routes.contains(&RouteKind::from(&t.route)) {
+            return false;
+        }
+        if !self.topics.is_empty()
+            && !record
+                .topic(self.version)
+                .is_some_and(|topic| self.topics.contains(&topic))
+        {
+            return false;
+        }
+        if self.exclude_false && self.ctx.verdict(t.id) == Some(Verdict::FalseDetection) {
+            return false;
+        }
+        true
+    }
+}
+
 /// The rows of every transmission `b`'s world holds in the scope (opened in
-/// its window, matching its filter as the fixture's scope filter reads it),
-/// newest id first, read from the world directly.
+/// its window, matching its filter as [`ScopeFilter`] reads it), newest id
+/// first, read from the world directly.
 pub async fn rows_in(b: &FixtureBackend, scope: &Scope) -> Vec<TransmissionSummary> {
     let state = b.state.read().await;
     let ctx = Ctx::new(&b.world, &state);
-    let filter = Filter::new(&ctx, scope).expect("scope");
+    let filter = ScopeFilter::new(&ctx, scope).expect("scope");
     let mut rows: Vec<TransmissionSummary> = b
         .world
         .transmissions

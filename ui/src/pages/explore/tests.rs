@@ -1,16 +1,20 @@
 //! The explore page against the fixture world: search, the fit flow, a
 //! stored projection and the lasso resolved server-side.
 
-use std::num::{NonZeroU16, NonZeroU32};
+use std::num::NonZeroU32;
 
 use crate::error::UiError;
+use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::projection::{
+    ProjectionLimit, ProjectionParams, ProjectionStatusKind,
+};
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
 use topcoat::router::StatusCode;
 
 use super::results::{Results, load};
 use super::*;
-use crate::contract::research::ProjectionParams;
+use crate::pages::common::topics::all_topics;
 use crate::pages::topology::tests::fixture_state;
 use crate::testing::{cx, get, post, render};
 
@@ -23,23 +27,37 @@ fn url(extra: &str) -> String {
 }
 
 fn params() -> ProjectionParams {
-    ProjectionParams::new(
-        NonZeroU16::new(15).expect("n"),
-        0.1,
-        42,
-        NonZeroU32::new(5000).expect("n"),
-    )
-    .expect("params")
+    ProjectionParams::new(ProjectionLimit::new(5000).expect("limit"), 15, 100, 42).expect("params")
 }
 
 /// A context whose backend holds a projection of the fixture view.
 async fn fitted() -> (Cx, ProjectionId) {
     let cx = cx();
+    let scope = fixture_state().scope;
     let id = backend(&cx)
-        .fit_projection(&everyone(), &fixture_state().scope, params())
+        .fit_projection(
+            &everyone(),
+            scope.window,
+            &scope.topology_filter(),
+            params(),
+        )
         .await
         .expect("fit");
     (cx, id)
+}
+
+/// The id of the fixture's seeded job in `status`.
+async fn seeded(status: ProjectionStatusKind) -> ProjectionId {
+    let cx = cx();
+    backend(&cx)
+        .projections(&everyone(), &crate::pages::common::paging::first(50u16))
+        .await
+        .expect("jobs")
+        .items()
+        .iter()
+        .find(|info| info.status().kind() == status)
+        .map(|info| info.id())
+        .expect("a seeded job")
 }
 
 #[tokio::test]
@@ -110,7 +128,7 @@ async fn fitting_redirects_to_the_projection() {
 
     let reply = post(&url(""), "action=fit&neighbors=0").await;
     assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(reply.body.contains("neighbors: expected 1 to 200"));
+    assert!(reply.body.contains("neighbors: expected 2 to 200"));
     let reply = post(&url(""), "action=refit").await;
     assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
 }
@@ -237,10 +255,11 @@ async fn results_validate_their_arguments_and_permissions() {
 #[tokio::test]
 async fn watch_links_preselect_the_topic_in_the_rule_form() {
     let cx = cx();
-    let topic = backend(&cx)
-        .topics(&everyone(), fixture_state().scope.topic_version)
+    let version = TopicVersionSelector::Pinned(fixture_state().scope.topic_version);
+    let topic = all_topics(backend(&cx), &everyone(), version)
         .await
         .expect("topics")
+        .1
         .into_iter()
         .next()
         .expect("a topic")
@@ -262,4 +281,76 @@ async fn watch_links_preselect_the_topic_in_the_rule_form() {
         !reply.body.contains("\" checked"),
         "unknown topics are ignored"
     );
+}
+
+#[tokio::test]
+async fn the_panel_follows_the_job_status() {
+    let id = |status| async move { seeded(status).await.to_ulid() };
+    let reply = get(&url(&format!(
+        "&p={}",
+        id(ProjectionStatusKind::Queued).await
+    )))
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(reply.body.contains("Queued for fitting since"));
+    assert!(!reply.body.contains("<ct-projection"));
+    let reply = get(&url(&format!(
+        "&p={}",
+        id(ProjectionStatusKind::Fitting).await
+    )))
+    .await;
+    assert!(reply.body.contains("Fitting since"));
+    let reply = get(&url(&format!(
+        "&p={}",
+        id(ProjectionStatusKind::Failed).await
+    )))
+    .await;
+    assert!(
+        reply
+            .body
+            .contains("Fitting failed: topic model version 0 was dropped"),
+        "{}",
+        reply.body
+    );
+    let reply = get(&url(&format!(
+        "&p={}",
+        id(ProjectionStatusKind::Expired).await
+    )))
+    .await;
+    assert!(reply.body.contains("fitted too long ago"));
+    assert!(
+        reply.body.contains("name=\"seed\" min=\"0\" value=\"42\""),
+        "the refit form keeps the seed"
+    );
+    assert!(
+        reply
+            .body
+            .contains("min_dist\" min=\"0\" max=\"1\" step=\"0.001\" value=\"0.100\"")
+    );
+}
+
+#[tokio::test]
+async fn a_projection_of_another_view_is_flagged_stale() {
+    let (cx, id) = fitted().await;
+    let mut other = fixture_state();
+    other.scope.filter.route_kinds = vec![crosstalk_spec::aggregates::edge::RouteKind::Channel];
+    let job = backend(&cx)
+        .projection_status(&everyone(), id)
+        .await
+        .expect("status");
+    assert!(matches!(
+        panel(Some(Ok(job.clone())), &fixture_state()),
+        ProjectionPanel::Ready { stale: false, .. }
+    ));
+    assert!(matches!(
+        panel(Some(Ok(job)), &other),
+        ProjectionPanel::Ready { stale: true, .. }
+    ));
+    assert_eq!(panel(None, &other), ProjectionPanel::NotFitted);
+}
+
+#[test]
+fn form_fields_round_trip_through_the_parser() {
+    let fields = form_fields(params());
+    assert_eq!(fit::parse(&fields), Ok(params()));
 }

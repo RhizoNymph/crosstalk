@@ -72,8 +72,9 @@ pub async fn load(
     }
     let id = ProjectionId::parse_ulid(projection).map_err(|e| invalid("p", e))?;
     let backend = backend(cx);
-    let points = backend.projection(caller, id).await?;
-    let version = TopicVersionSelector::Pinned(points.meta().scope.topic_version);
+    let projection = backend.projection(caller, id).await?;
+    let version = TopicVersionSelector::Pinned(projection.topic_version());
+    let of = usize::try_from(projection.frame().count()).unwrap_or(usize::MAX);
     match selection {
         ProjectionSelection::None => Ok(Results::Idle),
         ProjectionSelection::Point(tx) => {
@@ -93,12 +94,12 @@ pub async fn load(
             Ok(Results::Point(row.map(Box::new)))
         }
         ProjectionSelection::Lasso(polygon) => {
-            let ids = polygon.transmissions(&points);
+            let ids = polygon.transmissions(&projection);
             let selected = ids.len();
             if ids.is_empty() {
                 return Ok(Results::Lasso {
                     selected,
-                    of: points.len(),
+                    of,
                     rows: Vec::new(),
                     next: None,
                     paged: false,
@@ -111,7 +112,7 @@ pub async fn load(
             let listed = summaries_by_id(cx, caller, ids, version, &page).await?.page;
             Ok(Results::Lasso {
                 selected,
-                of: points.len(),
+                of,
                 rows: rows(cx, caller, listed.items(), &state).await,
                 next: listed.next().map(|c| c.token().to_owned()),
                 paged: cursor.is_some(),

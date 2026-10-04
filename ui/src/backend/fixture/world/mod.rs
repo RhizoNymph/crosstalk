@@ -13,6 +13,7 @@
 mod agents;
 mod alerts;
 pub mod blobs;
+pub mod catalog;
 mod channels;
 mod drafts;
 mod evidence;
@@ -26,6 +27,9 @@ mod traffic;
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::topic::{Assignment, EmbeddingModel, Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::topic_history::{
+    TopicLineage, TopicVersionHistory, TopicVersionInfo,
+};
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -34,7 +38,6 @@ use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TopicId, Tra
 use crate::contract::agents::ClaimSeen;
 use crate::contract::research::Operator;
 use crate::contract::rules::SinkInfo;
-use crate::contract::topics::{TopicVersionInfo, TopicVersionRemap};
 
 use super::store::State;
 use super::text::Theme;
@@ -48,7 +51,8 @@ pub use states::co_accesses;
 pub use states::confirmed;
 
 #[cfg(test)]
-pub use history::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
+pub use history::OPERATOR_ONCALL;
+pub use history::OPERATOR_RESEARCHER;
 
 /// A generation step failed a checked constructor. Always a fixture bug.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -93,8 +97,8 @@ pub struct TxRecord {
     pub texts: Vec<MatchText>,
     /// The accesses named by its co-access records.
     pub accesses: Vec<AccessId>,
-    /// Topic assignment per retained version, indexed by version number.
-    /// Empty until confirmed (nothing to embed).
+    /// Topic assignment per version, indexed by version number; a dropped
+    /// version's are never read. Empty until confirmed (nothing to embed).
     pub assignments: Vec<Assignment>,
     /// Each indexed text (origin then read, per match), lowercased, for
     /// search.
@@ -139,28 +143,40 @@ impl TxRecord {
     }
 }
 
-/// The topic model's retained versions.
+/// The topic model and its catalog.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopicModel {
     pub model: EmbeddingModel,
-    /// Oldest first; `versions[i].version == TopicModelVersion(i)`.
-    pub versions: Vec<TopicVersionInfo>,
+    /// Every version, oldest first, numbered from 0 without gaps, with its
+    /// status and retention.
+    pub history: TopicVersionHistory,
+    /// Every version's topics, dropped versions' included.
     pub topics: Vec<Topic>,
-    /// The remap from each version to the next, oldest first.
-    pub remaps: Vec<TopicVersionRemap>,
+    /// The lineage from each version to the next, oldest first.
+    pub lineages: Vec<TopicLineage>,
     /// Per version, the topic each theme is assigned to (`None`: outlier).
     pub theme_topics: Vec<Vec<Option<TopicId>>>,
 }
 
 impl TopicModel {
-    pub fn latest(&self) -> TopicModelVersion {
-        self.versions
-            .last()
-            .map_or(TopicModelVersion(0), |v| v.version)
+    /// The version graphs and series read, and views default to.
+    pub fn active(&self) -> TopicModelVersion {
+        self.history.active().version()
     }
 
+    pub fn info(&self, version: TopicModelVersion) -> Option<&TopicVersionInfo> {
+        self.history.get(version)
+    }
+
+    /// Whether `version` is known and its data not dropped.
     pub fn retains(&self, version: TopicModelVersion) -> bool {
-        self.versions.iter().any(|v| v.version == version)
+        self.info(version)
+            .is_some_and(|info| info.retention().is_retained())
+    }
+
+    /// The lineage from `from` to its successor.
+    pub fn lineage(&self, from: TopicModelVersion) -> Option<&TopicLineage> {
+        self.lineages.iter().find(|lineage| lineage.from() == from)
     }
 
     pub fn topics_of(&self, version: TopicModelVersion) -> impl Iterator<Item = &Topic> {
@@ -244,51 +260,6 @@ impl World {
             .get(&id)
             .and_then(|i| self.transmissions.get(*i))
     }
-}
-
-/// A world with nothing in it but the unfitted topic version: what the
-/// backend serves if generation fails.
-pub fn empty(seed: u64) -> (World, State) {
-    let model = EmbeddingModel {
-        name: "fixture-empty".to_owned(),
-        dimension: std::num::NonZeroU16::MIN,
-    };
-    let world = World {
-        seed,
-        operators: history::operators(),
-        resources: Vec::new(),
-        resource_index: HashMap::new(),
-        resource_channel: HashMap::new(),
-        accesses: Vec::new(),
-        access_index: HashMap::new(),
-        access_transmissions: HashMap::new(),
-        transmissions: Vec::new(),
-        tx_index: HashMap::new(),
-        blobs: Blobs::default(),
-        claims: HashMap::new(),
-        last_activity: HashMap::new(),
-        topics: TopicModel {
-            versions: vec![TopicVersionInfo {
-                version: TopicModelVersion(0),
-                fitted_at: history::CONFIG_AT,
-                embedding_model: model.clone(),
-                topics: 0,
-                pinned: false,
-            }],
-            model,
-            topics: Vec::new(),
-            remaps: Vec::new(),
-            theme_topics: vec![vec![None; Theme::ALL.len()]],
-        },
-        sinks: Vec::new(),
-        scenario: Scenario {
-            cast: Cast::default(),
-            channels: HashMap::new(),
-            dropped: Vec::new(),
-        },
-    };
-    let state = State::new(Vec::new(), Vec::new(), super::clock::Mint::new(seed));
-    (world, state)
 }
 
 /// Builds the world and the initial mutable state for `seed`.

@@ -15,9 +15,11 @@ use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo, ProjectionParams};
 use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
-use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -27,7 +29,7 @@ use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::SearchRequest;
+use crosstalk_spec::interfaces::l8_surface::lists::{SearchRequest, TopicPage};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
@@ -39,17 +41,13 @@ use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
-use crate::contract::research::{
-    AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
-};
+use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
-use crate::url::scope::Scope;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, SearchList, TransmissionList,
+    PageRequest, ProjectionList, SearchList, TopicList, TransmissionList,
 };
 
 pub type Result<T> = std::result::Result<T, QueryError>;
@@ -57,15 +55,6 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 /// Every read and action the UI performs. Methods return `Send` futures so
 /// pages can call them from Topcoat's multi-threaded runtime.
 pub trait Backend: Send + Sync + 'static {
-    // The present (item 27). Both need `View`.
-
-    /// The newest fitted topic-model version, which views default to. The
-    /// version number is not content, so this needs only `View`.
-    fn current_topic_version(
-        &self,
-        caller: &Caller,
-    ) -> impl Future<Output = Result<TopicModelVersion>> + Send;
-
     // Topology, series and the overview: exactly `QueryApi`'s methods.
 
     /// View. L7's exposed watermark. Pages show the watermark each
@@ -190,51 +179,82 @@ pub trait Backend: Send + Sync + 'static {
         page: &PageRequest<SearchList>,
     ) -> impl Future<Output = Result<SearchResults>> + Send;
 
-    // Content (items 7, 9). All need `Content`.
+    // Topics and projections: exactly `QueryApi`'s methods.
 
+    /// View. Every version the topic model has had, oldest first, with its
+    /// status and retention. Views default to its active version.
     fn topic_versions(
         &self,
         caller: &Caller,
-    ) -> impl Future<Output = Result<Vec<TopicVersionInfo>>> + Send;
+    ) -> impl Future<Output = Result<TopicVersionHistory>> + Send;
 
-    fn topics(
+    /// View. Each topic of `version` (`None`: the active one) and its
+    /// outliers with the transmissions assigned to them, confirmed in
+    /// `window` (all time when `None`). Unknown is `NotFound`, fitting
+    /// `Conflict(TopicVersionFitting)`; a dropped version answers only
+    /// without a window (its frozen all-time sizes), otherwise
+    /// `VersionNotRetained`.
+    fn topic_sizes(
         &self,
         caller: &Caller,
-        version: TopicModelVersion,
-    ) -> impl Future<Output = Result<Vec<Topic>>> + Send;
+        version: Option<TopicModelVersion>,
+        window: Option<TimeWindow>,
+    ) -> impl Future<Output = Result<Watermarked<TopicSizes>>> + Send;
 
-    fn topic_stats(
-        &self,
-        caller: &Caller,
-        scope: &Scope,
-        buckets: std::num::NonZeroU32,
-    ) -> impl Future<Output = Result<Vec<TopicStats>>> + Send;
-
-    /// The remap from `from` to the next version, if there is one.
-    fn topic_remap(
+    /// View. How the topics of `from` carry over to its successor; `None`
+    /// while it has none. Unknown is `NotFound`.
+    fn topic_lineage(
         &self,
         caller: &Caller,
         from: TopicModelVersion,
-    ) -> impl Future<Output = Result<Option<TopicVersionRemap>>> + Send;
+    ) -> impl Future<Output = Result<Option<TopicLineage>>> + Send;
 
+    /// Content. A page of a version's topics, newest id first, and that
+    /// version. Any version whose fit has returned, dropped ones included.
+    fn topics(
+        &self,
+        caller: &Caller,
+        version: TopicVersionSelector,
+        page: &PageRequest<TopicList>,
+    ) -> impl Future<Output = Result<TopicPage>> + Send;
+
+    /// Content. Records a projection job for the window and filter (its
+    /// version resolved and pinned) and returns its id at once.
     fn fit_projection(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
+        filter: &TopologyFilter,
         params: ProjectionParams,
     ) -> impl Future<Output = Result<ProjectionId>> + Send;
 
-    fn projection_job(
+    /// Content. A job's spec, requester and status. Unknown is `NotFound`.
+    fn projection_status(
         &self,
         caller: &Caller,
         id: ProjectionId,
-    ) -> impl Future<Output = Result<ProjectionJob>> + Send;
+    ) -> impl Future<Output = Result<ProjectionInfo>> + Send;
 
+    /// Content. Every job, newest first. No page lists jobs yet, so only
+    /// the tests call this.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "QueryApi's method; no page lists jobs yet")
+    )]
+    fn projections(
+        &self,
+        caller: &Caller,
+        page: &PageRequest<ProjectionList>,
+    ) -> impl Future<Output = Result<Page<ProjectionInfo, ProjectionList>>> + Send;
+
+    /// Content. A ready projection: its job record and stored frame.
+    /// Queued or fitting is `Conflict(ProjectionNotReady)`, failed
+    /// `Conflict(ProjectionFailed)`, expired `ProjectionNotRetained`.
     fn projection(
         &self,
         caller: &Caller,
         id: ProjectionId,
-    ) -> impl Future<Output = Result<ProjectionPoints>> + Send;
+    ) -> impl Future<Output = Result<Projection>> + Send;
 
     // Channels and agents (items 1, 5).
 

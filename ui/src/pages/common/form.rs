@@ -18,7 +18,7 @@ pub const NOTE_MAX_CHARS: usize = 2000;
 pub struct FormFields(Vec<(String, String)>);
 
 impl FormFields {
-    #[cfg(test)]
+    /// Fields as a form would submit them, for prefilling a form.
     pub fn from_pairs(pairs: &[(&str, &str)]) -> Self {
         Self(
             pairs

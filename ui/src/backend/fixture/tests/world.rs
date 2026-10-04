@@ -77,7 +77,13 @@ async fn now_and_versions() {
     let b = shared();
     let c = super::researcher();
     assert_eq!(b.now(&c).await, Ok(NOW));
-    assert_eq!(b.current_topic_version(&c).await, Ok(TopicModelVersion(2)));
+    let active = |history: crosstalk_spec::aggregates::topic_history::TopicVersionHistory| {
+        history.active().version()
+    };
+    assert_eq!(
+        b.topic_versions(&c).await.map(active),
+        Ok(TopicModelVersion(2))
+    );
     assert_eq!(b.seed(), SEED);
     let nobody = super::caller(&[Permission::Audit]);
     assert_eq!(
@@ -88,9 +94,9 @@ async fn now_and_versions() {
     );
     let viewer = super::caller(&[Permission::View]);
     assert_eq!(
-        b.current_topic_version(&viewer).await,
+        b.topic_versions(&viewer).await.map(active),
         Ok(TopicModelVersion(2)),
-        "the version number is not content"
+        "the topic history is not content"
     );
 }
 

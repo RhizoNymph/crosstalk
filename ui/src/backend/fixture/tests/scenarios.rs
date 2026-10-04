@@ -238,21 +238,48 @@ fn channels_cover_every_origin_detection_and_policy() {
 
 #[test]
 fn topic_versions_and_remaps() {
+    use crosstalk_spec::aggregates::topic_history::TopicVersionStatusKind;
+    use crosstalk_spec::support::Similarity;
+
     let w = &shared().world;
-    let versions: Vec<u32> = w.topics.versions.iter().map(|v| v.version.0).collect();
+    let history = &w.topics.history;
+    let versions: Vec<u32> = history.versions().iter().map(|v| v.version().0).collect();
     assert_eq!(versions, vec![0, 1, 2]);
+    assert_eq!(history.active().version(), TopicModelVersion(2));
+    let v0 = history.get(TopicModelVersion(0)).expect("v0");
+    assert_eq!(v0.status().kind(), TopicVersionStatusKind::Superseded);
+    assert!(!v0.retention().is_retained(), "retention dropped v0");
+    let v1 = history.get(TopicModelVersion(1)).expect("v1");
+    assert!(v1.retention().pin().is_some(), "v1 is pinned");
     assert_eq!(w.topics.topics_of(TopicModelVersion(0)).count(), 0);
     assert_eq!(w.topics.topics_of(TopicModelVersion(1)).count(), 6);
     assert_eq!(w.topics.topics_of(TopicModelVersion(2)).count(), 10);
-    let remap = w
-        .topics
-        .remaps
+    for topic in &w.topics.topics {
+        let info = history.get(topic.version).expect("version");
+        assert_eq!(Some(topic.fitted_at), info.fitted_at());
+    }
+    let lineage = w.topics.lineage(TopicModelVersion(1)).expect("v1 lineage");
+    assert_eq!(lineage.to(), TopicModelVersion(2));
+    assert_eq!(lineage.entries().len(), 6);
+    let threshold = Similarity::new(super::super::world::topics::REMAP_THRESHOLD).expect("t");
+    let unmapped: Vec<_> = lineage
+        .entries()
         .iter()
-        .find(|r| r.from == TopicModelVersion(1))
-        .expect("v1 remap");
-    let unmapped: Vec<_> = remap.remaps.iter().filter(|r| r.to.is_none()).collect();
+        .filter(|e| e.best().is_none_or(|best| best.similarity < threshold))
+        .collect();
     assert_eq!(unmapped.len(), 1, "exactly one v1 topic has no v2 match");
-    assert_eq!(remap.remaps.len(), 6);
+    let chatter = w
+        .topics
+        .topics_of(TopicModelVersion(1))
+        .find(|t| t.label == "Engineering chatter")
+        .expect("chatter");
+    assert_eq!(unmapped[0].topic(), chatter.id);
+    assert!(
+        !unmapped[0].others().is_empty(),
+        "its near misses are listed above the floor"
+    );
+    let v0 = w.topics.lineage(TopicModelVersion(0)).expect("v0 lineage");
+    assert!(v0.entries().is_empty(), "v0 had no topics to carry over");
     for topic in &w.topics.topics {
         assert!(!topic.terms.is_empty());
         assert_eq!(topic.centroid.model(), &w.topics.model);

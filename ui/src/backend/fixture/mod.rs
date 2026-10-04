@@ -23,16 +23,17 @@ mod world;
 mod tests;
 
 use std::collections::HashMap;
-use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::access::BipartiteGraph;
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo, ProjectionParams};
 use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
-use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -42,7 +43,7 @@ use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::lists::SearchRequest;
+use crosstalk_spec::interfaces::l8_surface::lists::{SearchRequest, TopicPage};
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission};
@@ -57,18 +58,13 @@ use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
 use crate::contract::present::Present;
-use crate::contract::research::{
-    AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
-};
+use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
-use crate::url::scope::Scope;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest, SearchList, TransmissionList,
+    PageRequest, ProjectionList, SearchList, TopicList, TransmissionList,
 };
 
 use queries::{Ctx, require};
@@ -86,21 +82,12 @@ pub struct FixtureBackend {
 }
 
 impl FixtureBackend {
-    /// Generates the world for `seed`. Generation only fails on a fixture
-    /// bug; then the error is logged and the backend serves an empty world.
-    pub fn new(seed: u64) -> Self {
-        Self::try_new(seed).unwrap_or_else(|error| {
-            tracing::error!(seed, %error, "fixture generation failed; serving an empty world");
-            let (world, state) = world::empty(seed);
-            Self {
-                world,
-                state: RwLock::new(state),
-            }
-        })
-    }
-
+    /// Generates the world for `seed`, with its seeded projection jobs.
+    /// Generation only fails on a fixture bug.
     pub fn try_new(seed: u64) -> std::result::Result<Self, GenError> {
-        let (world, state) = world::generate(seed)?;
+        let (world, mut state) = world::generate(seed)?;
+        queries::projection::seed::seed(&world, &mut state, world::OPERATOR_RESEARCHER)
+            .map_err(|e| GenError::invalid("projection seed", e))?;
         Ok(Self {
             world,
             state: RwLock::new(state),
@@ -155,11 +142,6 @@ impl Present for FixtureBackend {
 }
 
 impl Backend for FixtureBackend {
-    async fn current_topic_version(&self, caller: &Caller) -> Result<TopicModelVersion> {
-        require(caller, Permission::View)?;
-        Ok(self.world.topics.latest())
-    }
-
     async fn watermark(&self, caller: &Caller) -> Result<Watermark> {
         require(caller, Permission::View)?;
         Ok(queries::graph::watermark())
@@ -282,76 +264,78 @@ impl Backend for FixtureBackend {
             .await
     }
 
-    async fn topic_versions(&self, caller: &Caller) -> Result<Vec<TopicVersionInfo>> {
-        require(caller, Permission::Content)?;
-        Ok(self.world.topics.versions.clone())
+    async fn topic_versions(&self, caller: &Caller) -> Result<TopicVersionHistory> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::topics::versions(ctx))).await
     }
 
-    async fn topics(&self, caller: &Caller, version: TopicModelVersion) -> Result<Vec<Topic>> {
-        require(caller, Permission::Content)?;
-        self.read(|ctx| queries::content::topics(ctx, version))
-            .await
-    }
-
-    async fn topic_stats(
+    async fn topic_sizes(
         &self,
         caller: &Caller,
-        scope: &Scope,
-        buckets: NonZeroU32,
-    ) -> Result<Vec<TopicStats>> {
-        require(caller, Permission::Content)?;
-        self.read(|ctx| queries::content::stats(ctx, scope, buckets))
+        version: Option<TopicModelVersion>,
+        window: Option<TimeWindow>,
+    ) -> Result<Watermarked<TopicSizes>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::topics::sizes(ctx, version, window))
             .await
     }
 
-    async fn topic_remap(
+    async fn topic_lineage(
         &self,
         caller: &Caller,
         from: TopicModelVersion,
-    ) -> Result<Option<TopicVersionRemap>> {
+    ) -> Result<Option<TopicLineage>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::topics::lineage(ctx, from)).await
+    }
+
+    async fn topics(
+        &self,
+        caller: &Caller,
+        version: TopicVersionSelector,
+        page: &PageRequest<TopicList>,
+    ) -> Result<TopicPage> {
         require(caller, Permission::Content)?;
-        self.read(|ctx| queries::content::remap(ctx, from)).await
+        self.read(|ctx| queries::topics::topics(ctx, version, page))
+            .await
     }
 
     async fn fit_projection(
         &self,
         caller: &Caller,
-        scope: &Scope,
+        window: TimeWindow,
+        filter: &TopologyFilter,
         params: ProjectionParams,
     ) -> Result<ProjectionId> {
         require(caller, Permission::Content)?;
-        queries::linked::resolve_version(&self.world, &scope.topology_filter())?;
         let mut state = self.state.write().await;
-        let same = |p: &ProjectionPoints| p.meta().scope == *scope && p.meta().params == params;
-        if let Some((id, _)) = state.projections.iter().find(|(_, p)| same(p)) {
-            return Ok(*id);
-        }
-        let id = ProjectionId::from_ulid(state.mint.ulid(clock::NOW));
-        let points = queries::content::project(&Ctx::new(&self.world, &state), scope, params, id)?;
-        state.projections.push((id, points));
-        Ok(id)
+        queries::projection::fit(
+            &self.world,
+            &mut state,
+            caller.operator(),
+            window,
+            filter,
+            params,
+        )
     }
 
-    async fn projection_job(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionJob> {
+    async fn projection_status(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionInfo> {
         require(caller, Permission::Content)?;
-        let state = self.state.read().await;
-        state
-            .projections
-            .iter()
-            .find(|(p, _)| *p == id)
-            .map(|(_, points)| ProjectionJob::Ready(points.meta().clone()))
-            .ok_or(QueryError::NotFound)
+        queries::projection::status(&*self.state.read().await, id)
     }
 
-    async fn projection(&self, caller: &Caller, id: ProjectionId) -> Result<ProjectionPoints> {
+    async fn projections(
+        &self,
+        caller: &Caller,
+        page: &PageRequest<ProjectionList>,
+    ) -> Result<Page<ProjectionInfo, ProjectionList>> {
         require(caller, Permission::Content)?;
-        let state = self.state.read().await;
-        state
-            .projections
-            .iter()
-            .find(|(p, _)| *p == id)
-            .map(|(_, points)| points.clone())
-            .ok_or(QueryError::NotFound)
+        queries::projection::list(&*self.state.read().await, page)
+    }
+
+    async fn projection(&self, caller: &Caller, id: ProjectionId) -> Result<Projection> {
+        require(caller, Permission::Content)?;
+        queries::projection::read(&*self.state.read().await, id)
     }
 
     async fn channels(

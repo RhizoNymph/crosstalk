@@ -10,8 +10,8 @@
 
 use crosstalk_spec::ids::TransmissionId;
 
-use crate::contract::research::ProjectionPoints;
 use crate::url::ulid::{InvalidUlid, UlidId};
+use crosstalk_spec::aggregates::projection::Projection;
 
 pub const MIN_VERTICES: usize = 3;
 pub const MAX_VERTICES: usize = 48;
@@ -123,11 +123,14 @@ impl Polygon {
             .collect()
     }
 
-    /// The transmissions of a stored projection inside the polygon.
-    pub fn transmissions(&self, points: &ProjectionPoints) -> Vec<TransmissionId> {
-        self.select(points.xs(), points.ys())
+    /// The transmissions of a stored projection inside the polygon, in
+    /// sample order.
+    pub fn transmissions(&self, projection: &Projection) -> Vec<TransmissionId> {
+        let columns = projection.frame().columns();
+        let (xs, ys): (Vec<f32>, Vec<f32>) = columns.xy.iter().map(|[x, y]| (*x, *y)).unzip();
+        self.select(&xs, &ys)
             .into_iter()
-            .filter_map(|i| points.transmissions().get(i).copied())
+            .filter_map(|i| columns.transmissions.get(i).copied())
             .collect()
     }
 }

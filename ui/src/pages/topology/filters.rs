@@ -22,12 +22,13 @@ use crate::components::href::state_pairs;
 use crate::components::{agent_node_name, href, route_kind_name, short_id};
 use crate::contract::channels::ChannelListFilter;
 use crate::pages::common::lookup::agent_names;
+use crate::pages::common::topics::all_topics;
 use crate::pages::common::transmissions::summary_name;
 use crate::url::route::encode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 
 pub const ROUTE_KINDS: [RouteKind; 4] = [
     RouteKind::Channel,
@@ -144,8 +145,9 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
     channels.sort_by(|a, b| a.1.cmp(&b.1));
 
     let topics = if can(caller, Permission::Content) {
-        match backend.topics(caller, state.scope.topic_version).await {
-            Ok(topics) => Some(topics.into_iter().map(|t| (t.id, t.label)).collect()),
+        let version = TopicVersionSelector::Pinned(state.scope.topic_version);
+        match all_topics(backend, caller, version).await {
+            Ok((_, topics)) => Some(topics.into_iter().map(|t| (t.id, t.label)).collect()),
             Err(error) => {
                 tracing::warn!(error = ?error, "filter topic choices unavailable");
                 Some(Vec::new())

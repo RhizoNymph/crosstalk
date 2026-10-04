@@ -4,7 +4,6 @@
 //! resolution and of the verdicts in force, so each record is resolved the
 //! same way within one response.
 
-pub mod content;
 pub mod evidence;
 pub mod graph;
 pub mod linked;
@@ -12,11 +11,12 @@ pub mod lists;
 pub mod names;
 pub mod nodes;
 pub mod page;
+pub mod projection;
 pub mod promotion;
-pub mod scope;
 pub mod search;
 pub mod series;
 pub mod summaries;
+pub mod topics;
 pub mod transmissions;
 
 use std::collections::{BTreeMap, HashMap};
