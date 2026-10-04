@@ -13,7 +13,7 @@ encoder and decoder, the status mapping, authentication, SSE framing,
 frame caching and export headers are Rust in
 `spec/types/interfaces/l8_surface/http/`. The server (`crosstalk-api`,
 roadmap P7.1) and the client (`crosstalk-client`, P7.2) are both built and
-tested against them.
+tested against them. The client is described in [http_client.md](http_client.md).
 
 ## Scope
 

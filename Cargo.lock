@@ -241,7 +241,17 @@ dependencies = [
 name = "crosstalk-client"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "bytes",
  "crosstalk-spec",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -780,6 +790,7 @@ dependencies = [
  "http",
  "http-body",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

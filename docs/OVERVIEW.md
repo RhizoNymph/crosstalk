@@ -459,6 +459,29 @@ Features Index:
       - spec/types/interfaces/l8_surface/http/auth.rs
     depends_on: [query_surface, read_models, export, wire_contract]
     doc: docs/features/http_api.md
+  http_client:
+    description: >
+      crosstalk-client (P7.2): HttpClient implements QueryApi,
+      OperatorActions and LiveFeed over the HTTP binding, so the UI's
+      server can use it in place of the in-process surface. Every call is
+      encoded with the binding's RequestBuilder for its Route (query
+      parameters form-encoded compact JSON, bodies the wire goldens) and
+      carries one Authorization: Bearer token; an error response is
+      decoded as the route's error and accepted only at the status the
+      binding gives it (401 is AuthError); the live feed is parsed as SSE,
+      checked frame by frame and reconnected with Last-Event-ID from the
+      last cursor delivered; a JSONL export is checked row by row with the
+      binding's ExportSealer and ends Complete only when the surface's
+      trailer verifies (download_export passes either format on as bytes);
+      a projection frame is checked against its BLAKE3 ETag and revalidated
+      with If-None-Match. Tested against a stub server speaking the binding.
+    entry_points:
+      - crates/client/src/client.rs
+      - crates/client/src/query.rs
+      - crates/client/src/live/mod.rs
+      - crates/client/src/export/mod.rs
+    depends_on: [http_api, wire_contract, export]
+    doc: docs/features/http_client.md
   store:
     description: >
       crosstalk-store, the Postgres infrastructure layer crates build on

@@ -1,0 +1,30 @@
+[invariant]
+id = "surface.http.client-sends-the-route"
+statement = "Every QueryApi and OperatorActions call of the HTTP client (crosstalk_client::HttpClient) sends the request RequestBuilder encodes for the call's Route, under the base URL's prefix: it resolves back to that Route with exactly the table's path parameters, query parameters (each the argument's compact JSON, form-encoded, an Option's None left out) and JSON body, and its POST read bodies, export requests and action requests are their wire goldens."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The client is the UI's backend: a page that works in-process must work
+over HTTP with no change, so every call has to reach the method the
+route table names with the arguments it was given. Encoding through the
+binding's own RequestBuilder per route keeps the client table-driven, and
+the tests check what actually crossed the wire, after form encoding and
+decoding, against resolve, QueryParams and check_body, the server's half
+of the binding. An action travels as its ActionRequest, so nothing the
+surface stamps (a merge's author) is ever sent.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_client::tests::query::every_query_method_sends_its_route",
+    "crosstalk_client::tests::query::every_query_route_is_sent_by_one_method",
+    "crosstalk_client::tests::query::read_bodies_are_the_goldens",
+    "crosstalk_client::tests::query::export_request_bodies_are_the_goldens",
+    "crosstalk_client::tests::query::query_parameters_are_form_encoded_compact_json",
+    "crosstalk_client::tests::query::list_filters_travel_as_their_goldens",
+    "crosstalk_client::tests::actions::every_action_sends_its_request_golden",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
