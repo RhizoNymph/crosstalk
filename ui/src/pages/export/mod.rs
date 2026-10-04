@@ -1,29 +1,37 @@
 //! `/export`: choose a dataset, topic version, format and whether to
-//! include content, over the view's window and filter; and the detection
-//! quality summary for the window.
+//! include content, over the view's window and filter, and download it;
+//! and the detection quality summary for the window.
 //!
-//! The backend has no export call yet (contract item 11). A valid
-//! submission is answered with 501 and the exact `ExportRequest` that would
-//! be sent, so the form, its validation and its permissions are in place
-//! for when it does.
+//! `POST /export` validates the form into the spec's `ExportRequest`
+//! ([`request::parse`]), calls `QueryApi::export` and answers with the
+//! JSON Lines download ([`jsonl`]). A refused post (invalid input, a
+//! missing permission, a conflict) is rewritten to `GET /export` carrying
+//! the error and the submitted fields ([`Rejected`]), so the page renders
+//! the error with the input kept, under the status the error gives.
 
+pub mod jsonl;
 pub mod quality;
 pub mod request;
 
 use crosstalk_spec::interfaces::l8_surface::Permission;
+use crosstalk_spec::interfaces::l8_surface::export::ExportFormat;
 use topcoat::Result;
-use topcoat::context::Cx;
+use topcoat::context::{Cx, try_request_context};
 use topcoat::router::content::Form;
-use topcoat::router::{StatusCode, page};
+use topcoat::router::error::rewrite;
+use topcoat::router::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use topcoat::router::request::{headers, uri};
+use topcoat::router::{Body, Method, StatusCode, page, route};
 use topcoat::view::{View, component, view};
 
+use self::jsonl::{Download, download};
 use self::quality::{quality_lines, quality_section};
-use self::request::{DatasetChoice, FORMATS, describe, format_code, format_label, parse};
+use self::request::{DatasetChoice, FORMATS, format_code, format_label, parse};
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{error_panel, format_time, href, page_header};
-use crate::contract::research::ExportRequest;
+use crate::contract::formats::ExportFormats;
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::FormFields;
@@ -32,34 +40,62 @@ use crate::url::view_state::ViewState;
 
 pub const PATH: &str = "/export";
 
-/// What a post produced.
+/// A refused export post, carried to the page that shows it.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Submitted {
-    /// Valid, but the backend cannot export yet.
-    Unavailable(ExportRequest),
-    Invalid(UiError, FormFields),
+pub struct Rejected {
+    pub error: UiError,
+    pub fields: FormFields,
 }
 
 #[page("/export")]
 async fn export_get(cx: &Cx) -> Result<impl View> {
     let state = view_state(cx).await?;
-    Ok(view! { export_page(state: state, submitted: None) })
+    let rejected = try_request_context::<Rejected>(cx).cloned();
+    Ok(view! { export_page(state: state, rejected: rejected) })
 }
 
-#[page(POST "/export")]
-async fn export_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
+/// Validates, exports and downloads; a refusal is shown on the page.
+#[route(POST "/export")]
+async fn export_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<Download> {
     let state = view_state(cx).await?;
     let caller = caller(cx);
-    let submitted =
-        match require(&caller, Permission::View).and_then(|()| parse(&fields, &state, &caller)) {
-            Ok(request) => Submitted::Unavailable(request),
-            Err(error) => Submitted::Invalid(error, fields),
-        };
-    Ok(view! { export_page(state: state, submitted: Some(submitted)) })
+    let backend = backend(cx);
+    let exported = async {
+        require(&caller, Permission::View)?;
+        let request = parse(&fields, &state, &caller, backend.export_formats())?;
+        let export = backend.export(&caller, &request).await?;
+        download(export).await
+    }
+    .await;
+    match exported {
+        Ok(download) => {
+            tracing::info!(operator = ?caller.operator(), file = download.filename(), "export downloaded");
+            Ok(download)
+        }
+        Err(error) => {
+            tracing::info!(operator = ?caller.operator(), error = ?error, "export refused");
+            Err(show(cx, Rejected { error, fields }))
+        }
+    }
+}
+
+/// Rewrites the post to the page at the same URL, carrying the refusal.
+fn show(cx: &Cx, rejected: Rejected) -> topcoat::Error {
+    let target = uri(cx)
+        .path_and_query()
+        .map_or_else(|| PATH.to_owned(), |pq| pq.as_str().to_owned());
+    let mut kept = headers(cx).clone();
+    kept.remove(CONTENT_TYPE);
+    kept.remove(CONTENT_LENGTH);
+    rewrite(target, Body::empty())
+        .method(Method::GET)
+        .headers(kept)
+        .with(rejected)
+        .into()
 }
 
 #[component]
-async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) -> Result<impl View> {
+async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> Result<impl View> {
     let caller = caller(cx);
     let allowed = require(&caller, Permission::View);
     let content = can(&caller, Permission::Content);
@@ -87,14 +123,10 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
             vec![state.scope.topic_version.0]
         }
     };
-    let (status, outcome, retained) = match submitted {
+    let writes = backend.export_formats();
+    let (status, refusal, retained): (Option<StatusCode>, _, _) = match rejected {
         None => (None, None, None),
-        Some(Submitted::Unavailable(request)) => {
-            (Some(StatusCode::NOT_IMPLEMENTED), Some(Ok(request)), None)
-        }
-        Some(Submitted::Invalid(error, fields)) => {
-            (Some(status_of(&error)), Some(Err(error)), Some(fields))
-        }
+        Some(Rejected { error, fields }) => (Some(status_of(&error)), Some(error), Some(fields)),
     };
     let window = format!(
         "{} → {}",
@@ -112,40 +144,16 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
                 error_panel(error: &error)
             },
             Ok(()) => {
-                match outcome {
-                    Some(Ok(request)) => outcome_panel(request: request),
-                    Some(Err(error)) => <div class="mb-4">error_panel(error: &error)</div>,
-                    None => "",
+                if let Some(error) = refusal {
+                    <div class="mb-4">error_panel(error: &error)</div>
                 }
                 <section class=(SECTION)>
                     <h2 class=(SECTION_TITLE)>"Dataset"</h2>
-                    export_form(state: &state, window: window, versions: versions, content: content, retained: retained)
+                    export_form(state: &state, window: window, versions: versions, content: content, writes: writes, retained: retained)
                 </section>
                 quality_section(lines: quality)
             },
         }
-    })
-}
-
-#[component]
-async fn outcome_panel(request: ExportRequest) -> Result<impl View> {
-    let lines = describe(&request);
-    let exact = format!("{request:#?}");
-    Ok(view! {
-        <div class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100" role="status">
-            <p class="font-medium">"Export is not available from this backend yet."</p>
-            <p class="mb-2 text-xs">"This request is valid; it is what would be sent once the gateway offers export:"</p>
-            <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
-                for (label, value) in lines {
-                    <dt class="opacity-70">(label)</dt>
-                    <dd class="font-mono">(value)</dd>
-                }
-            </dl>
-            <details class="mt-2 text-xs">
-                <summary class="cursor-pointer opacity-70">"As sent"</summary>
-                <pre class="mt-1 overflow-auto whitespace-pre font-mono text-[11px]">(exact)</pre>
-            </details>
-        </div>
     })
 }
 
@@ -155,6 +163,7 @@ async fn export_form(
     window: String,
     versions: Vec<u32>,
     content: bool,
+    writes: &'static [ExportFormat],
     retained: Option<FormFields>,
 ) -> Result<impl View> {
     let pick = |key: &str| {
@@ -182,9 +191,19 @@ async fn export_form(
             )
         })
         .collect();
-    let formats: Vec<(&str, &str, bool)> = FORMATS
+    // Formats the backend does not write are shown, disabled, so the
+    // choice is visible and never refused after the fact.
+    let formats: Vec<(&str, String, bool, bool)> = FORMATS
         .iter()
-        .map(|f| (format_code(*f), format_label(*f), format_code(*f) == format))
+        .map(|f| {
+            let available = writes.contains(f);
+            let label = if available {
+                format_label(*f).to_owned()
+            } else {
+                format!("{} (not available on this backend)", format_label(*f))
+            };
+            (format_code(*f), label, format_code(*f) == format, available)
+        })
         .collect();
     let action = href(PATH, state, &[]);
     let filter_note = if state.scope.filter == Default::default() {
@@ -223,8 +242,8 @@ async fn export_form(
                 <label class="block">
                     <span class=(LABEL)>"Format"</span>
                     <select name="format" class=(INPUT)>
-                        for (code, label, chosen) in formats {
-                            <option value=(code) selected=(chosen)>(label)</option>
+                        for (code, label, chosen, available) in formats {
+                            <option value=(code) selected=(chosen) disabled=(!available)>(label)</option>
                         }
                     </select>
                 </label>
@@ -234,6 +253,7 @@ async fn export_form(
                 </label>
                 <button type="submit" class=(BUTTON_PRIMARY)>"Export"</button>
             </div>
+            <p class="text-xs text-zinc-500">"Downloads one JSON object per line: a header (what was selected, the topic version and the watermark), one line per row, and a trailer with the row count and digest. Accesses and verdicts have no content columns; a projection needs the Content permission."</p>
             if !content {
                 <p class="text-xs text-zinc-500">"Content can be included only with the Content permission."</p>
             }
@@ -243,14 +263,35 @@ async fn export_form(
 
 #[cfg(test)]
 mod tests {
+    use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
+    use crosstalk_spec::paging::PageRequest;
+    use serde_json::Value;
     use topcoat::router::StatusCode;
 
     use super::*;
     use crate::pages::topology::tests::fixture_state;
-    use crate::testing::{get, post};
+    use crate::testing::{Session, get, post, world};
+    use crate::url::ulid::UlidId;
 
     fn url(extra: &str) -> String {
         format!("{PATH}?{}{extra}", fixture_state().to_query())
+    }
+
+    /// The whole generated week, under v2.
+    fn week_url() -> String {
+        let mut state = fixture_state();
+        state.scope.window = crosstalk_spec::support::TimeWindow::new(
+            crosstalk_spec::support::Timestamp::from_micros(1_790_380_800_000_000),
+            state.scope.window.end(),
+        )
+        .expect("week");
+        format!("{PATH}?{}", state.to_query())
+    }
+
+    fn lines(body: &str) -> Vec<Value> {
+        body.lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .collect()
     }
 
     #[tokio::test]
@@ -264,25 +305,56 @@ mod tests {
         assert!(reply.body.contains("Detection quality in this window"));
         assert!(reply.body.contains(">total</span>"));
         assert!(reply.body.contains("decoded"));
-    }
-
-    #[tokio::test]
-    async fn valid_posts_show_the_request_that_would_be_sent() {
-        let reply = post(
-            &url("&r=channel"),
-            "dataset=edges&version=1&format=parquet&content=1",
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED, "{}", reply.body);
         assert!(
             reply
                 .body
-                .contains("Export is not available from this backend yet.")
+                .contains("Parquet (not available on this backend)")
         );
-        assert!(reply.body.contains(">edges</dd>"));
-        assert!(reply.body.contains(">v1</dd>"));
-        assert!(reply.body.contains(">channel</dd>"));
-        assert!(reply.body.contains("ExportRequest"));
+    }
+
+    #[tokio::test]
+    async fn valid_posts_download_the_export_as_json_lines() {
+        let reply = post(
+            &url("&r=channel"),
+            "dataset=edges&version=2&format=jsonl&content=1",
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(
+            reply
+                .headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/x-ndjson")
+        );
+        let lines = lines(&reply.body);
+        let (Some(header), Some(trailer)) = (lines.first(), lines.last()) else {
+            panic!("header and trailer lines");
+        };
+        assert_eq!(header["type"], "header");
+        assert_eq!(header["dataset"], "edges");
+        assert_eq!(header["include_content"], true);
+        assert_eq!(header["selection"]["filter"]["route_kinds"][0], "channel");
+        assert_eq!(header["basis"]["topic_version"], 2);
+        let export = header["export"].as_str().expect("export id");
+        assert_eq!(
+            reply
+                .headers
+                .get("content-disposition")
+                .and_then(|v| v.to_str().ok()),
+            Some(format!("attachment; filename=\"crosstalk-edges-{export}.jsonl\"").as_str())
+        );
+        let rows = &lines[1..lines.len() - 1];
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row["type"] == "row"
+            && row["dataset"] == "edges"
+            && row["route_kind"] == "channel"));
+        assert_eq!(header["rows"].as_u64(), u64::try_from(rows.len()).ok());
+        assert_eq!(trailer["type"], "trailer");
+        assert_eq!(trailer["export"], export);
+        assert_eq!(trailer["rows"], header["rows"]);
+        assert_eq!(trailer["end"]["status"], "complete");
+        assert_eq!(trailer["digest"].as_str().map(str::len), Some(64));
     }
 
     #[tokio::test]
@@ -295,5 +367,75 @@ mod tests {
                 .contains("projection: a projection export needs its id")
         );
         assert!(reply.body.contains("<option value=\"parquet\" selected"));
+    }
+
+    #[tokio::test]
+    async fn refused_exports_show_the_error_with_the_input_kept() {
+        let parquet = post(&url(""), "dataset=verdicts&format=parquet").await;
+        assert_eq!(
+            parquet.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            parquet.body
+        );
+        assert!(parquet.body.contains("this backend cannot write Parquet"));
+
+        let content = post(&url(""), "dataset=accesses&format=jsonl&content=1").await;
+        assert_eq!(content.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            content
+                .body
+                .contains("accesses exports have no content columns")
+        );
+
+        let large = post(&week_url(), "dataset=accesses&format=jsonl").await;
+        assert_eq!(large.status, StatusCode::CONFLICT, "{}", large.body);
+        assert!(large.body.contains("<option value=\"accesses\" selected"));
+
+        let queued = world()
+            .projections(
+                &crate::testing::operator().caller(),
+                &PageRequest {
+                    size: crate::pages::common::paging::size(50),
+                    after: None,
+                },
+            )
+            .await
+            .expect("jobs")
+            .into_parts()
+            .0
+            .into_iter()
+            .find(|info| info.status().kind() == ProjectionStatusKind::Queued)
+            .expect("a queued job");
+        let form = format!("dataset=projection&projection={}", queued.id().to_ulid());
+        let not_ready = post(&url(""), &form).await;
+        assert_eq!(not_ready.status, StatusCode::CONFLICT, "{}", not_ready.body);
+        assert!(
+            not_ready.body.contains(&queued.id().to_ulid()),
+            "input kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn exports_appear_in_the_audit_log() {
+        let session = Session::new();
+        let reply = session
+            .post(&url(""), "dataset=verdicts&format=jsonl")
+            .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        let refused = session
+            .post(
+                &url(""),
+                "dataset=projection&projection=01J9ZQ3W8D0000000000000001",
+            )
+            .await;
+        assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.body);
+        let audit = session
+            .get(&format!("/audit?{}&span=all", fixture_state().to_query()))
+            .await;
+        assert_eq!(audit.status, StatusCode::OK, "{}", audit.body);
+        assert!(audit.body.contains("started exporting"), "{}", audit.body);
+        assert!(audit.body.contains("finished exporting"));
+        assert!(audit.body.contains("asked to export"));
     }
 }

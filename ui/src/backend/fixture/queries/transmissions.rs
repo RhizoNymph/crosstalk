@@ -26,7 +26,7 @@ const EDGE: &str = "edge";
 const BY_ID: &str = "byid";
 
 /// `record`'s topic under `version`, as a summary shows it.
-fn topic_under(record: &TxRecord, version: TopicModelVersion) -> TopicUnder {
+pub fn topic_under(record: &TxRecord, version: TopicModelVersion) -> TopicUnder {
     match record.assignment(version) {
         Some(Assignment::Topic { topic, .. }) => TopicUnder::Topic(topic),
         Some(Assignment::Outlier) => TopicUnder::Outlier,

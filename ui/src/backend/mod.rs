@@ -37,6 +37,7 @@ use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest, ExportStream};
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
@@ -424,6 +425,24 @@ pub trait Backend: Send + Sync + 'static {
         group: Option<&ConsumerGroup>,
         page: &PageRequest<DeadLetterList>,
     ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>>> + Send;
+
+    // Export: exactly `QueryApi::export` and its `ExportRows`.
+
+    /// The stream `export` returns.
+    type ExportRows: ExportStream + Send;
+
+    /// View, or Content when the request includes content or names a
+    /// projection. Reads the watermark, plans the export (version resolved
+    /// and pinned, window cut at the watermark, resolution and verdicts
+    /// captured, rows counted), refuses one over the row limit
+    /// (`Conflict(ExportTooLarge)`), audits `Started` and returns the
+    /// header and the rows, which end with the trailer. Every call is
+    /// audited.
+    fn export(
+        &self,
+        caller: &Caller,
+        request: &ExportRequest,
+    ) -> impl Future<Output = Result<Export<Self::ExportRows>>> + Send;
 
     // Actions: exactly `OperatorActions::act`.
 

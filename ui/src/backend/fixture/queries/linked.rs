@@ -163,6 +163,22 @@ impl<'a> Linked<'a> {
         })
     }
 
+    /// A view under a version the caller already resolved and checked (an
+    /// export resolves it once, when it is planned). `None` reads all time.
+    pub fn at(
+        ctx: &'a Ctx<'a>,
+        window: Option<TimeWindow>,
+        filter: &'a TopologyFilter,
+        version: TopicModelVersion,
+    ) -> Self {
+        Self {
+            ctx,
+            window,
+            filter,
+            version,
+        }
+    }
+
     /// Whether `at` is in the view's window.
     pub fn in_window(&self, at: Timestamp) -> bool {
         self.window.is_none_or(|window| window.contains(at))

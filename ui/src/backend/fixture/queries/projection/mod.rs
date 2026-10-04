@@ -148,7 +148,21 @@ pub fn list(
 }
 
 pub fn read(state: &State, id: ProjectionId) -> Result<Projection> {
-    let error = match job(state, id)? {
+    stored(state, id).map_err(QueryError::from)
+}
+
+/// A ready job's projection, or why there is none, as `ProjectionStore`
+/// reports it (an export maps it through `ExportPlanError::Projection`).
+pub fn stored(
+    state: &State,
+    id: ProjectionId,
+) -> std::result::Result<Projection, ProjectionStoreError> {
+    let job = state
+        .projections
+        .iter()
+        .find(|job| job.info().id() == id)
+        .ok_or(ProjectionStoreError::Unknown(id))?;
+    let error = match job {
         Job::Ready(projection) => return Ok(projection.as_ref().clone()),
         Job::Record(info) => match info.status() {
             ProjectionStatus::Queued | ProjectionStatus::Fitting { .. } => {
@@ -167,5 +181,5 @@ pub fn read(state: &State, id: ProjectionId) -> Result<Projection> {
             },
         },
     };
-    Err(error.into())
+    Err(error)
 }

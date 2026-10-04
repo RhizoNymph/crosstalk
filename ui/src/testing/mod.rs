@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock};
 use topcoat::context::{AppContext, Cx};
 use topcoat::router::request::Request;
-use topcoat::router::{Body, Router, RouterBuilderDiscoverExt, StatusCode, to_bytes};
+use topcoat::router::{Body, HeaderMap, Router, RouterBuilderDiscoverExt, StatusCode, to_bytes};
 
 use topcoat::asset::{
     AssetConfig, AssetId, MANIFEST_VERSION, Manifest, ManifestEntry, RawAsset,
@@ -29,6 +29,7 @@ pub const SEED: u64 = 7;
 pub struct Reply {
     pub status: StatusCode,
     pub location: Option<String>,
+    pub headers: HeaderMap,
     pub body: String,
 }
 
@@ -163,6 +164,7 @@ async fn send(request: Request) -> Reply {
 async fn send_to(router: &Router, request: Request) -> Reply {
     let response = router.handle(request).await;
     let status = response.status();
+    let headers = response.headers().clone();
     let location = response
         .headers()
         .get("location")
@@ -172,6 +174,7 @@ async fn send_to(router: &Router, request: Request) -> Reply {
     Reply {
         status,
         location,
+        headers,
         body: String::from_utf8_lossy(&bytes).into_owned(),
     }
 }

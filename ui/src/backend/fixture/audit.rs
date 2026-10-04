@@ -10,6 +10,7 @@ use crosstalk_spec::ids::{AuditId, ConfigHash};
 use crosstalk_spec::interfaces::l8_surface::audit::{
     AuditBody, AuditEntry, AuditError, ConfigChange, ConfigOutcome, ConfigRecord, OperatorRecord,
 };
+use crosstalk_spec::interfaces::l8_surface::export::ExportRecord;
 use crosstalk_spec::support::{Blake3, Timestamp};
 
 use super::clock::Mint;
@@ -63,6 +64,17 @@ impl AuditLog {
         record: OperatorRecord,
     ) -> Result<AuditId, AuditError> {
         self.record(mint, at, AuditBody::Operator(record))
+    }
+
+    /// One export event: its refusal, its start, its end or its
+    /// abandonment.
+    pub fn export(
+        &mut self,
+        mint: &mut Mint,
+        at: Timestamp,
+        record: ExportRecord,
+    ) -> Result<AuditId, AuditError> {
+        self.record(mint, at, AuditBody::Export(record))
     }
 
     /// Every change one config load made, each applied, in order.

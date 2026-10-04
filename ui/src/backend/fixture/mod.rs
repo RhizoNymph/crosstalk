@@ -14,6 +14,7 @@
 mod actions;
 mod audit;
 mod clock;
+pub mod export;
 mod identity;
 mod queries;
 mod rng;
@@ -25,6 +26,7 @@ mod world;
 mod tests;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crosstalk_spec::aggregates::agents::filter::AgentFilter;
@@ -53,6 +55,9 @@ use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
+use crosstalk_spec::interfaces::l8_surface::export::{
+    Export, ExportFormat, ExportLimits, ExportRequest,
+};
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
@@ -66,6 +71,7 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::RwLock;
 
 use super::{Backend, Result};
+use crate::contract::formats::ExportFormats;
 use crate::contract::present::Present;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
@@ -86,7 +92,10 @@ pub use world::GenError;
 #[derive(Debug)]
 pub struct FixtureBackend {
     world: World,
-    state: RwLock<State>,
+    /// Shared with the streams of started exports, which audit how they
+    /// end.
+    state: Arc<RwLock<State>>,
+    export_limits: ExportLimits,
 }
 
 impl FixtureBackend {
@@ -98,8 +107,16 @@ impl FixtureBackend {
             .map_err(|e| GenError::invalid("projection seed", e))?;
         Ok(Self {
             world,
-            state: RwLock::new(state),
+            state: Arc::new(RwLock::new(state)),
+            export_limits: export::limits(),
         })
+    }
+
+    /// The same world with another `export.max_rows`.
+    #[cfg(test)]
+    pub fn with_export_limits(mut self, limits: ExportLimits) -> Self {
+        self.export_limits = limits;
+        self
     }
 
     #[cfg(test)]
@@ -146,6 +163,13 @@ impl Present for FixtureBackend {
     async fn now(&self, caller: &Caller) -> Result<Timestamp> {
         require(caller, Permission::View)?;
         Ok(clock::NOW)
+    }
+}
+
+impl ExportFormats for FixtureBackend {
+    /// JSONL only: a Parquet export is refused with `Store`.
+    fn export_formats(&self) -> &'static [ExportFormat] {
+        export::FORMATS
     }
 }
 
@@ -523,6 +547,23 @@ impl Backend for FixtureBackend {
         require(caller, Permission::Operate)?;
         self.read(|ctx| queries::lists::dead_letters(ctx, group, page))
             .await
+    }
+
+    type ExportRows = export::ExportRows;
+
+    async fn export(
+        &self,
+        caller: &Caller,
+        request: &ExportRequest,
+    ) -> Result<Export<export::ExportRows>> {
+        export::export(
+            &self.world,
+            &self.state,
+            self.export_limits,
+            caller,
+            request,
+        )
+        .await
     }
 
     async fn act(

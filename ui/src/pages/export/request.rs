@@ -1,21 +1,19 @@
-//! The export form's fields, validated into an `ExportRequest`, and the
-//! request described in words.
+//! The export form's fields, validated into the spec's `ExportRequest`.
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::export::{
+    ExportDataset, ExportFormat, ExportRequest, ExportScope, InvalidExportRequest,
+};
 
-use crate::app::can;
-use crate::components::{format_time, route_kind_name, short_id};
-use crate::contract::research::{ExportDataset, ExportFormat, ExportRequest};
 use crate::error::UiError;
+use crate::pages::common::action::require;
 use crate::pages::common::form::{FormFields, invalid};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::aggregates::filter::FalseDetections;
-use crosstalk_spec::ids::ProjectionId;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
 
-/// A dataset without its projection id: what the form's select offers.
+/// A dataset without its selection: what the form's select offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatasetChoice {
     Transmissions,
@@ -50,8 +48,8 @@ impl DatasetChoice {
     pub fn label(self) -> &'static str {
         match self {
             Self::Transmissions => "Transmissions",
-            Self::Edges => "Edges (aggregated)",
-            Self::Accesses => "Accesses",
+            Self::Edges => "Edges (per bucket)",
+            Self::Accesses => "Accesses (per bucket)",
             Self::Topics => "Topics",
             Self::Projection => "Projection (by id)",
             Self::Verdicts => "Verdicts",
@@ -75,24 +73,41 @@ pub fn format_label(format: ExportFormat) -> &'static str {
     }
 }
 
-/// Validates a posted export form against the view state. Content needs
-/// the `Content` permission; a projection needs its id.
+/// Validates a posted export form against the view state: the dataset over
+/// the view's window and filter, the filter pinned to the chosen topic
+/// version (a projection carries its own selection, verdicts the window
+/// alone), a format the backend writes (`writes`), and content only for a
+/// dataset with content columns. The request's one permission is checked
+/// last, so a caller without Content asking for content or a projection is
+/// refused before anything is sent.
 pub fn parse(
     fields: &FormFields,
     state: &ViewState,
     caller: &Caller,
+    writes: &[ExportFormat],
 ) -> Result<ExportRequest, UiError> {
     let dataset_text = fields.text("dataset").unwrap_or("transmissions");
     let choice = DatasetChoice::ALL
         .into_iter()
         .find(|d| d.code() == dataset_text)
         .ok_or_else(|| invalid("dataset", format!("unknown dataset {dataset_text:?}")))?;
+    let version = match fields.text("version") {
+        None => state.scope.topic_version,
+        Some(text) => TopicModelVersion(
+            text.parse()
+                .map_err(|_| invalid("version", "not a topic model version"))?,
+        ),
+    };
+    let scope = ExportScope {
+        window: state.scope.window,
+        filter: state.scope.filter.pinned(version),
+    };
     let dataset = match choice {
-        DatasetChoice::Transmissions => ExportDataset::Transmissions,
-        DatasetChoice::Edges => ExportDataset::Edges,
-        DatasetChoice::Accesses => ExportDataset::Accesses,
-        DatasetChoice::Topics => ExportDataset::Topics,
-        DatasetChoice::Verdicts => ExportDataset::Verdicts,
+        DatasetChoice::Transmissions => ExportDataset::Transmissions(scope),
+        DatasetChoice::Edges => ExportDataset::Edges(scope),
+        DatasetChoice::Accesses => ExportDataset::Accesses(scope),
+        DatasetChoice::Topics => ExportDataset::Topics(scope),
+        DatasetChoice::Verdicts => ExportDataset::Verdicts(state.scope.window),
         DatasetChoice::Projection => {
             let text = fields
                 .text("projection")
@@ -102,117 +117,45 @@ pub fn parse(
             )
         }
     };
-    let version = match fields.text("version") {
-        None => state.scope.topic_version,
-        Some(text) => TopicModelVersion(
-            text.parse()
-                .map_err(|_| invalid("version", "not a topic model version"))?,
-        ),
-    };
     let format_text = fields.text("format").unwrap_or("jsonl");
     let format = FORMATS
         .into_iter()
         .find(|f| format_code(*f) == format_text)
         .ok_or_else(|| invalid("format", format!("unknown format {format_text:?}")))?;
+    if !writes.contains(&format) {
+        return Err(invalid(
+            "format",
+            format!("this backend cannot write {}", format_label(format)),
+        ));
+    }
     let include_content = match fields.text("content") {
         None => false,
         Some("1") => true,
         Some(_) => return Err(invalid("content", "expected 1")),
     };
-    if include_content && !can(caller, Permission::Content) {
-        return Err(UiError::Query(QueryError::Forbidden {
-            missing: Permission::Content,
-        }));
-    }
-    let mut scope = state.scope.clone();
-    scope.topic_version = version;
-    Ok(ExportRequest {
-        dataset,
-        scope,
-        format,
-        include_content,
-    })
-}
-
-fn dataset_text(dataset: ExportDataset) -> String {
-    match dataset {
-        ExportDataset::Transmissions => "transmissions".to_owned(),
-        ExportDataset::Edges => "edges".to_owned(),
-        ExportDataset::Accesses => "accesses".to_owned(),
-        ExportDataset::Topics => "topics".to_owned(),
-        ExportDataset::Projection(id) => format!("projection {}", id.to_ulid()),
-        ExportDataset::Verdicts => "verdicts".to_owned(),
-    }
-}
-
-fn ids(list: impl Iterator<Item = String>) -> String {
-    let all: Vec<String> = list.map(short_id).collect();
-    if all.is_empty() {
-        "any".to_owned()
-    } else {
-        all.join(", ")
-    }
-}
-
-/// The request as labelled lines, in the order of its fields.
-pub fn describe(request: &ExportRequest) -> Vec<(&'static str, String)> {
-    let filter = &request.scope.filter;
-    vec![
-        ("dataset", dataset_text(request.dataset)),
-        (
-            "window",
-            format!(
-                "{} → {}",
-                format_time(request.scope.window.start()),
-                format_time(request.scope.window.end())
-            ),
-        ),
-        (
-            "topic version",
-            format!("v{}", request.scope.topic_version.0),
-        ),
-        ("agents", ids(filter.agents.iter().map(|a| a.to_ulid()))),
-        ("channels", ids(filter.channels.iter().map(|c| c.to_ulid()))),
-        (
-            "route kinds",
-            if filter.route_kinds.is_empty() {
-                "any".to_owned()
-            } else {
-                filter
-                    .route_kinds
-                    .iter()
-                    .map(|k| route_kind_name(*k))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            },
-        ),
-        ("topics", ids(filter.topics.iter().map(|t| t.to_ulid()))),
-        (
-            "verdicts",
-            match filter.false_detections {
-                FalseDetections::Include => "all".to_owned(),
-                FalseDetections::Exclude => "excluding false detections".to_owned(),
-            },
-        ),
-        ("format", format_label(request.format).to_owned()),
-        (
-            "content",
-            if request.include_content {
-                "included".to_owned()
-            } else {
-                "structure only".to_owned()
-            },
-        ),
-    ]
+    let request = ExportRequest::new(dataset, format, include_content).map_err(
+        |InvalidExportRequest::NoContentColumns { .. }| {
+            invalid(
+                "content",
+                format!("{} exports have no content columns", choice.code()),
+            )
+        },
+    )?;
+    require(caller, request.required_permission())?;
+    Ok(request)
 }
 
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::aggregates::edge::RouteKind;
+    use crosstalk_spec::aggregates::filter::TopicVersionSelector;
     use crosstalk_spec::ids::OperatorId;
+    use crosstalk_spec::interfaces::l8_surface::{Permission, QueryError};
 
     use super::*;
     use crate::components::href::tests::state;
+
+    const JSONL: &[ExportFormat] = &[ExportFormat::Jsonl];
 
     fn caller(permissions: Vec<Permission>) -> Caller {
         crate::testing::caller_of(OperatorId::from_ulid(1), &permissions)
@@ -223,33 +166,30 @@ mod tests {
         let mut state = state();
         state.scope.filter.route_kinds = vec![RouteKind::Channel];
         let fields = FormFields::from_pairs(&[
-            ("dataset", "projection"),
-            ("projection", "01J9ZQ3W8D0000000000000001"),
+            ("dataset", "edges"),
             ("version", "1"),
-            ("format", "parquet"),
+            ("format", "jsonl"),
             ("content", "1"),
         ]);
         let request = parse(
             &fields,
             &state,
             &caller(vec![Permission::View, Permission::Content]),
+            JSONL,
         )
         .expect("request");
+        let ExportDataset::Edges(scope) = request.dataset() else {
+            panic!("edges");
+        };
+        assert_eq!(scope.window, state.scope.window);
+        assert_eq!(scope.filter.route_kinds, vec![RouteKind::Channel]);
         assert_eq!(
-            request.dataset,
-            ExportDataset::Projection(
-                ProjectionId::parse_ulid("01J9ZQ3W8D0000000000000001").expect("id")
-            )
+            scope.filter.topic_version,
+            TopicVersionSelector::Pinned(TopicModelVersion(1))
         );
-        assert_eq!(request.scope.topic_version, TopicModelVersion(1));
-        assert_eq!(request.scope.window, state.scope.window);
-        assert_eq!(request.scope.filter, state.scope.filter);
-        assert_eq!(request.format, ExportFormat::Parquet);
-        assert!(request.include_content);
-        let lines = describe(&request);
-        assert_eq!(lines[0].1, "projection 01J9ZQ3W8D0000000000000001");
-        assert!(lines.contains(&("route kinds", "channel".to_owned())));
-        assert!(lines.contains(&("content", "included".to_owned())));
+        assert_eq!(request.format(), ExportFormat::Jsonl);
+        assert!(request.include_content());
+        assert_eq!(request.required_permission(), Permission::Content);
     }
 
     #[test]
@@ -258,36 +198,102 @@ mod tests {
             &FormFields::default(),
             &state(),
             &caller(vec![Permission::View]),
+            JSONL,
         )
         .expect("request");
-        assert_eq!(request.dataset, ExportDataset::Transmissions);
-        assert_eq!(request.scope, state().scope);
-        assert_eq!(request.format, ExportFormat::Jsonl);
-        assert!(!request.include_content);
+        assert_eq!(
+            request.dataset(),
+            &ExportDataset::Transmissions(ExportScope {
+                window: state().scope.window,
+                filter: state().scope.topology_filter(),
+            })
+        );
+        assert_eq!(request.format(), ExportFormat::Jsonl);
+        assert!(!request.include_content());
+    }
+
+    #[test]
+    fn projections_and_verdicts_take_their_own_selection() {
+        let both = caller(vec![Permission::View, Permission::Content]);
+        let request = parse(
+            &FormFields::from_pairs(&[
+                ("dataset", "projection"),
+                ("projection", "01J9ZQ3W8D0000000000000001"),
+            ]),
+            &state(),
+            &both,
+            JSONL,
+        )
+        .expect("request");
+        assert_eq!(
+            request.dataset(),
+            &ExportDataset::Projection(
+                ProjectionId::parse_ulid("01J9ZQ3W8D0000000000000001").expect("id")
+            )
+        );
+        let request = parse(
+            &FormFields::from_pairs(&[("dataset", "verdicts")]),
+            &state(),
+            &both,
+            JSONL,
+        )
+        .expect("request");
+        assert_eq!(
+            request.dataset(),
+            &ExportDataset::Verdicts(state().scope.window)
+        );
     }
 
     #[test]
     fn invalid_fields_and_missing_permissions_are_reported() {
         let viewer = caller(vec![Permission::View]);
-        let field =
-            |pairs: &[(&str, &str)]| match parse(&FormFields::from_pairs(pairs), &state(), &viewer)
-            {
-                Err(UiError::Field { field, .. }) => Some(field),
-                _ => None,
-            };
-        assert_eq!(field(&[("dataset", "everything")]), Some("dataset"));
-        assert_eq!(field(&[("dataset", "projection")]), Some("projection"));
-        assert_eq!(field(&[("version", "v2")]), Some("version"));
-        assert_eq!(field(&[("format", "csv")]), Some("format"));
+        let field = |pairs: &[(&str, &str)], writes: &[ExportFormat]| match parse(
+            &FormFields::from_pairs(pairs),
+            &state(),
+            &viewer,
+            writes,
+        ) {
+            Err(UiError::Field { field, .. }) => Some(field),
+            _ => None,
+        };
+        assert_eq!(field(&[("dataset", "everything")], JSONL), Some("dataset"));
+        assert_eq!(
+            field(&[("dataset", "projection")], JSONL),
+            Some("projection")
+        );
+        assert_eq!(field(&[("version", "v2")], JSONL), Some("version"));
+        assert_eq!(field(&[("format", "csv")], JSONL), Some("format"));
+        assert_eq!(field(&[("format", "parquet")], JSONL), Some("format"));
+        assert_eq!(field(&[("format", "parquet")], &FORMATS), None);
+        assert_eq!(
+            field(&[("dataset", "accesses"), ("content", "1")], JSONL),
+            Some("content"),
+            "accesses have no content columns"
+        );
+        let forbidden = Err(UiError::Query(QueryError::Forbidden {
+            missing: Permission::Content,
+        }));
         assert_eq!(
             parse(
                 &FormFields::from_pairs(&[("content", "1")]),
                 &state(),
-                &viewer
+                &viewer,
+                JSONL
             ),
-            Err(UiError::Query(QueryError::Forbidden {
-                missing: Permission::Content
-            }))
+            forbidden
+        );
+        assert_eq!(
+            parse(
+                &FormFields::from_pairs(&[
+                    ("dataset", "projection"),
+                    ("projection", "01J9ZQ3W8D0000000000000001")
+                ]),
+                &state(),
+                &viewer,
+                JSONL
+            ),
+            forbidden,
+            "a projection needs Content"
         );
     }
 }
