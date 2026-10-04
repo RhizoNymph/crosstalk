@@ -1,3 +1,4 @@
 /target
 /spec/target
 /deploy/.env
+/.env.test

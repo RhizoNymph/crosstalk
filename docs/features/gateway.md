@@ -24,12 +24,17 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   `ExchangeCaptured` on `MpscBus` from `crosstalk-transport`), the exchange
   log (a P3 stopgap, see [Persistence](#persistence-a-p3-stopgap)), and the
   ops listener.
+- The composition behind the proxy as a library entry point,
+  `crosstalk_gateway::pipeline::Pipeline` (P3.1), generic over the spec's
+  `BlobStore` and `EventBus` and an injected `Clock`, with
+  `Pipeline::ingest` for pre-normalized exchanges (see
+  [Pipeline](#pipeline-the-library-entry-point)).
 - Graceful shutdown on SIGINT and SIGTERM.
 - JSON logs on stdout.
 - `migrate`: connects to Postgres and ensures the extensions
   (`crosstalk-store`); no layer has migrations yet.
-- End-to-end tests over real sockets, a simulation test of the capture
-  stage, and a manual check with a real Claude Code session
+- End-to-end tests over real sockets, simulation tests of the capture
+  stage and of `ingest`, and a manual check with a real Claude Code session
   (`scripts/try-claude-code.sh`).
 
 ## Non-scope
@@ -47,6 +52,9 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   capture.
 - Application metrics beyond the capture counters, and tracing spans.
 - TLS on the listeners. The proxy speaks plain HTTP to harnesses.
+- The eval harness itself (`crates/eval`, being built separately): this
+  crate only gives it `Pipeline` and registers it as a composer in the
+  architecture test.
 
 ## Commands
 
@@ -165,13 +173,15 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
                     │ generation exchange ends ──▶ RawExchange ── bounded mpsc (capacity from config) ──┐
                     ▼                                                                                    │
                  client response, unchanged                                                              ▼
-                                                                         capture::CaptureStage::run (one task)
+                                                                         capture::CaptureStage::run (one task, spawned by Pipeline::build)
                                                                            AnthropicMessages::normalize_with_media (L1)
                                                                              └ refused ─▶ normalize_failed
-                                                                           crosstalk_canonical::store ─▶ FsBlobStore (blobs.root)
-                                                                             └ retried blob_put_attempts times ─▶ store_failed, nothing published
-                                                                           Envelope { EventId, clock time, ExchangeCaptured(Exchange) }
-                                                                           MpscBus::publish ─▶ every subscribed group
+                                                                           Ingester::ingest(normalization, clock.now())   ◀── Pipeline::ingest(NormalizedExchange, at)
+                                                                             crosstalk_canonical::store ─▶ FsBlobStore (blobs.root)
+                                                                               └ retried blob_put_attempts times ─▶ store_failed, nothing published
+                                                                             under the id lock: EventId minted at `at`;
+                                                                             Envelope { EventId, at, ExchangeCaptured(Exchange) }
+                                                                             MpscBus::publish ─▶ every subscribed group
                                                                                                 │
                                          log::consumer::run (group "exchange-log") ◀────────────┘
                                            ExchangeLog::append: one JSON line, synced; ack after; nack on failure
@@ -182,14 +192,17 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
   `store` section, `DATABASE_URL`; open the blob store and (pipeline) the
   log; build the proxy from the ingress config, reading its secrets
   through the environment lookup; bind the proxy and ops listeners; start
-  the bus and subscribe the exchange log before anything can publish;
-  spawn the tasks (each tracked by a running flag for `/readyz`); with
-  `store`, connect to Postgres in the background, retrying every 5 s.
+  the bus; `Pipeline::build` with the role's stages, which subscribes the
+  exchange log before anything can publish and spawns `exchange_log` and
+  `capture`; spawn the proxy listener (each task tracked by a running flag
+  for `/readyz`); with `store`, connect to Postgres in the background,
+  retrying every 5 s.
 - **Envelope ids** come from the spec's `UlidGenerator` (seeded from the
-  operating system's randomness), owned by the capture stage's one task
-  and minted with `mint_at` at the envelope time, the injected clock's
-  reading after the store. If no id is left (`UlidExhausted`), the event
-  is not published and is counted `publish_failed`.
+  operating system's randomness), owned by the pipeline's `Ingester` behind
+  a `tokio::sync::Mutex`, and minted with `mint_at` at the envelope time
+  `at`. On the proxy path `at` is the injected clock's reading after
+  normalization, before the store. If no id is left (`UlidExhausted`),
+  the event is not published and is counted `publish_failed`.
 - **Shutdown** (`Running::shutdown`), in dependency order:
   1. `/healthz` reports `draining` and `/readyz` 503.
   2. The proxy listener closes (new connections are refused) and every
@@ -198,15 +211,81 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
      it ends. Up to `drain_timeout_ms`; connections still open are then
      aborted, which the proxy records as `ClientDisconnected` and still
      hands to capture.
-  3. With the proxy and its connections gone, the capture channel closes
-     once the last per-exchange capture task has handed off; the capture
-     stage drains it.
-  4. The exchange log's group drains (bus depth zero), the bus stops, and
-     the consumer closes the log (flush and `fsync`).
+  3. `Pipeline::shutdown`: with the proxy and its connections gone, the
+     capture channel closes once the last per-exchange capture task has
+     handed off; the capture stage drains it.
+  4. Still `Pipeline::shutdown`: the exchange log's group drains (bus
+     depth zero), the bus stops, and the consumer closes the log (flush
+     and `fsync`).
   5. The Postgres pool closes and the ops listener stops last.
 
   Steps 3 and 4 share one `flush_timeout_ms` deadline; a task still
   running at it is aborted and the report says so.
+
+## Pipeline: the library entry point
+
+`crosstalk_gateway::pipeline` (roadmap P3.1) is the gateway's composition
+behind the proxy, usable without the binary. The `serve` roles build one
+(`gateway::start`), and so does the eval harness (`crosstalk-eval`, a
+composer in the architecture test), over the simulation's stores and
+clock.
+
+```rust
+let pipeline = Pipeline::build(
+    Settings { put_retry, consumer_retry },   // or Settings::from_config(&config), Settings::default()
+    Deps { blobs, bus, id_entropy, capture: Some(receiver), exchange_log: Some(log) },
+    clock,                                    // Arc<dyn Clock>: SystemClock, or crosstalk-sim's SimClock
+).await?;                                     // Result<Pipeline<B, E>, pipeline::BuildError>
+let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, IngestError>
+```
+
+- **Build.** Generic over any `B: BlobStore` and `E: EventBus` (both
+  `Send + Sync + 'static`). It subscribes the consumer stages first (the
+  exchange log's group, when `Deps::exchange_log` is given), then spawns
+  them and the capture stage (when `Deps::capture` is given) on its
+  `Tasks` (`exchange_log`, `capture`). `Deps::stores(blobs, bus, entropy)`
+  is a pipeline fed only through `ingest`. Nothing reads the system time:
+  the id generator and the capture stage read the injected clock, and
+  backoffs are tokio sleeps, so a pipeline runs under paused time.
+- **Ingest.** `Pipeline::ingest(NormalizedExchange, at)` (or the cloneable
+  `Ingester` from `pipeline.ingester()`, for other tasks):
+  1. store every message body and media blob with
+     `crosstalk_canonical::store`, retrying the whole put set up to
+     `put_retry.attempts` times, `put_retry.backoff` apart (puts are
+     idempotent); when every attempt fails, publish nothing and return
+     `IngestError::NotStored { attempts, source }`;
+  2. under the id lock, mint the envelope's `EventId` at `at` (when `at`
+     is in or before the last id's millisecond, the last id plus one) and
+     publish `ExchangeCaptured` in an envelope stamped `at`; no id left is
+     `IngestError::IdsExhausted { at }`, a refused publish
+     `IngestError::NotPublished(BusError)`.
+  Each outcome is counted in `PipelineStats` (`published`, `store_failed`,
+  `store_retries`, `publish_failed`) before it returns.
+- **One path after L1.** The capture stage normalizes a `RawExchange` with
+  `AnthropicMessages` (a refusal is `CaptureError::NotNormalized`, counted
+  `normalize_failed`) and calls the same `Ingester::ingest` with the
+  clock's reading. `pipeline_ingest_matches_the_proxy_path` checks that
+  both put the same bytes in the same order and publish the same envelope.
+- **Shutdown.** `join_capture(deadline)` waits for the capture stage once
+  the caller has dropped every capture sender; `join_consumers(deadline)`
+  waits for the consumers once the bus has stopped; for `MpscBus`,
+  `Pipeline::shutdown(deadline) -> Drained { capture, log }` does both
+  around the group drain and the bus shutdown.
+
+### Public interface
+
+| Item | What |
+| --- | --- |
+| `Pipeline<B, E>` | `build`, `ingest`, `ingester`, `blobs`, `bus`, `stats`, `log_stats`, `tasks`, `join_capture`, `join_consumers`; `shutdown` when `E = MpscBus` |
+| `Settings` | `put_retry: PutRetry`, `consumer_retry: RetryPolicy`; `from_config(&GatewayConfig)`, `Default` (3 attempts, 100 ms; the bus's default policy) |
+| `Deps<B, E>` | `blobs`, `bus`, `id_entropy: SeededRandom`, `capture: Option<mpsc::Receiver<RawExchange>>`, `exchange_log: Option<ExchangeLog>`; `Deps::stores` |
+| `Ingester<B, E>` | cloneable handle: `ingest`, `now`, `blobs`, `bus`, `stats`, `retry` |
+| `IngestError` | `NotStored { attempts, source: StoreError }`, `IdsExhausted { at }`, `NotPublished(BusError)` |
+| `BuildError` | `Subscribe(BusError)` |
+| `Drained` | `capture`, `log`: whether each drained by the deadline |
+| `PipelineStats`, `PipelineCounts`, `PutRetry` | the counters (`/healthz`, `/metrics`) and the put retry policy, moved here from `capture` |
+| `capture::CaptureStage<B, E>` | `new(Ingester)`, `run(receiver)`, `capture(&RawExchange) -> Result<EventId, CaptureError>` |
+| `capture::CaptureError` | `NotNormalized(NormalizeError)`, `Ingest(IngestError)` |
 
 ## Persistence: a P3 stopgap
 
@@ -268,8 +347,11 @@ gracefully.
 | `src/cli.rs` | The command line | `Command` (`parse`), `UsageError`, `USAGE` |
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`), `ApiConfig`, `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `not_built`), `UnknownRole` |
-| `src/gateway.rs` | Wiring, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
-| `src/capture.rs` | The capture stage | `CaptureStage` (`new` taking a `UlidGenerator<SeededRandom>` for envelope ids, `run`, `capture`), `Captured`, `PutRetry`, `PipelineStats`, `PipelineCounts` |
+| `src/gateway.rs` | Role wiring around a `Pipeline`: the proxy and ops listeners, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `pipeline`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
+| `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
+| `src/pipeline/ingest.rs` | Ingest at L1: store (retried), mint, publish | `Ingester` (`ingest`, `now`, `blobs`, `bus`, `stats`, `retry`), `IngestError` |
+| `src/pipeline/stats.rs` | Counters and put retry | `PipelineStats`, `PipelineCounts`, `PutRetry` |
+| `src/capture.rs` | The capture stage: L1 normalization, then `Ingester::ingest` | `CaptureStage` (`new`, `run`, `capture`), `CaptureError` |
 | `src/log/mod.rs` | The exchange log file | `ExchangeLog` (`open`, `append`, `close`), `Appended`, `read`, `LogContents`, `LogError` |
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |
@@ -279,7 +361,7 @@ gracefully.
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
 | `src/inspect.rs` | Reading back the log and bodies | `list`, `show`, `InspectError` |
 | `src/logging.rs` | JSON log setup | `init`, `try_init`, `Sink` |
-| `src/tests/` | `crosstalk_gateway::tests::*`: the capture stage simulation (`dst.rs`) over raw exchanges built from the corpus (`raw.rs`) | — |
+| `src/tests/` | `crosstalk_gateway::tests::*`: the capture stage simulation (`dst.rs`) and the `ingest` simulations (`ingest.rs`) over raw exchanges built from the corpus (`raw.rs`), with recording store and bus wrappers (`record.rs`) | — |
 | `tests/e2e/` | `crosstalk_gateway::e2e::*`: end-to-end tests (`support.rs` starts a gateway in front of testkit's fake upstream) | — |
 | `tests/logs.rs` | The log redaction test (its own binary: it installs the global subscriber) | — |
 | `tests/architecture.rs` | The workspace dependency rule ([workspace](workspace.md)) | — |
@@ -297,6 +379,9 @@ gracefully.
 | `e2e::stalled_stream_is_cut_at_the_drain_deadline_and_captured` | Shutdown during a stalled stream: cut at the drain deadline, the client sees an aborted body, the exchange is logged as `ClientDisconnected` with its bodies stored |
 | `e2e::ops_endpoints_and_inspect_report_the_capture` | `/healthz` counters, `/readyz` (tasks `exchange_log`, `capture`, `proxy`), `/metrics` lines, 404s, `healthcheck::check` on 2xx and 404, `inspect::list` and `show`, the ops listener stopping last |
 | `logs::logs_are_json_lines_without_secrets_credentials_or_bodies` | At debug level over three cases: every line JSON with a top-level `level`; never the deployment secret, the credential, or any message text |
+| `tests::pipeline_ingest_matches_the_proxy_path` | Under paused time, for every corpus exchange plus the image request at seeded instants: a pipeline fed the raw exchange through the capture channel and one fed the pre-normalized exchange through `ingest` at the same instant put the same bytes in the same order, publish the same envelope (id, `at`, event), and count the same |
+| `tests::pipeline_ingest_retries_blob_faults_then_fails_typed` | With every put failing before (and, separately, after) it commits: exactly `attempts` puts `backoff` apart, `IngestError::NotStored` with the attempt count, nothing published, `store_retries` = attempts - 1; a put that committed is stored once. Under 10% transient failures and latency every exchange is stored and published, with one retry per failed put |
+| `tests::pipeline_concurrent_ingests_keep_ids_monotonic` | Four rounds of the corpus ingested concurrently over a slow store and a slow bus (whose acceptance order follows call order only if ingest serializes mint and publish), with `at` spread back and forth: every one published, ids distinct and reaching the bus in strictly increasing order, each envelope stamped its `at` and its id never in an earlier millisecond |
 | `tests::dst_blobs_written_before_capture_published` | INV-48 (dst): under put latency and failures before and after the write, with seeded feed timing, every blob (bodies and media) an event names is stored when the event arrives; an exchange whose puts all failed publishes nothing; each exchange is published at most once |
 | unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text, healthcheck URL checks |
 
@@ -307,8 +392,13 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
 
 ## Invariants and constraints
 
-- The gateway is the only crate that depends on layer crates
-  (`tests/architecture.rs`).
+- Only the composers (`gateway`, and `api`, `client`, `eval` beside it)
+  depend on layer crates (`tests/architecture.rs`).
+- There is one path after L1: the capture stage normalizes and calls
+  `Ingester::ingest`, the same function `Pipeline::ingest` is.
+- Envelope ids reach the bus's `publish` in strictly increasing order,
+  however many ingests run at once (mint and publish under one lock); an
+  id is never in a millisecond before its envelope's `at`.
 - `ExchangeCaptured` is published only after every body and media blob of
   the exchange is stored (`canonical.capture.blobs-before-event`).
 - Each exchange the proxy hands off is published at most once; the log
@@ -318,7 +408,10 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
   secret, credential, header or body is logged (`tests/logs.rs`).
 - Concurrency is tokio tasks joined by channels (the capture channel, the
   bus, `watch` stop and phase signals); the only shared state is atomic
-  counters and per-task running flags.
+  counters, per-task running flags, and the envelope id generator behind
+  a `tokio::sync::Mutex`.
+- Nothing in the pipeline reads the system time: the injected `Clock` and
+  tokio time only, so it runs under paused time.
 - Shutdown is bounded: `drain_timeout_ms` plus `flush_timeout_ms` plus a
   second for the ops listener.
 - No `unwrap` or `expect` outside tests; errors are typed (`thiserror`).

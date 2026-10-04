@@ -1,0 +1,19 @@
+[package]
+name = "crosstalk-world"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The synthetic crosstalk world: a deterministic week of agent traffic, seeded through the spec's write traits, shared by the UI and the gateway's tests."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+crosstalk-memory = { path = "../memory" }
+crosstalk-transport = { path = "../transport" }
+tokio = { workspace = true, features = ["macros", "rt"] }
