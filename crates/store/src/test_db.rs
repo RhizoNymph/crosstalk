@@ -10,9 +10,16 @@
 //! Database tests are gated: when `TEST_DATABASE_URL` is unset,
 //! [`TestDb::new_or_skip`] prints why and returns `None`, and the test
 //! returns early as a pass. `scripts/test-db.sh` starts a disposable server.
+//!
+//! The URL comes from the process environment or, when the environment does
+//! not set it, from a [`TEST_ENV_FILE`] in the working directory or one of its
+//! ancestors (the workspace root, for `cargo test`). The file is gitignored,
+//! so a machine can point its tests at a server without exporting anything.
 
+use std::ffi::OsString;
 use std::io::Write;
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +33,70 @@ use crate::extensions::{InstalledExtension, ensure_extensions};
 use crate::layer::Layer;
 use crate::migrate::{Migrations, migrate};
 use crate::pool::{Store, open_pool};
+
+/// The dotenv-style file that supplies `TEST_DATABASE_URL` when the process
+/// environment does not: `NAME=value` lines, `#` comments and blank lines.
+pub const TEST_ENV_FILE: &str = ".env.test";
+
+/// The admin URL of the test server: the environment variable, else the
+/// nearest [`TEST_ENV_FILE`] above the working directory that sets it.
+fn admin_url() -> Result<DatabaseUrl, ConfigError> {
+    DatabaseUrl::from_lookup(TEST_DATABASE_URL_VAR, |name| {
+        std::env::var_os(name).or_else(|| env_file_value(name))
+    })
+}
+
+fn env_file_value(name: &str) -> Option<OsString> {
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            warn!(error = %err, "no working directory to search for {TEST_ENV_FILE}");
+            return None;
+        }
+    };
+    cwd.ancestors()
+        .find_map(|dir| read_env_file(&dir.join(TEST_ENV_FILE), name))
+        .map(OsString::from)
+}
+
+fn read_env_file(path: &Path, name: &str) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let value = env_file_lookup(&text, name);
+            if value.is_some() {
+                debug!(path = %path.display(), var = name, "read from env file");
+            }
+            value
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            warn!(path = %path.display(), error = %err, "could not read env file");
+            None
+        }
+    }
+}
+
+/// The value `text` gives `name`: the last `NAME=value` line for it, with
+/// surrounding whitespace, an optional leading `export ` and one pair of
+/// matching quotes removed. Blank lines and `#` comments are skipped.
+fn env_file_lookup(text: &str, name: &str) -> Option<String> {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| {
+            let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == name).then(|| unquote(value.trim()).to_owned())
+        })
+}
+
+fn unquote(value: &str) -> &str {
+    ['"', '\'']
+        .iter()
+        .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))
+        .unwrap_or(value)
+}
 
 /// Every test database's name starts with this.
 pub const TEST_DB_PREFIX: &str = "crosstalk_test_";
@@ -158,7 +229,7 @@ impl TestDb {
 
     /// As [`TestDb::new`], with explicit pool settings.
     pub async fn with_pool_settings(settings: PoolSettings) -> Result<Self, TestDbError> {
-        let admin = DatabaseUrl::from_env(TEST_DATABASE_URL_VAR)?;
+        let admin = admin_url()?;
         Self::create(admin, settings).await
     }
 
@@ -184,7 +255,8 @@ impl TestDb {
                 // reason should show in a plain `cargo test` run.
                 let line = format!(
                     "skipping {test}: {TEST_DATABASE_URL_VAR} is not set \
-                     (run scripts/test-db.sh and export the URL it prints)\n"
+                     (run scripts/test-db.sh and export the URL it prints, \
+                     or put it in {TEST_ENV_FILE})\n"
                 );
                 if let Err(err) = std::io::stderr().write_all(line.as_bytes()) {
                     debug!(error = %err, "could not print the skip reason");
@@ -408,6 +480,46 @@ mod tests {
             var: TEST_DATABASE_URL_VAR,
         });
         assert!(matches!(err, TestDbError::Config(_)));
+    }
+
+    #[test]
+    fn env_file_lookup_reads_the_named_variable() {
+        let text = "# test server\n\nOTHER=x\nTEST_DATABASE_URL=postgres://a@h:1/d\n";
+        assert_eq!(
+            env_file_lookup(text, TEST_DATABASE_URL_VAR).as_deref(),
+            Some("postgres://a@h:1/d")
+        );
+        assert_eq!(env_file_lookup(text, "MISSING"), None);
+    }
+
+    #[test]
+    fn env_file_lookup_strips_export_quotes_and_whitespace() {
+        let text = "  export  TEST_DATABASE_URL = \"postgres://q@h:1/d\"  \n";
+        assert_eq!(
+            env_file_lookup(text, TEST_DATABASE_URL_VAR).as_deref(),
+            Some("postgres://q@h:1/d")
+        );
+        assert_eq!(env_file_lookup("V='x'", "V").as_deref(), Some("x"));
+        assert_eq!(env_file_lookup("V=\"x'", "V").as_deref(), Some("\"x'"));
+    }
+
+    #[test]
+    fn env_file_lookup_takes_the_last_assignment_and_skips_comments() {
+        let text = "V=first\n# V=commented\nV=second\nVX=other\n";
+        assert_eq!(env_file_lookup(text, "V").as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn env_file_lookup_ignores_lines_without_equals() {
+        assert_eq!(env_file_lookup("V\nexport V\n", "V"), None);
+    }
+
+    #[test]
+    fn read_env_file_treats_a_missing_file_as_unset() {
+        let path = std::env::temp_dir()
+            .join("crosstalk-no-such-dir")
+            .join(TEST_ENV_FILE);
+        assert_eq!(read_env_file(&path, TEST_DATABASE_URL_VAR), None);
     }
 
     #[test]
