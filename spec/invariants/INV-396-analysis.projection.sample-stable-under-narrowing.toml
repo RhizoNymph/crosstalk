@@ -1,15 +1,15 @@
 [invariant]
 id = "analysis.projection.sample-stable-under-narrowing"
-statement = "Under one projection token, a point returned for a window and filter is also returned for any sub-window containing its confirmed_at and any narrower filter that admits it."
+statement = "For two fits with the same seed and sample size whose samples are read from the same data, where the second's window lies within the first's and every transmission the second's filter admits the first's filter also admits, every transmission in the first's sample that the second admits is in the second's sample."
 kind = "domain"
 property = "metamorphic"
 requires = ["property"]
 rationale = """
-When more transmissions match than the limit, the projection keeps those
-with the smallest sample key (a keyed hash of the transmission id). Bottom-k
-selection has this property; a random or most-recent sample would make
-points vanish and reappear as the operator narrows a linked view, which
-reads as data changing.
+When more transmissions match than the sample size, a fit keeps those with
+the smallest sample key, a hash of the transmission id keyed by the seed.
+Bottom-k selection has this property; a random or most-recent sample would
+make points vanish and reappear as the operator narrows a linked view and
+fits again, which reads as data changing.
 """
 
 [evidence]

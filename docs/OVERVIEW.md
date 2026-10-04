@@ -38,15 +38,18 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
-      topic sizes, lineage, pins and retention of old versions, search,
-      alert rules and their management), L7 topology (edge aggregation per
-      time window, graphs and time series, and the watermark before which
-      every bucket is final), L8 surface (query API with cursor-paginated
-      lists and linked views sharing one filter, UI, operator directory
-      with a trusted single-user mode, operator actions with one permission
-      each, operator verdicts on transmissions and the detection quality
-      they measure, append-only audit log of operator actions and config
-      changes, an id-only SSE live feed, alert sinks).
+      topic sizes, lineage, pins and retention of old versions, paged
+      search, stored projection jobs fitted in the background, alert rules
+      and their management), L7 topology (edge aggregation per time window,
+      graphs and time series, and the watermark before which every bucket
+      is final), L8 surface (query API with cursor-paginated lists, linked
+      views sharing one filter and one resolved topic-model version, typed
+      query errors, stored projections served as a columnar binary frame,
+      UI, operator directory with a trusted single-user mode, operator
+      actions with one permission each, operator verdicts on transmissions
+      and the detection quality they measure, append-only audit log of
+      operator actions and config changes, an id-only SSE live feed, alert
+      sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -66,18 +69,20 @@ Overview:
     retention policy no longer keeps (TopicVersionDropped, after which L7
     deletes their buckets); L7 also advances a watermark from the
     correlator's ticks and the oldest unprocessed input and publishes each
-    advance → L8 serves topology, time series,
-    topic history, search, projections, lists and alerts (every aggregate
-    with the watermark read before it), with the graph,
-    search, projection and edge drill-down all filtered by one
-    TopologyFilter, pages the audit log like any other list, and streams
-    id-only change events to the UI over SSE: every store publishes a
-    Changed notification after each committed change to an agent, channel,
-    alert, rule, topic version, projection layout or the watermark, and the
-    UI re-queries what the event names (resumable by cursor, with a resync
-    marker when a cursor is too old). Each request becomes a Caller through
-    the operator directory config defines (in trusted mode, the one
-    operator with every permission). Operator actions flow back down: policy
+    advance → L8 serves topology, time series, topic history, search,
+    projections, lists and alerts (every aggregate with the watermark read
+    before it), with the graph, series, search, projection and edge
+    drill-down all filtered by one TopologyFilter under one resolved (or
+    pinned) topic-model version, runs projection fits as background jobs
+    whose stored frames read back exactly, pages the audit log like any
+    other list, and streams id-only change events to the UI over SSE: every
+    store publishes a Changed notification after each committed change to
+    an agent, channel, alert, rule, topic version, projection job or the
+    watermark, and the UI re-queries what the event names (resumable by
+    cursor, with a resync marker when a cursor is too old). Each request
+    becomes a Caller through the operator directory config defines (in
+    trusted mode, the one operator with every permission). Operator actions
+    flow back down: policy
     changes and channel promotion to L5, which records every policy
     decision in the channel's policy history; verdicts on transmissions to
     L5's verdict log, beside the detector's state, which publishes
@@ -98,10 +103,12 @@ Features Index:
       aggregates (including time series, topic history, topic-version
       retention and the watermark that marks buckets final), bus events and
       per-layer interfaces (including the query surface's paginated lists,
-      shared view filter and projection, the id-only SSE live feed, the
-      audit log of operator and config changes, the operator directory and
-      trusted mode, channel policy history, operator actions with their
-      permissions, and operator verdicts with the detection quality report),
+      shared view filter and topic-version resolution, typed query errors,
+      stored projections and their columnar frame, the id-only SSE live
+      feed, the audit log of operator and config changes, the operator
+      directory and trusted mode, channel policy history, operator actions
+      with their permissions, and operator verdicts with the detection
+      quality report),
       with tests for the invariants checked at runtime and one TOML file per
       invariant in spec/invariants. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.

@@ -1,19 +1,18 @@
 [invariant]
 id = "surface.perf.projection-latency"
-statement = "QueryApi::projection with a limit of 50,000 answers within 1 s at p99 over 1,000,000 projected transmissions."
+statement = "QueryApi::projection for a ready projection of 100,000 points returns its stored frame within 1 s at p99."
 kind = "performance"
 requires = ["bench"]
 rationale = """
-The UMAP view reloads on every filter or window change of a linked view.
-The bound assumes layout coordinates stored beside the embeddings with the
-filter fields indexed, and sampling by a precomputed key, and rules out
-running UMAP or a per-point agent lookup at query time. Each point is under
-100 bytes, so a full response stays within a few megabytes. The figures are
-a proposed initial threshold.
+The UMAP view loads a stored projection when an operator opens it or
+follows a citation. The fit runs in the background, so a read only fetches
+the job record and the frame bytes and checks the frame; it never runs
+UMAP, samples or resolves agents. A 100,000-point frame is about 5 MB. The
+figures are a proposed initial threshold.
 """
 
 [evidence]
-bench = "crosstalk::surface::bench::projection_50k_p99"
+bench = "crosstalk::surface::bench::projection_frame_100k_p99"
 
 [evidence-review]
 bench = { agent = "false", human = "false" }

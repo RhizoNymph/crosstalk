@@ -17,12 +17,11 @@
 //! | `Rule` | L6 `AlertRuleStore` | create (operator or config), update, status change, turning stale |
 //! | `Watermark` | L7 `EdgeStore` | the watermark advancing |
 //! | `TopicVersion` | L6 `TopicCatalog` | a status change of that version (ready, active, superseded) |
-//! | `Projection` | L6 `ProjectionIndex` | a new layout becoming current |
+//! | `Projection` | L6 `ProjectionStore` | a projection job becoming ready or failed, or its frame expiring |
 
-use crate::aggregates::projection::ProjectionToken;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::Subject;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId};
 use crate::support::Watermark;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,8 +33,9 @@ pub enum Changed {
     /// The edge store's watermark advanced to this value.
     Watermark(Watermark),
     TopicVersion(TopicModelVersion),
-    /// This layout is now the current projection layout.
-    Projection(ProjectionToken),
+    /// This stored projection job became ready or failed, or its frame
+    /// expired.
+    Projection(ProjectionId),
 }
 
 impl Changed {

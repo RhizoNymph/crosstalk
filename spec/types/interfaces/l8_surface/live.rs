@@ -30,13 +30,14 @@
 //! | `RuleChanged { id }` | `Rule` | L6 rule store: create (operator or config), update, status, turning stale | `alert_rules` |
 //! | `Watermark { at }` | `Watermark` | L7 edge store: watermark advance | `topology`, `series`, `edge_transmissions` |
 //! | `TopicVersionReady { version }` | `TopicVersion` | L6 catalog: version ready, active or superseded | `topic_versions`, then topic-scoped queries if the active version changed |
-//! | `ProjectionReady { id }` | `Projection` | L6 projection index: new current layout | `projection` |
+//! | `ProjectionReady { id }` | `Projection` | L6 projection store: job ready or failed, frame expired | `projection_status`, then `projection` |
 //!
 //! **Permissions.** Subscribing needs `View`. Every event except
 //! `ProjectionReady` needs only `View`: it names an alert, channel, agent,
 //! rule, watermark or topic version, all of which View queries list.
-//! `ProjectionReady` names a layout token, which only `projection` (Content)
-//! returns, so it reaches only callers with `Content`
+//! `ProjectionReady` names a projection job, which only `projection_status`
+//! and `projection` (Content) return, so it reaches only callers with
+//! `Content`
 //! ([`UiEvent::required_permission`]). A stream ends with
 //! [`LiveEnd::SessionEnded`] when the caller's session expires or is
 //! revoked, or a config load changes or removes its operator.
@@ -67,10 +68,9 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::aggregates::projection::ProjectionToken;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::changed::Changed;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId};
 use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crate::support::Watermark;
 
@@ -98,10 +98,10 @@ pub enum UiEvent {
     TopicVersionReady {
         version: TopicModelVersion,
     },
-    /// `id` is the current projection layout. A client holding points of
-    /// another layout re-queries.
+    /// Projection job `id` finished (ready or failed) or its frame expired.
+    /// A client waiting on it, or showing it, re-queries.
     ProjectionReady {
-        id: ProjectionToken,
+        id: ProjectionId,
     },
 }
 

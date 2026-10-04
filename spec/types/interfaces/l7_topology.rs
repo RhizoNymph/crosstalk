@@ -35,7 +35,7 @@
 //! ([`EdgeStore::drop_version`]), which the topic catalog publishes when
 //! retention marks the version dropped
 //! ([`crate::aggregates::retention`]). A query reading a version either
-//! sees all of its buckets or fails with `VersionNotRetained`.
+//! sees all of its buckets or fails with `Version(NotRetained)`.
 //!
 //! **Watermark.** The topology consumer recomputes the watermark from a
 //! [`FrontierSource`] at least once per bucket width
@@ -48,6 +48,16 @@
 //! queries read the watermark before their data and return it with the
 //! result ([`Watermarked`]); see [`crate::aggregates::watermark`].
 //!
+//! **Topic version.** Graph, series and edge-transmission queries read the
+//! buckets and contributions of one version: the filter's selector resolved
+//! with [`TopicVersionSelector::resolve`] against the `TopicCatalog`'s
+//! history, with `retained` true for the versions whose buckets this store
+//! still holds (every version retention has not dropped). `Current` is the
+//! catalog's active version; the store activates a version before the
+//! catalog marks it active, so that version is always retained here. A
+//! filter listing topics outside the resolved version fails with
+//! `TopicsNotInVersion`. Every response reports the resolved version.
+//!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
@@ -56,12 +66,15 @@ use std::num::NonZeroU64;
 use crate::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
+#[cfg(doc)]
+use crate::aggregates::filter::TopicVersionSelector;
+use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crate::ids::{AgentId, TransmissionId};
+use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
@@ -112,7 +125,7 @@ pub trait EdgeStore {
 
     /// The exposed watermark. Persisted with the buckets, so it never moves
     /// back, restarts included. Starts at the epoch.
-    async fn watermark(&self) -> Result<Watermark, EdgeError>;
+    async fn watermark(&self) -> Result<Watermark, EdgeQueryError>;
 
     /// Recompute the watermark as `Watermark::settled(frontier, timing,
     /// bucket_width)` and expose it if it is later than the exposed one.
@@ -124,29 +137,30 @@ pub trait EdgeStore {
         frontier: PipelineFrontier,
     ) -> Result<Option<Watermark>, EdgeError>;
 
-    /// The graph, with the watermark read before its buckets.
+    /// The graph, with the watermark read before its buckets. Fails with
+    /// `UnalignedWindow` for a window not on bucket boundaries.
     async fn graph(
         &self,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologyGraph>, EdgeError>;
+    ) -> Result<Watermarked<TopologyGraph>, EdgeQueryError>;
 
     /// The applied contributions behind one edge: those `graph` counts into
     /// the edge (`from`, `to`, `route`) for the same window and filter, one
     /// row per transmission, newest `Confirmed::at` first. Served from the
     /// stored contributions, so the window need not be bucket-aligned. The
-    /// first page pins the active topic-model version into its cursor; if
-    /// that version's contributions are dropped mid-traversal, the next page
-    /// fails with `InvalidCursor`. Each page carries the watermark read
-    /// before it.
+    /// first page resolves the filter's topic version and its cursor pins
+    /// it; if that version's contributions are dropped mid-traversal, the
+    /// next page fails with `Version(NotRetained)`. Each page carries the
+    /// watermark read before it.
     async fn transmissions(
         &self,
         edge: &EdgeSelector,
         window: TimeWindow,
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
-    ) -> Result<Watermarked<EdgeTransmissionPage>, EdgeError>;
+    ) -> Result<Watermarked<EdgeTransmissionPage>, EdgeQueryError>;
 
     /// The width of every bucket in this store. Graph windows and series
     /// grids must be aligned to it.
@@ -154,16 +168,17 @@ pub trait EdgeStore {
 
     /// One series per group of `grouping`, one value per grid point: the
     /// stat under `weighting` summed over that step, counted exactly as
-    /// [`EdgeStore::graph`] counts it over the step's window. Fails with
-    /// `BucketWidthMismatch` when the grid was built for another width. The
-    /// watermark is read before the buckets.
+    /// [`EdgeStore::graph`] counts it over the step's window, under the same
+    /// resolved topic version (grouped by topic, one series per topic of
+    /// that version). Fails with `BucketWidthMismatch` when the grid was
+    /// built for another width. The watermark is read before the buckets.
     async fn series(
         &self,
         grid: SeriesGrid,
         weighting: Weighting,
         grouping: SeriesGrouping,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologySeries>, EdgeError>;
+    ) -> Result<Watermarked<TopologySeries>, EdgeQueryError>;
 }
 
 /// Where the topology consumer learns how far the pipeline has progressed.
@@ -195,23 +210,15 @@ pub trait FrontierSource {
     async fn frontier(&self) -> Result<PipelineFrontier, EdgeError>;
 }
 
+/// Why a write (`apply`, `judge`, `activate`, `drop_version`,
+/// `advance_watermark`) or the frontier read failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeError {
     Store {
         reason: String,
     },
-    /// The window is not aligned to bucket boundaries.
-    UnalignedWindow,
-    /// A series grid built for a bucket width other than the store's.
-    BucketWidthMismatch {
-        store: BucketWidth,
-        grid: BucketWidth,
-    },
     SelfEdge,
-    /// A cursor the store did not issue, issued for another edge, window or
-    /// filter, or pinning a topic-model version whose contributions are gone.
-    InvalidCursor,
-    /// A topic-model version retention has dropped.
+    /// A contribution of a topic-model version retention has dropped.
     VersionNotRetained {
         version: TopicModelVersion,
     },
@@ -225,4 +232,29 @@ pub enum EdgeError {
         bucket: TimeWindow,
         watermark: Watermark,
     },
+}
+
+/// Why a read (`graph`, `series`, `transmissions`, `watermark`) failed. A
+/// dropped version is `Version(NotRetained)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeQueryError {
+    Store {
+        reason: String,
+    },
+    /// The window is not aligned to bucket boundaries.
+    UnalignedWindow,
+    /// A series grid built for a bucket width other than the store's.
+    BucketWidthMismatch {
+        store: BucketWidth,
+        grid: BucketWidth,
+    },
+    Version(VersionUnavailable),
+    /// The filter lists topics that are not in the resolved version.
+    TopicsNotInVersion {
+        version: TopicModelVersion,
+        topics: Vec<TopicId>,
+    },
+    /// A cursor the store did not issue, or issued for another edge, window
+    /// or filter.
+    InvalidCursor,
 }

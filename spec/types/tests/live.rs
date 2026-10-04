@@ -2,11 +2,10 @@ use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::aggregates::projection::ProjectionToken;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::changed::Changed;
 use crate::events::{BusEvent, Subject};
-use crate::ids::{AlertId, AlertRuleId};
+use crate::ids::{AlertId, AlertRuleId, ProjectionId};
 use crate::interfaces::l8_surface::Permission;
 use crate::interfaces::l8_surface::live::{
     FeedEpoch, FeedWindow, FloorAboveHead, InvalidLiveConfig, LiveConfig, LiveCursor, LiveItem,
@@ -21,7 +20,7 @@ fn every_change() -> Vec<(Changed, UiEvent)> {
     let alert = AlertId::from_ulid(1);
     let rule = AlertRuleId::from_ulid(2);
     let version = TopicModelVersion(3);
-    let token = ProjectionToken::new(version, 1);
+    let projection = ProjectionId::from_ulid(4);
     let watermark = Watermark(at(60));
     vec![
         (Changed::Alert(alert), UiEvent::AlertChanged { id: alert }),
@@ -43,8 +42,8 @@ fn every_change() -> Vec<(Changed, UiEvent)> {
             UiEvent::TopicVersionReady { version },
         ),
         (
-            Changed::Projection(token),
-            UiEvent::ProjectionReady { id: token },
+            Changed::Projection(projection),
+            UiEvent::ProjectionReady { id: projection },
         ),
     ]
 }

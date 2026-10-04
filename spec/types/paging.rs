@@ -11,6 +11,15 @@
 //! | dead letters | [`DeadLetterList`] | (`Envelope::id`, `ConsumerGroup`) |
 //! | transmissions on an edge | [`EdgeTransmissionList`] | (`Confirmed::at`, `TransmissionId`) |
 //! | the audit log | [`AuditList`] | (`AuditEntry::at`, `AuditId`) |
+//! | alerts | [`AlertList`] | `AlertId` |
+//! | topics of a version | [`TopicList`] | `TopicId` |
+//! | stored projections | [`ProjectionList`] | `ProjectionId` |
+//! | search hits | [`SearchList`] | (score, `TransmissionId`) |
+//!
+//! A search hit's score is a fixed function of the query, the embedding
+//! model and the transmission (no rank fusion and no corpus statistics), so
+//! it never changes during a traversal; the cursor pins the embedding model
+//! and the topic-model version it was computed under.
 //!
 //! A [`Cursor`] holds the sort key of the last item served, so the next page
 //! is "the items after that key that match the request" (keyset
@@ -21,11 +30,16 @@
 //! later page if its key sorts after the cursor, otherwise not at all.
 //!
 //! A cursor also binds the request it came from (which list, its filter, and
-//! for an edge list its edge, window and topic-model version). The server
+//! for an edge list or search its window and the topic-model version its
+//! first page resolved). The server
 //! authenticates the token it issues; one it cannot verify, or one presented
 //! with a different request, is rejected as an invalid cursor. The marker
 //! type parameter makes presenting one list's cursor to another list a
 //! compile error.
+//!
+//! A valid cursor whose pinned topic-model version or embedding model is no
+//! longer available is not an invalid cursor: the next page fails with the
+//! typed reason (`VersionNotRetained`, `Conflict(EmbeddingModelChanged)`).
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -54,6 +68,14 @@ list_marker! {
     EdgeTransmissionList;
     /// `QueryApi::audit` and `AuditLog::query`.
     AuditList;
+    /// `QueryApi::alerts`.
+    AlertList;
+    /// `QueryApi::topics` and `TopicCatalog::topics`.
+    TopicList;
+    /// `QueryApi::projections` and `ProjectionStore::list`.
+    ProjectionList;
+    /// `QueryApi::search` and `SearchIndex::query`.
+    SearchList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

@@ -34,17 +34,25 @@
 //!   sink has a [`SinkId`]; an alert is delivered to the sinks its rule
 //!   lists, and `QueryApi::sinks` reports each sink's last delivery.
 //!
-//! **Lists.** Channels, agents, alert rules, dead letters, the audit log and
-//! the transmissions behind an edge are read a page at a time with the cursors
-//! of [`crate::paging`], so a traversal is stable under concurrent inserts.
-//! Their filters and request types are in [`lists`].
+//! **Lists.** Channels, agents, alert rules, alerts, dead letters, the audit
+//! log, the transmissions behind an edge, search hits, the topics of a
+//! version and stored projections are read a page at a time with the
+//! cursors of [`crate::paging`], so a traversal is stable under concurrent
+//! inserts. Their filters and request types are in [`lists`]. Whole values
+//! with their own invariants (a policy history, the topic version history,
+//! topic sizes, a lineage, a graph, a series grid) are returned whole.
 //!
-//! **Linked views.** `topology`, `search`, `projection` and
-//! `edge_transmissions` take the same [`TopologyFilter`] and apply it as
+//! **Linked views.** `topology`, `series`, `search`, `edge_transmissions`
+//! and `fit_projection` take the same [`TopologyFilter`] and apply it as
 //! [`TopologyFilter::admits`] defines, so a selection in one view narrows
-//! the others to the same transmissions. Each response reports the
-//! topic-model version its topics are under; responses with different
-//! versions are not linkable and the client re-queries.
+//! the others to the same transmissions. The filter's
+//! [`TopicVersionSelector`] is resolved as [`crate::aggregates::filter`]
+//! defines; each response reports the version it resolved to, and a client
+//! links views by pinning that version in the others. A pinned version that
+//! is unknown is `NotFound`, still fitting or never activated is a
+//! `Conflict`, and no longer retained is `VersionNotRetained`. A filter
+//! naming topics outside the resolved version is
+//! `Conflict(TopicsNotInVersion)`.
 //!
 //! **Watermarks.** `topology`, `series`, `edge_transmissions` and
 //! `topic_sizes` return their result [`Watermarked`]: with L7's watermark,
@@ -56,11 +64,22 @@
 //! ([`crate::aggregates::retention`]) is `VersionNotRetained` wherever its
 //! buckets or assignments would be read; its history entry, topics, lineage
 //! and all-time sizes stay readable.
+//!
+//! **Projections.** `fit_projection` resolves and pins the filter's version,
+//! records a queued job and returns its id at once; the fit runs in the
+//! background ([`crate::aggregates::projection`]). `projection_status` and
+//! `projections` report jobs; `projection` returns a ready projection's
+//! stored frame, identical on every read until its frame expires.
+//!
+//! **Errors.** Every method fails with a [`QueryError`]. How each store's
+//! error becomes one is defined once, by the `From` impls in
+//! [`query_errors`].
 
 pub mod audit;
 pub mod lists;
 pub mod live;
 pub mod operators;
+pub mod query_errors;
 
 use std::fmt;
 
@@ -68,10 +87,13 @@ use crate::aggregates::alert::{Alert, AlertRuleDef, RuleName, UserRule};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
-use crate::aggregates::projection::{Projection, ProjectionToken};
+use crate::aggregates::filter::TopicVersionSelector;
+use crate::aggregates::projection::{
+    FitFailure, Projection, ProjectionInfo, ProjectionParams, ProjectionStatusKind,
+};
 use crate::aggregates::quality::DetectionQuality;
 use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
-use crate::aggregates::topic::{Topic, TopicModelVersion};
+use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::aggregates::watermark::{Watermark, Watermarked};
 use crate::derived::flow::channel::Channel;
@@ -80,19 +102,20 @@ use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::{Verdict, VerdictLog};
 use crate::ids::{
-    AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, SinkId, TransmissionId,
+    AgentId, AlertId, AlertRuleId, ChannelId, EventId, MergeId, OperatorId, ProjectionId, SinkId,
+    TopicId, TransmissionId,
 };
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
-use crate::interfaces::l6_analysis::{SearchQuery, SearchResults};
+use crate::interfaces::l6_analysis::SearchResults;
 use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
 use crate::paging::{
-    AgentList, AlertRuleList, AuditList, ChannelList, DeadLetterList, EdgeTransmissionList, Page,
-    PageRequest,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
+    EdgeTransmissionList, Page, PageRequest, ProjectionList, SearchList, TopicList,
 };
 use crate::support::{TimeWindow, Timestamp};
 
 use audit::{AuditEntry, AuditFilter, AuditSubject};
-use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
+use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage};
 use operators::Operator;
 
 /// The policy an operator asks for. The surface stamps the author and time
@@ -135,7 +158,8 @@ pub enum Permission {
     /// labels or terms. Also verdict logs and detection quality.
     View,
     /// Transmission content, search, topics (their labels and terms come
-    /// from message text) and projections.
+    /// from message text) and projections: fitting them, their jobs and
+    /// their points.
     Content,
     /// Identity and policy: channel policy and promotion, agent merges,
     /// unmerges and renames, alert rules and their sinks (what the gateway
@@ -236,9 +260,8 @@ pub enum AlertStateKind {
 
 /// Every method checks the caller's permission first and returns
 /// `Forbidden` without reading anything when it is missing. List methods
-/// return `InvalidCursor` for a cursor issued for a different request.
-/// `EdgeError::VersionNotRetained` and `CatalogError::VersionNotRetained`
-/// become `VersionNotRetained` with the same version.
+/// return `InvalidCursor` for a cursor the surface did not issue or issued
+/// for a different request.
 pub trait QueryApi {
     /// View.
     async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
@@ -294,14 +317,21 @@ pub trait QueryApi {
         page: &PageRequest<DeadLetterList>,
     ) -> Result<Page<DeadLetter, DeadLetterList>, QueryError>;
 
-    /// View.
-    async fn alerts(&self, caller: &Caller, filter: &AlertFilter)
-    -> Result<Vec<Alert>, QueryError>;
+    /// View. Newest alert first.
+    async fn alerts(
+        &self,
+        caller: &Caller,
+        filter: &AlertFilter,
+        page: &PageRequest<AlertList>,
+    ) -> Result<Page<Alert, AlertList>, QueryError>;
 
     /// View. L7's exposed watermark (`EdgeStore::watermark`).
     async fn watermark(&self, caller: &Caller) -> Result<Watermark, QueryError>;
 
-    /// View.
+    /// View. Exactly [`EdgeStore::graph`], under the version the filter's
+    /// selector resolves to.
+    ///
+    /// [`EdgeStore::graph`]: crate::interfaces::l7_topology::EdgeStore::graph
     async fn topology(
         &self,
         caller: &Caller,
@@ -323,8 +353,9 @@ pub trait QueryApi {
         page: &PageRequest<EdgeTransmissionList>,
     ) -> Result<Watermarked<EdgeTransmissionPage>, QueryError>;
 
-    /// View. Exactly [`EdgeStore::series`]; a grid for another bucket width
-    /// is `InvalidInput(BucketWidthMismatch)`, like an unaligned graph window.
+    /// View. Exactly [`EdgeStore::series`], under the version the filter's
+    /// selector resolves to; a grid for another bucket width is
+    /// `InvalidInput(BucketWidthMismatch)`, like an unaligned graph window.
     ///
     /// [`EdgeStore::series`]: crate::interfaces::l7_topology::EdgeStore::series
     async fn series(
@@ -359,14 +390,20 @@ pub trait QueryApi {
         from: TopicModelVersion,
     ) -> Result<Option<TopicLineage>, QueryError>;
 
-    /// Content.
+    /// Content. Embeds `request`'s text with the current embedding model
+    /// for the semantic and hybrid modes, then runs [`SearchIndex::query`]: a
+    /// page of admitted hits in rank order. Text too long to embed is
+    /// `InvalidInput(QueryTooLong)`; a page after an embedding-model change
+    /// is `Conflict(EmbeddingModelChanged)`.
+    ///
+    /// [`SearchIndex::query`]: crate::interfaces::l6_analysis::SearchIndex::query
     async fn search(
         &self,
         caller: &Caller,
-        query: &SearchQuery,
+        request: &SearchRequest,
         window: Option<TimeWindow>,
         filter: &TopologyFilter,
-        limit: u32,
+        page: &PageRequest<SearchList>,
     ) -> Result<SearchResults, QueryError>;
 
     /// Content.
@@ -376,21 +413,55 @@ pub trait QueryApi {
         id: TransmissionId,
     ) -> Result<Option<Transmission>, QueryError>;
 
-    /// Content.
+    /// Content. A version's topics, newest id first, and the version they
+    /// belong to. `Current` is the catalog's active version; a pinned one may
+    /// be any version whose fit has returned (unlike a linked view, it need
+    /// not have been activated): unknown is `NotFound`, still fitting is
+    /// `Conflict(TopicVersionFitting)`.
     async fn topics(
         &self,
         caller: &Caller,
-        version: Option<TopicModelVersion>,
-    ) -> Result<Vec<Topic>, QueryError>;
+        version: TopicVersionSelector,
+        page: &PageRequest<TopicList>,
+    ) -> Result<TopicPage, QueryError>;
 
-    /// Content. When `request.layout` names a layout that is no longer
-    /// current, returns `StaleProjection` with the current token and no
-    /// points, so a client never merges points from two layouts.
-    async fn projection(
+    /// Content. Validate and record a projection job, and return its id
+    /// without waiting for the fit. Resolves the filter's version (errors as
+    /// for any linked view) and pins it, and records the current embedding
+    /// model, `params` (seed included), the caller and the time. Fails with
+    /// `Conflict(ProjectionQueueFull)` when
+    /// [`ProjectionStore::MAX_PENDING`] jobs are pending. Each call records
+    /// a new job.
+    ///
+    /// [`ProjectionStore::MAX_PENDING`]: crate::interfaces::l6_analysis::ProjectionStore::MAX_PENDING
+    async fn fit_projection(
         &self,
         caller: &Caller,
-        request: &ProjectionRequest,
-    ) -> Result<Projection, QueryError>;
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        params: ProjectionParams,
+    ) -> Result<ProjectionId, QueryError>;
+
+    /// Content. A job's spec, requester and status. Unknown is `NotFound`.
+    async fn projection_status(
+        &self,
+        caller: &Caller,
+        id: ProjectionId,
+    ) -> Result<ProjectionInfo, QueryError>;
+
+    /// Content. Every job, newest first.
+    async fn projections(
+        &self,
+        caller: &Caller,
+        page: &PageRequest<ProjectionList>,
+    ) -> Result<Page<ProjectionInfo, ProjectionList>, QueryError>;
+
+    /// Content. A ready projection: its job record and stored frame, the
+    /// same on every call. Unknown is `NotFound`; queued or fitting is
+    /// `Conflict(ProjectionNotReady)`; failed is `Conflict(ProjectionFailed)`;
+    /// expired is `ProjectionNotRetained`.
+    async fn projection(&self, caller: &Caller, id: ProjectionId)
+    -> Result<Projection, QueryError>;
 
     /// View. Every verdict record of the transmission, oldest first
     /// (`TransmissionVerdicts::log`); its last record is the current
@@ -672,21 +743,21 @@ pub enum QueryError {
     Forbidden {
         missing: Permission,
     },
-    /// A pinned topic-model version whose buckets and assignments are no
-    /// longer retained.
+    /// A topic-model version, pinned by the filter or by a cursor, that was
+    /// activated but whose buckets or assignments are no longer retained.
     VersionNotRetained {
         version: TopicModelVersion,
     },
     /// The request is well-formed but the state does not allow it.
     Conflict(ConflictKind),
     InvalidInput(InputError),
-    /// A cursor the surface did not issue, issued for a different list or
-    /// request, or no longer resumable (its pinned topic version is gone).
-    /// The client restarts from the first page.
+    /// A cursor the surface did not issue, or issued for a different list
+    /// or request. The client restarts from the first page.
     InvalidCursor,
-    /// The projection layout the client holds is no longer current.
-    StaleProjection {
-        current: ProjectionToken,
+    /// A projection whose frame was dropped after the retention period. Its
+    /// spec is still readable with `projection_status`.
+    ProjectionNotRetained {
+        projection: ProjectionId,
     },
 }
 
@@ -735,6 +806,31 @@ pub enum ConflictKind {
     TopicVersionFitting { version: TopicModelVersion },
     /// Pinning a topic-model version whose data retention has dropped.
     TopicVersionDropped { version: TopicModelVersion },
+    /// A linked view pinned to a version that was never activated, so its
+    /// edge buckets were never complete.
+    TopicVersionNotActivated { version: TopicModelVersion },
+    /// A filter listing topics that are not in the version it resolved to,
+    /// usually because `Current` moved on. The client re-reads the topics of
+    /// `version`, or pins the version its topics came from.
+    TopicsNotInVersion {
+        version: TopicModelVersion,
+        topics: Vec<TopicId>,
+    },
+    /// The embedding model changed between embedding the query and running
+    /// it, or between two pages of one search.
+    EmbeddingModelChanged,
+    /// Reading a projection that is queued or fitting.
+    ProjectionNotReady {
+        projection: ProjectionId,
+        status: ProjectionStatusKind,
+    },
+    /// Reading a projection whose fit failed.
+    ProjectionFailed {
+        projection: ProjectionId,
+        failure: FitFailure,
+    },
+    /// Fitting a projection while the job queue is full.
+    ProjectionQueueFull,
 }
 
 /// A request that is invalid whatever the state.
@@ -753,6 +849,8 @@ pub enum InputError {
     /// A semantic query whose text could not be embedded (too long for the
     /// model).
     QueryNotEmbeddable,
+    /// Search text longer than the embedding model's context.
+    QueryTooLong,
 }
 
 impl From<ActionError> for QueryError {

@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.search.score-stable"
+statement = "For a fixed query and embedding model, a transmission's search score is the same on every page and every call, whatever transmissions are indexed, re-indexed or removed meanwhile."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Search is keyset-paged on (score, TransmissionId). If a score depended on
+the rest of the corpus (rank fusion, IDF), concurrent indexing would move
+hits across the cursor and a traversal would skip or repeat them. The hybrid
+score is therefore the mean of a normalized text rank that reads only the
+document and the cosine similarity.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::search_scores_unchanged_by_concurrent_indexing"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -43,8 +43,10 @@ spec/types/
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits
-│   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
+│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── projection/
+│   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
+│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
 │   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
 │   ├── retention.rs       RetentionPolicy (checked, to_drop), Pin, Retention, pin/unpin/mark_dropped on TopicVersionHistory
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
@@ -67,11 +69,12 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down, judge, drop_version, watermark), FrontierSource
-│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit, operators, sinks, watermark), OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink, SinkInfo
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
+│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError, EdgeQueryError
+│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, projections, verdicts, detection quality, audit, operators, sinks, watermark), QueryError, ConflictKind, InputError, OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink, SinkInfo
 │   └── l8_surface/
-│       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
+│       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
+│       ├── query_errors.rs From impls: each store error to one QueryError
 │       ├── live.rs        LiveFeed, UiEvent (id only), LiveCursor, FeedWindow (checked), LiveConfig (checked)
 │       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), ConfigChange, AuditSubject, AuditFilter
 │       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
@@ -89,9 +92,12 @@ spec/types/
   rule set, so a second instance cannot be built. A verdict record can only
   be built for a transmission whose state takes one
   (`TransmissionVerdict::new`).
-- **Opaque newtypes for server-issued values.** Cursors and projection
-  tokens have private fields; clients only hand them back. A cursor's
-  list is a type parameter, so one list's cursor does not fit another.
+- **Opaque newtypes for server-issued values.** Cursors have private
+  fields; clients only hand them back. A cursor's list is a type
+  parameter, so one list's cursor does not fit another.
+- **Errors are typed end to end.** Each store's error enum maps to
+  `QueryError` through one `From` impl, so adding a variant forces a
+  decision about what the UI sees.
 - **Checked constructors for the rest.** When an invariant spans values
   (a content match's reader is not its origin agent; every match in a
   confirmed transmission has one sender), the type has private fields and a

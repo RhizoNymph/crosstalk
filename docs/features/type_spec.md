@@ -7,10 +7,14 @@
 - The events that cross the bus between layers.
 - The trait each layer of the abstraction stack exposes, and its errors.
 - Tests for invariants enforced by checked constructors.
-- The query surface a frontend reads: paginated lists (the audit log
-  included), the one filter that links the graph, search, projection and
-  edge drill-down, the projection's points, time series, the topic-model
-  version history and the channel policy history.
+- The query surface a frontend reads: paginated lists (the audit log,
+  alerts, search hits, topics and projections included), the one filter
+  that links the graph, series, search, projection and edge drill-down and
+  the topic-model version it resolves, stored projections and their
+  columnar frame, time series, the topic-model version history and the
+  channel policy history.
+- The typed query errors, and how every store error behind a query maps
+  to one.
 - Operator verdicts on transmissions (`Genuine`, `FalseDetection`), kept
   beside the detector's state as an append-only log, and the detection
   quality report that tallies them against the detector's calls.
@@ -30,7 +34,9 @@
 
 - Implementations of any trait.
 - Serialization formats, database schemas, wire encodings. Implementation
-  crates add serde and sqlx on their copies of these types.
+  crates add serde and sqlx on their copies of these types. The one
+  exception is the projection frame, whose binary layout is part of the
+  type (`ProjectionFrame::encode` and `decode`); its HTTP framing is not.
 - Lifecycle simulation: `design/lifecycles/cascade.yaml`, outside the
   repository, models the same lifecycles for the stateviz simulator.
 
@@ -142,8 +148,7 @@ The types follow data through the stack:
    returns it stores the `TopicLineage` from the predecessor (the version
    before it in the `TopicVersionHistory`): for each older topic, the new
    topic with the most similar centroid (`LineageEntry::best`, ties to the
-   lower id) and every other new topic at or above the lineage floor. Each
-   fit also fits a 2-D layout; later transmissions are placed into it. The
+   lower id) and every other new topic at or above the lineage floor. The
    re-fit then re-classifies everything and publishes `TopicVersionReady`,
    and the version becomes `Ready`. On `TopicVersionReady`, every watched
    topic rule that is current on the predecessor is carried over with
@@ -157,9 +162,12 @@ The types follow data through the stack:
    the catalog then enforces its `RetentionPolicy` (see "Retention and
    watermarks" below), as it does after an unpin and on start. `TopicSizes` count topic
    assignments per topic (outliers apart), optionally over a window. The
-   `SearchIndex` and the `ProjectionIndex` take a `TopologyFilter` and
-   report the topic-model version they evaluated topics under
-   (`SearchResults`, `Projection`). `AlertRuleEval`s turn envelopes into
+   `SearchIndex` takes a `TopologyFilter`, pages hits in (score, id) order
+   and reports the topic-model version it resolved (`SearchResults`).
+   Projection jobs go through the `ProjectionStore`: a fitter claims the
+   oldest queued job, reads its `Sample` from the `ProjectionSource`, lays it
+   out with the seeded, deterministic `LayoutFitter`, and stores the
+   `ProjectionFrame` (see Projections below). `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
    (`TriageOutcome`), or drops as `RuleInactive` when the rule stopped
    evaluating, and suppresses on sanctioning or rule disabling, and on a
@@ -208,15 +216,17 @@ The types follow data through the stack:
    (`EdgeStore::advance_watermark`), publishes `WatermarkAdvanced` on each
    strict advance, and refuses a contribution into a final bucket
    (`LateContribution`). Graph, series and drill-down results come back
-   `Watermarked`.
+   `Watermarked`. Reads (graph, series, drill-down, watermark) fail with
+   `EdgeQueryError`; writes with `EdgeError`.
 9. **L8 surface.** `QueryApi` serves channels, policy histories, agents,
    alert rules, dead letters, alerts, the topology, series, the topic
    history (versions, sizes, lineage), the transmissions behind an edge,
-   search, transmissions, topics, projections, verdict logs, detection
-   quality and the audit log to an
-   authenticated `Caller` with `Permission`s (View for structure, Content
-   for anything derived from message text, Operate for dead letters, Audit
-   for the audit log). `topology`, `series`, `edge_transmissions` and
+   search, transmissions, topics, projection jobs and projections, verdict
+   logs, detection quality and the audit log to an authenticated `Caller`
+   with `Permission`s (View for structure, Content for anything derived
+   from message text, projections included, Operate for dead letters,
+   Audit for the audit log). Every query fails with a typed `QueryError`
+   (see Errors below). `topology`, `series`, `edge_transmissions` and
    `topic_sizes` return `Watermarked` results, the watermark read from L7
    before the data, and `watermark` returns the current one. Series and the topic history need `View`: they carry
    ids, counts, times and similarities but no text, and topic labels stay
@@ -284,18 +294,25 @@ The types follow data through the stack:
 
 ### Lists and pagination
 
-Channels, agents, alert rules, dead letters, edge transmissions and the
-audit log are read a `Page` at a time. A `PageRequest<L>` holds a
-`PageSize` (1 to 500) and, after the first page, the `Cursor<L>` from the
-previous page. `L` is a marker per list (`ChannelList`, `AgentList`,
-`AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList`),
-so a cursor only fits its own list. Each list is ordered newest first by a
-unique sort key that never changes (ids, `(Confirmed::at, TransmissionId)`
-for an edge, `(AuditEntry::at, AuditId)` for the audit log), and the
-cursor holds the last key served (keyset pagination), so concurrent inserts
-and removals never make a traversal skip or repeat an item. The cursor also
-holds a digest of the request and a MAC; one presented with another request
-is `InvalidCursor`. A page with a next cursor is never empty, so following
+Channels, agents, alert rules, alerts, dead letters, edge transmissions,
+search hits, a version's topics, projection jobs and the audit log are read
+a `Page` at a time. A `PageRequest<L>` holds a `PageSize` (1 to 500) and,
+after the first page, the `Cursor<L>` from the previous page. `L` is a
+marker per list (`ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`,
+`DeadLetterList`, `EdgeTransmissionList`, `SearchList`, `TopicList`,
+`ProjectionList`, `AuditList`), so a cursor only fits its own list. Each
+list is ordered by a unique sort key that never changes, descending (ids,
+`(Confirmed::at, TransmissionId)` for an edge, `(AuditRecord::at, AuditId)`
+for the audit log, `(score, TransmissionId)` for search, whose score is a
+fixed function of query, model and transmission), and the cursor holds the
+last key served (keyset pagination), so concurrent inserts and removals
+never make a traversal skip or repeat an item. The cursor also holds a
+digest of the request and a MAC; one presented with another request is
+`InvalidCursor`. A cursor whose pinned topic version or embedding model is
+gone fails with that typed reason instead (`VersionNotRetained`,
+`Conflict(EmbeddingModelChanged)`). Whole values with their own invariants
+(a policy history, the version history, topic sizes, a lineage, a graph, a
+series) are not paged. A page with a next cursor is never empty, so following
 cursors always ends. List filters (`ChannelFilter`, `AgentFilter`,
 `AlertRuleFilter`, in `l8_surface/lists.rs`, and `AuditFilter`) are defined
 by their `matches` methods; empty lists do not restrict. `AlertRuleFilter`
@@ -304,11 +321,11 @@ a stale-rule list includes disabled stale rules.
 
 ### Linked views
 
-`topology`, `search`, `projection` and `edge_transmissions` take the same
-`TopologyFilter` (`aggregates/filter.rs`, re-exported from
+`topology`, `series`, `search`, `edge_transmissions` and `fit_projection`
+take the same `TopologyFilter` (`aggregates/filter.rs`, re-exported from
 `aggregates::edge`). Each view reduces a confirmed transmission to a
-`FilterSubject` (canonical sender and reader at query time, route, topic
-under the response's topic version) and keeps it when
+`FilterSubject` (canonical sender and reader when the view is computed,
+route, topic under the resolved version, latest verdict) and keeps it when
 `TopologyFilter::admits` holds:
 
 | Field | Admits a transmission when |
@@ -316,16 +333,14 @@ under the response's topic version) and keeps it when
 | `agents` | the canonical sender or reader equals the canonical form of a listed agent |
 | `channels` | its route is `Channel(c)` with `c` listed; other routes never match |
 | `route_kinds` | `RouteKind::from(route)` is listed |
-| `topics` | its topic under the response's version is listed; outliers and unclassified transmissions never match |
+| `topics` | its topic under the resolved version is listed; outliers and unclassified transmissions never match |
 | `false_detections` | `Include` (the default) always; `Exclude` unless the view's copy of the transmission's current verdict is `FalseDetection` |
 
 Empty lists do not restrict and non-empty fields combine with AND. The
 window is separate and always tested against `Confirmed::at`. For the graph
-the subject is each transmission counted into an edge, for search each hit,
-for the projection each point, and for the drill-down each row. Every
-response reports its topic-model version; a client links two responses only
-when the versions agree, and a filter holding an old version's topic ids
-matches nothing.
+and series the subject is each transmission counted into an edge, for
+search each hit, for a projection each sampled point (at fit time), and for
+the drill-down each row.
 
 ### Verdicts and detection quality
 
@@ -402,21 +417,111 @@ order): it is as credible as its best evidence. State and verdict are both
 read at query time. Rows are unique per key, never all zero, and ordered
 (`DetectionQuality::new`).
 
-### Projection
+### Topic versions
 
-`QueryApi::projection` takes a `ProjectionRequest` (window, filter,
-`ProjectionLimit` of 1 to 50,000, and optionally the `ProjectionToken` of
-points the client already holds) and returns a `Projection`. The token names
-one fitted layout (topic version and revision); within a token a
-transmission's coordinates and topic never change, and a request naming a
-token that is no longer current gets `StaleProjection { current }` instead
-of points. Each `ProjectedPoint` carries its canonical sender and reader,
-`RouteKind`, topic (its slot under the token's version, `Projection::slot`),
-`Confirmed::at` and coordinates, so a client colours and links points
-without lookups. When more transmissions match than the limit, the points
-are the `limit` with the smallest keyed sample hash, so the sample is fixed
-per token and survives narrowing. `Projection::new` checks that it holds
-exactly `min(matching, limit)` points, none twice, all finite.
+Every linked view is computed under one concrete topic-model version and
+reports it. The filter's `topic_version` (`TopicVersionSelector`) picks it:
+`Current` is the `TopicCatalog`'s active version when the view is computed,
+and `Pinned(v)` is `v`. The store serving the view resolves it with
+`TopicVersionSelector::resolve` against the catalog's history and its own
+retention:
+
+| `Pinned(v)` where `v` is | Result |
+| --- | --- |
+| active, or superseded after being active and still retained | `v` |
+| superseded after being active, no longer retained | `VersionNotRetained { version }` |
+| ready, or superseded without ever being active | `Conflict(TopicVersionNotActivated)` |
+| fitting | `Conflict(TopicVersionFitting)` |
+| unknown | `NotFound` |
+
+A paged view resolves on its first page and its cursor pins the result;
+later pages use it whatever `Current` now is, and fail with
+`VersionNotRetained` if its data is dropped meanwhile. A non-empty `topics`
+list must name topics of the resolved version only
+(`TopologyFilter::topics_outside`), otherwise the view fails with
+`Conflict(TopicsNotInVersion { version, topics })`, so a filter built from
+an older version is refused instead of silently matching nothing. To link
+views, a client takes the version the first response reports and pins it in
+every other request. `QueryApi::topics` takes the same selector but, being a
+catalog read, also accepts a ready version that was never activated.
+
+### Errors
+
+Every query returns `QueryError`: `Store` (retry may succeed), `NotFound`,
+`Forbidden { missing }`, `VersionNotRetained`, `Conflict(ConflictKind)`
+(the state does not allow the request), `InvalidInput(InputError)` (invalid
+whatever the state), `InvalidCursor`, `ProjectionNotRetained`. Operator
+actions return the subset `ActionError`. How each store error becomes a
+`QueryError` is defined once, by the `From` impls in
+`l8_surface/query_errors.rs`, for `EdgeQueryError`, `SearchError`,
+`CatalogError`, `ProjectionStoreError`, `EmbedError` (embedding a search's
+text), `VersionUnavailable` and `BusError` (the dead-letter list). No query
+error is a free-text classification: `Store`'s reason is diagnostic only.
+
+### Projections
+
+UMAP is randomized and depends on its sample, so projections are fitted
+once, stored and read back exactly; a cited view always reproduces.
+
+1. `QueryApi::fit_projection(caller, window, filter, params)` needs
+   Content. It resolves the filter's version (errors as for any linked
+   view), builds a `ProjectionSpec` (window, filter pinned to that version,
+   `ProjectionParams`, current `EmbeddingModel`), records a queued
+   `ProjectionInfo` (`ProjectionStore::enqueue`, refused with
+   `Conflict(ProjectionQueueFull)` beyond 16 pending jobs) and returns its
+   `ProjectionId` at once. `ProjectionParams` (checked) holds the sample size
+   (`ProjectionLimit`, 1 to 100,000), UMAP's neighbours (2 to 200) and
+   minimum distance (in thousandths, 0 to 1,000, so it serializes exactly)
+   and the seed.
+2. A fitter claims the oldest queued job (`Queued` to `Fitting`, under a
+   lease). `ProjectionSource::sample` reads every transmission confirmed in
+   the window that the pinned filter admits (agents resolved at that
+   moment) and that has an embedding from the spec's model; that count is
+   `matching`. It keeps the `limit` with the smallest sample key, a BLAKE3
+   keyed by the seed over the transmission id, in ascending key order, and
+   records the current `Watermark`. `LayoutFitter::fit` lays them out, a
+   pure function of embeddings, order and params. The fitter builds the
+   frame with `ProjectionFrame::from_points` and `complete` stores it with
+   the `Ready(Fitted)` status in one transaction. Deterministic problems
+   (`FitFailure`: too few points, version or model dropped, a non-finite
+   layout) make the job `Failed`; anything else leaves it to be requeued
+   when its lease lapses.
+3. `projection_status` and `projections` (paged) report jobs.
+   `projection(caller, id)` returns a `Projection`: the ready job and its
+   frame, identical on every read. Queued or fitting is
+   `Conflict(ProjectionNotReady)`, failed is `Conflict(ProjectionFailed)`,
+   expired is `ProjectionNotRetained`, unknown is `NotFound`.
+4. Frames are kept for `projection.frame_retention_days` (default 180)
+   after fitting, then dropped (`Expired`); the job record and its spec are
+   kept, so a citation still says exactly what was fitted and it can be
+   fitted again with the same seed. The catalog keeps every version's
+   topics, so a frame's topic ids always resolve to labels.
+
+`ProjectionInfo` (checked) keeps its timestamps in order, a fit's watermark
+no later than its start and exactly `min(matching, limit)` points; its
+transitions (`start`, `requeue`, `complete`, `fail`, `expire`) refuse moves
+outside the lifecycle. `Projection::new` checks that the frame's header
+agrees with the ready job.
+
+Points are frozen at fit time: canonical agents, route kind, topic under
+the pinned version and `Confirmed::at` as they were when the sample was
+read. For two fits with the same seed and sample size, a point sampled by
+the wider one is sampled by any narrower one that still admits it.
+
+**Frame.** A `ProjectionFrame` is the projection as columns: transmission
+ids, confirmation times, packed `f32` x/y pairs, and `u32` indices into
+tables of senders, readers, route kinds and topics (`OUTLIER` for an
+outlier). `ProjectionFrame::new` checks that every column has one entry per
+point, the count is `min(matching, limit)`, indices are in range, tables
+are distinct and in order of first use (so equal points give equal bytes),
+no transmission repeats and coordinates are finite. The binary layout
+(format 1, little-endian) is a 64-byte header (magic `XTPF`, format, table
+lengths, projection id, topic version, count, sample size, watermark,
+matching) followed by the id sections, the `u64` times, the coordinates,
+the four index columns and the route kind bytes, padded to 8 bytes, with
+every section aligned for typed-array views; the full table is in
+`aggregates/projection/frame.rs`. `encode` writes it and `decode` accepts
+exactly what `encode` can produce.
 
 ### Retention and watermarks
 
@@ -481,7 +586,7 @@ the active topic version.
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `DisplayText` (checked), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
-| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `DeadLetterList`, `EdgeTransmissionList`, `AuditList` |
+| `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`, `SearchList`, `TopicList`, `ProjectionList`, `AuditList` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
@@ -501,8 +606,9 @@ the active topic version.
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
 | `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph`, `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
-| `spec/types/aggregates/filter.rs` | The filter shared by every linked view | `TopologyFilter`, `FilterSubject`, `TopologyFilter::admits` |
-| `spec/types/aggregates/projection.rs` | The 2-D projection of embeddings | `ProjectionToken`, `ProjectionLimit`, `ProjectedPoint`, `Projection`, `InvalidProjection` |
+| `spec/types/aggregates/filter.rs` | The filter shared by every linked view, and topic-version resolution | `TopologyFilter` (`admits`, `topics_outside`, `pinned`), `FilterSubject`, `TopicVersionSelector` (`resolve`), `VersionUnavailable`, `FalseDetections` |
+| `spec/types/aggregates/projection/mod.rs` | Stored projection jobs | `ProjectionLimit`, `ProjectionParams` (checked), `ProjectionSpec`, `FitFailure`, `Fitted`, `ProjectionStatus`, `ProjectionInfo` (checked, with transitions), `ProjectedPoint`, `Projection` (checked) |
+| `spec/types/aggregates/projection/frame.rs` | The columnar projection frame and its binary layout | `ProjectionFrame` (checked; `from_points`, `encode`, `decode`), `FrameHeader`, `FrameTables`, `FrameColumns`, `InvalidFrame`, `FrameDecodeError`, `MAGIC`, `FORMAT`, `OUTLIER` |
 | `spec/types/aggregates/quality.rs` | Verdicts tallied against the detector's calls | `MatchClass` (`strongest`), `QualityMatch`, `QualityRow`, `DetectionQuality` (checked, `tally`), `InvalidQuality` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/retention.rs` | Retention of topic-model versions | `RetentionPolicy` (checked: `protected`, `to_drop`), `Pin`, `Retention`, `PinChange`, `PinError`, `DropError`, `TopicVersionHistory::pin`, `unpin`, `mark_dropped` |
@@ -513,13 +619,14 @@ the active topic version.
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`), `ProjectionIndex`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark` and `FrontierSource` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, `QueryApi::verdicts`, `detection_quality`, `operators` and `sinks`, `SinkInfo`, `SinkKind`, and `Caller` (checked: built only by the directory), `Permission`, `PermissionSet`, `OperatorAction` (`required_permission`, `kind`, `subjects`), `ActionKind`, `ActionOutcome` (`subject`) (L8) |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory` (L3); `ChannelRegistry::set_policy`, `policy_history` and `promote` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` and `EdgeQueryError` (L7); the list, series, topic-history, policy-history and audit queries on `QueryApi`, `QueryApi::verdicts`, `detection_quality`, `operators` and `sinks`, `SinkInfo`, `SinkKind`, and `Caller` (checked: built only by the directory), `Permission`, `PermissionSet`, `OperatorAction` (`required_permission`, `kind`, `subjects`), `ActionKind`, `ActionOutcome` (`subject`) (L8) |
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
-| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters and the projection request | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `ProjectionRequest` |
+| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `BusError` |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs` for the query surface; `live.rs`, `audit.rs`, `operators.rs`, `policy.rs` for the live feed, audit log, operator directory and policy history; `agents.rs` holds a reference merge table and a seeded random walk over merges and reverts; `rules.rs` for built-in and user rules; `surface.rs` for operator actions; `verdicts.rs`, `quality.rs` for verdicts and detection quality; `retention.rs`, `watermark.rs` for retention and watermarks) | — |
+| `spec/types/tests/` | Invariant tests (`series.rs`, `topic_history.rs` for the series and topic history; `filter.rs`, `paging.rs`, `projection.rs`, `projection_frame.rs`, `topic_version.rs`, `query_errors.rs` for the query surface; `live.rs`, `audit.rs`, `operators.rs`, `policy.rs` for the live feed, audit log, operator directory and policy history; `agents.rs` holds a reference merge table and a seeded random walk over merges and reverts; `rules.rs` for built-in and user rules; `surface.rs` for operator actions; `verdicts.rs`, `quality.rs` for verdicts and detection quality; `retention.rs`, `watermark.rs` for retention and watermarks) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -682,10 +789,15 @@ the active topic version.
   per switch, only after `EdgeStore::activate` has switched graph and
   series queries, and never for a version older than the active one.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges.
-- Every linked view (graph, search, projection, edge drill-down) applies
-  one `TopologyFilter` as `TopologyFilter::admits` defines, with agents
-  resolved through merges at query time and topics under the version the
-  response reports.
+- Every linked view (graph, series, search, projection fit, edge
+  drill-down) applies one `TopologyFilter` as `TopologyFilter::admits`
+  defines, with agents resolved through merges when the view is computed
+  and topics under one resolved version, which the response reports.
+  `TopicVersionSelector::resolve` is the only resolution; a paged view's
+  cursor pins its first page's version. A filter naming topics outside the
+  resolved version is refused (`TopicsNotInVersion`), never answered empty.
+- Every query error is a typed `QueryError`; each store error maps to
+  exactly one variant through the `From` impls in `query_errors.rs`.
 - List pages hold at most their `PageSize` (1 to 500) items; a page with a
   next cursor is non-empty (`Page::more`). Cursors are typed by list and
   bound to their request; keyset ordering on immutable unique keys keeps a
@@ -693,9 +805,15 @@ the active topic version.
 - An `EdgeSelector` is never a self-edge. A full drill-down of an edge lists
   exactly the transmissions the graph counts into it, under the topic
   version pinned by its first page.
-- A `Projection` holds exactly `min(matching, limit)` points with a limit of
-  1 to 50,000, no transmission twice and finite coordinates. Within one
-  `ProjectionToken` points never move or change topic.
+- A projection is fitted once and stored: `projection(id)` returns the
+  same frame on every read until its frame expires. Its spec records the
+  window, the filter pinned to its version, the params (seed included) and
+  the embedding model; its `Fitted` record the watermark and counts. A
+  `ProjectionFrame` holds exactly `min(matching, limit)` points with a
+  sample size of 1 to 100,000, consistent column lengths, in-range indices,
+  canonical tables, no transmission twice and finite coordinates; `decode`
+  accepts exactly what `encode` produces. `ProjectionInfo` timestamps never
+  go backwards and transitions follow the job lifecycle.
 - Lists of dead letters need Operate and the audit log needs Audit; edge
   drill-down rows carry no message content and need View, as do verdict
   logs and detection quality.

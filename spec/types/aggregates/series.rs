@@ -2,8 +2,9 @@
 //! per group. They back the UI's time brush and its per-topic, per-route and
 //! per-edge trend lines.
 //!
-//! A series query reads the same buckets as a graph query: the active
-//! topic-model version's, with agents resolved through merge aliases,
+//! A series query reads the same buckets as a graph query: those of the
+//! topic-model version its filter's selector resolves to (reported as
+//! [`TopologySeries::topic_version`]), with agents resolved through merge aliases,
 //! self-edges dropped and the same [`TopologyFilter`] semantics. Each point
 //! is the stat under the [`Weighting`] summed over one step of the grid, so
 //! for the same window, weighting, filter and topic version:
@@ -190,7 +191,7 @@ impl SeriesGrid {
 pub enum SeriesGrouping {
     /// One series of everything the filter admits.
     Total,
-    /// One series per topic of the active version, plus one for outliers.
+    /// One series per topic of the resolved version, plus one for outliers.
     Topic,
     RouteKind,
     /// One series per (from, to, route) over canonical agents: the graph's

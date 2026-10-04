@@ -1,29 +1,40 @@
 //! The one filter shared by every linked view.
 //!
-//! The topology graph, search, the projection (UMAP) and the list of
-//! transmissions behind an edge all take a [`TopologyFilter`] and apply it
-//! identically, so selecting agents, channels, route kinds or topics in one
-//! view narrows the others to the same transmissions.
+//! The topology graph, series, search, the projection (UMAP) and the list
+//! of transmissions behind an edge all take a [`TopologyFilter`] and apply
+//! it identically, so selecting agents, channels, route kinds or topics in
+//! one view narrows the others to the same transmissions.
 //!
 //! Every view filters confirmed transmissions. Each transmission is reduced
 //! to a [`FilterSubject`], and [`TopologyFilter::admits`] decides it:
 //!
 //! | View | Unit filtered | Subject |
 //! | --- | --- | --- |
-//! | topology graph | the transmissions counted into its edges | each counted transmission |
+//! | topology graph, series | the transmissions counted into its edges | each counted transmission |
 //! | search | each hit | the hit's transmission |
-//! | projection | each point | the point's transmission |
+//! | projection | each point | the point's transmission, at fit time |
 //! | edge transmissions | each row | the row's transmission |
 //!
-//! A subject's agents are canonical (resolved through `AgentDirectory` at
-//! query time), and so are the agents the filter lists. Its topic is the
-//! transmission's classification under the topic-model version the response
-//! reports (`TopologyGraph::topic_version`, `SearchResults::topic_version`,
-//! `Projection::topic_version`, `EdgeTransmissionPage::topic_version`); a
-//! transmission not yet classified under that version has no topic. Topic
-//! ids are never reused across versions, so a filter holding an older
-//! version's topic ids matches nothing; the reported version lets a client
-//! notice and refetch the topics.
+//! A subject's agents are canonical (resolved through `AgentDirectory` when
+//! the view is computed; for a stored projection, when it was fitted), and
+//! so are the agents the filter lists.
+//!
+//! **Topic version.** Every view evaluates topics (the filter's and the
+//! ones it reports) under one concrete topic-model version, which it reports
+//! (`TopologyGraph::topic_version`, `TopologySeries::topic_version`,
+//! `SearchResults::topic_version`, `EdgeTransmissionPage::topic_version`,
+//! `ProjectionSpec::topic_version`, `TopicPage::version`). The store serving
+//! the view resolves the filter's [`TopicVersionSelector`] with
+//! [`TopicVersionSelector::resolve`] against the `TopicCatalog`'s history,
+//! once: for a paged view on its first page, whose cursor then pins the
+//! resolved version for every later page whatever the selector would now
+//! resolve to. A pinned version whose data is dropped before a later page is
+//! [`VersionUnavailable::NotRetained`], not an invalid cursor. A non-empty
+//! `topics` list must name topics of the resolved version only
+//! ([`TopologyFilter::topics_outside`]); otherwise the view fails with
+//! `ConflictKind::TopicsNotInVersion` instead of silently matching nothing.
+//! A client that links several views resolves once (the first response's
+//! reported version) and pins it in every other request.
 //!
 //! The time window is not part of the filter: every view takes it
 //! separately and tests it against `Confirmed::at` with
@@ -31,6 +42,7 @@
 
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
+use crate::aggregates::topic_history::{TopicVersionHistory, TopicVersionStatus};
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId, TopicId};
 
@@ -60,10 +72,64 @@ pub struct TopologyFilter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TopicVersionSelector {
-    /// The active version at query time; the response reports which.
+    /// The catalog's active version when the view is computed; the response
+    /// reports which.
     #[default]
     Current,
     Pinned(TopicModelVersion),
+}
+
+/// Why a selector names no version a linked view can be computed under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VersionUnavailable {
+    /// The catalog has no such version.
+    Unknown(TopicModelVersion),
+    /// Still being fitted or re-classified.
+    Fitting(TopicModelVersion),
+    /// Ready but never activated (not yet, or overtaken by a newer version
+    /// before it was), so its edge buckets were never complete.
+    NotActivated(TopicModelVersion),
+    /// Was activated, but the store no longer retains its data.
+    NotRetained(TopicModelVersion),
+}
+
+impl TopicVersionSelector {
+    /// The concrete version a linked view (graph, series, search, edge
+    /// transmissions, projection fit) is computed under. `Current` is the
+    /// history's active version, which every store retains. `Pinned(v)`
+    /// must have been activated (it is active or superseded after being
+    /// active) and be `retained` by the store serving the view.
+    pub fn resolve(
+        self,
+        history: &TopicVersionHistory,
+        retained: impl Fn(TopicModelVersion) -> bool,
+    ) -> Result<TopicModelVersion, VersionUnavailable> {
+        let version = match self {
+            Self::Current => return Ok(history.active().version()),
+            Self::Pinned(version) => version,
+        };
+        let info = history
+            .get(version)
+            .ok_or(VersionUnavailable::Unknown(version))?;
+        match info.status() {
+            TopicVersionStatus::Fitting { .. } => Err(VersionUnavailable::Fitting(version)),
+            TopicVersionStatus::Ready { .. }
+            | TopicVersionStatus::Superseded {
+                activated_at: None, ..
+            } => Err(VersionUnavailable::NotActivated(version)),
+            TopicVersionStatus::Active { .. } => Ok(version),
+            TopicVersionStatus::Superseded {
+                activated_at: Some(_),
+                ..
+            } => {
+                if retained(version) {
+                    Ok(version)
+                } else {
+                    Err(VersionUnavailable::NotRetained(version))
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -124,5 +190,32 @@ impl TopologyFilter {
             FalseDetections::Exclude => !subject.false_detection,
         };
         agents && channels && route_kinds && topics && verdicts
+    }
+
+    /// The listed topics that do not belong to `version`, in list order and
+    /// without repeats. `version_of` looks a topic id up in the catalog;
+    /// topic ids are never reused across versions. A view whose filter has
+    /// any fails with `TopicsNotInVersion` rather than matching nothing.
+    pub fn topics_outside(
+        &self,
+        version: TopicModelVersion,
+        version_of: impl Fn(TopicId) -> Option<TopicModelVersion>,
+    ) -> Vec<TopicId> {
+        let mut outside: Vec<TopicId> = Vec::new();
+        for &topic in &self.topics {
+            if version_of(topic) != Some(version) && !outside.contains(&topic) {
+                outside.push(topic);
+            }
+        }
+        outside
+    }
+
+    /// This filter with its selector pinned to `version`. A stored
+    /// projection keeps its filter in this form.
+    pub fn pinned(self, version: TopicModelVersion) -> Self {
+        Self {
+            topic_version: TopicVersionSelector::Pinned(version),
+            ..self
+        }
     }
 }
