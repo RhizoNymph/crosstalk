@@ -1,13 +1,13 @@
 [invariant]
 id = "canonical.normalize.continuation-preserved"
-statement = "A normalized Exchange's continuation equals request.wire.continuation of the RawExchange it came from."
+statement = "A normalized Exchange's continuation equals request.harness.continuation of the RawExchange it came from."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]
 rationale = """
 The continuation tells reconstruction whether `request` is a full history
 or an increment after a given response. The adapter reads it from the
-request body into the WireRequest of the RawExchange's DecodedRequest; L1
+request body into the HarnessRequest of the RawExchange's DecodedRequest; L1
 copies it onto the Exchange. An increment recorded as FullHistory would
 start a new conversation on every WebSocket turn, and a full history
 recorded as an increment would be appended to a conversation it already

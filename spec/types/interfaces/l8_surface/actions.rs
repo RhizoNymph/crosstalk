@@ -7,6 +7,8 @@
 //! the action value itself ([`super::audit::OperatorRecord`]), so every
 //! action is audited the same way.
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::{RuleName, UserRule};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::resource::ResourcePattern;
@@ -22,7 +24,18 @@ use super::{Caller, Permission, PolicyKind};
 
 /// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
 /// similarity thresholds, which are floats.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// What the surface acts on and the audit log stores, so it serializes
+/// both ways (the audit log returns it), but it is never a request:
+/// `MergeAgents` holds a [`MergeRequest`] whose author the surface stamps
+/// from the caller ([`crate::wire::authority`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OperatorAction {
     SetPolicy {
         channel: ChannelId,
@@ -240,7 +253,13 @@ impl OperatorAction {
 /// What an accepted operator action did, including any ids it created or
 /// retired, so the UI can navigate to them and the audit log can find the
 /// action from any of them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ActionOutcome {
     /// The action changed state.
     Applied,
@@ -283,9 +302,23 @@ impl ActionOutcome {
 /// The channels one promotion superseded: sorted by id, each once, so two
 /// outcomes of the same promotion are equal however the registry listed
 /// them. Built only by [`SupersededChannels::new`], which sorts and
-/// deduplicates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+/// deduplicates. On the wire, an array of channel ids; decoding goes
+/// through [`SupersededChannels::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(from = "Vec<ChannelId>", into = "Vec<ChannelId>")]
 pub struct SupersededChannels(Vec<ChannelId>);
+
+impl From<Vec<ChannelId>> for SupersededChannels {
+    fn from(channels: Vec<ChannelId>) -> Self {
+        Self::new(channels)
+    }
+}
+
+impl From<SupersededChannels> for Vec<ChannelId> {
+    fn from(channels: SupersededChannels) -> Self {
+        channels.0
+    }
+}
 
 impl SupersededChannels {
     /// Sorts `channels` by id and drops repeats.

@@ -25,6 +25,8 @@
 //! decisions are also kept in the channel's `PolicyHistory`; the log answers
 //! "who did what, when, to what, and what came of it" across everything.
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::AlertRuleKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::PolicyAuthor;
@@ -42,6 +44,9 @@ use crate::interfaces::l8_surface::{
 use crate::observed::agent::IdentityEvidence;
 use crate::paging::{AuditList, Page, PageRequest};
 use crate::support::{NonEmpty, TimeWindow, Timestamp};
+use crate::wire::{Rejected, WireRequest};
+
+use super::permissions::RecordedCaller;
 
 /// Who made an audited change: config, or an operator. The same type that
 /// authors a policy decision, so a `SetPolicy` entry and the decision it
@@ -50,7 +55,13 @@ pub type AuditAuthor = PolicyAuthor;
 
 /// An entity an audited action or change touched. The log's subject filter
 /// matches on these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AuditSubject {
     Agent(AgentId),
     Channel(ChannelId),
@@ -69,7 +80,13 @@ pub enum AuditSubject {
 
 /// What an operator call came to: the exact result `act` returned, split so
 /// the log can tell refusals from failures.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AuditOutcome {
     Succeeded(ActionOutcome),
     /// A permitted action that was refused or failed. It had no effect.
@@ -82,7 +99,13 @@ pub enum AuditOutcome {
 
 /// Why a permitted action, or a config change, was refused or failed:
 /// every `ActionError` except `Forbidden`, which is its own outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Rejection {
     NotFound,
     Conflict(ConflictKind),
@@ -152,7 +175,13 @@ impl AuditOutcome {
 /// names that permission, because the permission is checked before anything
 /// else. A record that says an action was attempted by a caller who could
 /// not attempt it, or forbidden to one who could, cannot be built.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// On the wire, `{"caller": {"operator": .., "permissions": [..]}, "action":
+/// .., "outcome": ..}`: the caller is written as a `RecordedCaller`, and
+/// decoding goes through [`OperatorRecord::new`]. A response (inside
+/// `AuditEntry`), never a request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RawOperatorRecord", into = "RawOperatorRecord")]
 pub struct OperatorRecord {
     caller: Caller,
     action: OperatorAction,
@@ -169,6 +198,35 @@ pub enum InvalidOperatorRecord {
     /// `Forbidden`, but naming a permission other than the one the action
     /// requires.
     WrongMissingPermission { required: Permission },
+}
+
+/// [`OperatorRecord`]'s wire form: the caller as recorded, the action and
+/// the outcome.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawOperatorRecord {
+    caller: RecordedCaller,
+    action: OperatorAction,
+    outcome: AuditOutcome,
+}
+
+impl From<OperatorRecord> for RawOperatorRecord {
+    fn from(record: OperatorRecord) -> Self {
+        Self {
+            caller: RecordedCaller::from(&record.caller),
+            action: record.action,
+            outcome: record.outcome,
+        }
+    }
+}
+
+impl TryFrom<RawOperatorRecord> for OperatorRecord {
+    type Error = Rejected<InvalidOperatorRecord>;
+
+    fn try_from(raw: RawOperatorRecord) -> Result<Self, Self::Error> {
+        Self::new(Caller::from(raw.caller), raw.action, raw.outcome)
+            .map_err(|error| Rejected::new("operator record", error))
+    }
 }
 
 impl OperatorRecord {
@@ -228,7 +286,13 @@ impl OperatorRecord {
 
 /// One change config made, on load or reload. Each names its target, so
 /// the log reads as a list of facts, not as a copy of the config file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ConfigChange {
     /// Declared a channel before traffic (`ChannelRegistry::declare`). An
     /// `Unreviewed` policy records no decision.
@@ -289,13 +353,20 @@ impl ConfigChange {
 /// A config change either took effect or was refused (a declared pattern
 /// overlapping another channel's, for example). A change the stored state
 /// already reflects is not a change and is not recorded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ConfigOutcome {
     Applied,
     Rejected(Rejection),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ConfigRecord {
     /// The config document whose load made the change.
     pub config: ConfigHash,
@@ -303,7 +374,13 @@ pub struct ConfigRecord {
     pub outcome: ConfigOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AuditBody {
     Operator(OperatorRecord),
     Config(ConfigRecord),
@@ -313,7 +390,8 @@ pub enum AuditBody {
 }
 
 /// One entry of the audit log.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AuditEntry {
     pub id: AuditId,
     /// When the action was accepted or refused, or when config made the
@@ -343,7 +421,8 @@ impl AuditEntry {
 
 /// `QueryApi::audit`'s filter. An empty `by` and a `None` do not restrict;
 /// the fields combine with AND.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AuditFilter {
     /// Keep entries by any of these authors. `AuditAuthor::Config` selects
     /// config changes.
@@ -366,6 +445,10 @@ impl AuditFilter {
         by && subject && in_window
     }
 }
+
+/// A client chooses every field of the filter, `by` included: which
+/// authors to list, not who is asking.
+impl WireRequest for AuditFilter {}
 
 /// Append-only storage for audit entries. There is no update or delete.
 pub trait AuditLog {

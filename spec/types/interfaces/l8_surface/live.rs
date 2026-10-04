@@ -74,14 +74,23 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::changed::Changed;
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crate::support::Watermark;
+use crate::wire::decode_text;
 
 /// One live event: an id to re-query, never the entity's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum UiEvent {
     AlertChanged {
         id: AlertId,
@@ -153,12 +162,14 @@ impl UiEvent {
 }
 
 /// One incarnation of the feed log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct FeedEpoch(pub u64);
 
 /// A position in the feed log: the SSE event id. `seq` 0 is before the
 /// first entry. Cursors of different epochs are not comparable, so this
-/// type has no ordering.
+/// type has no ordering. On the wire, its text ([`LiveCursor::encode`]), the
+/// same string the SSE event id carries: `"7-1042"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LiveCursor {
     pub epoch: FeedEpoch,
@@ -181,6 +192,26 @@ impl LiveCursor {
     }
 }
 
+/// Text that is not a cursor [`LiveCursor::encode`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidLiveCursor;
+
+/// The cursor's text.
+impl Serialize for LiveCursor {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.encode())
+    }
+}
+
+/// A string [`LiveCursor::decode`] reads.
+impl<'de> Deserialize<'de> for LiveCursor {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "live cursor", |text| {
+            Self::decode(&text).ok_or(InvalidLiveCursor)
+        })
+    }
+}
+
 fn decimal(text: &str) -> Option<u64> {
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -189,7 +220,13 @@ fn decimal(text: &str) -> Option<u64> {
 }
 
 /// Where a subscription starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Resume {
     /// No `Last-Event-ID`: start with the next entry.
     Fresh,
@@ -231,7 +268,8 @@ pub enum ResumePlan {
     Resync(ResyncReason),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResyncReason {
     /// Entries after the cursor have left retention.
     Expired,
@@ -282,7 +320,13 @@ impl FeedWindow {
 }
 
 /// One SSE event. Its cursor is the event id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum LiveItem {
     Event {
         cursor: LiveCursor,
@@ -312,7 +356,8 @@ impl LiveItem {
 
 /// Why a stream ended. After any of these, the client reconnects with its
 /// last cursor (after re-authenticating, for `SessionEnded`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LiveEnd {
     /// The stream's buffer filled: the client read too slowly.
     Lagged,

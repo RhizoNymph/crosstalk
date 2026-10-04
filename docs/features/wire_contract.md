@@ -26,6 +26,12 @@ the type.
 - The reference area, converted completely: ids and digests, the support
   types, paging, the alert inbox (`alerts`, `alert`) and the query and
   action errors.
+- Stage 0 of the rest: every type reachable from a wire root (a
+  `QueryApi` argument or result, the operator action and its outcome, the
+  live feed's items, `Envelope`, an export's lines, `AuditEntry`) has its
+  recipe's derives and, if checked, its decode mirror, so every area
+  compiles against every other; its goldens, rejection tests and docs
+  follow per area.
 - How the UI consumes the contract.
 
 ## Non-scope
@@ -38,10 +44,14 @@ the type.
   features fix those; this feature fixes the JSON payload they carry.
 - Binary encodings: the projection frame's layout (`ProjectionFrame`) and
   the export digest's canonical row encoding are defined with their types.
-- The remaining areas (observed facts, provenance, flow, topology,
-  analysis, the rest of the surface, export, bus events), converted by
-  follow-up workstreams with the recipe below; until then their types
-  have no serde impls.
+- Goldens and rejection tests of the remaining areas (observed facts,
+  provenance, flow, topology, analysis, the rest of the surface, export,
+  bus events), written by follow-up workstreams; stage 0 gave their types
+  the recipe's impls only.
+- Types no wire root reaches keep no serde impls: traits, in-process
+  values (the proxy hot path, the message bodies the blob store holds,
+  readers' copies and drafts), store errors that map into `QueryError`,
+  config, and `Projection`, whose frame is binary.
 - Schema evolution beyond "change the golden and upgrade every node
   together": there is no versioned envelope and no tolerant reader.
 
@@ -178,7 +188,12 @@ on the wire.
 
 - **Requests** implement `WireRequest` (`Serialize + DeserializeOwned`):
   in the reference area the entity ids, `TimeWindow`, `IdBatch<T>`,
-  `PageRequest<L>`, `AlertFilter`, and `Option` of any request. The
+  `PageRequest<L>`, `AlertFilter`, and `Option` of any request; since
+  stage 0 also `TopologyFilter`, `TopicVersionSelector`, `Weighting`,
+  `EdgeSelector`, `SeriesGrid`, `SeriesGrouping`, `AgentFilter`,
+  `ResourcePattern`, `ProjectionParams`, `ChannelFilter`,
+  `AlertRuleFilter`, `SearchRequest`, `AuditFilter`,
+  `TransmissionSelection`, `ExcerptWindow` and `ExportRequest`. The
   gateway's HTTP layer decodes client input only through
   `decode_request::<T: WireRequest>`, so implementing the trait is the one
   decision that lets a client send a type. An axum extractor generic over
@@ -188,7 +203,9 @@ on the wire.
 - **Responses and bus events** derive `Serialize` and `Deserialize`
   (the UI and other nodes decode them) and are never `WireRequest`.
 - **Authority** never comes from the client. `Caller` implements neither
-  serde trait: the extractor builds it from the verified session through
+  serde trait (an audit record writes the caller it keeps as a private
+  `RecordedCaller`, `{"operator": .., "permissions": [..]}`, which a
+  client decoding the record reads back into a `Caller`): the extractor builds it from the verified session through
   `OperatorDirectory::caller`, and responses name its `OperatorId`. So do
   `RequestIdentity`, `OperatorDirectory` and `Promotion` (built in process
   from a `PromoteChannel`, the caller and the acceptance time). Every
@@ -198,7 +215,10 @@ on the wire.
   `VerdictLog`, `Pin`, `PolicyDecision`, `Decision`, `PolicyAuthor`,
   `Declaration`, `PolicyHistory`, `PromotionPreview`, `OperatorAction`,
   `OperatorRecord`, `AuditEntry`, `ExportHeader`, `ExportRecord`,
-  `ProjectionInfo`, `AlertRuleDef`, `Alert`, `AlertState`, `Envelope`.
+  `ProjectionInfo`, `AlertRuleDef`, `Alert`, `AlertState`, `Envelope`,
+  `Supersession`, `SupersededInto`, `Policy`, `Retention`, `AlertRule`,
+  `VerdictRow`, `ConfigChange`, `ConfigRecord`, `Operator` and
+  `PermissionSet`.
   `wire/authority.rs` asserts all of this at compile time (a hand-written
   `assert_not_impl!`, the `static_assertions` technique), and its
   `compile_fail` doctests show decoding a `Caller` or a `Promotion` does
@@ -296,7 +316,7 @@ the spec types themselves:
 | `spec/types/aggregates/topic.rs`, `aggregates/projection/mod.rs` | What the errors carry: `TopicModelVersion`, `EmbeddingModel`, `FitFailure`, `ProjectionStatusKind` | — |
 | `spec/types/interfaces/l8_surface.rs` | `AlertFilter` (a request), `AlertStateKind` | — |
 | `spec/types/interfaces/l8_surface/errors.rs` | The error enums, adjacently tagged | `InputError::MalformedRequest` |
-| `spec/types/interfaces/l8_surface/permissions.rs` | `Permission` as a string; `Caller` never serialized | — |
+| `spec/types/interfaces/l8_surface/permissions.rs` | `Permission` as a string, `PermissionSet` as an array; `Caller` never serialized, an audit record's copy written as `RecordedCaller` | `RecordedCaller` (surface-private) |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | `From<DecodeError>` for `QueryError` and `ActionError` | — |
 | `spec/types/tests/wire/harness.rs` | The golden harness | `assert_golden`, `assert_encodes`, `assert_request_golden`, `assert_request_golden_allowing`, `assert_rejected`, `assert_round_trips`, `authority_key`, `BLESS`, `AUTHORITY_KEYS` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | One module per area: goldens, rejections, reference values | — |

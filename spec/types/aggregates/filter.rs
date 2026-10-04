@@ -62,17 +62,21 @@
 //! there that nobody has read yet. The window is tested against
 //! `Access::at` (by bucket, like edges).
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicVersionHistory, TopicVersionStatus};
 use crate::aliases::Aliases;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId, TopicId};
+use crate::wire::WireRequest;
 
 /// Restricts which transmissions a view shows. Empty lists do not restrict.
 /// Non-empty lists combine with AND across fields; entries within one list
 /// combine with OR. [`TopologyFilter::admits`] is the definition.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopologyFilter {
     /// Keep transmissions whose sender OR reader is one of these (after alias
     /// resolution of both sides).
@@ -94,7 +98,15 @@ pub struct TopologyFilter {
     pub false_detections: FalseDetections,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// A request (a linked view's version, `transmissions_by_id`, `topics`):
+/// `{"type": "current"}` or `{"type": "pinned", "data": 3}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TopicVersionSelector {
     /// The catalog's active version when the view is computed; the response
     /// reports which.
@@ -102,6 +114,11 @@ pub enum TopicVersionSelector {
     Current,
     Pinned(TopicModelVersion),
 }
+
+/// A client chooses every field of the shared filter.
+impl WireRequest for TopologyFilter {}
+
+impl WireRequest for TopicVersionSelector {}
 
 /// Why a selector names no version a linked view can be computed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -156,7 +173,8 @@ impl TopicVersionSelector {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FalseDetections {
     /// Detector output as is.
     #[default]

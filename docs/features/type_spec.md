@@ -38,14 +38,14 @@ The types follow data through the stack:
    (`EndpointKind`): only `Generation` is captured. All of this reads only
    the request head, and the request is forwarded upstream as soon as it is
    routed. `decode_request` (gzip and zstd included) runs concurrently on a
-   tee of the body, off the hot path, and yields a `WireRequest`. When the
-   response head arrives, the adapter builds a `ResponseFramer` from the
-   `ResponseHead` (its content type gives the `ResponseFraming`: SSE or a
-   whole body) and its own protocol; a WebSocket connection gets a
-   `WebSocketTap` instead (one exchange per turn). `FrameEvent`s drive the
-   in-flight `ExchangeStage`. The `DecodedRequest` attaches to the exchange
-   when it is ready, and the finished exchange becomes a `RawExchange` on an
-   in-process channel. If decoding fails, the exchange was still forwarded
+   tee of the body, off the hot path, and yields a `HarnessRequest` (or a
+   `BodyDecodeError`). When the response head arrives, the adapter builds
+   a `ResponseFramer` from the `ResponseHead` (its content type gives the
+   `ResponseFraming`: SSE or a whole body) and its own protocol; a
+   WebSocket connection gets a `WebSocketTap` instead (one exchange per
+   turn). `FrameEvent`s drive the in-flight `ExchangeStage`. The
+   `DecodedRequest` attaches to the exchange when it is ready, and the
+   finished exchange becomes a `RawExchange` on an in-process channel. If decoding fails, the exchange was still forwarded
    and relayed, and is counted as uncaptured.
 2. **L1 canonicalization.** A `Normalizer` for the exchange's
    `WireProtocol`, handling its `Dialect`, turns a `RawExchange` into a

@@ -51,6 +51,8 @@ pub mod detection;
 pub mod policy;
 pub mod promotion;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::resource::ResourcePattern;
 use crate::ids::{AccessId, ChannelId, ResourceId};
 use crate::support::Timestamp;
@@ -58,7 +60,8 @@ use crate::support::Timestamp;
 use detection::{DeclaredDetection, DetectionKind, TrafficDetection};
 use policy::{Policy, PolicyAuthor};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Channel {
     pub id: ChannelId,
     pub origin: ChannelOrigin,
@@ -82,21 +85,29 @@ impl Channel {
 }
 
 /// The resource and access a discovered channel was created from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Seed {
     pub resource: ResourceId,
     pub first_access: AccessId,
 }
 
 /// A pattern and who attached it, when.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Declaration {
     pub pattern: ResourcePattern,
     pub by: PolicyAuthor,
     pub at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelOrigin {
     Declared {
         declaration: Declaration,
@@ -118,7 +129,8 @@ pub enum ChannelOrigin {
 
 /// Which promoted channel superseded a discovered one, and when: the
 /// promotion's declaration time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Supersession {
     pub by: ChannelId,
     pub at: Timestamp,
@@ -126,7 +138,13 @@ pub struct Supersession {
 
 /// How a declared channel came to be declared, with the detection that
 /// history allows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DeclaredHistory {
     /// Declared in config or by an operator before any traffic.
     BeforeTraffic(DeclaredDetection),

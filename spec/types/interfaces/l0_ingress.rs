@@ -120,10 +120,12 @@ pub trait ClientIdentifier {
     fn harness(&self, head: &RequestHead) -> (Option<HarnessClaim>, HarnessIds, RequestClass);
 }
 
-/// What capture needs from a request body. Decoded off the hot path: the
-/// proxy forwards the request without it.
+/// What capture needs from the harness's request body: its protocol and
+/// dialect, model, whether it streams, and whether it is a full history or
+/// an increment. Decoded off the hot path: the proxy forwards the request
+/// without it. In-process only; not the JSON wire's `crate::wire::WireRequest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WireRequest {
+pub struct HarnessRequest {
     pub protocol: WireProtocol,
     pub dialect: Dialect,
     pub model: ModelName,
@@ -143,7 +145,7 @@ pub enum ContentEncoding {
 /// A request body that decoded, ready to attach to its exchange.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedRequest {
-    pub wire: WireRequest,
+    pub harness: HarnessRequest,
     /// Decoded request body (or, on a WebSocket, the turn's client frame).
     pub body: Vec<u8>,
     /// The encoding the body arrived in, before decoding.
@@ -156,7 +158,7 @@ pub struct DecodedRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawExchange {
     /// Assembled once the request has decoded: its model comes from
-    /// `request.wire`.
+    /// `request.harness`.
     pub meta: ExchangeMeta,
     pub request: DecodedRequest,
     pub response: RawResponse,
@@ -198,7 +200,7 @@ pub trait ProviderAdapter {
         head: &RequestHead,
         body: &[u8],
         client: &ClientContext,
-    ) -> Result<WireRequest, DecodeError>;
+    ) -> Result<HarnessRequest, BodyDecodeError>;
 
     /// A fresh framer for one HTTP or SSE response, from its head and this
     /// adapter's protocol. It cannot depend on the decoded request, which may
@@ -297,15 +299,18 @@ pub trait WebSocketTap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnEvent {
     Started {
-        request: WireRequest,
+        request: HarnessRequest,
         frame: Vec<u8>,
     },
     Frame(FrameEvent),
     Ended(RawResponse),
 }
 
+/// Why a request body could not be decoded for capture. The exchange is
+/// still forwarded; it is counted as uncaptured. Unrelated to
+/// `crate::wire::DecodeError`, which is a client's JSON the surface refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodeError {
+pub enum BodyDecodeError {
     NotJson { offset: usize },
     MissingField(&'static str),
     UnsupportedVersion(String),

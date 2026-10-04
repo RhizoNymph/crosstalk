@@ -29,6 +29,8 @@
 //! never superseded again (their superseding channel's pattern matches
 //! their seed, so the overlap check refuses a pattern that would).
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::channel::policy::{Decision, PolicyAuthor, PolicyDecision, PolicyKind};
 use crate::derived::flow::channel::{
     Channel, ChannelOrigin, Declaration, NotPromotable, Supersession,
@@ -226,7 +228,11 @@ pub type CappedResources = Capped<Resource, COVERAGE_CAP>;
 /// Uncovered resources are not dropped: they stay stored on their channel
 /// (the promoted one, or a superseded one that resolves to it), but no new
 /// resource outside the pattern joins.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A response (inside `PromotionPreview`). Decoding cannot rerun
+/// [`coverage`]: it reads the registry, which the value does not hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PromotionCoverage {
     superseded: Vec<ChannelId>,
     covered: CappedResources,

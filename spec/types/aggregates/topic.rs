@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{TopicId, TransmissionId};
 use crate::support::{Similarity, Timestamp};
+use crate::wire::Rejected;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -19,7 +20,8 @@ pub struct EmbeddingModel {
 ///
 /// Built only through [`Embedding::new`]: `values` has the model's dimension
 /// and an L2 norm within [`Embedding::NORM_TOLERANCE`] of 1.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawEmbedding")]
 pub struct Embedding {
     model: EmbeddingModel,
     values: Vec<f32>,
@@ -29,6 +31,24 @@ pub struct Embedding {
 pub enum InvalidEmbedding {
     WrongDimension { expected: u16, got: usize },
     NotNormalized { norm: f32 },
+}
+
+/// [`Embedding`]'s fields, decoded without the checks. Decoding goes
+/// through [`Embedding::new`], which also refuses NaN and infinite values
+/// (their norm is not within the tolerance of 1).
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawEmbedding {
+    model: EmbeddingModel,
+    values: Vec<f32>,
+}
+
+impl TryFrom<RawEmbedding> for Embedding {
+    type Error = Rejected<InvalidEmbedding>;
+
+    fn try_from(raw: RawEmbedding) -> Result<Self, Self::Error> {
+        Self::new(raw.model, raw.values).map_err(|error| Rejected::new("embedding", error))
+    }
 }
 
 impl Embedding {
@@ -65,7 +85,8 @@ impl Embedding {
 #[serde(transparent)]
 pub struct TopicModelVersion(pub u32);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Topic {
     pub id: TopicId,
     pub version: TopicModelVersion,

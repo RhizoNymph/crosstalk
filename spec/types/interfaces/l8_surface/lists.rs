@@ -3,6 +3,8 @@
 //! List filters follow [`AlertFilter`](super::AlertFilter): an empty list
 //! does not restrict, and each filter's `matches` is its definition.
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::{AlertRuleDef, RuleStatus};
 use crate::aggregates::node::CanonicalOriginKind;
 use crate::aggregates::topic::{Topic, TopicModelVersion};
@@ -10,6 +12,7 @@ use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::paging::{Page, TopicList};
 use crate::support::{NonBlank, TimeWindow};
+use crate::wire::WireRequest;
 
 use super::PolicyKind;
 
@@ -31,7 +34,8 @@ pub use crate::aggregates::agents::filter::{AgentFilter, AgentText};
 /// counts on each row, never which rows are listed.
 ///
 /// [`ChannelOrigin::detection_kind`]: crate::derived::flow::channel::ChannelOrigin::detection_kind
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ChannelFilter {
     pub origin: OriginFilter,
     pub detections: Vec<DetectionKind>,
@@ -42,13 +46,22 @@ pub struct ChannelFilter {
     pub window: Option<TimeWindow>,
 }
 
+/// A client chooses every field of the channel filter.
+impl WireRequest for ChannelFilter {}
+
 /// Which origins a channel list keeps, superseded channels included or not.
 ///
 /// One value instead of a list of origins and a separate superseded flag,
 /// so "superseded channels only, but exclude superseded channels" cannot be
 /// asked. Origin kinds apply to channels in force only: a superseded channel
 /// was always discovered, and is selected by its variant alone.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OriginFilter {
     /// Channels in force whose origin kind is listed (every origin when
     /// empty), and no superseded channel. The default.
@@ -92,7 +105,8 @@ impl ChannelFilter {
 /// statuses, and "rules that evaluate" is `[Enabled]` with `Some(false)`.
 ///
 /// [`AlertRule::is_stale`]: crate::aggregates::alert::AlertRule::is_stale
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AlertRuleFilter {
     pub statuses: Vec<RuleStatus>,
     pub stale: Option<bool>,
@@ -108,8 +122,11 @@ impl AlertRuleFilter {
     }
 }
 
+impl WireRequest for AlertRuleFilter {}
+
 /// How `QueryApi::search` matches its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SearchMode {
     /// Full-text only.
     Text,
@@ -121,14 +138,18 @@ pub enum SearchMode {
 
 /// A search as an operator asks for it. The surface embeds the text itself,
 /// so a client never sends a vector and never needs to know the model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SearchRequest {
     pub mode: SearchMode,
     pub text: NonBlank,
 }
 
+impl WireRequest for SearchRequest {}
+
 /// One page of a version's topics, and that version.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicPage {
     pub version: TopicModelVersion,
     pub page: Page<Topic, TopicList>,

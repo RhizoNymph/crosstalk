@@ -1,13 +1,17 @@
 //! Content matches: an indexed span found in another agent's input.
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{AgentId, ExchangeId, SpanId};
 use crate::observed::message::ToolCallId;
 use std::num::NonZeroU32;
 
 use crate::support::{NonEmpty, Similarity};
+use crate::wire::Rejected;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Codec {
     Base64,
     Hex,
@@ -17,7 +21,13 @@ pub enum Codec {
 }
 
 /// How the reader's text had to be transformed before it matched.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum MatchKind {
     Exact,
     /// Matched after whitespace and case normalization.
@@ -29,7 +39,13 @@ pub enum MatchKind {
 }
 
 /// Where the matched text sits in the reader's exchange.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Carrier {
     /// Returned by one of the reader's tool calls. This is the case that
     /// implies a channel.
@@ -49,7 +65,8 @@ pub enum Carrier {
 /// Built only through [`ContentMatch::new`], which rejects self-matches and
 /// a matched length longer than the text read. `matched_bytes` is measured
 /// on the reader's side, in the bytes of `read_at`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawContentMatch")]
 pub struct ContentMatch {
     origin: SpanId,
     origin_agent: AgentId,
@@ -65,6 +82,38 @@ pub struct ContentMatch {
 pub enum InvalidMatch {
     SelfMatch,
     ExceedsReadRange,
+}
+
+/// [`ContentMatch`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawContentMatch {
+    origin: SpanId,
+    origin_agent: AgentId,
+    reader: AgentId,
+    reader_exchange: ExchangeId,
+    read_at: SpanLocation,
+    carrier: Carrier,
+    kind: MatchKind,
+    matched_bytes: NonZeroU32,
+}
+
+impl TryFrom<RawContentMatch> for ContentMatch {
+    type Error = Rejected<InvalidMatch>;
+
+    fn try_from(raw: RawContentMatch) -> Result<Self, Self::Error> {
+        Self::new(
+            raw.origin,
+            raw.origin_agent,
+            raw.reader,
+            raw.reader_exchange,
+            raw.read_at,
+            raw.carrier,
+            raw.kind,
+            raw.matched_bytes,
+        )
+        .map_err(|error| Rejected::new("content match", error))
+    }
 }
 
 impl ContentMatch {

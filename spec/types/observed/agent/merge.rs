@@ -43,8 +43,11 @@
 //! An operator merge between them is a deliberate decision: it goes ahead
 //! and deletes those vetoes.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{AgentId, MergeId, OperatorId};
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 use super::{ActiveAgentState, Agent, AgentState, MergeAuthor, MergeRequest, SelfMerge};
 
@@ -91,7 +94,8 @@ impl MergeRequest {
 /// `from` and `into` differ because a [`MergeRequest`] cannot name the same
 /// agent twice. The accessors are not named `from` and `into` because those
 /// would shadow the conversion traits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawMergeRecord")]
 pub struct MergeRecord {
     id: MergeId,
     from: AgentId,
@@ -102,8 +106,36 @@ pub struct MergeRecord {
     reverted: Option<Reversal>,
 }
 
+/// [`MergeRecord`]'s fields, decoded without the checks. Decoding goes
+/// through [`MergeRequest::new`] (a self-merge is refused) and
+/// [`MergeRecord::new`], then records the reversal.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawMergeRecord {
+    id: MergeId,
+    from: AgentId,
+    into: AgentId,
+    by: MergeAuthor,
+    at: Timestamp,
+    repointed: Vec<AgentId>,
+    reverted: Option<Reversal>,
+}
+
+impl TryFrom<RawMergeRecord> for MergeRecord {
+    type Error = Rejected<SelfMerge>;
+
+    fn try_from(raw: RawMergeRecord) -> Result<Self, Self::Error> {
+        let request = MergeRequest::new(raw.from, raw.into, raw.by)
+            .map_err(|error| Rejected::new("merge record", error))?;
+        let mut record = Self::new(raw.id, request, raw.at, raw.repointed);
+        record.reverted = raw.reverted;
+        Ok(record)
+    }
+}
+
 /// An operator's unmerge of one record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Reversal {
     pub by: OperatorId,
     pub at: Timestamp,
@@ -177,7 +209,8 @@ impl MergeRecord {
 
 /// A merged agent's state: the record that merged it, where it resolves to
 /// now, and what an unmerge restores.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MergedInto {
     /// The record that merged this agent. Reverting it unmerges the agent.
     pub merge: MergeId,
@@ -286,12 +319,32 @@ impl Agent {
 /// they unmerged them. Built only through [`MergeVeto::new`], which rejects
 /// an agent paired with itself and stores the pair in order, so `(a, b)` and
 /// `(b, a)` are the same veto.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawMergeVeto")]
 pub struct MergeVeto {
     a: AgentId,
     b: AgentId,
     by: OperatorId,
     at: Timestamp,
+}
+
+/// [`MergeVeto`]'s fields, decoded without the check. Decoding goes through
+/// [`MergeVeto::new`], which orders the pair.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawMergeVeto {
+    a: AgentId,
+    b: AgentId,
+    by: OperatorId,
+    at: Timestamp,
+}
+
+impl TryFrom<RawMergeVeto> for MergeVeto {
+    type Error = Rejected<SelfMerge>;
+
+    fn try_from(raw: RawMergeVeto) -> Result<Self, Self::Error> {
+        Self::new(raw.a, raw.b, raw.by, raw.at).map_err(|error| Rejected::new("merge veto", error))
+    }
 }
 
 impl MergeVeto {

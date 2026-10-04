@@ -4,9 +4,10 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ids::OperatorId;
+use crate::wire::Rejected;
 
 /// The authenticated caller of one request: an operator and the
 /// permissions it holds.
@@ -17,7 +18,12 @@ use crate::ids::OperatorId;
 ///
 /// Authority: it implements neither `Serialize` nor `Deserialize`
 /// ([`crate::wire::authority`]), so no request can carry one and no
-/// response leaks one; responses name its `OperatorId`.
+/// response leaks one; responses name its `OperatorId`. The one exception
+/// is an audit record of a call (`OperatorRecord`, `ExportRecord`), a
+/// response that keeps the operator and permissions of the caller as
+/// authenticated: it writes them as a `RecordedCaller`, and a client that
+/// decodes such a record gets a `Caller` back holding exactly what the
+/// record says. The gateway never decodes one from a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     pub(super) operator: OperatorId,
@@ -94,9 +100,25 @@ impl Permission {
     }
 }
 
-/// A set of permissions.
+/// A set of permissions. On the wire, an array of [`Permission`] strings in
+/// [`Permission::ALL`] order: `["view", "triage"]`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct PermissionSet(u8);
+
+/// The permissions in [`Permission::ALL`] order.
+impl Serialize for PermissionSet {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+/// An array of permissions in any order; a repeat counts once, as
+/// [`PermissionSet::of`] counts it.
+impl<'de> Deserialize<'de> for PermissionSet {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<Permission>::deserialize(deserializer).map(Self::of)
+    }
+}
 
 impl PermissionSet {
     pub const EMPTY: Self = Self(0);
@@ -139,5 +161,63 @@ impl PermissionSet {
 impl fmt::Debug for PermissionSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+/// The caller of one recorded call, as an audit record writes it: the
+/// operator and the permissions it held then. On the wire, the record's
+/// `caller`: `{"operator": .., "permissions": [..]}`.
+///
+/// Only the audit records use it, to write the [`Caller`] they keep and to
+/// read it back. Decoding refuses an empty set of permissions, which
+/// `OperatorDirectory::caller` never grants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawRecordedCaller")]
+pub(super) struct RecordedCaller {
+    operator: OperatorId,
+    permissions: PermissionSet,
+}
+
+/// A recorded caller with no permissions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct NoPermissions;
+
+/// `RecordedCaller`'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawRecordedCaller {
+    operator: OperatorId,
+    permissions: PermissionSet,
+}
+
+impl TryFrom<RawRecordedCaller> for RecordedCaller {
+    type Error = Rejected<NoPermissions>;
+
+    fn try_from(raw: RawRecordedCaller) -> Result<Self, Self::Error> {
+        if raw.permissions.is_empty() {
+            return Err(Rejected::new("recorded caller", NoPermissions));
+        }
+        Ok(Self {
+            operator: raw.operator,
+            permissions: raw.permissions,
+        })
+    }
+}
+
+impl From<&Caller> for RecordedCaller {
+    fn from(caller: &Caller) -> Self {
+        Self {
+            operator: caller.operator,
+            permissions: caller.permissions,
+        }
+    }
+}
+
+impl From<RecordedCaller> for Caller {
+    fn from(recorded: RecordedCaller) -> Self {
+        Self {
+            operator: recorded.operator,
+            permissions: recorded.permissions,
+        }
     }
 }

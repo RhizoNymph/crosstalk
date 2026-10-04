@@ -8,13 +8,16 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::events::{Envelope, Subject};
 use crate::ids::{EventId, MessageHash};
 use crate::paging::{DeadLetterList, Page, PageRequest};
 
 /// Consumers in the same group share deliveries: each event goes to one of
-/// them. Different groups each get every event.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// them. Different groups each get every event. On the wire, the name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ConsumerGroup(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,8 +117,10 @@ impl RetryPolicy {
 }
 
 /// A delivery that exhausted its retries. Kept for an operator to inspect
-/// and replay; never redelivered on its own.
-#[derive(Debug, Clone, PartialEq)]
+/// and replay; never redelivered on its own. A response
+/// (`QueryApi::dead_letters`), never a request: it holds an [`Envelope`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DeadLetter {
     pub group: ConsumerGroup,
     pub envelope: Envelope,

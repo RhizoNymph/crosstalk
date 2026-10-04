@@ -11,11 +11,14 @@
 //! exchange's `request` holds only that increment, and its [`Continuation`]
 //! names the response it continues. Reconstruction resolves the full history.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
 use crate::observed::client::ClientContext;
 use crate::support::Timestamp;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WireProtocol {
     AnthropicMessages,
     OpenAiChat,
@@ -27,7 +30,8 @@ pub enum WireProtocol {
     GeminiCodeAssist,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Transport {
     /// One request, one complete response body.
     Http,
@@ -37,21 +41,25 @@ pub enum Transport {
     WebSocket,
 }
 
-/// A WebSocket connection through the proxy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A WebSocket connection through the proxy. On the wire, the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ConnectionId(pub u128);
 
 /// The id a provider assigned to a response (`resp_…`, `msg_…`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ResponseId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ModelName(pub String);
 
 /// What the proxy knows about an exchange before its body is normalized.
 /// Assembled when the exchange is handed to capture, once its request has
 /// decoded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExchangeMeta {
     pub id: ExchangeId,
     pub protocol: WireProtocol,
@@ -65,7 +73,13 @@ pub struct ExchangeMeta {
 }
 
 /// Whether `request` is the whole history or an increment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Continuation {
     /// The request carries the full message history.
     FullHistory,
@@ -77,7 +91,8 @@ pub enum Continuation {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Exchange {
     pub meta: ExchangeMeta,
     pub continuation: Continuation,
@@ -86,7 +101,13 @@ pub struct Exchange {
     pub outcome: ExchangeOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExchangeOutcome {
     Completed {
         response: MessageHash,
@@ -106,7 +127,8 @@ pub enum ExchangeOutcome {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndTurn,
     ToolUse,
@@ -118,7 +140,8 @@ pub enum StopReason {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TokenUsage {
     pub input: u32,
     pub output: u32,
@@ -126,7 +149,13 @@ pub struct TokenUsage {
     pub reasoning: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExchangeFailure {
     /// A non-2xx status before any content.
     Upstream {

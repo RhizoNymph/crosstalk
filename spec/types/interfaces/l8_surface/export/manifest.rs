@@ -8,19 +8,24 @@
 //! export citable (the header reproduces it) and verifiable (the trailer
 //! checks it).
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::filter::{TopicVersionSelector, TopologyFilter};
 use crate::aggregates::projection::{Fitted, ProjectionSpec};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{ExportId, OperatorId, ProjectionId};
 use crate::support::{Blank, NonBlank, TimeWindow, Timestamp, Watermark};
+use crate::wire::Rejected;
 
 use super::digest::ExportDigest;
 use super::request::{ExportDataset, ExportDatasetKind, ExportRequest};
 use super::seal::RowRefused;
 
 /// The gateway build that produced an export (its release version), so a
-/// reader knows which row schema and resolution rules it followed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// reader knows which row schema and resolution rules it followed. On the
+/// wire, a string, decoded as [`GatewayVersion::new`] decodes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct GatewayVersion(NonBlank);
 
 impl GatewayVersion {
@@ -42,7 +47,13 @@ pub fn settled_window(window: TimeWindow, watermark: Watermark) -> Option<TimeWi
 }
 
 /// What the request's selection resolved to when the export started.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportBasis {
     /// Transmissions, edges, accesses and topics.
     Scoped {
@@ -79,7 +90,8 @@ impl ExportBasis {
 }
 
 /// The fields of an [`ExportHeader`], before checking.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExportHeaderParts {
     pub id: ExportId,
     pub request: ExportRequest,
@@ -105,7 +117,11 @@ pub struct ExportHeaderParts {
 /// settled window cut at the watermark, the projection named, and for a
 /// projection exactly its stored points; and that the watermark is no later
 /// than the start.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A response, never a request. On the wire, its [`ExportHeaderParts`],
+/// decoded through [`ExportHeader::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ExportHeaderParts", into = "ExportHeaderParts")]
 pub struct ExportHeader {
     parts: ExportHeaderParts,
 }
@@ -134,6 +150,20 @@ pub enum InvalidHeader {
         points: u32,
     },
     WatermarkAfterStart,
+}
+
+impl TryFrom<ExportHeaderParts> for ExportHeader {
+    type Error = Rejected<InvalidHeader>;
+
+    fn try_from(parts: ExportHeaderParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("export header", error))
+    }
+}
+
+impl From<ExportHeader> for ExportHeaderParts {
+    fn from(header: ExportHeader) -> Self {
+        header.parts
+    }
 }
 
 impl ExportHeader {
@@ -246,7 +276,13 @@ impl ExportHeader {
 }
 
 /// How an export ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportEnd {
     /// Every row the header planned was sent.
     Complete,
@@ -257,7 +293,13 @@ pub enum ExportEnd {
 }
 
 /// Why an export that had started did not complete.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportFailure {
     /// A store failed mid-stream. Retrying the export may succeed.
     Store { reason: String },
@@ -289,7 +331,10 @@ impl From<SourceFailure> for ExportFailure {
 /// The manifest sent after the rows. Built only by the sealer
 /// ([`super::ExportSealer`]), so `rows` and `digest` are those of the rows
 /// it accepted and `Complete` means it accepted every planned row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Decoding cannot rerun the sealer; a reader checks a decoded trailer
+/// against the rows it received ([`super::verify_export`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExportTrailer {
     pub(super) export: ExportId,
     pub(super) rows: u64,

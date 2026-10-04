@@ -18,12 +18,20 @@
 //! names it is a confirmation on the channel that superseded it, and moves
 //! that channel's detection (`confirm` above) instead.
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::evidence::CoAccess;
 use crate::ids::{AccessId, TransmissionId};
 use crate::support::Timestamp;
 
 /// Detection for a channel declared before any traffic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DeclaredDetection {
     /// No traffic yet, and the idle window has not closed.
     AwaitingTraffic,
@@ -37,7 +45,13 @@ pub enum DeclaredDetection {
 }
 
 /// Detection once a channel has traffic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TrafficDetection {
     /// Accessed, but not yet written by one agent and read by another.
     Observed { first_access: AccessId },
@@ -57,7 +71,8 @@ pub enum TrafficDetection {
 
 /// Which detection state a channel is in, without its data: what a graph
 /// node shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DetectionKind {
     AwaitingTraffic,
     Unused,

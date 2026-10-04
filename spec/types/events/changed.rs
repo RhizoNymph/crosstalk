@@ -25,12 +25,20 @@
 //! resolved here: a notification names the stored id that changed, and the
 //! re-query resolves it ([`crate::aliases`]).
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::Subject;
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::support::Watermark;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Changed {
     Alert(AlertId),
     Channel(ChannelId),

@@ -77,8 +77,10 @@ use crate::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, SinkId, TopicId, TransmissionId,
 };
 use crate::support::{Change, DisplayText, NonBlank, NonEmpty, Similarity, Timestamp};
+use crate::wire::Rejected;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AlertRuleKind {
     NewChannel,
     UnreviewedTraffic,
@@ -90,7 +92,8 @@ pub enum AlertRuleKind {
 }
 
 /// A rule that takes no parameters and exists exactly once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuiltinRule {
     /// A channel was discovered that no config declared.
     NewChannel,
@@ -168,7 +171,8 @@ pub fn is_reserved_rule_id(id: AlertRuleId) -> bool {
 pub type RuleName = DisplayText<80>;
 
 /// Topics of one topic-model version.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WatchedTopics {
     pub version: TopicModelVersion,
     pub topics: NonEmpty<TopicId>,
@@ -176,7 +180,13 @@ pub struct WatchedTopics {
 
 /// A user rule as an operator writes it in `CreateRule` and `UpdateRule`.
 /// The rule store resolves it into a [`RuleDefinition`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum UserRule {
     /// `topics.version` must be the current topic-model version and every
     /// topic must exist in it. `None` for `remap_threshold` takes
@@ -222,7 +232,8 @@ pub struct AlertRuleConfig {
 
 /// A semantic query and its embedding. The embedding carries the model it
 /// was made with ([`Embedding::model`]), so the two cannot disagree.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SemanticQuery {
     pub text: NonBlank,
     pub embedding: Embedding,
@@ -259,7 +270,13 @@ impl RuleDefinition {
 }
 
 /// Whether a watched-topic rule still names topics that mean something.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TopicWatch {
     Current(WatchedTopics),
     /// A re-fit to `unmapped_in` left a topic without a close counterpart.
@@ -278,7 +295,13 @@ pub enum TopicWatch {
 
 /// Whether a semantic rule's query can still be compared with new
 /// embeddings.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum QueryWatch {
     Current(SemanticQuery),
     /// The embedder now uses `model`, and `last` was embedded with another.
@@ -323,7 +346,13 @@ pub enum StaleReason {
 }
 
 /// A stored user rule's content.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ContentRule {
     /// Topic ids only mean something within one topic-model version. When a
     /// new version becomes ready (`TopicVersionReady`), the rule's topics are
@@ -404,7 +433,13 @@ impl ContentRule {
 }
 
 /// A rule: built in, or written by an operator.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AlertRule {
     Builtin(BuiltinRule),
     User {
@@ -440,7 +475,8 @@ impl AlertRule {
 /// so a rule can be disabled and stale at once, or enabled and stale when it
 /// went stale while enabled. Enabling a stale rule is refused
 /// ([`AlertRuleDef::set_enabled`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuleStatus {
     Enabled,
     Disabled,
@@ -459,13 +495,57 @@ impl RuleStatus {
 /// A stored rule. Built only through [`AlertRuleDef::builtin`] and
 /// [`AlertRuleDef::user`], so a built-in rule's id is always its fixed id,
 /// and a user rule's never is. Its transitions never change its id or kind.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawAlertRuleDef")]
 pub struct AlertRuleDef {
     id: AlertRuleId,
     rule: AlertRule,
     pub status: RuleStatus,
     /// Where its alerts are delivered.
     pub sinks: Vec<SinkId>,
+}
+
+/// [`AlertRuleDef`]'s fields, decoded without the checks. A built-in rule
+/// decodes through [`AlertRuleDef::builtin`], and a user rule through
+/// [`AlertRuleDef::load`], which accepts every stored status and staleness.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawAlertRuleDef {
+    id: AlertRuleId,
+    rule: AlertRule,
+    status: RuleStatus,
+    sinks: Vec<SinkId>,
+}
+
+/// Why decoded fields are not a stored rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidRuleDef {
+    /// A built-in rule under an id other than its fixed one.
+    BuiltinId { rule: BuiltinRule, id: AlertRuleId },
+    /// A user rule under an id reserved for built-in rules.
+    Reserved(ReservedRuleId),
+}
+
+impl TryFrom<RawAlertRuleDef> for AlertRuleDef {
+    type Error = Rejected<InvalidRuleDef>;
+
+    fn try_from(raw: RawAlertRuleDef) -> Result<Self, Self::Error> {
+        let rejected = |error| Rejected::new("alert rule", error);
+        match raw.rule {
+            AlertRule::Builtin(rule) if rule.id() == raw.id => {
+                Ok(Self::builtin(rule, raw.status, raw.sinks))
+            }
+            AlertRule::Builtin(rule) => {
+                Err(rejected(InvalidRuleDef::BuiltinId { rule, id: raw.id }))
+            }
+            AlertRule::User {
+                name,
+                created,
+                content,
+            } => Self::load(raw.id, name, created, content, raw.status, raw.sinks)
+                .map_err(|error| rejected(InvalidRuleDef::Reserved(error))),
+        }
+    }
 }
 
 /// A user rule given an id reserved for built-in rules.
@@ -759,7 +839,8 @@ impl AlertRuleSet {
 /// How many stored changes a rule has had: 1 when created, one more per
 /// change (an update, an enable or disable, going stale). Changes to one
 /// rule are compare-and-set on its revision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RuleRevision(NonZeroU32);
 
 impl RuleRevision {
@@ -884,7 +965,8 @@ pub enum AlertState {
 
 /// How many stored changes an alert has had: 1 when opened, one more per
 /// change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct AlertRevision(NonZeroU32);
 
 impl AlertRevision {

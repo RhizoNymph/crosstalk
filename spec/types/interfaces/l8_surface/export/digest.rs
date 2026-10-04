@@ -43,6 +43,8 @@
 //!
 //! [`ExportDatasetKind::code`]: super::request::ExportDatasetKind::code
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::projection::frame::route_code;
 use crate::aggregates::quality::{MatchClass, QualityMatch};
@@ -70,8 +72,10 @@ pub trait RowHasher {
     fn finalize(&self) -> Blake3;
 }
 
-/// The digest of an export's rows, as the trailer records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The digest of an export's rows, as the trailer records it. On the wire,
+/// its lower-case hex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ExportDigest(Blake3);
 
 impl ExportDigest {

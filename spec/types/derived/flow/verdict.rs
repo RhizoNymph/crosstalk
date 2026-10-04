@@ -36,13 +36,17 @@
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::{Confirmed, Transmission, TransmissionState};
 use crate::ids::{OperatorId, TransmissionId};
 use crate::support::{NonEmpty, Timestamp};
+use crate::wire::Rejected;
 
 /// What an operator judged a transmission to be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// A real agent-to-agent communication.
     Genuine,
@@ -83,8 +87,9 @@ impl TransmissionState {
 }
 
 /// The position of a record in its transmission's [`VerdictLog`]: 1 for the
-/// first record, one more for each after it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// first record, one more for each after it. On the wire, the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct VerdictRevision(NonZeroU32);
 
 impl VerdictRevision {
@@ -111,7 +116,12 @@ impl VerdictRevision {
 /// transmission and rejects one in a state that takes no verdict. The
 /// surface stamps `by` and `at` from the authenticated caller and the time
 /// it accepted the action; callers supply only the verdict and the note.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A response, never a request. Decoding cannot rerun
+/// [`TransmissionVerdict::new`]: its check reads the transmission's state,
+/// which the record names only by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionVerdict {
     transmission: TransmissionId,
     verdict: Option<Verdict>,
@@ -182,10 +192,55 @@ pub enum InvalidVerdictRecord {
 /// Every verdict record of one transmission, in append order. The record at
 /// index `i` has revision `i + 1`, so revisions are consecutive by
 /// construction, and the last record is the current verdict.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawVerdictLog")]
 pub struct VerdictLog {
     transmission: TransmissionId,
     records: Vec<TransmissionVerdict>,
+}
+
+/// [`VerdictLog`]'s fields, decoded without the checks. Decoding starts
+/// from [`VerdictLog::new`] and appends each record with
+/// [`VerdictLog::record`], so a decoded log is one the store could have
+/// built.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawVerdictLog {
+    transmission: TransmissionId,
+    records: Vec<TransmissionVerdict>,
+}
+
+/// Why decoded records are not a log [`VerdictLog::record`] could have
+/// built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidVerdictLog {
+    /// Record `index` was refused.
+    Record {
+        index: usize,
+        error: InvalidVerdictRecord,
+    },
+    /// Record `index` repeats the verdict current before it, so it would
+    /// not have been appended.
+    Unchanged { index: usize },
+}
+
+impl TryFrom<RawVerdictLog> for VerdictLog {
+    type Error = Rejected<InvalidVerdictLog>;
+
+    fn try_from(raw: RawVerdictLog) -> Result<Self, Self::Error> {
+        let rejected = |error| Rejected::new("verdict log", error);
+        let mut log = Self::new(raw.transmission);
+        for (index, record) in raw.records.into_iter().enumerate() {
+            match log.record(record) {
+                Ok(VerdictRecorded::Appended(_)) => {}
+                Ok(VerdictRecorded::Unchanged) => {
+                    return Err(rejected(InvalidVerdictLog::Unchanged { index }));
+                }
+                Err(error) => return Err(rejected(InvalidVerdictLog::Record { index, error })),
+            }
+        }
+        Ok(log)
+    }
 }
 
 impl VerdictLog {

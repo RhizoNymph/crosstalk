@@ -80,6 +80,8 @@
 //! other error leaves the job to be requeued when its lease lapses. One fit
 //! runs at a time per fitter.
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::{
     AlertDraft, AlertRuleKind, NotEditable, RuleName, StaleRule, TriageOutcome, UserRule,
 };
@@ -192,7 +194,8 @@ pub enum SearchQuery {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SearchHit {
     pub transmission: TransmissionId,
     pub score: Similarity,
@@ -202,7 +205,8 @@ pub struct SearchHit {
 /// One page of hits, in descending (score, `TransmissionId`), and the
 /// topic-model version the filter's topics were evaluated under: the one
 /// the first page resolved, pinned by the cursor for every later page.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SearchResults {
     pub topic_version: TopicModelVersion,
     pub page: Page<SearchHit, SearchList>,

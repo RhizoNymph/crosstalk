@@ -19,15 +19,25 @@
 //! as for actions. The entries of one export share its [`ExportId`], their
 //! subject, so the log's subject filter finds its start and end together.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::ExportId;
 use crate::interfaces::l8_surface::audit::AuditSubject;
+use crate::interfaces::l8_surface::permissions::RecordedCaller;
 use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
+use crate::wire::Rejected;
 
 use super::manifest::{ExportHeader, ExportTrailer};
 use super::request::{ExportDataset, ExportRequest};
 
 /// What an audit entry records about an export.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExportEvent {
     /// Refused before anything was sent: exactly what `export` returned.
     Refused(QueryError),
@@ -45,7 +55,12 @@ pub enum ExportEvent {
 /// when the caller lacks the request's required permission, naming it;
 /// every other event only for a caller holding it; and a `Started` header
 /// is for this request and this caller's operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// On the wire, `{"caller": {"operator": .., "permissions": [..]},
+/// "request": .., "event": ..}`, decoded through [`ExportRecord::new`]. A
+/// response (inside `AuditEntry`), never a request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawExportRecord", into = "RawExportRecord")]
 pub struct ExportRecord {
     caller: Caller,
     request: ExportRequest,
@@ -65,6 +80,35 @@ pub enum InvalidExportRecord {
     },
     /// The header describes another request or another requester.
     HeaderMismatch,
+}
+
+/// [`ExportRecord`]'s wire form: the caller as recorded, the request and
+/// the event.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawExportRecord {
+    caller: RecordedCaller,
+    request: ExportRequest,
+    event: ExportEvent,
+}
+
+impl From<ExportRecord> for RawExportRecord {
+    fn from(record: ExportRecord) -> Self {
+        Self {
+            caller: RecordedCaller::from(&record.caller),
+            request: record.request,
+            event: record.event,
+        }
+    }
+}
+
+impl TryFrom<RawExportRecord> for ExportRecord {
+    type Error = Rejected<InvalidExportRecord>;
+
+    fn try_from(raw: RawExportRecord) -> Result<Self, Self::Error> {
+        Self::new(Caller::from(raw.caller), raw.request, raw.event)
+            .map_err(|error| Rejected::new("export record", error))
+    }
 }
 
 impl ExportRecord {

@@ -39,11 +39,22 @@
 //! | `AlertRuleDef` | creator, time | 2 |
 //! | `Alert`, `AlertState` | who acknowledged or resolved, when | 2 |
 //! | `Envelope` (every bus event) | node, time | 2 |
+//! | `Supersession`, `SupersededInto` | the promotion's time (and operator) | 2 |
+//! | `Policy` | holds a `Decision` | 2 |
+//! | `Retention` | holds a `Pin` | 2 |
+//! | `AlertRule` | creator, time | 2 |
+//! | `VerdictRow` | operator, time | 2 |
+//! | `ConfigChange`, `ConfigRecord` | config, permissions | 2 |
+//! | `Operator`, `PermissionSet` | permissions | 2 |
 //!
 //! `OperatorAction` is what the surface acts on and the audit log stores,
 //! after `OperatorAction::merge_agents` has stamped the caller into a merge.
 //! The request a client sends for an action is a separate type without
 //! the author (see `docs/features/wire_contract.md`).
+//!
+//! An audit record's caller is written through `RecordedCaller` (private to
+//! the surface): the operator and permissions it held, a response's copy of
+//! a `Caller`, never decoded from a client.
 //!
 //! The checks are `assert_not_impl!` items below: each fails to compile if
 //! its type gains a listed trait. The doctests show the same from outside
@@ -92,21 +103,24 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::WireRequest;
-use crate::aggregates::alert::{Alert, AlertRuleDef, AlertState};
+use crate::aggregates::alert::{Alert, AlertRule, AlertRuleDef, AlertState};
 use crate::aggregates::projection::ProjectionInfo;
-use crate::aggregates::retention::Pin;
-use crate::derived::flow::channel::Declaration;
+use crate::aggregates::retention::{Pin, Retention};
 use crate::derived::flow::channel::policy::{
-    Decision, PolicyAuthor, PolicyDecision, PolicyHistory,
+    Decision, Policy, PolicyAuthor, PolicyDecision, PolicyHistory,
 };
 use crate::derived::flow::channel::promotion::Promotion;
+use crate::derived::flow::channel::{Declaration, Supersession};
 use crate::derived::flow::verdict::{TransmissionVerdict, VerdictLog};
 use crate::events::Envelope;
-use crate::interfaces::l8_surface::audit::{AuditEntry, OperatorRecord};
-use crate::interfaces::l8_surface::channels::PromotionPreview;
+use crate::interfaces::l8_surface::audit::{
+    AuditEntry, ConfigChange, ConfigRecord, OperatorRecord,
+};
+use crate::interfaces::l8_surface::channels::{PromotionPreview, SupersededInto};
+use crate::interfaces::l8_surface::export::rows::VerdictRow;
 use crate::interfaces::l8_surface::export::{ExportHeader, ExportRecord};
-use crate::interfaces::l8_surface::operators::{OperatorDirectory, RequestIdentity};
-use crate::interfaces::l8_surface::{Caller, OperatorAction};
+use crate::interfaces::l8_surface::operators::{Operator, OperatorDirectory, RequestIdentity};
+use crate::interfaces::l8_surface::{Caller, OperatorAction, PermissionSet};
 use crate::observed::agent::{MergeAuthor, MergeRecord, MergeRequest, MergeVeto, Reversal};
 
 // Rule 1: authority never serializes, either way.
@@ -140,3 +154,13 @@ assert_not_impl!(AlertRuleDef: WireRequest);
 assert_not_impl!(Alert: WireRequest);
 assert_not_impl!(AlertState: WireRequest);
 assert_not_impl!(Envelope: WireRequest);
+assert_not_impl!(Supersession: WireRequest);
+assert_not_impl!(SupersededInto: WireRequest);
+assert_not_impl!(Policy: WireRequest);
+assert_not_impl!(Retention: WireRequest);
+assert_not_impl!(AlertRule: WireRequest);
+assert_not_impl!(VerdictRow: WireRequest);
+assert_not_impl!(ConfigChange: WireRequest);
+assert_not_impl!(ConfigRecord: WireRequest);
+assert_not_impl!(Operator: WireRequest);
+assert_not_impl!(PermissionSet: WireRequest);

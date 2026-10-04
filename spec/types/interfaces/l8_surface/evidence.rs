@@ -33,6 +33,8 @@
 //! [`TransmissionState::co_accesses`]: crate::derived::flow::transmission::TransmissionState::co_accesses
 //! [`TransmissionSummary`]: super::summary::TransmissionSummary
 
+use serde::{Deserialize, Serialize};
+
 use crate::aliases::Aliases;
 use crate::derived::flow::access::Access;
 use crate::derived::flow::resource::Resource;
@@ -40,11 +42,13 @@ use crate::derived::flow::transmission::Transmission;
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AccessId, AgentId, ResourceId, SpanId};
 use crate::interfaces::l2_transport::BlobError;
+use crate::wire::Rejected;
 
 use super::excerpt::{ExcerptError, Excerpted};
 
 /// The two excerpts of one content match, as the surface cuts them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MatchQuotes {
     /// Around the sender's originated span.
     pub origin: Excerpted,
@@ -54,7 +58,9 @@ pub struct MatchQuotes {
 
 /// One content match of the transmission with the sender's and the
 /// reader's text. Built only by [`TransmissionEvidence::assemble`].
-#[derive(Debug, Clone, PartialEq)]
+/// Decoding cannot rerun it, which reads the stored records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MatchEvidence {
     content_match: ContentMatch,
     quotes: MatchQuotes,
@@ -79,7 +85,8 @@ impl MatchEvidence {
 ///
 /// Built only through [`AccessDetail::new`], which checks that the resource
 /// is the access's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawAccessDetail")]
 pub struct AccessDetail {
     access: Access,
     resource: Resource,
@@ -97,6 +104,27 @@ pub enum InvalidEvidence {
     },
     /// The access looked up is not the one asked for.
     WrongAccess { asked: AccessId, got: AccessId },
+}
+
+/// [`AccessDetail`]'s fields, decoded without the check. Decoding goes
+/// through [`AccessDetail::new`], with the recorded `agent` as the
+/// resolution of the access's agent.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawAccessDetail {
+    access: Access,
+    resource: Resource,
+    agent: AgentId,
+}
+
+impl TryFrom<RawAccessDetail> for AccessDetail {
+    type Error = Rejected<InvalidEvidence>;
+
+    fn try_from(raw: RawAccessDetail) -> Result<Self, Self::Error> {
+        let agent = raw.agent;
+        Self::new(raw.access, raw.resource, move |_: AgentId| agent)
+            .map_err(|error| Rejected::new("access detail", error))
+    }
 }
 
 impl AccessDetail {
@@ -138,7 +166,10 @@ impl AccessDetail {
 
 /// Everything the evidence page shows about one transmission, besides its
 /// summary and verdicts. Built only by [`TransmissionEvidence::assemble`].
-#[derive(Debug, Clone, PartialEq)]
+/// A response; decoding cannot rerun `assemble`, which reads the stored
+/// records the transmission names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionEvidence {
     transmission: Transmission,
     matches: Vec<MatchEvidence>,

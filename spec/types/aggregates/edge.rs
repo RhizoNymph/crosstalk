@@ -13,19 +13,23 @@
 
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::node::GraphNode;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, Page};
 use crate::support::{Share, TimeWindow, Timestamp};
+use crate::wire::{Rejected, WireRequest};
 
 pub use crate::aggregates::filter::TopologyFilter;
 
 /// The topic dimension of an edge bucket. Buckets are kept per topic-model
 /// version; after a re-fit the new version's buckets are rebuilt, and queries
 /// switch to them once the rebuild completes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopicSlot {
     pub version: TopicModelVersion,
     /// `None` for outlier transmissions.
@@ -36,7 +40,8 @@ pub struct TopicSlot {
 /// aggregates); query windows are unions of buckets.
 ///
 /// Built only through [`EdgeKey::new`], which rejects a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawEdgeKey")]
 pub struct EdgeKey {
     from: AgentId,
     to: AgentId,
@@ -47,6 +52,26 @@ pub struct EdgeKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelfEdge;
+
+/// [`EdgeKey`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawEdgeKey {
+    from: AgentId,
+    to: AgentId,
+    route: Route,
+    topic: TopicSlot,
+    bucket: TimeWindow,
+}
+
+impl TryFrom<RawEdgeKey> for EdgeKey {
+    type Error = Rejected<SelfEdge>;
+
+    fn try_from(raw: RawEdgeKey) -> Result<Self, Self::Error> {
+        Self::new(raw.from, raw.to, raw.route, raw.topic, raw.bucket)
+            .map_err(|error| Rejected::new("edge key", error))
+    }
+}
 
 impl EdgeKey {
     pub fn new(
@@ -91,7 +116,8 @@ impl EdgeKey {
 
 /// Counts for one bucket. A bucket exists only once a transmission has been
 /// counted into it, so both counts are non-zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EdgeStats {
     pub transmissions: NonZeroU64,
     /// Bytes of the sender's originated text that reached the reader.
@@ -104,14 +130,19 @@ pub struct Edge {
     pub stats: EdgeStats,
 }
 
-/// What an edge's share is a share of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What an edge's share is a share of. A request (`topology`,
+/// `channel_topology`, `series`): `"transmissions"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Weighting {
     Transmissions,
     MatchedBytes,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl WireRequest for Weighting {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RouteKind {
     Channel,
     Delegation,
@@ -130,7 +161,8 @@ impl From<&Route> for RouteKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WeightedEdge {
     pub from: AgentId,
     pub to: AgentId,
@@ -151,7 +183,8 @@ pub struct WeightedEdge {
 /// each, with counts that agree with `edges` ([`TopologyGraph::check_nodes`],
 /// [`crate::aggregates::node`]). It holds no channel nodes; the
 /// channel-centred view does.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TopologyGraph {
     pub window: TimeWindow,
     pub weighting: Weighting,
@@ -164,7 +197,8 @@ pub struct TopologyGraph {
 /// What a [`TopologyGraph`] counts in total, without its nodes, edges or
 /// shares: what the overview shows for a window and filter
 /// (`EdgeStore::totals`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EdgeTotals {
     /// The version the filter's selector resolved to.
     pub topic_version: TopicModelVersion,
@@ -208,12 +242,34 @@ impl EdgeTotals {
 /// resolve to one agent counts nothing, as in the graph.
 ///
 /// Built only through [`EdgeSelector::new`], which rejects a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawEdgeSelector")]
 pub struct EdgeSelector {
     from: AgentId,
     to: AgentId,
     route: Route,
 }
+
+/// [`EdgeSelector`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawEdgeSelector {
+    from: AgentId,
+    to: AgentId,
+    route: Route,
+}
+
+impl TryFrom<RawEdgeSelector> for EdgeSelector {
+    type Error = Rejected<SelfEdge>;
+
+    fn try_from(raw: RawEdgeSelector) -> Result<Self, Self::Error> {
+        Self::new(raw.from, raw.to, raw.route)
+            .map_err(|error| Rejected::new("edge selector", error))
+    }
+}
+
+/// A client picks the edge to drill into.
+impl WireRequest for EdgeSelector {}
 
 impl EdgeSelector {
     pub fn new(from: AgentId, to: AgentId, route: Route) -> Result<Self, SelfEdge> {
@@ -238,7 +294,8 @@ impl EdgeSelector {
 
 /// One transmission counted into an edge. Sender, reader and route are the
 /// selector's. Holds no message content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EdgeTransmission {
     pub transmission: TransmissionId,
     /// `Confirmed::at`: what the window is tested against and what edges are
@@ -256,7 +313,8 @@ pub struct EdgeTransmission {
 /// filter's selector to; the cursor pins it. Read with no apply in between, a full
 /// traversal for an aligned window lists exactly the transmissions
 /// `EdgeStore::graph` counts into that edge for the same window and filter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EdgeTransmissionPage {
     pub topic_version: TopicModelVersion,
     pub page: Page<EdgeTransmission, EdgeTransmissionList>,

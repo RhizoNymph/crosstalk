@@ -47,9 +47,12 @@
 
 pub mod merge;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{AccountHash, AgentId, CredentialHash, OperatorId, PromptHash};
 use crate::observed::client::UpstreamId;
 use crate::support::{Change, DisplayText, NonEmpty, Timestamp};
+use crate::wire::Rejected;
 
 mod claims;
 
@@ -67,7 +70,13 @@ pub type AgentLabel = DisplayText<64>;
 /// account if it has one, else its credential if that is stable, else its
 /// upstream (rotating, shared or no credential). Rotating credentials are
 /// never a scope, so a token refresh keeps the scope and with it the agent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum IdentityScope {
     Account(AccountHash),
     Credential(CredentialHash),
@@ -75,7 +84,13 @@ pub enum IdentityScope {
     Upstream(UpstreamId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum IdentityEvidence {
     /// A harness agent id (`x-claude-code-agent-id`, Codex `thread-id`).
     HarnessAgent {
@@ -133,7 +148,8 @@ impl IdentityEvidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Agent {
     pub id: AgentId,
     pub evidence: NonEmpty<IdentityEvidence>,
@@ -146,7 +162,13 @@ pub struct Agent {
     pub label: Option<AgentLabel>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AgentState {
     Registered {
         at: Timestamp,
@@ -166,7 +188,13 @@ pub enum AgentState {
 /// The states an agent can be merged from, and so the states an unmerge
 /// returns it to: every state but `Merged`. A registered agent can be merged
 /// by an operator who knows it is the same as one seen in traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ActiveAgentState {
     Registered { at: Timestamp },
     Provisional { first_seen: Timestamp },
@@ -227,7 +255,13 @@ impl Agent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum MergeAuthor {
     /// The identity resolver found the same strong evidence on two agents.
     Resolver,
@@ -238,7 +272,8 @@ pub enum MergeAuthor {
 /// [`MergeRequest::new`], which rejects a self-merge. Two different ids of
 /// one cluster pass here and are refused by the merge table
 /// ([`MergeRequest::conflict`], `MergeConflict::IntoSelf`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawMergeRequest")]
 pub struct MergeRequest {
     from: AgentId,
     into: AgentId,
@@ -247,6 +282,23 @@ pub struct MergeRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelfMerge;
+
+/// [`MergeRequest`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawMergeRequest {
+    from: AgentId,
+    into: AgentId,
+    by: MergeAuthor,
+}
+
+impl TryFrom<RawMergeRequest> for MergeRequest {
+    type Error = Rejected<SelfMerge>;
+
+    fn try_from(raw: RawMergeRequest) -> Result<Self, Self::Error> {
+        Self::new(raw.from, raw.into, raw.by).map_err(|error| Rejected::new("merge request", error))
+    }
+}
 
 impl MergeRequest {
     pub fn new(from: AgentId, into: AgentId, by: MergeAuthor) -> Result<Self, SelfMerge> {

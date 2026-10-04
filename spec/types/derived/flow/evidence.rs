@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::access::{Access, AccessOp};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::AccessId;
@@ -22,7 +24,12 @@ pub enum Evidence {
 /// truncated beyond what matching catches.
 ///
 /// Built only through [`CoAccess::new`], which checks the two accesses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// On the wire, `{"write": .., "read": .., "lag": {"secs": .., "nanos": ..}}`
+/// (serde's form of a `Duration`). Decoding cannot rerun [`CoAccess::new`]:
+/// its checks read the two accesses, which the value names only by id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CoAccess {
     write: AccessId,
     read: AccessId,

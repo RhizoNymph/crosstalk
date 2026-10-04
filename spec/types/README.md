@@ -80,7 +80,7 @@ spec/types/
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
-│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
+│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)

@@ -1,6 +1,6 @@
 [invariant]
 id = "ingress.capture.decode-attached-at-handoff"
-statement = "The proxy hands off an HTTP exchange's RawExchange only once both its response stream has ended and its request decode has succeeded, in either order, with its request (the DecodedRequest: WireRequest, body and encoding) and meta.model taken from that decode."
+statement = "The proxy hands off an HTTP exchange's RawExchange only once both its response stream has ended and its request decode has succeeded, in either order, with its request (the DecodedRequest: HarnessRequest, body and encoding) and meta.model taken from that decode."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

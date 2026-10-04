@@ -223,7 +223,9 @@ Features Index:
       records never requests; an undecodable request as
       InvalidInput(MalformedRequest); golden files pinning every shape,
       rewritten with CROSSTALK_BLESS=1. Converted so far: ids, support
-      types, paging, the alert inbox and the query and action errors.
+      types, paging, the alert inbox and the query and action errors, with
+      goldens; every other type a wire root reaches has its serde derives
+      and decode mirrors (stage 0), its goldens to follow per area.
     entry_points:
       - spec/types/wire/mod.rs
       - spec/types/wire/time.rs

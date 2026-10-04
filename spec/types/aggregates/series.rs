@@ -26,17 +26,21 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::num::{NonZeroU32, NonZeroU64};
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::{EdgeStats, RouteKind, TopologyGraph, Weighting};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, TopicId};
 use crate::support::{TimeWindow, Timestamp};
+use crate::wire::{Rejected, WireRequest};
 
 /// The edge table's bucket width, in microseconds. Buckets are aligned to
 /// multiples of the width from the Unix epoch, so every instant belongs to
 /// exactly one bucket. One width per edge store; graph windows and series
-/// grids are aligned to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// grids are aligned to it. On the wire, the number of microseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct BucketWidth(NonZeroU64);
 
 impl BucketWidth {
@@ -58,7 +62,8 @@ impl BucketWidth {
 /// is a union of buckets and no bucket is split between two points.
 ///
 /// Built only through [`SeriesStep::new`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawSeriesStep")]
 pub struct SeriesStep {
     bucket: BucketWidth,
     micros: NonZeroU64,
@@ -70,6 +75,22 @@ pub enum InvalidStep {
         bucket: NonZeroU64,
         step: NonZeroU64,
     },
+}
+
+/// [`SeriesStep`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawSeriesStep {
+    bucket: BucketWidth,
+    micros: NonZeroU64,
+}
+
+impl TryFrom<RawSeriesStep> for SeriesStep {
+    type Error = Rejected<InvalidStep>;
+
+    fn try_from(raw: RawSeriesStep) -> Result<Self, Self::Error> {
+        Self::new(raw.bucket, raw.micros).map_err(|error| Rejected::new("series step", error))
+    }
 }
 
 impl SeriesStep {
@@ -107,7 +128,12 @@ impl SeriesStep {
 /// exactly one step.
 ///
 /// Built only through [`SeriesGrid::new`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// A request (`series`). On the wire, `{"window": .., "step": ..}`: the
+/// point count follows from them, and decoding goes through
+/// [`SeriesGrid::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "RawSeriesGrid", into = "RawSeriesGrid")]
 pub struct SeriesGrid {
     window: TimeWindow,
     step: SeriesStep,
@@ -123,6 +149,35 @@ pub enum InvalidGrid {
     /// More than [`SeriesGrid::MAX_POINTS`] points.
     TooManyPoints { points: u64 },
 }
+
+/// [`SeriesGrid`]'s wire form: its window and step, without the point
+/// count, which [`SeriesGrid::new`] computes.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawSeriesGrid {
+    window: TimeWindow,
+    step: SeriesStep,
+}
+
+impl From<SeriesGrid> for RawSeriesGrid {
+    fn from(grid: SeriesGrid) -> Self {
+        Self {
+            window: grid.window,
+            step: grid.step,
+        }
+    }
+}
+
+impl TryFrom<RawSeriesGrid> for SeriesGrid {
+    type Error = Rejected<InvalidGrid>;
+
+    fn try_from(raw: RawSeriesGrid) -> Result<Self, Self::Error> {
+        Self::new(raw.window, raw.step).map_err(|error| Rejected::new("series grid", error))
+    }
+}
+
+/// A client picks the grid of a series query.
+impl WireRequest for SeriesGrid {}
 
 impl SeriesGrid {
     /// The most points one series may have. Bounds the work and the response
@@ -187,7 +242,8 @@ impl SeriesGrid {
 }
 
 /// How a series query splits the counted transmissions into series.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SeriesGrouping {
     /// One series of everything the filter admits.
     Total,
@@ -199,8 +255,11 @@ pub enum SeriesGrouping {
     Edge,
 }
 
+impl WireRequest for SeriesGrouping {}
+
 /// The key of a per-edge series. Never a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SeriesEdge {
     pub from: AgentId,
     pub to: AgentId,
@@ -209,7 +268,8 @@ pub struct SeriesEdge {
 
 /// One series: `values[i]` is the stat under the query's weighting summed
 /// over the grid's point `i`. Zero when nothing was counted in that step.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Series<K> {
     pub key: K,
     pub values: Vec<u64>,
@@ -225,7 +285,13 @@ impl<K> Series<K> {
 /// The series of one query, shaped by its grouping. A grouped variant holds
 /// one series per key that counted anything in the window; keys with no
 /// transmissions are left out, as edges are from a graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SeriesGroups {
     Total(Vec<u64>),
     /// `None` is the outlier series.
@@ -250,7 +316,8 @@ impl SeriesGroups {
 /// Built only through [`TopologySeries::new`]: every series has exactly one
 /// value per grid point, keys are distinct within a grouping, no grouped
 /// series is all zeros, and no edge series is a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTopologySeries")]
 pub struct TopologySeries {
     grid: SeriesGrid,
     weighting: Weighting,
@@ -268,6 +335,25 @@ pub enum InvalidSeries {
     /// A grouped series that counted nothing in the window.
     ZeroSeries,
     SelfEdge,
+}
+
+/// [`TopologySeries`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopologySeries {
+    grid: SeriesGrid,
+    weighting: Weighting,
+    topic_version: TopicModelVersion,
+    groups: SeriesGroups,
+}
+
+impl TryFrom<RawTopologySeries> for TopologySeries {
+    type Error = Rejected<InvalidSeries>;
+
+    fn try_from(raw: RawTopologySeries) -> Result<Self, Self::Error> {
+        Self::new(raw.grid, raw.weighting, raw.topic_version, raw.groups)
+            .map_err(|error| Rejected::new("topology series", error))
+    }
 }
 
 impl TopologySeries {
