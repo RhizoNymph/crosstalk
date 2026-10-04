@@ -12,6 +12,11 @@
 //! navigates to the same view with the brushed window: its payload's bucket
 //! edges are all bucket boundaries, so a brushed window is aligned and the
 //! URL it navigates to is canonical.
+//!
+//! Live updates do not re-render the page: the graph and the brush follow
+//! the feed themselves (`data-live`), refetch their payloads on a
+//! `watermark` event and merge them in place, and the graph keeps the
+//! header's `data-topology-stat` numbers current.
 
 pub mod drawer;
 pub mod filters;
@@ -19,7 +24,6 @@ pub mod lists;
 pub mod query;
 pub mod selection;
 
-use crate::components::live::live_watch;
 use crate::contract::present::Present;
 use std::time::Duration;
 
@@ -190,8 +194,7 @@ async fn topology_page(
     Ok(view! {
         <script type="module" src=(TOPOLOGY_JS)></script>
         <script type="module" src=(TIMEBRUSH_JS)></script>
-        // New traffic advances the watermark: the graph is read again.
-        live_watch(tokens: "watermark".to_owned())
+        // No `live_watch`: the elements below follow the feed themselves.
         if let Some(status) = failed_status {
             (status)
         }
@@ -258,9 +261,10 @@ async fn header_bar(
         format_time(state.scope.window.end())
     );
     let counts = headline.as_ref().map(|s| {
-        format!(
-            " · {} agents · {} edges · {} transmissions · ",
-            s.agents, s.edges, s.transmissions
+        (
+            s.agents.to_string(),
+            s.edges.to_string(),
+            s.transmissions.to_string(),
         )
     });
     let watermark = headline.map(|s| format!("final up to {}", s.watermark));
@@ -270,9 +274,17 @@ async fn header_bar(
                 <h1 class="text-lg font-semibold">"Topology"</h1>
                 <p class="text-xs text-zinc-500">
                     (window_text)
-                    (counts.unwrap_or_default())
+                    if let Some((agents, edges, transmissions)) = counts {
+                        " · "
+                        <span data-topology-stat="agents">(agents)</span>
+                        " agents · "
+                        <span data-topology-stat="edges">(edges)</span>
+                        " edges · "
+                        <span data-topology-stat="transmissions">(transmissions)</span>
+                        " transmissions · "
+                    }
                     if let Some(watermark) = watermark {
-                        <span title="Buckets before this time are final">(watermark)</span>
+                        <span data-topology-stat="watermark" title="Buckets before this time are final">(watermark)</span>
                     }
                 </p>
             </div>
@@ -328,6 +340,7 @@ async fn workspace(
                 <ct-topology
                     class="block h-[36rem] rounded border border-zinc-200 dark:border-zinc-800"
                     data-src=(topology_src)
+                    data-live="/data/live"
                     data-collapse=(collapse.then_some("true"))
                     :data-highlight=$(if hover.get().is_empty() { sel.get() } else { hover.get() })
                     @change=$(|e: Event| {
@@ -342,6 +355,7 @@ async fn workspace(
                 <ct-timebrush
                     class="mt-2 block h-24 rounded border border-zinc-200 dark:border-zinc-800"
                     data-src=(brush_src)
+                    data-live="/data/live"
                     data-from=(brush_from)
                     data-to=(brush_to)
                     @change=$(|e: Event| {

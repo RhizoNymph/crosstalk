@@ -176,6 +176,24 @@ async fn renders_graph_brush_filter_and_heaviest_edges() {
 }
 
 #[tokio::test]
+async fn follows_the_feed_in_the_elements_not_by_re_rendering() {
+    let reply = get(&url("")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    assert!(
+        !body.contains("data-live-watch"),
+        "no page re-render on events"
+    );
+    assert_eq!(body.matches("data-live=\"/data/live\"").count(), 2);
+    for stat in ["agents", "edges", "transmissions", "watermark"] {
+        assert!(
+            body.contains(&format!("data-topology-stat=\"{stat}\"")),
+            "{stat}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_selected_edge_lists_its_transmissions() {
     let sel = heaviest_edge().await.encode();
     let reply = get(&url(&format!("&sel={sel}"))).await;
