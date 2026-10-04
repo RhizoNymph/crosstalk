@@ -163,16 +163,19 @@ pub struct Promoted {
 }
 
 pub trait ChannelRegistry {
-    async fn lookup(&self, locator: &Locator) -> Result<ChannelLookup, RegistryError>;
+    fn lookup(
+        &self,
+        locator: &Locator,
+    ) -> impl Future<Output = Result<ChannelLookup, RegistryError>> + Send;
 
     /// Declare a channel from config. When `policy` carries a decision, it
     /// is the first entry of the channel's [`PolicyHistory`].
-    async fn declare(
+    fn declare(
         &mut self,
         pattern: ResourcePattern,
         policy: Policy,
         by: PolicyAuthor,
-    ) -> Result<ChannelId, RegistryError>;
+    ) -> impl Future<Output = Result<ChannelId, RegistryError>> + Send;
 
     /// Record a decision in the channel's [`PolicyHistory`] and set the
     /// channel's policy to the history's current one, in one transaction.
@@ -180,14 +183,17 @@ pub trait ChannelRegistry {
     /// changes nothing. A decision older than the current one is kept in the
     /// history and returns `Recorded::Superseded`. A superseded channel
     /// takes no decisions: `Superseded { channel, by }`, changing nothing.
-    async fn set_policy(
+    fn set_policy(
         &mut self,
         channel: ChannelId,
         decision: PolicyDecision,
-    ) -> Result<Recorded, RegistryError>;
+    ) -> impl Future<Output = Result<Recorded, RegistryError>> + Send;
 
     /// Every decision recorded for the channel, oldest first.
-    async fn policy_history(&self, channel: ChannelId) -> Result<PolicyHistory, RegistryError>;
+    fn policy_history(
+        &self,
+        channel: ChannelId,
+    ) -> impl Future<Output = Result<PolicyHistory, RegistryError>> + Send;
 
     /// Promote the discovered channel `channel` with `promotion`, as
     /// [`promotion::plan`] decides for `promotion.declaration()` over the
@@ -206,11 +212,11 @@ pub trait ChannelRegistry {
     /// [`promotion::plan`]: crate::derived::flow::channel::promotion::plan
     /// [`ChannelOrigin::promoted`]: crate::derived::flow::channel::ChannelOrigin::promoted
     /// [`ChannelOrigin::Superseded`]: crate::derived::flow::channel::ChannelOrigin::Superseded
-    async fn promote(
+    fn promote(
         &mut self,
         channel: ChannelId,
         promotion: Promotion,
-    ) -> Result<Promoted, PromoteError>;
+    ) -> impl Future<Output = Result<Promoted, PromoteError>> + Send;
 
     /// What `promote` would do now for a promotion with `declaration`,
     /// changing nothing: exactly [`promotion::coverage`] over the channels
@@ -222,11 +228,11 @@ pub trait ChannelRegistry {
     /// [`Promoted::superseded`].
     ///
     /// [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
-    async fn promotion_coverage(
+    fn promotion_coverage(
         &self,
         channel: ChannelId,
         declaration: &Declaration,
-    ) -> Result<PromotionCoverage, PromoteError>;
+    ) -> impl Future<Output = Result<PromotionCoverage, PromoteError>> + Send;
 
     /// The resources of `channel`'s canonical channel (its own and those of
     /// every channel it superseded) accessed within `window`, newest
@@ -234,12 +240,12 @@ pub trait ChannelRegistry {
     /// often each accessed it in the window
     /// ([`ResourceUse`](crate::aggregates::access::ResourceUse)). Agents are
     /// resolved through `AgentDirectory`, summing merged aliases.
-    async fn resource_use(
+    fn resource_use(
         &self,
         channel: ChannelId,
         window: TimeWindow,
         page: &PageRequest<ResourceUseList>,
-    ) -> Result<ResourceUsePage, RegistryError>;
+    ) -> impl Future<Output = Result<ResourceUsePage, RegistryError>> + Send;
 }
 
 /// What the correlator decided. The flow consumer applies these to stored

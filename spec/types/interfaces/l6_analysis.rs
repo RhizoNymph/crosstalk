@@ -115,7 +115,10 @@ use crate::support::{Change, NonBlank, NonEmpty, Similarity, TimeWindow, Timesta
 pub trait Embedder {
     fn model(&self) -> EmbeddingModel;
 
-    async fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError>;
+    fn embed(
+        &self,
+        texts: &[&str],
+    ) -> impl Future<Output = Result<Vec<Embedding>, EmbedError>> + Send;
 }
 
 pub trait TopicModel {
@@ -130,7 +133,7 @@ pub trait TopicModel {
 
 /// The record of topic-model versions, topic sizes and lineage.
 pub trait TopicCatalog {
-    async fn versions(&self) -> Result<TopicVersionHistory, CatalogError>;
+    fn versions(&self) -> impl Future<Output = Result<TopicVersionHistory, CatalogError>> + Send;
 
     /// Each of `version`'s topics, and its outliers, with the transmissions
     /// assigned to them under `version`; with a window, only transmissions
@@ -138,17 +141,20 @@ pub trait TopicCatalog {
     /// `StillFitting` for a version that is not ready yet. For a dropped
     /// version, returns without a window the all-time sizes frozen when it
     /// was dropped, and with a window `VersionNotRetained`.
-    async fn sizes(
+    fn sizes(
         &self,
         version: TopicModelVersion,
         window: Option<TimeWindow>,
-    ) -> Result<TopicSizes, CatalogError>;
+    ) -> impl Future<Output = Result<TopicSizes, CatalogError>> + Send;
 
     /// The lineage from `from` to its successor: one entry per topic of
     /// `from`, whose best link is the successor's topic with the most similar
     /// centroid (ties to the lower id). `None` while `from` has no successor
     /// whose fit has returned.
-    async fn lineage(&self, from: TopicModelVersion) -> Result<Option<TopicLineage>, CatalogError>;
+    fn lineage(
+        &self,
+        from: TopicModelVersion,
+    ) -> impl Future<Output = Result<Option<TopicLineage>, CatalogError>> + Send;
 
     /// The policy retention applies.
     fn retention(&self) -> RetentionPolicy;
@@ -156,29 +162,36 @@ pub trait TopicCatalog {
     /// Pin `version` ([`TopicVersionHistory::pin`]): `UnknownVersion`,
     /// `StillFitting` or `VersionNotRetained` when it is unknown, fitting or
     /// dropped, changing nothing. Serialized with `enforce_retention`.
-    async fn pin(&self, version: TopicModelVersion, pin: Pin) -> Result<PinChange, CatalogError>;
+    fn pin(
+        &self,
+        version: TopicModelVersion,
+        pin: Pin,
+    ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send;
 
     /// Unpin `version` ([`TopicVersionHistory::unpin`]), then enforce
     /// retention, so an unpinned version outside the policy is dropped.
-    async fn unpin(&self, version: TopicModelVersion) -> Result<PinChange, CatalogError>;
+    fn unpin(
+        &self,
+        version: TopicModelVersion,
+    ) -> impl Future<Output = Result<PinChange, CatalogError>> + Send;
 
     /// Mark every version `RetentionPolicy::to_drop` returns dropped at `at`,
     /// freezing its all-time sizes, in one transaction. Returns those
     /// versions, oldest first; the caller then publishes one
     /// `TopicVersionDropped` per version and deletes their assignments.
-    async fn enforce_retention(
+    fn enforce_retention(
         &self,
         at: Timestamp,
-    ) -> Result<Vec<TopicModelVersion>, CatalogError>;
+    ) -> impl Future<Output = Result<Vec<TopicModelVersion>, CatalogError>> + Send;
 
     /// `version`'s topics, newest id first. Any version whose fit has
     /// returned (ready, active or superseded) can be read: the catalog keeps
     /// every version's topics. Fails with `StillFitting` for a fitting one.
-    async fn topics(
+    fn topics(
         &self,
         version: TopicModelVersion,
         page: &PageRequest<TopicList>,
-    ) -> Result<Page<Topic, TopicList>, CatalogError>;
+    ) -> impl Future<Output = Result<Page<Topic, TopicList>, CatalogError>> + Send;
 }
 
 /// A query as the index runs it. The surface builds it from the operator's
@@ -230,13 +243,13 @@ pub trait SearchIndex {
     /// stable under concurrent indexing. The first page resolves the
     /// filter's topic version and rejects topics outside it; the cursor pins
     /// that version and the query's embedding model.
-    async fn query(
+    fn query(
         &self,
         query: &SearchQuery,
         window: Option<TimeWindow>,
         filter: &TopologyFilter,
         page: &PageRequest<SearchList>,
-    ) -> Result<SearchResults, SearchError>;
+    ) -> impl Future<Output = Result<SearchResults, SearchError>> + Send;
 }
 
 /// Projection jobs and their stored frames. Reads and `enqueue` fail with
@@ -250,46 +263,64 @@ pub trait ProjectionStore {
 
     /// Record a job made with [`ProjectionInfo::queued`]. Idempotent on its
     /// id: enqueuing the same info again changes nothing.
-    async fn enqueue(&mut self, job: ProjectionInfo) -> Result<(), ProjectionStoreError>;
+    fn enqueue(
+        &mut self,
+        job: ProjectionInfo,
+    ) -> impl Future<Output = Result<(), ProjectionStoreError>> + Send;
 
     /// Make the oldest queued job `Fitting` as of `at` under a lease, and
     /// return it. `None` when nothing is queued.
-    async fn claim(&mut self, at: Timestamp) -> Result<Option<ProjectionInfo>, ProjectionJobError>;
+    fn claim(
+        &mut self,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<Option<ProjectionInfo>, ProjectionJobError>> + Send;
 
     /// Store `frame` and make the job `Ready` in one transaction. The fit's
     /// watermark, matching and point counts are the frame header's.
-    async fn complete(
+    fn complete(
         &mut self,
         id: ProjectionId,
         frame: ProjectionFrame,
         at: Timestamp,
-    ) -> Result<(), ProjectionJobError>;
+    ) -> impl Future<Output = Result<(), ProjectionJobError>> + Send;
 
-    async fn fail(
+    fn fail(
         &mut self,
         id: ProjectionId,
         failure: FitFailure,
         at: Timestamp,
-    ) -> Result<(), ProjectionJobError>;
+    ) -> impl Future<Output = Result<(), ProjectionJobError>> + Send;
 
     /// Return to `Queued` every fitting job whose lease lapsed before `now`.
-    async fn requeue_lapsed(&mut self, now: Timestamp) -> Result<u32, ProjectionJobError>;
+    fn requeue_lapsed(
+        &mut self,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u32, ProjectionJobError>> + Send;
 
     /// Drop the frame of every ready projection fitted more than the frame
     /// retention before `now`, making it `Expired`.
-    async fn expire(&mut self, now: Timestamp) -> Result<u32, ProjectionJobError>;
+    fn expire(
+        &mut self,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u32, ProjectionJobError>> + Send;
 
-    async fn info(&self, id: ProjectionId) -> Result<Option<ProjectionInfo>, ProjectionStoreError>;
+    fn info(
+        &self,
+        id: ProjectionId,
+    ) -> impl Future<Output = Result<Option<ProjectionInfo>, ProjectionStoreError>> + Send;
 
     /// Every job, newest id first.
-    async fn list(
+    fn list(
         &self,
         page: &PageRequest<ProjectionList>,
-    ) -> Result<Page<ProjectionInfo, ProjectionList>, ProjectionStoreError>;
+    ) -> impl Future<Output = Result<Page<ProjectionInfo, ProjectionList>, ProjectionStoreError>> + Send;
 
     /// A ready projection's job record and stored frame, identical on every
     /// read until it expires.
-    async fn projection(&self, id: ProjectionId) -> Result<Projection, ProjectionStoreError>;
+    fn projection(
+        &self,
+        id: ProjectionId,
+    ) -> impl Future<Output = Result<Projection, ProjectionStoreError>> + Send;
 }
 
 /// One sampled transmission, as a fit reads it.
@@ -322,7 +353,10 @@ pub trait ProjectionSource {
     /// The sample of `spec` as of now: every transmission confirmed in its
     /// window that its pinned filter admits and that has an embedding from
     /// its model, reduced to the sample size by smallest sample key.
-    async fn sample(&self, spec: &ProjectionSpec) -> Result<Sample, SampleError>;
+    fn sample(
+        &self,
+        spec: &ProjectionSpec,
+    ) -> impl Future<Output = Result<Sample, SampleError>> + Send;
 }
 
 /// UMAP to two dimensions, cosine metric.
@@ -338,10 +372,17 @@ pub trait LayoutFitter {
 }
 
 /// What a rule may look up while evaluating, beyond the event itself.
-pub trait RuleContext {
-    async fn channel_policy(&self, channel: ChannelId) -> Option<Policy>;
+///
+/// `Sync` because [`AlertRuleEval::evaluate`] borrows the context into its
+/// `Send` future: a shared reference is `Send` only when its target is
+/// `Sync`.
+pub trait RuleContext: Sync {
+    fn channel_policy(&self, channel: ChannelId) -> impl Future<Output = Option<Policy>> + Send;
 
-    async fn transmission_embedding(&self, transmission: TransmissionId) -> Option<Embedding>;
+    fn transmission_embedding(
+        &self,
+        transmission: TransmissionId,
+    ) -> impl Future<Output = Option<Embedding>> + Send;
 }
 
 pub trait AlertRuleEval {
@@ -349,8 +390,11 @@ pub trait AlertRuleEval {
 
     /// A draft's `raised_at` is the envelope's time, so evaluation is
     /// deterministic for the same envelope and context.
-    async fn evaluate(&self, envelope: &Envelope, context: &impl RuleContext)
-    -> Option<AlertDraft>;
+    fn evaluate(
+        &self,
+        envelope: &Envelope,
+        context: &impl RuleContext,
+    ) -> impl Future<Output = Option<AlertDraft>> + Send;
 }
 
 pub trait AlertTriage {
@@ -359,15 +403,24 @@ pub trait AlertTriage {
     /// transaction), or `OperatorRejected` when the draft's subject is a
     /// transmission whose current verdict in triage's copy is
     /// `FalseDetection` (read in the same transaction).
-    async fn triage(&mut self, draft: AlertDraft) -> Result<TriageOutcome, TriageError>;
+    fn triage(
+        &mut self,
+        draft: AlertDraft,
+    ) -> impl Future<Output = Result<TriageOutcome, TriageError>> + Send;
 
     /// Suppress the active alerts whose subject is `channel` or a channel
     /// it superseded (`AlertSubject::resolved`). Triggered by
     /// `PolicyChanged` and `ChannelPromoted` carrying `Sanctioned`.
-    async fn channel_sanctioned(&mut self, channel: ChannelId) -> Result<u32, TriageError>;
+    fn channel_sanctioned(
+        &mut self,
+        channel: ChannelId,
+    ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 
     /// Suppress the active alerts raised by `rule`.
-    async fn rule_disabled(&mut self, rule: AlertRuleId) -> Result<u32, TriageError>;
+    fn rule_disabled(
+        &mut self,
+        rule: AlertRuleId,
+    ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 
     /// Record `transmission`'s verdict at `revision` in triage's copy
     /// ([`CurrentVerdict::observe`]). When the revision is newer and the
@@ -377,12 +430,12 @@ pub trait AlertTriage {
     /// `Genuine` verdict and a withdrawal suppress nothing and reopen
     /// nothing. Triggered by `VerdictSet`; returns how many alerts it
     /// suppressed.
-    async fn transmission_judged(
+    fn transmission_judged(
         &mut self,
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
-    ) -> Result<u32, TriageError>;
+    ) -> impl Future<Output = Result<u32, TriageError>> + Send;
 }
 
 /// Operator management of alert rules, called by the surface. The store
@@ -403,28 +456,28 @@ pub trait AlertTriage {
 pub trait AlertRuleStore {
     /// Create an enabled, current user rule created by `by` at `at`, under
     /// a fresh id the store assigns. Returns the id.
-    async fn create(
+    fn create(
         &mut self,
         name: RuleName,
         rule: UserRule,
         sinks: Vec<SinkId>,
         by: OperatorId,
         at: Timestamp,
-    ) -> Result<AlertRuleId, RuleError>;
+    ) -> impl Future<Output = Result<AlertRuleId, RuleError>> + Send;
 
     /// Replace a user rule's name, definition and sinks
     /// ([`AlertRuleDef::update`]): same kind only, creator kept. A stale rule
     /// is retargeted to the current version or model and enabled. Its alerts
     /// are left as they are. `NotEditable` for a built-in rule or another
     /// kind.
-    async fn update(
+    fn update(
         &mut self,
         id: AlertRuleId,
         name: RuleName,
         rule: UserRule,
         sinks: Vec<SinkId>,
         by: OperatorId,
-    ) -> Result<Change, RuleError>;
+    ) -> impl Future<Output = Result<Change, RuleError>> + Send;
 
     /// Enable or disable any rule, built in or not
     /// ([`AlertRuleDef::set_enabled`]). Disabling suppresses its active
@@ -432,12 +485,12 @@ pub trait AlertRuleStore {
     /// allowed whether or not the rule is stale. Enabling a stale rule is
     /// refused with `Stale`, changing nothing and publishing nothing: only
     /// `update` retargets a stale rule, and it enables it too.
-    async fn set_enabled(
+    fn set_enabled(
         &mut self,
         id: AlertRuleId,
         enabled: bool,
         by: OperatorId,
-    ) -> Result<Change, RuleError>;
+    ) -> impl Future<Output = Result<Change, RuleError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -268,6 +268,43 @@ The types follow data through the stack:
    in [read_models.md](read_models.md) and export in
    [export.md](export.md).
 
+### Conventions for the layer traits
+
+- **Async methods return `Send` futures.** Every async trait method in
+  `interfaces/` is declared in its desugared form,
+  `fn name(&self, ...) -> impl Future<Output = T> + Send` (`&mut self` where
+  the component owns its state), never as a bare `async fn`. An
+  implementation still writes `async fn`; the compiler checks that its
+  future is `Send`. Code generic over a trait (a UI or client generic over
+  `QueryApi`, a consumer loop generic over `EventBus`) can then hand the
+  futures to `tokio::spawn` or an axum handler without return-type
+  notation. A bare `async fn` would compile only against one concrete type
+  the compiler can see through.
+- **Streams and handles are `Send + 'static`.** The associated types a task
+  keeps across awaits or hands to another task are bounded so:
+  `EventBus::Subscription`, `LiveFeed::Stream`, `QueryApi::ExportRows`,
+  `ExportSource::Rows`, and `ProviderAdapter::Framer` and `Tap` (whose
+  methods are synchronous).
+- **What this asks of an implementation.** An `async fn` future holds its
+  arguments, `&self` included, so an implementation whose `&self` methods
+  are async is `Sync` in practice, and one with `&mut self` methods is
+  `Send`. A generic implementation states those bounds itself (`SealedRows`
+  requires its source and hasher to be `Send`). `RuleContext` is `Sync`
+  because `AlertRuleEval::evaluate` borrows a context into its future. The
+  traits do not require `Self: Send + Sync`; a host that shares one
+  implementation across tasks adds those bounds where it does
+  (`Arc<Q>` with `Q: QueryApi + Send + Sync + 'static`).
+- **Object safety is unchanged.** A trait with async methods was not
+  dyn-compatible as `async fn` and is not as `impl Future`; the
+  synchronous traits (`UpstreamRouter`, `ClientIdentifier`,
+  `ResponseFramer`, `WebSocketTap`, `AgentDirectory`, `ChannelDirectory`,
+  `RowHasher` and the like) are untouched.
+- `tests/send.rs` checks all of this at compile time
+  (`canonical.interface.send-futures`): an uninhabited `Dummy` implements
+  every trait with `async fn`, and a function generic over each trait
+  passes every method's future to `assert_send` and every associated
+  stream to `assert_send_static`, so dropping a bound fails the build.
+
 ## Files
 
 | File | Role | Key exports |
@@ -306,6 +343,7 @@ The types follow data through the stack:
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
 | `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
+| `spec/types/tests/send.rs`, `tests/send/{pipeline,detection,surface}.rs` | Compile-time check that every async trait method's future is `Send` and every associated stream or handle `Send + 'static`: an uninhabited `Dummy` implementing each trait with `async fn`, and one check function generic over each trait | `Dummy`, `assert_send`, `assert_send_static`, `arg` (test-only) |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
@@ -488,6 +526,10 @@ The types follow data through the stack:
   never NaN or outside `0..=1`.
 - Bus delivery is at least once. Consumers are idempotent on the envelope id
   and on entity ids.
+- Every async trait method in `interfaces/` returns a `Send` future, and
+  every associated stream or per-connection handle is `Send + 'static`
+  (`canonical.interface.send-futures`; checked by `tests/send.rs`). No
+  method is a bare `async fn`.
 - The spec's only dependencies are `serde` and `serde_json`, pinned
   exactly to the UI's versions with the lockfile committed; `cargo check`
   and `cargo test` on `spec/Cargo.toml` must stay clean. Every type that

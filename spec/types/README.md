@@ -123,6 +123,7 @@ spec/types/
 │           ├── stream.rs  ExportStream (trailer always last), Export, SealedRows, RowSource, ExportSource, ExportPlanError
 │           └── record.rs  ExportRecord (checked; keeps a CallerSnapshot), ExportEvent: exports in the audit log
 └── tests/                 tests for the invariants checked at runtime, one module per subject
+    ├── send.rs, send/     compile-time check that every async trait method's future is Send and every associated stream Send + 'static (Dummy, assert_send)
     ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area
     └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
@@ -175,6 +176,15 @@ spec/types/
   `wire::WireRequest`; a `Caller` never serializes and nothing the server
   stamps is a request. A golden file in `tests/golden/` pins every shape.
   See `wire/mod.rs` and `docs/features/wire_contract.md`.
+- **Async trait methods return `Send` futures.** Every async method in
+  `interfaces/` is declared as `fn name(..) -> impl Future<Output = T> +
+  Send`, never a bare `async fn`, so code generic over a trait can spawn
+  its futures on tokio's multi-threaded runtime. Implementations still
+  write `async fn`. Associated streams and handles
+  (`EventBus::Subscription`, `LiveFeed::Stream`, `QueryApi::ExportRows`,
+  `ExportSource::Rows`, `ProviderAdapter::Framer` and `Tap`) are
+  `Send + 'static`, and `RuleContext` is `Sync` because `evaluate` borrows
+  it into its future. `tests/send.rs` checks every trait at compile time.
 - **Error enums are plain.** Implementations derive `thiserror::Error` on
   their copies; serde's `Display` requirement is met by `wire::Rejected`.
 

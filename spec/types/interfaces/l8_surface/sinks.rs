@@ -10,7 +10,7 @@ use crate::support::Timestamp;
 pub trait AlertSink {
     fn id(&self) -> SinkId;
 
-    async fn deliver(&self, alert: &Alert) -> Result<(), SinkError>;
+    fn deliver(&self, alert: &Alert) -> impl Future<Output = Result<(), SinkError>> + Send;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

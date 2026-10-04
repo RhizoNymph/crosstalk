@@ -467,16 +467,20 @@ impl LiveConfig {
 }
 
 pub trait LiveFeed {
-    type Stream: LiveStream;
+    type Stream: LiveStream + Send + 'static;
 
     /// `Forbidden { missing: View }` if the caller lacks View. The stream
     /// starts as `FeedWindow::resume` plans for `resume`, and delivers every
     /// event `UiEvent::visible_to` the caller.
-    async fn subscribe(&self, caller: &Caller, resume: Resume) -> Result<Self::Stream, QueryError>;
+    fn subscribe(
+        &self,
+        caller: &Caller,
+        resume: Resume,
+    ) -> impl Future<Output = Result<Self::Stream, QueryError>> + Send;
 }
 
 pub trait LiveStream {
     /// The next item, or why the stream ended. After `Err` the stream is
     /// closed.
-    async fn next(&mut self) -> Result<LiveItem, LiveEnd>;
+    fn next(&mut self) -> impl Future<Output = Result<LiveItem, LiveEnd>> + Send;
 }

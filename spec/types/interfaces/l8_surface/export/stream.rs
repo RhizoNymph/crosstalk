@@ -8,8 +8,9 @@
 //! (the client went away), and then no trailer is ever sent, which a reader
 //! sees as truncation ([`super::verify_export`]).
 //!
-//! The traits use `async fn` and name no runtime; implementations run them
-//! on whatever executor serves HTTP.
+//! The traits name no runtime; implementations run them on whatever
+//! executor serves HTTP. Their futures are `Send`, and so are the rows a
+//! source yields from, so the stream can move between worker threads.
 
 use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::topic::EmbeddingModel;
@@ -43,7 +44,7 @@ pub enum ExportStep<S> {
 
 /// The rows of one export, ending with its trailer.
 pub trait ExportStream: Sized {
-    async fn next(self) -> ExportStep<Self>;
+    fn next(self) -> impl Future<Output = ExportStep<Self>> + Send;
 }
 
 /// Where the rows of a started export come from: the stores, read under the
@@ -51,7 +52,7 @@ pub trait ExportStream: Sized {
 pub trait RowSource {
     /// The next row in key order, `None` after the last. A failure ends the
     /// export; the sealer records it in the trailer.
-    async fn next(&mut self) -> Result<Option<ExportRow>, SourceFailure>;
+    fn next(&mut self) -> impl Future<Output = Result<Option<ExportRow>, SourceFailure>> + Send;
 }
 
 /// A [`RowSource`] whose every row passes through an [`ExportSealer`]: the
@@ -79,7 +80,7 @@ impl<R: RowSource, H: RowHasher> SealedRows<R, H> {
     }
 }
 
-impl<R: RowSource, H: RowHasher> ExportStream for SealedRows<R, H> {
+impl<R: RowSource + Send, H: RowHasher + Send> ExportStream for SealedRows<R, H> {
     async fn next(mut self) -> ExportStep<Self> {
         match self.source.next().await {
             Ok(Some(row)) => match self.sealer.push(&row) {
@@ -106,7 +107,7 @@ pub struct ExportPlan<R> {
 /// projections), L7 (edge and access buckets). One implementation reads
 /// them all, in one database snapshot.
 pub trait ExportSource {
-    type Rows: RowSource;
+    type Rows: RowSource + Send + 'static;
 
     /// Resolve the request against `watermark` (read first, from L7):
     /// resolve and pin the filter's topic version as every linked view does
@@ -114,11 +115,11 @@ pub trait ExportSource {
     /// cut the window at the watermark, capture the agent and channel
     /// resolution and the current verdicts for the whole export, read a
     /// projection's stored frame, and count the rows. Nothing is sent yet.
-    async fn plan(
+    fn plan(
         &self,
         request: &ExportRequest,
         watermark: Watermark,
-    ) -> Result<ExportPlan<Self::Rows>, ExportPlanError>;
+    ) -> impl Future<Output = Result<ExportPlan<Self::Rows>, ExportPlanError>> + Send;
 }
 
 /// Why an export could not be planned. Nothing was sent; `QueryApi::export`

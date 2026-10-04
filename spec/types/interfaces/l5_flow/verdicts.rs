@@ -28,22 +28,28 @@ pub trait TransmissionVerdicts {
     ///
     /// Rejects, changing nothing: an unknown transmission, and one whose
     /// state takes no verdict (`Detected`, `AwaitingContent`).
-    async fn set(
+    fn set(
         &mut self,
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         by: OperatorId,
         at: Timestamp,
         note: Option<String>,
-    ) -> Result<VerdictRecorded, VerdictError>;
+    ) -> impl Future<Output = Result<VerdictRecorded, VerdictError>> + Send;
 
     /// Every verdict record of the transmission, oldest first; an empty log
     /// for one never judged.
-    async fn log(&self, transmission: TransmissionId) -> Result<VerdictLog, VerdictError>;
+    fn log(
+        &self,
+        transmission: TransmissionId,
+    ) -> impl Future<Output = Result<VerdictLog, VerdictError>> + Send;
 
     /// [`DetectionQuality::tally`] over every stored transmission with its
     /// current verdict, read in one snapshot.
-    async fn quality(&self, window: TimeWindow) -> Result<DetectionQuality, VerdictError>;
+    fn quality(
+        &self,
+        window: TimeWindow,
+    ) -> impl Future<Output = Result<DetectionQuality, VerdictError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

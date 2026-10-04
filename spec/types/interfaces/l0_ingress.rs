@@ -181,8 +181,8 @@ pub enum RawResponse {
 }
 
 pub trait ProviderAdapter {
-    type Framer: ResponseFramer;
-    type Tap: WebSocketTap;
+    type Framer: ResponseFramer + Send + 'static;
+    type Tap: WebSocketTap + Send + 'static;
 
     fn protocol(&self) -> WireProtocol;
 

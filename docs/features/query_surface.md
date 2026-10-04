@@ -52,6 +52,19 @@ for agents, channels, transmissions and the overview are in
 
 ## Data and control flow
 
+### Generic clients
+
+A UI or client may be generic over `QueryApi` (and `OperatorActions`,
+`LiveFeed`), rather than written against one concrete backend: a fixture,
+an in-process surface and an HTTP client can then sit behind the same
+code. Every method returns `impl Future<Output = ..> + Send`, and
+`QueryApi::ExportRows` and `LiveFeed::Stream` are `Send + 'static`, so
+generic code can spawn the futures on tokio's multi-threaded runtime and
+move a live stream or an export into its own task. The bound it adds is
+on the backend value it shares, for example
+`Arc<Q>` with `Q: QueryApi + Send + Sync + 'static`. The convention and
+its compile-time check are in [type_spec.md](type_spec.md#conventions-for-the-layer-traits).
+
 ### Callers and permissions
 
 Config's `AccessConfig` is either `Trusted(TrustedOperator)` (one operator,
@@ -707,6 +720,12 @@ free-text classification: `Store`'s reason is diagnostic only.
 
 ## Invariants and constraints
 
+- Every `QueryApi`, `OperatorActions`, `LiveFeed`, `LiveStream`,
+  `AuditLog`, `AlertSink`, `ExportStream`, `RowSource` and `ExportSource`
+  method returns a `Send` future, and `QueryApi::ExportRows`,
+  `LiveFeed::Stream` and `ExportSource::Rows` are `Send + 'static`
+  (`canonical.interface.send-futures`), so a client can be generic over
+  the surface.
 - Only a discovered channel can be superseded (`ChannelOrigin::superseded`),
   and a superseded one cannot be promoted or take a policy decision.
   Resolution is one step: `canonical(canonical(c)) = canonical(c)`. Lookups

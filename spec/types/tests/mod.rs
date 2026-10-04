@@ -35,6 +35,7 @@ mod quality;
 mod query_errors;
 mod retention;
 mod rules;
+mod send;
 mod series;
 mod summary;
 mod support;

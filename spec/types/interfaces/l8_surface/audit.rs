@@ -448,16 +448,16 @@ pub trait AuditLog {
     /// Append one entry. Idempotent on `AuditEntry::id`: appending the same
     /// entry again is a no-op, and a different entry with a used id is
     /// `IdReused`.
-    async fn append(&mut self, entry: AuditEntry) -> Result<(), AuditError>;
+    fn append(&mut self, entry: AuditEntry) -> impl Future<Output = Result<(), AuditError>> + Send;
 
     /// The entries `filter` matches, a page at a time with the cursors of
     /// [`crate::paging`]: newest first by `(at, id)`, so entries appended
     /// during a traversal never shift a page.
-    async fn query(
+    fn query(
         &self,
         filter: &AuditFilter,
         page: &PageRequest<AuditList>,
-    ) -> Result<Page<AuditEntry, AuditList>, AuditError>;
+    ) -> impl Future<Output = Result<Page<AuditEntry, AuditList>, AuditError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
