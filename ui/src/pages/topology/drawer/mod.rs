@@ -6,8 +6,8 @@
 //! first, paged with a cursor signal); for an agent
 //! or a channel a summary card with its heaviest edges; with nothing
 //! selected, the heaviest edges of the view. Edges listed here select
-//! themselves on click, updating the signal (and so the graph's highlight)
-//! and the page URL's `sel`.
+//! themselves on click, updating the signal (and so the graph's highlight
+//! and, through the page's one sync binding, the URL's `sel`).
 //!
 //! Shard endpoints run without the page's guards: the shard builds the
 //! caller, checks `View` and validates every argument itself
@@ -197,7 +197,6 @@ async fn edge_list(
                                 @click=$(|_e| {
                                     sel.set(code.to_owned());
                                     cursor.set("".to_owned());
-                                    raw!("((value) => { const v = String(value); const kept = location.search.slice(1).split('&').filter((p) => p !== '' && p.split('=')[0] !== 'sel'); if (v !== '') kept.push('sel=' + encodeURIComponent(v).replace(/%3A/g, ':')); history.replaceState(history.state, '', location.pathname + '?' + kept.join('&')); })(${code})");
                                 })
                             >
                                 route_badge(kind: item.route_kind)

@@ -11,3 +11,40 @@
   --color-route-direct: #059669;
   --color-route-unobserved: #dc2626;
 }
+
+/*
+ * Topology list rows (`pages/topology/lists`). Rows repeat once per agent
+ * or channel, so their styling lives here rather than in every row's class
+ * attribute. A row's children ignore the pointer, so a click or hover
+ * anywhere on the row targets the row's button, whose `value` the list's
+ * one delegated handler reads.
+ */
+@layer components {
+  .ct-row {
+    @apply relative flex w-full items-center gap-2 px-2 py-1 text-left text-xs hover:bg-zinc-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 dark:hover:bg-zinc-900 aria-pressed:bg-sky-50 aria-pressed:shadow-[inset_3px_0_0_var(--color-sky-600)] dark:aria-pressed:bg-sky-950/60 dark:aria-pressed:shadow-[inset_3px_0_0_var(--color-sky-400)];
+  }
+  .ct-row > * {
+    pointer-events: none;
+  }
+  .ct-row-main {
+    @apply flex min-w-0 flex-1 flex-col gap-0.5;
+  }
+  .ct-row-meta {
+    @apply flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-zinc-500;
+  }
+  .ct-row-num {
+    @apply shrink-0 text-right tabular-nums;
+  }
+  .ct-row-num > :last-child {
+    @apply block text-[11px] text-zinc-500;
+  }
+  .ct-row-bar {
+    @apply absolute bottom-0 left-0 h-px bg-sky-500/50 dark:bg-sky-400/40;
+  }
+  .ct-row-badge {
+    @apply inline-flex items-center whitespace-nowrap rounded border px-1 text-[10px] leading-4 font-medium;
+  }
+  .ct-row-claim {
+    @apply inline-flex min-w-0 items-center gap-1 rounded border border-dashed border-zinc-400 px-1 text-[10px] leading-4 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300;
+  }
+}

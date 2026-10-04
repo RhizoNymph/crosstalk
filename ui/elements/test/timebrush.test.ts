@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { type TimelinePayload, timelinePayload } from '../src/payloads/timeline.ts';
 import {
+  type Axis,
   axisOf,
   bars,
   bucketAt,
+  type LabelledTick,
+  labelledTicks,
+  labelsFit,
   nearestEdge,
   rangeTimes,
   shiftRange,
   snapDrag,
+  tickLabel,
   ticks,
   toMs,
   toX,
@@ -100,5 +105,78 @@ describe('bars and ticks', () => {
     expect(step).toBe(2 * 3600_000);
     expect(marks[0]?.day).toBe(true);
     expect(marks.filter((t) => t.day).length).toBe(2);
+  });
+});
+
+describe('axis labels', () => {
+  // About what 10 px system-ui measures: 6 px a character.
+  const measure = (text: string) => text.length * 6;
+  const HOUR = 3_600_000;
+  /** A week of hourly buckets (the topology brush) over `width` pixels. */
+  const week = (width: number): Axis => {
+    const start = Date.parse('2026-09-26T00:00:00Z');
+    const edgeMs = Array.from({ length: 169 }, (_, i) => start + i * HOUR);
+    return {
+      edges: edgeMs.map((ms) => new Date(ms).toISOString().replace('.000Z', 'Z')),
+      edgeMs,
+      x0: 8,
+      x1: 8 + width,
+    };
+  };
+  const stepOf = (labels: readonly LabelledTick[]) => (labels[1]?.ms ?? 0) - (labels[0]?.ms ?? 0);
+  const inside = (a: Axis, labels: readonly LabelledTick[]) =>
+    labels.every((l) => l.left >= a.x0 - 1e-9 && l.right <= a.x1 + 1e-9);
+
+  it('never overlaps at the widths the topology page draws', () => {
+    for (const width of [300, 420, 560, 700, 760, 900, 1200]) {
+      const a = week(width);
+      const labels = labelledTicks(a, measure, 10);
+      expect(labels.length, `${width}px`).toBeGreaterThanOrEqual(2);
+      expect(labelsFit(labels, 10), `${width}px`).toBe(true);
+      expect(inside(a, labels), `${width}px`).toBe(true);
+    }
+  });
+
+  it('labels whole-day steps with the date only and pins edge labels inside', () => {
+    const a = week(560);
+    const labels = labelledTicks(a, measure, 10);
+    expect(stepOf(labels)).toBe(24 * HOUR);
+    expect(labels.map((l) => l.text)).toEqual([
+      '09-26',
+      '09-27',
+      '09-28',
+      '09-29',
+      '09-30',
+      '10-01',
+      '10-02',
+      '10-03',
+    ]);
+    expect(labels[0]?.anchor).toBe('start');
+    expect(labels[labels.length - 1]?.anchor).toBe('end');
+    expect(labels[3]?.anchor).toBe('middle');
+  });
+
+  it('gets finer as the axis widens', () => {
+    const narrow = stepOf(labelledTicks(week(400), measure));
+    const wide = stepOf(labelledTicks(week(2400), measure));
+    expect(wide).toBeLessThan(narrow);
+    const day = labelledTicks(axis(), measure);
+    expect(labelsFit(day, 10)).toBe(true);
+    expect(stepOf(day)).toBeLessThanOrEqual(3 * HOUR);
+    expect(day.find((l) => l.day)?.text).toBe('10-02 00:00');
+  });
+
+  it('drops crowded labels when even the coarsest step does not fit', () => {
+    const labels = labelledTicks(week(60), measure, 10);
+    expect(labelsFit(labels, 10)).toBe(true);
+    expect(labels.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('formats tick labels by step', () => {
+    const midnight = { ms: Date.parse('2026-10-02T00:00:00Z'), x: 0, day: true };
+    const noon = { ms: Date.parse('2026-10-02T12:00:00Z'), x: 0, day: false };
+    expect(tickLabel(midnight, 24 * HOUR)).toBe('10-02');
+    expect(tickLabel(midnight, 6 * HOUR)).toBe('10-02 00:00');
+    expect(tickLabel(noon, 6 * HOUR)).toBe('12:00');
   });
 });

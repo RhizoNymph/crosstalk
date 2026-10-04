@@ -11,7 +11,7 @@ import { type TimelinePayload, timelinePayload } from '../payloads/timeline.ts';
 import { mix, toCss, withAlpha } from '../shared/color.ts';
 import { PayloadElement } from '../shared/element.ts';
 import { type LoadError, loadJson } from '../shared/fetch.ts';
-import { formatBytes, formatCount, formatUtc, formatUtcShort } from '../shared/format.ts';
+import { formatBytes, formatCount, formatUtc } from '../shared/format.ts';
 import type { Result } from '../shared/result.ts';
 import { encodeBrushSelection } from '../shared/selection.ts';
 import {
@@ -20,11 +20,11 @@ import {
   bars,
   bucketAt,
   type EdgeRange,
+  labelledTicks,
   nearestEdge,
   rangeTimes,
   shiftRange,
   snapDrag,
-  ticks,
   toX,
   windowSpan,
 } from './model.ts';
@@ -34,11 +34,13 @@ const PAD_X = 8;
 const TOP = 18;
 const AXIS = 16;
 const HANDLE_HIT = 6;
+/** The axis labels' font size; `STYLES` sets the same. */
+const AXIS_FONT_PX = 10;
 
 const STYLES = `
 :host { height: 96px; }
 svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; user-select: none; }
-svg text { font-size: 10px; fill: var(--ct-muted); }
+svg text { font-size: ${AXIS_FONT_PX}px; fill: var(--ct-muted); }
 svg .label { font-size: 11px; }
 svg .strong { fill: var(--ct-text); }
 `;
@@ -72,6 +74,17 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
 
   constructor() {
     super(STYLES);
+  }
+
+  #measurer: CanvasRenderingContext2D | null = null;
+
+  /** The width of an axis label (10 px, the theme's font), in pixels. */
+  #measure(text: string): number {
+    this.#measurer ??= document.createElement('canvas').getContext('2d');
+    const context = this.#measurer;
+    if (context === null) return text.length * 6.5;
+    context.font = `${AXIS_FONT_PX}px ${this.theme.font}`;
+    return context.measureText(text).width;
   }
 
   protected load(url: string, signal: AbortSignal): Promise<Result<TimelinePayload, LoadError>> {
@@ -317,7 +330,7 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
       );
     }
 
-    for (const tick of ticks(axis)) {
+    for (const tick of labelledTicks(axis, (text) => this.#measure(text))) {
       const x = Math.round(tick.x) + 0.5;
       children.push(
         el('line', {
@@ -328,12 +341,8 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
           stroke: toCss(theme.faint),
         }),
       );
-      const label = el('text', {
-        x,
-        y: height - 4,
-        'text-anchor': tick.x < axis.x0 + 20 ? 'start' : tick.x > axis.x1 - 20 ? 'end' : 'middle',
-      });
-      label.textContent = formatUtcShort(tick.ms, tick.day);
+      const label = el('text', { x, y: height - 4, 'text-anchor': tick.anchor });
+      label.textContent = tick.text;
       children.push(label);
     }
 

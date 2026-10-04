@@ -251,36 +251,56 @@ export interface Highlight {
   readonly edges: ReadonlySet<string>;
 }
 
-/** What a selection lights up, or `null` when nothing is selected or found. */
+/** Lights up every transmission edge with a member `matches` keeps, and its endpoints. */
+function lightEdges(
+  model: GraphModel,
+  matches: (member: TransmissionEdge) => boolean,
+  nodes: Set<Ulid>,
+  edges: Set<string>,
+): void {
+  for (const edge of model.edges) {
+    if (edge.kind === 'transmission' && edge.members.some(matches)) {
+      edges.add(edge.key);
+      nodes.add(edge.source);
+      nodes.add(edge.target);
+    }
+  }
+}
+
+/**
+ * What a selection lights up, or `null` when nothing is selected or found.
+ *
+ * An edge lights up with its endpoints; an agent, or a channel drawn as a
+ * node (channels mode), with its neighbourhood. A channel that is not a
+ * node (agents mode) lights up the transmission edges routed through it
+ * (route `ch.<id>`) and their endpoints.
+ */
 export function highlightOf(model: GraphModel, selection: TopologySelection): Highlight | null {
   const nodes = new Set<Ulid>();
   const edges = new Set<string>();
   switch (selection.kind) {
     case 'none':
       return null;
-    case 'edge': {
-      for (const edge of model.edges) {
-        if (
-          edge.kind === 'transmission' &&
-          edge.members.some(
-            (m) =>
-              m.from === selection.from && m.to === selection.to && m.route === selection.route,
-          )
-        ) {
-          edges.add(edge.key);
-          nodes.add(edge.source);
-          nodes.add(edge.target);
-        }
-      }
+    case 'edge':
+      lightEdges(
+        model,
+        (m) => m.from === selection.from && m.to === selection.to && m.route === selection.route,
+        nodes,
+        edges,
+      );
       break;
-    }
     case 'agent':
     case 'channel': {
       const id =
         selection.kind === 'agent'
           ? (model.drawnAs.get(selection.id) ?? selection.id)
           : selection.id;
-      if (!model.nodes.some((n) => n.id === id)) return null;
+      if (!model.nodes.some((n) => n.id === id && n.kind === selection.kind)) {
+        if (selection.kind === 'agent') return null;
+        const route = `ch.${selection.id}`;
+        lightEdges(model, (m) => m.route === route, nodes, edges);
+        break;
+      }
       nodes.add(id);
       for (const edge of model.edges) {
         if (edge.source === id || edge.target === id) {

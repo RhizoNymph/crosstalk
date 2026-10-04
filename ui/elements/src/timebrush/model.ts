@@ -8,6 +8,7 @@
  */
 
 import type { TimelineBucket, TimelinePayload } from '../payloads/timeline.ts';
+import { formatUtcShort } from '../shared/format.ts';
 
 export interface Axis {
   /** Bucket edges: `from` of every bucket, then `to` of the last. */
@@ -134,13 +135,25 @@ export function bars(axis: Axis, payload: TimelinePayload, plotHeight: number, g
 }
 
 const MINUTE = 60_000;
-const TICK_STEPS = [5, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map((m) => m * MINUTE);
+const DAY = 1440 * MINUTE;
+export const TICK_STEPS = [5, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map(
+  (m) => m * MINUTE,
+);
 
 export interface Tick {
   readonly ms: number;
   readonly x: number;
   /** Midnight UTC: labelled with the date. */
   readonly day: boolean;
+}
+
+function ticksAt(axis: Axis, step: number): Tick[] {
+  const [t0, t1] = domain(axis);
+  const out: Tick[] = [];
+  for (let ms = Math.ceil(t0 / step) * step; ms <= t1; ms += step) {
+    out.push({ ms, x: toX(axis, ms), day: ms % DAY === 0 });
+  }
+  return out;
 }
 
 /** Ticks at a round UTC step, at most one per `minSpacing` pixels. */
@@ -152,9 +165,80 @@ export function ticks(axis: Axis, minSpacing = 64): Tick[] {
   const maxTicks = Math.max(1, Math.floor(width / minSpacing));
   const step =
     TICK_STEPS.find((s) => span / s <= maxTicks) ?? TICK_STEPS[TICK_STEPS.length - 1] ?? span;
-  const out: Tick[] = [];
-  for (let ms = Math.ceil(t0 / step) * step; ms <= t1; ms += step) {
-    out.push({ ms, x: toX(axis, ms), day: ms % (1440 * MINUTE) === 0 });
+  return ticksAt(axis, step);
+}
+
+export type LabelAnchor = 'start' | 'middle' | 'end';
+
+/** A tick with its label, placed so it stays inside the axis. */
+export interface LabelledTick extends Tick {
+  readonly text: string;
+  readonly anchor: LabelAnchor;
+  /** The label's horizontal extent in pixels. */
+  readonly left: number;
+  readonly right: number;
+}
+
+/**
+ * A tick's label: `HH:MM`, with the date at midnight (`MM-DD HH:MM`); only
+ * the date when the step is whole days.
+ */
+export function tickLabel(tick: Tick, step: number): string {
+  if (step >= DAY && step % DAY === 0) return new Date(tick.ms).toISOString().slice(5, 10);
+  return formatUtcShort(tick.ms, tick.day);
+}
+
+/** Centred on the tick, or pinned to an end of the axis it would overflow. */
+function place(axis: Axis, tick: Tick, text: string, width: number): LabelledTick {
+  let anchor: LabelAnchor = 'middle';
+  let left = tick.x - width / 2;
+  if (left < axis.x0) {
+    anchor = 'start';
+    left = tick.x;
+  } else if (tick.x + width / 2 > axis.x1) {
+    anchor = 'end';
+    left = tick.x - width;
   }
-  return out;
+  return { ...tick, text, anchor, left, right: left + width };
+}
+
+/** Whether consecutive labels keep `gap` pixels apart. */
+export function labelsFit(labels: readonly LabelledTick[], gap: number): boolean {
+  return labels.every((label, i) => {
+    const previous = labels[i - 1];
+    return previous === undefined || label.left - previous.right >= gap;
+  });
+}
+
+/**
+ * Labelled ticks at the finest round UTC step whose labels, measured with
+ * `measure` (text → pixels), keep at least `gap` pixels apart. When even the
+ * coarsest step crowds, labels that would overlap the one before are
+ * dropped.
+ */
+export function labelledTicks(
+  axis: Axis,
+  measure: (text: string) => number,
+  gap = 10,
+): LabelledTick[] {
+  const [t0, t1] = domain(axis);
+  const width = axis.x1 - axis.x0;
+  if (t1 <= t0 || width <= 0) return [];
+  const labelled = (step: number) =>
+    ticksAt(axis, step).map((tick) => {
+      const text = tickLabel(tick, step);
+      return place(axis, tick, text, measure(text));
+    });
+  for (const step of TICK_STEPS) {
+    // A label is never narrower than a few pixels; skip hopeless steps early.
+    if ((t1 - t0) / step > width / 4) continue;
+    const labels = labelled(step);
+    if (labelsFit(labels, gap)) return labels;
+  }
+  const kept: LabelledTick[] = [];
+  for (const label of labelled(TICK_STEPS[TICK_STEPS.length - 1] ?? DAY)) {
+    const previous = kept[kept.length - 1];
+    if (previous === undefined || label.left - previous.right >= gap) kept.push(label);
+  }
+  return kept;
 }
