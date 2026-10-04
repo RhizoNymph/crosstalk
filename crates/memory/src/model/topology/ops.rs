@@ -275,7 +275,7 @@ fn graph_view(read: &Watermarked<TopologyGraph>) -> GraphView {
         watermark: read.watermark,
         version: read.value.topic_version(),
         edges,
-        nodes: node_keys(&read.value.nodes()),
+        nodes: node_keys(read.value.nodes()),
     }
 }
 
