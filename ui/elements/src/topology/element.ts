@@ -7,9 +7,14 @@
  * (`shared/selection.ts`), announced with `change`.
  */
 
+import { createEdgeCurveProgram } from '@sigma/edge-curve';
 import Graph from 'graphology';
 import Sigma from 'sigma';
-import { EdgeArrowProgram, NodeCircleProgram } from 'sigma/rendering';
+import {
+  DEFAULT_EDGE_ARROW_HEAD_PROGRAM_OPTIONS,
+  EdgeArrowProgram,
+  NodeCircleProgram,
+} from 'sigma/rendering';
 import type { Settings } from 'sigma/settings';
 import type { EdgeDisplayData, NodeDisplayData, PartialButFor } from 'sigma/types';
 import { type TopologyPayload, topologyPayload } from '../payloads/topology.ts';
@@ -26,6 +31,7 @@ import {
 } from '../shared/selection.ts';
 import type { Ulid } from '../shared/ulid.ts';
 import { releaseWebGL } from '../shared/webgl.ts';
+import { curvatures } from './curvature.ts';
 import { NodeDiamondProgram } from './diamond-program.ts';
 import { layout } from './layout.ts';
 import {
@@ -89,7 +95,18 @@ type NodeAttributes = {
   type: 'circle' | 'diamond';
   zIndex: number;
 };
-type EdgeAttributes = { size: number; color: string; type: 'arrow'; zIndex: number };
+type EdgeAttributes = {
+  size: number;
+  color: string;
+  type: 'arrow' | 'curved';
+  curvature: number;
+  zIndex: number;
+};
+
+/** Arrows that bend, for edges sharing a pair of nodes (see `curvature.ts`). */
+const EdgeCurvedArrowProgram = createEdgeCurveProgram<NodeAttributes, EdgeAttributes>({
+  arrowHead: DEFAULT_EDGE_ARROW_HEAD_PROGRAM_OPTIONS,
+});
 
 export class TopologyElement extends PayloadElement<TopologyPayload> {
   static observedAttributes = ['data-src', 'data-highlight', 'data-collapse'];
@@ -215,13 +232,16 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
         zIndex: 1,
       });
     }
-    for (const edge of model.edges) {
-      if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
+    const drawn = model.edges.filter((e) => graph.hasNode(e.source) && graph.hasNode(e.target));
+    const bends = curvatures(drawn);
+    for (const edge of drawn) {
       this.#edges.set(edge.key, edge);
+      const curvature = bends.get(edge.key) ?? 0;
       graph.addDirectedEdgeWithKey(edge.key, edge.source, edge.target, {
         size: edge.width,
         color: toCss(edgeColor(edge, this.theme)),
-        type: 'arrow',
+        type: curvature === 0 ? 'arrow' : 'curved',
+        curvature,
         zIndex: 0,
       });
     }
@@ -232,7 +252,7 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
       renderEdgeLabels: false,
       defaultEdgeType: 'arrow',
       nodeProgramClasses: { circle: NodeCircleProgram, diamond: NodeDiamondProgram },
-      edgeProgramClasses: { arrow: EdgeArrowProgram },
+      edgeProgramClasses: { arrow: EdgeArrowProgram, curved: EdgeCurvedArrowProgram },
       labelFont: this.theme.font,
       labelSize: 11,
       labelWeight: '500',
