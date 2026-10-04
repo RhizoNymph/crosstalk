@@ -14,6 +14,24 @@ This document is the plan: phases, work items, deliverables, todo lists and
 the dependencies between items. Items with no dependency between them run in
 parallel, each on its own branch and worktree.
 
+## Status (2026-10-04)
+
+Work lands on `integration/impl` (item PRs and branches merge there). A
+separate staging branch integrates it with the other integration branches;
+main is reviewed after the hackathon.
+
+| Item | State |
+|---|---|
+| P0.1 Send traits, P0.2 UI gaps, P0.4 HTTP binding spec, P0.5 tooling, P0.6 write traits, P0.7 encoding and ids | merged |
+| P0.8 channel semantics (UI decision, `docs/channel-semantics`) | in progress |
+| P0.9 follow-mode spec and remaining UI gaps (`docs/follow-mode-spec`) | in progress |
+| P1.1–P1.5 workspace, checks, sim, testkit, store harness | merged (store tests need `TEST_DATABASE_URL`) |
+| P2.1–P2.5 bus, blobs, memory stores, L0 proxy, L1 normalizer | merged |
+| P2.6 L8 surface service (`feat/surface-service`) | in progress |
+| P3 capture slice (M1) and single-machine deploy (`deploy/`) | merged |
+| U world seed (`crosstalk-world`) and L8 conformance suite | UI sessions, in progress |
+| P4–P9 | not started |
+
 ## Principles
 
 1. **The spec is the only shared boundary.** Every implementation crate
@@ -217,6 +235,28 @@ It also needs:
 - `crosstalk-memory` converted to implement the new traits, with its private seeding traits removed and its duplicated helpers unified.
 
 Depends on P2.3, and P2.6 and the P4–P6 Postgres stores depend on it.
+
+### P0.7 Shared encoding and ids
+The canonical message encoding and hash, media blobs, `NormalizedExchange`,
+the deployment secret and keyed hasher (with rotation overlap ends), and ULID
+minting at a given time, moved into the spec because several layers must
+compute them identically. See `docs/features/spec_primitives.md`.
+
+### P0.8 Channel semantics
+The user's decision, from the UI track: a discovered channel exists only once
+a transmission between different agents goes through a resource; suspected
+channels are listed as `Unconfirmed`; declarations without traffic stay
+declarations; channels whose only traffic is between later-merged agents are
+hidden at read time. Ported from the UI branch onto the current spec
+(INV-850..869), with `ChannelRow::discovered_at` as the listing order and the
+memory stores updated.
+
+### P0.9 Follow mode and remaining UI gaps
+`QueryApi::now` and `bucket_width`, `Changed::Traffic`, traffic-caused
+channel listing changes, `DataRevision` on `Watermarked`, projection
+extensions, the default remap threshold, and the gap list from the UI's
+migration onto the wave-3 types (INV-870..899). P2.6 and the UI's follow mode
+depend on it.
 
 ---
 
@@ -437,10 +477,10 @@ streams from testkit without waiting for P3.
   OpenAI-compatible endpoint either way; the choice is which model and who
   hosts it. Proposed: start with a sidecar behind the traits, and keep
   determinism (seeds) in the contract.
-- **D2: SQL access.** sqlx (proposed) or tokio-postgres.
-- **D3: time-series storage.** Plain Postgres with partitioned bucket tables
-  (proposed first), or TimescaleDB hypertables.
-- **D4: simulation.** tokio paused time plus our own fault layer
-  (proposed), or turmoil.
+- **D2: SQL access.** Decided: sqlx.
+- **D3: time-series storage.** Decided: plain Postgres with partitioned
+  bucket tables. The deployment runs plain Postgres 18 (pgvector, pg_trgm),
+  no TimescaleDB.
+- **D4: simulation.** Decided: tokio paused time plus our own fault layer.
 - **D5: HTTP server.** axum over the UI's hyper version (proposed), or hyper
   directly for the API too. The proxy uses hyper directly either way.
