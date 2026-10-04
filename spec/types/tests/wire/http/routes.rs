@@ -197,7 +197,8 @@ fn every_source_has_exactly_one_route() {
 }
 
 /// The `QueryApi` methods as `l8_surface.rs` declares them, each with the
-/// first line of its documentation, which names its permission.
+/// first line of its documentation, which names its permission. A method
+/// is declared `fn name(..) -> impl Future<Output = ..> + Send`.
 fn query_api_methods() -> Vec<(String, String)> {
     let source = include_str!("../../../interfaces/l8_surface.rs");
     let start = source
@@ -211,7 +212,7 @@ fn query_api_methods() -> Vec<(String, String)> {
         let line = line.trim();
         if let Some(text) = line.strip_prefix("///") {
             doc.get_or_insert_with(|| text.trim().to_owned());
-        } else if let Some(rest) = line.strip_prefix("async fn ") {
+        } else if let Some(rest) = line.strip_prefix("fn ") {
             let name = rest.split('(').next().unwrap_or_default().to_owned();
             methods.push((name, doc.take().unwrap_or_default()));
         } else if line.ends_with(';') || line.ends_with('{') || line.is_empty() {
