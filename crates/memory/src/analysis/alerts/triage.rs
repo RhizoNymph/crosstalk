@@ -1,5 +1,5 @@
-//! `AlertTriage` on the reference alert store, and the surface's
-//! acknowledge and resolve, which change the same alerts.
+//! `AlertTriage` on the reference alert store, and `AlertActions`, the
+//! surface's acknowledge and resolve, which change the same alerts.
 //!
 //! ```text
 //! draft ─▶ rule unknown or not evaluating ─▶ RuleInactive
@@ -19,12 +19,13 @@ use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
+use crosstalk_spec::interfaces::l6_analysis::alerts::{AlertActionError, AlertActions};
 use crosstalk_spec::interfaces::l6_analysis::{AlertTriage, Embedder, TriageError};
 use crosstalk_spec::support::{Change, Timestamp};
 
 use super::{AlertsState, CommitRefused, InMemoryAlertStore, StoredAlert, is_active};
 use crate::analysis::aliases::Directories;
-use crate::analysis::support::lock;
+use crate::support::{Outbox, lock};
 
 fn triage_error(error: CommitRefused) -> TriageError {
     TriageError::Store {
@@ -32,19 +33,10 @@ fn triage_error(error: CommitRefused) -> TriageError {
     }
 }
 
-/// Why an acknowledge or resolve was refused. Each refusal changes nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AlertActionError {
-    #[error("unknown alert {0:?}")]
-    UnknownAlert(AlertId),
-    /// Resolved or suppressed: no action leaves those states.
-    #[error("alert {0:?} is no longer active")]
-    NotActive(AlertId),
-    /// Resolving an open alert: it must be acknowledged first.
-    #[error("alert {0:?} must be acknowledged before it is resolved")]
-    NotAcknowledged(AlertId),
-    #[error("the change could not be stored: {0}")]
-    Commit(CommitRefused),
+fn action_error(error: CommitRefused) -> AlertActionError {
+    AlertActionError::Store {
+        reason: error.to_string(),
+    }
 }
 
 impl AlertsState {
@@ -58,9 +50,9 @@ impl AlertsState {
         }
     }
 
-    fn open(&mut self, draft: AlertDraft) -> Alert {
+    fn open(&mut self, draft: AlertDraft, outbox: &Outbox) -> Alert {
         let alert = Alert {
-            id: AlertId::from_ulid(self.alert_ids.next_raw()),
+            id: AlertId::from_ulid(self.alert_ids.next_ulid()),
             rule: draft.rule,
             subject: draft.subject,
             raised_at: draft.raised_at,
@@ -74,22 +66,19 @@ impl AlertsState {
                 revision: AlertRevision::OPENED,
             },
         );
-        self.outbox
-            .insight(InsightEvent::AlertOpened(alert.clone()));
-        self.outbox.changed(Changed::Alert(alert.id));
+        outbox.insight(InsightEvent::AlertOpened(alert.clone()));
+        outbox.changed(Changed::Alert(alert.id));
         alert
     }
 }
 
-impl<E, D> InMemoryAlertStore<E, D>
+impl<E, D> AlertActions for InMemoryAlertStore<E, D>
 where
     E: Embedder + Send + Sync,
     D: AgentDirectory + ChannelDirectory + Send + Sync,
 {
-    /// An operator acknowledged `alert`: `Open` becomes `Acknowledged` by
-    /// `by` at `at`; an acknowledged alert is `Unchanged`.
-    pub fn acknowledge(
-        &self,
+    async fn acknowledge(
+        &mut self,
         alert: AlertId,
         by: OperatorId,
         at: Timestamp,
@@ -107,14 +96,14 @@ where
                 return Err(AlertActionError::NotActive(alert));
             }
         }
-        state.commit_alert(next).map_err(AlertActionError::Commit)?;
+        state
+            .commit_alert(next, &self.outbox)
+            .map_err(action_error)?;
         Ok(Change::Applied)
     }
 
-    /// An operator resolved `alert`: `Acknowledged` becomes `Resolved` by
-    /// `by` at `at` with `note`.
-    pub fn resolve(
-        &self,
+    async fn resolve(
+        &mut self,
         alert: AlertId,
         by: OperatorId,
         at: Timestamp,
@@ -135,7 +124,9 @@ where
                 return Err(AlertActionError::NotActive(alert));
             }
         }
-        state.commit_alert(next).map_err(AlertActionError::Commit)?;
+        state
+            .commit_alert(next, &self.outbox)
+            .map_err(action_error)?;
         Ok(Change::Applied)
     }
 }
@@ -174,15 +165,20 @@ where
                     .ok_or(CommitRefused::RevisionExhausted)
                     .map_err(triage_error)?;
                 let into = alert.id;
-                state.commit_alert(alert).map_err(triage_error)?;
+                state
+                    .commit_alert(alert, &self.outbox)
+                    .map_err(triage_error)?;
                 Ok(TriageOutcome::Deduplicated { into })
             }
-            None => Ok(TriageOutcome::Opened(state.open(draft))),
+            None => Ok(TriageOutcome::Opened(state.open(draft, &self.outbox))),
         }
     }
 
-    async fn channel_sanctioned(&mut self, channel: ChannelId) -> Result<u32, TriageError> {
-        let at = self.clock.now();
+    async fn channel_sanctioned(
+        &mut self,
+        channel: ChannelId,
+        at: Timestamp,
+    ) -> Result<u32, TriageError> {
         let aliases = Directories(&self.directory);
         let sanctioned = AlertSubject::Channel(channel).resolved(aliases);
         let mut state = lock(&self.state);
@@ -194,15 +190,24 @@ where
                 },
                 SuppressReason::ChannelSanctioned,
                 at,
+                &self.outbox,
             )
             .map_err(triage_error)
     }
 
-    async fn rule_disabled(&mut self, rule: AlertRuleId) -> Result<u32, TriageError> {
-        let at = self.clock.now();
+    async fn rule_disabled(
+        &mut self,
+        rule: AlertRuleId,
+        at: Timestamp,
+    ) -> Result<u32, TriageError> {
         let mut state = lock(&self.state);
         state
-            .suppress(|alert| alert.rule == rule, SuppressReason::RuleDisabled, at)
+            .suppress(
+                |alert| alert.rule == rule,
+                SuppressReason::RuleDisabled,
+                at,
+                &self.outbox,
+            )
             .map_err(triage_error)
     }
 
@@ -211,8 +216,8 @@ where
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
+        at: Timestamp,
     ) -> Result<u32, TriageError> {
-        let at = self.clock.now();
         let mut state = lock(&self.state);
         let held = state.verdicts.get(&transmission).copied();
         let mut copy = held.unwrap_or(CurrentVerdict { verdict, revision });
@@ -229,6 +234,7 @@ where
                     |alert| alert.subject == AlertSubject::Transmission(transmission),
                     SuppressReason::OperatorRejected,
                     at,
+                    &self.outbox,
                 )
                 .map_err(triage_error)?
         } else {

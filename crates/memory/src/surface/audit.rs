@@ -11,8 +11,7 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
 use crosstalk_spec::paging::{AuditList, Page, PageRequest};
 use crosstalk_spec::support::Timestamp;
 
-use super::paging::{CursorBook, page_after};
-use crate::analysis::support::lock;
+use crate::support::{CursorBook, lock, page_after};
 
 /// The reference audit log. Cloning shares the log.
 #[derive(Debug, Clone, Default)]
@@ -44,7 +43,7 @@ impl InMemoryAuditLog {
 
     /// Append every entry or none, as one transaction: the config changes of
     /// one load, recorded with the change they describe.
-    pub fn append_all(&self, entries: &[AuditEntry]) -> Result<(), AuditError> {
+    pub(crate) fn append_all(&self, entries: &[AuditEntry]) -> Result<(), AuditError> {
         let mut state = lock(&self.state);
         for entry in entries {
             state.check(entry)?;
@@ -58,8 +57,9 @@ impl InMemoryAuditLog {
         Ok(())
     }
 
-    /// Every entry, by id.
-    pub fn entries(&self) -> Vec<AuditEntry> {
+    /// Every entry, by id, for tests that check what a load recorded.
+    #[cfg(test)]
+    pub(crate) fn entries(&self) -> Vec<AuditEntry> {
         lock(&self.state).entries.values().cloned().collect()
     }
 }

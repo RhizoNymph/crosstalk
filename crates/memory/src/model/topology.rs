@@ -13,7 +13,7 @@
 mod ops;
 mod subject;
 
-pub use subject::{EdgeSubject, ReferenceEdges, edge_config};
+pub use subject::{EdgeSubject, EdgeWorld, ReferenceEdges, catalog_ready, edge_config};
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -158,23 +158,24 @@ fn check_graph(
 /// Random applies, re-fits, activations, drops, verdicts, accesses,
 /// merges, supersessions and watermark advances, with every read in
 /// between, against the reference. `make` builds a fresh, empty subject
-/// under the given configuration over an empty world: the catalog holding
-/// only version 0 (keeping the three most recent activated versions), no
-/// merge, supersession or parent.
+/// under the given configuration over the given world (no merge,
+/// supersession or parent yet): the catalog holding only version 0 (keeping
+/// the three most recent activated versions).
 pub fn check_edge_store<S, F, Fut>(harness: HarnessConfig, make: F) -> Result<(), ModelMismatch>
 where
     S: EdgeSubject,
-    F: Fn(EdgeStoreConfig) -> Fut,
+    F: Fn(EdgeStoreConfig, EdgeWorld) -> Fut,
     Fut: Future<Output = S>,
 {
     let config =
         edge_config().ok_or_else(|| ModelMismatch::Setup("edge store config".to_owned()))?;
     let strategy = prop::collection::vec(edge_op(), 1..harness.max_ops);
-    run(harness, strategy, |runtime, ops: &[EdgeOp]| {
+    run(harness, strategy, |runtime, ops: &Vec<EdgeOp>| {
         runtime.block_on(async {
-            let mut subject = make(config).await;
-            let mut reference =
-                ReferenceEdges::new(config).map_err(|error| Divergence::new(0, error))?;
+            let outside = EdgeWorld::default();
+            let mut subject = make(config, outside.clone()).await;
+            let mut reference = ReferenceEdges::new(config, outside.clone())
+                .map_err(|error| Divergence::new(0, error))?;
             let mut ledger = Ledger::default();
             let mut world = ops::World::default();
             for (step, op) in ops.iter().enumerate() {
@@ -183,6 +184,7 @@ where
                     op,
                     &mut subject,
                     &mut reference,
+                    &outside,
                     &mut ledger,
                     &mut world,
                 )

@@ -453,3 +453,67 @@ fn windows_the_surface_cannot_build_are_invalid_input() {
         QueryError::InvalidInput(InputError::ExcerptContextTooLong { max, got: u16::MAX })
     );
 }
+
+#[test]
+fn alert_action_errors_map_to_typed_action_errors() {
+    use crate::ids::AlertId;
+    use crate::interfaces::l6_analysis::alerts::AlertActionError;
+
+    let alert = AlertId::from_ulid(5);
+    let cases = [
+        (
+            AlertActionError::Store { reason: store() },
+            ActionError::Store { reason: store() },
+        ),
+        (AlertActionError::UnknownAlert(alert), ActionError::NotFound),
+        (
+            AlertActionError::NotActive(alert),
+            ActionError::Conflict(ConflictKind::AlertNotActive { alert }),
+        ),
+        (
+            AlertActionError::NotAcknowledged(alert),
+            ActionError::Conflict(ConflictKind::AlertNotAcknowledged { alert }),
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(ActionError::from(error.clone()), expected, "{error:?}");
+    }
+}
+
+#[test]
+fn alert_read_errors_map_to_typed_query_errors() {
+    use crate::interfaces::l6_analysis::alerts::AlertReadError;
+
+    assert_eq!(
+        QueryError::from(AlertReadError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
+    assert_eq!(
+        QueryError::from(AlertReadError::InvalidCursor),
+        QueryError::InvalidCursor
+    );
+}
+
+#[test]
+fn write_side_store_reads_map_failures_to_store_and_unknown_ids_to_not_found() {
+    use crate::interfaces::l5_flow::transmissions::TransmissionStoreError;
+    use crate::interfaces::l8_surface::operators::OperatorStoreError;
+    use crate::interfaces::l8_surface::sinks::SinkRegistryError;
+
+    assert_eq!(
+        QueryError::from(TransmissionStoreError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
+    assert_eq!(
+        QueryError::from(OperatorStoreError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
+    assert_eq!(
+        QueryError::from(SinkRegistryError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
+    assert_eq!(
+        QueryError::from(SinkRegistryError::UnknownSink(SinkId::from_ulid(2))),
+        QueryError::NotFound
+    );
+}

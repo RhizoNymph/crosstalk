@@ -3,10 +3,11 @@
 
 use super::HarnessConfig;
 use super::analysis::{
-    ReferenceAlerts, ReferenceCatalog, ReferenceSearch, check_alert_rule_store, check_alert_triage,
-    check_projection_store, check_search_index, check_topic_catalog,
+    ReferenceSearch, check_alert_rule_store, check_alert_triage, check_projection_store,
+    check_search_index, check_topic_catalog, reference_alerts, reference_catalog,
 };
 use crate::analysis::projection::InMemoryProjectionStore;
+use crate::support::Outbox;
 
 fn harness() -> HarnessConfig {
     HarnessConfig::default()
@@ -16,15 +17,15 @@ fn harness() -> HarnessConfig {
 fn sizes_match_assignment_count() {
     // analysis.sizes.match-assignments, and the catalog against itself
     let result = check_topic_catalog(harness(), |config| async move {
-        ReferenceCatalog::new(config).expect("a reference catalog")
+        reference_catalog(config).expect("a reference catalog")
     });
     assert_eq!(result, Ok(()));
 }
 
 #[test]
 fn search_index_agrees_with_reference() {
-    let result = check_search_index(harness(), |model| async move {
-        ReferenceSearch::new(model).expect("a reference search world")
+    let result = check_search_index(harness(), |model, world| async move {
+        ReferenceSearch::new(model, world).expect("a reference search world")
     });
     assert_eq!(result, Ok(()));
 }
@@ -33,17 +34,14 @@ fn search_index_agrees_with_reference() {
 fn projection_store_agrees_with_reference() {
     // analysis.projection.queue-bounded, sequentially
     let result = check_projection_store(harness(), |config| async move {
-        InMemoryProjectionStore::new(config)
+        InMemoryProjectionStore::new(config, Outbox::none())
     });
     assert_eq!(result, Ok(()));
 }
 
 #[test]
 fn alert_rule_store_agrees_with_reference() {
-    let result = check_alert_rule_store(
-        harness(),
-        |world| async move { ReferenceAlerts::new(world) },
-    );
+    let result = check_alert_rule_store(harness(), |world| async move { reference_alerts(world) });
     assert_eq!(result, Ok(()));
 }
 
@@ -51,10 +49,7 @@ fn alert_rule_store_agrees_with_reference() {
 fn alert_transitions_agree_with_lifecycle_model() {
     // analysis.triage.one-active-per-key, sequentially, and triage against
     // itself
-    let result = check_alert_triage(
-        harness(),
-        |world| async move { ReferenceAlerts::new(world) },
-    );
+    let result = check_alert_triage(harness(), |world| async move { reference_alerts(world) });
     assert_eq!(result, Ok(()));
 }
 
@@ -62,8 +57,8 @@ fn alert_transitions_agree_with_lifecycle_model() {
 fn in_memory_graph_matches_fold() {
     // topology.graph.matches-fold-model, series.total-matches-graph, and
     // the edge store against itself
-    let result = super::topology::check_edge_store(harness(), |config| async move {
-        super::topology::ReferenceEdges::new(config).expect("a reference edge world")
+    let result = super::topology::check_edge_store(harness(), |config, world| async move {
+        super::topology::ReferenceEdges::new(config, world).expect("a reference edge world")
     });
     assert_eq!(result, Ok(()));
 }

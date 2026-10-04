@@ -10,7 +10,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
-use std::sync::Arc;
 
 use proptest::prelude::*;
 
@@ -19,218 +18,107 @@ use crosstalk_spec::aggregates::alert::{
     NotEditable, RuleName, RuleQueryText, RuleStatus, StaleRule, TriageOutcome, UserRule,
     WatchedTopics,
 };
-use crosstalk_spec::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
-use crosstalk_spec::aggregates::topic_history::TopicLineage;
+use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRevision};
-use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId, OperatorId, TopicId};
-use crosstalk_spec::interfaces::l6_analysis::{
-    AlertRuleStore, AlertTriage, RuleError, TriageError,
+use crosstalk_spec::ids::{AlertId, AlertRuleId, TopicId};
+use crosstalk_spec::interfaces::l6_analysis::alerts::{
+    AlertActionError, AlertActions, AlertReadError, AlertReads, AlertRuleMaintenance,
 };
+use crosstalk_spec::interfaces::l6_analysis::{AlertRuleStore, AlertTriage, RuleError};
+use crosstalk_spec::interfaces::l8_surface::AlertFilter;
+use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
+use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 
 use super::search::harness_model;
-use crate::analysis::alerts::triage::AlertActionError;
-use crate::analysis::alerts::{AlertStoreConfig, CommitRefused, InMemoryAlertStore, is_active};
-use crate::analysis::aliases::{AliasError, StaticDirectory};
+use crate::analysis::alerts::{AlertStoreConfig, InMemoryAlertStore, is_active};
+use crate::analysis::aliases::StaticDirectory;
 use crate::analysis::fakes::{FakeEmbedder, fake_model};
 use crate::analysis::lineage::lineage_between;
-use crate::analysis::support::{Clock, ManualClock};
+use crate::flow::MemoryVerdicts;
 use crate::model::build::{
     channel, operator, raw, similarity, sink, topic, transmission, ts, unit,
 };
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
+use crate::support::Outbox;
 
-/// An alert store with the `alerts` consumer's rule changes, the surface's
-/// acknowledge and resolve, full reads, the supersession table it resolves
-/// through and its clock.
-pub trait AlertStoreSubject: AlertRuleStore + AlertTriage {
-    fn topic_version_ready(
-        &self,
-        lineage: &TopicLineage,
-        topics: Vec<TopicId>,
-    ) -> impl Future<Output = Result<Vec<AlertRuleId>, CommitRefused>> + Send;
-
-    fn embedding_model_changed(
-        &self,
-        model: &EmbeddingModel,
-    ) -> impl Future<Output = Result<Vec<AlertRuleId>, CommitRefused>> + Send;
-
-    fn acknowledge(
-        &self,
-        alert: AlertId,
-        by: OperatorId,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<Change, AlertActionError>> + Send;
-
-    fn resolve(
-        &self,
-        alert: AlertId,
-        by: OperatorId,
-        at: Timestamp,
-        note: Option<String>,
-    ) -> impl Future<Output = Result<Change, AlertActionError>> + Send;
-
-    /// Every rule, in any order.
-    fn rules(&self) -> impl Future<Output = Vec<AlertRuleDef>> + Send;
-
-    /// Every alert, in any order.
-    fn alerts(&self) -> impl Future<Output = Vec<Alert>> + Send;
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError>;
-
-    /// Set the clock suppressions are stamped with.
-    fn set_now(&self, at: Timestamp);
+/// Every spec trait of an alert store: rules, triage, the `alerts`
+/// consumer's rule upkeep, the surface's acknowledge and resolve, and the
+/// rule and alert reads.
+pub trait AlertStoreSubject:
+    AlertRuleStore + AlertTriage + AlertRuleMaintenance + AlertActions + AlertReads
+{
 }
 
-/// What `make` builds a subject from.
+impl<T> AlertStoreSubject for T where
+    T: AlertRuleStore + AlertTriage + AlertRuleMaintenance + AlertActions + AlertReads
+{
+}
+
+/// What `make` builds a subject from: its config and embedder, and the
+/// supersession table it resolves channels through (the harness supersedes
+/// channels in it, for the subject and the reference alike).
 #[derive(Debug, Clone)]
 pub struct AlertWorld {
     pub config: AlertStoreConfig,
     pub embedder: FakeEmbedder,
-}
-
-/// The reference alert store with its directory and clock.
-#[derive(Clone)]
-pub struct ReferenceAlerts {
-    pub store: InMemoryAlertStore<FakeEmbedder, StaticDirectory>,
     pub directory: StaticDirectory,
-    pub clock: ManualClock,
 }
 
-impl ReferenceAlerts {
-    pub fn new(world: AlertWorld) -> Self {
-        let directory = StaticDirectory::new();
-        let clock = ManualClock::at(ts(0));
-        let shared: Arc<dyn Clock> = Arc::new(clock.clone());
-        Self {
-            store: InMemoryAlertStore::new(world.config, world.embedder, directory.clone(), shared),
-            directory,
-            clock,
+/// The reference alert store.
+pub type ReferenceAlerts = InMemoryAlertStore<FakeEmbedder, StaticDirectory>;
+
+/// The reference store over `world`. Its transmission routes come from an
+/// empty transmission store: the harness lists alerts with no channel
+/// filter.
+pub fn reference_alerts(world: AlertWorld) -> ReferenceAlerts {
+    InMemoryAlertStore::new(
+        world.config,
+        world.embedder,
+        world.directory,
+        MemoryVerdicts::default(),
+        Outbox::none(),
+    )
+}
+
+/// Every page of a read, until the last page.
+async fn every_rule<S: AlertReads>(store: &S) -> Result<Vec<AlertRuleDef>, AlertReadError> {
+    let size = PageSize::new(5).map_err(|_| AlertReadError::InvalidCursor)?;
+    let mut request = PageRequest { size, after: None };
+    let mut all = Vec::new();
+    loop {
+        let (items, next) = store
+            .rules(&AlertRuleFilter::default(), &request)
+            .await?
+            .into_parts();
+        all.extend(items);
+        match next {
+            Some(cursor) => request.after = Some(cursor),
+            None => return Ok(all),
         }
     }
 }
 
-impl AlertRuleStore for ReferenceAlerts {
-    fn create(
-        &mut self,
-        name: RuleName,
-        rule: UserRule,
-        sinks: Vec<crosstalk_spec::ids::SinkId>,
-        by: OperatorId,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<AlertRuleId, RuleError>> + Send {
-        self.store.create(name, rule, sinks, by, at)
-    }
-
-    fn update(
-        &mut self,
-        id: AlertRuleId,
-        name: RuleName,
-        rule: UserRule,
-        sinks: Vec<crosstalk_spec::ids::SinkId>,
-        by: OperatorId,
-    ) -> impl Future<Output = Result<Change, RuleError>> + Send {
-        self.store.update(id, name, rule, sinks, by)
-    }
-
-    fn set_enabled(
-        &mut self,
-        id: AlertRuleId,
-        enabled: bool,
-        by: OperatorId,
-    ) -> impl Future<Output = Result<Change, RuleError>> + Send {
-        self.store.set_enabled(id, enabled, by)
-    }
-}
-
-impl AlertTriage for ReferenceAlerts {
-    fn triage(
-        &mut self,
-        draft: AlertDraft,
-    ) -> impl Future<Output = Result<TriageOutcome, TriageError>> + Send {
-        self.store.triage(draft)
-    }
-
-    fn channel_sanctioned(
-        &mut self,
-        channel: ChannelId,
-    ) -> impl Future<Output = Result<u32, TriageError>> + Send {
-        self.store.channel_sanctioned(channel)
-    }
-
-    fn rule_disabled(
-        &mut self,
-        rule: AlertRuleId,
-    ) -> impl Future<Output = Result<u32, TriageError>> + Send {
-        self.store.rule_disabled(rule)
-    }
-
-    fn transmission_judged(
-        &mut self,
-        transmission: crosstalk_spec::ids::TransmissionId,
-        verdict: Option<Verdict>,
-        revision: VerdictRevision,
-    ) -> impl Future<Output = Result<u32, TriageError>> + Send {
-        self.store
-            .transmission_judged(transmission, verdict, revision)
-    }
-}
-
-impl AlertStoreSubject for ReferenceAlerts {
-    async fn topic_version_ready(
-        &self,
-        lineage: &TopicLineage,
-        topics: Vec<TopicId>,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
-        self.store.topic_version_ready(lineage, topics)
-    }
-
-    async fn embedding_model_changed(
-        &self,
-        model: &EmbeddingModel,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
-        self.store.embedding_model_changed(model)
-    }
-
-    async fn acknowledge(
-        &self,
-        alert: AlertId,
-        by: OperatorId,
-        at: Timestamp,
-    ) -> Result<Change, AlertActionError> {
-        self.store.acknowledge(alert, by, at)
-    }
-
-    async fn resolve(
-        &self,
-        alert: AlertId,
-        by: OperatorId,
-        at: Timestamp,
-        note: Option<String>,
-    ) -> Result<Change, AlertActionError> {
-        self.store.resolve(alert, by, at, note)
-    }
-
-    async fn rules(&self) -> Vec<AlertRuleDef> {
-        self.store.all_rules()
-    }
-
-    async fn alerts(&self) -> Vec<Alert> {
-        self.store.all_alerts()
-    }
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError> {
-        self.directory.supersede(channel, by)
-    }
-
-    fn set_now(&self, at: Timestamp) {
-        self.clock.set(at);
+async fn every_alert<S: AlertReads>(store: &S) -> Result<Vec<Alert>, AlertReadError> {
+    let size = PageSize::new(5).map_err(|_| AlertReadError::InvalidCursor)?;
+    let mut request = PageRequest { size, after: None };
+    let mut all = Vec::new();
+    loop {
+        let (items, next) = store
+            .alerts(&AlertFilter::default(), &request)
+            .await?
+            .into_parts();
+        all.extend(items);
+        match next {
+            Some(cursor) => request.after = Some(cursor),
+            None => return Ok(all),
+        }
     }
 }
 
 /// The world every alert harness case starts from: sinks 1 and 2
 /// configured, every built-in enabled, remap threshold 0.8, an embedder of
-/// model "fake" refusing texts over 40 characters.
+/// model "fake" refusing texts over 40 characters, no supersession.
 pub fn alert_world() -> Option<AlertWorld> {
     Some(AlertWorld {
         config: AlertStoreConfig {
@@ -241,6 +129,7 @@ pub fn alert_world() -> Option<AlertWorld> {
             builtins: BTreeMap::new(),
         },
         embedder: FakeEmbedder::new(fake_model("fake", NonZeroU16::new(8)?), 40),
+        directory: StaticDirectory::new(),
     })
 }
 
@@ -498,11 +387,13 @@ fn verdict_of(n: u8) -> Option<Verdict> {
 
 /// Apply one operation to both stores and compare the outcomes, keeping
 /// the id maps.
+#[allow(clippy::too_many_arguments)]
 async fn step_both<S: AlertStoreSubject>(
     step: usize,
     op: &AlertOp,
     subject: &mut S,
     reference: &mut ReferenceAlerts,
+    directory: &StaticDirectory,
     ids: &mut Ids,
     version: &mut Version,
     now: Timestamp,
@@ -597,8 +488,12 @@ async fn step_both<S: AlertStoreSubject>(
         }
         AlertOp::SetEnabled { rule, enabled } => {
             let (their_id, our_id) = ids.pick_rule(*rule);
-            let theirs = subject.set_enabled(their_id, *enabled, operator(2)).await;
-            let ours = reference.set_enabled(our_id, *enabled, operator(2)).await;
+            let theirs = subject
+                .set_enabled(their_id, *enabled, operator(2), now)
+                .await;
+            let ours = reference
+                .set_enabled(our_id, *enabled, operator(2), now)
+                .await;
             same(
                 step,
                 &label,
@@ -643,22 +538,22 @@ async fn step_both<S: AlertStoreSubject>(
             same(step, &label, &theirs, &ours)
         }
         AlertOp::Sanctioned { channel: c } => {
-            let theirs = subject.channel_sanctioned(channel(*c)).await;
+            let theirs = subject.channel_sanctioned(channel(*c), now).await;
             same(
                 step,
                 &label,
                 &theirs,
-                &reference.channel_sanctioned(channel(*c)).await,
+                &reference.channel_sanctioned(channel(*c), now).await,
             )
         }
         AlertOp::RuleDisabled { rule } => {
             let (their_id, our_id) = ids.pick_rule(*rule);
-            let theirs = subject.rule_disabled(their_id).await;
+            let theirs = subject.rule_disabled(their_id, now).await;
             same(
                 step,
                 &label,
                 &theirs,
-                &reference.rule_disabled(our_id).await,
+                &reference.rule_disabled(our_id, now).await,
             )
         }
         AlertOp::Judged {
@@ -670,10 +565,10 @@ async fn step_both<S: AlertStoreSubject>(
                 std::num::NonZeroU32::new(*revision).unwrap_or(std::num::NonZeroU32::MIN),
             );
             let theirs = subject
-                .transmission_judged(transmission(*n), verdict_of(*verdict), revision)
+                .transmission_judged(transmission(*n), verdict_of(*verdict), revision, now)
                 .await;
             let ours = reference
-                .transmission_judged(transmission(*n), verdict_of(*verdict), revision)
+                .transmission_judged(transmission(*n), verdict_of(*verdict), revision, now)
                 .await;
             same(step, &label, &theirs, &ours)
         }
@@ -705,10 +600,8 @@ async fn step_both<S: AlertStoreSubject>(
                 ));
             };
             let topic_ids: Vec<TopicId> = made.iter().map(|one| one.id).collect();
-            let theirs = subject
-                .topic_version_ready(&lineage, topic_ids.clone())
-                .await;
-            let ours = reference.topic_version_ready(&lineage, topic_ids).await;
+            let theirs = subject.topic_version_ready(&lineage, &topic_ids).await;
+            let ours = reference.topic_version_ready(&lineage, &topic_ids).await;
             *version = Version {
                 number: next,
                 topics: made,
@@ -772,13 +665,10 @@ async fn step_both<S: AlertStoreSubject>(
             )
         }
         AlertOp::Supersede { channel: c, by } => {
-            let theirs = subject.supersede(channel(*c), channel(*by));
-            same(
-                step,
-                &label,
-                &theirs,
-                &reference.supersede(channel(*c), channel(*by)),
-            )
+            // The world both stores resolve through: a refusal (a cycle)
+            // leaves it as it was for both.
+            let _ = directory.supersede(channel(*c), channel(*by));
+            Ok(())
         }
         AlertOp::Tick { .. } => Ok(()),
     }
@@ -818,11 +708,16 @@ where
     F: Fn(AlertWorld) -> Fut,
     Fut: Future<Output = S>,
 {
-    let world = alert_world().ok_or_else(|| ModelMismatch::Setup("alert world".to_owned()))?;
+    let base = alert_world().ok_or_else(|| ModelMismatch::Setup("alert world".to_owned()))?;
     run(harness, strategy, |runtime, ops| {
         runtime.block_on(async {
+            let world = AlertWorld {
+                directory: StaticDirectory::new(),
+                ..base.clone()
+            };
+            let directory = world.directory.clone();
             let mut subject = make(world.clone()).await;
-            let mut reference = ReferenceAlerts::new(world.clone());
+            let mut reference = reference_alerts(world);
             let mut ids = Ids::default();
             let mut version = Version {
                 number: TopicModelVersion(0),
@@ -835,40 +730,40 @@ where
                     _ => 1,
                 };
                 let now = ts(micros);
-                subject.set_now(now);
-                reference.set_now(now);
                 step_both(
                     step,
                     op,
                     &mut subject,
                     &mut reference,
+                    &directory,
                     &mut ids,
                     &mut version,
                     now,
                 )
                 .await?;
-                let mut their_rules: Vec<_> = subject
-                    .rules()
+                let read = |error: AlertReadError| Divergence::new(step, format!("{error:?}"));
+                let mut their_rules: Vec<_> = every_rule(&subject)
                     .await
+                    .map_err(read)?
                     .iter()
                     .map(|rule| rule_view(rule, &ids))
                     .collect();
-                let mut our_rules: Vec<_> = reference
-                    .rules()
+                let mut our_rules: Vec<_> = every_rule(&reference)
                     .await
+                    .map_err(read)?
                     .iter()
                     .map(|rule| rule_view(rule, &Ids::default()))
                     .collect();
                 their_rules.sort_by_key(|rule| rule.0);
                 our_rules.sort_by_key(|rule| rule.0);
                 same(step, "rules after the operation", &their_rules, &our_rules)?;
-                let mut their_alerts: Vec<Alert> = subject
-                    .alerts()
+                let mut their_alerts: Vec<Alert> = every_alert(&subject)
                     .await
+                    .map_err(read)?
                     .iter()
                     .map(|alert| ids.translate_alert(alert))
                     .collect();
-                let mut our_alerts = reference.alerts().await;
+                let mut our_alerts = every_alert(&reference).await.map_err(read)?;
                 their_alerts.sort_by_key(|alert| alert.id);
                 our_alerts.sort_by_key(|alert| alert.id);
                 same(
@@ -894,8 +789,8 @@ where
 
 /// Random rule creation, updates, enabling, re-fits and model changes,
 /// with triage in between, against the reference. `make` builds a fresh
-/// subject from the world: config and embedder, version 0 current, the
-/// clock at the epoch, no supersession.
+/// subject from the world: config and embedder, version 0 current,
+/// resolving channels through the world's directory.
 pub fn check_alert_rule_store<S, F, Fut>(
     harness: HarnessConfig,
     make: F,

@@ -11,6 +11,8 @@ use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::Watermark;
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, Route};
 use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
+use crosstalk_spec::interfaces::l6_analysis::corpus::{IndexedTransmission, SearchCorpus};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{StoredAssignment, TopicLifecycle};
 use crosstalk_spec::interfaces::l6_analysis::{
     ProjectionSource, SampleError, SearchError, SearchIndex, SearchQuery,
 };
@@ -19,15 +21,14 @@ use crosstalk_spec::support::NonBlank;
 
 use super::support::{at, fit_active, fit_ready, model};
 use crate::analysis::aliases::StaticDirectory;
-use crate::analysis::catalog::{InMemoryTopicCatalog, StoredAssignment};
+use crate::analysis::catalog::InMemoryTopicCatalog;
 use crate::analysis::search::{
-    FixedWatermark, InMemoryProjectionSource, InMemorySearchIndex, IndexedTransmission, sample_key,
-    text_score,
+    FixedWatermark, InMemoryProjectionSource, InMemorySearchIndex, sample_key, text_score,
 };
-use crate::analysis::support::ManualClock;
 use crate::model::build::{
     agent, catalog, channel, non_zero, test_model, topic_id, transmission, ts, unit, window,
 };
+use crate::support::Outbox;
 
 struct World {
     catalog: InMemoryTopicCatalog,
@@ -36,7 +37,7 @@ struct World {
 }
 
 fn world() -> World {
-    let catalog = catalog(3, 0.5, ManualClock::at(ts(0))).unwrap();
+    let catalog = catalog(3, 0.5, Outbox::none()).unwrap();
     let directory = StaticDirectory::new();
     let index = InMemorySearchIndex::new(catalog.clone(), directory.clone(), model());
     World {
@@ -119,37 +120,51 @@ fn text_score_is_the_fraction_of_query_terms_present() {
 
 #[tokio::test]
 async fn text_search_ranks_by_score_then_id() {
-    let world = world();
-    world.index.index(doc(
-        1,
-        1,
-        2,
-        Route::Unobserved,
-        10,
-        "deploy the wiki",
-        [1.0, 0.0, 0.0],
-    ));
+    let mut world = world();
     world
         .index
-        .index(doc(2, 1, 2, Route::Unobserved, 11, "wiki", [1.0, 0.0, 0.0]));
-    world.index.index(doc(
-        3,
-        1,
-        2,
-        Route::Unobserved,
-        12,
-        "deploy wiki now",
-        [1.0, 0.0, 0.0],
-    ));
-    world.index.index(doc(
-        4,
-        1,
-        2,
-        Route::Unobserved,
-        13,
-        "unrelated",
-        [1.0, 0.0, 0.0],
-    ));
+        .index(doc(
+            1,
+            1,
+            2,
+            Route::Unobserved,
+            10,
+            "deploy the wiki",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(2, 1, 2, Route::Unobserved, 11, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(
+            3,
+            1,
+            2,
+            Route::Unobserved,
+            12,
+            "deploy wiki now",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(
+            4,
+            1,
+            2,
+            Route::Unobserved,
+            13,
+            "unrelated",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
     let hits = traverse(
         &world.index,
         &text("wiki deploy"),
@@ -165,19 +180,25 @@ async fn text_search_ranks_by_score_then_id() {
 
 #[tokio::test]
 async fn hybrid_score_is_mean_of_text_and_cosine() {
-    let world = world();
+    let mut world = world();
     world
         .index
-        .index(doc(1, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
-    world.index.index(doc(
-        2,
-        1,
-        2,
-        Route::Unobserved,
-        10,
-        "other",
-        [0.0, 1.0, 0.0],
-    ));
+        .index(doc(1, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(
+            2,
+            1,
+            2,
+            Route::Unobserved,
+            10,
+            "other",
+            [0.0, 1.0, 0.0],
+        ))
+        .await
+        .unwrap();
     let query = SearchQuery::Hybrid {
         text: NonBlank::new("wiki").unwrap(),
         embedding: unit(&model(), 1.0, 0.0, 0.0).unwrap(),
@@ -200,10 +221,12 @@ async fn hybrid_score_is_mean_of_text_and_cosine() {
 #[tokio::test]
 async fn semantic_search_rejects_query_of_other_model() {
     // analysis.embedding.same-model-only
-    let world = world();
+    let mut world = world();
     world
         .index
-        .index(doc(1, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+        .index(doc(1, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
     let other: EmbeddingModel = test_model("other");
     let query = SearchQuery::Semantic(unit(&other, 1.0, 0.0, 0.0).unwrap());
     let result = world
@@ -222,17 +245,21 @@ async fn semantic_search_rejects_query_of_other_model() {
 #[tokio::test]
 async fn search_window_boundaries_are_half_open() {
     // analysis.search.within-window
-    let world = world();
+    let mut world = world();
     for (n, at_micros) in [(1, 99), (2, 100), (3, 150), (4, 200)] {
-        world.index.index(doc(
-            n,
-            1,
-            2,
-            Route::Unobserved,
-            at_micros,
-            "wiki",
-            [1.0, 0.0, 0.0],
-        ));
+        world
+            .index
+            .index(doc(
+                n,
+                1,
+                2,
+                Route::Unobserved,
+                at_micros,
+                "wiki",
+                [1.0, 0.0, 0.0],
+            ))
+            .await
+            .unwrap();
     }
     let hits = traverse(
         &world.index,
@@ -249,11 +276,13 @@ async fn search_window_boundaries_are_half_open() {
 #[tokio::test]
 async fn hybrid_fusion_truncates_to_limit() {
     // analysis.search.within-limit
-    let world = world();
+    let mut world = world();
     for n in 1..=7 {
         world
             .index
-            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+            .await
+            .unwrap();
     }
     let results = world
         .index
@@ -282,43 +311,58 @@ async fn hybrid_fusion_truncates_to_limit() {
 #[tokio::test]
 async fn search_filter_field_cases() {
     // analysis.search.honours-filter
-    let world = world();
+    let mut world = world();
     let v1 = fit_active(
-        &world.catalog,
+        &mut world.catalog,
         1,
         &[(1, [1.0, 0.0, 0.0]), (2, [0.0, 1.0, 0.0])],
-    );
-    world.index.index(doc(
-        1,
-        1,
-        2,
-        Route::Channel(channel(1)),
-        10,
-        "wiki",
-        [1.0, 0.0, 0.0],
-    ));
-    world.index.index(doc(
-        2,
-        3,
-        4,
-        Route::Channel(channel(2)),
-        10,
-        "wiki",
-        [1.0, 0.0, 0.0],
-    ));
-    world.index.index(doc(
-        3,
-        5,
-        6,
-        Route::Delegation(DelegationDirection::ParentToChild),
-        10,
-        "wiki",
-        [1.0, 0.0, 0.0],
-    ));
+    )
+    .await;
     world
         .index
-        .index(doc(4, 1, 6, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
-    let assign = |n: u64, topic: Option<u64>| {
+        .index(doc(
+            1,
+            1,
+            2,
+            Route::Channel(channel(1)),
+            10,
+            "wiki",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(
+            2,
+            3,
+            4,
+            Route::Channel(channel(2)),
+            10,
+            "wiki",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(
+            3,
+            5,
+            6,
+            Route::Delegation(DelegationDirection::ParentToChild),
+            10,
+            "wiki",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(4, 1, 6, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
+    for (n, topic) in [(1, Some(1)), (2, Some(2)), (3, Some(1)), (4, None)] {
         world
             .catalog
             .assign(
@@ -330,19 +374,17 @@ async fn search_filter_field_cases() {
                     matched_bytes: non_zero(1),
                 },
             )
+            .await
             .unwrap();
-    };
-    assign(1, Some(1));
-    assign(2, Some(2));
-    assign(3, Some(1));
-    assign(4, None);
+    }
     // Agent 9 was merged into agent 1; channel 2 was superseded by
     // channel 1.
     world.directory.merge(agent(9), agent(1)).unwrap();
     world.directory.supersede(channel(2), channel(1)).unwrap();
     let query = text("wiki");
+    let shared = world.index.clone();
     let run = |filter: TopologyFilter| {
-        let index = world.index.clone();
+        let index = shared.clone();
         let query = query.clone();
         async move { ids(&traverse(&index, &query, None, &filter, 10).await.unwrap()) }
     };
@@ -382,12 +424,15 @@ async fn search_filter_field_cases() {
         vec![3, 1]
     );
     assert_eq!(
-        world.index.judge(
-            transmission(1),
-            Some(Verdict::FalseDetection),
-            VerdictRevision::FIRST
-        ),
-        Observed::Newer
+        world
+            .index
+            .judge(
+                transmission(1),
+                Some(Verdict::FalseDetection),
+                VerdictRevision::FIRST
+            )
+            .await,
+        Ok(Observed::Newer)
     );
     assert_eq!(
         run(TopologyFilter {
@@ -402,9 +447,9 @@ async fn search_filter_field_cases() {
 
 #[tokio::test]
 async fn filtered_search_rejects_topics_outside_the_version() {
-    let world = world();
-    let v1 = fit_active(&world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]);
-    let v2 = fit_ready(&world.catalog, 10, &[(2, [1.0, 0.0, 0.0])]);
+    let mut world = world();
+    let v1 = fit_active(&mut world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]).await;
+    let v2 = fit_ready(&mut world.catalog, 10, &[(2, [1.0, 0.0, 0.0])]).await;
     let filter = TopologyFilter {
         topics: vec![topic_id(2), topic_id(1), topic_id(2)],
         ..TopologyFilter::default()
@@ -436,12 +481,14 @@ async fn filtered_search_rejects_topics_outside_the_version() {
 #[tokio::test]
 async fn search_pages_keep_version_across_activation() {
     // analysis.search.cursor-pins-version, in one thread
-    let world = world();
-    let v1 = fit_active(&world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]);
+    let mut world = world();
+    let v1 = fit_active(&mut world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]).await;
     for n in 1..=4 {
         world
             .index
-            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+            .await
+            .unwrap();
         world
             .catalog
             .assign(
@@ -453,6 +500,7 @@ async fn search_pages_keep_version_across_activation() {
                     matched_bytes: non_zero(1),
                 },
             )
+            .await
             .unwrap();
     }
     let filter = TopologyFilter {
@@ -466,7 +514,7 @@ async fn search_pages_keep_version_across_activation() {
         .unwrap();
     assert_eq!(first.topic_version, v1);
     // A new version becomes active mid-traversal.
-    fit_active(&world.catalog, 20, &[(2, [1.0, 0.0, 0.0])]);
+    fit_active(&mut world.catalog, 20, &[(2, [1.0, 0.0, 0.0])]).await;
     let next = PageRequest {
         size: PageSize::new(2).unwrap(),
         after: first.page.next().cloned(),
@@ -499,8 +547,8 @@ async fn search_pages_keep_version_across_activation() {
         )
         .await
         .unwrap();
-    fit_active(&world.catalog, 30, &[(3, [1.0, 0.0, 0.0])]);
-    fit_active(&world.catalog, 40, &[(4, [1.0, 0.0, 0.0])]);
+    fit_active(&mut world.catalog, 30, &[(3, [1.0, 0.0, 0.0])]).await;
+    fit_active(&mut world.catalog, 40, &[(4, [1.0, 0.0, 0.0])]).await;
     assert!(!world.catalog.retains(v1));
     let after_drop = world
         .index
@@ -529,11 +577,13 @@ async fn search_scores_unchanged_by_concurrent_indexing() {
     // analysis.search.score-stable and the keyset traversal: a document
     // indexed mid-traversal with a key after the cursor appears once, and
     // nothing repeats.
-    let world = world();
+    let mut world = world();
     for n in [1, 2, 3, 4] {
         world
             .index
-            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+            .await
+            .unwrap();
     }
     let query = semantic([1.0, 0.0, 0.0]);
     let filter = TopologyFilter::default();
@@ -550,11 +600,15 @@ async fn search_scores_unchanged_by_concurrent_indexing() {
         .collect();
     world
         .index
-        .index(doc(0, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+        .index(doc(0, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
     world
         .index
-        .index(doc(9, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
-    world.index.remove(transmission(2));
+        .index(doc(9, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
+    world.index.remove(transmission(2)).await.unwrap();
     let next = PageRequest {
         size: PageSize::new(10).unwrap(),
         after: first.page.next().cloned(),
@@ -583,11 +637,13 @@ async fn search_scores_unchanged_by_concurrent_indexing() {
 
 #[tokio::test]
 async fn cursor_with_changed_request_is_rejected() {
-    let world = world();
+    let mut world = world();
     for n in 1..=3 {
         world
             .index
-            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]));
+            .index(doc(n, 1, 2, Route::Unobserved, 10, "wiki", [1.0, 0.0, 0.0]))
+            .await
+            .unwrap();
     }
     let first = world
         .index
@@ -624,23 +680,27 @@ async fn cursor_with_changed_request_is_rejected() {
     );
 }
 
-#[test]
-fn judge_keeps_the_newest_revision() {
-    let world = world();
+#[tokio::test]
+async fn judge_keeps_the_newest_revision() {
+    let mut world = world();
     let second = VerdictRevision::FIRST.next().unwrap();
     assert_eq!(
         world
             .index
-            .judge(transmission(1), Some(Verdict::Genuine), second),
-        Observed::Newer
+            .judge(transmission(1), Some(Verdict::Genuine), second)
+            .await,
+        Ok(Observed::Newer)
     );
     assert_eq!(
-        world.index.judge(
-            transmission(1),
-            Some(Verdict::FalseDetection),
-            VerdictRevision::FIRST
-        ),
-        Observed::Stale
+        world
+            .index
+            .judge(
+                transmission(1),
+                Some(Verdict::FalseDetection),
+                VerdictRevision::FIRST
+            )
+            .await,
+        Ok(Observed::Stale)
     );
 }
 
@@ -668,17 +728,21 @@ fn source(
 #[tokio::test]
 async fn prop_sample_is_bottom_k_by_seeded_key() {
     // analysis.projection.sample-selection, on a fixed set
-    let world = world();
+    let mut world = world();
     for n in 1..=20 {
-        world.index.index(doc(
-            n,
-            1,
-            2,
-            Route::Unobserved,
-            10 + n,
-            "wiki",
-            [1.0, 0.0, 0.0],
-        ));
+        world
+            .index
+            .index(doc(
+                n,
+                1,
+                2,
+                Route::Unobserved,
+                10 + n,
+                "wiki",
+                [1.0, 0.0, 0.0],
+            ))
+            .await
+            .unwrap();
     }
     let seed = 42;
     let sample = source(&world, 5)
@@ -703,23 +767,33 @@ async fn prop_sample_is_bottom_k_by_seeded_key() {
 #[tokio::test]
 async fn sampled_point_resolves_merged_agents() {
     // analysis.projection.point-facts and honours-filter
-    let world = world();
-    world.index.index(doc(
-        1,
-        1,
-        2,
-        Route::Channel(channel(1)),
-        10,
-        "wiki",
-        [1.0, 0.0, 0.0],
-    ));
+    let mut world = world();
     world
         .index
-        .index(doc(2, 3, 2, Route::Unobserved, 20, "wiki", [1.0, 0.0, 0.0]));
-    world.index.index(IndexedTransmission {
-        embedding: None,
-        ..doc(3, 1, 2, Route::Unobserved, 20, "wiki", [1.0, 0.0, 0.0])
-    });
+        .index(doc(
+            1,
+            1,
+            2,
+            Route::Channel(channel(1)),
+            10,
+            "wiki",
+            [1.0, 0.0, 0.0],
+        ))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(doc(2, 3, 2, Route::Unobserved, 20, "wiki", [1.0, 0.0, 0.0]))
+        .await
+        .unwrap();
+    world
+        .index
+        .index(IndexedTransmission {
+            embedding: None,
+            ..doc(3, 1, 2, Route::Unobserved, 20, "wiki", [1.0, 0.0, 0.0])
+        })
+        .await
+        .unwrap();
     world.directory.merge(agent(1), agent(7)).unwrap();
     let filter = TopologyFilter {
         agents: vec![agent(1)],
@@ -748,11 +822,11 @@ async fn sampled_point_resolves_merged_agents() {
 
 #[tokio::test]
 async fn sample_fails_for_dropped_version_and_dropped_model() {
-    let world = world();
-    let v1 = fit_active(&world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]);
-    fit_active(&world.catalog, 10, &[(2, [1.0, 0.0, 0.0])]);
-    fit_active(&world.catalog, 20, &[(3, [1.0, 0.0, 0.0])]);
-    fit_active(&world.catalog, 30, &[(4, [1.0, 0.0, 0.0])]);
+    let mut world = world();
+    let v1 = fit_active(&mut world.catalog, 1, &[(1, [1.0, 0.0, 0.0])]).await;
+    fit_active(&mut world.catalog, 10, &[(2, [1.0, 0.0, 0.0])]).await;
+    fit_active(&mut world.catalog, 20, &[(3, [1.0, 0.0, 0.0])]).await;
+    fit_active(&mut world.catalog, 30, &[(4, [1.0, 0.0, 0.0])]).await;
     assert!(!world.catalog.retains(v1));
     let sampled = source(&world, 0)
         .sample(&spec(
@@ -769,7 +843,7 @@ async fn sample_fails_for_dropped_version_and_dropped_model() {
             version: v1
         }))
     );
-    world.index.drop_model(&model());
+    world.index.drop_model(&model()).await.unwrap();
     let sampled = source(&world, 0)
         .sample(&spec(
             window(0, 100).unwrap(),

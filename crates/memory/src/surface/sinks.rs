@@ -1,21 +1,17 @@
-//! [`InMemorySinkRegistry`]: the configured alert sinks and how each one's
-//! last delivery went (`QueryApi::sinks`); and [`FakeSink`], an
-//! [`AlertSink`] that records what it is given.
+//! [`InMemorySinkRegistry`]: the reference [`SinkRegistry`], the configured
+//! alert sinks and how each one's last delivery went (`QueryApi::sinks`);
+//! and [`FakeSink`], an [`AlertSink`] that records what it is given.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::ids::SinkId;
+use crosstalk_spec::interfaces::l8_surface::sinks::{SinkRegistry, SinkRegistryError};
 use crosstalk_spec::interfaces::l8_surface::{AlertSink, SinkError, SinkInfo, SinkKind};
 use crosstalk_spec::support::Timestamp;
 
-use crate::analysis::support::lock;
-
-/// A sink config does not define.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("sink {0:?} is not configured")]
-pub struct UnknownSink(pub SinkId);
+use crate::support::lock;
 
 /// One configured sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,23 +58,24 @@ impl InMemorySinkRegistry {
     pub fn contains(&self, sink: SinkId) -> bool {
         lock(&self.state).contains_key(&sink)
     }
+}
 
-    /// Record how a delivery to `sink` went: when it succeeded, or why it
-    /// failed. The latest delivery replaces the one before.
-    pub fn record_delivery(
-        &self,
+impl SinkRegistry for InMemorySinkRegistry {
+    async fn record_delivery(
+        &mut self,
         sink: SinkId,
         outcome: Result<Timestamp, SinkError>,
-    ) -> Result<(), UnknownSink> {
+    ) -> Result<(), SinkRegistryError> {
         let mut state = lock(&self.state);
-        let info = state.get_mut(&sink).ok_or(UnknownSink(sink))?;
+        let info = state
+            .get_mut(&sink)
+            .ok_or(SinkRegistryError::UnknownSink(sink))?;
         info.last_delivery = Some(outcome);
         Ok(())
     }
 
-    /// Every configured sink, by id.
-    pub fn sinks(&self) -> Vec<SinkInfo> {
-        lock(&self.state).values().cloned().collect()
+    async fn sinks(&self) -> Result<Vec<SinkInfo>, SinkRegistryError> {
+        Ok(lock(&self.state).values().cloned().collect())
     }
 }
 

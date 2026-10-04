@@ -29,7 +29,7 @@ async fn first_exchange_moves_registered_to_provisional() {
         store
             .advance(agent(0), Advance::FirstTraffic { at: at(6) })
             .await,
-        Err(SeedError::IllegalTransition { agent: agent(0) })
+        Err(AgentLifecycleError::IllegalTransition { agent: agent(0) })
     );
 }
 

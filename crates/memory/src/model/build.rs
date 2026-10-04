@@ -2,7 +2,6 @@
 //! built from small numbers, so generated operations collide on purpose.
 
 use std::num::{NonZeroU16, NonZeroU64};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::series::BucketWidth;
@@ -15,7 +14,7 @@ use crosstalk_spec::ids::{
 use crosstalk_spec::support::{Similarity, TimeWindow, Timestamp};
 
 use crate::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
-use crate::analysis::support::{Clock, ManualClock};
+use crate::support::Outbox;
 
 /// Every id kind from a small number, offset past the reserved rule ids.
 pub fn raw(n: u64) -> u128 {
@@ -129,12 +128,12 @@ pub fn timing(settle_micros: u64) -> Option<CorrelationTiming> {
 }
 
 /// A catalog keeping the last `keep_last` activated versions, with a
-/// lineage floor of `floor`, version 0 active since the epoch.
-pub fn catalog(keep_last: u32, floor: f32, clock: ManualClock) -> Option<InMemoryTopicCatalog> {
+/// lineage floor of `floor`, version 0 active since the epoch, publishing
+/// to `outbox`.
+pub fn catalog(keep_last: u32, floor: f32, outbox: Outbox) -> Option<InMemoryTopicCatalog> {
     let config = CatalogConfig {
         retention: RetentionPolicy::new(keep_last).ok()?,
         lineage_floor: similarity(floor)?,
     };
-    let clock: Arc<dyn Clock> = Arc::new(clock);
-    InMemoryTopicCatalog::new(config, clock, ts(0)).ok()
+    InMemoryTopicCatalog::new(config, ts(0), outbox).ok()
 }

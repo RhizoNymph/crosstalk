@@ -152,8 +152,9 @@ Overview:
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
-    to L6, which then drops the versions its retention policy no longer
-    keeps (TopicVersionDropped; L7 deletes their buckets) → L8 serves
+    to L6, whose topic catalog then drops the versions its retention
+    policy no longer keeps and publishes TopicVersionDropped from that
+    transaction (L7 deletes their buckets) → L8 serves
     topology, the channel-centred graph, a channel's resources, series,
     topic history, search, projections, verdicts, detection quality,
     lists, alerts, and the read models: agent rows (L3's profiles joined
@@ -232,7 +233,15 @@ Features Index:
       history with retention, and the watermark that marks buckets final),
       bus events and per-layer interfaces whose async methods return Send
       futures and whose associated streams are Send + 'static, so they
-      can be hosted on tokio and used generically (the types are also the
+      can be hosted on tokio and used generically. Every stateful store
+      has a spec write side (P0.6: agent lifecycle, channel traffic and
+      reads, transmissions, topic fits and assignments, search indexing,
+      alert rule upkeep, actions and reads, edge activation, the operator
+      store, the sink registry), so in-memory and Postgres stores
+      implement the same traits; a store publishes the events of the
+      decisions it takes from the transaction that makes them (the topic
+      catalog owns TopicVersionDropped), and every store method that
+      depends on the time takes it as an argument (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
@@ -509,28 +518,35 @@ Features Index:
       stateful spec store (roadmap P2.3), each with a model-based proptest
       harness that runs random operation sequences on a store under test
       and on the reference and requires equal results, events and
-      observations; the Postgres stores reuse the harnesses. The pipeline
-      half (L3 to L5): MemoryAgents (AgentDirectory, the merge log with
-      exact unmerges and vetoes through IdentityResolver's merge, unmerge
-      and rename, a reference evidence lookup for resolve, ClaimStore,
+      observations; the harnesses drive every store through spec traits
+      only (write side included, P0.6), with what a store reads from other
+      layers' caches handed in as spec read traits, so the Postgres stores
+      reuse them with no crate-specific hooks. The pipeline half (L3 to
+      L5): MemoryAgents (AgentDirectory, the merge log with exact unmerges
+      and vetoes through IdentityResolver's merge, unmerge and rename, the
+      evidence lookup behind resolve, AgentLifecycle, ClaimStore,
       ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
-      with cutoff, retention and shards), MemoryChannels (ChannelRegistry
-      and ChannelDirectory: lookups, declarations, policy history,
-      promotion by promotion::plan and its coverage, supersession,
-      resource use) and MemoryVerdicts (TransmissionVerdicts), plus seeding
-      traits for the writes the spec leaves to the layer consumers; state
-      sits behind a std RwLock per store and events go to an mpsc outbox
-      after each commit; harnesses run on pipeline::harness. The insight
-      and surface half (L6 to L8): the topic catalog (fit lifecycle,
-      lineage, assignments, sizes, pins and retention), exact search and
-      projection sampling, projection jobs with leases and frame retention,
-      alert rules and triage in one transaction scope, the edge store
+      with cutoff, retention measured from the now each call is given, and
+      shards), MemoryChannels (ChannelRegistry, ChannelTraffic,
+      ChannelReads and ChannelDirectory: lookups, declarations, policy
+      history, promotion by promotion::plan and its coverage, supersession,
+      resource use, traffic writes and stored channels) and MemoryVerdicts
+      (TransmissionStore and TransmissionVerdicts); state sits behind a std
+      RwLock per store. The insight and surface half (L6 to L8): the topic
+      catalog (TopicCatalog and TopicLifecycle: fit lifecycle, lineage,
+      assignments, sizes, pins and retention, publishing its drops), exact
+      search and projection sampling (SearchIndex, SearchCorpus,
+      ProjectionSource), projection jobs with leases and frame retention,
+      the alert store (AlertRuleStore, AlertTriage, AlertRuleMaintenance,
+      AlertActions, AlertReads) in one transaction scope, the edge store
       computed from stored contributions (activation, watermark, drops,
       graph, totals, channel-centred graph, drill-down, agent traffic,
-      series), the append-only audit log, the operator directory's store
-      and the sink registry, and Fake* doubles of the computational traits;
-      harnesses run on the model module's runner, with planted mutants
-      proving each harness catches a bug.
+      series), the append-only audit log, the OperatorStore and the
+      SinkRegistry, and Fake* doubles of the computational traits. Every
+      store shares one id sequence, one mpsc outbox, one cursor book and
+      pager (crates/memory/src/support) and one harness runner
+      (model::run, HarnessConfig, ModelMismatch), with planted mutants and
+      broken stores proving each harness catches a bug.
     entry_points:
       - crates/memory/src/reconstruct/mod.rs
       - crates/memory/src/provenance/mod.rs
@@ -539,7 +555,7 @@ Features Index:
       - crates/memory/src/provenance/model.rs
       - crates/memory/src/flow/registry/model.rs
       - crates/memory/src/flow/verdicts/model.rs
-      - crates/memory/src/pipeline/harness.rs
+      - crates/memory/src/support/mod.rs
       - crates/memory/src/analysis/mod.rs
       - crates/memory/src/topology/mod.rs
       - crates/memory/src/surface/mod.rs

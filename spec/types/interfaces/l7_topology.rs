@@ -1,14 +1,17 @@
 //! L7 topology: edge aggregation. Consumer group `topology`, triggered by
 //! `TransmissionClassified` (after analysis, so edges can be filtered by
-//! topic) and `TopicVersionReady` (switch queries to the new version's
-//! buckets; once `EdgeStore::activate` has switched, publish
-//! `TopicVersionActivated`). Graph and series queries resolve agents,
+//! topic; [`EdgeStore::apply`]) and `TopicVersionReady`
+//! ([`EdgeStore::version_ready`]). After either it calls
+//! [`EdgeStore::activate`], which switches queries to the new version's
+//! buckets once they are complete and publishes `TopicVersionActivated`
+//! from the transaction that switches. Graph and series queries resolve agents,
 //! including the ids named in a filter, through the `AgentDirectory`. A
 //! contribution rejected as a self-edge is a permanent outcome: its delivery
 //! is acked, not retried.
 //!
-//! When the store's watermark advances, L7 publishes `Changed::Watermark`
-//! with the new value, once it is what graph and series queries report.
+//! When the store's watermark advances, the store publishes
+//! `WatermarkAdvanced` and `Changed::Watermark` with the new value, from the
+//! transaction that makes it what graph and series queries report.
 //!
 //! A series query is a graph query cut into steps: for the same window,
 //! weighting, filter and topic version, the sum of every series value is the
@@ -39,8 +42,11 @@
 //!
 //! **Watermark.** The topology consumer recomputes the watermark from a
 //! [`FrontierSource`] at least once per bucket width
-//! ([`EdgeStore::advance_watermark`]) and publishes `WatermarkAdvanced` each
-//! time it strictly advances, after persisting it. Once a watermark is
+//! ([`EdgeStore::advance_watermark`]); the store publishes
+//! `WatermarkAdvanced` each time it strictly advances, from the transaction
+//! that persists it. Readers outside L7 that date their own results by the
+//! watermark (the projection source's sample) read it through
+//! [`WatermarkRead`]. Once a watermark is
 //! exposed, no bucket of a version that has been activated whose window ends
 //! at or before it changes: `apply` refuses such a contribution with
 //! `LateContribution`, which signals a frontier that broke its contract and
@@ -67,7 +73,9 @@
 //! through the `ChannelDirectory`, including the ids a filter names, then
 //! sums what became equal. Graph responses describe their nodes
 //! ([`crate::aggregates::node`]) from the agent store, L3's `ClaimStore` and
-//! the channel registry, read at query time.
+//! the channel registry, read at query time through [`NodeFacts`], a
+//! synchronous cache kept current from L3's and L5's events (as
+//! `AgentDirectory` is from the merge events).
 //!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
@@ -84,17 +92,23 @@ use crate::aggregates::edge::{
 #[cfg(doc)]
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::filter::VersionUnavailable;
+use crate::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crate::derived::flow::access::AccessKind;
+use crate::derived::flow::channel::detection::DetectionKind;
+use crate::derived::flow::channel::policy::PolicyKind;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
+use crate::events::insight::ClassificationCause;
 use crate::ids::{AccessId, AgentId, ChannelId, TopicId, TransmissionId};
+use crate::observed::agent::{AgentLabel, ClaimSet};
 use crate::paging::{EdgeTransmissionList, PageRequest};
-use crate::support::{TimeWindow, Timestamp};
+use crate::support::{NonBlank, TimeWindow, Timestamp};
 
-/// One classified transmission, as the edge store counts it.
+/// One classified transmission, as the edge store counts it: a
+/// `TransmissionClassified` event's fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EdgeContribution {
     pub transmission: TransmissionId,
@@ -104,6 +118,26 @@ pub struct EdgeContribution {
     pub at: Timestamp,
     pub matched_bytes: NonZeroU64,
     pub classification: Classification,
+    /// Why it was classified. A `Refit` classification counts toward
+    /// activating its version ([`EdgeStore::activate`]); a `Confirmation`
+    /// never does.
+    pub cause: ClassificationCause,
+}
+
+/// What [`EdgeStore::activate`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// Queries now read `version`; `previous` is what they read before.
+    /// `TopicVersionActivated { version, previous }` was published.
+    Switched {
+        version: TopicModelVersion,
+        previous: TopicModelVersion,
+    },
+    /// Not yet: the version's `TopicVersionReady` has not arrived, or fewer
+    /// refit-classified transmissions than it counts have been processed.
+    Pending,
+    /// Already active, or older than the active version.
+    Ignored,
 }
 
 /// One recorded access, as the edge store counts it: an `AccessRecorded`
@@ -123,7 +157,8 @@ pub trait EdgeStore {
     /// agent. Returns `LateContribution` and changes nothing when the
     /// classification version has been activated and the bucket ends at or
     /// before the exposed watermark, and `VersionNotRetained` for a dropped
-    /// version.
+    /// version. A `Refit` contribution that is applied, already applied or
+    /// a self-edge counts as processed toward its version's activation.
     fn apply(
         &mut self,
         contribution: &EdgeContribution,
@@ -140,17 +175,29 @@ pub trait EdgeStore {
         revision: VerdictRevision,
     ) -> impl Future<Output = Result<Observed, EdgeError>> + Send;
 
+    /// `TopicVersionReady` for `version` arrived, counting `transmissions`.
+    /// The first count received is kept: a redelivery changes nothing.
+    /// `VersionNotRetained` for a dropped version.
+    fn version_ready(
+        &mut self,
+        version: TopicModelVersion,
+        transmissions: u64,
+    ) -> impl Future<Output = Result<(), EdgeError>> + Send;
+
     /// Switch queries to `version` once its buckets are complete: its
     /// `TopicVersionReady` has arrived and the store has processed (applied,
     /// or rejected as a self-edge) as many distinct transmissions classified
     /// under it with cause `Refit` as the event counts. Classifications
     /// under it with cause `Confirmation`, which follow the event, do not
-    /// count. Ignores a version older than the active one. Drops nothing:
-    /// see [`EdgeStore::drop_version`].
+    /// count. `Switched` publishes `TopicVersionActivated` from the
+    /// transaction that switches; `Pending` (not complete yet) and `Ignored`
+    /// (a version not newer than the active one) change nothing.
+    /// `VersionNotRetained` for a dropped version. Drops nothing: see
+    /// [`EdgeStore::drop_version`].
     fn activate(
         &mut self,
         version: TopicModelVersion,
-    ) -> impl Future<Output = Result<(), EdgeError>> + Send;
+    ) -> impl Future<Output = Result<Activation, EdgeError>> + Send;
 
     /// Delete every bucket and stored contribution of `version`, on
     /// `TopicVersionDropped`. The version is marked dropped before any row
@@ -169,9 +216,9 @@ pub trait EdgeStore {
 
     /// Recompute the watermark as `Watermark::settled(frontier, timing,
     /// bucket_width)` and expose it if it is later than the exposed one.
-    /// Returns the new watermark when it advanced, after persisting it; the
-    /// consumer then publishes `WatermarkAdvanced`. Never lowers the exposed
-    /// watermark.
+    /// Returns the new watermark when it advanced, after persisting it and
+    /// publishing `WatermarkAdvanced` and `Changed::Watermark` from the same
+    /// transaction. Never lowers the exposed watermark.
     fn advance_watermark(
         &mut self,
         frontier: PipelineFrontier,
@@ -310,8 +357,57 @@ pub trait FrontierSource {
     fn frontier(&self) -> impl Future<Output = Result<PipelineFrontier, EdgeError>> + Send;
 }
 
-/// Why a write (`apply`, `judge`, `activate`, `drop_version`,
-/// `advance_watermark`) or the frontier read failed.
+/// What a graph node says about a canonical agent before its counts: read
+/// at query time from L3 (the agent record and its claims).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentFacts {
+    pub label: Option<AgentLabel>,
+    pub state: CanonicalStateKind,
+    /// The parent as stored; the edge store resolves it.
+    pub parent: Option<AgentId>,
+    /// The claims of the agent and every agent merged into it.
+    pub claims: ClaimSet,
+}
+
+/// What a channel node says about a canonical channel: read at query time
+/// from L5's registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelFacts {
+    pub label: Option<String>,
+    pub origin: CanonicalOriginKind,
+    pub detection: DetectionKind,
+    pub policy: PolicyKind,
+    pub locator_summary: NonBlank,
+}
+
+/// The node facts the edge store's graphs describe their nodes with
+/// ([`crate::aggregates::node`]). Synchronous, like `AgentDirectory`: an
+/// implementation is a cache kept current from L3's and L5's events
+/// (`AgentSeen`, `AgentRenamed`, merges, `Changed::Agent`, channel events,
+/// `Changed::Channel`), so the edge store reads it inside its own
+/// transaction.
+pub trait NodeFacts {
+    /// `canonical`'s facts; `None` for an agent the cache has not seen, which
+    /// the graph draws as a provisional top-level agent with no label or
+    /// claims.
+    fn agent(&self, canonical: AgentId) -> Option<AgentFacts>;
+
+    /// `canonical`'s facts; `None` for a channel the cache has not seen,
+    /// which the graph draws as a discovered, observed, unreviewed channel
+    /// summarized by its id.
+    fn channel(&self, canonical: ChannelId) -> Option<ChannelFacts>;
+}
+
+/// L7's exposed watermark, for readers outside L7 that date what they read
+/// by it (the projection source's `Sample::watermark`). Synchronous, like
+/// the directories: a cache of the value the last `WatermarkAdvanced`
+/// carried, which never moves back.
+pub trait WatermarkRead {
+    fn current_watermark(&self) -> Watermark;
+}
+
+/// Why a write (`apply`, `judge`, `version_ready`, `activate`,
+/// `drop_version`, `advance_watermark`) or the frontier read failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeError {
     Store {

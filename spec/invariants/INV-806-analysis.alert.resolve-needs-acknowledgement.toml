@@ -1,0 +1,23 @@
+[invariant]
+id = "analysis.alert.resolve-needs-acknowledgement"
+statement = "AlertActions::resolve of an Open alert returns NotAcknowledged and changes and publishes nothing, and ActionError::from maps NotAcknowledged to Conflict(AlertNotAcknowledged), distinct from Conflict(AlertNotActive)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The alert lifecycle goes Open, Acknowledged, Resolved: an operator
+acknowledges before resolving, so the audit log always shows who took an
+alert on. Resolving an open alert is a state the client can fix (by
+acknowledging it), unlike an alert no longer active, so it has its own
+conflict kind and the UI can offer the acknowledgement rather than report
+the alert as closed.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_spec::tests::query_errors::alert_action_errors_map_to_typed_action_errors",
+  "crosstalk_analysis::tests::resolving_an_open_alert_is_refused",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

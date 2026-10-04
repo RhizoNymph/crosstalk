@@ -1,5 +1,5 @@
-//! [`InMemoryOperatorStore`]: the store behind the surface's
-//! [`OperatorDirectory`].
+//! [`InMemoryOperatorStore`]: the reference [`OperatorStore`], the store
+//! behind the surface's [`OperatorDirectory`].
 //!
 //! The directory itself is a spec value built only by
 //! [`OperatorDirectory::load`]; the store keeps the current one and applies
@@ -13,34 +13,16 @@ use std::sync::{Arc, Mutex};
 use crosstalk_spec::ids::{AuditId, ConfigHash};
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::audit::{
-    AuditBody, AuditEntry, AuditError, ConfigChange, ConfigOutcome, ConfigRecord,
+    AuditBody, AuditEntry, ConfigChange, ConfigOutcome, ConfigRecord,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::{
-    AccessConfig, InvalidAccessConfig, Operator, OperatorDirectory, RequestIdentity,
-    Unauthenticated,
+    AccessConfig, CallerError, Operator, OperatorDirectory, OperatorLoadError, OperatorStore,
+    OperatorStoreError, RequestIdentity,
 };
 use crosstalk_spec::support::Timestamp;
 
 use super::audit::InMemoryAuditLog;
-use crate::analysis::support::{IdSequence, lock};
-
-/// Why a config load changed nothing.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum LoadError {
-    #[error("the access config cannot be used: {0:?}")]
-    Invalid(InvalidAccessConfig),
-    #[error("the audit log refused the load's entries: {0:?}")]
-    Audit(AuditError),
-}
-
-/// Why a request got no caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum CallerError {
-    #[error("no access config has been loaded")]
-    NotLoaded,
-    #[error("the request is not authenticated: {0:?}")]
-    Unauthenticated(Unauthenticated),
-}
+use crate::support::{IdSequence, lock};
 
 /// The operator directory and the audit log its loads are recorded in.
 /// Cloning shares the store.
@@ -70,24 +52,31 @@ impl InMemoryOperatorStore {
         }
     }
 
-    /// Apply `config` (the document hashed `hash`) at `at`: the new
-    /// directory is stored and each change is appended as an applied config
-    /// entry, together. Returns the changes, in `OperatorDirectory::load`'s
-    /// order.
-    pub fn load(
-        &self,
+    /// The stored directory, if a config was ever loaded.
+    pub fn directory(&self) -> Option<OperatorDirectory> {
+        lock(&self.state).directory.clone()
+    }
+}
+
+impl OperatorStore for InMemoryOperatorStore {
+    /// The new directory is stored and each change is appended as an
+    /// applied config entry, together; audit ids are drawn only when both
+    /// succeed.
+    async fn load(
+        &mut self,
         config: &AccessConfig,
         hash: ConfigHash,
         at: Timestamp,
-    ) -> Result<Vec<ConfigChange>, LoadError> {
+    ) -> Result<Vec<ConfigChange>, OperatorLoadError> {
         let mut state = lock(&self.state);
         let (directory, changes) = OperatorDirectory::load(state.directory.as_ref(), config)
-            .map_err(LoadError::Invalid)?;
-        let mut ids = state.audit_ids;
+            .map_err(OperatorLoadError::Invalid)?;
+        let ids = state.audit_ids.peek(changes.len());
         let entries: Vec<AuditEntry> = changes
             .iter()
-            .map(|change| AuditEntry {
-                id: AuditId::from_ulid(ids.next_raw()),
+            .zip(ids)
+            .map(|(change, id)| AuditEntry {
+                id: AuditId::from_ulid(id),
                 at,
                 body: AuditBody::Config(ConfigRecord {
                     config: hash,
@@ -96,28 +85,23 @@ impl InMemoryOperatorStore {
                 }),
             })
             .collect();
-        self.audit.append_all(&entries).map_err(LoadError::Audit)?;
-        state.audit_ids = ids;
+        self.audit
+            .append_all(&entries)
+            .map_err(OperatorLoadError::Audit)?;
+        state.audit_ids.skip(entries.len());
         state.directory = Some(directory);
         Ok(changes)
     }
 
-    /// The stored directory, if a config was ever loaded.
-    pub fn directory(&self) -> Option<OperatorDirectory> {
-        lock(&self.state).directory.clone()
-    }
-
-    /// Every operator, current and former, by id (`QueryApi::operators`).
-    pub fn operators(&self) -> Vec<Operator> {
-        lock(&self.state)
+    async fn operators(&self) -> Result<Vec<Operator>, OperatorStoreError> {
+        Ok(lock(&self.state)
             .directory
             .as_ref()
             .map(|directory| directory.operators().cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
-    /// The caller for one request ([`OperatorDirectory::caller`]).
-    pub fn caller(&self, identity: RequestIdentity) -> Result<Caller, CallerError> {
+    async fn caller(&self, identity: RequestIdentity) -> Result<Caller, CallerError> {
         let state = lock(&self.state);
         let directory = state.directory.as_ref().ok_or(CallerError::NotLoaded)?;
         directory

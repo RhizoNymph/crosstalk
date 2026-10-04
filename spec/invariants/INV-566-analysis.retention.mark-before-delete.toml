@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.retention.mark-before-delete"
-statement = "A version's topic assignments are deleted, and TopicVersionDropped for it is published, only after the catalog has marked it dropped."
+statement = "A version's topic assignments are deleted, and TopicVersionDropped for it is published by the catalog, only after the catalog has marked it dropped, all in the transaction that marks it."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

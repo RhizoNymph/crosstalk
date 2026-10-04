@@ -18,8 +18,8 @@
 //!
 //! After every committed change to a stored channel (discovery, a
 //! declaration, a new resource, any detection change including turning
-//! dormant, a recorded policy decision) flow publishes `Changed::Channel`
-//! for it; after a promotion, for the promoted channel and every channel it
+//! dormant, a recorded policy decision) the registry publishes
+//! `Changed::Channel` for it; after a promotion, for the promoted channel and every channel it
 //! superseded ([`Changed::promotion`]). A `PolicyChanged` is announced to
 //! the UI only this way, once recorded, never by the surface that published
 //! it. The verdict store publishes `Changed::Verdict` for each appended
@@ -27,11 +27,24 @@
 //!
 //! [`Changed::promotion`]: crate::events::changed::Changed::promotion
 //!
+//! The flow consumer writes what it sees through
+//! [`channels::ChannelTraffic`] (a discovered channel, a new resource, an
+//! access, a detection change, a confirmation) and stores each transmission
+//! state the correlator decides through
+//! [`transmissions::TransmissionStore`]. It publishes the events of its own
+//! decisions once the write commits: `ChannelDiscovered` (the lookup said
+//! `New`), `AccessRecorded`, `DeclaredChannelUnused` (the idle window
+//! closed), `ChannelCrossAccessed`, `TransmissionConfirmed` and
+//! `TransmissionSuspected` (the correlator's updates). The surface reads
+//! stored channels through [`channels::ChannelReads`].
+//!
 //! Implementations:
 //! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,
 //!   `BashExtractor` (tree-sitter-bash), `FileToolExtractor`, `McpExtractor`,
 //!   `UrlScanFallback`.
-//! - `ChannelRegistry`: `PgChannelRegistry`.
+//! - `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`:
+//!   `PgChannelRegistry`.
+//! - `TransmissionStore`, `TransmissionVerdicts`: `PgTransmissionStore`.
 //! - `Correlator`: `WindowedCorrelator`, which buffers evidence that arrives
 //!   out of order. A content match can be processed before the access that
 //!   opens its transmission, because they come from different consumer
@@ -89,6 +102,8 @@
 //!
 //! [`CorrelationTiming`]: crate::derived::flow::timing::CorrelationTiming
 
+pub mod channels;
+pub mod transmissions;
 pub mod verdicts;
 
 use crate::aggregates::access::ResourceUsePage;
@@ -168,13 +183,17 @@ pub trait ChannelRegistry {
         locator: &Locator,
     ) -> impl Future<Output = Result<ChannelLookup, RegistryError>> + Send;
 
-    /// Declare a channel from config. When `policy` carries a decision, it
-    /// is the first entry of the channel's [`PolicyHistory`].
+    /// Declare a channel from config, as `by` at `at` (the declaration's
+    /// time), under a fresh id the registry assigns. When `policy` carries a
+    /// decision, it is the first entry of the channel's [`PolicyHistory`].
+    /// Publishes `Changed::Channel` for it. `OverlappingDeclaration` when
+    /// the pattern overlaps a declared channel's, changing nothing.
     fn declare(
         &mut self,
         pattern: ResourcePattern,
         policy: Policy,
         by: PolicyAuthor,
+        at: Timestamp,
     ) -> impl Future<Output = Result<ChannelId, RegistryError>> + Send;
 
     /// Record a decision in the channel's [`PolicyHistory`] and set the

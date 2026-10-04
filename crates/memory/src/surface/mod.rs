@@ -3,16 +3,17 @@
 //! which `crosstalk-surface` composes over these.
 //!
 //! - `AuditLog` is [`audit::InMemoryAuditLog`], append-only.
-//! - The stored `OperatorDirectory` is [`operators::InMemoryOperatorStore`],
-//!   each config load recorded in the audit log with the change.
-//! - The configured sinks and their last deliveries are
+//! - `OperatorStore`, the stored `OperatorDirectory`, is
+//!   [`operators::InMemoryOperatorStore`], each config load recorded in the
+//!   audit log with the change.
+//! - `SinkRegistry`, the configured sinks and their last deliveries, is
 //!   [`sinks::InMemorySinkRegistry`]; [`sinks::FakeSink`] is an `AlertSink`
 //!   double.
-//! - The cursor book every reference store pages with is [`paging`].
+//! - The cursor book every reference store pages with is in
+//!   [`crate::support`].
 
 pub mod audit;
 pub mod operators;
-pub mod paging;
 pub mod sinks;
 
 #[cfg(test)]

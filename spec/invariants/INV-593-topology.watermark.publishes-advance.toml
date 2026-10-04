@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.watermark.publishes-advance"
-statement = "L7 publishes WatermarkAdvanced(w) exactly once for each value w the exposed watermark advances to, after persisting w, and each published value is later than every earlier one."
+statement = "EdgeStore::advance_watermark publishes WatermarkAdvanced(w) exactly once for each value w the exposed watermark advances to, from the transaction that persists w, and each published value is later than every earlier one."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

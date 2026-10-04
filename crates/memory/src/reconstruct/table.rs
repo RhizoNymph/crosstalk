@@ -23,7 +23,9 @@ use crosstalk_spec::observed::agent::{
 use crosstalk_spec::observed::client::HarnessClaim;
 use crosstalk_spec::support::{Change, Timestamp};
 
-use super::seed::{Advance, AgentOrigin, NewAgent, SeedError};
+use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    Advance, AgentLifecycleError, AgentOrigin, NewAgent,
+};
 
 /// Everything L3 stores: agents, the merge log, vetoes, and the claims and
 /// activity recorded per attributed agent.
@@ -92,15 +94,17 @@ impl AgentTable {
             .filter(|parent| *parent != own)
     }
 
-    fn get(&self, id: AgentId) -> Result<&Agent, SeedError> {
-        self.agents.get(&id).ok_or(SeedError::UnknownAgent(id))
+    fn get(&self, id: AgentId) -> Result<&Agent, AgentLifecycleError> {
+        self.agents
+            .get(&id)
+            .ok_or(AgentLifecycleError::UnknownAgent(id))
     }
 
-    // ---- seeding ----------------------------------------------------------
+    // ---- `AgentLifecycle` ---------------------------------------------------
 
-    pub(crate) fn create(&mut self, new: NewAgent) -> Result<Vec<BusEvent>, SeedError> {
+    pub(crate) fn create(&mut self, new: NewAgent) -> Result<Vec<BusEvent>, AgentLifecycleError> {
         if self.agents.contains_key(&new.id) {
-            return Err(SeedError::DuplicateAgent(new.id));
+            return Err(AgentLifecycleError::DuplicateAgent(new.id));
         }
         let state = match new.origin {
             AgentOrigin::Config { at } => AgentState::Registered { at },
@@ -128,7 +132,7 @@ impl AgentTable {
         &mut self,
         id: AgentId,
         advance: Advance,
-    ) -> Result<Vec<BusEvent>, SeedError> {
+    ) -> Result<Vec<BusEvent>, AgentLifecycleError> {
         let next = match (&self.get(id)?.state, advance) {
             (AgentState::Registered { .. }, Advance::FirstTraffic { at }) => {
                 AgentState::Provisional { first_seen: at }
@@ -136,7 +140,7 @@ impl AgentTable {
             (AgentState::Provisional { .. }, Advance::Establish { since }) => {
                 AgentState::Established { since }
             }
-            _ => return Err(SeedError::IllegalTransition { agent: id }),
+            _ => return Err(AgentLifecycleError::IllegalTransition { agent: id }),
         };
         if let Advance::FirstTraffic { at } = advance {
             self.record_activity(id, at);
@@ -147,13 +151,13 @@ impl AgentTable {
         Ok(changed([id]).collect())
     }
 
-    pub(crate) fn attach(
+    pub(crate) fn attach_evidence(
         &mut self,
         id: AgentId,
         evidence: IdentityEvidence,
-    ) -> Result<Vec<BusEvent>, SeedError> {
+    ) -> Result<Vec<BusEvent>, AgentLifecycleError> {
         if self.get(id)?.evidence.iter().any(|held| *held == evidence) {
-            return Err(SeedError::DuplicateEvidence(id));
+            return Err(AgentLifecycleError::DuplicateEvidence(id));
         }
         if let Some(agent) = self.agents.get_mut(&id) {
             agent.evidence.push(evidence);

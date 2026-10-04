@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.projection.frame-mismatch-refused"
+statement = "ProjectionStore::complete with a frame that Projection::new refuses for the job's ready record returns FrameMismatch naming the job and the ProjectionMismatch, and the job stays Fitting with no frame stored and nothing published."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A frame from another job, another topic version, or with a watermark,
+sample limit or counts that disagree with the fit would be served as this
+projection forever (stored frames are immutable until they expire). Naming
+the mismatch tells the fitter which input it got wrong; refusing before any
+change lets the lease lapse and the job be refitted rather than leaving a
+Ready job with a frame that does not belong to it.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::tests::complete_refuses_a_frame_of_another_job"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

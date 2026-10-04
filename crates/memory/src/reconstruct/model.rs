@@ -40,6 +40,9 @@ use crosstalk_spec::ids::{
 use crosstalk_spec::interfaces::l3_reconstruction::agents::{
     ActivityStore, AgentReadError, AgentReads,
 };
+use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    Advance, AgentLifecycle, AgentOrigin, NewAgent,
+};
 use crosstalk_spec::interfaces::l3_reconstruction::{AgentDirectory, ClaimStore, IdentityResolver};
 use crosstalk_spec::observed::agent::{
     Agent, AgentLabel, AgentState, IdentityEvidence, IdentityScope, MergeAuthor, MergeRecord,
@@ -51,18 +54,17 @@ use crosstalk_spec::support::{Blake3, NonEmpty, Timestamp};
 use proptest::prelude::*;
 
 use super::MemoryAgents;
-use super::seed::{Advance, AgentOrigin, NewAgent, SeedAgents};
-use crate::pipeline::harness::{HarnessConfig, Mismatch, run, same};
-use crate::pipeline::{IdSequence, Outbox, drain};
+use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
+use crate::support::{IdSequence, Outbox, drain};
 
-/// Every trait an L3 agent store implements, plus [`SeedAgents`].
+/// Every spec trait an L3 agent store implements.
 pub trait AgentStore:
-    AgentDirectory + IdentityResolver + ClaimStore + ActivityStore + AgentReads + SeedAgents
+    AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads
 {
 }
 
 impl<T> AgentStore for T where
-    T: AgentDirectory + IdentityResolver + ClaimStore + ActivityStore + AgentReads + SeedAgents
+    T: AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads
 {
 }
 
@@ -307,36 +309,36 @@ pub fn agent_ops(max: usize) -> impl Strategy<Value = Vec<AgentOp>> {
 }
 
 /// Run the harness: the store `make` builds must agree with
-/// [`MemoryAgents`] on every generated sequence. Panics on the first
-/// disagreement with the shrunk sequence.
-pub fn check_agent_store<S, F>(config: HarnessConfig, make: F)
+/// [`MemoryAgents`] on every generated sequence. A failure is a
+/// [`ModelMismatch`] with the shrunk sequence.
+pub fn check_agent_store<S, F>(config: HarnessConfig, make: F) -> Result<(), ModelMismatch>
 where
     S: AgentStore,
     F: Fn(IdSequence, Outbox) -> S,
 {
-    run("agent store", config, agent_ops(config.max_ops), |ops| {
+    run(config, agent_ops(config.max_ops), |runtime, ops| {
         let (sut_outbox, sut_events) = Outbox::channel();
         let sut = make(IdSequence::default(), sut_outbox);
-        run_case(sut, sut_events, ops)
-    });
+        runtime.block_on(run_case(sut, sut_events, ops))
+    })
 }
 
 /// Every operation's result, compared between the two stores.
 async fn run_case<S: AgentStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
-    ops: Vec<AgentOp>,
-) -> Result<(), Mismatch> {
+    ops: &[AgentOp],
+) -> Result<(), Divergence> {
     let (model_outbox, mut model_events) = Outbox::channel();
     let mut model = MemoryAgents::new(IdSequence::default(), model_outbox);
     let mut merges: Vec<MergeId> = Vec::new();
-    let mut before = states(&sut).await?;
+    let mut before = states(0, &sut).await?;
     for (step, op) in ops.iter().enumerate() {
         let at = Timestamp::from_micros(1_000 + 10 * step as u64);
         apply(step, op, at, &mut sut, &mut model, &mut merges).await?;
         compare_events(step, drain(&mut sut_events), drain(&mut model_events))?;
         observe(step, &sut, &model).await?;
-        let after = states(&sut).await?;
+        let after = states(step, &sut).await?;
         check_invariants(step, op, &merges, &before, &after)?;
         before = after;
     }
@@ -350,7 +352,7 @@ async fn apply<S: AgentStore>(
     sut: &mut S,
     model: &mut MemoryAgents,
     merges: &mut Vec<MergeId>,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     match op {
         AgentOp::Create {
             agent: n,
@@ -372,8 +374,8 @@ async fn apply<S: AgentStore>(
                 },
                 label: l.and_then(label),
             };
-            let s = SeedAgents::create(sut, new.clone()).await;
-            let m = SeedAgents::create(model, new).await;
+            let s = AgentLifecycle::create(sut, new.clone()).await;
+            let m = AgentLifecycle::create(model, new).await;
             same(step, "create", &s, &m)
         }
         AgentOp::Advance {
@@ -387,17 +389,17 @@ async fn apply<S: AgentStore>(
             } else {
                 Advance::FirstTraffic { at }
             };
-            let s = SeedAgents::advance(sut, agent(*n), advance).await;
-            let m = SeedAgents::advance(model, agent(*n), advance).await;
+            let s = AgentLifecycle::advance(sut, agent(*n), advance).await;
+            let m = AgentLifecycle::advance(model, agent(*n), advance).await;
             same(step, "advance", &s, &m)
         }
         AgentOp::Attach {
             agent: n,
             evidence: e,
         } => {
-            let s = SeedAgents::attach(sut, agent(*n), evidence(*e)).await;
-            let m = SeedAgents::attach(model, agent(*n), evidence(*e)).await;
-            same(step, "attach", &s, &m)
+            let s = AgentLifecycle::attach_evidence(sut, agent(*n), evidence(*e)).await;
+            let m = AgentLifecycle::attach_evidence(model, agent(*n), evidence(*e)).await;
+            same(step, "attach_evidence", &s, &m)
         }
         AgentOp::Merge {
             from,
@@ -500,7 +502,7 @@ fn split(events: Vec<BusEvent>) -> (Vec<BusEvent>, HashSet<Changed>) {
     (others, changed)
 }
 
-fn compare_events(step: usize, sut: Vec<BusEvent>, model: Vec<BusEvent>) -> Result<(), Mismatch> {
+fn compare_events(step: usize, sut: Vec<BusEvent>, model: Vec<BusEvent>) -> Result<(), Divergence> {
     let (sut_events, sut_changed) = split(sut);
     let (model_events, model_changed) = split(model);
     same(step, "published events", &sut_events, &model_events)?;
@@ -508,8 +510,9 @@ fn compare_events(step: usize, sut: Vec<BusEvent>, model: Vec<BusEvent>) -> Resu
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "step {step}: change notifications missing: {missing:?}"
+        Err(Divergence::new(
+            step,
+            format!("change notifications missing: {missing:?}"),
         ))
     }
 }
@@ -518,7 +521,7 @@ async fn observe<S: AgentStore>(
     step: usize,
     sut: &S,
     model: &MemoryAgents,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     let ids: Vec<AgentId> = (0..AGENTS).map(agent).chain([unknown_agent()]).collect();
     for id in &ids {
         same(
@@ -547,7 +550,7 @@ async fn observe<S: AgentStore>(
         )?;
     }
     let batch = IdBatch::new(ids.iter().copied())
-        .map_err(|error| format!("step {step}: id batch: {error:?}"))?;
+        .map_err(|error| Divergence::new(step, format!("id batch: {error:?}")))?;
     same(
         step,
         "names",
@@ -562,8 +565,9 @@ async fn observe<S: AgentStore>(
         &traverse(model, &filter, 2).await,
     )?;
     let foreign = Cursor::from_token("never-issued".to_owned())
-        .map_err(|error| format!("step {step}: cursor: {error:?}"))?;
-    let size = PageSize::new(2).map_err(|error| format!("step {step}: size: {error:?}"))?;
+        .map_err(|error| Divergence::new(step, format!("cursor: {error:?}")))?;
+    let size =
+        PageSize::new(2).map_err(|error| Divergence::new(step, format!("size: {error:?}")))?;
     let request = PageRequest {
         size,
         after: Some(foreign),
@@ -582,7 +586,7 @@ struct Snapshot {
     merges: BTreeMap<MergeId, MergeRecord>,
 }
 
-async fn states<S: AgentReads>(store: &S) -> Result<Snapshot, Mismatch> {
+async fn states<S: AgentReads>(step: usize, store: &S) -> Result<Snapshot, Divergence> {
     let mut snapshot = Snapshot {
         agents: BTreeMap::new(),
         merges: BTreeMap::new(),
@@ -591,7 +595,7 @@ async fn states<S: AgentReads>(store: &S) -> Result<Snapshot, Mismatch> {
         let cluster = store
             .cluster(agent(n))
             .await
-            .map_err(|error| format!("cluster read failed: {error:?}"))?;
+            .map_err(|error| Divergence::new(step, format!("cluster read failed: {error:?}")))?;
         if let Some(cluster) = cluster {
             for record in std::iter::once(cluster.agent()).chain(cluster.aliases()) {
                 snapshot.agents.insert(record.id, record.clone());
@@ -610,7 +614,7 @@ fn check_invariants(
     merges: &[MergeId],
     before: &Snapshot,
     after: &Snapshot,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     for agent in after.agents.values() {
         if let AgentState::Merged(merged) = &agent.state {
             let target = after.agents.get(&merged.into).map(|target| &target.state);
@@ -622,9 +626,12 @@ fn check_invariants(
                         | AgentState::Established { .. }
                 )
             ) {
-                return Err(format!(
-                    "step {step}: {:?} is merged into {:?}, which is not an active agent",
-                    agent.id, merged.into
+                return Err(Divergence::new(
+                    step,
+                    format!(
+                        "{:?} is merged into {:?}, which is not an active agent",
+                        agent.id, merged.into
+                    ),
                 ));
             }
         }
@@ -639,17 +646,20 @@ fn check_invariants(
             (_, records) => records.is_empty(),
         };
         if !agrees {
-            return Err(format!(
-                "step {step}: {:?}'s state disagrees with the merge log",
-                agent.id
+            return Err(Divergence::new(
+                step,
+                format!("{:?}'s state disagrees with the merge log", agent.id),
             ));
         }
         if let Some(previous) = before.agents.get(&agent.id)
             && !legal(op, merges, &previous.state, &agent.state)
         {
-            return Err(format!(
-                "step {step}: illegal transition of {:?}: {:?} to {:?} on {op:?}",
-                agent.id, previous.state, agent.state
+            return Err(Divergence::new(
+                step,
+                format!(
+                    "illegal transition of {:?}: {:?} to {:?} on {op:?}",
+                    agent.id, previous.state, agent.state
+                ),
             ));
         }
     }

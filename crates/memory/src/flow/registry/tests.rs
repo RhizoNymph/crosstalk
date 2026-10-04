@@ -2,8 +2,6 @@
 //! that names `ChannelRegistry` or `ChannelDirectory`. Each test's doc
 //! names the invariant it checks.
 
-use std::sync::Arc;
-
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor, Recorded};
 use crosstalk_spec::derived::flow::channel::promotion::{
@@ -22,10 +20,22 @@ use crosstalk_spec::interfaces::l5_flow::{
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use super::MemoryChannels;
 use super::model::{self, access_agent, channel, decision, directory, locator, pattern, resource};
-use super::{DetectionUpdate, MemoryChannels, SeedChannels, SeedError};
-use crate::pipeline::harness::HarnessConfig;
-use crate::pipeline::{IdSequence, ManualClock, Outbox, drain};
+use crate::model::{HarnessConfig, ModelMismatch};
+use crate::support::{IdSequence, Outbox, drain};
+use crosstalk_spec::interfaces::l5_flow::channels::{
+    ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+};
+use crosstalk_spec::support::Change;
+
+/// The case count the pipeline harnesses have always run with.
+fn pipeline_harness() -> HarnessConfig {
+    HarnessConfig {
+        cases: 64,
+        ..HarnessConfig::default()
+    }
+}
 use crate::reconstruct::MemoryAgents;
 
 fn at(micros: u64) -> Timestamp {
@@ -34,19 +44,13 @@ fn at(micros: u64) -> Timestamp {
 
 type Registry = MemoryChannels<MemoryAgents>;
 
-async fn registry() -> (Registry, UnboundedReceiver<BusEvent>, ManualClock) {
+async fn registry() -> (Registry, UnboundedReceiver<BusEvent>) {
     let Ok(agents) = directory().await else {
         panic!("directory");
     };
-    let clock = ManualClock::at(at(100));
     let (outbox, events) = Outbox::channel();
-    let registry = MemoryChannels::new(
-        agents,
-        IdSequence::default(),
-        Arc::new(clock.clone()),
-        outbox,
-    );
-    (registry, events, clock)
+    let registry = MemoryChannels::new(agents, IdSequence::default(), outbox);
+    (registry, events)
 }
 
 fn first_access(n: u8) -> AccessId {
@@ -74,12 +78,10 @@ fn promotion(p: u8, time: u64) -> Promotion {
 }
 
 async fn stored(registry: &Registry, id: ChannelId) -> Channel {
-    registry
-        .channels()
-        .await
-        .into_iter()
-        .find(|channel| channel.id == id)
-        .unwrap_or_else(|| panic!("channel {id:?} not stored"))
+    match registry.channel(id).await {
+        Ok(Some(channel)) => channel,
+        other => panic!("channel {id:?} not stored: {other:?}"),
+    }
 }
 
 // ---- lookups ------------------------------------------------------------------
@@ -88,10 +90,15 @@ async fn stored(registry: &Registry, id: ChannelId) -> Channel {
 /// canonical channel), else Declared for a matching pattern, else New.
 #[tokio::test]
 async fn lookup_agrees_with_precedence_model() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     let Ok(declared) = registry
-        .declare(pattern(2), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(2),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
@@ -116,7 +123,7 @@ async fn lookup_agrees_with_precedence_model() {
 /// `flow.registry.lookup-never-superseded`.
 #[tokio::test]
 async fn lookup_of_superseded_resource_is_known_on_superseder() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -131,7 +138,7 @@ async fn lookup_of_superseded_resource_is_known_on_superseder() {
     );
     assert_eq!(
         registry.add_resource(channel(1), resource(2)).await,
-        Err(SeedError::Superseded {
+        Err(TrafficError::Superseded {
             channel: channel(1),
             by: channel(0)
         })
@@ -141,24 +148,24 @@ async fn lookup_of_superseded_resource_is_known_on_superseder() {
 /// `flow.registry.one-channel-per-resource`: a resource is stored once.
 #[tokio::test]
 async fn a_resource_is_stored_on_one_channel() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     assert_eq!(
         registry
             .discover(channel(1), resource(0), first_access(9))
             .await,
-        Err(SeedError::DuplicateResource(resource(0).id))
+        Err(TrafficError::DuplicateResource(resource(0).id))
     );
     assert_eq!(
         registry.add_resource(channel(0), resource(0)).await,
-        Err(SeedError::DuplicateResource(resource(0).id))
+        Err(TrafficError::DuplicateResource(resource(0).id))
     );
 }
 
 /// `flow.channel.discovered-seed`, at the store.
 #[tokio::test]
 async fn discovered_channel_seeded_by_first_access() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 3).await;
     let channel = stored(&registry, channel(0)).await;
     assert_eq!(
@@ -181,9 +188,14 @@ async fn discovered_channel_seeded_by_first_access() {
 /// `flow.registry.declared-patterns-disjoint`, by declaration.
 #[tokio::test]
 async fn declared_patterns_never_overlap() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     let Ok(host) = registry
-        .declare(pattern(0), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(0),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
@@ -194,7 +206,8 @@ async fn declared_patterns_never_overlap() {
                 .declare(
                     pattern(overlapping),
                     Policy::Unreviewed(None),
-                    PolicyAuthor::Config
+                    PolicyAuthor::Config,
+                    at(100)
                 )
                 .await,
             Err(RegistryError::OverlappingDeclaration { existing: host })
@@ -202,7 +215,12 @@ async fn declared_patterns_never_overlap() {
     }
     assert!(
         registry
-            .declare(pattern(2), Policy::Unreviewed(None), PolicyAuthor::Config)
+            .declare(
+                pattern(2),
+                Policy::Unreviewed(None),
+                PolicyAuthor::Config,
+                at(100)
+            )
             .await
             .is_ok()
     );
@@ -224,15 +242,14 @@ async fn declared_patterns_never_overlap() {
     );
 }
 
-/// A declaration is dated by the registry's clock, and its decision is the
-/// first entry of its history.
+/// A declaration is dated by the time `declare` is given, and its decision
+/// is the first entry of its history.
 #[tokio::test]
 async fn declare_records_the_initial_decision() {
-    let (mut registry, _events, clock) = registry().await;
-    clock.set(at(150));
+    let (mut registry, _events) = registry().await;
     let first = decision(1, 10, true, false);
     let Ok(id) = registry
-        .declare(pattern(4), first.policy(), PolicyAuthor::Config)
+        .declare(pattern(4), first.policy(), PolicyAuthor::Config, at(150))
         .await
     else {
         panic!("declare");
@@ -259,7 +276,7 @@ async fn declare_records_the_initial_decision() {
 /// behind a newer one and a redelivered one.
 #[tokio::test]
 async fn stored_policy_is_history_current() {
-    let (mut registry, mut events, _clock) = registry().await;
+    let (mut registry, mut events) = registry().await;
     discover(&mut registry, 0, 0).await;
     drain(&mut events);
     let newer = decision(1, 20, false, false);
@@ -293,7 +310,7 @@ async fn stored_policy_is_history_current() {
 /// decision is in the history once, however often it is recorded.
 #[tokio::test]
 async fn policy_history_complete_under_redelivery() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     let decisions = [
         decision(0, 5, true, false),
@@ -325,7 +342,7 @@ async fn policy_history_complete_under_redelivery() {
 /// `flow.registry.superseded-takes-no-policy`.
 #[tokio::test]
 async fn set_policy_on_superseded_channel_refused() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -359,12 +376,12 @@ async fn set_policy_on_superseded_channel_refused() {
 /// `flow.registry.promote-publishes-once`.
 #[tokio::test]
 async fn promote_applies_plan() {
-    let (mut registry, mut events, _clock) = registry().await;
+    let (mut registry, mut events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     discover(&mut registry, 2, 2).await;
     drain(&mut events);
-    let before = registry.channels().await;
+    let before = model::all_channels(&registry).await.unwrap();
     let expected = {
         let table = registry.state.read();
         plan(
@@ -412,7 +429,7 @@ async fn promote_applies_plan() {
 /// and changes and publishes nothing.
 #[tokio::test]
 async fn promote_rejections_change_nothing() {
-    let (mut registry, mut events, _clock) = registry().await;
+    let (mut registry, mut events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -422,7 +439,12 @@ async fn promote_rejections_change_nothing() {
             .is_ok()
     );
     let Ok(declared) = registry
-        .declare(pattern(2), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(2),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
@@ -473,7 +495,7 @@ async fn promote_rejections_change_nothing() {
 /// `flow.registry.coverage-reads-like-promote`.
 #[tokio::test]
 async fn promotion_coverage_matches_reference() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     discover(&mut registry, 2, 2).await;
@@ -513,7 +535,7 @@ async fn promotion_coverage_matches_reference() {
 /// `flow.channel.supersession-one-step`.
 #[tokio::test]
 async fn channel_canonical_is_idempotent() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -535,7 +557,7 @@ async fn channel_canonical_is_idempotent() {
 /// `flow.channel.confirmation-advances-canonical-detection`.
 #[tokio::test]
 async fn late_confirmation_on_a_superseded_channel_advances_its_superseder() {
-    let (mut registry, mut events, _clock) = registry().await;
+    let (mut registry, mut events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -581,7 +603,7 @@ async fn late_confirmation_on_a_superseded_channel_advances_its_superseder() {
         registry
             .set_detection(channel(1), DetectionUpdate::Unused { since: at(1) })
             .await,
-        Err(SeedError::Superseded {
+        Err(TrafficError::Superseded {
             channel: channel(1),
             by: channel(0)
         })
@@ -593,14 +615,19 @@ async fn late_confirmation_on_a_superseded_channel_advances_its_superseder() {
 /// channel; an access and a no-op detection do not.
 #[tokio::test]
 async fn channel_changes_announced_after_commit() {
-    let (mut registry, mut events, _clock) = registry().await;
+    let (mut registry, mut events) = registry().await;
     let announced = |events: Vec<BusEvent>, id: ChannelId| {
         events.contains(&BusEvent::Changed(Changed::Channel(id)))
     };
     discover(&mut registry, 0, 0).await;
     assert!(announced(drain(&mut events), channel(0)));
     let Ok(declared) = registry
-        .declare(pattern(2), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(2),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
@@ -613,10 +640,13 @@ async fn channel_changes_announced_after_commit() {
     });
     assert_eq!(
         registry.set_detection(declared, observed.clone()).await,
-        Ok(())
+        Ok(Change::Applied)
     );
     assert!(announced(drain(&mut events), declared));
-    assert_eq!(registry.set_detection(declared, observed).await, Ok(()));
+    assert_eq!(
+        registry.set_detection(declared, observed).await,
+        Ok(Change::Unchanged)
+    );
     assert!(drain(&mut events).is_empty());
     assert!(
         registry
@@ -653,7 +683,7 @@ async fn channel_changes_announced_after_commit() {
 /// accesses in the window counted.
 #[tokio::test]
 async fn resource_use_includes_superseded_and_sums_aliases() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 1).await;
     assert!(
@@ -717,7 +747,7 @@ async fn resource_use_includes_superseded_and_sums_aliases() {
 /// A cursor issued for one channel or window is refused for another.
 #[tokio::test]
 async fn resource_use_refuses_foreign_cursors() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     discover(&mut registry, 0, 0).await;
     discover(&mut registry, 1, 6).await;
     assert_eq!(registry.add_resource(channel(0), resource(7)).await, Ok(()));
@@ -787,33 +817,45 @@ async fn resource_use_refuses_foreign_cursors() {
 /// step.
 #[test]
 fn reference_agrees_with_itself_under_the_harness() {
-    model::check_channel_registry(HarnessConfig::default(), |agents, ids, clock, outbox| {
-        MemoryChannels::new(agents, ids, Arc::new(clock), outbox)
-    });
+    let outcome = model::check_channel_registry(pipeline_harness(), MemoryChannels::new);
+    assert_eq!(outcome, Ok(()));
 }
 
 /// The harness catches a registry that ignores accesses' agents' merges:
 /// one built over a directory with no merges.
 #[test]
-#[should_panic(expected = "disagrees with the reference")]
 fn harness_rejects_a_registry_that_ignores_merges() {
-    model::check_channel_registry(HarnessConfig::default(), |_agents, ids, clock, outbox| {
-        MemoryChannels::new(MemoryAgents::default(), ids, Arc::new(clock), outbox)
+    let outcome = model::check_channel_registry(pipeline_harness(), |_agents, ids, outbox| {
+        MemoryChannels::new(MemoryAgents::default(), ids, outbox)
     });
+    assert!(
+        matches!(outcome, Err(ModelMismatch::Failed { .. })),
+        "{outcome:?}"
+    );
 }
 
 /// Declared channels created by declaration only for distinct ids.
 #[tokio::test]
 async fn declared_channels_take_fresh_ids() {
-    let (mut registry, _events, _clock) = registry().await;
+    let (mut registry, _events) = registry().await;
     let Ok(first) = registry
-        .declare(pattern(2), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(2),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
     };
     let Ok(second) = registry
-        .declare(pattern(4), Policy::Unreviewed(None), PolicyAuthor::Config)
+        .declare(
+            pattern(4),
+            Policy::Unreviewed(None),
+            PolicyAuthor::Config,
+            at(100),
+        )
         .await
     else {
         panic!("declare");
@@ -827,4 +869,104 @@ async fn declared_channels_take_fresh_ids() {
 fn the_registry_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<MemoryChannels<MemoryAgents>>();
+}
+
+/// `ChannelReads`: a channel by id (a superseded one as itself, with its
+/// supersession), and the channels a filter keeps, newest first, a page at
+/// a time, with the cursor bound to the filter.
+#[tokio::test]
+async fn channel_reads_list_filtered_newest_first() {
+    use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+    use crosstalk_spec::paging::{PageRequest, PageSize};
+
+    let (mut registry, _events) = registry().await;
+    discover(&mut registry, 0, 0).await;
+    discover(&mut registry, 1, 1).await;
+    discover(&mut registry, 2, 6).await;
+    // The prefix pattern covers channel 1's seed: it is superseded.
+    assert!(
+        registry
+            .promote(channel(0), promotion(1, 200))
+            .await
+            .is_ok()
+    );
+    assert_eq!(registry.channel(model::unknown_channel()).await, Ok(None));
+    let Ok(Some(superseded)) = registry.channel(channel(1)).await else {
+        panic!("channel 1 is stored");
+    };
+    assert_eq!(
+        superseded
+            .origin
+            .supersession()
+            .map(|supersession| supersession.by),
+        Some(channel(0))
+    );
+    let in_force = ChannelFilter::default();
+    let one = PageSize::new(1).unwrap();
+    let first = registry
+        .channels(
+            &in_force,
+            &PageRequest {
+                size: one,
+                after: None,
+            },
+        )
+        .await
+        .unwrap();
+    let (items, next) = first.into_parts();
+    assert_eq!(
+        items.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        vec![channel(2)]
+    );
+    let cursor = next.unwrap();
+    let superseded_only = ChannelFilter {
+        origin: OriginFilter::Superseded,
+        ..ChannelFilter::default()
+    };
+    assert_eq!(
+        registry
+            .channels(
+                &superseded_only,
+                &PageRequest {
+                    size: one,
+                    after: Some(cursor.clone())
+                }
+            )
+            .await
+            .map(|_| ()),
+        Err(RegistryError::InvalidCursor)
+    );
+    let second = registry
+        .channels(
+            &in_force,
+            &PageRequest {
+                size: one,
+                after: Some(cursor),
+            },
+        )
+        .await
+        .unwrap();
+    let (items, next) = second.into_parts();
+    assert_eq!(
+        items.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        vec![channel(0)]
+    );
+    assert!(next.is_none());
+    let all = registry
+        .channels(
+            &superseded_only,
+            &PageRequest {
+                size: PageSize::new(10).unwrap(),
+                after: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        all.items()
+            .iter()
+            .map(|channel| channel.id)
+            .collect::<Vec<_>>(),
+        vec![channel(1)]
+    );
 }

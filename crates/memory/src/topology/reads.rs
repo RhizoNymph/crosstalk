@@ -21,7 +21,7 @@ use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
 use crosstalk_spec::ids::{AgentId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
+    AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
 };
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest};
 use crosstalk_spec::support::TimeWindow;
@@ -32,8 +32,7 @@ use super::fold::{
     resolve_version, route_key,
 };
 use super::store::{EdgeState, InMemoryEdgeStore};
-use crate::analysis::support::lock;
-use crate::surface::paging::page_after;
+use crate::support::{lock, page_after};
 
 fn store_error(reason: impl Into<String>) -> EdgeQueryError {
     EdgeQueryError::Store {
@@ -190,8 +189,16 @@ impl<V: TopologyEnv> EdgeStore for InMemoryEdgeStore<V> {
         Ok(self.judge_impl(transmission, verdict, revision))
     }
 
-    async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError> {
-        self.activate_if_complete(version).map(|_| ())
+    async fn version_ready(
+        &mut self,
+        version: TopicModelVersion,
+        transmissions: u64,
+    ) -> Result<(), EdgeError> {
+        self.version_ready_impl(version, transmissions)
+    }
+
+    async fn activate(&mut self, version: TopicModelVersion) -> Result<Activation, EdgeError> {
+        self.activate_impl(version)
     }
 
     async fn drop_version(&mut self, version: TopicModelVersion) -> Result<(), EdgeError> {

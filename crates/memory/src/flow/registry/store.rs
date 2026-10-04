@@ -1,4 +1,6 @@
-//! The spec traits (and [`SeedChannels`]) on [`MemoryChannels`].
+//! The spec traits on [`MemoryChannels`]. Each method runs one table
+//! operation in one critical section, then publishes the events it
+//! returned.
 
 use crosstalk_spec::aggregates::access::ResourceUsePage;
 use crosstalk_spec::derived::flow::access::Access;
@@ -11,15 +13,18 @@ use crosstalk_spec::derived::flow::channel::promotion::{Promotion, PromotionCove
 use crosstalk_spec::derived::flow::resource::{Locator, Resource, ResourcePattern};
 use crosstalk_spec::ids::{AccessId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
+use crosstalk_spec::interfaces::l5_flow::channels::{
+    ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+};
 use crosstalk_spec::interfaces::l5_flow::{
     ChannelDirectory, ChannelLookup, ChannelRegistry, PromoteError, Promoted, RegistryError,
 };
-use crosstalk_spec::paging::{PageRequest, ResourceUseList};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
+use crosstalk_spec::paging::{ChannelList, Page, PageRequest, ResourceUseList};
+use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
 
 use super::MemoryChannels;
-use super::seed::{DetectionUpdate, SeedChannels, SeedError};
-use crate::pipeline::{PageError, page_after};
+use crate::support::{lock, page_after};
 
 impl<D> ChannelDirectory for MemoryChannels<D> {
     fn canonical(&self, id: ChannelId) -> ChannelId {
@@ -32,15 +37,13 @@ impl<D: AgentDirectory + Send + Sync> ChannelRegistry for MemoryChannels<D> {
         Ok(self.state.read().lookup(locator))
     }
 
-    /// The declaration is dated by the registry's clock: the trait passes
-    /// no time.
     async fn declare(
         &mut self,
         pattern: ResourcePattern,
         policy: Policy,
         by: PolicyAuthor,
+        at: Timestamp,
     ) -> Result<ChannelId, RegistryError> {
-        let at = self.clock.now();
         let (id, events) = self
             .state
             .write()
@@ -104,25 +107,23 @@ impl<D: AgentDirectory + Send + Sync> ChannelRegistry for MemoryChannels<D> {
             serde_json::to_string(&(canonical, window)).map_err(|error| RegistryError::Store {
                 reason: error.to_string(),
             })?;
+        let mut cursors = lock(&self.cursors);
         let after = match &page.after {
             None => None,
             Some(cursor) => Some(
-                self.cursors
-                    .redeem(cursor, &request)
+                cursors
+                    .resources
+                    .resolve(cursor, &request)
                     .ok_or(RegistryError::InvalidCursor)?,
             ),
         };
-        let page = page_after(
-            rows,
-            |row| row.resource().id,
-            after,
-            page.size,
-            |last| {
-                self.cursors
-                    .issue(&request, last)
-                    .map_err(|_| PageError::Token)
-            },
-        )
+        let rows = rows
+            .into_iter()
+            .filter(|row| after.is_none_or(|after| row.resource().id < after))
+            .collect();
+        let page = page_after(&mut cursors.resources, rows, page.size, request, |row| {
+            row.resource().id
+        })
         .map_err(|error| RegistryError::Store {
             reason: error.to_string(),
         })?;
@@ -134,13 +135,13 @@ impl<D: AgentDirectory + Send + Sync> ChannelRegistry for MemoryChannels<D> {
     }
 }
 
-impl<D: Send + Sync> SeedChannels for MemoryChannels<D> {
+impl<D: Send + Sync> ChannelTraffic for MemoryChannels<D> {
     async fn discover(
         &mut self,
         channel: ChannelId,
         resource: Resource,
         first_access: AccessId,
-    ) -> Result<(), SeedError> {
+    ) -> Result<(), TrafficError> {
         let events = self
             .state
             .write()
@@ -153,13 +154,13 @@ impl<D: Send + Sync> SeedChannels for MemoryChannels<D> {
         &mut self,
         channel: ChannelId,
         resource: Resource,
-    ) -> Result<(), SeedError> {
+    ) -> Result<(), TrafficError> {
         let events = self.state.write().add_resource(channel, resource)?;
         self.outbox.publish(events);
         Ok(())
     }
 
-    async fn record_access(&mut self, access: Access) -> Result<(), SeedError> {
+    async fn record_access(&mut self, access: Access) -> Result<(), TrafficError> {
         self.state.write().record_access(access)
     }
 
@@ -167,10 +168,10 @@ impl<D: Send + Sync> SeedChannels for MemoryChannels<D> {
         &mut self,
         channel: ChannelId,
         update: DetectionUpdate,
-    ) -> Result<(), SeedError> {
-        let events = self.state.write().set_detection(channel, update)?;
+    ) -> Result<Change, TrafficError> {
+        let (change, events) = self.state.write().set_detection(channel, update)?;
         self.outbox.publish(events);
-        Ok(())
+        Ok(change)
     }
 
     async fn confirm(
@@ -178,13 +179,43 @@ impl<D: Send + Sync> SeedChannels for MemoryChannels<D> {
         channel: ChannelId,
         transmission: TransmissionId,
         at: Timestamp,
-    ) -> Result<ChannelId, SeedError> {
+    ) -> Result<ChannelId, TrafficError> {
         let (canonical, events) = self.state.write().confirm(channel, transmission, at)?;
         self.outbox.publish(events);
         Ok(canonical)
     }
+}
 
-    async fn channels(&self) -> Vec<Channel> {
-        self.state.read().channels.values().cloned().collect()
+impl<D: Send + Sync> ChannelReads for MemoryChannels<D> {
+    async fn channel(&self, id: ChannelId) -> Result<Option<Channel>, RegistryError> {
+        Ok(self.state.read().channels.get(&id).cloned())
+    }
+
+    async fn channels(
+        &self,
+        filter: &ChannelFilter,
+        page: &PageRequest<ChannelList>,
+    ) -> Result<Page<Channel, ChannelList>, RegistryError> {
+        let mut cursors = lock(&self.cursors);
+        let after = match &page.after {
+            None => None,
+            Some(cursor) => Some(
+                cursors
+                    .channels
+                    .resolve(cursor, filter)
+                    .ok_or(RegistryError::InvalidCursor)?,
+            ),
+        };
+        let rows = self.state.read().channels_matching(filter, after);
+        page_after(
+            &mut cursors.channels,
+            rows,
+            page.size,
+            filter.clone(),
+            |channel| channel.id,
+        )
+        .map_err(|error| RegistryError::Store {
+            reason: error.to_string(),
+        })
     }
 }

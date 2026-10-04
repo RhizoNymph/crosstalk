@@ -1,5 +1,6 @@
-//! The in-memory verdict store: `TransmissionVerdicts` over the stored
-//! transmissions and one `VerdictLog` beside each.
+//! The in-memory transmission store: `TransmissionStore` and
+//! `TransmissionVerdicts` over the stored transmissions and one
+//! `VerdictLog` beside each.
 //!
 //! L5 keeps each transmission's log beside the transmission, so the
 //! judgeable check and the append read one row. Here both live in one
@@ -7,8 +8,8 @@
 //! critical section, and a state change racing it lands wholly before or
 //! wholly after.
 //!
-//! Transmissions are written by the flow consumer, which the spec gives no
-//! trait; [`SeedTransmissions::put`] is that write.
+//! The flow consumer writes each transmission state through
+//! `TransmissionStore::save`, which keeps the transmission's log.
 
 pub mod model;
 
@@ -26,19 +27,13 @@ use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{OperatorId, TransmissionId};
+use crosstalk_spec::interfaces::l5_flow::transmissions::{
+    TransmissionStore, TransmissionStoreError,
+};
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use crate::pipeline::{Outbox, State};
-
-/// The flow consumer's write of a transmission, implemented by every
-/// verdict store the model-based harness checks.
-pub trait SeedTransmissions {
-    /// Store `transmission`, replacing the stored one with its id (the
-    /// consumer applies each state change this way). Its verdict log is
-    /// kept. Announces nothing: transmission events are the consumer's.
-    fn put(&mut self, transmission: Transmission) -> impl Future<Output = ()> + Send;
-}
+use crate::support::{Outbox, State};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct VerdictTable {
@@ -110,7 +105,8 @@ impl VerdictTable {
     }
 }
 
-/// The in-memory `TransmissionVerdicts`. Clones are handles on one store.
+/// The in-memory `TransmissionStore` and `TransmissionVerdicts`. Clones are
+/// handles on one store.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryVerdicts {
     state: State<VerdictTable>,
@@ -125,9 +121,17 @@ impl MemoryVerdicts {
         }
     }
 
-    /// The stored transmission, as the flow consumer last put it.
-    pub fn transmission(&self, id: TransmissionId) -> Option<Transmission> {
-        self.state.read().transmissions.get(&id).cloned()
+    /// The stored transmission's route, read synchronously by the reference
+    /// alert store, which matches alerts on a transmission's route.
+    pub(crate) fn route(
+        &self,
+        id: TransmissionId,
+    ) -> Option<crosstalk_spec::derived::flow::transmission::Route> {
+        self.state
+            .read()
+            .transmissions
+            .get(&id)
+            .map(|transmission| transmission.route.clone())
     }
 }
 
@@ -159,11 +163,19 @@ impl TransmissionVerdicts for MemoryVerdicts {
     }
 }
 
-impl SeedTransmissions for MemoryVerdicts {
-    async fn put(&mut self, transmission: Transmission) {
+impl TransmissionStore for MemoryVerdicts {
+    async fn save(&mut self, transmission: Transmission) -> Result<(), TransmissionStoreError> {
         self.state
             .write()
             .transmissions
             .insert(transmission.id, transmission);
+        Ok(())
+    }
+
+    async fn transmission(
+        &self,
+        id: TransmissionId,
+    ) -> Result<Option<Transmission>, TransmissionStoreError> {
+        Ok(self.state.read().transmissions.get(&id).cloned())
     }
 }

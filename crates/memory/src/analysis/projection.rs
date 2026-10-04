@@ -24,8 +24,7 @@ use crosstalk_spec::interfaces::l6_analysis::{
 use crosstalk_spec::paging::{Page, PageRequest, ProjectionList};
 use crosstalk_spec::support::Timestamp;
 
-use super::support::{Outbox, Published, lock};
-use crate::surface::paging::{CursorBook, page_after};
+use crate::support::{CursorBook, Outbox, lock, page_after};
 
 /// How long a claim holds a job, and how long a ready frame is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +49,7 @@ pub fn plus(at: Timestamp, by: Duration) -> Timestamp {
 #[derive(Clone)]
 pub struct InMemoryProjectionStore {
     config: ProjectionConfig,
+    outbox: Outbox,
     state: Arc<Mutex<ProjectionState>>,
 }
 
@@ -58,7 +58,6 @@ struct ProjectionState {
     jobs: BTreeMap<ProjectionId, Job>,
     frames: BTreeMap<ProjectionId, ProjectionFrame>,
     cursors: CursorBook<(), ProjectionId>,
-    outbox: Outbox,
 }
 
 #[derive(Debug, Clone)]
@@ -69,9 +68,11 @@ struct Job {
 }
 
 impl InMemoryProjectionStore {
-    pub fn new(config: ProjectionConfig) -> Self {
+    /// An empty store publishing to `outbox`.
+    pub fn new(config: ProjectionConfig, outbox: Outbox) -> Self {
         Self {
             config,
+            outbox,
             state: Arc::new(Mutex::new(ProjectionState::default())),
         }
     }
@@ -80,14 +81,9 @@ impl InMemoryProjectionStore {
         self.config
     }
 
-    /// `Changed::Projection` for each job that became ready or failed, or
-    /// whose frame expired, since the last drain.
-    pub fn drain_published(&self) -> Vec<Published> {
-        lock(&self.state).outbox.drain()
-    }
-
-    /// How many jobs are queued or fitting.
-    pub fn pending(&self) -> usize {
+    /// How many jobs are queued or fitting, for tests of the queue bound.
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> usize {
         lock(&self.state).pending()
     }
 }
@@ -199,14 +195,17 @@ impl ProjectionStore for InMemoryProjectionStore {
             .complete(fit)
             .map_err(ProjectionJobError::Transition)?;
         // A frame that does not belong to the job (another id, version,
-        // watermark, sample size or count) is refused like a transition
-        // the job does not allow.
-        let projection = Projection::new(ready, frame)
-            .map_err(|_| not_allowed(ProjectionStatusKind::Fitting, ProjectionStatusKind::Ready))?;
+        // watermark, sample size or count) is refused as a mismatch.
+        let projection = Projection::new(ready, frame).map_err(|mismatch| {
+            ProjectionJobError::FrameMismatch {
+                projection: id,
+                mismatch,
+            }
+        })?;
         let ready = projection.info().clone();
         state.transition(id, |_| Ok(ready))?;
         state.frames.insert(id, projection.frame().clone());
-        state.outbox.changed(Changed::Projection(id));
+        self.outbox.changed(Changed::Projection(id));
         Ok(())
     }
 
@@ -218,7 +217,7 @@ impl ProjectionStore for InMemoryProjectionStore {
     ) -> Result<(), ProjectionJobError> {
         let mut state = lock(&self.state);
         state.transition(id, |info| info.fail(at, failure))?;
-        state.outbox.changed(Changed::Projection(id));
+        self.outbox.changed(Changed::Projection(id));
         Ok(())
     }
 
@@ -253,7 +252,7 @@ impl ProjectionStore for InMemoryProjectionStore {
         for id in &due {
             state.transition(*id, |info| info.expire(now))?;
             state.frames.remove(id);
-            state.outbox.changed(Changed::Projection(*id));
+            self.outbox.changed(Changed::Projection(*id));
         }
         Ok(u32::try_from(due.len()).unwrap_or(u32::MAX))
     }

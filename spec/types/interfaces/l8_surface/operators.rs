@@ -31,9 +31,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::ids::OperatorId;
-use crate::interfaces::l8_surface::audit::ConfigChange;
+use crate::ids::{ConfigHash, OperatorId};
+use crate::interfaces::l8_surface::audit::{AuditError, ConfigChange};
 use crate::interfaces::l8_surface::{Caller, PermissionSet};
+use crate::support::Timestamp;
 use crate::wire::decode_text;
 
 /// An operator's display name: trimmed, non-empty, at most
@@ -322,4 +323,65 @@ impl OperatorDirectory {
             permissions: operator.permissions,
         })
     }
+}
+
+/// The store behind the directory: the one directory the surface holds, and
+/// the audit log each load is recorded in.
+///
+/// A load and its config entries are one transaction: the new directory is
+/// stored and one applied config entry per change is appended (dated `at`,
+/// by `Config`, naming the loaded document's hash), or neither happens. A
+/// config the directory already reflects records nothing; a config
+/// [`OperatorDirectory::load`] refuses changes nothing and records nothing.
+pub trait OperatorStore {
+    /// Apply `config`, the document whose hash is `hash`, at `at`, as
+    /// [`OperatorDirectory::load`] does to the stored directory. Returns the
+    /// changes, in `load`'s order.
+    fn load(
+        &mut self,
+        config: &AccessConfig,
+        hash: ConfigHash,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<Vec<ConfigChange>, OperatorLoadError>> + Send;
+
+    /// Every operator, current and former, by id (`QueryApi::operators`);
+    /// empty before the first load.
+    fn operators(&self) -> impl Future<Output = Result<Vec<Operator>, OperatorStoreError>> + Send;
+
+    /// The caller for one request, from the stored directory
+    /// ([`OperatorDirectory::caller`]).
+    fn caller(
+        &self,
+        identity: RequestIdentity,
+    ) -> impl Future<Output = Result<Caller, CallerError>> + Send;
+}
+
+/// Why a config load changed nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorLoadError {
+    Store {
+        reason: String,
+    },
+    /// The access config cannot be used.
+    Invalid(InvalidAccessConfig),
+    /// The audit log refused the load's entries.
+    Audit(AuditError),
+}
+
+/// Why a read of the operator store failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorStoreError {
+    Store { reason: String },
+}
+
+/// Why a request got no caller. The HTTP binding answers each with its
+/// `AuthError`, never a `QueryError`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallerError {
+    Store {
+        reason: String,
+    },
+    /// No access config has been loaded.
+    NotLoaded,
+    Unauthenticated(Unauthenticated),
 }

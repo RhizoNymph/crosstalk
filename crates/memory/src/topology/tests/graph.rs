@@ -18,7 +18,7 @@ use crosstalk_spec::support::TimeWindow;
 
 use super::support::{World, all, contribution, edge_counts, graph, plain, refit, world};
 use crate::model::build::{access, agent, channel, transmission, ts, window};
-use crate::topology::env::AgentDescription;
+use crosstalk_spec::interfaces::l7_topology::AgentFacts as AgentDescription;
 
 fn first_page(size: u16) -> PageRequest<EdgeTransmissionList> {
     PageRequest {
@@ -618,7 +618,7 @@ async fn edge_transmission_pages_keep_version_across_activation() {
             )
         })
         .collect();
-    let v1 = refit(&world, 100, &[11], &refits);
+    let v1 = refit(&mut world, 100, &[11], &refits).await;
     assert_eq!(v1, TopicModelVersion(1));
     let mut request = first_page(1);
     request.after = first.page.next().cloned();

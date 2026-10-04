@@ -2,13 +2,16 @@
 //!
 //! A database store writes its events to an outbox table in the
 //! transaction that makes the change and relays them to the bus after
-//! commit. The in-memory stores do the same through a channel: each write
-//! sends its events after its critical section ends, so a receiver that
-//! re-queries the store on an event always sees the change. The wiring (or
-//! a test) owns the receiving end and stamps each event into an `Envelope`
-//! for the bus.
+//! commit. The in-memory stores send them on a channel, never before the
+//! change is visible: the L3 to L5 stores send right after their critical
+//! section, the L6 to L8 stores from inside it (so events of concurrent
+//! writes arrive in commit order). A receiver that re-queries the store on
+//! an event always sees the change. The wiring (or a test) owns the
+//! receiving end and stamps each event into an `Envelope` for the bus.
 
 use crosstalk_spec::events::BusEvent;
+use crosstalk_spec::events::changed::Changed;
+use crosstalk_spec::events::insight::InsightEvent;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// The sending half of a store's outbox. [`Outbox::none`] discards every
@@ -48,6 +51,16 @@ impl Outbox {
                 return;
             }
         }
+    }
+
+    /// Publish one insight event.
+    pub fn insight(&self, event: InsightEvent) {
+        self.publish([BusEvent::Insight(event)]);
+    }
+
+    /// Publish one live-feed notification.
+    pub fn changed(&self, changed: Changed) {
+        self.publish([BusEvent::Changed(changed)]);
     }
 }
 

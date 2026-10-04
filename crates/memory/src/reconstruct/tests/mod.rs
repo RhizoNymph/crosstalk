@@ -29,11 +29,22 @@ pub(super) use crosstalk_spec::support::{Change, NonEmpty, Timestamp};
 pub(super) use proptest::prelude::*;
 pub(super) use tokio::sync::mpsc::UnboundedReceiver;
 
+pub(super) use super::MemoryAgents;
 pub(super) use super::model::{self, agent, claim, evidence, label};
 pub(super) use super::resolve::resolve_evidence;
-pub(super) use super::{Advance, AgentOrigin, MemoryAgents, NewAgent, SeedAgents, SeedError};
-pub(super) use crate::pipeline::harness::HarnessConfig;
-pub(super) use crate::pipeline::{IdSequence, Outbox, drain};
+pub(super) use crate::model::{Divergence, HarnessConfig, ModelMismatch};
+pub(super) use crate::support::{IdSequence, Outbox, drain};
+pub(super) use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    Advance, AgentLifecycle, AgentLifecycleError, AgentOrigin, NewAgent,
+};
+
+/// The case count the pipeline harnesses have always run with.
+pub(super) fn pipeline_harness() -> HarnessConfig {
+    HarnessConfig {
+        cases: 64,
+        ..HarnessConfig::default()
+    }
+}
 
 pub(super) fn at(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)

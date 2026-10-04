@@ -181,7 +181,8 @@ impl AlertState {
 
     /// Open or acknowledged: still waiting for someone. Only an active
     /// alert is deduplicated into, suppressed, acknowledged or resolved;
-    /// acknowledging or resolving any other is `Conflict(AlertNotActive)`.
+    /// acknowledging or resolving any other is `Conflict(AlertNotActive)`,
+    /// and resolving an open one `Conflict(AlertNotAcknowledged)`.
     pub fn is_active(&self) -> bool {
         self.kind().is_active()
     }

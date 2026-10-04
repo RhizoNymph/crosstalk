@@ -11,15 +11,18 @@
 //! **Versions.** The store has its own active version (0 at first), the set
 //! of versions it has ever activated, and the set it has dropped. A version
 //! is activated once its `TopicVersionReady` count of refit-classified
-//! transmissions has been processed ([`InMemoryEdgeStore::version_ready`],
-//! [`InMemoryEdgeStore::apply_classified`]); queries resolve selectors
+//! transmissions has been processed (`EdgeStore::version_ready`, and
+//! `EdgeStore::apply` of contributions whose cause is `Refit`); queries
+//! resolve selectors
 //! against the catalog's history, with every version not dropped here
 //! retained.
 //!
 //! **Watermark.** Exposed only through
 //! [`EdgeStore::advance_watermark`](crosstalk_spec::interfaces::l7_topology::EdgeStore::advance_watermark),
 //! never lowered. A contribution of an activated version into a bucket
-//! ending at or before it is `LateContribution`.
+//! ending at or before it is `LateContribution`. The store publishes
+//! `TopicVersionActivated`, `WatermarkAdvanced` and `Changed::Watermark`
+//! from the critical section that makes each change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -36,15 +39,13 @@ use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
 use crosstalk_spec::ids::{AccessId, TransmissionId};
 use crosstalk_spec::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeError, FrontierSource,
+    AccessContribution, Activation, EdgeContribution, EdgeError, FrontierSource, WatermarkRead,
 };
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use super::env::TopologyEnv;
 use super::fold::{EdgeBinding, EdgeResume};
-use crate::analysis::search::WatermarkRead;
-use crate::analysis::support::{Outbox, Published, lock};
-use crate::surface::paging::CursorBook;
+use crate::support::{CursorBook, Outbox, lock};
 
 /// The edge store's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,27 +56,12 @@ pub struct EdgeStoreConfig {
     pub timing: CorrelationTiming,
 }
 
-/// What [`InMemoryEdgeStore::activate_if_complete`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Activation {
-    /// Queries now read `version`; `previous` is what they read before.
-    /// `TopicVersionActivated` was published.
-    Switched {
-        version: TopicModelVersion,
-        previous: TopicModelVersion,
-    },
-    /// Not yet: its `TopicVersionReady` has not arrived, or fewer
-    /// refit-classified transmissions than it counts have been processed.
-    Pending,
-    /// Already active, or older than the active version.
-    Ignored,
-}
-
 /// The reference edge store. Cloning shares the store.
 #[derive(Clone)]
 pub struct InMemoryEdgeStore<V> {
     pub(super) config: EdgeStoreConfig,
     pub(super) env: V,
+    pub(super) outbox: Outbox,
     pub(super) state: Arc<Mutex<EdgeState>>,
 }
 
@@ -98,7 +84,6 @@ pub(super) struct EdgeState {
     pub(super) verdicts: BTreeMap<TransmissionId, CurrentVerdict>,
     pub(super) accesses: BTreeMap<AccessId, AccessContribution>,
     pub(super) cursors: CursorBook<EdgeBinding, EdgeResume>,
-    pub(super) outbox: Outbox,
 }
 
 /// The aligned bucket of width `width` holding `at`.
@@ -116,11 +101,13 @@ fn no_bucket(at: Timestamp) -> EdgeError {
 }
 
 impl<V: TopologyEnv> InMemoryEdgeStore<V> {
-    /// An empty store: version 0 active, the watermark at the epoch.
-    pub fn new(config: EdgeStoreConfig, env: V) -> Self {
+    /// An empty store: version 0 active, the watermark at the epoch,
+    /// publishing to `outbox`.
+    pub fn new(config: EdgeStoreConfig, env: V, outbox: Outbox) -> Self {
         Self {
             config,
             env,
+            outbox,
             state: Arc::new(Mutex::new(EdgeState {
                 contributions: BTreeMap::new(),
                 refit_processed: BTreeMap::new(),
@@ -132,19 +119,12 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
                 verdicts: BTreeMap::new(),
                 accesses: BTreeMap::new(),
                 cursors: CursorBook::default(),
-                outbox: Outbox::default(),
             })),
         }
     }
 
     pub fn env(&self) -> &V {
         &self.env
-    }
-
-    /// `WatermarkAdvanced`, `Changed::Watermark` and
-    /// `TopicVersionActivated` since the last drain, in commit order.
-    pub fn drain_published(&self) -> Vec<Published> {
-        lock(&self.state).outbox.drain()
     }
 
     /// The version the store has switched queries to.
@@ -157,14 +137,11 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
         lock(&self.state).contributions.values().cloned().collect()
     }
 
-    /// `apply` of a `TransmissionClassified` with its cause. A `Refit`
-    /// classification counts toward activating its version whether it is
-    /// applied, already applied or rejected as a self-edge.
-    pub fn apply_classified(
-        &self,
-        contribution: &EdgeContribution,
-        cause: ClassificationCause,
-    ) -> Result<EdgeKey, EdgeError> {
+    /// `EdgeStore::apply`. A `Refit` contribution counts toward activating
+    /// its version whether it is applied, already applied or rejected as a
+    /// self-edge.
+    pub(super) fn apply_impl(&self, contribution: &EdgeContribution) -> Result<EdgeKey, EdgeError> {
+        let cause = contribution.cause;
         let mut state = lock(&self.state);
         let version = contribution.classification.version;
         if state.dropped.contains(&version) {
@@ -215,18 +192,23 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
         .map_err(|_| EdgeError::SelfEdge)
     }
 
-    /// `TopicVersionReady` for `version` arrived, counting `transmissions`.
-    /// The first count received is kept.
-    pub fn version_ready(&self, version: TopicModelVersion, transmissions: u64) {
-        lock(&self.state)
-            .ready
-            .entry(version)
-            .or_insert(transmissions);
+    /// `EdgeStore::version_ready`: the first count received is kept.
+    pub(super) fn version_ready_impl(
+        &self,
+        version: TopicModelVersion,
+        transmissions: u64,
+    ) -> Result<(), EdgeError> {
+        let mut state = lock(&self.state);
+        if state.dropped.contains(&version) {
+            return Err(EdgeError::VersionNotRetained { version });
+        }
+        state.ready.entry(version).or_insert(transmissions);
+        Ok(())
     }
 
-    /// Switch queries to `version` if its buckets are complete, publishing
-    /// `TopicVersionActivated` when it switches.
-    pub fn activate_if_complete(
+    /// `EdgeStore::activate`: switch queries to `version` if its buckets
+    /// are complete, publishing `TopicVersionActivated` when it switches.
+    pub(super) fn activate_impl(
         &self,
         version: TopicModelVersion,
     ) -> Result<Activation, EdgeError> {
@@ -247,8 +229,7 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
         let previous = state.active;
         state.active = version;
         state.activated.insert(version);
-        state
-            .outbox
+        self.outbox
             .insight(InsightEvent::TopicVersionActivated { version, previous });
         Ok(Activation::Switched { version, previous })
     }
@@ -290,10 +271,6 @@ impl<V: TopologyEnv> WatermarkRead for InMemoryEdgeStore<V> {
 }
 
 impl<V: TopologyEnv> InMemoryEdgeStore<V> {
-    pub(super) fn apply_impl(&self, contribution: &EdgeContribution) -> Result<EdgeKey, EdgeError> {
-        self.apply_classified(contribution, ClassificationCause::Confirmation)
-    }
-
     pub(super) fn judge_impl(
         &self,
         transmission: TransmissionId,
@@ -333,10 +310,9 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
         let mut state = lock(&self.state);
         let advanced = state.watermark.advance(settled)?;
         state.watermark = advanced;
-        state
-            .outbox
+        self.outbox
             .insight(InsightEvent::WatermarkAdvanced(advanced));
-        state.outbox.changed(Changed::Watermark(advanced));
+        self.outbox.changed(Changed::Watermark(advanced));
         Some(advanced)
     }
 

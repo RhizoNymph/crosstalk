@@ -277,35 +277,40 @@ async fn operator_merge_clears_veto() {
 #[test]
 fn merge_unmerge_round_trip() {
     let strategy = (model::agent_ops(20), 0u8..model::AGENTS, 0u8..model::AGENTS);
-    crate::pipeline::harness::run(
-        "merge round trip",
-        HarnessConfig::default(),
+    let outcome = crate::model::run(
+        pipeline_harness(),
         strategy,
-        |(ops, from, into)| async move {
-            let (mut store, _events) = store();
-            for op in &ops {
-                replay(&mut store, op).await;
-            }
-            let before = store.state.read().agents.clone();
-            let Ok(request) =
-                MergeRequest::new(agent(from), agent(into), MergeAuthor::Operator(op(1)))
-            else {
-                return Ok(());
-            };
-            let Ok(record) = store.merge(request, at(10_000)).await else {
-                return Ok(());
-            };
-            store
-                .unmerge(record.id(), op(2), at(10_001))
-                .await
-                .map_err(|error| format!("unmerge refused: {error:?}"))?;
-            if store.state.read().agents == before {
-                Ok(())
-            } else {
-                Err("agent states differ after merge and revert".to_owned())
-            }
+        |runtime, (ops, from, into)| {
+            runtime.block_on(async {
+                let (mut store, _events) = store();
+                for op in ops {
+                    replay(&mut store, op).await;
+                }
+                let before = store.state.read().agents.clone();
+                let Ok(request) =
+                    MergeRequest::new(agent(*from), agent(*into), MergeAuthor::Operator(op(1)))
+                else {
+                    return Ok(());
+                };
+                let Ok(record) = store.merge(request, at(10_000)).await else {
+                    return Ok(());
+                };
+                store
+                    .unmerge(record.id(), op(2), at(10_001))
+                    .await
+                    .map_err(|error| Divergence::new(0, format!("unmerge refused: {error:?}")))?;
+                if store.state.read().agents == before {
+                    Ok(())
+                } else {
+                    Err(Divergence::new(
+                        0,
+                        "agent states differ after merge and revert",
+                    ))
+                }
+            })
         },
     );
+    assert_eq!(outcome, Ok(()));
 }
 
 /// Apply a generated operation to one store, ignoring refusals.

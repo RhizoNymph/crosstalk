@@ -8,28 +8,32 @@ use crosstalk_spec::aggregates::alert::{
     RuleStatus, StaleRule, TopicWatch, TriageOutcome, WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::AlertRuleId;
-use crosstalk_spec::interfaces::l6_analysis::{AlertRuleStore, AlertTriage, EmbedError, RuleError};
+use crosstalk_spec::interfaces::l6_analysis::alerts::{AlertReads, AlertRuleMaintenance};
+use crosstalk_spec::interfaces::l6_analysis::{
+    AlertRuleStore, AlertTriage, EmbedError, Embedder, RuleError,
+};
 use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{Change, NonEmpty};
 
 use super::alerts::{
-    draft, embedder, name, on_transmission, open, semantic, state_of, stored_lineage, traffic,
-    version_one, watch, world, world_with,
+    NOW, all_rules, draft, embedder, name, on_transmission, open, semantic, state_of,
+    stored_lineage, traffic, version_one, watch, world, world_with,
 };
 use super::support::{at, fit_ready};
 use crate::analysis::catalog::TopicVersions;
 use crate::analysis::fakes::fake_model;
-use crate::analysis::support::Published;
 use crate::model::build::{operator, sink, topic_id};
+use crate::support::drain;
 
 #[tokio::test]
 async fn watched_rule_remaps_to_most_similar_centroid() {
     // analysis.rule.watched-remap and analysis.lineage.remap-uses-lineage
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     let rule = world
         .store
         .create(
@@ -43,12 +47,13 @@ async fn watched_rule_remaps_to_most_similar_centroid() {
         .unwrap();
     // Version 2: topic 11 is closest to topic 1, topic 12 to topic 2.
     let v2 = fit_ready(
-        &world.catalog,
+        &mut world.catalog,
         30,
         &[(12, [0.1, 1.0, 0.0]), (11, [1.0, 0.1, 0.0])],
-    );
+    )
+    .await;
     // Until version 2 is ready, the rule keeps version 1.
-    let stored = world.store.rule(rule).unwrap();
+    let stored = world.store.rule(rule).await.unwrap().unwrap();
     assert_eq!(
         watched(&stored),
         Some(TopicWatch::Current(watched_topics(v1, &[1, 2])))
@@ -56,21 +61,23 @@ async fn watched_rule_remaps_to_most_similar_centroid() {
     let lineage = stored_lineage(&world.catalog, v1).await;
     let changed = world
         .store
-        .topic_version_ready(&lineage, world.catalog.topic_ids(v2))
+        .topic_version_ready(&lineage, &world.catalog.topic_ids(v2))
+        .await
         .unwrap();
     assert_eq!(changed, vec![rule]);
-    let stored = world.store.rule(rule).unwrap();
+    let stored = world.store.rule(rule).await.unwrap().unwrap();
     assert_eq!(
         watched(&stored),
         Some(TopicWatch::Current(watched_topics(v2, &[11, 12])))
     );
     assert_eq!(stored.status, RuleStatus::Enabled);
-    assert_eq!(world.store.current_version(), v2);
+    assert_eq!(world.store.rule_version().await.unwrap(), v2);
     // A redelivered TopicVersionReady changes nothing.
     assert_eq!(
         world
             .store
-            .topic_version_ready(&lineage, world.catalog.topic_ids(v2)),
+            .topic_version_ready(&lineage, &world.catalog.topic_ids(v2))
+            .await,
         Ok(Vec::new())
     );
 }
@@ -79,7 +86,7 @@ async fn watched_rule_remaps_to_most_similar_centroid() {
 async fn watched_rule_with_unmappable_topic_becomes_stale() {
     // analysis.rule.watched-stale and analysis.rule.stale-keeps-alerts
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     let rule = world
         .store
         .create(
@@ -92,19 +99,21 @@ async fn watched_rule_with_unmappable_topic_becomes_stale() {
         .await
         .unwrap();
     let alert = open(&mut world.store, rule, on_transmission(1), 21).await;
-    world.store.drain_published();
+    drain(&mut world.events);
     // Nothing in version 2 is close to topic 2.
     let v2 = fit_ready(
-        &world.catalog,
+        &mut world.catalog,
         30,
         &[(11, [1.0, 0.0, 0.0]), (12, [0.0, 0.0, 1.0])],
-    );
+    )
+    .await;
     let lineage = stored_lineage(&world.catalog, v1).await;
     world
         .store
-        .topic_version_ready(&lineage, world.catalog.topic_ids(v2))
+        .topic_version_ready(&lineage, &world.catalog.topic_ids(v2))
+        .await
         .unwrap();
-    let stored = world.store.rule(rule).unwrap();
+    let stored = world.store.rule(rule).await.unwrap().unwrap();
     assert_eq!(
         watched(&stored),
         Some(TopicWatch::Stale {
@@ -114,7 +123,7 @@ async fn watched_rule_with_unmappable_topic_becomes_stale() {
         })
     );
     assert_eq!(stored.status, RuleStatus::Enabled);
-    assert_eq!(state_of(&world.store, alert), AlertState::Open);
+    assert_eq!(state_of(&world.store, alert).await, AlertState::Open);
     assert_eq!(
         world
             .store
@@ -122,9 +131,9 @@ async fn watched_rule_with_unmappable_topic_becomes_stale() {
             .await,
         Ok(TriageOutcome::RuleInactive)
     );
-    let published = world.store.drain_published();
+    let published = drain(&mut world.events);
     assert!(
-        published.contains(&Published::Insight(InsightEvent::AlertRuleChanged {
+        published.contains(&BusEvent::Insight(InsightEvent::AlertRuleChanged {
             rule: stored.clone(),
             revision: RuleRevision::CREATED.next().unwrap(),
         }))
@@ -132,19 +141,22 @@ async fn watched_rule_with_unmappable_topic_becomes_stale() {
     // Enabling a stale rule is refused without effect, even an enabled
     // one.
     assert_eq!(
-        world.store.set_enabled(rule, true, operator(1)).await,
+        world.store.set_enabled(rule, true, operator(1), NOW).await,
         Err(RuleError::Stale(StaleRule { rule }))
     );
     world
         .store
-        .set_enabled(rule, false, operator(1))
+        .set_enabled(rule, false, operator(1), NOW)
         .await
         .unwrap();
     assert_eq!(
-        world.store.set_enabled(rule, true, operator(1)).await,
+        world.store.set_enabled(rule, true, operator(1), NOW).await,
         Err(RuleError::Stale(StaleRule { rule }))
     );
-    assert_eq!(world.store.rule(rule).unwrap().status, RuleStatus::Disabled);
+    assert_eq!(
+        world.store.rule(rule).await.unwrap().unwrap().status,
+        RuleStatus::Disabled
+    );
 }
 
 fn watched(rule: &crosstalk_spec::aggregates::alert::AlertRuleDef) -> Option<TopicWatch> {
@@ -168,7 +180,7 @@ fn watched_topics(version: TopicModelVersion, topics: &[u64]) -> WatchedTopics {
 async fn rule_requests_need_current_version() {
     // analysis.rule.request-current-version
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     assert_eq!(
         world
             .store
@@ -200,7 +212,7 @@ async fn rule_requests_need_current_version() {
             NonEmpty::from_vec(vec![topic_id(9), topic_id(8)]).unwrap()
         ))
     );
-    assert_eq!(world.store.all_rules().len(), 5);
+    assert_eq!(all_rules(&world.store).await.len(), 5);
     let rule = world
         .store
         .create(name("ok"), watch(v1, &[1]), vec![], operator(1), at(20))
@@ -228,7 +240,7 @@ async fn rule_requests_need_current_version() {
 async fn create_rule_assigns_fresh_id() {
     // analysis.rule.create-assigns-id
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     let first = world
         .store
         .create(
@@ -248,22 +260,25 @@ async fn create_rule_assigns_fresh_id() {
     assert_ne!(first, second);
     for id in [first, second] {
         assert!(!crosstalk_spec::aggregates::alert::is_reserved_rule_id(id));
-        let rule = world.store.rule(id).unwrap();
+        let rule = world.store.rule(id).await.unwrap().unwrap();
         assert_eq!(rule.status, RuleStatus::Enabled);
         assert!(!rule.rule().is_stale());
     }
     assert_eq!(
-        world.store.rule(first).unwrap().created(),
+        world.store.rule(first).await.unwrap().unwrap().created(),
         Some((operator(3), at(20)))
     );
-    assert_eq!(world.store.rule(first).unwrap().sinks, vec![sink(1)]);
+    assert_eq!(
+        world.store.rule(first).await.unwrap().unwrap().sinks,
+        vec![sink(1)]
+    );
 }
 
 #[tokio::test]
 async fn rule_sinks_must_be_configured() {
     // analysis.rule.sinks-configured
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     assert_eq!(
         world
             .store
@@ -277,7 +292,7 @@ async fn rule_sinks_must_be_configured() {
             .await,
         Err(RuleError::UnknownSink(sink(9)))
     );
-    assert_eq!(world.store.all_rules().len(), 5);
+    assert_eq!(all_rules(&world.store).await.len(), 5);
     let rule = world
         .store
         .create(
@@ -296,14 +311,17 @@ async fn rule_sinks_must_be_configured() {
             .await,
         Err(RuleError::UnknownSink(sink(9)))
     );
-    assert_eq!(world.store.rule(rule).unwrap().sinks, vec![sink(2)]);
+    assert_eq!(
+        world.store.rule(rule).await.unwrap().unwrap().sinks,
+        vec![sink(2)]
+    );
 }
 
 #[tokio::test]
 async fn rule_update_keeps_alerts() {
     // analysis.rule.update-keeps-alerts
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     let rule = world
         .store
         .create(name("a"), watch(v1, &[1]), vec![], operator(1), at(20))
@@ -315,7 +333,7 @@ async fn rule_update_keeps_alerts() {
         .triage(draft(rule, on_transmission(1), 22))
         .await
         .unwrap();
-    let before = world.store.alert(alert).unwrap();
+    let before = world.store.alert(alert).await.unwrap().unwrap();
     assert_eq!(
         world
             .store
@@ -323,8 +341,8 @@ async fn rule_update_keeps_alerts() {
             .await,
         Ok(Change::Applied)
     );
-    assert_eq!(world.store.alert(alert).unwrap(), before);
-    let stored = world.store.rule(rule).unwrap();
+    assert_eq!(world.store.alert(alert).await.unwrap().unwrap(), before);
+    let stored = world.store.rule(rule).await.unwrap().unwrap();
     assert_eq!(stored.name(), "b");
     assert_eq!(stored.created(), Some((operator(1), at(20))));
     // The same update again is unchanged.
@@ -340,7 +358,7 @@ async fn rule_update_keeps_alerts() {
 #[tokio::test]
 async fn updates_of_builtin_or_other_kind_are_not_editable() {
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     assert_eq!(
         world
             .store
@@ -375,28 +393,29 @@ async fn rule_changed_once_per_change() {
     // analysis.rule.changed-event-once: each stored change bumps the
     // revision by one and publishes once; Unchanged publishes nothing.
     let mut world = world();
-    world.store.drain_published();
+    drain(&mut world.events);
     assert_eq!(
-        world.store.set_enabled(traffic(), true, operator(1)).await,
+        world
+            .store
+            .set_enabled(traffic(), true, operator(1), NOW)
+            .await,
         Ok(Change::Unchanged)
     );
-    assert!(world.store.drain_published().is_empty());
+    assert!(drain(&mut world.events).is_empty());
     world
         .store
-        .set_enabled(traffic(), false, operator(1))
+        .set_enabled(traffic(), false, operator(1), NOW)
         .await
         .unwrap();
     world
         .store
-        .set_enabled(traffic(), true, operator(1))
+        .set_enabled(traffic(), true, operator(1), NOW)
         .await
         .unwrap();
-    let revisions: Vec<_> = world
-        .store
-        .drain_published()
+    let revisions: Vec<_> = drain(&mut world.events)
         .into_iter()
         .filter_map(|event| match event {
-            Published::Insight(InsightEvent::AlertRuleChanged { rule, revision }) => {
+            BusEvent::Insight(InsightEvent::AlertRuleChanged { rule, revision }) => {
                 Some((rule.id(), rule.status, revision.get().get()))
             }
             _ => None,
@@ -427,8 +446,11 @@ async fn model_change_marks_semantic_rules_stale() {
         .await
         .unwrap();
     let other = fake_model("other", NonZeroU16::new(8).unwrap());
-    assert_eq!(world.store.embedding_model_changed(&other), Ok(vec![rule]));
-    let stored = world.store.rule(rule).unwrap();
+    assert_eq!(
+        world.store.embedding_model_changed(&other).await,
+        Ok(vec![rule])
+    );
+    let stored = world.store.rule(rule).await.unwrap().unwrap();
     match stored.rule() {
         AlertRule::User {
             content: ContentRule::SemanticQuery { watch, .. },
@@ -438,10 +460,19 @@ async fn model_change_marks_semantic_rules_stale() {
     }
     assert_eq!(stored.status, RuleStatus::Enabled);
     // Again: already stale, unchanged.
-    assert_eq!(world.store.embedding_model_changed(&other), Ok(Vec::new()));
+    assert_eq!(
+        world.store.embedding_model_changed(&other).await,
+        Ok(Vec::new())
+    );
     // A store started with another embedder marks it stale at start.
-    let restarted = world_with(embedder("fake"));
-    assert_eq!(restarted.store.start(), Ok(Vec::new()));
+    let mut restarted = world_with(embedder("fake"));
+    assert_eq!(
+        restarted
+            .store
+            .embedding_model_changed(&embedder("fake").model())
+            .await,
+        Ok(Vec::new())
+    );
 }
 
 #[tokio::test]
@@ -460,7 +491,7 @@ async fn semantic_rule_text_too_long_is_an_embed_error() {
 #[tokio::test]
 async fn rules_page_filters_by_status_newest_first() {
     let mut world = world();
-    let v1 = version_one(&world).await;
+    let v1 = version_one(&mut world).await;
     let user = world
         .store
         .create(name("a"), watch(v1, &[1]), vec![], operator(1), at(20))
@@ -472,13 +503,14 @@ async fn rules_page_filters_by_status_newest_first() {
     };
     let page = world
         .store
-        .rules_page(
+        .rules(
             &enabled,
             &PageRequest {
                 size: PageSize::new(10).unwrap(),
                 after: None,
             },
         )
+        .await
         .unwrap();
     let ids: Vec<_> = page
         .items()

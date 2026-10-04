@@ -3,33 +3,29 @@
 //!
 //! [`MemoryAgents`] implements, over one table:
 //! - `AgentDirectory` (the merge table every reader resolves through);
-//! - `IdentityResolver`: `merge`, `unmerge` and `rename` exactly as the
-//!   spec documents them, and `resolve` as the reference lookup in
-//!   [`resolve`];
+//! - `IdentityResolver`: `merge`, `unmerge`, `rename` and `resolve` (the
+//!   evidence lookup in [`resolve`]) exactly as the spec documents them;
+//! - `AgentLifecycle`: creating agents, moving them forward between active
+//!   states and attaching new evidence;
 //! - `ClaimStore` and `ActivityStore` (per attributed agent, unioned over
 //!   aliases at read time);
-//! - `AgentReads` (the agents list, a cluster, batch names);
-//! - [`SeedAgents`], the creation and state changes the spec leaves to the
-//!   reconstruct consumer and config.
+//! - `AgentReads` (the agents list, a cluster, batch names).
 //!
 //! [`model`] is the model-based property harness the Postgres store reuses.
 
 pub mod model;
 pub mod resolve;
-mod seed;
 mod store;
 mod table;
 
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::ids::{AgentId, MergeId};
 
-use crate::pipeline::{CursorTable, IdSequence, Outbox, State};
-
-pub use seed::{Advance, AgentOrigin, NewAgent, SeedAgents, SeedError};
+use crate::support::{CursorBook, IdSequence, Outbox, State};
 
 use table::AgentTable;
 
@@ -37,7 +33,9 @@ use table::AgentTable;
 #[derive(Debug, Clone)]
 pub struct MemoryAgents {
     state: State<AgentTable>,
-    cursors: Arc<CursorTable<AgentId>>,
+    /// Cursors bound to the list filter's JSON. Behind its own lock, since
+    /// a list takes only a read lock on the table.
+    cursors: Arc<Mutex<CursorBook<String, AgentId>>>,
     merge_ids: IdSequence,
     outbox: Outbox,
 }
@@ -48,7 +46,7 @@ impl MemoryAgents {
     pub fn new(merge_ids: IdSequence, outbox: Outbox) -> Self {
         Self {
             state: State::new(AgentTable::default()),
-            cursors: Arc::new(CursorTable::new("agents")),
+            cursors: Arc::new(Mutex::new(CursorBook::default())),
             merge_ids,
             outbox,
         }

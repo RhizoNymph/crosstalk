@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.version-ready.first-count-kept"
+statement = "EdgeStore::version_ready keeps the first transmissions count it receives for a version, so a redelivered TopicVersionReady changes nothing, and it refuses a version retention has dropped with VersionNotRetained."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+Activation waits for as many refit classifications as the count says
+(topology.version.activate-after-complete). If a redelivery could replace
+the count, a stale or duplicated event could move the target after the
+store had already counted against it; keeping the first makes the target
+fixed for the life of the version.
+"""
+
+[evidence]
+unit = "crosstalk_topology::tests::version_ready_keeps_first_count"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

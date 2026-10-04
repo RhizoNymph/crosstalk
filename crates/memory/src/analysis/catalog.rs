@@ -2,17 +2,18 @@
 //!
 //! The catalog holds the [`TopicVersionHistory`], every version's topics,
 //! the lineage from each version to its successor, every topic assignment
-//! and the all-time sizes frozen when a version was dropped. The spec's
-//! trait is the read, pin and retention half; the lifecycle the `analyze`
-//! consumer drives (a fit starting, returning or failing, the version
-//! becoming ready and then active, each assignment) is the inherent half
-//! below. Both halves go through one lock, so every call is one
-//! transaction.
+//! and the all-time sizes frozen when a version was dropped. `TopicCatalog`
+//! is the read, pin and retention half; `TopicLifecycle` the fit lifecycle
+//! the `analyze` consumer drives (a fit starting, returning or failing, the
+//! version becoming ready and then active, each assignment). Both halves go
+//! through one lock, so every call is one transaction, and the catalog
+//! publishes `TopicVersionDropped` for every drop from the transaction that
+//! marks it.
 //!
 //! ```text
-//! begin_fit ─▶ Fitting ─fit_returned (topics, lineage)─▶ ─ready─▶ Ready ─activated─▶ Active
-//!                 └─fit_failed: the version is removed, its number never reused
-//! activated / unpin / start ─▶ enforce_retention ─▶ Dropped (sizes frozen, assignments deleted)
+//! begin_fit ─▶ Fitting ─complete_fit (topics, lineage)─▶ ─mark_ready─▶ Ready ─mark_active─▶ Active
+//!                 └─fail_fit: the version is removed, its number never reused
+//! mark_active / unpin / enforce_retention ─▶ Dropped (sizes frozen, assignments deleted)
 //! ```
 
 use std::collections::BTreeMap;
@@ -23,20 +24,21 @@ use crosstalk_spec::aggregates::edge::EdgeStats;
 use crosstalk_spec::aggregates::retention::{Pin, PinChange, PinError, Retention};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::topic_history::{
-    CompletedFit, DuplicateTopic, FitRecord, InvalidHistory, InvalidVersionInfo, TopicLineage,
-    TopicSize, TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus,
-    TopicVersionStatusKind,
+    CompletedFit, DuplicateTopic, FitRecord, InvalidVersionInfo, TopicLineage, TopicSize,
+    TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus, TopicVersionStatusKind,
 };
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{TopicId, TransmissionId};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
+    CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
+};
 use crosstalk_spec::interfaces::l6_analysis::{CatalogError, TopicCatalog};
 use crosstalk_spec::paging::{Page, PageRequest, TopicList};
-use crosstalk_spec::support::{Similarity, TimeWindow, Timestamp};
+use crosstalk_spec::support::{Change, Similarity, TimeWindow, Timestamp};
 
 use super::lineage::{LineageError, lineage_between};
-use super::support::{Clock, Outbox, Published, lock};
-use crate::surface::paging::{CursorBook, page_after};
+use crate::support::{CursorBook, Outbox, lock, page_after};
 
 pub use crosstalk_spec::aggregates::retention::RetentionPolicy;
 
@@ -63,78 +65,18 @@ pub trait TopicVersions: Send + Sync {
     fn topic_ids(&self, version: TopicModelVersion) -> Vec<TopicId>;
 }
 
-/// One stored topic assignment, with the confirmed facts sizes count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StoredAssignment {
-    /// `None` for an outlier.
-    pub topic: Option<TopicId>,
-    pub confirmed_at: Timestamp,
-    pub matched_bytes: NonZeroU64,
-}
-
-/// Whether [`InMemoryTopicCatalog::assign`] stored anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Assigned {
-    New,
-    /// The same assignment was already stored: a redelivery.
-    Duplicate,
-}
-
-/// What [`InMemoryTopicCatalog::activated`] did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Activated {
-    /// `version` is active; `superseded` lists the versions it superseded,
-    /// oldest first, and `dropped` what retention then dropped.
-    Switched {
-        superseded: Vec<TopicModelVersion>,
-        dropped: Vec<TopicModelVersion>,
-    },
-    /// The version is already active, or older than the active one.
-    Ignored,
-}
-
-/// Why a lifecycle call was refused. Each refusal changes nothing.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum LifecycleError {
-    #[error("version {0:?} is still fitting; fits run one at a time")]
-    FitInProgress(TopicModelVersion),
-    #[error("unknown topic-model version {0:?}")]
-    UnknownVersion(TopicModelVersion),
-    #[error("version {0:?} is not fitting")]
-    NotFitting(TopicModelVersion),
-    #[error("the fit of version {0:?} has already returned")]
-    AlreadyReturned(TopicModelVersion),
-    #[error("the fit of version {0:?} has not returned")]
-    FitNotReturned(TopicModelVersion),
-    #[error("version {0:?} is not ready")]
-    NotReady(TopicModelVersion),
-    #[error("topic {topic:?} does not belong to version {version:?} as fitted")]
-    ForeignTopic {
-        topic: TopicId,
-        version: TopicModelVersion,
-    },
-    #[error("topic id {0:?} is already used")]
-    TopicIdReused(TopicId),
-    #[error("version {0:?} was dropped")]
-    VersionNotRetained(TopicModelVersion),
-    #[error("transmission {transmission:?} already has another assignment under {version:?}")]
-    Conflicting {
-        transmission: TransmissionId,
-        version: TopicModelVersion,
-    },
-    #[error("the lineage could not be built: {0:?}")]
-    Lineage(LineageError),
-    #[error("the version would break the history: {0:?}")]
-    History(InvalidHistory),
-    #[error("the version would break its record: {0:?}")]
-    VersionInfo(InvalidVersionInfo),
+fn lineage_error(error: LineageError) -> TopicLifecycleError {
+    match error {
+        LineageError::Entry(entry) => TopicLifecycleError::LineageEntry(entry),
+        LineageError::Lineage(lineage) => TopicLifecycleError::Lineage(lineage),
+    }
 }
 
 /// The reference topic catalog. Cloning shares the store.
 #[derive(Clone)]
 pub struct InMemoryTopicCatalog {
     config: CatalogConfig,
-    clock: Arc<dyn Clock>,
+    outbox: Outbox,
     state: Arc<Mutex<CatalogState>>,
 }
 
@@ -155,16 +97,16 @@ struct CatalogState {
     /// All-time sizes of each dropped version, frozen at the drop.
     frozen: BTreeMap<TopicModelVersion, TopicSizes>,
     cursors: CursorBook<TopicModelVersion, TopicId>,
-    outbox: Outbox,
 }
 
 impl InMemoryTopicCatalog {
-    /// A catalog holding only version 0, active since `started_at`.
+    /// A catalog holding only version 0, active since `started_at`,
+    /// publishing to `outbox`.
     pub fn new(
         config: CatalogConfig,
-        clock: Arc<dyn Clock>,
         started_at: Timestamp,
-    ) -> Result<Self, LifecycleError> {
+        outbox: Outbox,
+    ) -> Result<Self, TopicLifecycleError> {
         let zero = TopicVersionInfo::new(
             TopicModelVersion(0),
             TopicVersionStatus::Active {
@@ -172,8 +114,8 @@ impl InMemoryTopicCatalog {
                 activated_at: started_at,
             },
         )
-        .map_err(LifecycleError::VersionInfo)?;
-        let history = TopicVersionHistory::new(vec![zero]).map_err(LifecycleError::History)?;
+        .map_err(TopicLifecycleError::VersionInfo)?;
+        let history = TopicVersionHistory::new(vec![zero]).map_err(TopicLifecycleError::History)?;
         let state = CatalogState {
             history,
             next_version: 1,
@@ -184,11 +126,10 @@ impl InMemoryTopicCatalog {
             assignments: BTreeMap::new(),
             frozen: BTreeMap::new(),
             cursors: CursorBook::default(),
-            outbox: Outbox::default(),
         };
         Ok(Self {
             config,
-            clock,
+            outbox,
             state: Arc::new(Mutex::new(state)),
         })
     }
@@ -197,66 +138,72 @@ impl InMemoryTopicCatalog {
         self.config
     }
 
-    /// Everything published since the last drain: `Changed::TopicVersion`
-    /// for each status and retention change, and `TopicVersionDropped` for
-    /// each drop, whichever call made it.
-    pub fn drain_published(&self) -> Vec<Published> {
-        lock(&self.state).outbox.drain()
+    /// `transmission`'s assignment under `version`, if one is stored (a
+    /// dropped version holds none).
+    pub fn assignment(
+        &self,
+        version: TopicModelVersion,
+        transmission: TransmissionId,
+    ) -> Option<StoredAssignment> {
+        lock(&self.state)
+            .assignments
+            .get(&version)
+            .and_then(|stored| stored.get(&transmission))
+            .copied()
     }
 
-    /// The catalog starting: retention is enforced, since the policy may
-    /// have changed.
-    pub fn start(&self, at: Timestamp) -> Vec<TopicModelVersion> {
-        let mut state = lock(&self.state);
-        state.enforce(self.config.retention, at)
+    /// Whether `version`'s assignments are still kept: known and not
+    /// dropped.
+    pub fn retains(&self, version: TopicModelVersion) -> bool {
+        lock(&self.state)
+            .history
+            .get(version)
+            .is_some_and(|info| info.retention().is_retained())
     }
+}
 
-    /// A re-fit starts: records the next version as `Fitting`.
-    pub fn begin_fit(&self, at: Timestamp) -> Result<TopicModelVersion, LifecycleError> {
+impl TopicLifecycle for InMemoryTopicCatalog {
+    async fn begin_fit(&mut self, at: Timestamp) -> Result<TopicModelVersion, TopicLifecycleError> {
         let mut state = lock(&self.state);
         if let Some(fitting) = state.fitting() {
-            return Err(LifecycleError::FitInProgress(fitting));
+            return Err(TopicLifecycleError::FitInProgress(fitting));
         }
         let version = TopicModelVersion(state.next_version);
         let info = TopicVersionInfo::new(version, TopicVersionStatus::Fitting { started_at: at })
-            .map_err(LifecycleError::VersionInfo)?;
+            .map_err(TopicLifecycleError::VersionInfo)?;
         let mut versions = state.history.versions().to_vec();
         versions.push(info);
-        state.history = TopicVersionHistory::new(versions).map_err(LifecycleError::History)?;
+        state.history = TopicVersionHistory::new(versions).map_err(TopicLifecycleError::History)?;
         state.next_version += 1;
         Ok(version)
     }
 
-    /// `TopicModel::fit` returned `topics` for `version` at `fitted_at`:
-    /// stores them and the lineage from the predecessor (the version before
-    /// it in the history). The version stays `Fitting` until
-    /// [`InMemoryTopicCatalog::ready`].
-    pub fn fit_returned(
-        &self,
+    async fn complete_fit(
+        &mut self,
         version: TopicModelVersion,
         topics: Vec<Topic>,
         fitted_at: Timestamp,
-    ) -> Result<TopicLineage, LifecycleError> {
+    ) -> Result<TopicLineage, TopicLifecycleError> {
         let mut state = lock(&self.state);
         let started_at = state.fitting_start(version)?;
         if state.returned.contains_key(&version) {
-            return Err(LifecycleError::AlreadyReturned(version));
+            return Err(TopicLifecycleError::AlreadyReturned(version));
         }
         if fitted_at < started_at {
-            return Err(LifecycleError::VersionInfo(
+            return Err(TopicLifecycleError::VersionInfo(
                 InvalidVersionInfo::TimestampsOutOfOrder,
             ));
         }
         let mut by_id = BTreeMap::new();
         for topic in topics {
             if topic.version != version || topic.fitted_at != fitted_at {
-                return Err(LifecycleError::ForeignTopic {
+                return Err(TopicLifecycleError::ForeignTopic {
                     topic: topic.id,
                     version,
                 });
             }
             if state.topic_versions.contains_key(&topic.id) || by_id.contains_key(&topic.id) {
-                return Err(LifecycleError::TopicIdReused(topic.id));
+                return Err(TopicLifecycleError::TopicIdReused(topic.id));
             }
             by_id.insert(topic.id, topic);
         }
@@ -274,7 +221,7 @@ impl InMemoryTopicCatalog {
             &to_topics,
             self.config.lineage_floor,
         )
-        .map_err(LifecycleError::Lineage)?;
+        .map_err(lineage_error)?;
         for id in by_id.keys() {
             state.topic_versions.insert(*id, version);
         }
@@ -284,9 +231,7 @@ impl InMemoryTopicCatalog {
         Ok(lineage)
     }
 
-    /// The fit of `version` failed: the version leaves no entry, and its
-    /// number is not given to a later fit.
-    pub fn fit_failed(&self, version: TopicModelVersion) -> Result<(), LifecycleError> {
+    async fn fail_fit(&mut self, version: TopicModelVersion) -> Result<(), TopicLifecycleError> {
         let mut state = lock(&self.state);
         state.fitting_start(version)?;
         let versions: Vec<TopicVersionInfo> = state
@@ -296,7 +241,7 @@ impl InMemoryTopicCatalog {
             .filter(|info| info.version() != version)
             .copied()
             .collect();
-        state.history = TopicVersionHistory::new(versions).map_err(LifecycleError::History)?;
+        state.history = TopicVersionHistory::new(versions).map_err(TopicLifecycleError::History)?;
         state.returned.remove(&version);
         if let Some(topics) = state.topics.remove(&version) {
             for id in topics.keys() {
@@ -308,15 +253,17 @@ impl InMemoryTopicCatalog {
         Ok(())
     }
 
-    /// `TopicVersionReady` for `version` was published at `at`: the version
-    /// becomes `Ready`.
-    pub fn ready(&self, version: TopicModelVersion, at: Timestamp) -> Result<(), LifecycleError> {
+    async fn mark_ready(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> Result<(), TopicLifecycleError> {
         let mut state = lock(&self.state);
         let started_at = state.fitting_start(version)?;
         let fitted_at = *state
             .returned
             .get(&version)
-            .ok_or(LifecycleError::FitNotReturned(version))?;
+            .ok_or(TopicLifecycleError::FitNotReturned(version))?;
         let topics = state.topics.get(&version).map_or(0, BTreeMap::len);
         let fit = CompletedFit {
             started_at,
@@ -326,29 +273,25 @@ impl InMemoryTopicCatalog {
         };
         state.set_status(version, TopicVersionStatus::Ready { fit })?;
         state.returned.remove(&version);
-        state.outbox.changed(Changed::TopicVersion(version));
+        self.outbox.changed(Changed::TopicVersion(version));
         Ok(())
     }
 
-    /// `TopicVersionActivated` for `version` at `at`: it becomes `Active`,
-    /// and every older version not yet superseded is superseded by it at
-    /// that time; then retention is enforced at `at`. A version that is
-    /// already active, or older than the active one, is ignored.
-    pub fn activated(
-        &self,
+    async fn mark_active(
+        &mut self,
         version: TopicModelVersion,
         at: Timestamp,
-    ) -> Result<Activated, LifecycleError> {
+    ) -> Result<CatalogActivation, TopicLifecycleError> {
         let mut state = lock(&self.state);
         if version <= state.history.active().version() {
-            return Ok(Activated::Ignored);
+            return Ok(CatalogActivation::Ignored);
         }
         let info = *state
             .history
             .get(version)
-            .ok_or(LifecycleError::UnknownVersion(version))?;
+            .ok_or(TopicLifecycleError::UnknownVersion(version))?;
         let TopicVersionStatus::Ready { fit } = *info.status() else {
-            return Err(LifecycleError::NotReady(version));
+            return Err(TopicLifecycleError::NotReady(version));
         };
         let mut superseded = Vec::new();
         let mut versions = Vec::new();
@@ -380,82 +323,56 @@ impl InMemoryTopicCatalog {
             };
             versions.push(
                 TopicVersionInfo::with_retention(info.version(), status, info.retention())
-                    .map_err(LifecycleError::VersionInfo)?,
+                    .map_err(TopicLifecycleError::VersionInfo)?,
             );
         }
-        state.history = TopicVersionHistory::new(versions).map_err(LifecycleError::History)?;
-        state.outbox.changed(Changed::TopicVersion(version));
+        state.history = TopicVersionHistory::new(versions).map_err(TopicLifecycleError::History)?;
+        self.outbox.changed(Changed::TopicVersion(version));
         for old in &superseded {
-            state.outbox.changed(Changed::TopicVersion(*old));
+            self.outbox.changed(Changed::TopicVersion(*old));
         }
-        let dropped = state.enforce(self.config.retention, at);
-        Ok(Activated::Switched {
+        let dropped = state.enforce(self.config.retention, at, &self.outbox);
+        Ok(CatalogActivation::Switched {
             superseded,
             dropped,
         })
     }
 
-    /// Store `transmission`'s assignment under `version`, with the confirmed
-    /// facts sizes count. At most one per (transmission, version): the same
-    /// one again is a `Duplicate`, another is refused.
-    pub fn assign(
-        &self,
+    async fn assign(
+        &mut self,
         transmission: TransmissionId,
         version: TopicModelVersion,
         assignment: StoredAssignment,
-    ) -> Result<Assigned, LifecycleError> {
+    ) -> Result<Change, TopicLifecycleError> {
         let mut state = lock(&self.state);
         let info = state
             .history
             .get(version)
-            .ok_or(LifecycleError::UnknownVersion(version))?;
+            .ok_or(TopicLifecycleError::UnknownVersion(version))?;
         if !info.retention().is_retained() {
-            return Err(LifecycleError::VersionNotRetained(version));
+            return Err(TopicLifecycleError::VersionNotRetained(version));
         }
         let topics = state
             .topics
             .get(&version)
-            .ok_or(LifecycleError::FitNotReturned(version))?;
+            .ok_or(TopicLifecycleError::FitNotReturned(version))?;
         if let Some(topic) = assignment.topic
             && !topics.contains_key(&topic)
         {
-            return Err(LifecycleError::ForeignTopic { topic, version });
+            return Err(TopicLifecycleError::ForeignTopic { topic, version });
         }
         let stored = state.assignments.entry(version).or_default();
         match stored.get(&transmission) {
-            Some(existing) if *existing == assignment => Ok(Assigned::Duplicate),
-            Some(_) => Err(LifecycleError::Conflicting {
+            Some(existing) if *existing == assignment => Ok(Change::Unchanged),
+            Some(_) => Err(TopicLifecycleError::Conflicting {
                 transmission,
                 version,
             }),
             None => {
                 stored.insert(transmission, assignment);
-                Ok(Assigned::New)
+                Ok(Change::Applied)
             }
         }
-    }
-
-    /// `transmission`'s assignment under `version`, if one is stored (a
-    /// dropped version holds none).
-    pub fn assignment(
-        &self,
-        version: TopicModelVersion,
-        transmission: TransmissionId,
-    ) -> Option<StoredAssignment> {
-        lock(&self.state)
-            .assignments
-            .get(&version)
-            .and_then(|stored| stored.get(&transmission))
-            .copied()
-    }
-
-    /// Whether `version`'s assignments are still kept: known and not
-    /// dropped.
-    pub fn retains(&self, version: TopicModelVersion) -> bool {
-        lock(&self.state)
-            .history
-            .get(version)
-            .is_some_and(|info| info.retention().is_retained())
     }
 }
 
@@ -469,42 +386,45 @@ impl CatalogState {
     }
 
     /// When `version`'s fit started, if it is fitting.
-    fn fitting_start(&self, version: TopicModelVersion) -> Result<Timestamp, LifecycleError> {
+    fn fitting_start(&self, version: TopicModelVersion) -> Result<Timestamp, TopicLifecycleError> {
         match self.history.get(version).map(TopicVersionInfo::status) {
-            None => Err(LifecycleError::UnknownVersion(version)),
+            None => Err(TopicLifecycleError::UnknownVersion(version)),
             Some(TopicVersionStatus::Fitting { started_at }) => Ok(*started_at),
-            Some(_) => Err(LifecycleError::NotFitting(version)),
+            Some(_) => Err(TopicLifecycleError::NotFitting(version)),
         }
     }
 
     /// The version right before `version` in the history.
-    fn predecessor(&self, version: TopicModelVersion) -> Result<TopicModelVersion, LifecycleError> {
+    fn predecessor(
+        &self,
+        version: TopicModelVersion,
+    ) -> Result<TopicModelVersion, TopicLifecycleError> {
         self.history
             .versions()
             .iter()
             .map(TopicVersionInfo::version)
             .take_while(|older| *older < version)
             .last()
-            .ok_or(LifecycleError::UnknownVersion(version))
+            .ok_or(TopicLifecycleError::UnknownVersion(version))
     }
 
     fn set_status(
         &mut self,
         version: TopicModelVersion,
         status: TopicVersionStatus,
-    ) -> Result<(), LifecycleError> {
+    ) -> Result<(), TopicLifecycleError> {
         let mut versions = Vec::new();
         for info in self.history.versions() {
             if info.version() == version {
                 versions.push(
                     TopicVersionInfo::with_retention(version, status, info.retention())
-                        .map_err(LifecycleError::VersionInfo)?,
+                        .map_err(TopicLifecycleError::VersionInfo)?,
                 );
             } else {
                 versions.push(*info);
             }
         }
-        self.history = TopicVersionHistory::new(versions).map_err(LifecycleError::History)?;
+        self.history = TopicVersionHistory::new(versions).map_err(TopicLifecycleError::History)?;
         Ok(())
     }
 
@@ -544,7 +464,12 @@ impl CatalogState {
     /// all-time sizes and deleting its assignments. Oldest first. A version
     /// superseded after `at` cannot be marked yet and is left for a later
     /// enforcement.
-    fn enforce(&mut self, policy: RetentionPolicy, at: Timestamp) -> Vec<TopicModelVersion> {
+    fn enforce(
+        &mut self,
+        policy: RetentionPolicy,
+        at: Timestamp,
+        outbox: &Outbox,
+    ) -> Vec<TopicModelVersion> {
         let mut dropped = Vec::new();
         for version in policy.to_drop(&self.history) {
             let Ok(frozen) = self.count_sizes(version, None) else {
@@ -555,9 +480,8 @@ impl CatalogState {
             }
             self.frozen.insert(version, frozen);
             self.assignments.remove(&version);
-            self.outbox
-                .insight(InsightEvent::TopicVersionDropped { version });
-            self.outbox.changed(Changed::TopicVersion(version));
+            outbox.insight(InsightEvent::TopicVersionDropped { version });
+            outbox.changed(Changed::TopicVersion(version));
             dropped.push(version);
         }
         dropped
@@ -656,18 +580,21 @@ impl TopicCatalog for InMemoryTopicCatalog {
         let mut state = lock(&self.state);
         let change = state.history.pin(version, pin).map_err(catalog_pin_error)?;
         if change == PinChange::Changed {
-            state.outbox.changed(Changed::TopicVersion(version));
+            self.outbox.changed(Changed::TopicVersion(version));
         }
         Ok(change)
     }
 
-    async fn unpin(&self, version: TopicModelVersion) -> Result<PinChange, CatalogError> {
-        let at = self.clock.now();
+    async fn unpin(
+        &self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> Result<PinChange, CatalogError> {
         let mut state = lock(&self.state);
         let change = state.history.unpin(version).map_err(catalog_pin_error)?;
         if change == PinChange::Changed {
-            state.outbox.changed(Changed::TopicVersion(version));
-            state.enforce(self.config.retention, at);
+            self.outbox.changed(Changed::TopicVersion(version));
+            state.enforce(self.config.retention, at, &self.outbox);
         }
         Ok(change)
     }
@@ -677,7 +604,7 @@ impl TopicCatalog for InMemoryTopicCatalog {
         at: Timestamp,
     ) -> Result<Vec<TopicModelVersion>, CatalogError> {
         let mut state = lock(&self.state);
-        Ok(state.enforce(self.config.retention, at))
+        Ok(state.enforce(self.config.retention, at, &self.outbox))
     }
 
     async fn topics(

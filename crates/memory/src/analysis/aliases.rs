@@ -16,7 +16,7 @@ use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 
-use super::support::lock;
+use crate::support::lock;
 
 /// A merge or supersession that would break the one-step rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

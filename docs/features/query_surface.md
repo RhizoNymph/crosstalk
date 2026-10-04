@@ -133,11 +133,11 @@ inverse, so each action has exactly one request form.
 | `Unmerge { merge }` | Govern | `IdentityResolver::unmerge` (L3) | `Applied` | the merge |
 | `RenameAgent { agent, label }` | Govern | `IdentityResolver::rename` (L3) | `Applied` / `Unchanged` | the agent |
 | `PromoteChannel { channel, pattern, policy, note }` | Govern | `ChannelRegistry::promote` with a `Promotion` (L5) | `ChannelPromoted { channel, superseded }` | the channel and every channel it superseded |
-| `Acknowledge { alert }`, `Resolve { alert, note }` | Triage | the alert store; publishes `AlertChanged` and `Changed::Alert` | `Applied` / `Unchanged` | the alert |
+| `Acknowledge { alert }`, `Resolve { alert, note }` | Triage | `AlertActions::acknowledge`, `resolve` (L6), which publish `AlertChanged` and `Changed::Alert`; resolving an open alert is `Conflict(AlertNotAcknowledged)`, acting on a resolved or suppressed one `Conflict(AlertNotActive)` | `Applied` / `Unchanged` | the alert |
 | `SetVerdict { transmission, verdict, note }` | Triage | `TransmissionVerdicts::set` (L5) | `Applied` / `Unchanged` | the transmission |
 | `CreateRule { name, rule, sinks }` | Govern | `AlertRuleStore::create` (L6) | `RuleCreated(AlertRuleId)` | the new rule |
-| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` (L6); enabling a stale rule is `Conflict(RuleStale)`, disabling is always allowed | `Applied` / `Unchanged` | the rule |
-| `PinTopicVersion { version }`, `UnpinTopicVersion { version }` | Govern | `TopicCatalog::pin`, `unpin` (L6) | `Applied` / `Unchanged` | the version |
+| `UpdateRule { id, name, rule, sinks }`, `SetRuleEnabled { id, enabled }` | Govern | `AlertRuleStore::update`, `set_enabled` at the acceptance time (L6); enabling a stale rule is `Conflict(RuleStale)`, disabling is always allowed | `Applied` / `Unchanged` | the rule |
+| `PinTopicVersion { version }`, `UnpinTopicVersion { version }` | Govern | `TopicCatalog::pin`, `unpin` at the acceptance time (L6) | `Applied` / `Unchanged` | the version |
 | `ReplayDeadLetter { group, id }` | Operate | `DeadLetterStore::replay` (L2) | `Applied` | none |
 
 No action needs View, Content or Audit, which are read permissions.
@@ -189,7 +189,7 @@ query that reads it (`events/changed.rs` has the full table):
 | `Agent(AgentId)` | L3: creation (and the new agent's canonical parent), state change, merge (source, target, repointed agents), unmerge (source, former target, restored agents), for a merge or unmerge also the agents whose stored parent is one of those and the source's canonical parent, rename; not activity (claims, last seen) | `AgentChanged` | `agents`, `agent`, `agent_names` |
 | `Channel(ChannelId)` | L5: discovery, declaration, new resource, detection change, recorded policy decision; a promotion announces the promoted channel and every channel it superseded (`Changed::promotion`) | `ChannelChanged` | `channel`, `channels`, `channel_names`, `policy_history`, `channel_resources`, an open `promotion_preview`, `overview` |
 | `Verdict(TransmissionId)` | L5 verdict store: a verdict set or withdrawn | `VerdictChanged` | `verdicts`, `detection_quality`, `transmissions_by_id`, views excluding false detections |
-| `Alert(AlertId)` | L6 triage (open, deduplicate, suppress), L8 acknowledge and resolve | `AlertChanged` | `alerts`, `alert`, `overview` |
+| `Alert(AlertId)` | L6 alert store: triage (open, deduplicate, suppress), acknowledge and resolve (`AlertActions`) | `AlertChanged` | `alerts`, `alert`, `overview` |
 | `Rule(AlertRuleId)` | L6 rule store: create, update, enable or disable, turning stale | `RuleChanged` | `alert_rules` |
 | `TopicVersion(TopicModelVersion)` | L6 catalog: ready, active, superseded; pinned, unpinned, dropped | `TopicVersionReady` | `topic_versions`, then topic-scoped queries |
 | `Projection(ProjectionId)` | L6 projection store: a job ready or failed, a frame expired | `ProjectionReady` | `projection_status`, then `projection` |
@@ -506,10 +506,13 @@ version; `RetentionPolicy::to_drop` lists the rest, all superseded. Each
 | topics and lineage | kept | kept |
 | history entry | kept | kept, marked `Dropped` |
 
-The catalog enforces the policy after `TopicVersionActivated`, after an
-unpin and on start: it marks each `to_drop` version dropped (freezing its
-all-time sizes), then publishes `TopicVersionDropped`; only then do L6 and
-L7 delete data. Pins and drops are serialized. `PinTopicVersion` and
+The catalog enforces the policy after `TopicVersionActivated`
+(`TopicLifecycle::mark_active`), after an unpin and when `analyze` starts
+(`TopicCatalog::enforce_retention`): in one transaction it marks each
+`to_drop` version dropped (freezing its all-time sizes), deletes its topic
+assignments and publishes `TopicVersionDropped` from that transaction, so
+the catalog is the event's one publisher; L7 deletes its buckets on the
+event. Pins and drops are serialized. `PinTopicVersion` and
 `UnpinTopicVersion` need Govern. Pinning returns `Unchanged` when already
 pinned, `NotFound` for an unknown version, `Conflict(TopicVersionFitting)`
 for a fitting one (a fit can still fail, and pending versions are kept
@@ -565,6 +568,13 @@ draws, so the UI needs no lookup per node (`aggregates/node.rs`):
   policy_kind, locator_summary })`, in the channel-centred view only.
   `origin_kind` is a `CanonicalOriginKind` (no superseded origin); `label`
   is `None` until channels carry display labels.
+
+The facts come from `NodeFacts` (`l7_topology.rs`): a synchronous cache
+of L3's and L5's facts the edge store reads inside its own snapshot, like
+the directories. A node it has not seen yet is drawn with fixed defaults
+(an agent provisional, top-level, unlabelled and without claims; a channel
+discovered, observed, unreviewed and summarized by its id)
+(`topology.node-facts.unknown-defaults`).
 
 Which nodes appear: every edge endpoint (in the channel-centred view also
 every access channel and transmission route channel) and every canonical
@@ -693,6 +703,9 @@ one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
 `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`AlertReadError` (rules and alerts), `TransmissionStoreError` (stored
+transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
+(`operators`),
 `BusError` (the dead-letter list), `BlobError` and `EvidenceError` (the
 evidence: every cause is `Store`, its reason naming it), `AgentReadError`
 (agent reads), `ExportPlanError` (planning an export), and the request
@@ -713,7 +726,10 @@ resolver-only `Vetoed` to `Store`), `VerdictError` (`SetVerdict`:
 `UnknownTransmission` to `NotFound`, `NotJudgeable` to
 `Conflict(TransmissionNotJudgeable)`), `RuleError` (rule management;
 enabling a stale rule is `Conflict(RuleStale)`, since only `UpdateRule`
-can retarget it), `CatalogError` and `PinError` (`PinTopicVersion`,
+can retarget it), `AlertActionError` (`Acknowledge`, `Resolve`:
+`UnknownAlert` to `NotFound`, `NotActive` to `Conflict(AlertNotActive)`,
+`NotAcknowledged`, resolving an open alert, to
+`Conflict(AlertNotAcknowledged)`), `CatalogError` and `PinError` (`PinTopicVersion`,
 `UnpinTopicVersion`: unknown to `NotFound`, fitting to
 `Conflict(TopicVersionFitting)`, dropped to
 `Conflict(TopicVersionDropped)`) and `SelfMerge`
@@ -735,7 +751,11 @@ too many ids: `agent_names` and `channel_names` over `IdBatch::MAX`, and
 bound that applied. An export over the configured row limit is
 `Conflict(ExportTooLarge)`; a failure after an export has started is
 recorded in its trailer, not returned. The edge store's writes fail with
-`EdgeError`, which never reaches a query.
+`EdgeError`, which never reaches a query, and so do the consumer-side
+write errors (`AgentLifecycleError`, `TrafficError`,
+`TopicLifecycleError`, `CorpusError`) and the operator store's
+`OperatorLoadError` and `CallerError` (an authentication failure, answered
+by the HTTP binding's `AuthError`).
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
@@ -772,9 +792,12 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/interfaces/l8_surface/sinks.rs` | Alert delivery | `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError` |
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`; wire data, never a request), `ActionKind` (`ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` returns), `ActionOutcome` (`subjects`), `SupersededChannels` |
 | `spec/types/interfaces/l8_surface/actions/request.rs` | The action a client sends | `ActionRequest` (a `WireRequest`; `into_action`, `of`, `kind`) |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `UnsupportedFormat`, `MalformedRequest`) |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `AlertNotAcknowledged`, `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `UnsupportedFormat`, `MalformedRequest`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode` (default `Hybrid`), `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow`, `UnsupportedFormat` (to `QueryError`), `RegistryError`, `VerdictError`, `CatalogError`, `PinError`, `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`AlertReadError` (rules and alerts), `TransmissionStoreError` (stored
+transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
+(`operators`), `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow`, `UnsupportedFormat` (to `QueryError`), `RegistryError`, `VerdictError`, `CatalogError`, `PinError`, `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) and its framing | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor` (wire form: its text), `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem` (`event_name`, `cursor`), `LiveEnd` (`EVENT_NAME`), `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportFormats` (checked; `check` gives `UnsupportedFormat`), `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked; keeps a `CallerSnapshot`), `ConfigRecord`, `ConfigChange` (incl. `SetSink`, `RemoveSink`, `SetTopicRetention`, `SetFrameRetention`), `ConfigOutcome`, `AuditAuthor`, `AuditSubject` (incl. `Sink`), `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |

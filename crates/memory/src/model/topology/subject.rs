@@ -1,7 +1,8 @@
-//! What `check_edge_store` drives: the edge store, the writes the spec
-//! leaves to the implementation, and the world it reads at query time.
+//! What `check_edge_store` drives: the edge store and the topic catalog's
+//! lifecycle (the versions it resolves selectors against), both through
+//! their spec traits, and the world it reads at query time.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{AccessEdge, BipartiteGraph};
 use crosstalk_spec::aggregates::agents::AgentTraffic;
@@ -11,67 +12,41 @@ use crosstalk_spec::aggregates::edge::{
 };
 use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::aggregates::topic_history::TopicLineage;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crosstalk_spec::events::insight::ClassificationCause;
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, TransmissionId};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
+    CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
+};
 use crosstalk_spec::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
+    AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
 };
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
-use std::collections::BTreeMap;
+use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
 
-use crate::analysis::aliases::{AliasError, StaticDirectory};
-use crate::analysis::catalog::{
-    Activated, CatalogConfig, InMemoryTopicCatalog, LifecycleError, RetentionPolicy,
-};
-use crate::analysis::support::{Clock, ManualClock};
+use crate::analysis::aliases::StaticDirectory;
+use crate::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
 use crate::model::build::{bucket_width, similarity, timing, ts};
+use crate::support::Outbox;
 use crate::topology::env::{Env, StaticNodes};
-use crate::topology::store::{Activation, EdgeStoreConfig, InMemoryEdgeStore};
+use crate::topology::store::{EdgeStoreConfig, InMemoryEdgeStore};
 
-/// An edge store with its classification and activation writes, and the
-/// world it resolves through.
-pub trait EdgeSubject: EdgeStore {
-    fn apply_classified(
-        &self,
-        contribution: &EdgeContribution,
-        cause: ClassificationCause,
-    ) -> impl Future<Output = Result<EdgeKey, EdgeError>> + Send;
+/// Every spec trait the edge harness drives: the edge store, and the topic
+/// catalog's lifecycle, whose history the store resolves selectors against.
+pub trait EdgeSubject: EdgeStore + TopicLifecycle {}
 
-    fn version_ready(
-        &self,
-        version: TopicModelVersion,
-        transmissions: u64,
-    ) -> impl Future<Output = ()> + Send;
+impl<T: EdgeStore + TopicLifecycle> EdgeSubject for T {}
 
-    fn activate_if_complete(
-        &self,
-        version: TopicModelVersion,
-    ) -> impl Future<Output = Result<Activation, EdgeError>> + Send;
-
-    fn merge(&self, from: AgentId, into: AgentId) -> Result<(), AliasError>;
-
-    fn unmerge(&self, agent: AgentId);
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError>;
-
-    fn set_parent(&self, agent: AgentId, parent: Option<AgentId>);
-
-    /// Fit a version with `topics` and make it ready in the catalog.
-    fn catalog_ready(
-        &self,
-        topics: Vec<Topic>,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<TopicModelVersion, LifecycleError>> + Send;
-
-    /// `TopicVersionActivated` reached the catalog.
-    fn catalog_activated(
-        &self,
-        version: TopicModelVersion,
-        at: Timestamp,
-    ) -> impl Future<Output = Result<Activated, LifecycleError>> + Send;
+/// What the edge store reads from other layers at query time: the merges
+/// and supersessions it resolves ids through (`AgentDirectory`,
+/// `ChannelDirectory`) and the node facts its graphs describe nodes with
+/// (`NodeFacts`). The harness changes both, for the subject and the
+/// reference alike.
+#[derive(Debug, Clone, Default)]
+pub struct EdgeWorld {
+    pub directory: StaticDirectory,
+    pub nodes: StaticNodes,
 }
 
 /// The harness's store configuration: 10 µs buckets, `settle_after` of
@@ -85,37 +60,105 @@ pub fn edge_config() -> Option<EdgeStoreConfig> {
 
 type RefEnv = Env<InMemoryTopicCatalog, StaticDirectory, StaticNodes>;
 
-/// The reference store and its world.
+/// The reference store and the catalog it reads.
 #[derive(Clone)]
 pub struct ReferenceEdges {
     pub catalog: InMemoryTopicCatalog,
-    pub directory: StaticDirectory,
-    pub nodes: StaticNodes,
     pub store: InMemoryEdgeStore<RefEnv>,
 }
 
 impl ReferenceEdges {
-    pub fn new(config: EdgeStoreConfig) -> Result<Self, String> {
+    /// A reference store over `world`, its catalog holding only version 0
+    /// and keeping the three most recent activated versions.
+    pub fn new(config: EdgeStoreConfig, world: EdgeWorld) -> Result<Self, String> {
         let catalog_config = CatalogConfig {
             retention: RetentionPolicy::new(3).map_err(|error| format!("{error:?}"))?,
             lineage_floor: similarity(0.5).ok_or("floor")?,
         };
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(ts(0)));
-        let catalog = InMemoryTopicCatalog::new(catalog_config, clock, ts(0))
-            .map_err(|error| error.to_string())?;
-        let directory = StaticDirectory::new();
-        let nodes = StaticNodes::new();
+        let catalog = InMemoryTopicCatalog::new(catalog_config, ts(0), Outbox::none())
+            .map_err(|error| format!("{error:?}"))?;
         let env = Env {
             topics: catalog.clone(),
-            directory: directory.clone(),
-            nodes: nodes.clone(),
+            directory: world.directory,
+            nodes: world.nodes,
         };
         Ok(Self {
             catalog,
-            directory,
-            nodes,
-            store: InMemoryEdgeStore::new(config, env),
+            store: InMemoryEdgeStore::new(config, env, Outbox::none()),
         })
+    }
+}
+
+/// Fit a version with `topics` through `catalog` and make it ready, at `at`,
+/// `at + 1` and `at + 2`.
+pub async fn catalog_ready<C: TopicLifecycle>(
+    catalog: &mut C,
+    topics: Vec<Topic>,
+    at: Timestamp,
+) -> Result<TopicModelVersion, TopicLifecycleError> {
+    let micros = at.as_micros();
+    let version = catalog.begin_fit(at).await?;
+    let fitted = ts(micros + 1);
+    let topics = topics
+        .into_iter()
+        .map(|one| Topic {
+            version,
+            fitted_at: fitted,
+            ..one
+        })
+        .collect();
+    catalog.complete_fit(version, topics, fitted).await?;
+    catalog.mark_ready(version, ts(micros + 2)).await?;
+    Ok(version)
+}
+
+impl TopicLifecycle for ReferenceEdges {
+    fn begin_fit(
+        &mut self,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<TopicModelVersion, TopicLifecycleError>> + Send {
+        self.catalog.begin_fit(at)
+    }
+
+    fn complete_fit(
+        &mut self,
+        version: TopicModelVersion,
+        topics: Vec<Topic>,
+        fitted_at: Timestamp,
+    ) -> impl Future<Output = Result<TopicLineage, TopicLifecycleError>> + Send {
+        self.catalog.complete_fit(version, topics, fitted_at)
+    }
+
+    fn fail_fit(
+        &mut self,
+        version: TopicModelVersion,
+    ) -> impl Future<Output = Result<(), TopicLifecycleError>> + Send {
+        self.catalog.fail_fit(version)
+    }
+
+    fn mark_ready(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<(), TopicLifecycleError>> + Send {
+        self.catalog.mark_ready(version, at)
+    }
+
+    fn mark_active(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<CatalogActivation, TopicLifecycleError>> + Send {
+        self.catalog.mark_active(version, at)
+    }
+
+    fn assign(
+        &mut self,
+        transmission: TransmissionId,
+        version: TopicModelVersion,
+        assignment: StoredAssignment,
+    ) -> impl Future<Output = Result<Change, TopicLifecycleError>> + Send {
+        self.catalog.assign(transmission, version, assignment)
     }
 }
 
@@ -136,10 +179,18 @@ impl EdgeStore for ReferenceEdges {
         self.store.judge(transmission, verdict, revision)
     }
 
+    fn version_ready(
+        &mut self,
+        version: TopicModelVersion,
+        transmissions: u64,
+    ) -> impl Future<Output = Result<(), EdgeError>> + Send {
+        self.store.version_ready(version, transmissions)
+    }
+
     fn activate(
         &mut self,
         version: TopicModelVersion,
-    ) -> impl Future<Output = Result<(), EdgeError>> + Send {
+    ) -> impl Future<Output = Result<Activation, EdgeError>> + Send {
         self.store.activate(version)
     }
 
@@ -226,71 +277,5 @@ impl EdgeStore for ReferenceEdges {
         filter: &TopologyFilter,
     ) -> impl Future<Output = Result<Watermarked<TopologySeries>, EdgeQueryError>> + Send {
         self.store.series(grid, weighting, grouping, filter)
-    }
-}
-
-impl EdgeSubject for ReferenceEdges {
-    async fn apply_classified(
-        &self,
-        contribution: &EdgeContribution,
-        cause: ClassificationCause,
-    ) -> Result<EdgeKey, EdgeError> {
-        self.store.apply_classified(contribution, cause)
-    }
-
-    async fn version_ready(&self, version: TopicModelVersion, transmissions: u64) {
-        self.store.version_ready(version, transmissions);
-    }
-
-    async fn activate_if_complete(
-        &self,
-        version: TopicModelVersion,
-    ) -> Result<Activation, EdgeError> {
-        self.store.activate_if_complete(version)
-    }
-
-    fn merge(&self, from: AgentId, into: AgentId) -> Result<(), AliasError> {
-        self.directory.merge(from, into)
-    }
-
-    fn unmerge(&self, agent: AgentId) {
-        self.directory.unmerge(agent);
-    }
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError> {
-        self.directory.supersede(channel, by)
-    }
-
-    fn set_parent(&self, agent: AgentId, parent: Option<AgentId>) {
-        self.nodes.set_parent(agent, parent);
-    }
-
-    async fn catalog_ready(
-        &self,
-        topics: Vec<Topic>,
-        at: Timestamp,
-    ) -> Result<TopicModelVersion, LifecycleError> {
-        let micros = at.as_micros();
-        let version = self.catalog.begin_fit(at)?;
-        let fitted = ts(micros + 1);
-        let topics = topics
-            .into_iter()
-            .map(|one| Topic {
-                version,
-                fitted_at: fitted,
-                ..one
-            })
-            .collect();
-        self.catalog.fit_returned(version, topics, fitted)?;
-        self.catalog.ready(version, ts(micros + 2))?;
-        Ok(version)
-    }
-
-    async fn catalog_activated(
-        &self,
-        version: TopicModelVersion,
-        at: Timestamp,
-    ) -> Result<Activated, LifecycleError> {
-        self.catalog.activated(version, at)
     }
 }

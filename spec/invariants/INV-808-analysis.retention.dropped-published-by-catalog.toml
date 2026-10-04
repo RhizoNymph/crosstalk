@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.retention.dropped-published-by-catalog"
+statement = "TopicVersionDropped for a version is published by the topic catalog alone, exactly once, from the transaction in which TopicCatalog::enforce_retention (called directly, or within TopicLifecycle::mark_active or TopicCatalog::unpin) marks that version dropped and deletes its assignments; no consumer publishes it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Retention's drop is the catalog's decision (RetentionPolicy::to_drop over
+its history), so the catalog owns the event that announces it. Before P0.6
+the trait returned the dropped versions for "the caller" to publish, which
+left a window where the version was marked dropped and nobody had told L7,
+and let two callers (activation and unpin) both publish it. Publishing from
+the marking transaction's outbox makes the event exactly-once per drop and
+never earlier than the mark L7 queries depend on.
+"""
+
+[evidence]
+dst = "crosstalk_analysis::dst::topic_version_dropped_published_once_by_catalog"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

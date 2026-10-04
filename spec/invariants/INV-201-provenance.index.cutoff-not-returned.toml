@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.index.cutoff-not-returned"
-statement = "FingerprintIndex::lookup returns no hit for a fingerprint whose frequency is above the cutoff at lookup time, including entries inserted while it was below."
+statement = "FingerprintIndex::lookup returns no hit for a fingerprint whose frequency is above the cutoff at the now the lookup is given, including entries inserted while it was below."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

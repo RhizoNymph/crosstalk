@@ -38,7 +38,8 @@ use crate::interfaces::l6_analysis::{
     TopicCatalog, TriageError,
 };
 use crate::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore, FrontierSource,
+    AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
+    FrontierSource,
 };
 use crate::paging::{EdgeTransmissionList, ProjectionList, ResourceUseList, SearchList, TopicList};
 use crate::paging::{Page, PageRequest};
@@ -58,6 +59,7 @@ impl ChannelRegistry for Dummy {
         _pattern: ResourcePattern,
         _policy: Policy,
         _by: PolicyAuthor,
+        _at: Timestamp,
     ) -> Result<ChannelId, RegistryError> {
         match *self {}
     }
@@ -97,7 +99,7 @@ impl ChannelRegistry for Dummy {
 
 fn channel_registry<T: ChannelRegistry>(x: &mut T, never: &Dummy) {
     assert_send(x.lookup(arg(never)));
-    assert_send(x.declare(arg(never), arg(never), arg(never)));
+    assert_send(x.declare(arg(never), arg(never), arg(never), arg(never)));
     assert_send(x.set_policy(arg(never), arg(never)));
     assert_send(x.policy_history(arg(never)));
     assert_send(x.promote(arg(never), arg(never)));
@@ -164,7 +166,11 @@ impl TopicCatalog for Dummy {
     async fn pin(&self, _version: TopicModelVersion, _pin: Pin) -> Result<PinChange, CatalogError> {
         match *self {}
     }
-    async fn unpin(&self, _version: TopicModelVersion) -> Result<PinChange, CatalogError> {
+    async fn unpin(
+        &self,
+        _version: TopicModelVersion,
+        _at: Timestamp,
+    ) -> Result<PinChange, CatalogError> {
         match *self {}
     }
     async fn enforce_retention(
@@ -275,10 +281,18 @@ impl AlertTriage for Dummy {
     async fn triage(&mut self, _draft: AlertDraft) -> Result<TriageOutcome, TriageError> {
         match *self {}
     }
-    async fn channel_sanctioned(&mut self, _channel: ChannelId) -> Result<u32, TriageError> {
+    async fn channel_sanctioned(
+        &mut self,
+        _channel: ChannelId,
+        _at: Timestamp,
+    ) -> Result<u32, TriageError> {
         match *self {}
     }
-    async fn rule_disabled(&mut self, _rule: AlertRuleId) -> Result<u32, TriageError> {
+    async fn rule_disabled(
+        &mut self,
+        _rule: AlertRuleId,
+        _at: Timestamp,
+    ) -> Result<u32, TriageError> {
         match *self {}
     }
     async fn transmission_judged(
@@ -286,6 +300,7 @@ impl AlertTriage for Dummy {
         _transmission: TransmissionId,
         _verdict: Option<Verdict>,
         _revision: VerdictRevision,
+        _at: Timestamp,
     ) -> Result<u32, TriageError> {
         match *self {}
     }
@@ -317,6 +332,7 @@ impl AlertRuleStore for Dummy {
         _id: AlertRuleId,
         _enabled: bool,
         _by: OperatorId,
+        _at: Timestamp,
     ) -> Result<Change, RuleError> {
         match *self {}
     }
@@ -331,7 +347,7 @@ fn topic_catalog<T: TopicCatalog>(x: &T, never: &Dummy) {
     assert_send(x.sizes(arg(never), arg(never)));
     assert_send(x.lineage(arg(never)));
     assert_send(x.pin(arg(never), arg(never)));
-    assert_send(x.unpin(arg(never)));
+    assert_send(x.unpin(arg(never), arg(never)));
     assert_send(x.enforce_retention(arg(never)));
     assert_send(x.topics(arg(never), arg(never)));
 }
@@ -367,15 +383,15 @@ fn alert_rule_eval<T: AlertRuleEval, C: RuleContext>(x: &T, never: &Dummy) {
 
 fn alert_triage<T: AlertTriage>(x: &mut T, never: &Dummy) {
     assert_send(x.triage(arg(never)));
-    assert_send(x.channel_sanctioned(arg(never)));
-    assert_send(x.rule_disabled(arg(never)));
-    assert_send(x.transmission_judged(arg(never), arg(never), arg(never)));
+    assert_send(x.channel_sanctioned(arg(never), arg(never)));
+    assert_send(x.rule_disabled(arg(never), arg(never)));
+    assert_send(x.transmission_judged(arg(never), arg(never), arg(never), arg(never)));
 }
 
 fn alert_rule_store<T: AlertRuleStore>(x: &mut T, never: &Dummy) {
     assert_send(x.create(arg(never), arg(never), arg(never), arg(never), arg(never)));
     assert_send(x.update(arg(never), arg(never), arg(never), arg(never), arg(never)));
-    assert_send(x.set_enabled(arg(never), arg(never), arg(never)));
+    assert_send(x.set_enabled(arg(never), arg(never), arg(never), arg(never)));
 }
 
 // ── L7 topology ────────────────────────────────────────────────────────
@@ -392,7 +408,14 @@ impl EdgeStore for Dummy {
     ) -> Result<Observed, EdgeError> {
         match *self {}
     }
-    async fn activate(&mut self, _version: TopicModelVersion) -> Result<(), EdgeError> {
+    async fn version_ready(
+        &mut self,
+        _version: TopicModelVersion,
+        _transmissions: u64,
+    ) -> Result<(), EdgeError> {
+        match *self {}
+    }
+    async fn activate(&mut self, _version: TopicModelVersion) -> Result<Activation, EdgeError> {
         match *self {}
     }
     async fn drop_version(&mut self, _version: TopicModelVersion) -> Result<(), EdgeError> {
@@ -475,6 +498,7 @@ impl FrontierSource for Dummy {
 fn edge_store<T: EdgeStore>(x: &mut T, never: &Dummy) {
     assert_send(x.apply(arg(never)));
     assert_send(x.judge(arg(never), arg(never), arg(never)));
+    assert_send(x.version_ready(arg(never), arg(never)));
     assert_send(x.activate(arg(never)));
     assert_send(x.drop_version(arg(never)));
     assert_send(x.watermark());

@@ -208,7 +208,7 @@ async fn series_concatenate_over_adjacent_grids_and_coarsen() {
 
 #[tokio::test]
 async fn topic_series_follow_the_resolved_version() {
-    let world = loaded().await;
+    let mut world = loaded().await;
     let refits = vec![
         contribution(1, 1, 2, Route::Unobserved, 12, 3, 1, Some(11)),
         contribution(2, 1, 2, Route::Unobserved, 27, 5, 1, Some(12)),
@@ -223,7 +223,7 @@ async fn topic_series_follow_the_resolved_version() {
             None,
         ),
     ];
-    let v1 = refit(&world, 100, &[11, 12], &refits);
+    let v1 = refit(&mut world, 100, &[11, 12], &refits).await;
     let by_topic = series(
         &world,
         grid(0, 60, 20),

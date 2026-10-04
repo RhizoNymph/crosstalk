@@ -1,47 +1,52 @@
-//! The in-memory channel registry: `ChannelRegistry` and `ChannelDirectory`
-//! over one table of channels, policy histories, resources and accesses,
-//! plus [`SeedChannels`].
+//! The in-memory channel registry: `ChannelRegistry`, `ChannelTraffic`,
+//! `ChannelReads` and `ChannelDirectory` over one table of channels, policy
+//! histories, resources and accesses.
 
 pub mod model;
-mod seed;
 mod store;
 mod table;
 
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::ids::{ChannelId, ResourceId};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
-use crate::pipeline::{Clock, CursorTable, IdSequence, Outbox, State};
-
-pub use seed::{DetectionUpdate, SeedChannels, SeedError};
+use crate::support::{CursorBook, IdSequence, Outbox, State};
 
 use table::ChannelTable;
+
+/// The cursors the registry's two lists issue. Behind their own lock, since
+/// a read takes only a shared lock on the table.
+#[derive(Debug, Default)]
+struct Cursors {
+    /// `resource_use`: bound to the canonical channel and window's JSON.
+    resources: CursorBook<String, ResourceId>,
+    /// `ChannelReads::channels`: bound to the filter.
+    channels: CursorBook<ChannelFilter, ChannelId>,
+}
 
 /// The in-memory L5 registry. Agents in `resource_use` are resolved through
 /// `agents`. Clones are handles on one registry.
 #[derive(Clone)]
 pub struct MemoryChannels<D> {
     state: State<ChannelTable>,
-    cursors: Arc<CursorTable<ResourceId>>,
+    cursors: Arc<Mutex<Cursors>>,
     channel_ids: IdSequence,
-    clock: Arc<dyn Clock>,
     agents: D,
     outbox: Outbox,
 }
 
 impl<D> MemoryChannels<D> {
     /// An empty registry. Declared channels take their ids from
-    /// `channel_ids` (one per accepted declaration) and their declaration
-    /// time from `clock`; events go to `outbox`.
-    pub fn new(agents: D, channel_ids: IdSequence, clock: Arc<dyn Clock>, outbox: Outbox) -> Self {
+    /// `channel_ids` (one per accepted declaration); events go to `outbox`.
+    pub fn new(agents: D, channel_ids: IdSequence, outbox: Outbox) -> Self {
         Self {
             state: State::new(ChannelTable::default()),
-            cursors: Arc::new(CursorTable::new("resources")),
+            cursors: Arc::new(Mutex::new(Cursors::default())),
             channel_ids,
-            clock,
             agents,
             outbox,
         }

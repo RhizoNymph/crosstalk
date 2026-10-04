@@ -570,6 +570,7 @@ fn every_conflict() -> Vec<ConflictKind> {
     fn declared(kind: ConflictKind) -> ConflictKind {
         match kind {
             ConflictKind::AlertNotActive { .. }
+            | ConflictKind::AlertNotAcknowledged { .. }
             | ConflictKind::AgentMerged { .. }
             | ConflictKind::MergeAlreadyReverted { .. }
             | ConflictKind::MergeIntoSelf { .. }
@@ -595,6 +596,9 @@ fn every_conflict() -> Vec<ConflictKind> {
     let projection = ProjectionId::from_ulid(9);
     [
         ConflictKind::AlertNotActive {
+            alert: AlertId::from_ulid(1),
+        },
+        ConflictKind::AlertNotAcknowledged {
             alert: AlertId::from_ulid(1),
         },
         ConflictKind::AgentMerged {

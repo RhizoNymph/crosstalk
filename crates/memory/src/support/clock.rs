@@ -1,19 +1,15 @@
-//! Time for stores whose trait needs a "now" it does not pass in.
+//! A clock for the computation doubles that read the time.
 //!
-//! `ChannelRegistry::declare` stamps a declaration with no time argument,
-//! and `FingerprintIndex::frequency` counts observations "within the
-//! retention period" of an unstated now. The in-memory stores read both
-//! from a [`Clock`], which a test or the simulation drives.
+//! No store reads a clock: every store method takes its time as an argument
+//! (`crosstalk_spec::interfaces`, "Time is an argument"). A computation
+//! that has to stamp what it returns without a time argument, such as
+//! `TopicModel::fit` stamping its topics' `fitted_at`, reads the spec's
+//! [`Clock`]; [`ManualClock`] is one a test moves.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crosstalk_spec::support::Timestamp;
-
-/// A source of the current time.
-pub trait Clock: Send + Sync {
-    fn now(&self) -> Timestamp;
-}
+use crosstalk_spec::support::{Clock, Timestamp};
 
 /// A clock that moves only when told to. Clones share one time.
 #[derive(Debug, Clone, Default)]

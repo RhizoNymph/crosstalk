@@ -26,10 +26,11 @@ use crosstalk_spec::ids::{ChannelId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l6_analysis::{
     EmbedError, Embedder, LayoutFitter, RuleContext, TopicError, TopicModel,
 };
-use crosstalk_spec::support::Similarity;
+use crosstalk_spec::support::{Clock, Similarity};
 
 use super::search::terms;
-use super::support::{Clock, IdSequence, lock, similarity};
+use super::support::similarity;
+use crate::support::{IdSequence, lock};
 
 /// The model a [`FakeEmbedder`] reports by default.
 pub fn fake_model(name: &str, dimension: NonZeroU16) -> EmbeddingModel {
@@ -223,7 +224,7 @@ impl TopicModel for FakeTopicModel {
                 continue;
             };
             topics.push(Topic {
-                id: TopicId::from_ulid(state.ids.next_raw()),
+                id: TopicId::from_ulid(state.ids.next_ulid()),
                 version,
                 label: format!("topic {index}"),
                 terms: Vec::new(),

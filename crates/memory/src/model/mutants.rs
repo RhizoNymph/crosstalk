@@ -1,5 +1,6 @@
 //! The harnesses are not vacuous: each catches a store with one planted
-//! bug.
+//! bug. Every mutant wraps a reference store and implements the same spec
+//! traits, changing one method.
 
 use crosstalk_spec::aggregates::access::{AccessEdge, BipartiteGraph};
 use crosstalk_spec::aggregates::agents::AgentTraffic;
@@ -18,34 +19,39 @@ use crosstalk_spec::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion
 use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crosstalk_spec::events::insight::ClassificationCause;
 use crosstalk_spec::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, ProjectionId, SinkId, TopicId,
     TransmissionId,
+};
+use crosstalk_spec::interfaces::l6_analysis::alerts::{
+    AlertActionError, AlertActions, AlertReadError, AlertReads, AlertRuleMaintenance,
+};
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
+    CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
 };
 use crosstalk_spec::interfaces::l6_analysis::{
     AlertRuleStore, AlertTriage, CatalogError, ProjectionJobError, ProjectionStore,
     ProjectionStoreError, RuleError, TopicCatalog, TriageError,
 };
 use crosstalk_spec::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
+    AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
 };
-use crosstalk_spec::paging::{EdgeTransmissionList, Page, PageRequest, ProjectionList, TopicList};
+use crosstalk_spec::interfaces::l8_surface::AlertFilter;
+use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
+use crosstalk_spec::paging::{
+    AlertList, AlertRuleList, EdgeTransmissionList, Page, PageRequest, ProjectionList, TopicList,
+};
 use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
 use std::collections::BTreeMap;
 
 use super::HarnessConfig;
 use super::analysis::{
-    AlertStoreSubject, CatalogSubject, ReferenceAlerts, ReferenceCatalog, check_alert_triage,
-    check_projection_store, check_topic_catalog,
+    ReferenceAlerts, ReferenceCatalog, check_alert_triage, check_projection_store,
+    check_topic_catalog, reference_alerts, reference_catalog,
 };
-use super::topology::{EdgeSubject, ReferenceEdges, check_edge_store};
-use crate::analysis::alerts::CommitRefused;
-use crate::analysis::alerts::triage::AlertActionError;
-use crate::analysis::aliases::AliasError;
-use crate::analysis::catalog::{Activated, Assigned, LifecycleError, StoredAssignment};
+use super::topology::{ReferenceEdges, check_edge_store};
 use crate::analysis::projection::InMemoryProjectionStore;
-use crate::topology::store::Activation;
+use crate::support::Outbox;
 
 fn harness() -> HarnessConfig {
     HarnessConfig {
@@ -89,8 +95,12 @@ impl TopicCatalog for ForgetfulCatalog {
         self.0.pin(version, pin).await
     }
 
-    async fn unpin(&self, version: TopicModelVersion) -> Result<PinChange, CatalogError> {
-        self.0.unpin(version).await
+    async fn unpin(
+        &self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> Result<PinChange, CatalogError> {
+        self.0.unpin(version, at).await
     }
 
     async fn enforce_retention(
@@ -109,54 +119,54 @@ impl TopicCatalog for ForgetfulCatalog {
     }
 }
 
-impl CatalogSubject for ForgetfulCatalog {
-    async fn begin_fit(&self, at: Timestamp) -> Result<TopicModelVersion, LifecycleError> {
+impl TopicLifecycle for ForgetfulCatalog {
+    async fn begin_fit(&mut self, at: Timestamp) -> Result<TopicModelVersion, TopicLifecycleError> {
         self.0.begin_fit(at).await
     }
 
-    async fn fit_returned(
-        &self,
+    async fn complete_fit(
+        &mut self,
         version: TopicModelVersion,
         topics: Vec<Topic>,
         fitted_at: Timestamp,
-    ) -> Result<TopicLineage, LifecycleError> {
-        self.0.fit_returned(version, topics, fitted_at).await
+    ) -> Result<TopicLineage, TopicLifecycleError> {
+        self.0.complete_fit(version, topics, fitted_at).await
     }
 
-    async fn fit_failed(&self, version: TopicModelVersion) -> Result<(), LifecycleError> {
-        self.0.fit_failed(version).await
+    async fn fail_fit(&mut self, version: TopicModelVersion) -> Result<(), TopicLifecycleError> {
+        self.0.fail_fit(version).await
     }
 
-    async fn ready(&self, version: TopicModelVersion, at: Timestamp) -> Result<(), LifecycleError> {
-        self.0.ready(version, at).await
-    }
-
-    async fn activated(
-        &self,
+    async fn mark_ready(
+        &mut self,
         version: TopicModelVersion,
         at: Timestamp,
-    ) -> Result<Activated, LifecycleError> {
-        self.0.activated(version, at).await
+    ) -> Result<(), TopicLifecycleError> {
+        self.0.mark_ready(version, at).await
+    }
+
+    async fn mark_active(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> Result<CatalogActivation, TopicLifecycleError> {
+        self.0.mark_active(version, at).await
     }
 
     async fn assign(
-        &self,
+        &mut self,
         transmission: TransmissionId,
         version: TopicModelVersion,
         assignment: StoredAssignment,
-    ) -> Result<Assigned, LifecycleError> {
+    ) -> Result<Change, TopicLifecycleError> {
         self.0.assign(transmission, version, assignment).await
-    }
-
-    fn set_now(&self, at: Timestamp) {
-        self.0.set_now(at);
     }
 }
 
 #[test]
 fn catalog_harness_catches_forgotten_outliers() {
     let result = check_topic_catalog(harness(), |config| async move {
-        ForgetfulCatalog(ReferenceCatalog::new(config).expect("a reference catalog"))
+        ForgetfulCatalog(reference_catalog(config).expect("a reference catalog"))
     });
     assert!(result.is_err());
 }
@@ -218,7 +228,7 @@ impl ProjectionStore for StickyLeases {
 #[test]
 fn projection_harness_catches_sticky_leases() {
     let result = check_projection_store(harness(), |config| async move {
-        StickyLeases(InMemoryProjectionStore::new(config))
+        StickyLeases(InMemoryProjectionStore::new(config, Outbox::none()))
     });
     assert!(result.is_err());
 }
@@ -240,7 +250,15 @@ impl EdgeStore for DeafEdges {
         Ok(Observed::Newer)
     }
 
-    async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError> {
+    async fn version_ready(
+        &mut self,
+        version: TopicModelVersion,
+        transmissions: u64,
+    ) -> Result<(), EdgeError> {
+        self.0.version_ready(version, transmissions).await
+    }
+
+    async fn activate(&mut self, version: TopicModelVersion) -> Result<Activation, EdgeError> {
         self.0.activate(version).await
     }
 
@@ -322,63 +340,54 @@ impl EdgeStore for DeafEdges {
     }
 }
 
-impl EdgeSubject for DeafEdges {
-    async fn apply_classified(
-        &self,
-        contribution: &EdgeContribution,
-        cause: ClassificationCause,
-    ) -> Result<EdgeKey, EdgeError> {
-        self.0.apply_classified(contribution, cause).await
+impl TopicLifecycle for DeafEdges {
+    async fn begin_fit(&mut self, at: Timestamp) -> Result<TopicModelVersion, TopicLifecycleError> {
+        self.0.begin_fit(at).await
     }
 
-    async fn version_ready(&self, version: TopicModelVersion, transmissions: u64) {
-        self.0.version_ready(version, transmissions).await;
-    }
-
-    async fn activate_if_complete(
-        &self,
+    async fn complete_fit(
+        &mut self,
         version: TopicModelVersion,
-    ) -> Result<Activation, EdgeError> {
-        self.0.activate_if_complete(version).await
-    }
-
-    fn merge(&self, from: AgentId, into: AgentId) -> Result<(), AliasError> {
-        self.0.merge(from, into)
-    }
-
-    fn unmerge(&self, agent: AgentId) {
-        self.0.unmerge(agent);
-    }
-
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError> {
-        self.0.supersede(channel, by)
-    }
-
-    fn set_parent(&self, agent: AgentId, parent: Option<AgentId>) {
-        self.0.set_parent(agent, parent);
-    }
-
-    async fn catalog_ready(
-        &self,
         topics: Vec<Topic>,
-        at: Timestamp,
-    ) -> Result<TopicModelVersion, LifecycleError> {
-        self.0.catalog_ready(topics, at).await
+        fitted_at: Timestamp,
+    ) -> Result<TopicLineage, TopicLifecycleError> {
+        self.0.complete_fit(version, topics, fitted_at).await
     }
 
-    async fn catalog_activated(
-        &self,
+    async fn fail_fit(&mut self, version: TopicModelVersion) -> Result<(), TopicLifecycleError> {
+        self.0.fail_fit(version).await
+    }
+
+    async fn mark_ready(
+        &mut self,
         version: TopicModelVersion,
         at: Timestamp,
-    ) -> Result<Activated, LifecycleError> {
-        self.0.catalog_activated(version, at).await
+    ) -> Result<(), TopicLifecycleError> {
+        self.0.mark_ready(version, at).await
+    }
+
+    async fn mark_active(
+        &mut self,
+        version: TopicModelVersion,
+        at: Timestamp,
+    ) -> Result<CatalogActivation, TopicLifecycleError> {
+        self.0.mark_active(version, at).await
+    }
+
+    async fn assign(
+        &mut self,
+        transmission: TransmissionId,
+        version: TopicModelVersion,
+        assignment: StoredAssignment,
+    ) -> Result<Change, TopicLifecycleError> {
+        self.0.assign(transmission, version, assignment).await
     }
 }
 
 #[test]
 fn edge_harness_catches_ignored_verdicts() {
-    let result = check_edge_store(harness(), |config| async move {
-        DeafEdges(ReferenceEdges::new(config).expect("a reference edge world"))
+    let result = check_edge_store(harness(), |config, world| async move {
+        DeafEdges(ReferenceEdges::new(config, world).expect("a reference edge world"))
     });
     assert!(result.is_err());
 }
@@ -414,8 +423,9 @@ impl AlertRuleStore for LaxTriage {
         id: AlertRuleId,
         enabled: bool,
         by: OperatorId,
+        at: Timestamp,
     ) -> Result<Change, RuleError> {
-        self.0.set_enabled(id, enabled, by).await
+        self.0.set_enabled(id, enabled, by, at).await
     }
 }
 
@@ -424,12 +434,20 @@ impl AlertTriage for LaxTriage {
         self.0.triage(draft).await
     }
 
-    async fn channel_sanctioned(&mut self, _channel: ChannelId) -> Result<u32, TriageError> {
+    async fn channel_sanctioned(
+        &mut self,
+        _channel: ChannelId,
+        _at: Timestamp,
+    ) -> Result<u32, TriageError> {
         Ok(0)
     }
 
-    async fn rule_disabled(&mut self, rule: AlertRuleId) -> Result<u32, TriageError> {
-        self.0.rule_disabled(rule).await
+    async fn rule_disabled(
+        &mut self,
+        rule: AlertRuleId,
+        at: Timestamp,
+    ) -> Result<u32, TriageError> {
+        self.0.rule_disabled(rule, at).await
     }
 
     async fn transmission_judged(
@@ -437,31 +455,34 @@ impl AlertTriage for LaxTriage {
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
+        at: Timestamp,
     ) -> Result<u32, TriageError> {
         self.0
-            .transmission_judged(transmission, verdict, revision)
+            .transmission_judged(transmission, verdict, revision, at)
             .await
     }
 }
 
-impl AlertStoreSubject for LaxTriage {
+impl AlertRuleMaintenance for LaxTriage {
     async fn topic_version_ready(
-        &self,
+        &mut self,
         lineage: &TopicLineage,
-        topics: Vec<TopicId>,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
+        topics: &[TopicId],
+    ) -> Result<Vec<AlertRuleId>, RuleError> {
         self.0.topic_version_ready(lineage, topics).await
     }
 
     async fn embedding_model_changed(
-        &self,
+        &mut self,
         model: &EmbeddingModel,
-    ) -> Result<Vec<AlertRuleId>, CommitRefused> {
+    ) -> Result<Vec<AlertRuleId>, RuleError> {
         self.0.embedding_model_changed(model).await
     }
+}
 
+impl AlertActions for LaxTriage {
     async fn acknowledge(
-        &self,
+        &mut self,
         alert: AlertId,
         by: OperatorId,
         at: Timestamp,
@@ -470,7 +491,7 @@ impl AlertStoreSubject for LaxTriage {
     }
 
     async fn resolve(
-        &self,
+        &mut self,
         alert: AlertId,
         by: OperatorId,
         at: Timestamp,
@@ -478,28 +499,42 @@ impl AlertStoreSubject for LaxTriage {
     ) -> Result<Change, AlertActionError> {
         self.0.resolve(alert, by, at, note).await
     }
+}
 
-    async fn rules(&self) -> Vec<AlertRuleDef> {
-        self.0.rules().await
+impl AlertReads for LaxTriage {
+    async fn rule(&self, id: AlertRuleId) -> Result<Option<AlertRuleDef>, AlertReadError> {
+        self.0.rule(id).await
     }
 
-    async fn alerts(&self) -> Vec<Alert> {
-        self.0.alerts().await
+    async fn rules(
+        &self,
+        filter: &AlertRuleFilter,
+        page: &PageRequest<AlertRuleList>,
+    ) -> Result<Page<AlertRuleDef, AlertRuleList>, AlertReadError> {
+        self.0.rules(filter, page).await
     }
 
-    fn supersede(&self, channel: ChannelId, by: ChannelId) -> Result<(), AliasError> {
-        self.0.supersede(channel, by)
+    async fn alert(&self, id: AlertId) -> Result<Option<Alert>, AlertReadError> {
+        self.0.alert(id).await
     }
 
-    fn set_now(&self, at: Timestamp) {
-        self.0.set_now(at);
+    async fn alerts(
+        &self,
+        filter: &AlertFilter,
+        page: &PageRequest<AlertList>,
+    ) -> Result<Page<Alert, AlertList>, AlertReadError> {
+        self.0.alerts(filter, page).await
+    }
+
+    async fn rule_version(&self) -> Result<TopicModelVersion, AlertReadError> {
+        self.0.rule_version().await
     }
 }
 
 #[test]
 fn triage_harness_catches_lax_sanctions() {
     let result = check_alert_triage(harness(), |world| async move {
-        LaxTriage(ReferenceAlerts::new(world))
+        LaxTriage(reference_alerts(world))
     });
     assert!(result.is_err());
 }

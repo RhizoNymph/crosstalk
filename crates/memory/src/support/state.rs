@@ -1,7 +1,8 @@
-//! The lock around a store's plain data.
+//! The locks around a store's plain data.
 //!
-//! The pipeline stores keep their state behind a `std::sync::RwLock`, not a
-//! `tokio` one, for two reasons:
+//! The L3 to L5 stores keep their state in a [`State`], behind a
+//! `std::sync::RwLock`; the L6 to L8 stores behind a `std::sync::Mutex`
+//! taken with [`lock`]. Neither is a `tokio` lock, for two reasons:
 //!
 //! - `AgentDirectory::canonical` and `ChannelDirectory::canonical` are
 //!   synchronous, and are called from inside async tasks, where a `tokio`
@@ -15,7 +16,14 @@
 //! The futures the trait methods return hold no guard, so they are `Send`
 //! whenever the store is `Sync`.
 
-use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+/// Locks `mutex`, recovering the state from a poisoned lock. Every store
+/// mutates its state only through methods that leave it consistent before
+/// they can panic, so a poisoned lock still guards a valid state.
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Shared, lock-protected state. Cloning shares the state: every clone is a
 /// handle on one store.

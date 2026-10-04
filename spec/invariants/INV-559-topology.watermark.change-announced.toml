@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.watermark.change-announced"
-statement = "Each time the edge store's watermark advances, L7 publishes Changed::Watermark with the new watermark at least once, and only after graph and series queries report a watermark at or after it."
+statement = "Each time the edge store's watermark advances, the edge store publishes Changed::Watermark with the new watermark at least once, and only after graph and series queries report a watermark at or after it."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

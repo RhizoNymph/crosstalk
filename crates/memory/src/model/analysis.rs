@@ -8,11 +8,12 @@
 //! | [`check_alert_rule_store`] | `AlertRuleStore` | [`AlertStoreSubject`] |
 //! | [`check_alert_triage`] | `AlertTriage` | [`AlertStoreSubject`] |
 //!
-//! A subject trait adds to the spec trait the writes the spec leaves to the
-//! implementation (the fit lifecycle, indexing, the consumer's rule
-//! changes) and the world the store reads at query time (merges,
-//! supersessions, the catalog), so the harness can drive both sides
-//! identically.
+//! A subject trait is the set of spec traits the harness drives, write side
+//! included (the fit lifecycle, indexing, the consumer's rule upkeep, alert
+//! actions and reads), so any store implementing the spec can be checked.
+//! What a store reads from other layers' caches (merges and supersessions,
+//! L7's watermark) is a world of spec read traits the harness hands `make`
+//! and changes itself, for the subject and the reference alike.
 
 mod alerts;
 mod catalog;
@@ -21,11 +22,11 @@ mod search;
 
 pub use alerts::{
     AlertStoreSubject, AlertWorld, ReferenceAlerts, alert_world, check_alert_rule_store,
-    check_alert_triage,
+    check_alert_triage, reference_alerts,
 };
-pub use catalog::{CatalogSubject, ReferenceCatalog, check_topic_catalog};
+pub use catalog::{CatalogSubject, ReferenceCatalog, check_topic_catalog, reference_catalog};
 pub use projection::{check_projection_store, projection_config};
 pub use search::{
-    FilterSeed, ReferenceSearch, SearchSubject, check_search_index, filter_seed, harness_model,
-    new_version_in,
+    FilterSeed, ReferenceSearch, SearchSubject, SearchWorld, check_search_index, filter_seed,
+    harness_model, new_version_in,
 };

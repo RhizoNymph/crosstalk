@@ -2,11 +2,12 @@
 //!
 //! [`check_fingerprint_index`] generates random sequences of
 //! [`IndexOp`]s (inserts of originated spans, lookups, frequency reads,
-//! observations, evictions and clock moves) over a small pool of
+//! observations, evictions and moves of the time passed as `now`) over a
+//! small pool of
 //! fingerprints, so fingerprints repeat, cross the cutoff and age out. It
 //! runs each sequence on the index under test and on
 //! [`MemoryFingerprintIndex`], both built from the same [`IndexConfig`] and
-//! sharing one [`ManualClock`], and requires equal results from every
+//! given the same `now` on every call, and requires equal results from every
 //! operation. Lookup hits are compared as multisets, since the trait does
 //! not order them. Each run checks two configurations: a single node, and
 //! a node owning one of two shards (which exercises `WrongShard`).
@@ -26,8 +27,7 @@ use crosstalk_spec::support::{Blake3, ByteRange, Timestamp};
 use proptest::prelude::*;
 
 use super::index::{IndexConfig, MemoryFingerprintIndex};
-use crate::pipeline::ManualClock;
-use crate::pipeline::harness::{HarnessConfig, Mismatch, run, same};
+use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
 
 /// The cutoff both configurations use: a fingerprint observed in more than
 /// two live texts is boilerplate.
@@ -90,7 +90,7 @@ pub enum IndexOp {
     Evict {
         spans: Vec<u8>,
     },
-    /// Set the shared clock.
+    /// Move the time every later call passes as `now`.
     Clock {
         now: u64,
     },
@@ -129,26 +129,21 @@ pub fn index_ops(max: usize) -> impl Strategy<Value = Vec<IndexOp>> {
 }
 
 /// Run the harness on every configuration of [`configs`]: the index `make`
-/// builds from a configuration and a clock must agree with
-/// [`MemoryFingerprintIndex`]. Panics on the first disagreement.
-pub fn check_fingerprint_index<S, F>(config: HarnessConfig, make: F)
+/// builds from a configuration must agree with [`MemoryFingerprintIndex`].
+/// A failure is a [`ModelMismatch`] with the shrunk sequence.
+pub fn check_fingerprint_index<S, F>(config: HarnessConfig, make: F) -> Result<(), ModelMismatch>
 where
     S: FingerprintIndex,
-    F: Fn(IndexConfig, ManualClock) -> S,
+    F: Fn(IndexConfig) -> S,
 {
     for index_config in configs() {
-        run(
-            "fingerprint index",
-            config,
-            index_ops(config.max_ops),
-            |ops| {
-                let clock = ManualClock::default();
-                let sut = make(index_config.clone(), clock.clone());
-                let model = MemoryFingerprintIndex::new(index_config.clone(), clock.clone());
-                run_case(sut, model, clock, ops)
-            },
-        );
+        run(config, index_ops(config.max_ops), |runtime, ops| {
+            let sut = make(index_config.clone());
+            let model = MemoryFingerprintIndex::new(index_config.clone());
+            runtime.block_on(run_case(sut, model, ops))
+        })?;
     }
+    Ok(())
 }
 
 fn sorted(
@@ -163,30 +158,30 @@ fn sorted(
 async fn run_case<S: FingerprintIndex>(
     mut sut: S,
     mut model: MemoryFingerprintIndex,
-    clock: ManualClock,
-    ops: Vec<IndexOp>,
-) -> Result<(), Mismatch> {
+    ops: &[IndexOp],
+) -> Result<(), Divergence> {
+    let mut now = Timestamp::from_micros(0);
     for (step, op) in ops.iter().enumerate() {
         match op {
             IndexOp::Insert { span, fingerprints } => {
                 let Some(span) = originated(*span) else {
-                    return Err(format!("step {step}: span fixture"));
+                    return Err(Divergence::new(step, "span fixture"));
                 };
                 let fingerprints = positioned(fingerprints);
-                let s = sut.insert(&span, &fingerprints).await;
-                let m = model.insert(&span, &fingerprints).await;
+                let s = sut.insert(&span, &fingerprints, now).await;
+                let m = model.insert(&span, &fingerprints, now).await;
                 same(step, "insert", &s, &m)?;
             }
             IndexOp::Lookup { fingerprints } => {
                 let fingerprints = positioned(fingerprints);
-                let s = sorted(sut.lookup(&fingerprints).await);
-                let m = sorted(model.lookup(&fingerprints).await);
+                let s = sorted(sut.lookup(&fingerprints, now).await);
+                let m = sorted(model.lookup(&fingerprints, now).await);
                 same(step, "lookup", &s, &m)?;
             }
             IndexOp::Frequency { fingerprint } => {
                 let fingerprint = Fingerprint(u64::from(*fingerprint));
-                let s = sut.frequency(fingerprint).await;
-                let m = model.frequency(fingerprint).await;
+                let s = sut.frequency(fingerprint, now).await;
+                let m = model.frequency(fingerprint, now).await;
                 same(step, "frequency", &s, &m)?;
             }
             IndexOp::Observe { fingerprints, at } => {
@@ -195,19 +190,19 @@ async fn run_case<S: FingerprintIndex>(
                     .map(|n| Fingerprint(u64::from(*n)))
                     .collect();
                 let at = Timestamp::from_micros(*at);
-                let s = sut.observe(&fingerprints, at).await;
-                let m = model.observe(&fingerprints, at).await;
+                let s = sut.observe(&fingerprints, at, now).await;
+                let m = model.observe(&fingerprints, at, now).await;
                 same(step, "observe", &s, &m)?;
             }
             IndexOp::Evict { spans } => {
                 let spans: Vec<SpanId> = spans.iter().map(|n| span_id(*n)).collect();
-                let s = sut.evict(&spans).await;
-                let m = model.evict(&spans).await;
+                let s = sut.evict(&spans, now).await;
+                let m = model.evict(&spans, now).await;
                 same(step, "evict", &s, &m)?;
             }
-            IndexOp::Clock { now } => clock.set(Timestamp::from_micros(*now)),
+            IndexOp::Clock { now: moved } => now = Timestamp::from_micros(*moved),
         }
-        observe(step, &sut, &model).await?;
+        observe(step, now, &sut, &model).await?;
     }
     Ok(())
 }
@@ -216,16 +211,17 @@ async fn run_case<S: FingerprintIndex>(
 /// offset 0 (when this node owns it).
 async fn observe<S: FingerprintIndex>(
     step: usize,
+    now: Timestamp,
     sut: &S,
     model: &MemoryFingerprintIndex,
-) -> Result<(), Mismatch> {
+) -> Result<(), Divergence> {
     for n in 0..8u8 {
         let fingerprint = Fingerprint(u64::from(n));
         same(
             step,
             "frequency after the step",
-            &sut.frequency(fingerprint).await,
-            &model.frequency(fingerprint).await,
+            &sut.frequency(fingerprint, now).await,
+            &model.frequency(fingerprint, now).await,
         )?;
         if model.config().owns(fingerprint) {
             let query = [PositionedFingerprint {
@@ -235,8 +231,8 @@ async fn observe<S: FingerprintIndex>(
             same(
                 step,
                 "lookup after the step",
-                &sorted(sut.lookup(&query).await),
-                &sorted(model.lookup(&query).await),
+                &sorted(sut.lookup(&query, now).await),
+                &sorted(model.lookup(&query, now).await),
             )?;
         }
     }

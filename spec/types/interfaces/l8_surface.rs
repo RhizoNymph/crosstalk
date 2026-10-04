@@ -6,16 +6,19 @@
 //! to L3's identity resolver; channel promotion goes to L5
 //! (`ChannelRegistry::promote`), and so do verdicts on transmissions
 //! (`TransmissionVerdicts::set`); alert rule management goes to L6's
-//! `AlertRuleStore`; topic-version pins go to L6's `TopicCatalog` (`pin`,
+//! `AlertRuleStore`, and acknowledging or resolving an alert to its
+//! `AlertActions`; topic-version pins go to L6's `TopicCatalog` (`pin`,
 //! `unpin`). Every action names its
 //! permission ([`OperatorAction::required_permission`]), checked before any
 //! effect. Wherever an action records an author or time, the surface stamps
 //! them from the authenticated caller and the time it accepted the action;
 //! callers cannot supply them. Every action call, whatever its outcome,
 //! leaves one [`audit::AuditEntry`], and so does every change config makes.
-//! Acknowledging or resolving an alert changes the alert store, so the
-//! surface publishes `AlertChanged` and `Changed::Alert` for it; every other
-//! action's store publishes its own `Changed`.
+//! Acknowledging or resolving an alert goes to L6's alert store
+//! (`AlertActions`), which publishes `AlertChanged` and `Changed::Alert`;
+//! as for every action, the store that changes publishes its own events and
+//! `Changed`, and the surface publishes none for it (`PolicyChanged` is the
+//! exception: it is the surface's request to L5, not a stored change).
 //!
 //! **Callers.** A [`Caller`] is built only by the [`operators::OperatorDirectory`]
 //! for one request, from the operator config defines: in trusted mode the
@@ -30,6 +33,10 @@
 //! - `LiveFeed` ([`live`]): the SSE endpoint that tells the UI, by id, what
 //!   to re-query.
 //! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
+//! - `OperatorStore` ([`operators`]): `PgOperatorStore`, the directory and
+//!   its config loads, each recorded in the audit log in its transaction.
+//! - `SinkRegistry` ([`sinks`]): `PgSinkRegistry`, the configured sinks and
+//!   their last deliveries.
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`. Each configured
 //!   sink has a [`SinkId`](crate::ids::SinkId) ([`sinks`]); an alert is delivered to the sinks its rule
 //!   lists, and `QueryApi::sinks` reports each sink's last delivery.
