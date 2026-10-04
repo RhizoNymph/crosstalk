@@ -127,6 +127,9 @@ pub enum ConflictKind {
     },
     /// Fitting a projection while the job queue is full.
     ProjectionQueueFull,
+    /// An export that would hold `rows` rows, more than the configured
+    /// `limit` (`ExportLimits`). A smaller window or narrower filter passes.
+    ExportTooLarge { rows: u64, limit: u64 },
 }
 
 /// A request that is invalid whatever the state.

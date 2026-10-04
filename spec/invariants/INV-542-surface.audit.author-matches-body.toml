@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.audit.author-matches-body"
-statement = "An AuditEntry's author is Config exactly when its body is a ConfigRecord, and otherwise is the OperatorId of the Caller its OperatorRecord was authenticated as."
+statement = "An AuditEntry's author is Config exactly when its body is a ConfigRecord, and otherwise is the OperatorId of the Caller its OperatorRecord or ExportRecord was authenticated as."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
@@ -12,7 +12,10 @@ own rather than an OperatorAction with a made-up author.
 
 [evidence]
 type = "crosstalk_spec::interfaces::l8_surface::audit::AuditEntry::by"
-unit = "crosstalk_spec::tests::audit::entry_author_follows_its_body"
+unit = [
+    "crosstalk_spec::tests::audit::entry_author_follows_its_body",
+    "crosstalk_spec::tests::export::export_entries_are_authored_by_the_caller_and_name_the_export",
+]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

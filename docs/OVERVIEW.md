@@ -58,8 +58,9 @@ Overview:
       query, typed query
       and action errors, the operator directory with a trusted single-user
       mode, operator actions with one permission each, the append-only
-      audit log of operator actions and config changes, the id-only SSE
-      live feed, alert sinks).
+      audit log of operator actions, config changes and exports, the
+      id-only SSE live feed, streamed exports with a header and trailer
+      manifest, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -87,7 +88,11 @@ Overview:
     effect, so a preview and the promotion agree), series,
     topic history, search, projections, verdicts, detection quality, lists,
     agents (canonical rows joining L3's profiles with L7's traffic in the
-    window, details following merged ids, batch names) and alerts. Every
+    window, details following merged ids, batch names), alerts and exports
+    (one dataset streamed between a header naming the request, resolved
+    version, watermark, embedding model and gateway version and a trailer
+    with the row count, a digest and whether it completed, reading only
+    data settled before the watermark). Every
     aggregate comes back with the watermark read before it; every linked
     view applies one TopologyFilter under one resolved (or pinned)
     topic-model version, with merged agents and superseded
@@ -112,7 +117,8 @@ Overview:
     are refused as MergeIntoSelf, one id twice never becomes an action);
     rule management (a stale rule is updated, never re-enabled) and
     topic-version pins to L6. Every action call is recorded in the audit
-    log with its outcome, and so is every change a config load makes.
+    log with its outcome, and so is every change a config load makes and
+    every export (refused, or started and then ended or abandoned).
 
 Features Index:
   type_spec:
@@ -147,8 +153,8 @@ Features Index:
       projections and their columnar frame; verdicts and detection quality; watermarked
       aggregates and retention; typed query and action errors with one
       From impl per store error; operator actions; the append-only audit
-      log of actions and config changes; and the id-only SSE live feed fed
-      by every store's Changed.
+      log of actions, config changes and exports; the id-only SSE live
+      feed fed by every store's Changed; and streamed exports.
     entry_points:
       - spec/types/interfaces/l8_surface.rs
       - spec/types/interfaces/l8_surface/actions.rs
@@ -160,4 +166,20 @@ Features Index:
       - spec/types/interfaces/l8_surface/overview.rs
     depends_on: [type_spec]
     doc: docs/features/query_surface.md
+  export:
+    description: >
+      QueryApi::export: one dataset (transmissions, edge or access buckets,
+      topics, a stored projection, verdicts) streamed in JSONL or Parquet
+      between a header (request, resolved topic version, watermark,
+      embedding model, gateway version, planned rows) and a trailer (rows
+      sent, a format-independent digest over a canonical row encoding,
+      Complete or the failure). Reads only data settled before the
+      watermark, under resolution captured at the start, so a re-run
+      reproduces it; content needs Content; oversized exports are refused
+      before streaming; every export is audited.
+    entry_points:
+      - spec/types/interfaces/l8_surface/export/mod.rs
+      - spec/types/interfaces/l8_surface/export/stream.rs
+    depends_on: [query_surface, type_spec]
+    doc: docs/features/export.md
 ```

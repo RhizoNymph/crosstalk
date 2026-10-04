@@ -114,6 +114,11 @@
 //! `projections` report jobs; `projection` returns a ready projection's
 //! stored frame, identical on every read until its frame expires.
 //!
+//! **Export.** `export` streams one dataset (transmissions, edge or access
+//! buckets, topics, a stored projection, verdicts) between a header and a
+//! trailer, reading only data settled before the watermark read at its
+//! start ([`export`]). It is not paged and every export is audited.
+//!
 //! **Errors.** Every method fails with a [`QueryError`]. How each store's
 //! error becomes one is defined once, by the `From` impls in
 //! [`query_errors`].
@@ -124,6 +129,7 @@ pub mod channels;
 pub mod errors;
 pub mod evidence;
 pub mod excerpt;
+pub mod export;
 pub mod lists;
 pub mod live;
 pub mod operators;
@@ -166,6 +172,7 @@ use audit::{AuditEntry, AuditFilter};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
 use evidence::TransmissionEvidence;
 use excerpt::ExcerptWindow;
+use export::{Export, ExportRequest, ExportStream};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage};
 use operators::Operator;
 use overview::OverviewCounts;
@@ -328,6 +335,9 @@ pub enum AlertStateKind {
 /// return `InvalidCursor` for a cursor the surface did not issue or issued
 /// for a different request.
 pub trait QueryApi {
+    /// The stream `export` returns.
+    type ExportRows: ExportStream;
+
     /// View. The channel stored under `id` as a [`ChannelRow`], the head of
     /// the channel page: a superseded id answers with its own record and its
     /// supersession (the UI's banner to the channel in force), not with the
@@ -756,6 +766,27 @@ pub trait QueryApi {
     /// permissions, so past decisions and audit entries can still show a
     /// name (`OperatorDirectory::operators`).
     async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>, QueryError>;
+
+    /// View, or Content when `request` includes content or names a
+    /// projection ([`ExportRequest::required_permission`]); without it,
+    /// `Forbidden { missing }` before anything is read. Reads L7's
+    /// watermark first, then plans the export (`ExportSource::plan`): the
+    /// filter's version resolved and pinned as for any linked view (errors
+    /// as for one), the window cut at the watermark, agent and channel
+    /// resolution and current verdicts captured for the whole export, the
+    /// rows counted. More rows than `ExportLimits::max_rows` is
+    /// `Conflict(ExportTooLarge)`; an unaligned window for edges or
+    /// accesses is `InvalidInput(UnalignedWindow)`; a projection that is
+    /// unknown, not ready, failed or expired fails as `projection` does.
+    /// Returns the header and the stream of rows, which always ends with a
+    /// trailer, `Complete` or recording why it failed. Every call is
+    /// audited ([`export::record`]): `Started` is appended before the
+    /// header is returned, and a failed append fails the call with `Store`.
+    async fn export(
+        &self,
+        caller: &Caller,
+        request: &ExportRequest,
+    ) -> Result<Export<Self::ExportRows>, QueryError>;
 }
 
 pub trait OperatorActions {

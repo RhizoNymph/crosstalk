@@ -32,6 +32,10 @@
 //!   the request names one id twice (no state needed) and
 //!   `Conflict(MergeIntoSelf)` when it names two ids that the merge table
 //!   resolves to one agent.
+//! - An export whose plan holds more rows than allowed is
+//!   `Conflict(ExportTooLarge)`, from `ExportLimits::check` (not a store
+//!   error). A failure after an export has started is not a `QueryError`:
+//!   the stream's trailer records it (`ExportFailure`).
 
 use super::{ActionError, ConflictKind, InputError, QueryError};
 use crate::aggregates::filter::VersionUnavailable;
@@ -49,6 +53,7 @@ use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
+use crate::interfaces::l8_surface::export::ExportPlanError;
 use crate::observed::agent::SelfMerge;
 use crate::observed::message::text::NoPartText;
 
@@ -376,6 +381,23 @@ impl From<AgentReadError> for QueryError {
         match error {
             AgentReadError::Store { reason } => Self::Store { reason },
             AgentReadError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::export` (`ExportSource::plan`). Nothing was sent, so each
+/// cause maps as it does for the view or read it repeats: a version as for
+/// any linked view, a projection as for `projection`.
+impl From<ExportPlanError> for QueryError {
+    fn from(error: ExportPlanError) -> Self {
+        match error {
+            ExportPlanError::Store { reason } => Self::Store { reason },
+            ExportPlanError::Version(version) => version.into(),
+            ExportPlanError::TopicsNotInVersion { version, topics } => {
+                Self::Conflict(ConflictKind::TopicsNotInVersion { version, topics })
+            }
+            ExportPlanError::UnalignedWindow => Self::InvalidInput(InputError::UnalignedWindow),
+            ExportPlanError::Projection(projection) => projection.into(),
         }
     }
 }

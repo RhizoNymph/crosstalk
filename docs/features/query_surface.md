@@ -38,6 +38,8 @@ that produces the data is in [type_spec.md](type_spec.md).
   filtered by author, subject and time.
 - Read-time resolution of merged agents and superseded channels in every
   response and request.
+- Export: one dataset streamed with a header and a trailer, its permission,
+  errors and audit entries (detailed in [export.md](export.md)).
 
 ## Non-scope
 
@@ -46,7 +48,9 @@ that produces the data is in [type_spec.md](type_spec.md).
 - The UI itself, HTTP routing and framing, and session verification: a
   verified session arrives as a `RequestIdentity`.
 - Serialization formats, except the projection frame's binary layout,
-  which is part of the type (`ProjectionFrame::encode` and `decode`).
+  which is part of the type (`ProjectionFrame::encode` and `decode`), and
+  the canonical row encoding an export's digest is defined over
+  (`ExportRow::encode`).
 - Undoing a promotion or a supersession.
 
 ## Data and control flow
@@ -78,7 +82,8 @@ their resources, policy histories, agents (rows, details and names),
 rules, alerts, the topic history, verdict logs and detection quality; no
 message text and no topic labels. Content is anything derived from message
 text: transmissions and their evidence, search, topics, projections and
-their jobs. Govern is identity, policy, rules and
+their jobs, and exports that include content or read a projection (other
+exports need View). Govern is identity, policy, rules and
 their sinks (`QueryApi::sinks` too, since a delivery error can name an
 endpoint) and topic-version pins; Triage is working alerts and judging
 transmissions; Operate is the pipeline (dead letters); Audit is the audit
@@ -121,15 +126,21 @@ An `AuditEntry { id, at, body }` is either `AuditBody::Operator(OperatorRecord)`
 `Succeeded(ActionOutcome)`, `Rejected(Rejection)` or `Forbidden { missing }`,
 the exact inverse of `act`'s result for every outcome and error) or
 `AuditBody::Config(ConfigRecord)` (the loaded config's `ConfigHash`, a
-typed `ConfigChange` and a `ConfigOutcome`). `OperatorRecord::new` makes an
+typed `ConfigChange` and a `ConfigOutcome`) or `AuditBody::Export(ExportRecord)`
+(the `Caller`, the `ExportRequest` and an `ExportEvent`: `Refused` with the
+`QueryError` returned, `Started` with the header, `Ended` with the trailer,
+or `Abandoned`; see [export.md](export.md)). `OperatorRecord::new` makes an
 entry `Forbidden` exactly when its caller lacks the action's permission.
 `AuditEntry::by` derives the author (`Config` or `Operator(id)`) from the
-body, so a config change never poses as an operator action.
+body, so a config change never poses as an operator action; an export's
+author is its caller's operator.
 `AuditEntry::subjects` lists the entities touched: the ids the action or
 change names (`OperatorAction::subjects`, `ConfigChange::subjects`) and the
 ids the outcome names (`ActionOutcome::subjects`: a created rule or merge
 record, or every channel a promotion superseded, so a superseded channel's
-audit history leads to the promotion that retired it). Operator entries are
+audit history leads to the promotion that retired it), or for an export
+`AuditSubject::Export(id)` and, for a projection export,
+`AuditSubject::Projection(id)`. Operator entries are
 written in the action's transaction; config entries in the change's
 transaction, and only for real changes. The `AuditLog` is append-only;
 `QueryApi::audit(caller, AuditFilter { by, subject, window }, page)` reads
@@ -557,19 +568,22 @@ for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
 `BusError` (the dead-letter list), `BlobError` and `EvidenceError` (the
 evidence: every cause is `Store`, its reason naming it), `AgentReadError`
-(agent reads) and `TooManyIds` (`InvalidInput(TooManyIds)`); for actions
-`PromotionRefusal`, `PromoteError`, `RuleError` (rule management;
-enabling a stale rule is `Conflict(RuleStale)`, since only `UpdateRule` can
-retarget it), `ResolveError` (merges, unmerges and renames: `UnknownAgent`
-and `UnknownMerge` to `NotFound`, `AgentMerged`, `MergeIntoSelf` and
+(agent reads), `TooManyIds` (`InvalidInput(TooManyIds)`) and
+`ExportPlanError` (planning an export); for actions `PromotionRefusal`,
+`PromoteError`, `RuleError` (rule management; enabling a stale rule is
+`Conflict(RuleStale)`, since only `UpdateRule` can retarget it),
+`ResolveError` (merges, unmerges and renames: `UnknownAgent` and
+`UnknownMerge` to `NotFound`, `AgentMerged`, `MergeIntoSelf` and
 `MergeAlreadyReverted` to the same-named conflicts, a resolver-only
 `Vetoed` to `Store`) and `SelfMerge` (`InvalidInput(SelfMerge)`). The
 promotion preview reads `PromoteError` through that same action mapping
 (`PromotionPreview::from_registry`), keeping conflicts as its answer and
 converting the rest with `QueryError::from`, so it adds no mapping of its
 own. `InputError::TooManyIds` is a batch lookup over its cap
-(`channel_names`). The edge store's writes fail with `EdgeError`, which
-never reaches a query.
+(`channel_names`). An export over the configured row limit is
+`Conflict(ExportTooLarge)`; a failure after an export has started is
+recorded in its trailer, not returned. The edge store's writes fail with
+`EdgeError`, which never reaches a query.
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
 topic-model version's buckets or assignments (from
@@ -647,6 +661,20 @@ the four index columns and the route kind bytes, padded to 8 bytes, with
 every section aligned for typed-array views; the full table is in
 `aggregates/projection/frame.rs`. `encode` writes it and `decode` accepts
 exactly what `encode` can produce.
+
+### Export
+
+`QueryApi::export(caller, request)` (View, or Content when the request
+includes content or names a projection) reads L7's watermark, plans the
+export (`ExportSource::plan`: the filter's version resolved and pinned as
+for any linked view, the window cut at the watermark, agent and channel
+resolution and verdicts captured once, rows counted), refuses more than
+`ExportLimits::max_rows` with `Conflict(ExportTooLarge)`, audits the start
+and returns `Export { header, rows }`. The stream (`ExportStream`) yields
+rows and then exactly one trailer: `Complete` with the row count and a
+format-independent digest, or `Failed` with why. It is a stream, not a
+paged list. The header plays the role of `Watermarked`: it carries the
+watermark read first. The full design is in [export.md](export.md).
 
 ### Retention and watermarks
 
@@ -936,18 +964,19 @@ policy.
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
 | `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (incl. `agents`, `agent`, `agent_names`), `OperatorActions`, `Caller` (built only by the directory), `Permission`, `PermissionSet`, `AlertFilter`, `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError`; re-exports the action and error types |
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind` (incl. `MergeIntoSelf`), `InputError` (incl. `SelfMerge`, `TooManyIds`) |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind` (incl. `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `TooManyIds`) |
 | `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`, `MAX_BATCH`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
 | `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage` |
 | `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `EvidenceError`, `EvidenceRecord` |
 | `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError` |
 | `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`, `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `TooManyIds` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `TooManyIds`, `ExportPlanError` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
-| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
+| `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
+| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `channel_reads.rs` (channel rows and counts, the channel filter, names, the promotion preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs`, `overview.rs` (transmission rows, evidence, excerpts, part text, overview counts); `agent_reads.rs` (agent profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `channel_reads.rs` (channel rows and counts, the channel filter, names, the promotion preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs`, `overview.rs` (transmission rows, evidence, excerpts, part text, overview counts); `agent_reads.rs` (agent profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings); `export.rs`, `export_stream.rs` (exports) | — |
 
 ## Invariants and constraints
 
@@ -1105,6 +1134,11 @@ policy.
   unsuperseded `Unreviewed` channels, unscoped. `alert(id)` equals the
   alert `alerts` lists under that id. Evidence needs Content; rows by id,
   one alert and the overview need View.
+- An export needs View, or Content when it includes content or reads a
+  projection, checked before anything is read; reads only data settled
+  before the watermark read at its start, under resolution captured then;
+  and always ends with one trailer, `Complete` only when every planned row
+  was sent. Every export call is audited. See [export.md](export.md).
 - Every `Watermarked` response (`topology`, `channel_topology`, `series`,
   `overview`, `edge_transmissions`, `channel_resources`, `channel`,
   `channels`, `topic_sizes`) carries the

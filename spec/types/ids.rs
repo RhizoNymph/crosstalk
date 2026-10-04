@@ -105,6 +105,8 @@ entity_id! {
     EventId;
     /// One audit log entry: an operator action call or a change config made.
     AuditId;
+    /// One export: its header, its trailer and its audit entries name it.
+    ExportId;
 }
 
 content_id! {
