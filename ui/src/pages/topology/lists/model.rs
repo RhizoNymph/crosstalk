@@ -323,23 +323,6 @@ pub async fn load(
     }
 }
 
-/// What the list's count shows for `query` over `keys` (search keys, one
-/// per line): the total, or how many match of it. The browser computes the
-/// same in JavaScript as the query changes.
-pub fn shown_label(keys: &str, total: usize, query: &str) -> String {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return total.to_string();
-    }
-    let shown = keys.split('\n').filter(|k| k.contains(&query)).count();
-    format!("{shown} of {total}")
-}
-
-/// Whether a search key matches the filter text.
-pub fn matches(key: &str, query: &str) -> bool {
-    key.contains(&query.trim().to_lowercase())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,15 +426,20 @@ mod tests {
     }
 
     #[test]
-    fn the_count_follows_the_filter_text() {
-        let keys = "pi-scraper 01a\nplanner 01b\nwiki.example.org 01c";
-        assert_eq!(shown_label(keys, 3, ""), "3");
-        assert_eq!(shown_label(keys, 3, "  "), "3");
-        assert_eq!(shown_label(keys, 3, "P"), "3 of 3");
-        assert_eq!(shown_label(keys, 3, "Wiki"), "1 of 3");
-        assert_eq!(shown_label(keys, 3, "nothing"), "0 of 3");
-        assert_eq!(shown_label("", 0, "x"), "0 of 0");
-        assert!(matches("pi-scraper 01a", " SCRAPER "));
-        assert!(!matches("pi-scraper 01a", "wiki"));
+    fn search_keys_are_lowercase_for_the_browser_filter() {
+        // The list's filter lowercases the text and matches it against
+        // `data-key`, so every key must already be lowercase.
+        let graph = fixtures::topology_graph().value;
+        let bipartite = fixtures::bipartite_graph().value;
+        let lists = agents_mode(&graph, Some(&bipartite), &names());
+        let keys = lists
+            .agents
+            .iter()
+            .map(AgentItem::search_key)
+            .chain(lists.channels.iter().map(ChannelItem::search_key));
+        for key in keys {
+            assert_eq!(key, key.to_lowercase());
+        }
+        assert!(lists.channels[0].search_key().contains("sanctioned"));
     }
 }

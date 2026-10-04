@@ -38,7 +38,7 @@ use topcoat::view::{View, component, view};
 use self::drawer::topology_drawer;
 use self::filters::{FilterChoices, chips, clear_href, filter_chips, filter_form, load_choices};
 use self::lists::model::{GraphLists, load as load_lists};
-use self::lists::{ListTab, graph_lists};
+use self::lists::{ListTab, graph_lists, selection_sync};
 use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
 use crate::app::{backend, caller};
 use crate::components::{Tab, error_panel, format_time, href, segmented};
@@ -312,6 +312,7 @@ async fn workspace(
     let brush_to = rfc3339(state.scope.window.end());
     let state_query = state.to_query();
     let initial = query.sel.encode();
+    let selected = initial.clone();
     let initial_tab = ListTab::for_selection(&query.sel).code();
     let sel = signal(cx, move || initial);
     let cursor = signal(cx, String::new);
@@ -333,7 +334,6 @@ async fn workspace(
                         hover.set("".to_owned());
                         let next_tab = if v.starts_with("channel:") { "channels".to_owned() } else if v.starts_with("agent:") { "agents".to_owned() } else { tab.get() };
                         tab.set(next_tab);
-                        raw!("((value) => { const v = String(value); const kept = location.search.slice(1).split('&').filter((p) => p !== '' && p.split('=')[0] !== 'sel'); if (v !== '') kept.push('sel=' + encodeURIComponent(v).replace(/%3A/g, ':')); history.replaceState(history.state, '', location.pathname + '?' + kept.join('&')); if (!v.startsWith('agent:') && !v.startsWith('channel:')) return; requestAnimationFrame(() => { const item = document.querySelector('[data-list-item=\"' + v + '\"]'); const box = item && item.closest('[data-list-scroll]'); if (!item || !box) return; const top = item.offsetTop; if (top < box.scrollTop || top + item.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = Math.max(0, top - box.clientHeight / 2); }); })(${v})");
                     })
                 ></ct-topology>
                 <ct-timebrush
@@ -350,10 +350,11 @@ async fn workspace(
             </div>
             <div class="min-w-0 lg:col-start-2 lg:row-start-1">
                 match lists {
-                    Ok(lists) => graph_lists(lists: lists, sel: &sel, cursor: &cursor, hover: &hover, tab: &tab),
+                    Ok(lists) => graph_lists(lists: lists, selected: selected, sel: &sel, cursor: &cursor, hover: &hover, tab: &tab),
                     Err(error) => error_panel(error: &error),
                 }
             </div>
+            selection_sync(sel: &sel)
             <aside class="min-w-0 lg:col-span-2 xl:col-span-1 xl:col-start-2 xl:row-start-2">
                 topology_drawer(state: state_query, sel: drawer_sel, cursor: drawer_cursor)
             </aside>

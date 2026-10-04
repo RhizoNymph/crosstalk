@@ -317,6 +317,43 @@ fn pressed_items(body: &str) -> usize {
         .count()
 }
 
+/// Bytes one list row may take: rows repeat once per agent and channel, so
+/// they carry no script, bindings or long class lists (about 0.8 KB each
+/// with the fixture's names and claims).
+const ROW_BUDGET: usize = 1_100;
+/// Bytes the lists panel may take besides its rows: tabs, filter boxes and
+/// the lists' delegated handlers and filter bindings.
+const PANEL_BUDGET: usize = 16_000;
+
+#[tokio::test]
+async fn list_rows_carry_no_script_and_stay_within_budget() {
+    for path in [url(""), url("").replace("g=agents", "g=channels")] {
+        let reply = get(&path).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        let body = &reply.body;
+        let start = body.find("<section").expect("lists panel");
+        let end = start + body[start..].find("</section>").expect("panel end");
+        let panel = &body[start..end];
+        let rows: Vec<&str> = panel
+            .split("<li>")
+            .skip(1)
+            .map(|rest| &rest[..rest.find("</li>").expect("row end")])
+            .collect();
+        assert!(rows.len() > 20, "{path}: {} rows", rows.len());
+        for row in &rows {
+            assert!(row.contains("data-list-item="), "{row}");
+            assert!(!row.contains("data-topcoat"), "a row carries script: {row}");
+            assert!(row.len() <= ROW_BUDGET, "{} bytes: {row}", row.len());
+        }
+        let row_bytes: usize = rows.iter().map(|r| r.len() + "<li></li>".len()).sum();
+        assert!(
+            panel.len() - row_bytes <= PANEL_BUDGET,
+            "{path}: the panel takes {} bytes besides its rows",
+            panel.len() - row_bytes
+        );
+    }
+}
+
 #[tokio::test]
 async fn lists_show_the_views_agents_and_the_channels_behind_its_edges() {
     let reply = get(&url("")).await;

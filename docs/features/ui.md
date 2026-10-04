@@ -110,14 +110,17 @@ browser ────────────────────────
   arrive as `data-*` attributes bound to signals
   (`:data-highlight=$(sig.get())`) and observed with
   `attributeChangedCallback`. Binding and reading use only Topcoat's typed
-  expression vocabulary. `raw!` is used for two things only. Keeping the
-  URL current: after setting the signal, the handler rewrites one query
-  key with `history.replaceState` (or, for the time brush, navigates with
-  `location.assign`); the topology graph's handler also scrolls the newly
-  selected list item into view. And the topology lists' case-insensitive
-  filter (`toLowerCase`, `includes`), with a Rust fallback that computes
-  the same on the server. Values reach `raw!` as runtime wrappers, so the
-  JavaScript converts them with `String(value)` first.
+  expression vocabulary. `raw!` is used for a few side effects the
+  vocabulary has no words for, each in one place: navigating (the time
+  brush's handler calls `location.assign`); on the topology page, one
+  binding on the `sel` signal (`lists::selection_sync`) that rewrites the
+  URL's `sel` key with `history.replaceState` when it differs, sets every
+  list row's `aria-pressed` and scrolls the selected row into view; and
+  one binding per list on its filter text, which hides rows by their
+  lowercase `data-key` and rewrites the count. Handlers only set signals,
+  so the graph, the lists and the drawer all update the URL through the
+  one binding. Values reach `raw!` as runtime wrappers, so the JavaScript
+  converts them with `String(value)` first.
 - **Shards take the view state as an argument.** A shard's endpoint does
   not see the page URL, so a page passes `state.to_query()` and the shard
   re-parses it strictly (`pages::view::state_from_query`) together with
@@ -246,11 +249,19 @@ thin bar under each row is its volume against the list's heaviest. Each
 list has a filter box (client-side, case-insensitive over name, id,
 parent, claimed harness and policy) with a live "n of N" count.
 
-Each row is a button whose click does exactly what clicking the item in
-the graph does: it sets the `sel` signal to the item's selection value
-(`agent:<ulid>`, `channel:<ulid>`), resets the drawer's cursor and
-rewrites the URL's `sel`; the graph's `data-highlight`, the drawer and the
-row's `aria-pressed` all follow the signal. Clicking the selected row
+Each row is a button (`value` = the item's selection value,
+`agent:<ulid>` or `channel:<ulid>`) whose click does exactly what clicking
+the item in the graph does: it sets the `sel` signal to that value and
+resets the drawer's cursor; the graph's `data-highlight`, the drawer, the
+URL's `sel` and the row's `aria-pressed` all follow the signal. Rows carry
+no script: each list has one delegated `click` handler and one
+`mouseover`/`mouseleave` pair on its `<ul>`, reading the event target's
+`value` (a row's children ignore the pointer, so the target is the row's
+button), and row styling is the `ct-row*` component classes in
+`styles/app.css`. A row costs about 0.8 KB of HTML with the fixture's
+names (the router test `list_rows_carry_no_script_and_stay_within_budget`
+holds it under 1.1 KB and the panel's fixed part under 16 KB); the fixture's
+`/topology` is 87 KB. Clicking the selected row
 again, or "Clear selection", clears it. Selecting in the graph marks the
 row, switches to its tab and scrolls it into view within the list; a page
 load opens the tab of the URL's selection (channels for a channel, else
@@ -827,7 +838,7 @@ checks a fixture export only.
 | Path | Role |
 | --- | --- |
 | `ui/Cargo.toml` | The `crosstalk-ui` package. Pins `topcoat = "=0.9.0"` and every other dependency exactly. `futures-core` (the version Topcoat already pulls in) names the `Stream` trait Topcoat's `Sse` response takes. |
-| `ui/build.rs`, `ui/styles/app.css` | Tailwind 4.3.3 (checksum-pinned on linux-x64) rendered from classes in `src/`. Route-kind colours are theme tokens shared with the elements. |
+| `ui/build.rs`, `ui/styles/app.css` | Tailwind 4.3.3 (checksum-pinned on linux-x64) rendered from classes in `src/`. Route-kind colours are theme tokens shared with the elements. `ct-row*` component classes style the topology list rows, which repeat per agent and channel. |
 | `ui/config.json` | Listen address, trusted operator, backend choice (`fixture { seed }`). `CROSSTALK_UI_CONFIG` overrides the path. |
 | `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. Raises `recursion_limit` to 256: pages embedding shards nest component futures past the default depth for the `Send` check. |
 | `ui/src/app.rs` | `AppBackend` (the configured backend type: `FixtureBackend`, an enum over implementations once there is more than one), `backend(cx)`, `caller(cx)` (the request's `Caller` from `config::Access`; shards and procedures call it themselves), `access(cx)`, `can(caller, permission)` (`Caller::has`). |
@@ -840,7 +851,7 @@ checks a fixture export only.
 | `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one; `<ct-live>` and its script for callers with View, and the page inside `data-live-region="page"`), `view.rs` (`defaults(cx)`: the default window, the 24 hours before `Present::now` on bucket boundaries, the bucket width from `Present::bucket_width` and the active version of `topic_versions`; `defaults_error`; async `view_state(cx)`: parse, default, redirect to canonical (an unaligned window to its snapped form); async `current_state(cx)` for the layout; async `state_from_query(cx, query)`: a shard's view-state argument, parsed strictly), one module per screen. |
 | `ui/src/pages/common/` | Shared by the pages. `action` (`perform`: `required_permission` checked, then `OperatorActions::act`, its `ActionError` a `UiError`; `settled`: `Flash::Unchanged` for an `Unchanged` outcome; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages; `ChannelPromoted { superseded }` as `promoted` or `promoted-<n>`, `Unchanged` as `unchanged`), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator names from the spec `Operator`s, `OperatorNames::of`; agent names from one `agent_names` call per `IdBatch`; `id_batches`: distinct ids in `IdBatch`es of at most `IdBatch::MAX`), `rules` (`all_rules`: `alert_rules` followed to its last page; `rule`; `RuleNames`, `rule_names`), `topics` (`default_version`; `all_topics`: a version's topics followed to their last page; `topic_trends`: one `series` grouped by topic on a 24-point grid, as `Trends`), `transmissions` (`summaries_by_id`: rows from one `transmissions_by_id` call, an empty or oversized selection refused as the spec's `TransmissionSelection` refuses it; `TransmissionRow` from a spec `TransmissionSummary`/`SummaryState`, `rows`, `transmission_table`; `route_text`, `ChannelNames` from one `channel_names` call per `IdBatch`, `summary_name` of a `ChannelRow`). |
 | `ui/src/pages/overview/` | `/`: `model` (`tiles` from one `overview` call; `load`: tiles, the heaviest edges of `topology`, newest open alerts), `mod` (the page). |
-| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush, lists and drawer sharing the `sel` signal (and the lists' `hover` and `tab` signals); `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `lists/` (`mod`: `graph_lists`, the tabbed agent and channel lists with filter boxes, and `ListTab`; `model`: `GraphLists`, `AgentItem`, `ChannelItem` and `Carried` built from the spec graphs by `agents_mode` and `channels_mode`, `load`, and `shown_label`/`matches`, the filter's server-side twins), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`, `EdgeRow` from the spec's `EdgeTransmission`), `tests`. |
+| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush, lists and drawer sharing the `sel` signal (and the lists' `hover` and `tab` signals); `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `lists/` (`mod`: `graph_lists`, the tabbed agent and channel lists with filter boxes and delegated handlers, `selection_sync` (the page's one binding keeping the URL, `aria-pressed` and scroll position in step with `sel`), and `ListTab`; `model`: `GraphLists`, `AgentItem`, `ChannelItem` and `Carried` built from the spec graphs by `agents_mode` and `channels_mode`, `load`, and the rows' lowercase `search_key`s), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`, `EdgeRow` from the spec's `EdgeTransmission`), `tests`. |
 | `ui/src/pages/transmission/` | `/transmissions/{id}` GET and POST `set-verdict`: `mod` (header from the transmission's `TransmissionSummary`, `TopicCell`, load), `model` (state in words, `Strength`, match kind and carrier labels, `ExcerptView` from a spec `Excerpt`, `QuoteView` (shown, or body dropped), co-access views from `AccessDetail`), `sections` (matches side by side, co-access timeline), `verdict` (form with the spec's `Verdict`, parser, rows from a `VerdictLog`; offered for `Triage`, saying the text is hidden without `Content`), `tests`. |
 | `ui/src/pages/explore/` | `/explore` GET and POST `fit`: `mod` (page, `ProjectionPanel`, colour-by and selection signals), `query` (`q`, `m`, `p`, `cb`, `ps`), `lasso` (`Polygon`: parse, even-odd point-in-polygon, `select` over stored points; `ProjectionSelection`), `results` (the `projection_results` shard), `search` (hits, form), `topics` (sidebar, `watch_url`), `fit` (parameters and form), `tests`. |
 | `ui/src/pages/topics/` | `/topics`: `mod` (page, version picker, tables), `model` (`version_tabs`, `topic_rows`, `remap_rows` with stale rules), `pin` (POST `/topics` `pin`/`unpin`: `PinTopicVersion`/`UnpinTopicVersion` for `Govern`, `choice` (unpin a pinned version, pin one neither dropped nor fitting), the picker's `pin_control`). |
@@ -871,7 +882,7 @@ checks a fixture export only.
 | `ui/elements/src/payloads/` | zod schemas mirroring `ui/src/data/` (`topology.ts`, `timeline.ts`), and the binary projection decoder (`projection.ts`). |
 | `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight: a channel that is not a node lights the edges routed through it), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `curvature.ts` (edges sharing a pair of nodes bend apart: reciprocal pairs to opposite sides, same-direction routes fanned out; lone edges stay straight; drawn with `@sigma/edge-curve`), `element.ts`. When sub-agents are collapsed, clicking a merged edge selects the heaviest edge it stands for. |
 | `ui/elements/src/projection/` | `transform.ts` (data ↔ normalised), `lasso.ts` (point-in-polygon, simplification, rounding), `colors.ts` (colour-by and legend), `element.ts`. |
-| `ui/elements/src/timebrush/` | `model.ts` (axis, snapping, bars, ticks), `element.ts` (SVG). |
+| `ui/elements/src/timebrush/` | `model.ts` (axis, snapping, bars, ticks; `labelledTicks` picks the finest round UTC step whose labels, measured in the element's font, keep 10 px apart, pinning edge labels inside the axis and labelling whole-day steps with the date only), `element.ts` (SVG). |
 | `ui/elements/test/` | vitest suites, and `fixtures/` (written by the Rust tests). |
 | `ui/elements/demo/index.html` | Static harness showing all three elements and their states on the fixtures (`pnpm demo`). |
 
