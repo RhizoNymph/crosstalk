@@ -19,7 +19,7 @@ fn case(name: &str) -> Case {
     anthropic::case(name).expect("the case exists")
 }
 
-const NAMES: [&str; 14] = [
+const NAMES: [&str; 15] = [
     "count_tokens",
     "hello_probe",
     "models_list",
@@ -28,6 +28,7 @@ const NAMES: [&str; 14] = [
     "rate_limited",
     "subagent_oauth_streaming",
     "system_cache_control",
+    "system_turn_streaming",
     "text_turn",
     "text_turn_streaming",
     "thinking_streaming",
@@ -86,7 +87,7 @@ fn every_event_stream_reassembles_exactly_and_ends_cleanly() {
             }
         }
     }
-    assert_eq!(streams, 7);
+    assert_eq!(streams, 8);
 }
 
 #[test]
@@ -160,7 +161,7 @@ fn failure(expect: &Expect) -> Option<ExchangeFailure> {
 fn the_required_shapes_are_covered() {
     use BlockKind::{Text, Thinking, ToolUse};
     use StopReason::{EndTurn, ToolUse as ToolStop};
-    let shapes: [(&str, bool, StopReason, &[BlockKind]); 7] = [
+    let shapes: [(&str, bool, StopReason, &[BlockKind]); 8] = [
         ("text_turn", false, EndTurn, &[Text]),
         ("text_turn_streaming", true, EndTurn, &[Text]),
         ("tool_use_streaming", true, ToolStop, &[Text, ToolUse]),
@@ -173,6 +174,7 @@ fn the_required_shapes_are_covered() {
         ),
         ("system_cache_control", true, EndTurn, &[Text]),
         ("thinking_streaming", true, EndTurn, &[Thinking, Text]),
+        ("system_turn_streaming", true, EndTurn, &[Text]),
     ];
     for (name, stream, stop, blocks) in shapes {
         let (streams, expect) = generation(name);
@@ -198,6 +200,29 @@ fn the_required_shapes_are_covered() {
     assert_eq!(
         case("hello_probe").meta.endpoint.kind(),
         EndpointKind::Probe
+    );
+}
+
+/// Claude Code's system turn: a top-level `system` array, and a `system`
+/// role inside `messages`, after the first user turn.
+#[test]
+fn the_system_turn_case_carries_both_system_prompts() {
+    let body = case("system_turn_streaming").request.json().expect("JSON");
+    assert!(body["system"].is_array(), "the top-level system prompt");
+    assert_eq!(
+        body.pointer("/messages/0/role")
+            .and_then(|role| role.as_str()),
+        Some("user")
+    );
+    assert_eq!(
+        body.pointer("/messages/1/role")
+            .and_then(|role| role.as_str()),
+        Some("system")
+    );
+    assert!(
+        body.pointer("/messages/1/content")
+            .is_some_and(|content| content.is_array()),
+        "the system turn's content is blocks"
     );
 }
 

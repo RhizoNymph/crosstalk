@@ -74,6 +74,7 @@ consistent.
 | `tool_result_followup` | The next request: history with the tool_use echoed and the tool_result in a user turn |
 | `multi_block_assistant` | Text and two parallel tool_use blocks, not streamed |
 | `system_cache_control` | The attribution block, then system blocks with `cache_control` and a 1h `ttl` paired with the `extended-cache-ttl` beta; a cache write in `usage` |
+| `system_turn_streaming` | Claude Code's system turn: the top-level `system` array, then a user turn and a `role: "system"` entry at `messages[1]` (a reminder block with `cache_control`), which the upstream accepts |
 | `thinking_streaming` | Adaptive thinking: `thinking_delta`s closed by a `signature_delta`, then text |
 | `overloaded_mid_stream` | An `overloaded_error` event after two text deltas, then the body ends |
 | `rate_limited` | 429 `rate_limit_error` with `retry-after: 17` and `x-should-retry` |
