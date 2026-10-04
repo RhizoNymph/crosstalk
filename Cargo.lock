@@ -234,6 +234,7 @@ dependencies = [
 name = "crosstalk-memory"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "crosstalk-spec",
  "proptest",
  "serde_json",

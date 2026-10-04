@@ -102,7 +102,7 @@ Overview:
       the vector and pg_trgm extensions, classified errors, serializable
       transaction retries, and a database-per-test harness gated on
       TEST_DATABASE_URL), crosstalk-memory (in-memory reference stores and
-      the model-based harnesses the Postgres stores reuse; L3 to L5 done),
+      the model-based harnesses the Postgres stores reuse; L3 to L8 done),
       crosstalk-sim (deterministic simulation) and crosstalk-testkit
       (builders, recorded corpus, fake upstreams). Layer crates may depend
       on store; memory, sim and testkit are their dev-dependencies only.
@@ -479,20 +479,31 @@ Features Index:
   memory:
     description: >
       crosstalk-memory, the in-memory reference implementation of every
-      stateful spec store, each with a model-based proptest harness that
-      runs random operation sequences on a store under test and on the
-      reference and requires equal results, events and observations. The
-      pipeline half (L3 to L5): MemoryAgents (AgentDirectory, the merge
-      log with exact unmerges and vetoes through IdentityResolver's merge,
-      unmerge and rename, a reference evidence lookup for resolve,
-      ClaimStore, ActivityStore, AgentReads), MemoryFingerprintIndex
-      (FingerprintIndex with cutoff, retention and shards),
-      MemoryChannels (ChannelRegistry and ChannelDirectory: lookups,
-      declarations, policy history, promotion by promotion::plan and its
-      coverage, supersession, resource use) and MemoryVerdicts
-      (TransmissionVerdicts), plus seeding traits for the writes the spec
-      leaves to the layer consumers. State sits behind a std RwLock per
-      store; events go to an mpsc outbox after each commit.
+      stateful spec store (roadmap P2.3), each with a model-based proptest
+      harness that runs random operation sequences on a store under test
+      and on the reference and requires equal results, events and
+      observations; the Postgres stores reuse the harnesses. The pipeline
+      half (L3 to L5): MemoryAgents (AgentDirectory, the merge log with
+      exact unmerges and vetoes through IdentityResolver's merge, unmerge
+      and rename, a reference evidence lookup for resolve, ClaimStore,
+      ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
+      with cutoff, retention and shards), MemoryChannels (ChannelRegistry
+      and ChannelDirectory: lookups, declarations, policy history,
+      promotion by promotion::plan and its coverage, supersession,
+      resource use) and MemoryVerdicts (TransmissionVerdicts), plus seeding
+      traits for the writes the spec leaves to the layer consumers; state
+      sits behind a std RwLock per store and events go to an mpsc outbox
+      after each commit; harnesses run on pipeline::harness. The insight
+      and surface half (L6 to L8): the topic catalog (fit lifecycle,
+      lineage, assignments, sizes, pins and retention), exact search and
+      projection sampling, projection jobs with leases and frame retention,
+      alert rules and triage in one transaction scope, the edge store
+      computed from stored contributions (activation, watermark, drops,
+      graph, totals, channel-centred graph, drill-down, agent traffic,
+      series), the append-only audit log, the operator directory's store
+      and the sink registry, and Fake* doubles of the computational traits;
+      harnesses run on the model module's runner, with planted mutants
+      proving each harness catches a bug.
     entry_points:
       - crates/memory/src/reconstruct/mod.rs
       - crates/memory/src/provenance/mod.rs
@@ -501,6 +512,11 @@ Features Index:
       - crates/memory/src/provenance/model.rs
       - crates/memory/src/flow/registry/model.rs
       - crates/memory/src/flow/verdicts/model.rs
-    depends_on: [type_spec, workspace]
+      - crates/memory/src/pipeline/harness.rs
+      - crates/memory/src/analysis/mod.rs
+      - crates/memory/src/topology/mod.rs
+      - crates/memory/src/surface/mod.rs
+      - crates/memory/src/model/mod.rs
+    depends_on: [type_spec, query_surface, workspace]
     doc: docs/features/memory.md
 ```

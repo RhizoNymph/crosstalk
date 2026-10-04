@@ -71,7 +71,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 | `Cargo.lock` | The workspace lock. It replaced `spec/Cargo.lock` and resolves the identical third-party versions (serde 1.0.229, serde_core, serde_derive, serde_json 1.0.151, syn 3.0.6, quote, proc-macro2, unicode-ident, itoa, memchr, zmij), with the same checksums |
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde and serde_json from the workspace pins |
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing; `crates/testkit/Cargo.toml`: see `docs/features/testkit.md`; `crates/memory/Cargo.toml`: below) |
-| `crates/memory/Cargo.toml` | Adds `proptest`, `serde_json`, `thiserror`, `tokio` (`sync`, `rt`, `macros`) and `tracing` from the workspace pins: the reference stores and their exported property harnesses |
+| `crates/memory/Cargo.toml` | Adds `blake3`, `proptest`, `serde_json`, `thiserror`, `tokio` (`sync`, `rt`, `macros`) and `tracing` from the workspace pins: the reference stores and their exported property harnesses |
 | `crates/gateway/Cargo.toml` | Adds the `crosstalk` binary and a `serde_json` dev-dependency for the architecture test |
 | `crates/sim/Cargo.toml` | Adds `thiserror`, `tracing` and `tokio` with `macros`, `rt`, `sync`, `time` and `test-util` (paused time); see [sim.md](sim.md) |
 
