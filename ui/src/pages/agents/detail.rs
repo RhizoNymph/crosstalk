@@ -364,13 +364,14 @@ pub(crate) mod tests {
             .agents(
                 &c,
                 &Default::default(),
-                &crate::contract::lists::PageRequest::first(
+                &crate::pages::common::paging::first(
                     std::num::NonZeroU32::new(1000).expect("limit"),
                 ),
             )
             .await
             .expect("agents")
-            .items;
+            .into_parts()
+            .0;
         let child = all
             .iter()
             .find(|a| a.parent.is_some())

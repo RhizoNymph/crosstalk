@@ -14,8 +14,9 @@ use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
 use crate::contract::graph::route_kind;
-use crate::contract::scope::{Scope, VerdictFilter};
 use crate::contract::verdict::Verdict;
+use crate::url::scope::Scope;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 
 use super::{Ctx, retained};
 use crate::backend::fixture::world::TxRecord;
@@ -45,7 +46,7 @@ impl<'a> Filter<'a> {
             channels: f.channels.iter().map(|c| ctx.channel(*c)).collect(),
             routes: f.route_kinds.iter().copied().collect(),
             topics: f.topics.iter().copied().collect(),
-            exclude_false: f.verdicts == VerdictFilter::ExcludeFalseDetections,
+            exclude_false: f.false_detections == FalseDetections::Exclude,
         })
     }
 

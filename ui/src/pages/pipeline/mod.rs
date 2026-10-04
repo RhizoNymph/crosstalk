@@ -22,7 +22,6 @@ use crate::components::{
     pagination,
 };
 use crate::contract::actions::OperatorAction;
-use crate::contract::lists::Cursor;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
@@ -31,6 +30,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{Cursor, DeadLetterList};
 
 const PATH: &str = "/pipeline";
 
@@ -88,8 +88,8 @@ pub fn parse(fields: &FormFields) -> std::result::Result<OperatorAction, UiError
 
 struct Letters {
     rows: Vec<LetterRow>,
-    current: Option<Cursor>,
-    next: Option<Cursor>,
+    current: Option<Cursor<DeadLetterList>>,
+    next: Option<Cursor<DeadLetterList>>,
 }
 
 async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<Letters, UiError> {
@@ -97,9 +97,9 @@ async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<Letters, UiError>
     let request = page_request(cx)?;
     let page = backend(cx).dead_letters(caller, &request).await?;
     Ok(Letters {
-        rows: page.items.iter().map(letter_row).collect(),
-        current: request.cursor,
-        next: page.next,
+        rows: page.items().iter().map(letter_row).collect(),
+        current: request.after,
+        next: page.next().cloned(),
     })
 }
 

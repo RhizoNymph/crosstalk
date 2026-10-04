@@ -34,19 +34,20 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{INPUT, LABEL, PANEL};
 use crate::components::{PageLinks, error_panel, flash_banner, format_time, href, page_header};
-use crate::contract::lists::PageRequest;
 use crate::contract::research::ProjectionJob;
 use crate::data::elements::PROJECTION_JS;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, error_for, fields_for, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
+use crate::pages::common::paging::Count;
 use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::{PageRequest, SearchList};
 
 pub const PATH: &str = "/explore";
 
@@ -121,9 +122,9 @@ const SEARCH_PAGE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(20) {
     None => std::num::NonZeroU32::MIN,
 };
 
-fn search_page(cx: &Cx) -> std::result::Result<PageRequest, UiError> {
+fn search_page(cx: &Cx) -> std::result::Result<PageRequest<SearchList>, UiError> {
     page_request(cx).map(|page| PageRequest {
-        limit: SEARCH_PAGE,
+        size: crate::pages::common::paging::size(SEARCH_PAGE.items()),
         ..page
     })
 }
@@ -177,7 +178,7 @@ async fn explore_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
 async fn explore_page(
     cx: &Cx,
     state: ViewState,
-    query: std::result::Result<(ExploreQuery, PageRequest), UiError>,
+    query: std::result::Result<(ExploreQuery, PageRequest<SearchList>), UiError>,
     flash: Option<Flash>,
     failure: Option<Failure<ExploreForm>>,
 ) -> Result<impl View> {
@@ -231,7 +232,7 @@ async fn explore_body(
     cx: &Cx,
     state: ViewState,
     query: ExploreQuery,
-    page: PageRequest,
+    page: PageRequest<SearchList>,
     fit_error: Option<UiError>,
     fit_fields: Option<FormFields>,
 ) -> Result<impl View> {

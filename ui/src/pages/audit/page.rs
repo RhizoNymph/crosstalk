@@ -18,7 +18,6 @@ use crate::components::{
     pagination, short_id, state_inputs,
 };
 use crate::contract::actions::ActionOutcome;
-use crate::contract::lists::Cursor;
 use crate::contract::research::{AuditEntry, AuditOutcome, AuditSubject};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
@@ -29,6 +28,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{AuditList, Cursor};
 
 const PATH: &str = "/audit";
 
@@ -100,8 +100,8 @@ fn list_href(state: &ViewState, query: &AuditQuery) -> String {
 struct Log {
     rows: Vec<AuditRow>,
     operators: Vec<(String, String)>,
-    current: Option<Cursor>,
-    next: Option<Cursor>,
+    current: Option<Cursor<AuditList>>,
+    next: Option<Cursor<AuditList>>,
 }
 
 async fn load(
@@ -122,13 +122,13 @@ async fn load(
     };
     Ok(Log {
         rows: page
-            .items
+            .items()
             .iter()
             .map(|e| audit_row(e, &names, query, state))
             .collect(),
         operators,
-        current: request.cursor,
-        next: page.next,
+        current: request.after,
+        next: page.next().cloned(),
     })
 }
 

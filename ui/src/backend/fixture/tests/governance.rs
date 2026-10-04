@@ -14,7 +14,7 @@ use crosstalk_spec::support::{NonEmpty, Similarity};
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::world::ChannelKey;
-use super::{caller, first, fresh, researcher, scope_with, week};
+use super::{caller, collect, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
@@ -26,7 +26,7 @@ use crate::contract::rules::{
     BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
     UserRuleSpec,
 };
-use crate::contract::scope::TopologyFilter;
+use crate::url::scope::ViewFilter;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
@@ -472,22 +472,18 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
         "the new channel counts the old traffic"
     );
     // Graphs and lists follow.
-    let rows = b
-        .transmissions(
-            &c,
-            &scope_with(
-                week().window,
-                TopologyFilter {
-                    channels: vec![wiki],
-                    ..Default::default()
-                },
-            ),
-            &TransmissionSelector::All,
-            &first(100_000),
-        )
-        .await
-        .expect("rows")
-        .items;
+    let on_wiki = scope_with(
+        week().window,
+        ViewFilter {
+            channels: vec![wiki],
+            ..Default::default()
+        },
+    );
+    let rows = collect(500, async |p| {
+        b.transmissions(&c, &on_wiki, &TransmissionSelector::All, &p)
+            .await
+    })
+    .await;
     assert_eq!(rows.len() as u64, before);
     assert!(rows.iter().all(|t| t.route == Route::Channel(new)));
     let view = b
@@ -510,7 +506,8 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
         .channels(&c, &ChannelListFilter::default(), &first(100))
         .await
         .expect("list")
-        .items;
+        .into_parts()
+        .0;
     assert!(
         listed
             .iter()

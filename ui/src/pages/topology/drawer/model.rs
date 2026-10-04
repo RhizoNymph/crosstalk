@@ -19,13 +19,12 @@ use crate::components::{agent_name, format_bytes, format_share, format_time, hre
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
 use crate::contract::graph::{TopologyView, TransmissionSelector, route_kind};
-use crate::contract::lists::PageRequest;
 use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{agent_url, channel_url};
 use crate::pages::common::lookup::{AgentNames, agent_names};
-use crate::pages::common::paging::parse_cursor;
+use crate::pages::common::paging::{Count, parse_cursor};
 use crate::pages::common::transmissions::summary_name;
 use crate::pages::common::transmissions::{
     ChannelNames, Named, TransmissionRow, channel_names, route_channel, route_text, rows,
@@ -33,6 +32,7 @@ use crate::pages::common::transmissions::{
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::PageRequest;
 
 /// Transmissions per drawer page: the drawer is narrow and short.
 pub const DRAWER_PAGE: NonZeroU32 = match NonZeroU32::new(12) {
@@ -240,8 +240,8 @@ pub async fn load(
         },
         Selection::Edge { from, to, route } => {
             let page = PageRequest {
-                cursor: cursor.clone(),
-                limit: DRAWER_PAGE,
+                after: cursor.clone(),
+                size: crate::pages::common::paging::size(DRAWER_PAGE.items()),
             };
             let selector = TransmissionSelector::Edge {
                 from,
@@ -277,8 +277,8 @@ pub async fn load(
                 route: route_text(&route, &channels),
                 route_url: route_channel(&route).map(|c| channel_url(c, &state)),
                 stats,
-                rows: rows(cx, caller, &listed.items, &state).await,
-                next: listed.next.map(|c| c.0),
+                rows: rows(cx, caller, listed.items(), &state).await,
+                next: listed.next().map(|c| c.token().to_owned()),
                 paged: cursor.is_some(),
                 focus_url: focus_url(&state, vec![from, to], Vec::new(), sel),
             })

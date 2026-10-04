@@ -128,7 +128,7 @@ async fn a_stored_projection_renders_with_highlighted_hits() {
     let query = ExploreQuery::parse(&raw).expect("query");
     let cx = &cx;
     let html = render(
-        view! { cx => explore_body(state: fixture_state(), query: query, page: PageRequest::first(NonZeroU32::new(50).expect("n")), fit_error: None, fit_fields: None) },
+        view! { cx => explore_body(state: fixture_state(), query: query, page: crate::pages::common::paging::first(NonZeroU32::new(50).expect("n")), fit_error: None, fit_fields: None) },
         cx,
     )
     .await;

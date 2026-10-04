@@ -17,13 +17,13 @@ use crate::components::{
     PageLinks, empty_state, error_panel, pagination, route_badge, state_inputs,
 };
 use crate::contract::graph::TransmissionSelector;
-use crate::contract::lists::{Cursor, PageRequest};
 use crate::contract::search::SearchRequest;
 use crate::error::UiError;
 use crate::pages::common::links::transmission_url;
 use crate::pages::common::transmissions::{TransmissionRow, rows};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{Cursor, PageRequest, SearchList};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HitRow {
@@ -38,8 +38,8 @@ pub struct HitRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hits {
     pub rows: Vec<HitRow>,
-    pub next: Option<Cursor>,
-    pub current: Option<Cursor>,
+    pub next: Option<Cursor<SearchList>>,
+    pub current: Option<Cursor<SearchList>>,
 }
 
 impl Hits {
@@ -59,7 +59,7 @@ pub async fn load_hits(
     caller: &Caller,
     query: &ExploreQuery,
     state: &ViewState,
-    page: PageRequest,
+    page: PageRequest<SearchList>,
 ) -> std::result::Result<Option<Hits>, UiError> {
     let Some(text) = &query.text else {
         return Ok(None);
@@ -72,7 +72,7 @@ pub async fn load_hits(
     let found = backend
         .search(caller, &request, &state.scope, &page)
         .await?;
-    let ids: Vec<TransmissionId> = found.items.iter().map(|h| h.transmission).collect();
+    let ids: Vec<TransmissionId> = found.items().iter().map(|h| h.transmission).collect();
     let summaries = if ids.is_empty() {
         Vec::new()
     } else {
@@ -81,10 +81,11 @@ pub async fn load_hits(
                 caller,
                 &state.scope,
                 &TransmissionSelector::Ids(ids.clone()),
-                &PageRequest::first(page.limit),
+                &crate::pages::common::paging::first(page.size.get().get()),
             )
             .await?
-            .items
+            .into_parts()
+            .0
     };
     let mut by_id: HashMap<TransmissionId, TransmissionRow> = rows(cx, caller, &summaries, state)
         .await
@@ -93,8 +94,9 @@ pub async fn load_hits(
         .collect();
     Ok(Some(Hits {
         rows: found
-            .items
-            .into_iter()
+            .items()
+            .iter()
+            .cloned()
             .map(|hit| HitRow {
                 id: hit.transmission,
                 url: transmission_url(hit.transmission, state),
@@ -103,8 +105,8 @@ pub async fn load_hits(
                 row: by_id.remove(&hit.transmission),
             })
             .collect(),
-        next: found.next,
-        current: page.cursor,
+        next: found.next().cloned(),
+        current: page.after,
     }))
 }
 

@@ -14,10 +14,10 @@ use crate::contract::evidence::{AccessDetail, MatchEvidence, TransmissionEvidenc
 use crate::contract::graph::{
     TransmissionSelector, TransmissionStateKind, TransmissionSummary, route_kind,
 };
-use crate::contract::lists::{Page, PageRequest};
-use crate::contract::scope::Scope;
 use crate::contract::search::{SearchMode, SearchRequest};
+use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::{Page, PageRequest, SearchList, TransmissionList};
 
 use super::Ctx;
 use super::page::{self, Key, newest_first};
@@ -64,8 +64,8 @@ pub fn list(
     ctx: &Ctx,
     scope: &Scope,
     selector: &TransmissionSelector,
-    page: &PageRequest,
-) -> Result<Page<TransmissionSummary>> {
+    page: &PageRequest<TransmissionList>,
+) -> Result<Page<TransmissionSummary, TransmissionList>> {
     let filter = Filter::new(ctx, scope)?;
     let items: Vec<(Key, TransmissionSummary)> = match selector {
         TransmissionSelector::All => ctx
@@ -94,7 +94,7 @@ pub fn list(
                 .collect()
         }
     };
-    page::paginate("tx", items, page)
+    page::paginate("tx", page::digest(&(scope, selector)), items, page)
 }
 
 /// The evidence page: matches with their text, accesses and verdicts.
@@ -220,8 +220,8 @@ pub fn search(
     ctx: &Ctx,
     request: &SearchRequest,
     scope: &Scope,
-    page: &PageRequest,
-) -> Result<Page<SearchHit>> {
+    page: &PageRequest<SearchList>,
+) -> Result<Page<SearchHit, SearchList>> {
     let filter = Filter::new(ctx, scope)?;
     let needle = request.text.as_str().to_lowercase();
     let words = text::tokens(request.text.as_str());
@@ -263,11 +263,21 @@ pub fn search(
             },
         ));
     }
-    let scored = page::paginate("search", items, page)?;
-    Ok(Page {
-        items: scored.items.into_iter().map(hit).collect(),
-        next: scored.next,
-    })
+    let (scored, next) =
+        page::paginate("search", page::digest(&(request, scope)), items, page)?.into_parts();
+    let hits = scored.into_iter().map(hit).collect::<Vec<_>>();
+    let overflow = |e| QueryError::Store {
+        reason: format!("page overflow: {e:?}"),
+    };
+    match (next, crosstalk_spec::support::NonEmpty::from_vec(hits)) {
+        (Some(next), Some(hits)) => Page::more(page.size, hits, next).map_err(overflow),
+        (_, hits) => Page::last(
+            page.size,
+            hits.map(crosstalk_spec::support::NonEmpty::into_vec)
+                .unwrap_or_default(),
+        )
+        .map_err(overflow),
+    }
 }
 
 /// The hit for a scored record, with a snippet around its first text match

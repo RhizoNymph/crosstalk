@@ -20,13 +20,13 @@ use crate::components::form::{BUTTON_PRIMARY, FACET, INPUT, LINK};
 use crate::components::href::state_pairs;
 use crate::components::{agent_name, href, route_kind_name, short_id};
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::lists::PageRequest;
-use crate::contract::scope::{TopologyFilter, VerdictFilter};
 use crate::pages::common::lookup::agent_names;
 use crate::pages::common::transmissions::summary_name;
 use crate::url::route::encode_kind;
+use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 
 pub const ROUTE_KINDS: [RouteKind; 4] = [
     RouteKind::Channel,
@@ -87,7 +87,7 @@ impl FilterChoices {
 pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> FilterChoices {
     let backend = backend(cx);
     let mut unfiltered = state.scope.clone();
-    unfiltered.filter = TopologyFilter::default();
+    unfiltered.filter = ViewFilter::default();
 
     let mut agents: Vec<(AgentId, String)> = match backend
         .topology(caller, &unfiltered, Weighting::Transmissions)
@@ -113,13 +113,13 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
     }
     agents.sort_by_key(|a| a.1.to_lowercase());
 
-    let request = PageRequest::first(crate::pages::common::paging::PAGE_SIZE);
+    let request = crate::pages::common::paging::first(crate::pages::common::paging::PAGE_SIZE);
     let mut channels: Vec<(ChannelId, String)> = match backend
         .channels(caller, &ChannelListFilter::default(), &request)
         .await
     {
         Ok(page) => page
-            .items
+            .items()
             .iter()
             .map(|s| (s.channel.id, summary_name(s)))
             .collect(),
@@ -168,7 +168,7 @@ pub fn chips(
     choices: &FilterChoices,
 ) -> Vec<Chip> {
     let filter = &state.scope.filter;
-    let link = |change: &dyn Fn(&mut TopologyFilter)| {
+    let link = |change: &dyn Fn(&mut ViewFilter)| {
         let mut next = state.clone();
         change(&mut next.scope.filter);
         href(path, &next, extra)
@@ -202,11 +202,11 @@ pub fn chips(
             remove: link(&|f| f.topics = without(&filter.topics, *id)),
         });
     }
-    if filter.verdicts == VerdictFilter::ExcludeFalseDetections {
+    if filter.false_detections == FalseDetections::Exclude {
         out.push(Chip {
             facet: "verdict",
             label: "excluding false detections".to_owned(),
-            remove: link(&|f| f.verdicts = VerdictFilter::IncludeAll),
+            remove: link(&|f| f.false_detections = FalseDetections::Include),
         });
     }
     out
@@ -215,7 +215,7 @@ pub fn chips(
 /// The link that clears the whole filter.
 pub fn clear_href(path: &str, state: &ViewState, extra: &[(&str, &str)]) -> String {
     let mut next = state.clone();
-    next.scope.filter = TopologyFilter::default();
+    next.scope.filter = ViewFilter::default();
     href(path, &next, extra)
 }
 
@@ -227,7 +227,7 @@ pub fn base_inputs(state: &ViewState) -> Vec<(String, String)> {
         .collect()
 }
 
-fn agent_choices(choices: &FilterChoices, filter: &TopologyFilter) -> Vec<Choice> {
+fn agent_choices(choices: &FilterChoices, filter: &ViewFilter) -> Vec<Choice> {
     choices
         .agents
         .iter()
@@ -239,7 +239,7 @@ fn agent_choices(choices: &FilterChoices, filter: &TopologyFilter) -> Vec<Choice
         .collect()
 }
 
-fn channel_choices(choices: &FilterChoices, filter: &TopologyFilter) -> Vec<Choice> {
+fn channel_choices(choices: &FilterChoices, filter: &ViewFilter) -> Vec<Choice> {
     let mut out: Vec<Choice> = choices
         .channels
         .iter()
@@ -261,7 +261,7 @@ fn channel_choices(choices: &FilterChoices, filter: &TopologyFilter) -> Vec<Choi
     out
 }
 
-fn route_choices(filter: &TopologyFilter) -> Vec<Choice> {
+fn route_choices(filter: &ViewFilter) -> Vec<Choice> {
     ROUTE_KINDS
         .iter()
         .map(|k| Choice {
@@ -274,7 +274,7 @@ fn route_choices(filter: &TopologyFilter) -> Vec<Choice> {
 
 /// Topic choices, or `None` without `Content`. Filtered topics stay
 /// checked (by id) even when the version's list lacks them.
-fn topic_choices(choices: &FilterChoices, filter: &TopologyFilter) -> Option<Vec<Choice>> {
+fn topic_choices(choices: &FilterChoices, filter: &ViewFilter) -> Option<Vec<Choice>> {
     let topics = choices.topics.as_ref()?;
     let mut out: Vec<Choice> = topics
         .iter()
@@ -353,7 +353,7 @@ pub async fn filter_form(
     let channels = channel_choices(&choices, filter);
     let routes = route_choices(filter);
     let topics = topic_choices(&choices, filter);
-    let exclude = filter.verdicts == VerdictFilter::ExcludeFalseDetections;
+    let exclude = filter.false_detections == FalseDetections::Exclude;
     Ok(view! {
         <form method="get" action=(action) class="flex flex-wrap items-center gap-1.5">
             for (name, value) in hidden {
@@ -417,12 +417,12 @@ mod tests {
     #[test]
     fn chips_remove_one_value_each() {
         let mut state = state();
-        state.scope.filter = TopologyFilter {
+        state.scope.filter = ViewFilter {
             agents: vec![AgentId::from_ulid(1), AgentId::from_ulid(3)],
             channels: vec![ChannelId::from_ulid(2)],
             route_kinds: vec![RouteKind::Channel],
             topics: vec![TopicId::from_ulid(4)],
-            verdicts: VerdictFilter::ExcludeFalseDetections,
+            false_detections: FalseDetections::Exclude,
         };
         let chips = chips("/topology", &state, &[("sel", "")], &choices());
         let labels: Vec<_> = chips.iter().map(|c| (c.facet, c.label.as_str())).collect();
@@ -455,10 +455,10 @@ mod tests {
 
     #[test]
     fn filtered_values_stay_offered() {
-        let filter = TopologyFilter {
+        let filter = ViewFilter {
             channels: vec![ChannelId::from_ulid(9)],
             topics: vec![TopicId::from_ulid(5)],
-            ..TopologyFilter::default()
+            ..ViewFilter::default()
         };
         let channels = channel_choices(&choices(), &filter);
         assert_eq!(channels.len(), 2);

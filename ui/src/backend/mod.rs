@@ -17,7 +17,7 @@ use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::TimeWindow;
 
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
@@ -29,17 +29,20 @@ use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
     BipartiteView, Timeline, TopologyView, TransmissionSelector, TransmissionSummary,
 };
-use crate::contract::lists::{Page, PageRequest};
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
     QualityRow,
 };
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::scope::Scope;
 use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
+use crate::url::scope::Scope;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::{
+    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest, SearchList,
+    TransmissionList,
+};
 
 pub type Result<T> = std::result::Result<T, QueryError>;
 
@@ -47,10 +50,6 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 /// pages can call them from Topcoat's multi-threaded runtime.
 pub trait Backend: Send + Sync + 'static {
     // The present (item 27). Both need `View`.
-
-    /// The end of the data a default view shows: the gateway's clock, or the
-    /// fixture's fixed `now`.
-    fn now(&self, caller: &Caller) -> impl Future<Output = Result<Timestamp>> + Send;
 
     /// The newest fitted topic-model version, which views default to. The
     /// version number is not content, so this needs only `View`.
@@ -89,8 +88,8 @@ pub trait Backend: Send + Sync + 'static {
         caller: &Caller,
         scope: &Scope,
         selector: &TransmissionSelector,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<TransmissionSummary>>> + Send;
+        page: &PageRequest<TransmissionList>,
+    ) -> impl Future<Output = Result<Page<TransmissionSummary, TransmissionList>>> + Send;
 
     /// Needs `Content`.
     fn transmission(
@@ -106,8 +105,8 @@ pub trait Backend: Send + Sync + 'static {
         caller: &Caller,
         request: &SearchRequest,
         scope: &Scope,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<SearchHit>>> + Send;
+        page: &PageRequest<SearchList>,
+    ) -> impl Future<Output = Result<Page<SearchHit, SearchList>>> + Send;
 
     fn topic_versions(
         &self,
@@ -159,8 +158,8 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         caller: &Caller,
         filter: &ChannelListFilter,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<ChannelSummary>>> + Send;
+        page: &PageRequest<ChannelList>,
+    ) -> impl Future<Output = Result<Page<ChannelSummary, ChannelList>>> + Send;
 
     fn channel(
         &self,
@@ -189,8 +188,8 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         caller: &Caller,
         filter: &AgentListFilter,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<AgentSummary>>> + Send;
+        page: &PageRequest<AgentList>,
+    ) -> impl Future<Output = Result<Page<AgentSummary, AgentList>>> + Send;
 
     /// Resolves aliases: asking for a merged agent returns its canonical
     /// agent.
@@ -224,8 +223,8 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         caller: &Caller,
         filter: &AlertFilter,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<Alert>>> + Send;
+        page: &PageRequest<AlertList>,
+    ) -> impl Future<Output = Result<Page<Alert, AlertList>>> + Send;
 
     /// One alert by id (item 25).
     fn alert(
@@ -250,8 +249,8 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         caller: &Caller,
         filter: &AuditFilter,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<AuditEntry>>> + Send;
+        page: &PageRequest<AuditList>,
+    ) -> impl Future<Output = Result<Page<AuditEntry, AuditList>>> + Send;
 
     fn operators(&self, caller: &Caller) -> impl Future<Output = Result<Vec<Operator>>> + Send;
 
@@ -259,8 +258,8 @@ pub trait Backend: Send + Sync + 'static {
     fn dead_letters(
         &self,
         caller: &Caller,
-        page: &PageRequest,
-    ) -> impl Future<Output = Result<Page<DeadLetter>>> + Send;
+        page: &PageRequest<DeadLetterList>,
+    ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>>> + Send;
 
     // Actions (item 13).
 

@@ -46,17 +46,22 @@ use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
     BipartiteView, Timeline, TopologyView, TransmissionSelector, TransmissionSummary,
 };
-use crate::contract::lists::{Page, PageRequest};
+use crate::contract::present::Present;
 use crate::contract::research::{
     AuditEntry, AuditFilter, Operator, ProjectionJob, ProjectionParams, ProjectionPoints,
     QualityRow,
 };
 use crate::contract::rules::{RuleDef, SinkInfo};
-use crate::contract::scope::Scope;
 use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
+use crate::url::scope::Scope;
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::{
+    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest, SearchList,
+    TransmissionList,
+};
 
 use queries::{Ctx, require};
 use store::State;
@@ -112,14 +117,22 @@ impl FixtureBackend {
     }
 }
 
-impl Backend for FixtureBackend {
+impl Present for FixtureBackend {
+    /// Five minutes: the watermark, ten minutes before `now`, is a bucket
+    /// boundary.
+    fn bucket_width(&self) -> BucketWidth {
+        clock::BUCKET
+    }
+
     /// The end of the generated data. Buckets before the watermark (ten
     /// minutes earlier) are final.
     async fn now(&self, caller: &Caller) -> Result<Timestamp> {
         require(caller, Permission::View)?;
         Ok(clock::NOW)
     }
+}
 
+impl Backend for FixtureBackend {
     async fn current_topic_version(&self, caller: &Caller) -> Result<TopicModelVersion> {
         require(caller, Permission::View)?;
         Ok(self.world.topics.latest())
@@ -163,8 +176,8 @@ impl Backend for FixtureBackend {
         caller: &Caller,
         scope: &Scope,
         selector: &TransmissionSelector,
-        page: &PageRequest,
-    ) -> Result<Page<TransmissionSummary>> {
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<Page<TransmissionSummary, TransmissionList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::transmissions::list(ctx, scope, selector, page))
             .await
@@ -185,8 +198,8 @@ impl Backend for FixtureBackend {
         caller: &Caller,
         request: &SearchRequest,
         scope: &Scope,
-        page: &PageRequest,
-    ) -> Result<Page<SearchHit>> {
+        page: &PageRequest<SearchList>,
+    ) -> Result<Page<SearchHit, SearchList>> {
         require(caller, Permission::Content)?;
         self.read(|ctx| queries::transmissions::search(ctx, request, scope, page))
             .await
@@ -268,8 +281,8 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         filter: &ChannelListFilter,
-        page: &PageRequest,
-    ) -> Result<Page<ChannelSummary>> {
+        page: &PageRequest<ChannelList>,
+    ) -> Result<Page<ChannelSummary, ChannelList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::channels(ctx, filter, page))
             .await
@@ -307,8 +320,8 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         filter: &AgentListFilter,
-        page: &PageRequest,
-    ) -> Result<Page<AgentSummary>> {
+        page: &PageRequest<AgentList>,
+    ) -> Result<Page<AgentSummary, AgentList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::agents(ctx, filter, page))
             .await
@@ -342,8 +355,8 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         filter: &AlertFilter,
-        page: &PageRequest,
-    ) -> Result<Page<Alert>> {
+        page: &PageRequest<AlertList>,
+    ) -> Result<Page<Alert, AlertList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::alerts(ctx, filter, page))
             .await
@@ -379,8 +392,8 @@ impl Backend for FixtureBackend {
         &self,
         caller: &Caller,
         filter: &AuditFilter,
-        page: &PageRequest,
-    ) -> Result<Page<AuditEntry>> {
+        page: &PageRequest<AuditList>,
+    ) -> Result<Page<AuditEntry, AuditList>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::audit(ctx, filter, page))
             .await
@@ -391,7 +404,11 @@ impl Backend for FixtureBackend {
         Ok(self.world.operators.clone())
     }
 
-    async fn dead_letters(&self, caller: &Caller, page: &PageRequest) -> Result<Page<DeadLetter>> {
+    async fn dead_letters(
+        &self,
+        caller: &Caller,
+        page: &PageRequest<DeadLetterList>,
+    ) -> Result<Page<DeadLetter, DeadLetterList>> {
         require(caller, Permission::Operate)?;
         self.read(|ctx| queries::lists::dead_letters(ctx, page))
             .await

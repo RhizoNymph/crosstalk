@@ -21,7 +21,6 @@ use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
 use crate::contract::graph::route_kind;
-use crate::contract::lists::{Page, PageRequest};
 use crate::contract::research::{
     Actor, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, AuditedAction, MatchKindName,
     QualityRow,
@@ -30,6 +29,9 @@ use crate::contract::verdict::Verdict;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::MergeId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::{
+    AgentList, AlertList, AuditList, ChannelList, DeadLetterList, Page, PageRequest,
+};
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};
@@ -38,8 +40,8 @@ use super::summaries;
 pub fn channels(
     ctx: &Ctx,
     filter: &ChannelListFilter,
-    page: &PageRequest,
-) -> Result<Page<ChannelSummary>> {
+    page: &PageRequest<ChannelList>,
+) -> Result<Page<ChannelSummary, ChannelList>> {
     let items = ctx
         .state
         .channels
@@ -60,7 +62,7 @@ pub fn channels(
             )
         })
         .collect();
-    page::paginate("channels", items, page)
+    page::paginate("channels", page::digest(filter), items, page)
 }
 
 pub fn channel(ctx: &Ctx, id: ChannelId) -> Option<ChannelSummary> {
@@ -141,8 +143,8 @@ fn keeps(filter: &AgentListFilter, summary: &AgentSummary) -> bool {
 pub fn agents(
     ctx: &Ctx,
     filter: &AgentListFilter,
-    page: &PageRequest,
-) -> Result<Page<AgentSummary>> {
+    page: &PageRequest<AgentList>,
+) -> Result<Page<AgentSummary, AgentList>> {
     let counts = summaries::global_counts(ctx);
     // Parents name canonical agents; an alias asks for its canonical agent.
     let filter = AgentListFilter {
@@ -156,7 +158,7 @@ pub fn agents(
             keeps(&filter, &summary).then(|| ((0, id.as_ulid()), summary))
         })
         .collect();
-    page::paginate("agents", items, page)
+    page::paginate("agents", page::digest(&filter), items, page)
 }
 
 pub fn agent(ctx: &Ctx, id: AgentId) -> Option<AgentDetail> {
@@ -223,7 +225,11 @@ fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
     }
 }
 
-pub fn alerts(ctx: &Ctx, filter: &AlertFilter, page: &PageRequest) -> Result<Page<Alert>> {
+pub fn alerts(
+    ctx: &Ctx,
+    filter: &AlertFilter,
+    page: &PageRequest<AlertList>,
+) -> Result<Page<Alert, AlertList>> {
     let channel = filter.channel.map(|c| ctx.channel(c));
     let items = ctx
         .state
@@ -233,7 +239,7 @@ pub fn alerts(ctx: &Ctx, filter: &AlertFilter, page: &PageRequest) -> Result<Pag
         .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
         .map(|a| (newest_first(a.raised_at, a.id.as_ulid()), a.clone()))
         .collect();
-    page::paginate("alerts", items, page)
+    page::paginate("alerts", page::digest(filter), items, page)
 }
 
 fn match_kind_name(kind: &MatchKind) -> MatchKindName {
@@ -341,7 +347,11 @@ fn subject_matches(ctx: &Ctx, wanted: AuditSubject, subject: AuditSubject) -> bo
     }
 }
 
-pub fn audit(ctx: &Ctx, filter: &AuditFilter, page: &PageRequest) -> Result<Page<AuditEntry>> {
+pub fn audit(
+    ctx: &Ctx,
+    filter: &AuditFilter,
+    page: &PageRequest<AuditList>,
+) -> Result<Page<AuditEntry, AuditList>> {
     let items = ctx
         .state
         .audit
@@ -360,10 +370,13 @@ pub fn audit(ctx: &Ctx, filter: &AuditFilter, page: &PageRequest) -> Result<Page
         })
         .map(|e| (newest_first(e.at, e.id.as_ulid()), e.clone()))
         .collect();
-    page::paginate("audit", items, page)
+    page::paginate("audit", page::digest(filter), items, page)
 }
 
-pub fn dead_letters(ctx: &Ctx, page: &PageRequest) -> Result<Page<DeadLetter>> {
+pub fn dead_letters(
+    ctx: &Ctx,
+    page: &PageRequest<DeadLetterList>,
+) -> Result<Page<DeadLetter, DeadLetterList>> {
     let items = ctx
         .state
         .dead_letters
@@ -375,5 +388,5 @@ pub fn dead_letters(ctx: &Ctx, page: &PageRequest) -> Result<Page<DeadLetter>> {
             )
         })
         .collect();
-    page::paginate("dead-letters", items, page)
+    page::paginate("dead-letters", 0, items, page)
 }

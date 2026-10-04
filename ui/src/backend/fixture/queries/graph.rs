@@ -16,7 +16,7 @@ use crate::backend::Result;
 use crate::backend::fixture::clock::WATERMARK;
 use crate::backend::fixture::world::TxRecord;
 use crate::contract::graph::{AccessEdge, BipartiteView, Timeline, TimelineBucket, TopologyView};
-use crate::contract::scope::Scope;
+use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::scope::Filter;

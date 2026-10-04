@@ -12,10 +12,10 @@ use super::drawer::model::{Drawer, load};
 use super::selection::Selection;
 use super::*;
 use crate::backend::fixture::FixtureBackend;
-use crate::contract::lists::PageRequest;
 use crate::testing::{cx, get};
 use crate::url::ulid::UlidId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::paging::PageRequest;
 
 /// The default window of the fixture world (the last day) under v2.
 pub fn fixture_state() -> ViewState {
@@ -28,8 +28,8 @@ fn everyone() -> Caller {
     crate::testing::operator().caller()
 }
 
-fn first(limit: u32) -> PageRequest {
-    PageRequest::first(NonZeroU32::new(limit).expect("limit"))
+fn first<L>(limit: u32) -> PageRequest<L> {
+    crate::pages::common::paging::first(NonZeroU32::new(limit).expect("limit"))
 }
 
 /// The heaviest edge of the fixture's default view, as a selection.
@@ -62,7 +62,7 @@ pub async fn agent_labelled(label: &str) -> crosstalk_spec::ids::AgentId {
         )
         .await
         .expect("agents");
-    page.items
+    page.items()
         .iter()
         .find(|a| a.label.as_ref().is_some_and(|l| l.as_str() == label))
         .map(|a| a.id)

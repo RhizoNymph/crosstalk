@@ -7,11 +7,11 @@ use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use crate::app::can;
 use crate::components::{format_time, route_kind_name, short_id};
 use crate::contract::research::{ExportDataset, ExportFormat, ExportRequest};
-use crate::contract::scope::VerdictFilter;
 use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
@@ -189,9 +189,9 @@ pub fn describe(request: &ExportRequest) -> Vec<(&'static str, String)> {
         ("topics", ids(filter.topics.iter().map(|t| t.to_ulid()))),
         (
             "verdicts",
-            match filter.verdicts {
-                VerdictFilter::IncludeAll => "all".to_owned(),
-                VerdictFilter::ExcludeFalseDetections => "excluding false detections".to_owned(),
+            match filter.false_detections {
+                FalseDetections::Include => "all".to_owned(),
+                FalseDetections::Exclude => "excluding false detections".to_owned(),
             },
         ),
         ("format", format_label(request.format).to_owned()),

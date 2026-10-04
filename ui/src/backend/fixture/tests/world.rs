@@ -1,6 +1,7 @@
 //! The generated world: determinism, size, and the traffic every page
 //! relies on.
 
+use crate::contract::present::Present;
 use std::collections::HashSet;
 use std::time::Instant;
 

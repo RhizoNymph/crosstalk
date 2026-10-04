@@ -16,9 +16,10 @@ use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditFilter, ProjectionJob};
-use crate::contract::scope::{Scope, TopologyFilter, VerdictFilter};
 use crate::contract::search::SearchMode;
 use crate::contract::verdict::Verdict;
+use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::aggregates::filter::FalseDetections;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
@@ -59,7 +60,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
             )
             .await
             .expect("search");
-        assert!(!hits.items.is_empty());
+        assert!(!hits.items().is_empty());
         let stats = b.topic_stats(&c, &scope, n(12)).await.expect("stats");
         assert!(stats.iter().map(|s| s.transmissions).sum::<u64>() > 0);
         let id = b
@@ -88,7 +89,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         !b.channels(&c, &ChannelListFilter::default(), &first(50))
             .await
             .expect("channels")
-            .items
+            .items()
             .is_empty()
     );
     assert!(
@@ -101,7 +102,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         !b.agents(&c, &Default::default(), &first(50))
             .await
             .expect("agents")
-            .items
+            .items()
             .is_empty()
     );
     assert!(b.agent(&c, agent("cc0")).await.expect("agent").is_some());
@@ -109,7 +110,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         !b.alerts(&c, &AlertFilter::default(), &first(50))
             .await
             .expect("alerts")
-            .items
+            .items()
             .is_empty()
     );
     assert!(b.rules(&c).await.expect("rules").len() >= 9);
@@ -118,7 +119,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         !b.audit(&c, &AuditFilter::default(), &first(50))
             .await
             .expect("audit")
-            .items
+            .items()
             .is_empty()
     );
     assert_eq!(b.operators(&c).await.expect("operators").len(), 2);
@@ -126,7 +127,7 @@ async fn every_method_answers_for_the_day_and_the_week() {
         !b.dead_letters(&c, &first(50))
             .await
             .expect("dead letters")
-            .items
+            .items()
             .is_empty()
     );
     assert_eq!(b.topic_versions(&c).await.expect("versions").len(), 3);
@@ -281,7 +282,7 @@ async fn agent_filter_matches_sender_or_reader_after_alias_resolution() {
     let by_canonical = b
         .topology(
             &researcher(),
-            &with(TopologyFilter {
+            &with(ViewFilter {
                 agents: vec![cc0],
                 ..Default::default()
             }),
@@ -300,7 +301,7 @@ async fn agent_filter_matches_sender_or_reader_after_alias_resolution() {
     let by_alias = b
         .topology(
             &researcher(),
-            &with(TopologyFilter {
+            &with(ViewFilter {
                 agents: vec![al0],
                 ..Default::default()
             }),
@@ -322,12 +323,12 @@ async fn channel_filter_follows_supersession() {
     let b = shared();
     let notes = channel(ChannelKey::TeamNotes);
     let old = channel(ChannelKey::OldTeamNotes);
-    let by_new = all_transmissions(&with(TopologyFilter {
+    let by_new = all_transmissions(&with(ViewFilter {
         channels: vec![notes],
         ..Default::default()
     }))
     .await;
-    let by_old = all_transmissions(&with(TopologyFilter {
+    let by_old = all_transmissions(&with(ViewFilter {
         channels: vec![old],
         ..Default::default()
     }))
@@ -352,7 +353,7 @@ async fn channel_filter_follows_supersession() {
 #[tokio::test]
 async fn route_and_topic_filters_and_their_conjunction() {
     let routes = vec![RouteKind::Delegation, RouteKind::Direct];
-    let by_route = all_transmissions(&with(TopologyFilter {
+    let by_route = all_transmissions(&with(ViewFilter {
         route_kinds: routes.clone(),
         ..Default::default()
     }))
@@ -365,7 +366,7 @@ async fn route_and_topic_filters_and_their_conjunction() {
         .topics
         .theme_topic(TopicModelVersion(2), super::super::text::Theme::Credentials)
         .expect("topic");
-    let by_topic = all_transmissions(&with(TopologyFilter {
+    let by_topic = all_transmissions(&with(ViewFilter {
         topics: vec![topic],
         ..Default::default()
     }))
@@ -376,7 +377,7 @@ async fn route_and_topic_filters_and_their_conjunction() {
         "outliers never match"
     );
 
-    let both = all_transmissions(&with(TopologyFilter {
+    let both = all_transmissions(&with(ViewFilter {
         topics: vec![topic],
         route_kinds: routes.clone(),
         ..Default::default()
@@ -391,7 +392,7 @@ async fn route_and_topic_filters_and_their_conjunction() {
     // Topics are read under the scope's version: v1 ids do not match v2.
     let v1_scope = Scope {
         topic_version: TopicModelVersion(1),
-        ..with(TopologyFilter {
+        ..with(ViewFilter {
             topics: vec![topic],
             ..Default::default()
         })
@@ -406,8 +407,8 @@ async fn verdict_filter_drops_false_detections() {
         all.iter()
             .any(|t| t.verdict == Some(Verdict::FalseDetection))
     );
-    let kept = all_transmissions(&with(TopologyFilter {
-        verdicts: VerdictFilter::ExcludeFalseDetections,
+    let kept = all_transmissions(&with(ViewFilter {
+        false_detections: FalseDetections::Exclude,
         ..Default::default()
     }))
     .await;

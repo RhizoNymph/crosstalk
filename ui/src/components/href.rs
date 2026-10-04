@@ -61,7 +61,7 @@ pub(crate) mod tests {
     use crosstalk_spec::support::{TimeWindow, Timestamp};
 
     use super::*;
-    use crate::contract::scope::{Scope, TopologyFilter};
+    use crate::url::scope::{Scope, ViewFilter};
     use crate::url::view_state::GraphMode;
 
     /// 2026-10-02T00:00:00Z to 2026-10-03T00:00:00Z, version 3, no filter.
@@ -76,7 +76,7 @@ pub(crate) mod tests {
                 )
                 .expect("window"),
                 topic_version: TopicModelVersion(3),
-                filter: TopologyFilter::default(),
+                filter: ViewFilter::default(),
             },
             weighting: Weighting::Transmissions,
             graph: GraphMode::Agents,

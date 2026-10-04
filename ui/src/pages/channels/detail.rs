@@ -24,7 +24,6 @@ use crate::components::{
 };
 use crate::contract::alerts::Alert;
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
-use crate::contract::lists::PageRequest;
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
@@ -170,11 +169,15 @@ async fn load(
         channel: Some(id),
     };
     let alerts = backend
-        .alerts(caller, &filter, &PageRequest::first(PAGE_SIZE))
+        .alerts(
+            caller,
+            &filter,
+            &crate::pages::common::paging::first(PAGE_SIZE),
+        )
         .await
         .map_err(UiError::from)
         .map(|page| {
-            page.items
+            page.items()
                 .iter()
                 .map(|a: &Alert| AlertRow::new(a, &rules, &operators, state))
                 .collect()
@@ -186,12 +189,17 @@ async fn load(
         window: None,
     };
     let history = backend
-        .audit(caller, &audit_filter, &PageRequest::first(PAGE_SIZE))
+        .audit(
+            caller,
+            &audit_filter,
+            &crate::pages::common::paging::first(PAGE_SIZE),
+        )
         .await
         .map_err(UiError::from)
         .map(|page| {
             let entries: Vec<_> = page
-                .items
+                .into_parts()
+                .0
                 .into_iter()
                 .filter(|e| is_policy_change(&e.action))
                 .collect();

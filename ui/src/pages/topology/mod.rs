@@ -14,6 +14,7 @@ pub mod filters;
 pub mod query;
 pub mod selection;
 
+use crate::contract::present::Present;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::edge::Weighting;

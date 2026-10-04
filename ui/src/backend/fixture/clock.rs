@@ -4,6 +4,9 @@
 //! time part is the entity's creation time, so ids sort by time like the
 //! gateway's.
 
+use std::num::NonZeroU64;
+
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::support::Timestamp;
 
 use super::rng::Rng;
@@ -22,7 +25,14 @@ pub const DAYS: u64 = 7;
 /// The first instant of generated traffic.
 pub const START: Timestamp = Timestamp::from_micros(NOW.as_micros() - DAYS * DAY);
 
-/// Every bucket before this is final.
+/// The width of every aggregate bucket: windows start and end on its
+/// multiples.
+pub const BUCKET: BucketWidth = BucketWidth::from_micros(match NonZeroU64::new(5 * MINUTE) {
+    Some(width) => width,
+    None => NonZeroU64::MIN,
+});
+
+/// Every bucket before this is final. A bucket boundary.
 pub const WATERMARK: Timestamp = Timestamp::from_micros(NOW.as_micros() - 10 * MINUTE);
 
 /// The correlation window: a read further than this after a write is not a
@@ -74,6 +84,13 @@ mod tests {
     fn now_is_2026_10_03() {
         assert_eq!(NOW.as_micros(), 1_790_985_600_000_000);
         assert_eq!(NOW.as_micros() - START.as_micros(), 7 * DAY);
+    }
+
+    #[test]
+    fn the_clock_sits_on_bucket_boundaries() {
+        for at in [NOW, START, WATERMARK] {
+            assert!(BUCKET.is_boundary(at), "{at:?}");
+        }
     }
 
     #[test]

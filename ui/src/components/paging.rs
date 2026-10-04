@@ -5,8 +5,8 @@ use topcoat::view::{View, component, view};
 
 use super::form::LINK;
 use super::href::href;
-use crate::contract::lists::Cursor;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::Cursor;
 
 /// Links for a cursor-paged list.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -19,16 +19,16 @@ pub struct PageLinks {
 
 impl PageLinks {
     /// `extra` are the page's own query pairs, without the cursor.
-    pub fn new(
+    pub fn new<L>(
         path: &str,
         state: &ViewState,
         extra: &[(&str, &str)],
-        current: Option<&Cursor>,
-        next: Option<&Cursor>,
+        current: Option<&Cursor<L>>,
+        next: Option<&Cursor<L>>,
     ) -> Self {
-        let with_cursor = |cursor: &Cursor| {
+        let with_cursor = |cursor: &Cursor<L>| {
             let mut pairs = extra.to_vec();
-            pairs.push(("cursor", cursor.0.as_str()));
+            pairs.push(("cursor", cursor.token()));
             href(path, state, &pairs)
         };
         Self {
@@ -58,12 +58,18 @@ pub async fn pagination(links: PageLinks) -> Result<impl View> {
 
 #[cfg(test)]
 mod tests {
+    use crosstalk_spec::paging::AgentList;
+
     use super::*;
     use crate::components::href::tests::state;
 
+    fn cursor(token: &str) -> Cursor<AgentList> {
+        Cursor::from_token(token.to_owned()).expect("token")
+    }
+
     #[test]
     fn first_page_has_only_next() {
-        let next = Cursor("c2".into());
+        let next = cursor("c2");
         let links = PageLinks::new("/agents", &state(), &[], None, Some(&next));
         assert_eq!(links.first, None);
         assert!(
@@ -76,7 +82,7 @@ mod tests {
 
     #[test]
     fn later_pages_link_back_without_cursor() {
-        let current = Cursor("c2".into());
+        let current = cursor("c2");
         let links = PageLinks::new(
             "/alerts",
             &state(),

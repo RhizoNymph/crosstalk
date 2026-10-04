@@ -20,7 +20,6 @@ use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
 };
-use crate::contract::lists::PageRequest;
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::contract::rules::{RuleDef, RuleKind};
 use crate::error::UiError;
@@ -84,10 +83,14 @@ async fn load(
         ..AuditFilter::default()
     };
     let history = backend
-        .audit(caller, &filter, &PageRequest::first(HISTORY))
+        .audit(
+            caller,
+            &filter,
+            &crate::pages::common::paging::first(HISTORY),
+        )
         .await
         .map_err(UiError::from)
-        .map(|page| history_rows(&page.items, &operators));
+        .map(|page| history_rows(&page.items(), &operators));
     Ok(Some(Loaded {
         row: AlertRow::new(&alert, &names, &operators, state),
         rule_url: rule_link(rules.iter().find(|r| r.id == alert.rule), state),
@@ -247,7 +250,6 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::lists::PageRequest;
     use crate::pages::alerts::rules::model::tests::watched;
     use crate::testing::{Session, get, operator, world};
 
@@ -271,11 +273,11 @@ mod tests {
             .alerts(
                 &operator().caller(),
                 &filter,
-                &PageRequest::first(std::num::NonZeroU32::MIN),
+                &crate::pages::common::paging::first(std::num::NonZeroU32::MIN),
             )
             .await
             .expect("alerts");
-        page.items.first().expect("an open alert").id
+        page.items().first().expect("an open alert").id
     }
 
     #[tokio::test]

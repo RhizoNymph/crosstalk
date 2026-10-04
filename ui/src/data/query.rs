@@ -24,6 +24,8 @@ pub const MAX_BUCKETS: u32 = 1000;
 pub enum StrictViewStateError {
     #[error("incomplete view state: missing {}", .0.join(", "))]
     Missing(Vec<&'static str>),
+    #[error("from, to: the window is not on bucket boundaries")]
+    Unaligned,
     #[error(transparent)]
     Invalid(#[from] ViewStateError),
 }
@@ -47,6 +49,9 @@ pub fn parse_strict(
         return Err(StrictViewStateError::Missing(missing));
     }
     let parsed = ViewState::parse(raw, defaults)?;
+    if !parsed.aligned {
+        return Err(StrictViewStateError::Unaligned);
+    }
     Ok(parsed.state)
 }
 
@@ -103,6 +108,9 @@ mod tests {
             )
             .expect("window"),
             topic_version: TopicModelVersion(1),
+            bucket: crosstalk_spec::aggregates::series::BucketWidth::from_micros(
+                std::num::NonZeroU64::new(300_000_000).expect("five minutes"),
+            ),
         }
     }
 
@@ -155,6 +163,18 @@ mod tests {
         assert_eq!(
             parse_strict(&raw, defaults()),
             Err(StrictViewStateError::Invalid(ViewStateError::Weighting))
+        );
+    }
+
+    #[test]
+    fn unaligned_windows_are_refused() {
+        let raw = RawViewState {
+            to: Some("2026-10-03T00:00:01Z".to_owned()),
+            ..complete()
+        };
+        assert_eq!(
+            parse_strict(&raw, defaults()),
+            Err(StrictViewStateError::Unaligned)
         );
     }
 

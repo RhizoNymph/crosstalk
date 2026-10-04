@@ -20,7 +20,6 @@ use crate::components::{
     page_header, pagination, short_id, tabs,
 };
 use crate::contract::actions::OperatorAction;
-use crate::contract::lists::Cursor;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
@@ -30,6 +29,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{AlertList, Cursor};
 
 const PATH: &str = "/alerts";
 
@@ -96,8 +96,8 @@ pub fn parse(
 
 struct Inbox {
     rows: Vec<AlertRow>,
-    current: Option<Cursor>,
-    next: Option<Cursor>,
+    current: Option<Cursor<AlertList>>,
+    next: Option<Cursor<AlertList>>,
 }
 
 async fn load(
@@ -122,12 +122,12 @@ async fn load(
     let operators = operator_names(cx, caller).await;
     Ok(Inbox {
         rows: page
-            .items
+            .items()
             .iter()
             .map(|a| AlertRow::new(a, &rules, &operators, state))
             .collect(),
-        current: request.cursor,
-        next: page.next,
+        current: request.after,
+        next: page.next().cloned(),
     })
 }
 

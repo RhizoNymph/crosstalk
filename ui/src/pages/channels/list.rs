@@ -21,7 +21,6 @@ use crate::components::{
     state_badge, tabs,
 };
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind};
-use crate::contract::lists::{Cursor, Page};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::POLICIES;
@@ -30,6 +29,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{ChannelList, Cursor};
 
 const PATH: &str = "/channels";
 
@@ -81,8 +81,8 @@ pub fn row(summary: &ChannelSummary, state: &ViewState) -> ChannelRow {
 
 struct Listing {
     rows: Vec<ChannelRow>,
-    next: Option<Cursor>,
-    current: Option<Cursor>,
+    next: Option<Cursor<ChannelList>>,
+    current: Option<Cursor<ChannelList>>,
 }
 
 async fn load(
@@ -93,13 +93,14 @@ async fn load(
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;
-    let Page { items, next } = backend(cx)
+    let (items, next) = backend(cx)
         .channels(&caller, &query.effective_filter(), &request)
-        .await?;
+        .await?
+        .into_parts();
     Ok(Listing {
         rows: items.iter().map(|s| row(s, state)).collect(),
         next,
-        current: request.cursor,
+        current: request.after,
     })
 }
 

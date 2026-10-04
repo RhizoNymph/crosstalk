@@ -18,7 +18,6 @@ use crate::components::{
     filter_chip, format_time, href, kind_badge, page_header, pagination, short_id,
 };
 use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::lists::Cursor;
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
@@ -27,6 +26,7 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{AgentList, Cursor};
 
 const PATH: &str = "/agents";
 
@@ -62,8 +62,8 @@ pub fn agent_row(agent: &AgentSummary, state: &ViewState) -> AgentRow {
 
 struct Listing {
     rows: Vec<AgentRow>,
-    current: Option<Cursor>,
-    next: Option<Cursor>,
+    current: Option<Cursor<AgentList>>,
+    next: Option<Cursor<AgentList>>,
 }
 
 async fn load(
@@ -78,9 +78,9 @@ async fn load(
         .agents(&caller, &query.filter(), &request)
         .await?;
     Ok(Listing {
-        rows: page.items.iter().map(|a| agent_row(a, state)).collect(),
-        current: request.cursor,
-        next: page.next,
+        rows: page.items().iter().map(|a| agent_row(a, state)).collect(),
+        current: request.after,
+        next: page.next().cloned(),
     })
 }
 

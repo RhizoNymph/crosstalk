@@ -6,15 +6,21 @@
 //! key (`from`, `to`, `v`, `w`, `g`); pages redirect incomplete URLs to the
 //! canonical form, so any URL a user copies reproduces the view. Filter keys
 //! are omitted when empty, since an absent filter has a defined meaning.
+//!
+//! The window is on bucket boundaries: the surface refuses any other
+//! (`InvalidInput(UnalignedWindow)`), so a URL with an unaligned window is
+//! not canonical and parses to the smallest aligned window covering it.
 
 use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use super::route::{decode_kind, encode_kind};
+use super::scope::{Scope, ViewFilter, is_aligned, snap};
 use super::ulid::{InvalidUlid, UlidId};
-use crate::contract::scope::{Scope, TopologyFilter, VerdictFilter};
+use crosstalk_spec::aggregates::filter::FalseDetections;
 
 /// The query keys of the shared view state, as strings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
@@ -47,11 +53,14 @@ pub struct ViewState {
     pub graph: GraphMode,
 }
 
-/// Values used for keys the URL does not carry.
+/// Values used for keys the URL does not carry, and the bucket width
+/// windows are aligned to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Defaults {
+    /// On bucket boundaries.
     pub window: TimeWindow,
     pub topic_version: TopicModelVersion,
+    pub bucket: BucketWidth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -78,11 +87,14 @@ pub enum ViewStateError {
 }
 
 /// The outcome of parsing: the state, and whether the URL was already
-/// canonical.
+/// canonical (every required key, and a window on bucket boundaries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
     pub state: ViewState,
     pub complete: bool,
+    /// Whether the URL's own window was on bucket boundaries. A strict
+    /// parse (data routes, shard arguments) refuses one that is not.
+    pub aligned: bool,
 }
 
 impl ViewState {
@@ -101,7 +113,10 @@ impl ViewState {
             Some(text) => parse_time(text, "to")?,
             None => defaults.window.end(),
         };
-        let window = TimeWindow::new(start, end).map_err(|_| ViewStateError::EmptyWindow)?;
+        let asked = TimeWindow::new(start, end).map_err(|_| ViewStateError::EmptyWindow)?;
+        let aligned = is_aligned(asked, defaults.bucket);
+        let window = snap(asked, defaults.bucket);
+        let complete = complete && aligned;
 
         let topic_version = match &raw.v {
             Some(text) => TopicModelVersion(text.parse().map_err(|_| ViewStateError::Version)?),
@@ -118,19 +133,19 @@ impl ViewState {
             Some(_) => return Err(ViewStateError::Graph),
         };
         let verdicts = match raw.x.as_deref() {
-            None | Some("all") => VerdictFilter::IncludeAll,
-            Some("exclude-false") => VerdictFilter::ExcludeFalseDetections,
+            None | Some("all") => FalseDetections::Include,
+            Some("exclude-false") => FalseDetections::Exclude,
             Some(_) => return Err(ViewStateError::Verdicts),
         };
 
-        let filter = TopologyFilter {
+        let filter = ViewFilter {
             agents: parse_ids::<AgentId>(raw.a.as_deref(), "a")?,
             channels: parse_ids::<ChannelId>(raw.c.as_deref(), "c")?,
             route_kinds: parse_list(raw.r.as_deref())
                 .map(|k| decode_kind(k).ok_or_else(|| ViewStateError::RouteKind(k.to_owned())))
                 .collect::<Result<_, _>>()?,
             topics: parse_ids::<TopicId>(raw.t.as_deref(), "t")?,
-            verdicts,
+            false_detections: verdicts,
         };
 
         Ok(Parsed {
@@ -144,6 +159,7 @@ impl ViewState {
                 graph,
             },
             complete,
+            aligned,
         })
     }
 
@@ -186,7 +202,7 @@ impl ViewState {
                 .map(|k| encode_kind(*k).to_owned()),
         );
         push_list(&mut pairs, "t", filter.topics.iter().map(|id| id.to_ulid()));
-        if filter.verdicts == VerdictFilter::ExcludeFalseDetections {
+        if filter.false_detections == FalseDetections::Exclude {
             pairs.push(("x", "exclude-false".to_owned()));
         }
         pairs
@@ -273,6 +289,9 @@ mod tests {
             window: TimeWindow::new(ts("2026-10-02T00:00:00Z"), ts("2026-10-03T00:00:00Z"))
                 .expect("window"),
             topic_version: TopicModelVersion(3),
+            bucket: BucketWidth::from_micros(
+                std::num::NonZeroU64::new(300_000_000).expect("five minutes"),
+            ),
         }
     }
 
@@ -325,7 +344,7 @@ mod tests {
         assert_eq!(parsed.state.scope.topic_version, TopicModelVersion(3));
         assert_eq!(parsed.state.weighting, Weighting::Transmissions);
         assert_eq!(parsed.state.graph, GraphMode::Agents);
-        assert_eq!(parsed.state.scope.filter, TopologyFilter::default());
+        assert_eq!(parsed.state.scope.filter, ViewFilter::default());
     }
 
     #[test]
@@ -335,12 +354,12 @@ mod tests {
             .state;
         state.weighting = Weighting::MatchedBytes;
         state.graph = GraphMode::Channels;
-        state.scope.filter = TopologyFilter {
+        state.scope.filter = ViewFilter {
             agents: vec![AgentId::from_ulid(1), AgentId::from_ulid(u128::MAX)],
             channels: vec![ChannelId::from_ulid(7)],
             route_kinds: vec![RouteKind::Channel, RouteKind::Unobserved],
             topics: vec![TopicId::from_ulid(9)],
-            verdicts: VerdictFilter::ExcludeFalseDetections,
+            false_detections: FalseDetections::Exclude,
         };
         let query = state.to_query();
         let parsed = ViewState::parse(&raw(&query), defaults()).expect("reparse");
@@ -396,5 +415,23 @@ mod tests {
             parsed.state.scope.filter.route_kinds,
             vec![RouteKind::Channel, RouteKind::Direct]
         );
+    }
+
+    #[test]
+    fn unaligned_windows_snap_outward_and_are_not_canonical() {
+        let parsed = ViewState::parse(
+            &raw("from=2026-10-02T00:03:00Z&to=2026-10-02T01:01:30Z&v=3&w=tx&g=agents"),
+            defaults(),
+        )
+        .expect("parse");
+        assert!(!parsed.complete);
+        assert!(!parsed.aligned);
+        assert_eq!(
+            parsed.state.to_query(),
+            "from=2026-10-02T00:00:00Z&to=2026-10-02T01:05:00Z&v=3&w=tx&g=agents"
+        );
+        let canonical =
+            ViewState::parse(&raw(&parsed.state.to_query()), defaults()).expect("parse");
+        assert!(canonical.complete && canonical.aligned);
     }
 }

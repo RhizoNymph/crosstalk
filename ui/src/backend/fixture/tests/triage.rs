@@ -14,8 +14,9 @@ use crate::contract::agents::AgentLabel;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditOutcome, AuditedAction};
-use crate::contract::scope::{TopologyFilter, VerdictFilter};
 use crate::contract::verdict::Verdict;
+use crate::url::scope::ViewFilter;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
@@ -135,7 +136,7 @@ async fn audit_entries_name_their_subject_and_what_they_created() {
         };
         let page = b.audit(&c, &filter, &first(50)).await.expect("audit");
         let ours: Vec<_> = page
-            .items
+            .items()
             .iter()
             .filter(|e| e.at == NOW)
             .map(|e| e.subject)
@@ -209,8 +210,8 @@ async fn verdicts_judge_only_what_has_evidence() {
     ));
     let excluded = scope_with(
         week().window,
-        TopologyFilter {
-            verdicts: VerdictFilter::ExcludeFalseDetections,
+        ViewFilter {
+            false_detections: FalseDetections::Exclude,
             ..Default::default()
         },
     );
@@ -219,7 +220,7 @@ async fn verdicts_judge_only_what_has_evidence() {
         b.transmissions(&c, &excluded, &ids, &first(5))
             .await
             .expect("rows")
-            .items
+            .items()
             .is_empty()
     );
     // Withdrawing it puts the transmission back.
@@ -237,7 +238,8 @@ async fn verdicts_judge_only_what_has_evidence() {
         .transmissions(&c, &excluded, &ids, &first(5))
         .await
         .expect("rows")
-        .items;
+        .into_parts()
+        .0;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].verdict, None);
     // Judging needs Content as well as Triage.
@@ -339,7 +341,8 @@ async fn replaying_a_dead_letter_removes_it() {
         .dead_letters(&c, &first(1))
         .await
         .expect("letters")
-        .items
+        .into_parts()
+        .0
         .remove(0);
     let replay = OperatorAction::ReplayDeadLetter {
         group: letter.group.clone(),

@@ -12,7 +12,6 @@ use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{agent_name, short_id};
 use crate::contract::agents::{AgentListFilter, AgentStateKind};
-use crate::contract::lists::PageRequest;
 use crate::pages::common::links::agent_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -106,7 +105,11 @@ pub async fn load(
             ..AgentListFilter::default()
         };
         let page = match backend(cx)
-            .agents(caller, &filter, &PageRequest::first(budget))
+            .agents(
+                caller,
+                &filter,
+                &crate::pages::common::paging::first(budget),
+            )
             .await
         {
             Ok(page) => page,
@@ -115,9 +118,9 @@ pub async fn load(
                 break;
             }
         };
-        truncated |= page.next.is_some();
+        truncated |= page.next().is_some();
         let mut next = Vec::new();
-        for summary in page.items {
+        for summary in page.items() {
             if summary.id == agent || nodes.contains_key(&summary.id) {
                 continue;
             }

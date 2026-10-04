@@ -11,6 +11,7 @@ pub mod model;
 pub mod sections;
 pub mod verdict;
 
+use crate::contract::present::Present;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
@@ -36,8 +37,6 @@ use crate::components::{
     kind_badge, route_badge,
 };
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
-use crate::contract::lists::PageRequest;
-use crate::contract::scope::{Scope, TopologyFilter};
 use crate::contract::verdict::Verdict;
 use crate::error::UiError;
 use crate::pages::common::action::{
@@ -50,6 +49,7 @@ use crate::pages::common::lookup::{agent_names, operator_names};
 use crate::pages::common::transmissions::{Named, channel_names, route_channel, route_text};
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::view_state;
+use crate::url::scope::{Scope, ViewFilter};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -138,17 +138,17 @@ async fn load(
     let scope = Scope {
         window,
         topic_version: version,
-        filter: TopologyFilter::default(),
+        filter: ViewFilter::default(),
     };
     let listed = backend
         .transmissions(
             caller,
             &scope,
             &TransmissionSelector::Ids(vec![id]),
-            &PageRequest::first(crate::pages::common::paging::PAGE_SIZE),
+            &crate::pages::common::paging::first(crate::pages::common::paging::PAGE_SIZE),
         )
         .await?;
-    let Some(summary) = listed.items.into_iter().find(|s| s.id == id) else {
+    let Some(summary) = listed.items().into_iter().find(|s| s.id == id) else {
         return Ok(None);
     };
     let evidence = if content {

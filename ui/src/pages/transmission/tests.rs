@@ -1,7 +1,7 @@
 //! The evidence page against the fixture world: matched text, weaker
 //! states, verdict posts and the view without `Content`.
 
-use std::num::NonZeroU32;
+use crate::contract::present::Present;
 
 use crate::error::UiError;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
@@ -25,23 +25,34 @@ async fn week_scope(backend: &FixtureBackend) -> Scope {
             .current_topic_version(&everyone())
             .await
             .expect("version"),
-        filter: TopologyFilter::default(),
+        filter: crate::url::scope::ViewFilter::default(),
     }
 }
 
 /// The newest transmissions of the fixture world.
 async fn transmissions(limit: u32) -> Vec<TransmissionSummary> {
     let backend = FixtureBackend::new(7);
-    backend
-        .transmissions(
-            &everyone(),
-            &week_scope(&backend).await,
-            &TransmissionSelector::All,
-            &PageRequest::first(NonZeroU32::new(limit).expect("limit")),
-        )
-        .await
-        .expect("transmissions")
-        .items
+    let scope = week_scope(&backend).await;
+    let mut out = Vec::new();
+    let mut after = None;
+    while out.len() < limit as usize {
+        let page = crosstalk_spec::paging::PageRequest {
+            size: crate::pages::common::paging::size(500),
+            after,
+        };
+        let (items, next) = backend
+            .transmissions(&everyone(), &scope, &TransmissionSelector::All, &page)
+            .await
+            .expect("transmissions")
+            .into_parts();
+        out.extend(items);
+        match next {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    out.truncate(limit as usize);
+    out
 }
 
 async fn first_in(kind: TransmissionStateKind) -> TransmissionId {

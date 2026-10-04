@@ -25,7 +25,6 @@ use crate::components::{
     state_badge, state_inputs,
 };
 use crate::contract::agents::{AgentDetail, AgentStateKind};
-use crate::contract::lists::PageRequest;
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
@@ -119,10 +118,14 @@ async fn load(
     let from = detail(cx, caller, id).await?;
     let Some(into) = into else {
         let page = backend(cx)
-            .agents(caller, &Default::default(), &PageRequest::first(CHOICES))
+            .agents(
+                caller,
+                &Default::default(),
+                &crate::pages::common::paging::first(CHOICES),
+            )
             .await?;
         let choices = page
-            .items
+            .items()
             .iter()
             .filter(|a| a.id != from.summary.id)
             .map(|a| (a.id.to_ulid(), agent_name(a)))

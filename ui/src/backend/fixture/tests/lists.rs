@@ -16,8 +16,8 @@ use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
 use crate::contract::research::{AuditFilter, AuditSubject};
-use crate::contract::scope::Scope;
 use crate::contract::search::SearchMode;
+use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
@@ -159,7 +159,8 @@ async fn edge_and_id_selectors() {
         .transmissions(&c, &scope, &selector, &first(BIG))
         .await
         .expect("edge rows")
-        .items;
+        .into_parts()
+        .0;
     assert_eq!(rows.len() as u64, edge.stats.transmissions.get());
     assert!(
         rows.iter()
@@ -175,7 +176,8 @@ async fn edge_and_id_selectors() {
         )
         .await
         .expect("ids")
-        .items;
+        .into_parts()
+        .0;
     let got: HashSet<_> = picked.iter().map(|t| t.id).collect();
     assert_eq!(got, ids.into_iter().collect());
 }
@@ -259,7 +261,8 @@ async fn text_search_is_a_case_insensitive_substring() {
         )
         .await
         .expect("semantic")
-        .items;
+        .into_parts()
+        .0;
     assert!(!semantic.is_empty());
     let top = b.world.tx(semantic[0].transmission).expect("record");
     assert_eq!(top.theme, super::super::text::Theme::Credentials);
@@ -592,7 +595,8 @@ async fn one_alert_reads_by_id() {
         .alerts(&c, &AlertFilter::default(), &first(1))
         .await
         .expect("alerts")
-        .items
+        .into_parts()
+        .0
         .remove(0);
     assert_eq!(
         b.alert(&c, listed.id).await.expect("read"),
@@ -622,7 +626,8 @@ async fn agents_filter_by_state_claims_text_and_parent() {
         b.agents(&c, &filter, &first(BIG))
             .await
             .expect("agents")
-            .items
+            .into_parts()
+            .0
     };
     let all = list(AgentListFilter::default()).await;
     let registered = list(AgentListFilter {
@@ -687,7 +692,8 @@ async fn channel_counts_follow_the_window() {
         b.channels(&c, &filter, &first(BIG))
             .await
             .expect("channels")
-            .items
+            .into_parts()
+            .0
             .into_iter()
             .find(|s| s.channel.id == wiki)
             .expect("wiki")

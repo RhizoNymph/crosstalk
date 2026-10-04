@@ -3,12 +3,12 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
 use super::super::world::ChannelKey;
-use super::{first, researcher, scope_with, shared, week};
+use super::{collect, researcher, scope_with, shared, week};
 use crate::backend::Backend;
 use crate::contract::graph::{TransmissionSelector, TransmissionSummary};
 use crate::contract::research::ProjectionParams;
-use crate::contract::scope::{Scope, TopologyFilter};
 use crate::contract::search::{SearchMode, SearchRequest, SearchText};
+use crate::url::scope::{Scope, ViewFilter};
 
 pub const BIG: u32 = 100_000;
 
@@ -35,21 +35,17 @@ pub fn agent(key: &str) -> crosstalk_spec::ids::AgentId {
     shared().world.scenario.agent(key).expect("agent")
 }
 
-pub fn with(filter: TopologyFilter) -> Scope {
+pub fn with(filter: ViewFilter) -> Scope {
     scope_with(week().window, filter)
 }
 
 pub async fn all_transmissions(scope: &Scope) -> Vec<TransmissionSummary> {
-    shared()
-        .transmissions(
-            &researcher(),
-            scope,
-            &TransmissionSelector::All,
-            &first(BIG),
-        )
-        .await
-        .expect("transmissions")
-        .items
+    collect(500, async |p| {
+        shared()
+            .transmissions(&researcher(), scope, &TransmissionSelector::All, &p)
+            .await
+    })
+    .await
 }
 
 pub fn sum_shares(shares: impl Iterator<Item = f64>) -> f64 {

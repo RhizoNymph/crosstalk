@@ -13,11 +13,12 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use topcoat::router::query_params;
 
 use super::selection::Selection;
-use crate::contract::scope::{TopologyFilter, VerdictFilter};
 use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
 use crate::url::route::decode_kind;
+use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::aggregates::filter::FalseDetections;
 
 #[query_params]
 pub struct RawTopologyQuery {
@@ -84,7 +85,7 @@ fn ids<T: UlidId + PartialEq>(form: &FormFields, key: &'static str) -> Result<Ve
 
 /// The filter a submitted filter form asks for, or `None` when the query
 /// is not a filter form submission.
-pub fn submitted_filter(form: &FormFields) -> Result<Option<TopologyFilter>, UiError> {
+pub fn submitted_filter(form: &FormFields) -> Result<Option<ViewFilter>, UiError> {
     if form.text(fields::APPLY).is_none() {
         return Ok(None);
     }
@@ -97,8 +98,8 @@ pub fn submitted_filter(form: &FormFields) -> Result<Option<TopologyFilter>, UiE
         }
     }
     let verdicts = match form.text(fields::VERDICTS) {
-        None | Some("all") => VerdictFilter::IncludeAll,
-        Some("exclude-false") => VerdictFilter::ExcludeFalseDetections,
+        None | Some("all") => FalseDetections::Include,
+        Some("exclude-false") => FalseDetections::Exclude,
         Some(other) => {
             return Err(invalid(
                 fields::VERDICTS,
@@ -106,12 +107,12 @@ pub fn submitted_filter(form: &FormFields) -> Result<Option<TopologyFilter>, UiE
             ));
         }
     };
-    Ok(Some(TopologyFilter {
+    Ok(Some(ViewFilter {
         agents: ids::<AgentId>(form, fields::AGENTS)?,
         channels: ids::<ChannelId>(form, fields::CHANNELS)?,
         route_kinds,
         topics: ids::<TopicId>(form, fields::TOPICS)?,
-        verdicts,
+        false_detections: verdicts,
     }))
 }
 
@@ -176,7 +177,7 @@ mod tests {
             filter.route_kinds,
             vec![RouteKind::Channel, RouteKind::Unobserved]
         );
-        assert_eq!(filter.verdicts, VerdictFilter::ExcludeFalseDetections);
+        assert_eq!(filter.false_detections, FalseDetections::Exclude);
         assert!(filter.channels.is_empty() && filter.topics.is_empty());
     }
 

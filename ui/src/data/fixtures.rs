@@ -41,7 +41,7 @@ use crate::contract::graph::{
 use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
-use crate::contract::scope::{Scope, TopologyFilter};
+use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::ids::ProjectionId;
 
 /// 2026-10-02T00:00:00Z.
@@ -597,7 +597,7 @@ fn projection_meta(id: ProjectionId) -> ProjectionMeta {
         scope: Scope {
             window: window(),
             topic_version: TopicModelVersion(3),
-            filter: TopologyFilter::default(),
+            filter: ViewFilter::default(),
         },
         params: ProjectionParams::new(
             NonZeroU16::new(15).expect("non-zero"),

@@ -10,7 +10,7 @@ use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use super::actions::{ActionOutcome, OperatorAction};
-use super::scope::Scope;
+use crate::url::scope::Scope;
 use crosstalk_spec::ids::{AuditId, MergeId, ProjectionId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 

@@ -20,8 +20,8 @@ use crate::contract::graph::route_kind;
 use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
-use crate::contract::scope::Scope;
 use crate::contract::topics::{TopicStats, TopicVersionRemap};
+use crate::url::scope::Scope;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 

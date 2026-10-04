@@ -21,15 +21,15 @@ use crate::backend::Backend;
 use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{empty_state, error_panel, kind_badge, route_badge};
 use crate::contract::graph::TransmissionSelector;
-use crate::contract::lists::PageRequest;
 use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
-use crate::pages::common::paging::parse_cursor;
+use crate::pages::common::paging::{Count, parse_cursor};
 use crate::pages::common::transmissions::{TransmissionRow, rows, transmission_table};
 use crate::pages::view::state_from_query;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::paging::PageRequest;
 
 pub const RESULTS_PAGE: NonZeroU32 = match NonZeroU32::new(15) {
     Some(n) => n,
@@ -79,10 +79,10 @@ pub async fn load(
                     caller,
                     &scope,
                     &TransmissionSelector::Ids(vec![tx]),
-                    &PageRequest::first(RESULTS_PAGE),
+                    &crate::pages::common::paging::first(RESULTS_PAGE),
                 )
                 .await?;
-            let row = rows(cx, caller, &listed.items, &state)
+            let row = rows(cx, caller, &listed.items(), &state)
                 .await
                 .into_iter()
                 .next();
@@ -101,8 +101,8 @@ pub async fn load(
                 });
             }
             let page = PageRequest {
-                cursor: cursor.clone(),
-                limit: RESULTS_PAGE,
+                after: cursor.clone(),
+                size: crate::pages::common::paging::size(RESULTS_PAGE.items()),
             };
             let listed = backend
                 .transmissions(caller, &scope, &TransmissionSelector::Ids(ids), &page)
@@ -110,8 +110,8 @@ pub async fn load(
             Ok(Results::Lasso {
                 selected,
                 of: points.len(),
-                rows: rows(cx, caller, &listed.items, &state).await,
-                next: listed.next.map(|c| c.0),
+                rows: rows(cx, caller, listed.items(), &state).await,
+                next: listed.next().map(|c| c.token().to_owned()),
                 paged: cursor.is_some(),
             })
         }

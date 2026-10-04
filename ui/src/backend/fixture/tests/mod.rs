@@ -21,8 +21,8 @@ use super::FixtureBackend;
 use super::clock::{DAY, NOW, START, ago};
 use super::world::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
 use crate::backend::Result;
-use crate::contract::lists::{Page, PageRequest};
-use crate::contract::scope::{Scope, TopologyFilter};
+use crate::url::scope::{Scope, ViewFilter};
+use crosstalk_spec::paging::{Page, PageRequest};
 
 pub const SEED: u64 = 7;
 
@@ -57,7 +57,7 @@ pub fn window(start: crosstalk_spec::support::Timestamp) -> TimeWindow {
     TimeWindow::new(start, NOW).expect("window")
 }
 
-pub fn scope_with(window: TimeWindow, filter: TopologyFilter) -> Scope {
+pub fn scope_with(window: TimeWindow, filter: ViewFilter) -> Scope {
     Scope {
         window,
         topic_version: TopicModelVersion(2),
@@ -67,38 +67,44 @@ pub fn scope_with(window: TimeWindow, filter: TopologyFilter) -> Scope {
 
 /// The UI's default view: the last 24 hours under the latest version.
 pub fn day() -> Scope {
-    scope_with(window(ago(DAY)), TopologyFilter::default())
+    scope_with(window(ago(DAY)), ViewFilter::default())
 }
 
 /// The whole generated week.
 pub fn week() -> Scope {
-    scope_with(window(START), TopologyFilter::default())
+    scope_with(window(START), ViewFilter::default())
 }
 
-pub fn first(limit: u32) -> PageRequest {
-    PageRequest::first(NonZeroU32::new(limit).expect("limit"))
+pub fn first<L>(limit: u32) -> PageRequest<L> {
+    crate::pages::common::paging::first(NonZeroU32::new(limit).expect("limit"))
 }
 
 /// Follows cursors to the end, checking each page's size.
-pub async fn collect<T>(
+pub async fn collect<T, L>(
     limit: u32,
-    mut fetch: impl AsyncFnMut(PageRequest) -> Result<Page<T>>,
+    mut fetch: impl AsyncFnMut(PageRequest<L>) -> Result<Page<T, L>>,
 ) -> Vec<T> {
     let mut out = Vec::new();
     let mut request = first(limit);
     loop {
-        let page = fetch(request.clone()).await.expect("page");
-        assert!(page.items.len() <= limit as usize);
-        if page.next.is_some() {
+        let page = fetch(PageRequest {
+            size: request.size,
+            after: request.after.clone(),
+        })
+        .await
+        .expect("page");
+        assert!(page.items().len() <= limit as usize);
+        if page.next().is_some() {
             assert_eq!(
-                page.items.len(),
+                page.items().len(),
                 limit as usize,
                 "only the last page is short"
             );
         }
-        out.extend(page.items);
-        match page.next {
-            Some(cursor) => request.cursor = Some(cursor),
+        let (items, next) = page.into_parts();
+        out.extend(items);
+        match next {
+            Some(cursor) => request.after = Some(cursor),
             None => return out,
         }
     }

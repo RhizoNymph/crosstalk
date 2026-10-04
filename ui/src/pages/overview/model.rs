@@ -13,7 +13,6 @@ use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{format_bytes, format_time, href};
 use crate::contract::channels::{ChannelListFilter, DetectionKind};
-use crate::contract::lists::{Page, PageRequest};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::require;
@@ -21,6 +20,7 @@ use crate::pages::common::lookup::{agent_names, operator_names, rule_names};
 use crate::pages::common::transmissions::channel_names;
 use crate::pages::topology::drawer::model::{EdgeItem, edge_items};
 use crate::url::view_state::ViewState;
+use crosstalk_spec::paging::{Page, PageRequest};
 
 const COUNT_PAGE: NonZeroU32 = match NonZeroU32::new(500) {
     Some(n) => n,
@@ -64,15 +64,15 @@ impl Counter {
         Self { value: 0, pages: 0 }
     }
 
-    pub fn first() -> PageRequest {
-        PageRequest::first(COUNT_PAGE)
+    pub fn first<L>() -> PageRequest<L> {
+        crate::pages::common::paging::first(COUNT_PAGE)
     }
 
     /// Adds a page; the request for the next one, or the count when done.
-    pub fn add<T>(&mut self, page: Page<T>) -> Result<PageRequest, Count> {
-        self.value += page.items.len();
+    pub fn add<T, L>(&mut self, page: Page<T, L>) -> Result<PageRequest<L>, Count> {
+        self.value += page.items().len();
         self.pages += 1;
-        match page.next {
+        match page.next() {
             None => Err(Count {
                 value: self.value,
                 capped: false,
@@ -82,8 +82,10 @@ impl Counter {
                 capped: true,
             }),
             Some(cursor) => Ok(PageRequest {
-                cursor: Some(cursor),
-                limit: COUNT_PAGE,
+                after: Some(cursor.clone()),
+                size: crate::pages::common::paging::size(
+                    crate::pages::common::paging::Count::items(COUNT_PAGE),
+                ),
             }),
         }
     }
@@ -247,14 +249,18 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
     };
 
     let alerts = match backend
-        .alerts(caller, &open_filter, &PageRequest::first(NEWEST_ALERTS))
+        .alerts(
+            caller,
+            &open_filter,
+            &crate::pages::common::paging::first(NEWEST_ALERTS),
+        )
         .await
     {
         Ok(page) => {
             let rules = rule_names(cx, caller).await;
             let operators = operator_names(cx, caller).await;
             Ok(page
-                .items
+                .items()
                 .iter()
                 .map(|a: &Alert| AlertRow::new(a, &rules, &operators, state))
                 .collect())
@@ -272,17 +278,28 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::lists::Cursor;
+    use crosstalk_spec::paging::Cursor;
 
     #[test]
     fn counters_follow_cursors_and_cap() {
-        let page = |next: Option<&str>| Page {
-            items: vec![(); 3],
-            next: next.map(|c| Cursor(c.into())),
+        let size = crate::pages::common::paging::size(3);
+        let page = |next: Option<&str>| -> Page<(), crosstalk_spec::paging::AlertList> {
+            match next {
+                Some(c) => Page::more(
+                    size,
+                    crosstalk_spec::support::NonEmpty::from_vec(vec![(); 3]).expect("items"),
+                    Cursor::from_token(c.into()).expect("token"),
+                )
+                .expect("page"),
+                None => Page::last(size, vec![(); 3]).expect("page"),
+            }
         };
         let mut counter = Counter::new();
         let next = counter.add(page(Some("2"))).expect("more");
-        assert_eq!(next.cursor, Some(Cursor("2".into())));
+        assert_eq!(
+            next.after,
+            Some(Cursor::from_token("2".into()).expect("token"))
+        );
         assert_eq!(
             counter.add(page(None)),
             Err(Count {
