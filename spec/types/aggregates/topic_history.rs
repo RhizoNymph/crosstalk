@@ -28,6 +28,14 @@
 //! topic at or above the lineage floor. Watched-topic rules are remapped from
 //! it with [`TopicLineage::remap`], so the UI's "topic 12 became 31" and the
 //! alert rules can never disagree.
+//!
+//! **On the wire.** Every type here but [`TopicVersionStatusKind`] and the
+//! errors is a response: [`TopicVersionHistory`] (`topic_versions`),
+//! [`TopicSizes`] (`topic_sizes`) and [`TopicLineage`] (`topic_lineage`).
+//! The checked ones ([`TopicVersionInfo`], [`TopicVersionHistory`],
+//! [`TopicSizes`], [`LineageEntry`], [`TopicLineage`]) decode through their
+//! constructors; a history's active index is not on the wire but found
+//! again from the statuses.
 
 use std::collections::HashSet;
 

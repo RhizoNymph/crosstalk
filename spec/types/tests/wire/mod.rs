@@ -9,6 +9,7 @@
 pub mod harness;
 
 mod alerts;
+mod analysis;
 mod errors;
 mod ids;
 mod paging;

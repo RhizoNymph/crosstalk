@@ -344,6 +344,46 @@ impl From<Share> for f64 {
     }
 }
 
+/// An `f32` that is neither NaN nor infinite, for a float with no narrower
+/// range: a topic term's c-TF-IDF weight, a projected coordinate. A JSON
+/// number. JSON has no NaN, but a number too large for an `f32` (`1e39`)
+/// decodes to infinity, so decoding checks too.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f32", into = "f32")]
+pub struct Finite(f32);
+
+/// NaN or an infinity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NotFinite(pub f32);
+
+impl Finite {
+    pub fn new(value: f32) -> Result<Self, NotFinite> {
+        if value.is_finite() {
+            Ok(Self(value))
+        } else {
+            Err(NotFinite(value))
+        }
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl TryFrom<f32> for Finite {
+    type Error = Rejected<NotFinite>;
+
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value).map_err(|error| Rejected::new("finite number", error))
+    }
+}
+
+impl From<Finite> for f32 {
+    fn from(finite: Finite) -> Self {
+        finite.0
+    }
+}
+
 /// Text with at least one non-whitespace character, stored trimmed.
 ///
 /// Used for operator-written text that must say something, such as a

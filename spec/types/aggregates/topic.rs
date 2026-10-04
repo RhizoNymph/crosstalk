@@ -5,8 +5,8 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{TopicId, TransmissionId};
-use crate::support::{Similarity, Timestamp};
-use crate::wire::Rejected;
+use crate::support::{Finite, Similarity, Timestamp};
+use crate::wire::{Rejected, WireRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -35,7 +35,8 @@ pub enum InvalidEmbedding {
 
 /// [`Embedding`]'s fields, decoded without the checks. Decoding goes
 /// through [`Embedding::new`], which also refuses NaN and infinite values
-/// (their norm is not within the tolerance of 1).
+/// (their norm is not within the tolerance of 1), including a number too
+/// large for an `f32`, which decodes to infinity.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawEmbedding {
@@ -85,14 +86,22 @@ impl Embedding {
 #[serde(transparent)]
 pub struct TopicModelVersion(pub u32);
 
+/// A client names a version: `topic_sizes` and `topic_lineage` take one, and
+/// so do the pin and unpin actions. Any number decodes; an unknown version
+/// is the query's `NotFound`, not a decode error.
+impl WireRequest for TopicModelVersion {}
+
+/// A response: `QueryApi::topics` pages them. On the wire, `terms` is an
+/// array of `[term, weight]` pairs, each weight a finite JSON number.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Topic {
     pub id: TopicId,
     pub version: TopicModelVersion,
     pub label: String,
-    /// Top c-TF-IDF terms, highest weight first.
-    pub terms: Vec<(String, f32)>,
+    /// Top c-TF-IDF terms, highest weight first. A weight is never NaN or
+    /// infinite, so it always encodes as a JSON number.
+    pub terms: Vec<(String, Finite)>,
     /// The mean of its members' embeddings, normalized. Compared across
     /// versions to build the topic lineage, from which watched topics are
     /// remapped.
@@ -100,6 +109,8 @@ pub struct Topic {
     pub fitted_at: Timestamp,
 }
 
+/// Not wire data: what the topic model returns in process. The bus carries
+/// a transmission's topic as `TransmissionClassified`'s `Classification`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopicAssignment {
     pub transmission: TransmissionId,

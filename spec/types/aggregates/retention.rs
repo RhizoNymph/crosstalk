@@ -135,7 +135,8 @@ pub struct Pin {
     pub at: Timestamp,
 }
 
-/// Whether a version's data is still kept.
+/// Whether a version's data is still kept. A response (inside
+/// `TopicVersionInfo`); never a request, since a pin is stamped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(
     tag = "type",

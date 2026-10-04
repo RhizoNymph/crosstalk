@@ -21,7 +21,7 @@ spec/types/
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
 ├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests), BLAKE3 content ids (incl. ConfigHash), secret digests
-├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow (a WireRequest), ByteRange, Blake3 (hex), Similarity, Share, Watermark; each with its wire form
+├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Capped (checked: capped list with exact total), Change, Timestamp, TimeWindow (a WireRequest), ByteRange, Blake3 (hex), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
 ├── wire/                  the JSON wire contract: conventions, requests and authority
 │   ├── mod.rs             conventions, WireRequest, decode_request, DecodeError, DecodeErrorKind, Rejected (checked constructors' refusals as decode errors)
@@ -60,25 +60,27 @@ spec/types/
 │   ├── agents/
 │   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details
 │   │   └── filter.rs      AgentFilter (matches, text_matches), AgentText
-│   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked; set_enabled refuses a stale rule: StaleRule), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
+│   ├── alert/
+│   │   ├── mod.rs         AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision, SuppressReason; re-exports every rule type
+│   │   └── rules.rs       BuiltinRule, UserRule (a WireRequest), RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked, decoded through builtin or load; set_enabled refuses a stale rule: StaleRule), AlertRuleSet (not serialized), RuleRevision
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTotals (of), EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
 │   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
-│   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
-│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
+│   │   ├── mod.rs         ProjectionParams (checked; a WireRequest), ProjectionSpec (decoded pinned), ProjectionInfo (checked, transitions), Fitted, FitFailure, ProjectedPoint (Finite coordinates), Projection (checked; not serialized: its info is JSON, its frame binary)
+│   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode; served as application/octet-stream, no serde)
 │   ├── quality.rs         DetectionQuality (checked, tally), QualityRow, QualityMatch, MatchClass
-│   ├── retention.rs       RetentionPolicy (checked, to_drop), Pin, Retention, pin/unpin/mark_dropped on TopicVersionHistory
+│   ├── retention.rs       RetentionPolicy (checked, to_drop; config, not serialized), Pin (stamped), Retention, pin/unpin/mark_dropped on TopicVersionHistory
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
-│   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
+│   ├── topic.rs           Embedding (checked), EmbeddingModel, TopicModelVersion (a WireRequest), Topic (Finite term weights), TopicAssignment (not serialized)
+│   ├── topic_history.rs   TopicVersionHistory (on the wire without its active index), TopicVersionInfo (checked, with retention), TopicSizes (checked), TopicLineage (checked, remap); responses
 │   └── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (every store, for the live feed); Changed::promotion
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
 │   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
-│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged; golden inside a full Envelope each
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
@@ -90,7 +92,7 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, promotion coverage, resource use), Correlator; detection follows resolution
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore; SearchHit and SearchResults are its only wire types
 │   ├── l7_topology.rs     EdgeStore (graph, totals, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
 │   ├── l8_surface.rs      QueryApi (every read, incl. the read models and export), OperatorActions, AlertFilter (a WireRequest); re-exports the action, error, permission and sink types
 │   └── l8_surface/

@@ -376,7 +376,11 @@ once, stored and read back exactly; a cited view always reproduces.
    `projection(caller, id)` returns a `Projection`: the ready job and its
    frame, identical on every read. Queued or fitting is
    `Conflict(ProjectionNotReady)`, failed is `Conflict(ProjectionFailed)`,
-   expired is `ProjectionNotRetained`, unknown is `NotFound`.
+   expired is `ProjectionNotRetained`, unknown is `NotFound`. A
+   `Projection` has no JSON form: over HTTP the job record is the JSON
+   `ProjectionInfo` and the frame is `application/octet-stream`
+   (`ProjectionFrame::encode`); the UI joins them with `Projection::new`
+   (see the wire contract's analysis section).
 4. Frames are kept for `projection.frame_retention_days` (default 180)
    after fitting, then dropped (`Expired`); the job record and its spec are
    kept, so a citation still says exactly what was fitted and it can be
