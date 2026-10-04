@@ -16,7 +16,7 @@ use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
 use super::audit::AuditLog;
-use super::clock::Mint;
+use super::clock::{Clock, Mint};
 use super::identity::Identity;
 
 /// A stored channel with its policy history. Built only through
@@ -115,6 +115,8 @@ pub struct State {
     /// Projection jobs, oldest first.
     pub projections: Vec<Job>,
     pub mint: Mint,
+    /// What actions, exports and projection fits are stamped with.
+    pub clock: Clock,
 }
 
 impl State {
@@ -136,6 +138,7 @@ impl State {
             dead_letters: Vec::new(),
             projections: Vec::new(),
             mint,
+            clock: Clock::Fixed,
         }
     }
 

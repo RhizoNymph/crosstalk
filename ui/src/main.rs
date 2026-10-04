@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     let backend = match config.backend {
-        BackendConfig::Fixture { seed } => FixtureBackend::try_new(seed)?,
+        BackendConfig::Fixture { seed } => FixtureBackend::try_live(seed)?,
     };
     let router = Router::builder()
         .discover()

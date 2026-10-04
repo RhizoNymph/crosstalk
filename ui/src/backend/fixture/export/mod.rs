@@ -33,7 +33,6 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use tokio::sync::RwLock;
 
-use super::clock::NOW;
 use super::queries::graph::watermark;
 use super::queries::{Ctx, require};
 use super::store::State;
@@ -91,9 +90,10 @@ fn record(
 ) -> std::result::Result<(), AuditFault> {
     let record =
         ExportRecord::new(caller.clone(), request.clone(), event).map_err(AuditFault::Record)?;
+    let at = state.clock.now();
     state
         .audit
-        .export(&mut state.mint, NOW, record)
+        .export(&mut state.mint, at, record)
         .map(|_| ())
         .map_err(AuditFault::Log)
 }
@@ -123,11 +123,12 @@ async fn start(
         snapshot.plan(request, watermark).await?
     };
     limits.check(plan.rows).map_err(QueryError::Conflict)?;
+    let started_at = state.clock.now();
     let header = ExportHeader::new(ExportHeaderParts {
-        id: ExportId::from_ulid(state.mint.ulid(NOW)),
+        id: ExportId::from_ulid(state.mint.ulid(started_at)),
         request: request.clone(),
         by: caller.operator(),
-        started_at: NOW,
+        started_at,
         watermark,
         basis: plan.basis,
         embedding_model: plan.embedding_model,

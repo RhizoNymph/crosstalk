@@ -73,7 +73,7 @@ impl Present for FixtureBackend {
     /// minutes earlier) are final.
     async fn now(&self, caller: &Caller) -> Result<Timestamp> {
         require(caller, Permission::View)?;
-        Ok(clock::NOW)
+        Ok(self.state.read().await.clock.now())
     }
 }
 
@@ -342,12 +342,12 @@ impl QueryApi for FixtureBackend {
         pattern: &ResourcePattern,
     ) -> Result<PromotionPreview> {
         require(caller, Permission::View)?;
+        let state = self.state.read().await;
         let declaration = Declaration {
             pattern: pattern.clone(),
             by: PolicyAuthor::Operator(caller.operator()),
-            at: clock::NOW,
+            at: state.clock.now(),
         };
-        let state = self.state.read().await;
         PromotionPreview::from_registry(queries::channels::coverage(
             &self.world,
             &state,

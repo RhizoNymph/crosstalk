@@ -22,7 +22,6 @@ use crosstalk_spec::support::{Change, Timestamp};
 
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditOutcome, OperatorRecord};
 
-use super::clock::NOW;
 use super::store::State;
 use super::world::World;
 
@@ -136,7 +135,7 @@ pub fn act(world: &World, state: &mut State, caller: &Caller, action: OperatorAc
 fn audited(world: &World, state: &mut State, caller: &Caller, action: OperatorAction) -> Acted {
     let stamp = Stamp {
         by: caller.operator(),
-        at: NOW,
+        at: state.clock.now(),
     };
     let result = permitted(caller, &action).and_then(|()| apply(world, state, stamp, &action));
     let record =

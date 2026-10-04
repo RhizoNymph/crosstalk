@@ -11,7 +11,7 @@
 //! - **The present.** A default view is "the last 24 hours". `QueryApi`
 //!   offers the watermark, which trails the newest data by the settling
 //!   delay, but no clock. A gateway answers with its wall clock; the fixture
-//!   answers with the fixed end of its generated week.
+//!   answers with the end of its generated week plus the time since startup.
 //!
 //! Both are proposed for `QueryApi`; when they land there this module is
 //! deleted.

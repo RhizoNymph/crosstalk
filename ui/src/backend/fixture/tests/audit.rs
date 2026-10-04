@@ -274,3 +274,31 @@ async fn dead_letters_list_one_group_or_all_newest_first() {
         })
     );
 }
+
+#[tokio::test]
+async fn a_live_clock_stamps_actions_after_the_data_and_reports_the_present() {
+    use crate::contract::present::Present;
+
+    let b = FixtureBackend::try_live(super::SEED).expect("fixture generates");
+    let c = researcher();
+    let before = b.now(&c).await.expect("now");
+    assert!(before >= NOW);
+    let pin = OperatorAction::PinTopicVersion {
+        version: TopicModelVersion(2),
+    };
+    b.act(&c, pin).await.expect("pin");
+    let at = b
+        .state
+        .read()
+        .await
+        .audit
+        .entries()
+        .last()
+        .expect("entry")
+        .at;
+    let after = b.now(&c).await.expect("now");
+    assert!(
+        before <= at && at <= after,
+        "{before:?} <= {at:?} <= {after:?}"
+    );
+}

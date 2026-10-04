@@ -59,6 +59,36 @@ pub const fn minus(at: Timestamp, micros: u64) -> Timestamp {
     Timestamp::from_micros(at.as_micros().saturating_sub(micros))
 }
 
+/// The fixture's present. The generated data always ends at [`NOW`]; a
+/// live clock moves on from there in real time, so what an operator does
+/// while the UI runs is stamped after the data and shows in a fresh default
+/// view, whose window ends on the bucket boundary after the present.
+#[derive(Debug, Clone, Copy)]
+pub enum Clock {
+    /// Always [`NOW`]: for tests and anything that must be reproducible.
+    Fixed,
+    /// [`NOW`] plus the real time since `started`.
+    Live { started: std::time::Instant },
+}
+
+impl Clock {
+    pub fn live() -> Self {
+        Self::Live {
+            started: std::time::Instant::now(),
+        }
+    }
+
+    pub fn now(&self) -> Timestamp {
+        match self {
+            Self::Fixed => NOW,
+            Self::Live { started } => {
+                let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                plus(NOW, elapsed)
+            }
+        }
+    }
+}
+
 /// Mints unique ULIDs: 48 bits of milliseconds, 56 random bits and a 24-bit
 /// counter, so two ids minted by one mint never collide.
 #[derive(Debug, Clone)]
@@ -86,6 +116,22 @@ impl Mint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fixed_clock_stays_at_now() {
+        assert_eq!(Clock::Fixed.now(), NOW);
+    }
+
+    #[test]
+    fn a_live_clock_moves_on_from_now() {
+        let started = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(60))
+            .expect("a minute ago");
+        let clock = Clock::Live { started };
+        let first = clock.now();
+        assert!(first >= plus(NOW, MINUTE));
+        assert!(clock.now() >= first);
+    }
 
     #[test]
     fn now_is_2026_10_03() {

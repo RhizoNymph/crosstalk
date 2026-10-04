@@ -28,7 +28,7 @@ use crosstalk_spec::paging::{Page, PageRequest, ProjectionList};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::Result;
-use crate::backend::fixture::clock::{DAY, NOW};
+use crate::backend::fixture::clock::DAY;
 use crate::backend::fixture::store::{Job, State};
 use crate::backend::fixture::world::World;
 
@@ -112,9 +112,10 @@ pub fn fit(
     if pending(state) >= MAX_PENDING {
         return Err(ProjectionStoreError::QueueFull.into());
     }
-    let id = ProjectionId::from_ulid(state.mint.ulid(NOW));
-    let job = ProjectionInfo::queued(id, spec(world, window, filter, version, params), by, NOW);
-    let job = run(&Ctx::new(world, state), job, NOW)?;
+    let at = state.clock.now();
+    let id = ProjectionId::from_ulid(state.mint.ulid(at));
+    let job = ProjectionInfo::queued(id, spec(world, window, filter, version, params), by, at);
+    let job = run(&Ctx::new(world, state), job, at)?;
     state.projections.push(job);
     Ok(id)
 }

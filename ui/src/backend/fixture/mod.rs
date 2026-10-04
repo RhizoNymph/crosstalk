@@ -58,12 +58,27 @@ pub struct FixtureBackend {
 }
 
 impl FixtureBackend {
-    /// Generates the world for `seed`, with its seeded projection jobs.
-    /// Generation only fails on a fixture bug.
+    /// Generates the world for `seed`, with its seeded projection jobs, on
+    /// a fixed clock: every action is stamped at [`clock::NOW`]. Generation
+    /// only fails on a fixture bug.
+    #[cfg(test)]
     pub fn try_new(seed: u64) -> std::result::Result<Self, GenError> {
+        Self::build(seed, clock::Clock::Fixed)
+    }
+
+    /// The same world on a live clock, for serving the UI: actions, exports
+    /// and fits are stamped with the time since startup added to the end of
+    /// the data, so they show in a freshly loaded default view.
+    pub fn try_live(seed: u64) -> std::result::Result<Self, GenError> {
+        Self::build(seed, clock::Clock::live())
+    }
+
+    fn build(seed: u64, clock: clock::Clock) -> std::result::Result<Self, GenError> {
         let (world, mut state) = world::generate(seed)?;
         queries::projection::seed::seed(&world, &mut state, world::OPERATOR_RESEARCHER)
             .map_err(|e| GenError::invalid("projection seed", e))?;
+        // After seeding, so the seeded jobs keep their fixed times.
+        state.clock = clock;
         Ok(Self {
             world,
             state: Arc::new(RwLock::new(state)),

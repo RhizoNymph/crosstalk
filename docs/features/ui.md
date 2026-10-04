@@ -1017,7 +1017,7 @@ deleted when the spec gains it.
 | Gap | Trait | Why the UI needs it |
 | --- | --- | --- |
 | The bucket width | `present::Present::bucket_width` | `QueryApi` refuses unaligned windows (`InvalidInput(UnalignedWindow)`) and series grids for another width (`InvalidInput(BucketWidthMismatch)`), but only L7 knows the width (`EdgeStore::bucket_width`). The UI needs it to snap view windows, draw the time brush and build a `SeriesGrid`. |
-| The present | `present::Present::now` (View) | A default view is "the last 24 hours". `QueryApi` offers the watermark, which trails the newest data by the settling delay, but no clock. A gateway would answer with its wall clock; the fixture answers with the end of its generated week. |
+| The present | `present::Present::now` (View) | A default view is "the last 24 hours". `QueryApi` offers the watermark, which trails the newest data by the settling delay, but no clock. A gateway would answer with its wall clock; the fixture's data ends at 2026-10-03T00:00Z, and when serving (`FixtureBackend::try_live`) its clock moves on from there in real time, so actions, exports and fits are stamped after the data and show in a freshly loaded default view. Tests use a fixed clock (`try_new`). |
 | Export formats | `formats::ExportFormats::export_formats` | `export` takes an `ExportFormat` (JSONL or Parquet), but the spec has neither a capability query nor an `InputError` for a format the gateway cannot write. The fixture writes JSONL only and refuses Parquet with `Store` (audited as refused) before reading anything; the export page lists Parquet as unavailable instead of offering a choice that is refused. |
 
 #### Spec gaps worked around elsewhere
