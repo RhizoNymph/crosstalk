@@ -8,6 +8,7 @@ pub mod common;
 pub mod overview;
 pub mod pipeline;
 pub mod topology;
+pub mod transmission;
 pub mod view;
 
 use topcoat::Result;

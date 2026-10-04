@@ -302,4 +302,4 @@ async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<
 }
 
 #[cfg(test)]
-mod tests;
+pub mod tests;
