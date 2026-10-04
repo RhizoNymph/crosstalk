@@ -32,8 +32,8 @@ use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::components::{Tab, error_panel, format_time, href, segmented};
-use crate::contract::errors::QueryError;
 use crate::data::elements::{TIMEBRUSH_JS, TOPOLOGY_JS};
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::{FormFields, invalid};
 use crate::pages::view::view_state;
@@ -92,7 +92,7 @@ async fn summary(
     cx: &Cx,
     caller: &Caller,
     state: &ViewState,
-) -> std::result::Result<Summary, QueryError> {
+) -> std::result::Result<Summary, UiError> {
     require(caller, Permission::View)?;
     let view = backend(cx)
         .topology(caller, &state.scope, state.weighting)
@@ -137,7 +137,7 @@ async fn topology_page(
     cx: &Cx,
     state: ViewState,
     query: TopologyQuery,
-    failure: Option<QueryError>,
+    failure: Option<UiError>,
 ) -> Result<impl View> {
     let caller = caller(cx);
     let loaded = summary(cx, &caller, &state).await;

@@ -21,13 +21,13 @@ use crate::contract::agents::AgentLabel;
 use crate::contract::agents::AgentState;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::rules::{
     BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
     UserRuleSpec,
 };
 use crate::contract::scope::TopologyFilter;
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
 
@@ -106,7 +106,10 @@ async fn sanctioning_suppresses_the_channels_own_alerts() {
             },
         )
         .await;
-    assert_eq!(result.err(), conflict(ConflictKind::ChannelSuperseded));
+    assert!(matches!(
+        result.err(),
+        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded { .. }))
+    ));
 }
 
 #[tokio::test]
@@ -192,10 +195,12 @@ async fn merge_then_unmerge_restores_the_graph() {
         before.nodes().iter().map(|n| n.id).collect::<Vec<_>>(),
         after.nodes().iter().map(|n| n.id).collect::<Vec<_>>()
     );
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, OperatorAction::Unmerge { merge: id }).await.err(),
-        conflict(ConflictKind::MergeReverted)
-    );
+        Some(QueryError::Conflict(
+            ConflictKind::MergeAlreadyReverted { .. }
+        ))
+    ));
     // Merging the pair again clears the veto.
     b.act(&c, merge(&b, "pi2", "pi1"))
         .await
@@ -229,15 +234,15 @@ async fn merge_redirects_and_rejects() {
         .into;
     assert_eq!(into, agent(&b, "cx1"));
     // A merged source is a conflict.
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, merge(&b, "al0", "cx0")).await.err(),
-        conflict(ConflictKind::AgentMerged)
-    );
+        Some(QueryError::Conflict(ConflictKind::AgentMerged { .. }))
+    ));
     // A target that resolves to the source is a conflict.
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, merge(&b, "pi2", "al3")).await.err(),
-        conflict(ConflictKind::MergeIntoSelf)
-    );
+        Some(QueryError::Conflict(ConflictKind::MergeIntoSelf { .. }))
+    ));
     // An operator merge clears the veto on the pair.
     let (omp3, omp1) = (agent(&b, "omp3"), agent(&b, "omp1"));
     assert!(
@@ -258,7 +263,7 @@ async fn merge_redirects_and_rejects() {
             .any(|v| v.a == omp3 && v.b == omp1)
     );
     // Unknown merge.
-    let unknown = crate::contract::MergeId::from_ulid(1);
+    let unknown = crosstalk_spec::ids::MergeId::from_ulid(1);
     assert_eq!(
         b.act(&c, OperatorAction::Unmerge { merge: unknown })
             .await
@@ -314,7 +319,7 @@ async fn rename_labels_canonical_agents_only() {
         None
     );
     let alias = agent(&b, "al0");
-    assert_eq!(
+    assert!(matches!(
         b.act(
             &c,
             OperatorAction::RenameAgent {
@@ -324,8 +329,8 @@ async fn rename_labels_canonical_agents_only() {
         )
         .await
         .err(),
-        conflict(ConflictKind::AgentMerged)
-    );
+        Some(QueryError::Conflict(ConflictKind::AgentMerged { .. }))
+    ));
 }
 
 #[tokio::test]
@@ -382,21 +387,26 @@ async fn promotion_previews_what_promote_then_does() {
         .promotion_preview(&c, wiki, &pattern)
         .await
         .expect("preview");
-    assert_eq!(again.conflicts, Some(ConflictKind::ChannelSuperseded));
+    assert!(matches!(
+        again.conflicts,
+        Some(ConflictKind::ChannelSuperseded { .. })
+    ));
     let declared_preview = b
         .promotion_preview(&c, new, &pattern)
         .await
         .expect("preview");
-    assert_eq!(
+    assert!(matches!(
         declared_preview.conflicts,
-        Some(ConflictKind::ChannelNotDiscovered)
-    );
+        Some(ConflictKind::ChannelNotDiscovered { .. })
+    ));
     let pastebin = channel(&b, ChannelKey::Pastebin);
-    let missed = b
-        .promotion_preview(&c, pastebin, &pattern)
-        .await
-        .expect("preview");
-    assert_eq!(missed.conflicts, Some(ConflictKind::PatternMissesSeed));
+    let missed = b.promotion_preview(&c, pastebin, &pattern).await;
+    assert_eq!(
+        missed.err(),
+        Some(QueryError::InvalidInput(
+            crosstalk_spec::interfaces::l8_surface::InputError::PatternMissesSeed
+        ))
+    );
     assert_eq!(
         b.promotion_preview(&c, crosstalk_spec::ids::ChannelId::from_ulid(1), &pattern)
             .await
@@ -524,18 +534,22 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
         policy: PolicyKind::Sanctioned,
         note: None,
     };
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, promote(wiki, pattern.clone())).await.err(),
-        conflict(ConflictKind::ChannelSuperseded)
-    );
-    assert_eq!(
+        Some(QueryError::Conflict(ConflictKind::ChannelSuperseded { .. }))
+    ));
+    assert!(matches!(
         b.act(&c, promote(notes, pattern.clone())).await.err(),
-        conflict(ConflictKind::ChannelNotDiscovered)
-    );
+        Some(QueryError::Conflict(
+            ConflictKind::ChannelNotDiscovered { .. }
+        ))
+    ));
     let pastebin = channel(&b, ChannelKey::Pastebin);
     assert_eq!(
         b.act(&c, promote(pastebin, pattern)).await.err(),
-        conflict(ConflictKind::PatternMissesSeed)
+        Some(QueryError::InvalidInput(
+            crosstalk_spec::interfaces::l8_surface::InputError::PatternMissesSeed
+        ))
     );
 }
 
@@ -589,14 +603,19 @@ async fn rules_are_created_updated_and_disabled() {
             },
         )
         .await;
-    assert_eq!(on_old.err(), conflict(ConflictKind::TopicVersionNotCurrent));
+    assert!(matches!(
+        on_old.err(),
+        Some(QueryError::Conflict(
+            ConflictKind::TopicVersionNotCurrent { .. }
+        ))
+    ));
     let unknown_sink = b
         .act(
             &c,
             OperatorAction::CreateRule {
                 name: name.clone(),
                 rule: rule.clone(),
-                sinks: vec![crate::contract::SinkId::from_ulid(9)],
+                sinks: vec![crosstalk_spec::ids::SinkId::from_ulid(9)],
             },
         )
         .await;
@@ -610,7 +629,7 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| r.rule == RuleKind::Builtin(BuiltinRule::NewChannel))
         .expect("builtin")
         .id;
-    assert_eq!(
+    assert!(matches!(
         b.act(
             &c,
             OperatorAction::UpdateRule {
@@ -622,8 +641,8 @@ async fn rules_are_created_updated_and_disabled() {
         )
         .await
         .err(),
-        conflict(ConflictKind::BuiltinRule)
-    );
+        Some(QueryError::Conflict(ConflictKind::RuleNotEditable { .. }))
+    ));
     // Disabling suppresses the rule's active alerts.
     let active = {
         let state = b.state.read().await;
@@ -662,7 +681,7 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| matches!(r.status, RuleStatus::Stale(_)))
         .expect("stale")
         .id;
-    assert_eq!(
+    assert!(matches!(
         b.act(
             &c,
             OperatorAction::SetRuleEnabled {
@@ -672,8 +691,8 @@ async fn rules_are_created_updated_and_disabled() {
         )
         .await
         .err(),
-        conflict(ConflictKind::RuleStale)
-    );
+        Some(QueryError::Conflict(ConflictKind::RuleStale { .. }))
+    ));
     let retarget = watch(&b, 2, super::super::text::Theme::CodeReview);
     b.act(
         &c,

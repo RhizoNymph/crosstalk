@@ -9,13 +9,13 @@ use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::ProjectionId;
 use crate::contract::agents::{Agent, AgentLabel, AgentState, MergeRecord, MergeVeto};
 use crate::contract::alerts::Alert;
 use crate::contract::channels::Supersession;
 use crate::contract::research::{AuditEntry, ProjectionPoints};
 use crate::contract::rules::RuleDef;
 use crate::contract::verdict::TransmissionVerdict;
+use crosstalk_spec::ids::ProjectionId;
 
 use super::clock::Mint;
 

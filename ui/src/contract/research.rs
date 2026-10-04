@@ -10,9 +10,9 @@ use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use super::actions::{ActionOutcome, OperatorAction};
-use super::errors::QueryError;
 use super::scope::Scope;
-use super::{AuditId, MergeId, ProjectionId};
+use crosstalk_spec::ids::{AuditId, MergeId, ProjectionId};
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// UMAP parameters. `min_dist` is checked to lie in `[0, 1]`.
 #[derive(Debug, Clone, Copy, PartialEq)]

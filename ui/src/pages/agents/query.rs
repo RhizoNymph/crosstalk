@@ -6,7 +6,7 @@ use topcoat::router::query_params;
 
 use crate::components::badge::Badge;
 use crate::contract::agents::{AgentListFilter, AgentStateKind};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::form::invalid;
 
 #[query_params]
@@ -58,7 +58,7 @@ fn codes(text: Option<&str>) -> impl Iterator<Item = &str> {
 }
 
 impl AgentQuery {
-    pub fn parse(raw: &RawAgentQuery) -> Result<Self, QueryError> {
+    pub fn parse(raw: &RawAgentQuery) -> Result<Self, UiError> {
         let mut query = Self::default();
         for code in codes(raw.state.as_deref()) {
             let state = STATES

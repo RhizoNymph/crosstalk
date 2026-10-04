@@ -13,8 +13,8 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use topcoat::router::query_params;
 
 use super::selection::Selection;
-use crate::contract::errors::QueryError;
 use crate::contract::scope::{TopologyFilter, VerdictFilter};
+use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
 use crate::url::route::decode_kind;
 use crate::url::ulid::UlidId;
@@ -32,7 +32,7 @@ pub struct TopologyQuery {
 }
 
 impl TopologyQuery {
-    pub fn parse(raw: &RawTopologyQuery) -> Result<Self, QueryError> {
+    pub fn parse(raw: &RawTopologyQuery) -> Result<Self, UiError> {
         let sel = match raw.sel.as_deref() {
             None => Selection::None,
             Some(text) => Selection::parse(text).map_err(|e| invalid("sel", e))?,
@@ -71,7 +71,7 @@ pub mod fields {
     pub const VERDICTS: &str = "fx";
 }
 
-fn ids<T: UlidId + PartialEq>(form: &FormFields, key: &'static str) -> Result<Vec<T>, QueryError> {
+fn ids<T: UlidId + PartialEq>(form: &FormFields, key: &'static str) -> Result<Vec<T>, UiError> {
     let mut out: Vec<T> = Vec::new();
     for text in form.all(key) {
         let id = T::parse_ulid(text).map_err(|e| invalid(key, e))?;
@@ -84,7 +84,7 @@ fn ids<T: UlidId + PartialEq>(form: &FormFields, key: &'static str) -> Result<Ve
 
 /// The filter a submitted filter form asks for, or `None` when the query
 /// is not a filter form submission.
-pub fn submitted_filter(form: &FormFields) -> Result<Option<TopologyFilter>, QueryError> {
+pub fn submitted_filter(form: &FormFields) -> Result<Option<TopologyFilter>, UiError> {
     if form.text(fields::APPLY).is_none() {
         return Ok(None);
     }
@@ -151,9 +151,7 @@ mod tests {
         };
         assert!(matches!(
             TopologyQuery::parse(&raw),
-            Err(QueryError::InvalidInput(
-                crate::contract::errors::InputError::Field { field: "sel", .. }
-            ))
+            Err(UiError::Field { field: "sel", .. })
         ));
         let raw = RawTopologyQuery {
             sel: None,

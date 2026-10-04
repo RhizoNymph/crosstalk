@@ -25,7 +25,7 @@ use crate::components::{
     short_id,
 };
 use crate::contract::agents::{AgentDetail, AgentLabel, AgentStateKind, ClaimSeen};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::action::{
     Failure, done, error_for, fields_for, general_error, perform, require, status_of,
 };
@@ -105,7 +105,7 @@ async fn load(
     caller: &Caller,
     id: AgentId,
     state: &ViewState,
-) -> std::result::Result<Option<Loaded>, QueryError> {
+) -> std::result::Result<Option<Loaded>, UiError> {
     require(caller, Permission::View)?;
     let Some(detail) = backend(cx).agent(caller, id).await? else {
         return Ok(None);

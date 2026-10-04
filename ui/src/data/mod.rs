@@ -3,7 +3,7 @@
 //! Each element fetches its payload from a route here, never from L8, so
 //! authorization stays server-side: every route builds the request's
 //! [`Caller`](crosstalk_spec::interfaces::l8_surface::Caller), checks the
-//! permission it needs and maps [`QueryError`](crate::contract::errors::QueryError)
+//! permission it needs and maps [`UiError`](crate::error::UiError)
 //! to an HTTP status ([`errors`]).
 //!
 //! | Route | Payload | Needs |

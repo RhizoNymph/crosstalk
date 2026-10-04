@@ -11,7 +11,7 @@ use crate::backend::Result;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::channels::PromotionPreview;
-use crate::contract::errors::{ConflictKind, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
 
 /// A promotion worked out but not applied.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,16 +58,19 @@ pub fn plan(
             .resource(*seed)
             .is_some_and(|r| pattern.matches(&r.locator))
     };
+    let superseded = |by: ChannelId| ConflictKind::ChannelSuperseded { channel, by };
     let conflict = match &record.channel.origin {
-        ChannelOrigin::Declared { .. } => Some(ConflictKind::ChannelNotDiscovered),
-        ChannelOrigin::Discovered { .. } if record.superseded.is_some() => {
-            Some(ConflictKind::ChannelSuperseded)
+        ChannelOrigin::Declared { .. } => Some(ConflictKind::ChannelNotDiscovered { channel }),
+        ChannelOrigin::Discovered { .. } | ChannelOrigin::Superseded { .. }
+            if record.superseded.is_some() =>
+        {
+            record.superseded.map(|s| superseded(s.into))
         }
         ChannelOrigin::Discovered { seed, .. } if !covers(&seed.resource) => {
-            Some(ConflictKind::PatternMissesSeed)
+            return Err(QueryError::InvalidInput(InputError::PatternMissesSeed));
         }
         ChannelOrigin::Discovered { .. } => None,
-        ChannelOrigin::Superseded { .. } => Some(ConflictKind::ChannelSuperseded),
+        ChannelOrigin::Superseded { supersession, .. } => Some(superseded(supersession.by)),
     };
     let mut covered_records: Vec<_> = state
         .channels

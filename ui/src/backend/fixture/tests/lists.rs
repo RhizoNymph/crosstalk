@@ -14,11 +14,11 @@ use super::{caller, collect, day, first, researcher, shared, week, window};
 use crate::backend::Backend;
 use crate::contract::agents::AgentState;
 use crate::contract::channels::{ChannelListFilter, OriginKind};
-use crate::contract::errors::QueryError;
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::contract::scope::Scope;
 use crate::contract::search::SearchMode;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
 
@@ -340,7 +340,7 @@ async fn projections_are_deterministic_stored_and_sampled() {
     assert_ne!(pa.transmissions(), po.transmissions());
     assert!(pa.categories().iter().any(|p| p.topic.is_some()));
     assert!(pa.categories().iter().any(|p| p.channel.is_some()));
-    let missing = crate::contract::ProjectionId::from_ulid(5);
+    let missing = crosstalk_spec::ids::ProjectionId::from_ulid(5);
     assert_eq!(
         a.projection(&c, missing).await.err(),
         Some(QueryError::NotFound)

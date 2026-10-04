@@ -6,8 +6,8 @@ use crosstalk_spec::ids::OperatorId;
 use topcoat::router::query_params;
 
 use super::subject::{parse_subject, subject_code};
-use crate::contract::errors::QueryError;
 use crate::contract::research::{AuditFilter, AuditSubject};
+use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -28,7 +28,7 @@ pub struct AuditQuery {
 }
 
 impl AuditQuery {
-    pub fn parse(raw: &RawAuditQuery) -> Result<Self, QueryError> {
+    pub fn parse(raw: &RawAuditQuery) -> Result<Self, UiError> {
         Ok(Self {
             operator: raw
                 .op
@@ -136,7 +136,7 @@ mod tests {
     fn bad_values_name_their_key() {
         assert!(matches!(
             AuditQuery::parse(&raw(Some("x"), None, None)),
-            Err(QueryError::InvalidInput(_))
+            Err(UiError::Field { .. })
         ));
         assert_eq!(
             AuditQuery::parse(&raw(None, None, Some("week"))),

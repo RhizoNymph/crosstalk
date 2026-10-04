@@ -12,10 +12,10 @@ use super::drawer::model::{Drawer, load};
 use super::selection::Selection;
 use super::*;
 use crate::backend::fixture::FixtureBackend;
-use crate::contract::errors::InputError;
 use crate::contract::lists::PageRequest;
 use crate::testing::{cx, get};
 use crate::url::ulid::UlidId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// The default window of the fixture world (the last day) under v2.
 pub fn fixture_state() -> ViewState {
@@ -196,27 +196,18 @@ async fn drawer_arguments_are_validated() {
     let bad_state = load(&cx, &caller, "from=yesterday", "", "").await;
     assert!(matches!(
         bad_state,
-        Err(QueryError::InvalidInput(InputError::Field {
-            field: "state",
-            ..
-        }))
+        Err(UiError::Field { field: "state", .. })
     ));
     let bad_sel = load(&cx, &caller, &state, "edge:x", "").await;
-    assert!(matches!(
-        bad_sel,
-        Err(QueryError::InvalidInput(InputError::Field {
-            field: "sel",
-            ..
-        }))
-    ));
+    assert!(matches!(bad_sel, Err(UiError::Field { field: "sel", .. })));
     let bad_cursor = load(&cx, &caller, &state, "", "a b").await;
     assert!(bad_cursor.is_err());
     let viewer = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::Content]);
     assert_eq!(
         load(&cx, &viewer, &state, "", "").await.map(|_| ()),
-        Err(QueryError::Forbidden {
+        Err(UiError::Query(QueryError::Forbidden {
             missing: Permission::View
-        })
+        }))
     );
     let unknown = format!("agent:{}", "01J9ZQ3W8D0000000000000999");
     let (_, drawer) = load(&cx, &caller, &state, &unknown, "")

@@ -22,8 +22,8 @@ use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::{error_panel, href, page_header, state_badge};
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::rules::{RuleDef, RuleKind, RuleStatus, UserRule};
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
@@ -31,6 +31,8 @@ use crate::pages::common::links::rule_url;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(rule_ulid);
 
@@ -68,8 +70,8 @@ pub enum Target {
 async fn current_version(
     cx: &Cx,
     caller: &Caller,
-) -> std::result::Result<TopicModelVersion, QueryError> {
-    backend(cx).current_topic_version(caller).await
+) -> std::result::Result<TopicModelVersion, UiError> {
+    Ok(backend(cx).current_topic_version(caller).await?)
 }
 
 /// The topics and sinks a form may pick. Topics need `Content`: their
@@ -80,7 +82,7 @@ struct Options {
     sinks: Vec<(String, String)>,
 }
 
-async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, QueryError> {
+async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiError> {
     let version = current_version(cx, caller).await?;
     let sinks = backend(cx).sinks(caller).await?;
     let topics = if can(caller, Permission::Content) {
@@ -113,15 +115,17 @@ async fn existing(
     cx: &Cx,
     caller: &Caller,
     id: AlertRuleId,
-) -> std::result::Result<RuleDef, QueryError> {
+) -> std::result::Result<RuleDef, UiError> {
     let rule = backend(cx)
         .rules(caller)
         .await?
         .into_iter()
         .find(|r| r.id == id)
-        .ok_or(QueryError::NotFound)?;
+        .ok_or(UiError::Query(QueryError::NotFound))?;
     if matches!(rule.rule, RuleKind::Builtin(_)) {
-        return Err(QueryError::Conflict(ConflictKind::BuiltinRule));
+        return Err(UiError::Query(QueryError::Conflict(
+            ConflictKind::RuleNotEditable { rule: id },
+        )));
     }
     Ok(rule)
 }
@@ -172,7 +176,7 @@ async fn submit(
     cx: &Cx,
     target: &Target,
     fields: &FormFields,
-) -> std::result::Result<Flash, QueryError> {
+) -> std::result::Result<Flash, UiError> {
     let caller = caller(cx);
     require(&caller, Permission::Govern)?;
     let (kind, id) = match target {
@@ -272,7 +276,7 @@ async fn editor(
     target: &Target,
     state: &ViewState,
     failed: Option<&FormFields>,
-) -> std::result::Result<Editor, QueryError> {
+) -> std::result::Result<Editor, UiError> {
     require(caller, Permission::View)?;
     require(caller, Permission::Govern)?;
     let options = options(cx, caller).await?;
@@ -323,7 +327,7 @@ async fn editor(
 async fn rule_page(
     cx: &Cx,
     state: ViewState,
-    target: std::result::Result<Target, QueryError>,
+    target: std::result::Result<Target, UiError>,
     failure: Option<Failure<()>>,
 ) -> Result<impl View> {
     let caller = caller(cx);

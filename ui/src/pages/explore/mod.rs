@@ -34,11 +34,10 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{INPUT, LABEL, PANEL};
 use crate::components::{PageLinks, error_panel, flash_banner, format_time, href, page_header};
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
 use crate::contract::research::ProjectionJob;
 use crate::data::elements::PROJECTION_JS;
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, error_for, fields_for, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, invalid};
@@ -46,6 +45,8 @@ use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 pub const PATH: &str = "/explore";
 
@@ -60,7 +61,7 @@ pub enum ExploreForm {
 pub enum ProjectionPanel {
     NotFitted,
     Missing,
-    Unavailable(QueryError),
+    Unavailable(UiError),
     Pending(String),
     Failed(String),
     Ready {
@@ -73,13 +74,13 @@ pub enum ProjectionPanel {
 
 /// The panel for the query's projection.
 pub fn panel(
-    job: Option<std::result::Result<ProjectionJob, QueryError>>,
+    job: Option<std::result::Result<ProjectionJob, UiError>>,
     state: &ViewState,
     id: Option<ProjectionId>,
 ) -> ProjectionPanel {
     match (job, id) {
         (None, _) | (_, None) => ProjectionPanel::NotFitted,
-        (Some(Err(QueryError::NotFound)), _) => ProjectionPanel::Missing,
+        (Some(Err(UiError::Query(QueryError::NotFound))), _) => ProjectionPanel::Missing,
         (Some(Err(error)), _) => ProjectionPanel::Unavailable(error),
         (Some(Ok(ProjectionJob::Queued)), _) => {
             ProjectionPanel::Pending("Queued for fitting.".to_owned())
@@ -108,7 +109,7 @@ fn borrowed<'a>(pairs: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a s
     pairs.iter().map(|(k, v)| (*k, v.as_str())).collect()
 }
 
-fn parse_query(cx: &Cx) -> std::result::Result<ExploreQuery, QueryError> {
+fn parse_query(cx: &Cx) -> std::result::Result<ExploreQuery, UiError> {
     query_params::<RawExploreQuery>(cx)
         .map_err(|e| invalid("query", e))
         .and_then(ExploreQuery::parse)
@@ -120,7 +121,7 @@ const SEARCH_PAGE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(20) {
     None => std::num::NonZeroU32::MIN,
 };
 
-fn search_page(cx: &Cx) -> std::result::Result<PageRequest, QueryError> {
+fn search_page(cx: &Cx) -> std::result::Result<PageRequest, UiError> {
     page_request(cx).map(|page| PageRequest {
         limit: SEARCH_PAGE,
         ..page
@@ -149,7 +150,7 @@ async fn explore_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
                 let id = backend(cx)
                     .fit_projection(&caller, &state.scope, params)
                     .await?;
-                Ok::<_, QueryError>((query.clone(), id))
+                Ok::<_, UiError>((query.clone(), id))
             }
             .await;
             match fitted {
@@ -176,7 +177,7 @@ async fn explore_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vi
 async fn explore_page(
     cx: &Cx,
     state: ViewState,
-    query: std::result::Result<(ExploreQuery, PageRequest), QueryError>,
+    query: std::result::Result<(ExploreQuery, PageRequest), UiError>,
     flash: Option<Flash>,
     failure: Option<Failure<ExploreForm>>,
 ) -> Result<impl View> {
@@ -231,12 +232,12 @@ async fn explore_body(
     state: ViewState,
     query: ExploreQuery,
     page: PageRequest,
-    fit_error: Option<QueryError>,
+    fit_error: Option<UiError>,
     fit_fields: Option<FormFields>,
 ) -> Result<impl View> {
     let caller = caller(cx);
     let backend = backend(cx);
-    let hits: Option<std::result::Result<Hits, QueryError>> =
+    let hits: Option<std::result::Result<Hits, UiError>> =
         load_hits(cx, &caller, &query, &state, page)
             .await
             .transpose();
@@ -256,7 +257,12 @@ async fn explore_body(
         _ => String::new(),
     };
     let job = match query.projection {
-        Some(id) => Some(backend.projection_job(&caller, id).await),
+        Some(id) => Some(
+            backend
+                .projection_job(&caller, id)
+                .await
+                .map_err(UiError::from),
+        ),
         None => None,
     };
     let panel = panel(job, &state, query.projection);
@@ -287,7 +293,7 @@ async fn projection_section(
     panel: ProjectionPanel,
     highlight: String,
     action: String,
-    fit_error: Option<QueryError>,
+    fit_error: Option<UiError>,
     fit_fields: Option<FormFields>,
 ) -> Result<impl View> {
     let initial_color = query.color.code().to_owned();

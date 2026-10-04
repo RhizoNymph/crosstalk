@@ -16,7 +16,7 @@ use crate::backend::fixture::store::{ChannelRecord, State};
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::channels::Supersession;
-use crate::contract::errors::{ConflictKind, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::effects;
 
@@ -46,8 +46,11 @@ pub fn set_policy(
         .channels
         .get_mut(&channel)
         .ok_or(QueryError::NotFound)?;
-    if record.superseded.is_some() {
-        return Err(QueryError::Conflict(ConflictKind::ChannelSuperseded));
+    if let Some(superseded) = record.superseded {
+        return Err(QueryError::Conflict(ConflictKind::ChannelSuperseded {
+            channel,
+            by: superseded.into,
+        }));
     }
     record.channel.policy = policy(kind, by, note);
     if kind == PolicyKind::Sanctioned {

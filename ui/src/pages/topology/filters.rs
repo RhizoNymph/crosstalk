@@ -95,7 +95,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
     {
         Ok(view) => view.nodes().iter().map(|n| (n.id, agent_name(n))).collect(),
         Err(error) => {
-            tracing::warn!(%error, "filter agent choices unavailable");
+            tracing::warn!(error = ?error, "filter agent choices unavailable");
             Vec::new()
         }
     };
@@ -124,7 +124,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
             .map(|s| (s.channel.id, summary_name(s)))
             .collect(),
         Err(error) => {
-            tracing::warn!(%error, "filter channel choices unavailable");
+            tracing::warn!(error = ?error, "filter channel choices unavailable");
             Vec::new()
         }
     };
@@ -134,7 +134,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
         match backend.topics(caller, state.scope.topic_version).await {
             Ok(topics) => Some(topics.into_iter().map(|t| (t.id, t.label)).collect()),
             Err(error) => {
-                tracing::warn!(%error, "filter topic choices unavailable");
+                tracing::warn!(error = ?error, "filter topic choices unavailable");
                 Some(Vec::new())
             }
         }

@@ -12,11 +12,11 @@ use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::AgentLabel;
 use crate::contract::alerts::{AlertState, SuppressReason};
-use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditOutcome, AuditedAction};
 use crate::contract::scope::{TopologyFilter, VerdictFilter};
 use crate::contract::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::actions_support::*;
 
@@ -175,7 +175,12 @@ async fn verdicts_judge_only_what_has_evidence() {
                 },
             )
             .await;
-        assert_eq!(result.err(), conflict(ConflictKind::NotJudgeable));
+        assert!(matches!(
+            result.err(),
+            Some(QueryError::Conflict(
+                ConflictKind::TransmissionNotJudgeable { .. }
+            ))
+        ));
     }
     // A false detection suppresses the transmission's active alerts.
     let (alert, tx) = {
@@ -261,12 +266,12 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
             at: NOW
         }
     );
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, OperatorAction::Acknowledge { alert: open })
             .await
             .err(),
-        conflict(ConflictKind::AlertState)
-    );
+        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
+    ));
     b.act(
         &c,
         OperatorAction::Resolve {
@@ -284,7 +289,7 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
             note: Some("done".into())
         }
     );
-    assert_eq!(
+    assert!(matches!(
         b.act(
             &c,
             OperatorAction::Resolve {
@@ -294,15 +299,15 @@ async fn acknowledge_and_resolve_follow_the_alert_lifecycle() {
         )
         .await
         .err(),
-        conflict(ConflictKind::AlertState)
-    );
+        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
+    ));
     let suppressed = find_alert(&b, |a| matches!(a.state, AlertState::Suppressed { .. })).await;
-    assert_eq!(
+    assert!(matches!(
         b.act(&c, OperatorAction::Acknowledge { alert: suppressed })
             .await
             .err(),
-        conflict(ConflictKind::AlertState)
-    );
+        Some(QueryError::Conflict(ConflictKind::AlertNotActive { .. }))
+    ));
     let other_open = find_alert(&b, |a| a.state == AlertState::Open).await;
     b.act(
         &c,

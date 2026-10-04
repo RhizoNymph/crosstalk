@@ -16,10 +16,10 @@ use crate::components::form::{BUTTON_PRIMARY, INPUT};
 use crate::components::{
     PageLinks, empty_state, error_panel, pagination, route_badge, state_inputs,
 };
-use crate::contract::errors::QueryError;
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::lists::{Cursor, PageRequest};
 use crate::contract::search::SearchRequest;
+use crate::error::UiError;
 use crate::pages::common::links::transmission_url;
 use crate::pages::common::transmissions::{TransmissionRow, rows};
 use crate::url::ulid::UlidId;
@@ -60,7 +60,7 @@ pub async fn load_hits(
     query: &ExploreQuery,
     state: &ViewState,
     page: PageRequest,
-) -> std::result::Result<Option<Hits>, QueryError> {
+) -> std::result::Result<Option<Hits>, UiError> {
     let Some(text) = &query.text else {
         return Ok(None);
     };
@@ -158,7 +158,7 @@ fn score_width(score: f32) -> String {
 /// The hits of one page, best first.
 #[component]
 pub async fn hit_list(
-    hits: Option<std::result::Result<Hits, QueryError>>,
+    hits: Option<std::result::Result<Hits, UiError>>,
     links: PageLinks,
 ) -> Result<impl View> {
     let none = matches!(&hits, Some(Ok(h)) if h.rows.is_empty());

@@ -22,8 +22,8 @@ use crate::components::{
     pagination,
 };
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, required};
@@ -69,7 +69,7 @@ pub fn letter_row(letter: &DeadLetter) -> LetterRow {
 }
 
 /// A validated replay post.
-pub fn parse(fields: &FormFields) -> std::result::Result<OperatorAction, QueryError> {
+pub fn parse(fields: &FormFields) -> std::result::Result<OperatorAction, UiError> {
     if fields.text("action") != Some("replay") {
         return Err(invalid("action", "unknown action"));
     }
@@ -92,7 +92,7 @@ struct Letters {
     next: Option<Cursor>,
 }
 
-async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<Letters, QueryError> {
+async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<Letters, UiError> {
     require(caller, Permission::Operate)?;
     let request = page_request(cx)?;
     let page = backend(cx).dead_letters(caller, &request).await?;

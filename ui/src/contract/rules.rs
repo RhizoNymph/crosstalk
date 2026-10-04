@@ -9,7 +9,7 @@ use crosstalk_spec::ids::{AlertRuleId, OperatorId, TopicId};
 use crosstalk_spec::interfaces::l8_surface::SinkError;
 use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
 
-use super::SinkId;
+use crosstalk_spec::ids::SinkId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinRule {

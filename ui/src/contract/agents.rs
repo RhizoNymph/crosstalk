@@ -5,8 +5,8 @@ use crosstalk_spec::observed::agent::{IdentityEvidence, MergeAuthor};
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
 use crosstalk_spec::support::{NonEmpty, Timestamp};
 
-use super::MergeId;
 use super::search::SearchText;
+use crosstalk_spec::ids::MergeId;
 
 /// An operator-chosen display name: trimmed, non-empty, at most
 /// [`AgentLabel::MAX_CHARS`] characters.

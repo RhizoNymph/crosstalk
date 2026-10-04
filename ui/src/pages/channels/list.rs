@@ -21,8 +21,8 @@ use crate::components::{
     state_badge, tabs,
 };
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind};
-use crate::contract::errors::QueryError;
 use crate::contract::lists::{Cursor, Page};
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::POLICIES;
 use crate::pages::common::links::channel_url;
@@ -89,7 +89,7 @@ async fn load(
     cx: &Cx,
     query: &ListQuery,
     state: &ViewState,
-) -> std::result::Result<Listing, QueryError> {
+) -> std::result::Result<Listing, UiError> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;

@@ -19,14 +19,12 @@ use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
-use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
     BipartiteView, Timeline, TopologyView, TransmissionSelector, TransmissionSummary,
@@ -40,6 +38,8 @@ use crate::contract::rules::{RuleDef, SinkInfo};
 use crate::contract::scope::Scope;
 use crate::contract::search::SearchRequest;
 use crate::contract::topics::{TopicStats, TopicVersionInfo, TopicVersionRemap};
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 pub type Result<T> = std::result::Result<T, QueryError>;
 

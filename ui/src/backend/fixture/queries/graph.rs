@@ -15,9 +15,9 @@ use crosstalk_spec::support::{Share, TimeWindow, Timestamp};
 use crate::backend::Result;
 use crate::backend::fixture::clock::WATERMARK;
 use crate::backend::fixture::world::TxRecord;
-use crate::contract::errors::QueryError;
 use crate::contract::graph::{AccessEdge, BipartiteView, Timeline, TimelineBucket, TopologyView};
 use crate::contract::scope::Scope;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::scope::Filter;
 use super::summaries::{self, Counts};

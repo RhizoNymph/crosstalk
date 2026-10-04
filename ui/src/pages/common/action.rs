@@ -16,8 +16,9 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::href;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// A rejected form post: which form (`None` when the post named no known
 /// form), why, and what was submitted, so the page can show the error next
@@ -25,12 +26,12 @@ use crate::url::view_state::ViewState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure<F> {
     pub form: Option<F>,
-    pub error: QueryError,
+    pub error: UiError,
     pub fields: FormFields,
 }
 
 impl<F: Copy + PartialEq> Failure<F> {
-    pub fn new(form: Option<F>, error: QueryError, fields: FormFields) -> Self {
+    pub fn new(form: Option<F>, error: UiError, fields: FormFields) -> Self {
         Self {
             form,
             error,
@@ -44,7 +45,7 @@ impl<F: Copy + PartialEq> Failure<F> {
 }
 
 /// The error to show next to `form`, if the failure was there.
-pub fn error_for<F: Copy + PartialEq>(failure: Option<&Failure<F>>, form: F) -> Option<QueryError> {
+pub fn error_for<F: Copy + PartialEq>(failure: Option<&Failure<F>>, form: F) -> Option<UiError> {
     failure
         .filter(|f| f.form == Some(form))
         .map(|f| f.error.clone())
@@ -61,41 +62,47 @@ pub fn fields_for<F: Copy + PartialEq>(
 }
 
 /// The error of a post that named no known form, shown at the top.
-pub fn general_error<F: Copy + PartialEq>(failure: Option<&Failure<F>>) -> Option<QueryError> {
+pub fn general_error<F: Copy + PartialEq>(failure: Option<&Failure<F>>) -> Option<UiError> {
     failure
         .filter(|f| f.form.is_none())
         .map(|f| f.error.clone())
 }
 
 /// `Err(Forbidden)` unless the caller holds `permission`.
-pub fn require(caller: &Caller, permission: Permission) -> Result<(), QueryError> {
+pub fn require(caller: &Caller, permission: Permission) -> Result<(), UiError> {
     if can(caller, permission) {
         Ok(())
     } else {
-        Err(QueryError::Forbidden {
+        Err(UiError::Query(QueryError::Forbidden {
             missing: permission,
-        })
+        }))
     }
 }
 
 /// Checks the action's permissions, then runs it.
-pub async fn perform(cx: &Cx, action: OperatorAction) -> Result<ActionOutcome, QueryError> {
+pub async fn perform(cx: &Cx, action: OperatorAction) -> Result<ActionOutcome, UiError> {
     let caller = caller(cx);
     require(&caller, action.requires())?;
     if let Some(also) = action.also_requires() {
         require(&caller, also)?;
     }
-    backend(cx).act(&caller, action).await
+    Ok(backend(cx).act(&caller, action).await?)
 }
 
 /// The response status for a failed action or read.
-pub fn status_of(error: &QueryError) -> StatusCode {
+pub fn status_of(error: &UiError) -> StatusCode {
     match error {
-        QueryError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        QueryError::Forbidden { .. } => StatusCode::FORBIDDEN,
-        QueryError::NotFound => StatusCode::NOT_FOUND,
-        QueryError::Conflict(_) | QueryError::VersionNotRetained { .. } => StatusCode::CONFLICT,
-        QueryError::Store { .. } => StatusCode::BAD_GATEWAY,
+        UiError::Field { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        UiError::Query(query) => match query {
+            QueryError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            QueryError::InvalidCursor => StatusCode::BAD_REQUEST,
+            QueryError::Forbidden { .. } => StatusCode::FORBIDDEN,
+            QueryError::NotFound | QueryError::ProjectionNotRetained { .. } => {
+                StatusCode::NOT_FOUND
+            }
+            QueryError::Conflict(_) | QueryError::VersionNotRetained { .. } => StatusCode::CONFLICT,
+            QueryError::Store { .. } => StatusCode::BAD_GATEWAY,
+        },
     }
 }
 
@@ -119,21 +126,29 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::errors::ConflictKind;
+    use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 
     #[test]
     fn statuses_follow_the_error() {
         assert_eq!(
-            status_of(&QueryError::Conflict(ConflictKind::AgentMerged)),
+            status_of(&UiError::Query(QueryError::Conflict(
+                ConflictKind::AgentMerged {
+                    agent: crosstalk_spec::ids::AgentId::from_ulid(1),
+                    into: crosstalk_spec::ids::AgentId::from_ulid(2),
+                }
+            ))),
             StatusCode::CONFLICT
         );
         assert_eq!(
-            status_of(&QueryError::Forbidden {
+            status_of(&UiError::Query(QueryError::Forbidden {
                 missing: Permission::Govern
-            }),
+            })),
             StatusCode::FORBIDDEN
         );
-        assert_eq!(status_of(&QueryError::NotFound), StatusCode::NOT_FOUND);
+        assert_eq!(
+            status_of(&UiError::Query(QueryError::NotFound)),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[test]
@@ -150,16 +165,26 @@ mod tests {
             A,
             B,
         }
-        let failure = Failure::new(Some(Forms::A), QueryError::NotFound, FormFields::default());
+        let failure = Failure::new(
+            Some(Forms::A),
+            UiError::Query(QueryError::NotFound),
+            FormFields::default(),
+        );
         assert_eq!(
             error_for(Some(&failure), Forms::A),
-            Some(QueryError::NotFound)
+            Some(UiError::Query(QueryError::NotFound))
         );
         assert_eq!(error_for(Some(&failure), Forms::B), None);
         assert_eq!(general_error(Some(&failure)), None);
-        let general: Failure<Forms> =
-            Failure::new(None, QueryError::NotFound, FormFields::default());
-        assert_eq!(general_error(Some(&general)), Some(QueryError::NotFound));
+        let general: Failure<Forms> = Failure::new(
+            None,
+            UiError::Query(QueryError::NotFound),
+            FormFields::default(),
+        );
+        assert_eq!(
+            general_error(Some(&general)),
+            Some(UiError::Query(QueryError::NotFound))
+        );
         assert_eq!(failure.status(), StatusCode::NOT_FOUND);
     }
 
@@ -169,9 +194,9 @@ mod tests {
         assert_eq!(require(&caller, Permission::View), Ok(()));
         assert_eq!(
             require(&caller, Permission::Triage),
-            Err(QueryError::Forbidden {
+            Err(UiError::Query(QueryError::Forbidden {
                 missing: Permission::Triage
-            })
+            }))
         );
     }
 }

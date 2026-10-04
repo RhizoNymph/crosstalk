@@ -18,8 +18,8 @@ use crate::components::{
     filter_chip, format_time, href, kind_badge, page_header, pagination, short_id,
 };
 use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
-use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::agent_url;
@@ -70,7 +70,7 @@ async fn load(
     cx: &Cx,
     query: &AgentQuery,
     state: &ViewState,
-) -> std::result::Result<Listing, QueryError> {
+) -> std::result::Result<Listing, UiError> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;

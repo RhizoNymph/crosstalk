@@ -15,8 +15,8 @@ use crosstalk_spec::observed::agent::{IdentityEvidence, IdentityScope, MergeAuth
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily, UpstreamId};
 use crosstalk_spec::support::{Blake3, NonEmpty, Timestamp};
 
-use crate::contract::MergeId;
 use crate::contract::agents::{Agent, AgentLabel, AgentState, ClaimSeen, MergeRecord, MergeVeto};
+use crosstalk_spec::ids::MergeId;
 
 use super::GenError;
 use super::history::OPERATOR_RESEARCHER;

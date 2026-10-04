@@ -10,11 +10,11 @@ use topcoat::view::{View, component, view};
 
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL};
 use crate::components::{content_hidden, error_panel, short_id};
-use crate::contract::SinkId;
-use crate::contract::errors::QueryError;
 use crate::contract::rules::{QueryText, RuleName, UserRuleSpec};
+use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid, required, similarity};
 use crate::url::ulid::UlidId;
+use crosstalk_spec::ids::SinkId;
 
 pub const DEFAULT_REMAP: &str = "0.80";
 pub const DEFAULT_SEMANTIC: &str = "0.75";
@@ -33,7 +33,7 @@ impl RuleKindChoice {
         }
     }
 
-    pub fn parse(text: Option<&str>) -> std::result::Result<Self, QueryError> {
+    pub fn parse(text: Option<&str>) -> std::result::Result<Self, UiError> {
         match text {
             Some("watched") => Ok(Self::Watched),
             Some("semantic") => Ok(Self::Semantic),
@@ -51,14 +51,14 @@ pub struct Choices {
     pub sinks: Vec<SinkId>,
 }
 
-pub fn parse_name(fields: &FormFields) -> std::result::Result<RuleName, QueryError> {
+pub fn parse_name(fields: &FormFields) -> std::result::Result<RuleName, UiError> {
     RuleName::new(fields.text("name").unwrap_or("")).map_err(|e| invalid("name", e))
 }
 
 pub fn parse_sinks(
     fields: &FormFields,
     known: &[SinkId],
-) -> std::result::Result<Vec<SinkId>, QueryError> {
+) -> std::result::Result<Vec<SinkId>, UiError> {
     fields
         .all("sink")
         .map(|text| {
@@ -77,7 +77,7 @@ pub fn parse_sinks(
 pub fn parse_watched(
     fields: &FormFields,
     choices: &Choices,
-) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), QueryError> {
+) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
     let version: u32 = required(fields, "version")?
         .parse()
@@ -114,7 +114,7 @@ pub fn parse_watched(
 pub fn parse_semantic(
     fields: &FormFields,
     sinks: &[SinkId],
-) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), QueryError> {
+) -> std::result::Result<(RuleName, UserRuleSpec, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
     let text = QueryText::new(required(fields, "text")?).map_err(|e| invalid("text", e))?;
     let rule = UserRuleSpec::SemanticQuery {
@@ -177,7 +177,7 @@ pub async fn rule_form(
     topics: Vec<TopicOption>,
     sinks: Vec<(String, String)>,
     submit: &str,
-    error: Option<QueryError>,
+    error: Option<UiError>,
 ) -> Result<impl View> {
     let Values {
         name,
@@ -324,12 +324,10 @@ mod tests {
         ]);
         assert!(matches!(
             parse_watched(&stale, &choices()),
-            Err(QueryError::InvalidInput(
-                crate::contract::errors::InputError::Field {
-                    field: "version",
-                    ..
-                }
-            ))
+            Err(UiError::Field {
+                field: "version",
+                ..
+            })
         ));
         let unnamed =
             FormFields::from_pairs(&[("version", "3"), ("topic", &t1), ("remap_threshold", "0.5")]);

@@ -26,7 +26,7 @@ use topcoat::Result;
 use topcoat::view::{View, component, view};
 
 use crate::contract::agents::{AgentLabel, AgentName, AgentSummary};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::url::ulid::UlidId;
 
 /// An agent's display name: its label, else its id's last six characters.
@@ -191,7 +191,7 @@ pub async fn content_hidden() -> Result<impl View> {
 }
 
 #[component]
-pub async fn error_panel(error: &QueryError) -> Result<impl View> {
+pub async fn error_panel(error: &UiError) -> Result<impl View> {
     let message = error.to_string();
     Ok(view! {
         <div class="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">

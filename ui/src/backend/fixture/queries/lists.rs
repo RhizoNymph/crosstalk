@@ -14,14 +14,12 @@ use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
 use crate::backend::fixture::world::confirmed;
-use crate::contract::MergeId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
 use crate::contract::alerts::Alert;
 use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
-use crate::contract::errors::QueryError;
 use crate::contract::graph::route_kind;
 use crate::contract::lists::{Page, PageRequest};
 use crate::contract::research::{
@@ -30,6 +28,8 @@ use crate::contract::research::{
 };
 use crate::contract::verdict::Verdict;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};

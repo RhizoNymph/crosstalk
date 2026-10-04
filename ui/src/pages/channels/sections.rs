@@ -13,8 +13,8 @@ use crate::components::{
     data_table, empty_state, error_panel, format_time, kind_badge, locator_text,
 };
 use crate::contract::channels::ResourceUse;
-use crate::contract::errors::QueryError;
 use crate::contract::research::{AuditEntry, AuditOutcome};
+use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::audit::describe::{describe, note};
 use crate::pages::common::links::agent_url;
@@ -86,7 +86,7 @@ async fn agent_list(uses: Vec<AgentUse>) -> Result<impl View> {
 
 #[component]
 pub async fn resources_section(
-    rows: std::result::Result<Vec<ResourceRow>, QueryError>,
+    rows: std::result::Result<Vec<ResourceRow>, UiError>,
 ) -> Result<impl View> {
     let empty = rows.as_ref().is_ok_and(Vec::is_empty);
     Ok(view! {
@@ -132,7 +132,7 @@ pub fn history_rows(entries: &[AuditEntry], operators: &OperatorNames) -> Vec<Hi
             note: note(&e.action).map(str::to_owned),
             outcome: match &e.outcome {
                 AuditOutcome::Applied(_) => Ok(()),
-                AuditOutcome::Rejected(error) => Err(error.to_string()),
+                AuditOutcome::Rejected(error) => Err(crate::error::describe(error)),
             },
         })
         .collect()
@@ -140,7 +140,7 @@ pub fn history_rows(entries: &[AuditEntry], operators: &OperatorNames) -> Vec<Hi
 
 #[component]
 pub async fn history_section(
-    rows: std::result::Result<Vec<HistoryRow>, QueryError>,
+    rows: std::result::Result<Vec<HistoryRow>, UiError>,
     audit_url: String,
 ) -> Result<impl View> {
     let empty = rows.as_ref().is_ok_and(Vec::is_empty);
@@ -177,7 +177,7 @@ pub async fn history_section(
 
 #[component]
 pub async fn alerts_section(
-    rows: std::result::Result<Vec<AlertRow>, QueryError>,
+    rows: std::result::Result<Vec<AlertRow>, UiError>,
     inbox_url: String,
 ) -> Result<impl View> {
     let empty = rows.as_ref().is_ok_and(Vec::is_empty);
@@ -216,7 +216,7 @@ pub async fn alerts_section(
 mod tests {
     use crosstalk_spec::derived::flow::resource::Resource;
     use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
-    use crosstalk_spec::interfaces::l8_surface::PolicyKind;
+    use crosstalk_spec::interfaces::l8_surface::{PolicyKind, QueryError};
     use crosstalk_spec::support::Timestamp;
 
     use super::*;
@@ -244,10 +244,10 @@ mod tests {
 
     #[test]
     fn history_names_the_operator_and_keeps_rejections() {
-        use crate::contract::AuditId;
         use crate::contract::actions::OperatorAction;
-        use crate::contract::errors::ConflictKind;
         use crate::contract::research::{Actor, AuditedAction};
+        use crosstalk_spec::ids::AuditId;
+        use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 
         let entry = AuditEntry {
             id: AuditId::from_ulid(1),
@@ -261,7 +261,12 @@ mod tests {
             subject: Some(crate::contract::research::AuditSubject::Channel(
                 ChannelId::from_ulid(1),
             )),
-            outcome: AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::ChannelSuperseded)),
+            outcome: AuditOutcome::Rejected(QueryError::Conflict(
+                ConflictKind::ChannelSuperseded {
+                    channel: ChannelId::from_ulid(1),
+                    by: ChannelId::from_ulid(2),
+                },
+            )),
         };
         let operators = OperatorNames::new([(OperatorId::from_ulid(3), "ada".to_owned())]);
         let rows = history_rows(&[entry], &operators);
@@ -270,7 +275,7 @@ mod tests {
         assert_eq!(rows[0].note.as_deref(), Some("ok"));
         assert_eq!(
             rows[0].outcome,
-            Err("conflict: the channel is superseded".to_owned())
+            Err("the channel is superseded: 00000000000000000000000001 resolves to 00000000000000000000000002; act on that channel instead".to_owned())
         );
     }
 
@@ -301,17 +306,17 @@ mod tests {
             by: "ada".into(),
             what: "set policy to sanctioned".into(),
             note: None,
-            outcome: Err("conflict: the channel is superseded".into()),
+            outcome: Err("the channel is superseded".into()),
         }];
         let html = render(
             view! { cx => history_section(rows: Ok(history), audit_url: "/audit".to_owned()) },
             cx,
         )
         .await;
-        assert!(html.contains("rejected: conflict: the channel is superseded"));
+        assert!(html.contains("rejected: the channel is superseded"));
 
         let html = render(
-            view! { cx => alerts_section(rows: Err(QueryError::NotFound), inbox_url: "/alerts".to_owned()) },
+            view! { cx => alerts_section(rows: Err(UiError::Query(QueryError::NotFound)), inbox_url: "/alerts".to_owned()) },
             cx,
         )
         .await;

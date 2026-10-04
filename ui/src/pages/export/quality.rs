@@ -7,8 +7,8 @@ use topcoat::view::{View, component, view};
 use crate::components::form::{SECTION, SECTION_TITLE};
 use crate::components::table::{ROW, TD, TD_NUM};
 use crate::components::{data_table, empty_state, error_panel, route_badge};
-use crate::contract::errors::QueryError;
 use crate::contract::research::{MatchKindName, QualityRow};
+use crate::error::UiError;
 use crosstalk_spec::aggregates::edge::RouteKind;
 
 pub fn match_kind_name(kind: MatchKindName) -> &'static str {
@@ -77,7 +77,7 @@ pub fn quality_lines(rows: &[QualityRow]) -> Vec<QualityLine> {
 
 #[component]
 pub async fn quality_section(
-    lines: std::result::Result<Vec<QualityLine>, QueryError>,
+    lines: std::result::Result<Vec<QualityLine>, UiError>,
 ) -> Result<impl View> {
     let empty = lines.as_ref().is_ok_and(Vec::is_empty);
     Ok(view! {

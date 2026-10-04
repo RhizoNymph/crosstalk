@@ -5,7 +5,7 @@ use crosstalk_spec::ids::{
     OperatorId, ResourceId, SpanId, TopicId, TransmissionId,
 };
 
-use crate::contract::{AuditId, MergeId, ProjectionId, SinkId};
+use crosstalk_spec::ids::{AuditId, ExportId, MergeId, ProjectionId, SinkId};
 
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const LEN: usize = 26;
@@ -103,6 +103,7 @@ ulid_ids!(
     AlertId,
     OperatorId,
     EventId,
+    ExportId,
     MergeId,
     ProjectionId,
     SinkId,

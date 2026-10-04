@@ -23,8 +23,8 @@ use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{error_panel, format_time, href, page_header};
-use crate::contract::errors::QueryError;
 use crate::contract::research::ExportRequest;
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::FormFields;
 use crate::pages::view::view_state;
@@ -37,7 +37,7 @@ pub const PATH: &str = "/export";
 pub enum Submitted {
     /// Valid, but the backend cannot export yet.
     Unavailable(ExportRequest),
-    Invalid(QueryError, FormFields),
+    Invalid(UiError, FormFields),
 }
 
 #[page("/export")]
@@ -68,7 +68,8 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
         Ok(()) => backend
             .detection_quality(&caller, state.scope.window)
             .await
-            .map(|rows| quality_lines(&rows)),
+            .map(|rows| quality_lines(&rows))
+            .map_err(UiError::from),
         Err(error) => Err(error.clone()),
     };
     // Versions to export under; listing them reads topic metadata, which
@@ -77,7 +78,7 @@ async fn export_page(cx: &Cx, state: ViewState, submitted: Option<Submitted>) ->
         match backend.topic_versions(&caller).await {
             Ok(versions) => versions.iter().map(|v| v.version.0).collect(),
             Err(error) => {
-                tracing::warn!(%error, "topic versions unavailable");
+                tracing::warn!(error = ?error, "topic versions unavailable");
                 vec![state.scope.topic_version.0]
             }
         }

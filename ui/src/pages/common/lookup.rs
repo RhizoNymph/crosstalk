@@ -67,7 +67,7 @@ pub async fn operator_names(cx: &Cx, caller: &Caller) -> OperatorNames {
     match backend(cx).operators(caller).await {
         Ok(operators) => OperatorNames::new(operators.into_iter().map(|o| (o.id, o.name))),
         Err(error) => {
-            tracing::warn!(%error, "operator names unavailable");
+            tracing::warn!(error = ?error, "operator names unavailable");
             OperatorNames::default()
         }
     }
@@ -98,7 +98,7 @@ pub async fn rule_names(cx: &Cx, caller: &Caller) -> RuleNames {
                 .map(|r| (r.id, r.name.as_str().to_owned())),
         ),
         Err(error) => {
-            tracing::warn!(%error, "rule names unavailable");
+            tracing::warn!(error = ?error, "rule names unavailable");
             RuleNames::default()
         }
     }
@@ -141,7 +141,7 @@ pub async fn agent_names(
                 .collect(),
         ),
         Err(error) => {
-            tracing::warn!(%error, agents = wanted.len(), "agent names unavailable");
+            tracing::warn!(error = ?error, agents = wanted.len(), "agent names unavailable");
             AgentNames::default()
         }
     }

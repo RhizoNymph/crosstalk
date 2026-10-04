@@ -111,7 +111,7 @@ pub async fn load(
         {
             Ok(page) => page,
             Err(error) => {
-                tracing::warn!(%error, agent = %agent.to_ulid(), "sub-agents unavailable");
+                tracing::warn!(error = ?error, agent = %agent.to_ulid(), "sub-agents unavailable");
                 break;
             }
         };

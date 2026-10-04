@@ -14,8 +14,8 @@ use crate::backend::Backend;
 use crate::components::form::LINK;
 use crate::components::sparkline::sparkline;
 use crate::components::{error_panel, href};
-use crate::contract::errors::QueryError;
 use crate::contract::topics::TopicStats;
+use crate::error::UiError;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
@@ -80,7 +80,7 @@ pub async fn load_topics(
     cx: &Cx,
     caller: &Caller,
     state: &ViewState,
-) -> std::result::Result<Vec<TopicRow>, QueryError> {
+) -> std::result::Result<Vec<TopicRow>, UiError> {
     let backend = backend(cx);
     let stats = backend
         .topic_stats(caller, &state.scope, TREND_BUCKETS)
@@ -96,7 +96,7 @@ pub async fn load_topics(
 
 #[component]
 pub async fn topic_sidebar(
-    rows: std::result::Result<Vec<TopicRow>, QueryError>,
+    rows: std::result::Result<Vec<TopicRow>, UiError>,
     version: u32,
     topics_url: String,
 ) -> Result<impl View> {

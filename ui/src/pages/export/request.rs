@@ -6,13 +6,14 @@ use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 
 use crate::app::can;
 use crate::components::{format_time, route_kind_name, short_id};
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::research::{ExportDataset, ExportFormat, ExportRequest};
 use crate::contract::scope::VerdictFilter;
+use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// A dataset without its projection id: what the form's select offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +81,7 @@ pub fn parse(
     fields: &FormFields,
     state: &ViewState,
     caller: &Caller,
-) -> Result<ExportRequest, QueryError> {
+) -> Result<ExportRequest, UiError> {
     let dataset_text = fields.text("dataset").unwrap_or("transmissions");
     let choice = DatasetChoice::ALL
         .into_iter()
@@ -119,9 +120,9 @@ pub fn parse(
         Some(_) => return Err(invalid("content", "expected 1")),
     };
     if include_content && !can(caller, Permission::Content) {
-        return Err(QueryError::Forbidden {
+        return Err(UiError::Query(QueryError::Forbidden {
             missing: Permission::Content,
-        });
+        }));
     }
     let mut scope = state.scope.clone();
     scope.topic_version = version;
@@ -212,7 +213,6 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::errors::InputError;
 
     fn caller(permissions: Vec<Permission>) -> Caller {
         crate::testing::caller_of(OperatorId::from_ulid(1), &permissions)
@@ -272,7 +272,7 @@ mod tests {
         let field =
             |pairs: &[(&str, &str)]| match parse(&FormFields::from_pairs(pairs), &state(), &viewer)
             {
-                Err(QueryError::InvalidInput(InputError::Field { field, .. })) => Some(field),
+                Err(UiError::Field { field, .. }) => Some(field),
                 _ => None,
             };
         assert_eq!(field(&[("dataset", "everything")]), Some("dataset"));
@@ -285,9 +285,9 @@ mod tests {
                 &state(),
                 &viewer
             ),
-            Err(QueryError::Forbidden {
+            Err(UiError::Query(QueryError::Forbidden {
                 missing: Permission::Content
-            })
+            }))
         );
     }
 }

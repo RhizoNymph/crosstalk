@@ -14,12 +14,12 @@ use super::super::world::ChannelKey;
 use super::{day, first, researcher, shared, week};
 use crate::backend::Backend;
 use crate::contract::channels::ChannelListFilter;
-use crate::contract::errors::QueryError;
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::research::{AuditFilter, ProjectionJob};
 use crate::contract::scope::{Scope, TopologyFilter, VerdictFilter};
 use crate::contract::search::SearchMode;
 use crate::contract::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::reads_support::*;
 

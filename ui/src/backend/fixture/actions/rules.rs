@@ -11,21 +11,14 @@ use crate::backend::fixture::queries::retained;
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::backend::fixture::world::topics::embed;
-use crate::contract::SinkId;
 use crate::contract::actions::ActionOutcome;
-use crate::contract::errors::{ConflictKind, InputError, QueryError};
 use crate::contract::rules::{
     OperatorRuleStatus, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, UserRule, UserRuleSpec,
 };
+use crosstalk_spec::ids::SinkId;
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
 
 use super::effects;
-
-fn invalid(field: &'static str, reason: &str) -> QueryError {
-    QueryError::InvalidInput(InputError::Field {
-        field,
-        reason: reason.to_owned(),
-    })
-}
 
 /// Turns what an operator submitted into the rule to store. A
 /// watched-topic rule must watch topics of the current version (new
@@ -36,10 +29,9 @@ fn build(world: &World, spec: &UserRuleSpec, sinks: &[SinkId]) -> Result<UserRul
         .iter()
         .find(|s| !world.sinks.iter().any(|k| k.id == **s))
     {
-        return Err(invalid(
-            "sinks",
-            &format!("unknown sink {:032x}", missing.as_ulid()),
-        ));
+        return Err(QueryError::InvalidInput(InputError::UnknownSink {
+            sink: *missing,
+        }));
     }
     match spec {
         UserRuleSpec::WatchedTopic {
@@ -49,11 +41,14 @@ fn build(world: &World, spec: &UserRuleSpec, sinks: &[SinkId]) -> Result<UserRul
         } => {
             retained(world, *version)?;
             if *version != world.topics.latest() {
-                return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent));
+                return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent {
+                    requested: *version,
+                    current: world.topics.latest(),
+                }));
             }
             let known = |t| world.topics.topics_of(*version).any(|k| k.id == t);
             if topics.iter().any(|t| !known(*t)) {
-                return Err(invalid("rule.topics", "a topic is not in that version"));
+                return Err(QueryError::InvalidInput(InputError::UnknownTopics));
             }
             Ok(UserRule::WatchedTopic {
                 version: *version,
@@ -114,7 +109,9 @@ pub fn update(
         .find(|r| r.id == id)
         .ok_or(QueryError::NotFound)?;
     if matches!(existing.rule, RuleKind::Builtin(_)) {
-        return Err(QueryError::Conflict(ConflictKind::BuiltinRule));
+        return Err(QueryError::Conflict(ConflictKind::RuleNotEditable {
+            rule: id,
+        }));
     }
     let rule = build(world, spec, sinks)?;
     if let Some(def) = state.rules.iter_mut().find(|r| r.id == id) {
@@ -141,7 +138,7 @@ pub fn set_enabled(
         .find(|r| r.id == id)
         .ok_or(QueryError::NotFound)?;
     if matches!(def.status, RuleStatus::Stale(_)) && status == OperatorRuleStatus::Enabled {
-        return Err(QueryError::Conflict(ConflictKind::RuleStale));
+        return Err(QueryError::Conflict(ConflictKind::RuleStale { rule: id }));
     }
     def.status = match status {
         OperatorRuleStatus::Enabled => RuleStatus::Enabled,

@@ -35,11 +35,11 @@ use crate::components::{
     content_hidden, empty_state, error_panel, flash_banner, format_bytes, format_time, href,
     kind_badge, route_badge,
 };
-use crate::contract::errors::QueryError;
 use crate::contract::graph::{TransmissionSelector, TransmissionStateKind};
 use crate::contract::lists::PageRequest;
 use crate::contract::scope::{Scope, TopologyFilter};
 use crate::contract::verdict::Verdict;
+use crate::error::UiError;
 use crate::pages::common::action::{
     Failure, done, error_for, fields_for, general_error, perform, require, status_of,
 };
@@ -52,6 +52,7 @@ use crate::pages::topology::selection::Selection;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(tx_ulid);
 
@@ -124,13 +125,15 @@ async fn load(
     caller: &Caller,
     id: TransmissionId,
     state: &ViewState,
-) -> std::result::Result<Option<Loaded>, QueryError> {
+) -> std::result::Result<Option<Loaded>, UiError> {
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let content = can(caller, Permission::Content);
     let version = backend.current_topic_version(caller).await?;
-    let window = all_time(backend.now(caller).await?).ok_or_else(|| QueryError::Store {
-        reason: "empty window".to_owned(),
+    let window = all_time(backend.now(caller).await?).ok_or_else(|| {
+        UiError::Query(QueryError::Store {
+            reason: "empty window".to_owned(),
+        })
     })?;
     let scope = Scope {
         window,
@@ -176,7 +179,7 @@ async fn load(
                 .find(|t| t.id == topic)
                 .map_or(TopicCell::Hidden, |t| TopicCell::Label(t.label)),
             Err(error) => {
-                tracing::warn!(%error, "topic label unavailable");
+                tracing::warn!(error = ?error, "topic label unavailable");
                 TopicCell::Hidden
             }
         },

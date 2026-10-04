@@ -8,8 +8,8 @@ use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
-use super::errors::ConflictKind;
 use super::graph::ChannelShape;
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OriginKind {

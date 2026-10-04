@@ -20,10 +20,10 @@ use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
 };
-use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crate::contract::rules::{RuleDef, RuleKind};
+use crate::error::UiError;
 use crate::pages::channels::sections::{HistoryRow, history_rows};
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
@@ -62,7 +62,7 @@ pub fn rule_link(rule: Option<&RuleDef>, state: &ViewState) -> String {
 struct Loaded {
     row: AlertRow,
     rule_url: String,
-    history: std::result::Result<Vec<HistoryRow>, QueryError>,
+    history: std::result::Result<Vec<HistoryRow>, UiError>,
 }
 
 async fn load(
@@ -70,7 +70,7 @@ async fn load(
     caller: &Caller,
     id: AlertId,
     state: &ViewState,
-) -> std::result::Result<Option<Loaded>, QueryError> {
+) -> std::result::Result<Option<Loaded>, UiError> {
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let Some(alert) = backend.alert(caller, id).await? else {
@@ -86,6 +86,7 @@ async fn load(
     let history = backend
         .audit(caller, &filter, &PageRequest::first(HISTORY))
         .await
+        .map_err(UiError::from)
         .map(|page| history_rows(&page.items, &operators));
     Ok(Some(Loaded {
         row: AlertRow::new(&alert, &names, &operators, state),

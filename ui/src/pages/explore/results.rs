@@ -20,16 +20,16 @@ use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::components::form::{LINK, SMALL_BUTTON};
 use crate::components::{empty_state, error_panel, kind_badge, route_badge};
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::lists::PageRequest;
+use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::paging::parse_cursor;
 use crate::pages::common::transmissions::{TransmissionRow, rows, transmission_table};
 use crate::pages::view::state_from_query;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::ids::ProjectionId;
 
 pub const RESULTS_PAGE: NonZeroU32 = match NonZeroU32::new(15) {
     Some(n) => n,
@@ -58,7 +58,7 @@ pub async fn load(
     projection: &str,
     selection: &str,
     cursor: &str,
-) -> std::result::Result<Results, QueryError> {
+) -> std::result::Result<Results, UiError> {
     require(caller, Permission::View)?;
     require(caller, Permission::Content)?;
     let state = state_from_query(cx, state).await?;

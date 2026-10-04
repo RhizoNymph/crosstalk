@@ -20,8 +20,8 @@ use crate::components::{
     page_header, pagination, short_id, tabs,
 };
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, note};
@@ -45,7 +45,7 @@ pub fn tab_code(state: AlertStateKind) -> &'static str {
 }
 
 /// `None` is the default tab, open alerts.
-pub fn parse_tab(text: Option<&str>) -> std::result::Result<AlertStateKind, QueryError> {
+pub fn parse_tab(text: Option<&str>) -> std::result::Result<AlertStateKind, UiError> {
     match text {
         None => Ok(AlertStateKind::Open),
         Some(text) => TABS
@@ -69,7 +69,7 @@ pub struct RowForm(pub AlertId);
 pub fn parse_action(
     alert: AlertId,
     fields: &FormFields,
-) -> std::result::Result<(OperatorAction, Flash), QueryError> {
+) -> std::result::Result<(OperatorAction, Flash), UiError> {
     match fields.text("action") {
         Some("acknowledge") => Ok((OperatorAction::Acknowledge { alert }, Flash::Acknowledged)),
         Some("resolve") => Ok((
@@ -86,7 +86,7 @@ pub fn parse_action(
 /// A validated inbox post: the action, its flash, and the tab to return to.
 pub fn parse(
     fields: &FormFields,
-) -> std::result::Result<(OperatorAction, Flash, AlertStateKind), (Option<RowForm>, QueryError)> {
+) -> std::result::Result<(OperatorAction, Flash, AlertStateKind), (Option<RowForm>, UiError)> {
     let alert = id::<AlertId>(fields, "alert").map_err(|e| (None, e))?;
     let row = Some(RowForm(alert));
     let tab = parse_tab(fields.text("tab")).map_err(|e| (row, e))?;
@@ -105,7 +105,7 @@ async fn load(
     caller: &Caller,
     tab: AlertStateKind,
     state: &ViewState,
-) -> std::result::Result<Inbox, QueryError> {
+) -> std::result::Result<Inbox, UiError> {
     require(caller, Permission::View)?;
     let request = page_request(cx)?;
     // The shared filter narrows the inbox when it names exactly one channel.
@@ -164,7 +164,7 @@ async fn alerts_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl Vie
 async fn inbox_page(
     cx: &Cx,
     state: ViewState,
-    tab: std::result::Result<AlertStateKind, QueryError>,
+    tab: std::result::Result<AlertStateKind, UiError>,
     flash: Option<Flash>,
     failure: Option<Failure<RowForm>>,
 ) -> Result<impl View> {
@@ -334,7 +334,7 @@ mod tests {
         let unknown = FormFields::from_pairs(&[("action", "snooze"), ("alert", ALERT)]);
         assert!(matches!(
             parse(&unknown),
-            Err((Some(_), QueryError::InvalidInput(_)))
+            Err((Some(_), UiError::Field { .. }))
         ));
     }
 

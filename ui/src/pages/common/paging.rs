@@ -5,8 +5,8 @@ use std::num::NonZeroU32;
 use topcoat::context::Cx;
 use topcoat::router::query_params;
 
-use crate::contract::errors::QueryError;
 use crate::contract::lists::{Cursor, PageRequest};
+use crate::error::UiError;
 use crate::pages::common::form::invalid;
 
 pub const PAGE_SIZE: NonZeroU32 = match NonZeroU32::new(50) {
@@ -23,7 +23,7 @@ struct CursorQuery {
 }
 
 /// A cursor from the query: printable ASCII, at most [`CURSOR_MAX`] bytes.
-pub fn parse_cursor(text: Option<&str>) -> Result<Option<Cursor>, QueryError> {
+pub fn parse_cursor(text: Option<&str>) -> Result<Option<Cursor>, UiError> {
     match text {
         None => Ok(None),
         Some(text) if text.len() > CURSOR_MAX => Err(invalid("cursor", "too long")),
@@ -35,7 +35,7 @@ pub fn parse_cursor(text: Option<&str>) -> Result<Option<Cursor>, QueryError> {
 }
 
 /// The page this request asks for.
-pub fn page_request(cx: &Cx) -> Result<PageRequest, QueryError> {
+pub fn page_request(cx: &Cx) -> Result<PageRequest, UiError> {
     let raw = query_params::<CursorQuery>(cx).map_err(|e| invalid("cursor", e))?;
     Ok(PageRequest {
         cursor: parse_cursor(raw.cursor.as_deref())?,

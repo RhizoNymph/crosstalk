@@ -11,8 +11,8 @@ use topcoat::view::{View, component, view};
 
 use crate::components::error_panel;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL};
-use crate::contract::errors::QueryError;
 use crate::contract::research::ProjectionParams;
+use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
 
 pub const DEFAULT_NEIGHBORS: &str = "15";
@@ -28,7 +28,7 @@ fn field<'a>(fields: &'a FormFields, key: &str, default: &'a str) -> &'a str {
 }
 
 /// The parameters a fit form asks for; blank fields take the defaults.
-pub fn parse(fields: &FormFields) -> std::result::Result<ProjectionParams, QueryError> {
+pub fn parse(fields: &FormFields) -> std::result::Result<ProjectionParams, UiError> {
     let neighbors = field(fields, "neighbors", DEFAULT_NEIGHBORS)
         .parse::<u16>()
         .ok()
@@ -60,7 +60,7 @@ pub async fn fit_form(
     action: String,
     submit: &str,
     retained: Option<FormFields>,
-    error: Option<QueryError>,
+    error: Option<UiError>,
 ) -> Result<impl View> {
     let value = |key: &str, default: &str| {
         retained
@@ -106,7 +106,6 @@ pub async fn fit_form(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::errors::InputError;
 
     #[test]
     fn blank_fields_take_the_defaults() {
@@ -140,7 +139,7 @@ mod tests {
             assert!(
                 matches!(
                     parse(&fields),
-                    Err(QueryError::InvalidInput(InputError::Field { field, .. })) if field == key
+                    Err(UiError::Field { field, .. }) if field == key
                 ),
                 "{key}={value}"
             );

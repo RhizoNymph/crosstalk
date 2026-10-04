@@ -32,7 +32,6 @@ use super::projection::format::{ProjectionTables, encode};
 use super::timeline::TimelinePayload;
 use super::topology::TopologyPayload;
 use crate::components::agent_name;
-use crate::contract::ProjectionId;
 use crate::contract::agents::{AgentLabel, AgentStateKind, AgentSummary, ClaimSeen};
 use crate::contract::channels::{DetectionKind, OriginKind};
 use crate::contract::graph::{
@@ -43,6 +42,7 @@ use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
 use crate::contract::scope::{Scope, TopologyFilter};
+use crosstalk_spec::ids::ProjectionId;
 
 /// 2026-10-02T00:00:00Z.
 const START_MICROS: u64 = 1_790_899_200_000_000;

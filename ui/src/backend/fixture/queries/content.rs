@@ -16,14 +16,14 @@ use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
 use crate::backend::fixture::world::TxRecord;
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::graph::route_kind;
 use crate::contract::research::{
     PointCategories, ProjectionMeta, ProjectionParams, ProjectionPoints,
 };
 use crate::contract::scope::Scope;
 use crate::contract::topics::{TopicStats, TopicVersionRemap};
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::graph::{bucket_of, buckets};
 use super::scope::Filter;

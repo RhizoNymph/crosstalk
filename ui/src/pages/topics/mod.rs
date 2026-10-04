@@ -24,7 +24,7 @@ use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::sparkline::sparkline;
 use crate::components::table::{ROW, TD, TD_NUM};
 use crate::components::{Tab, data_table, empty_state, error_panel, href, page_header, segmented};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
 use crate::pages::common::transmissions::Named;
@@ -42,7 +42,7 @@ struct RawTopicsQuery {
 /// The `ver` key: a version number.
 pub fn parse_version(
     text: Option<&str>,
-) -> std::result::Result<Option<TopicModelVersion>, QueryError> {
+) -> std::result::Result<Option<TopicModelVersion>, UiError> {
     text.map(|t| {
         t.parse::<u32>()
             .map(TopicModelVersion)
@@ -55,7 +55,7 @@ struct Loaded {
     tabs: Vec<VersionTab>,
     selected: TopicModelVersion,
     /// The selected version's topics; an error when it is not retained.
-    topics: std::result::Result<Vec<TopicRow>, QueryError>,
+    topics: std::result::Result<Vec<TopicRow>, UiError>,
     /// The remap to the next version: its number and rows.
     remap: Option<(u32, Vec<RemapRow>)>,
 }
@@ -65,7 +65,7 @@ async fn load(
     caller: &Caller,
     state: &ViewState,
     selected: TopicModelVersion,
-) -> std::result::Result<Loaded, QueryError> {
+) -> std::result::Result<Loaded, UiError> {
     let backend = backend(cx);
     let versions = backend.topic_versions(caller).await?;
     let tabs = version_tabs(&versions, state.scope.topic_version);
@@ -91,7 +91,7 @@ async fn load(
             };
             Ok((rows, remap))
         }
-        Err(error) => Err(error),
+        Err(error) => Err(UiError::from(error)),
     };
     let (topics, remap) = match topics {
         Ok((rows, remap)) => (Ok(rows), remap),
@@ -119,7 +119,7 @@ async fn topics_get(cx: &Cx) -> Result<impl View> {
 async fn topics_page(
     cx: &Cx,
     state: ViewState,
-    selected: std::result::Result<TopicModelVersion, QueryError>,
+    selected: std::result::Result<TopicModelVersion, UiError>,
 ) -> Result<impl View> {
     let caller = caller(cx);
     let allowed = require(&caller, Permission::View).and(selected);
@@ -214,7 +214,7 @@ async fn topics_body(cx: &Cx, state: ViewState, selected: TopicModelVersion) -> 
 }
 
 #[component]
-async fn topic_table(topics: std::result::Result<Vec<TopicRow>, QueryError>) -> Result<impl View> {
+async fn topic_table(topics: std::result::Result<Vec<TopicRow>, UiError>) -> Result<impl View> {
     let empty = topics.as_ref().is_ok_and(Vec::is_empty);
     Ok(view! {
         <section class=(SECTION)>

@@ -18,9 +18,9 @@ use crate::backend::Backend;
 use crate::components::{agent_name, format_bytes, format_share, format_time, href};
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind, policy_kind};
-use crate::contract::errors::QueryError;
 use crate::contract::graph::{TopologyView, TransmissionSelector, route_kind};
 use crate::contract::lists::PageRequest;
+use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{agent_url, channel_url};
@@ -225,7 +225,7 @@ pub async fn load(
     state: &str,
     sel: &str,
     cursor: &str,
-) -> Result<(ViewState, Drawer), QueryError> {
+) -> Result<(ViewState, Drawer), UiError> {
     require(caller, Permission::View)?;
     let state = state_from_query(cx, state).await?;
     let selection = Selection::parse(sel).map_err(|e| invalid("sel", e))?;

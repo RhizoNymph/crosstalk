@@ -11,11 +11,11 @@
 use topcoat::router::query_params;
 
 use super::lasso::ProjectionSelection;
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::search::{SearchMode, SearchText};
+use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::ids::ProjectionId;
 
 #[query_params]
 pub struct RawExploreQuery {
@@ -101,7 +101,7 @@ pub struct ExploreQuery {
 }
 
 impl ExploreQuery {
-    pub fn parse(raw: &RawExploreQuery) -> Result<Self, QueryError> {
+    pub fn parse(raw: &RawExploreQuery) -> Result<Self, UiError> {
         let text = match raw.q.as_deref() {
             Some(q) if q.chars().count() > MAX_QUERY_CHARS => {
                 return Err(invalid(
@@ -277,9 +277,7 @@ mod tests {
             assert!(
                 matches!(
                     ExploreQuery::parse(&bad),
-                    Err(QueryError::InvalidInput(
-                        crate::contract::errors::InputError::Field { field, .. }
-                    )) if field == key
+                    Err(UiError::Field { field, .. }) if field == key
                 ),
                 "{key}"
             );

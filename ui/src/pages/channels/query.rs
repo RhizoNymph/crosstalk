@@ -6,7 +6,7 @@ use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use topcoat::router::query_params;
 
 use crate::contract::channels::{ChannelListFilter, DetectionKind, OriginKind};
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::form::{POLICIES, invalid, policy_code};
 
 #[query_params]
@@ -68,7 +68,7 @@ fn parse_codes<T: Copy>(
     key: &'static str,
     all: &[T],
     code: fn(T) -> &'static str,
-) -> Result<Vec<T>, QueryError> {
+) -> Result<Vec<T>, UiError> {
     let mut out = Vec::new();
     for item in text
         .unwrap_or("")
@@ -87,7 +87,7 @@ fn parse_codes<T: Copy>(
 }
 
 impl ListQuery {
-    pub fn parse(raw: &RawListQuery) -> Result<Self, QueryError> {
+    pub fn parse(raw: &RawListQuery) -> Result<Self, UiError> {
         let tab = match raw.tab.as_deref() {
             None | Some("all") => Tab::All,
             Some("review") => Tab::Review,

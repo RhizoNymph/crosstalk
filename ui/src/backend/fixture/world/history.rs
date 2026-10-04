@@ -23,9 +23,9 @@ use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::store::State;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::alerts::AlertState;
-use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::research::{Actor, AuditOutcome, AuditSubject, AuditedAction, Operator};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::channels::{
     ChannelKey, ChannelPlan, DESIGN_DOCS_AT, MCP_RESET_AT, PASTEBIN_DECIDED_AT, PROMOTE_AT,
@@ -416,7 +416,7 @@ fn rejected(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
             Actor::Operator(OPERATOR_ONCALL),
             AuditedAction::Operator(OperatorAction::Acknowledge { alert }),
             Some(AuditSubject::Alert(alert)),
-            AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::AlertState)),
+            AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::AlertNotActive { alert })),
         );
     }
     Ok(())

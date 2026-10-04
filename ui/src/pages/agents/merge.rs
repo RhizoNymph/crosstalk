@@ -25,8 +25,8 @@ use crate::components::{
     state_badge, state_inputs,
 };
 use crate::contract::agents::{AgentDetail, AgentStateKind};
-use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, id, invalid};
@@ -34,6 +34,7 @@ use crate::pages::common::links::agent_url;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// Agents offered as merge targets.
 const CHOICES: NonZeroU32 = match NonZeroU32::new(100) {
@@ -93,11 +94,11 @@ async fn detail(
     cx: &Cx,
     caller: &Caller,
     id: AgentId,
-) -> std::result::Result<AgentDetail, QueryError> {
+) -> std::result::Result<AgentDetail, UiError> {
     backend(cx)
         .agent(caller, id)
         .await?
-        .ok_or(QueryError::NotFound)
+        .ok_or(UiError::Query(QueryError::NotFound))
 }
 
 enum Stage {
@@ -112,7 +113,7 @@ async fn load(
     id: AgentId,
     into: Option<&str>,
     state: &ViewState,
-) -> std::result::Result<(Side, Stage), QueryError> {
+) -> std::result::Result<(Side, Stage), UiError> {
     require(caller, Permission::View)?;
     require(caller, Permission::Govern)?;
     let from = detail(cx, caller, id).await?;

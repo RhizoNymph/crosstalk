@@ -3,7 +3,7 @@
 
 use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, TransmissionId};
 
-use crate::contract::MergeId;
+use crosstalk_spec::ids::MergeId;
 
 use crate::components::short_id;
 use crate::contract::research::AuditSubject;

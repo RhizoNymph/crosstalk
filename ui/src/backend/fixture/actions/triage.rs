@@ -10,8 +10,8 @@ use crate::backend::fixture::store::State;
 use crate::backend::fixture::world::World;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::alerts::AlertState;
-use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 use super::effects;
 
@@ -34,7 +34,9 @@ pub fn set_verdict(
         | TransmissionState::Classified { .. }
         | TransmissionState::Aggregated { .. } => {}
         TransmissionState::Detected | TransmissionState::AwaitingContent { .. } => {
-            return Err(QueryError::Conflict(ConflictKind::NotJudgeable));
+            return Err(QueryError::Conflict(
+                ConflictKind::TransmissionNotJudgeable { transmission },
+            ));
         }
     }
     state.verdicts.push(TransmissionVerdict {
@@ -50,14 +52,16 @@ pub fn set_verdict(
     Ok(ActionOutcome::Applied)
 }
 
-pub fn acknowledge(state: &mut State, by: OperatorId, alert: AlertId) -> Result<ActionOutcome> {
+pub fn acknowledge(state: &mut State, by: OperatorId, id: AlertId) -> Result<ActionOutcome> {
     let alert = state
         .alerts
         .iter_mut()
-        .find(|a| a.id == alert)
+        .find(|a| a.id == id)
         .ok_or(QueryError::NotFound)?;
     if alert.state != AlertState::Open {
-        return Err(QueryError::Conflict(ConflictKind::AlertState));
+        return Err(QueryError::Conflict(ConflictKind::AlertNotActive {
+            alert: id,
+        }));
     }
     alert.state = AlertState::Acknowledged { by, at: NOW };
     Ok(ActionOutcome::Applied)
@@ -66,16 +70,18 @@ pub fn acknowledge(state: &mut State, by: OperatorId, alert: AlertId) -> Result<
 pub fn resolve(
     state: &mut State,
     by: OperatorId,
-    alert: AlertId,
+    id: AlertId,
     note: Option<String>,
 ) -> Result<ActionOutcome> {
     let alert = state
         .alerts
         .iter_mut()
-        .find(|a| a.id == alert)
+        .find(|a| a.id == id)
         .ok_or(QueryError::NotFound)?;
     if !effects::is_active(alert) {
-        return Err(QueryError::Conflict(ConflictKind::AlertState));
+        return Err(QueryError::Conflict(ConflictKind::AlertNotActive {
+            alert: id,
+        }));
     }
     alert.state = AlertState::Resolved { by, at: NOW, note };
     Ok(ActionOutcome::Applied)

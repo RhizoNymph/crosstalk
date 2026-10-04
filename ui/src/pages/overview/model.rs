@@ -13,8 +13,8 @@ use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{format_bytes, format_time, href};
 use crate::contract::channels::{ChannelListFilter, DetectionKind};
-use crate::contract::errors::QueryError;
 use crate::contract::lists::{Page, PageRequest};
+use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::require;
 use crate::pages::common::lookup::{agent_names, operator_names, rule_names};
@@ -92,7 +92,7 @@ impl Counter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tile {
     pub label: &'static str,
-    pub value: Result<String, QueryError>,
+    pub value: Result<String, UiError>,
     pub detail: String,
     pub href: String,
 }
@@ -101,15 +101,15 @@ pub struct Tile {
 pub struct Overview {
     pub tiles: Vec<Tile>,
     pub watermark: Option<String>,
-    pub edges: Result<Vec<(EdgeItem, String)>, QueryError>,
-    pub alerts: Result<Vec<AlertRow>, QueryError>,
+    pub edges: Result<Vec<(EdgeItem, String)>, UiError>,
+    pub alerts: Result<Vec<AlertRow>, UiError>,
 }
 
 async fn channel_count(
     cx: &Cx,
     caller: &Caller,
     filter: ChannelListFilter,
-) -> Result<Count, QueryError> {
+) -> Result<Count, UiError> {
     let mut counter = Counter::new();
     let mut request = Counter::first();
     loop {
@@ -125,7 +125,7 @@ async fn open_alert_count(
     cx: &Cx,
     caller: &Caller,
     filter: &AlertFilter,
-) -> Result<Count, QueryError> {
+) -> Result<Count, UiError> {
     let mut counter = Counter::new();
     let mut request = Counter::first();
     loop {
@@ -137,7 +137,7 @@ async fn open_alert_count(
     }
 }
 
-pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overview, QueryError> {
+pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overview, UiError> {
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let one = NonZeroU32::MIN;
@@ -151,7 +151,7 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
                 .to_string()),
             Some(format_time(t.watermark)),
         ),
-        Err(error) => (Err(error.clone()), None),
+        Err(error) => (Err(UiError::from(error.clone())), None),
     };
     let matched = timeline
         .as_ref()
@@ -243,7 +243,7 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
                 })
                 .collect())
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
 
     let alerts = match backend
@@ -259,7 +259,7 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
                 .map(|a: &Alert| AlertRow::new(a, &rules, &operators, state))
                 .collect())
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
     Ok(Overview {
         tiles,

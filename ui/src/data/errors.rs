@@ -1,10 +1,11 @@
-//! HTTP statuses for backend errors on data routes.
+//! HTTP statuses for errors on data routes.
 
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 use topcoat::router::error::{bad_request, forbidden, internal_server_error, not_found};
 
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 
-/// The status a [`QueryError`] is answered with.
+/// The status an error is answered with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorStatus {
     BadRequest,
@@ -13,21 +14,27 @@ pub enum ErrorStatus {
     Internal,
 }
 
-pub fn status_of(error: &QueryError) -> ErrorStatus {
+pub fn status_of(error: &UiError) -> ErrorStatus {
     match error {
-        QueryError::Forbidden { .. } => ErrorStatus::Forbidden,
-        QueryError::NotFound => ErrorStatus::NotFound,
-        QueryError::VersionNotRetained { .. } | QueryError::InvalidInput(_) => {
-            ErrorStatus::BadRequest
-        }
-        QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
+        UiError::Field { .. } => ErrorStatus::BadRequest,
+        UiError::Query(query) => match query {
+            QueryError::Forbidden { .. } => ErrorStatus::Forbidden,
+            QueryError::NotFound | QueryError::ProjectionNotRetained { .. } => {
+                ErrorStatus::NotFound
+            }
+            QueryError::VersionNotRetained { .. }
+            | QueryError::InvalidInput(_)
+            | QueryError::InvalidCursor => ErrorStatus::BadRequest,
+            QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
+        },
     }
 }
 
-/// Converts a backend error into the router error for its status. A 400
-/// carries the error's message, so the element can show why; a 500 is
-/// logged and carries nothing.
-pub fn query_error(error: QueryError) -> topcoat::Error {
+/// Converts an error into the router error for its status. A 400 carries
+/// the error's message, so the element can show why; a 500 is logged and
+/// carries nothing.
+pub fn query_error(error: impl Into<UiError>) -> topcoat::Error {
+    let error = error.into();
     match status_of(&error) {
         ErrorStatus::BadRequest => bad_request(error.to_string()).into(),
         ErrorStatus::Forbidden => forbidden().into(),
@@ -42,42 +49,47 @@ pub fn query_error(error: QueryError) -> topcoat::Error {
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::aggregates::topic::TopicModelVersion;
-    use crosstalk_spec::interfaces::l8_surface::Permission;
+    use crosstalk_spec::ids::AgentId;
+    use crosstalk_spec::interfaces::l8_surface::{ConflictKind, InputError, Permission};
 
     use super::*;
-    use crate::contract::errors::{ConflictKind, InputError};
 
     #[test]
     fn maps_every_error_kind() {
         let cases = [
             (
-                QueryError::Forbidden {
+                UiError::Query(QueryError::Forbidden {
                     missing: Permission::Content,
-                },
+                }),
                 ErrorStatus::Forbidden,
             ),
-            (QueryError::NotFound, ErrorStatus::NotFound),
+            (UiError::Query(QueryError::NotFound), ErrorStatus::NotFound),
             (
-                QueryError::VersionNotRetained {
+                UiError::Query(QueryError::VersionNotRetained {
                     version: TopicModelVersion(2),
-                },
-                ErrorStatus::BadRequest,
-            ),
-            (
-                QueryError::InvalidInput(InputError::Field {
-                    field: "x",
-                    reason: "bad".to_owned(),
                 }),
                 ErrorStatus::BadRequest,
             ),
             (
-                QueryError::Store {
+                UiError::Query(QueryError::InvalidInput(InputError::UnalignedWindow)),
+                ErrorStatus::BadRequest,
+            ),
+            (UiError::field("x", "bad"), ErrorStatus::BadRequest),
+            (
+                UiError::Query(QueryError::InvalidCursor),
+                ErrorStatus::BadRequest,
+            ),
+            (
+                UiError::Query(QueryError::Store {
                     reason: "down".to_owned(),
-                },
+                }),
                 ErrorStatus::Internal,
             ),
             (
-                QueryError::Conflict(ConflictKind::AgentMerged),
+                UiError::Query(QueryError::Conflict(ConflictKind::AgentMerged {
+                    agent: AgentId::from_ulid(1),
+                    into: AgentId::from_ulid(2),
+                })),
                 ErrorStatus::Internal,
             ),
         ];

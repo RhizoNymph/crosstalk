@@ -6,10 +6,10 @@ use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use crate::backend::Result;
 use crate::backend::fixture::clock::NOW;
 use crate::backend::fixture::store::State;
-use crate::contract::MergeId;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::agents::{AgentLabel, AgentState, MergeRecord, MergeVeto};
-use crate::contract::errors::{ConflictKind, QueryError};
+use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
 
 fn exists(state: &State, id: AgentId) -> Result<()> {
     if state.agents.contains_key(&id) {
@@ -25,15 +25,23 @@ pub fn merge(state: &mut State, by: OperatorId, request: &MergeRequest) -> Resul
     let (source, target) = (request.source(), request.target());
     exists(state, source)?;
     exists(state, target)?;
+    let into = state.canonical_agent(target);
+    let canonical = state.canonical_agent(source);
+    if into == canonical {
+        return Err(QueryError::Conflict(ConflictKind::MergeIntoSelf {
+            from: source,
+            into: target,
+            canonical,
+        }));
+    }
     let prior = state
         .agents
         .get(&source)
         .and_then(|r| r.agent.state.active())
-        .ok_or(QueryError::Conflict(ConflictKind::AgentMerged))?;
-    let into = state.canonical_agent(target);
-    if into == source {
-        return Err(QueryError::Conflict(ConflictKind::MergeIntoSelf));
-    }
+        .ok_or(QueryError::Conflict(ConflictKind::AgentMerged {
+            agent: source,
+            into: canonical,
+        }))?;
     let repointed: Vec<AgentId> = state
         .agents
         .values()
@@ -83,7 +91,9 @@ pub fn unmerge(state: &mut State, by: OperatorId, merge: MergeId) -> Result<Acti
         .ok_or(QueryError::NotFound)?;
     let record = state.merges[index].clone();
     if record.reverted.is_some() {
-        return Err(QueryError::Conflict(ConflictKind::MergeReverted));
+        return Err(QueryError::Conflict(ConflictKind::MergeAlreadyReverted {
+            merge,
+        }));
     }
     let prior = match state.agents.get(&record.from).map(|r| &r.agent.state) {
         Some(AgentState::Merged { prior, .. }) => *prior,
@@ -120,7 +130,10 @@ pub fn rename(
 ) -> Result<ActionOutcome> {
     exists(state, agent)?;
     if state.is_merged(agent) {
-        return Err(QueryError::Conflict(ConflictKind::AgentMerged));
+        return Err(QueryError::Conflict(ConflictKind::AgentMerged {
+            agent,
+            into: state.canonical_agent(agent),
+        }));
     }
     if let Some(record) = state.agents.get_mut(&agent) {
         record.label = label.clone();

@@ -4,12 +4,12 @@
 use crosstalk_spec::ids::{AgentId, OperatorId};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 
-use crate::contract::MergeId;
 use crate::contract::actions::OperatorAction;
 use crate::contract::agents::AgentLabel;
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, id, invalid, required};
+use crosstalk_spec::ids::MergeId;
 
 /// The forms on the agent page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +22,7 @@ pub enum AgentForm {
 pub fn parse(
     agent: AgentId,
     fields: &FormFields,
-) -> Result<(AgentForm, OperatorAction, Flash), (Option<AgentForm>, QueryError)> {
+) -> Result<(AgentForm, OperatorAction, Flash), (Option<AgentForm>, UiError)> {
     match fields.text("action") {
         Some("rename") => {
             let label = required(fields, "label")
@@ -60,7 +60,7 @@ pub fn merge_action(
     from: AgentId,
     into: AgentId,
     operator: OperatorId,
-) -> Result<OperatorAction, QueryError> {
+) -> Result<OperatorAction, UiError> {
     MergeRequest::new(from, into, MergeAuthor::Operator(operator))
         .map(OperatorAction::MergeAgents)
         .map_err(|_| invalid("into", "an agent cannot be merged into itself"))
@@ -131,7 +131,7 @@ mod tests {
         ));
         assert!(matches!(
             parse(agent(), &FormFields::default()),
-            Err((None, QueryError::InvalidInput(_)))
+            Err((None, UiError::Field { .. }))
         ));
     }
 

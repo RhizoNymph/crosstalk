@@ -3,8 +3,9 @@
 
 use std::num::{NonZeroU16, NonZeroU32};
 
+use crate::error::UiError;
 use crosstalk_spec::ids::OperatorId;
-use crosstalk_spec::interfaces::l8_surface::Caller;
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
 use topcoat::router::StatusCode;
 
 use super::results::{Results, load};
@@ -227,9 +228,9 @@ async fn results_validate_their_arguments_and_permissions() {
     let viewer = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::View]);
     assert_eq!(
         load(&cx, &viewer, &state, &projection, "", "").await,
-        Err(QueryError::Forbidden {
+        Err(UiError::Query(QueryError::Forbidden {
             missing: Permission::Content
-        })
+        }))
     );
 }
 

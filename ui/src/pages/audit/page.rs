@@ -18,9 +18,9 @@ use crate::components::{
     pagination, short_id, state_inputs,
 };
 use crate::contract::actions::ActionOutcome;
-use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
 use crate::contract::research::{AuditEntry, AuditOutcome, AuditSubject};
+use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::{channel_url, rule_url};
@@ -86,7 +86,7 @@ pub fn audit_row(
         }),
         outcome: match &entry.outcome {
             AuditOutcome::Applied(outcome) => Ok(created(outcome, query, state)),
-            AuditOutcome::Rejected(error) => Err(error.to_string()),
+            AuditOutcome::Rejected(error) => Err(crate::error::describe(error)),
         },
     }
 }
@@ -109,7 +109,7 @@ async fn load(
     caller: &Caller,
     query: &AuditQuery,
     state: &ViewState,
-) -> std::result::Result<Log, QueryError> {
+) -> std::result::Result<Log, UiError> {
     require(caller, Permission::View)?;
     let request = page_request(cx)?;
     let page = backend(cx)
@@ -269,17 +269,17 @@ async fn audit_get(cx: &Cx) -> Result<impl View> {
 #[cfg(test)]
 mod tests {
     use crosstalk_spec::ids::{ChannelId, OperatorId};
-    use crosstalk_spec::interfaces::l8_surface::PolicyKind;
+    use crosstalk_spec::interfaces::l8_surface::{PolicyKind, QueryError};
     use crosstalk_spec::support::Timestamp;
     use topcoat::router::StatusCode;
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::AuditId;
     use crate::contract::actions::OperatorAction;
-    use crate::contract::errors::ConflictKind;
     use crate::contract::research::{Actor, AuditedAction};
     use crate::testing::get;
+    use crosstalk_spec::ids::AuditId;
+    use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 
     #[test]
     fn rows_link_and_filter_by_subject() {
@@ -293,7 +293,12 @@ mod tests {
                 note: None,
             }),
             subject: Some(AuditSubject::Channel(ChannelId::from_ulid(3))),
-            outcome: AuditOutcome::Rejected(QueryError::Conflict(ConflictKind::ChannelSuperseded)),
+            outcome: AuditOutcome::Rejected(QueryError::Conflict(
+                ConflictKind::ChannelSuperseded {
+                    channel: ChannelId::from_ulid(3),
+                    by: ChannelId::from_ulid(4),
+                },
+            )),
         };
         let names = OperatorNames::new([(OperatorId::from_ulid(2), "ada".to_owned())]);
         let row = audit_row(&entry, &names, &AuditQuery::default(), &state());
@@ -304,7 +309,7 @@ mod tests {
         assert!(filter.contains("subject=ch.00000000000000000000000003"));
         assert_eq!(
             row.outcome,
-            Err("conflict: the channel is superseded".to_owned())
+            Err("the channel is superseded: 00000000000000000000000003 resolves to 00000000000000000000000004; act on that channel instead".to_owned())
         );
     }
 
@@ -367,7 +372,7 @@ mod tests {
                 crosstalk_spec::ids::AgentId::from_ulid(1),
             )),
             outcome: AuditOutcome::Applied(ActionOutcome::Merged(
-                crate::contract::MergeId::from_ulid(9),
+                crosstalk_spec::ids::MergeId::from_ulid(9),
             )),
             ..promoted
         };

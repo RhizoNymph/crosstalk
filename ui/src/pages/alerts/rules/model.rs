@@ -6,7 +6,6 @@ use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::interfaces::l8_surface::SinkError;
 
 use crate::components::{Tone, format_time, short_id};
-use crate::contract::SinkId;
 use crate::contract::rules::{
     BuiltinRule, RuleDef, RuleKind, RuleStatus, SinkInfo, SinkKind, StaleReason, UserRule,
 };
@@ -14,6 +13,7 @@ use crate::pages::common::links::rule_url;
 use crate::pages::common::lookup::OperatorNames;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::ids::SinkId;
 
 pub fn builtin_description(rule: BuiltinRule) -> &'static str {
     match rule {

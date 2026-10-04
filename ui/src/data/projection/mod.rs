@@ -23,10 +23,11 @@ use super::require;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
-use crate::contract::ProjectionId;
-use crate::contract::errors::QueryError;
 use crate::contract::research::ProjectionPoints;
+use crate::error::UiError;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 path_param!(id);
 
@@ -37,7 +38,7 @@ pub async fn tables<B: Backend>(
     backend: &B,
     caller: &Caller,
     points: &ProjectionPoints,
-) -> Result<ProjectionTables, QueryError> {
+) -> Result<ProjectionTables, UiError> {
     let agent_names = backend.agent_names(caller, points.agents()).await?;
     let agents = points
         .agents()
@@ -69,13 +70,15 @@ pub async fn tables<B: Backend>(
                 .map(|id| topics.iter().find(|t| t.id == *id).map(|t| t.label.clone()))
                 .collect(),
             Err(QueryError::VersionNotRetained { .. }) => vec![None; points.topics().len()],
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     } else {
         vec![None; points.topics().len()]
     };
-    ProjectionTables::new(points, agents, channels, topics).map_err(|e| QueryError::Store {
-        reason: e.to_string(),
+    ProjectionTables::new(points, agents, channels, topics).map_err(|e| {
+        UiError::Query(QueryError::Store {
+            reason: e.to_string(),
+        })
     })
 }
 

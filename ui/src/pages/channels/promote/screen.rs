@@ -18,8 +18,8 @@ use crate::components::badge::Badge;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::locator::{format_pattern, pattern_kind};
 use crate::components::{empty_state, error_panel, href, locator_text, page_header, short_id};
-use crate::contract::errors::QueryError;
 use crate::data::names::channel_name;
+use crate::error::UiError;
 use crate::pages::channels::detail::channel_path;
 use crate::pages::channels::model::title;
 use crate::pages::common::action::{Failure, error_for, fields_for, require, status_of};
@@ -27,6 +27,7 @@ use crate::pages::common::form::{POLICIES, invalid, policy, policy_code};
 use crate::pages::common::links::channel_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// What the chosen pattern would do, display-ready.
 struct Preview {
@@ -35,7 +36,7 @@ struct Preview {
     /// The other channels it supersedes: id, link and name.
     superseded: Vec<(String, String, String)>,
     /// Why promotion would be refused now.
-    conflict: Option<QueryError>,
+    conflict: Option<UiError>,
 }
 
 struct Promotion {
@@ -43,7 +44,7 @@ struct Promotion {
     seed: Locator,
     options: Vec<ResourcePattern>,
     selected: Option<usize>,
-    preview: Option<std::result::Result<Preview, QueryError>>,
+    preview: Option<std::result::Result<Preview, UiError>>,
 }
 
 /// Asks the backend what `pattern` would do, and names the channels it
@@ -54,7 +55,7 @@ async fn preview(
     id: ChannelId,
     pattern: &ResourcePattern,
     state: &ViewState,
-) -> std::result::Result<Preview, QueryError> {
+) -> std::result::Result<Preview, UiError> {
     let preview = backend(cx).promotion_preview(caller, id, pattern).await?;
     let names = backend(cx)
         .channel_names(caller, &preview.superseded_channels)
@@ -83,7 +84,9 @@ async fn preview(
                 )
             })
             .collect(),
-        conflict: preview.conflicts.map(QueryError::Conflict),
+        conflict: preview
+            .conflicts
+            .map(|kind| UiError::Query(QueryError::Conflict(kind))),
     })
 }
 
@@ -93,7 +96,7 @@ async fn load(
     id: ChannelId,
     state: &ViewState,
     pattern: Option<&str>,
-) -> std::result::Result<Option<Promotion>, QueryError> {
+) -> std::result::Result<Option<Promotion>, UiError> {
     require(caller, Permission::View)?;
     let Some(summary) = backend(cx).channel(caller, id).await? else {
         return Ok(None);

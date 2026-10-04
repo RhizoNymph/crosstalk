@@ -14,7 +14,7 @@ use crate::components::{
 use crate::contract::agents::{
     ActiveAgentState, Agent, AgentState, ClaimSeen, MergeRecord, MergeVeto,
 };
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::lookup::OperatorNames;
 use crate::url::ulid::UlidId;
@@ -273,7 +273,7 @@ pub async fn aliases_section(rows: Vec<AliasRow>) -> Result<impl View> {
 pub async fn merges_section(
     rows: Vec<MergeRow>,
     unmerge_action: Option<String>,
-    error: Option<QueryError>,
+    error: Option<UiError>,
 ) -> Result<impl View> {
     let empty = rows.is_empty();
     Ok(view! {
@@ -356,7 +356,7 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::MergeId;
+    use crosstalk_spec::ids::MergeId;
 
     #[test]
     fn merge_rows_show_reverts() {

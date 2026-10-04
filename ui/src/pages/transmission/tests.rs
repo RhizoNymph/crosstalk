@@ -3,9 +3,10 @@
 
 use std::num::NonZeroU32;
 
+use crate::error::UiError;
 use crosstalk_spec::derived::provenance::matching::MatchKind;
 use crosstalk_spec::ids::OperatorId;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
 use topcoat::router::StatusCode;
 
 use super::*;
@@ -181,6 +182,6 @@ async fn without_content_only_structure_shows() {
     let nobody = crate::testing::caller_of(OperatorId::from_ulid(1), &[Permission::Audit]);
     assert!(matches!(
         load(&cx, &nobody, id, &state).await,
-        Err(QueryError::Forbidden { .. })
+        Err(UiError::Query(QueryError::Forbidden { .. }))
     ));
 }

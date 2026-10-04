@@ -5,8 +5,8 @@
 use crosstalk_spec::support::Timestamp;
 
 use crate::backend::Result;
-use crate::contract::errors::{InputError, QueryError};
 use crate::contract::lists::{Cursor, Page, PageRequest};
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 pub type Key = (u64, u128);
 
@@ -23,11 +23,8 @@ fn encode(list: &str, key: Key) -> Cursor {
     Cursor(format!("{list}.{:016x}{:032x}", key.0, key.1))
 }
 
-fn bad_cursor(reason: &str) -> QueryError {
-    QueryError::InvalidInput(InputError::Field {
-        field: "cursor",
-        reason: reason.to_owned(),
-    })
+fn bad_cursor(_reason: &str) -> QueryError {
+    QueryError::InvalidCursor
 }
 
 fn decode(list: &str, cursor: &Cursor) -> Result<Key> {
@@ -112,12 +109,12 @@ mod tests {
         let foreign = encode("other", (0, 0));
         assert!(matches!(
             paginate("t", items.clone(), &request(Some(foreign), 1)),
-            Err(QueryError::InvalidInput(_))
+            Err(QueryError::InvalidCursor)
         ));
         let junk = Cursor("t.zz".to_owned());
         assert!(matches!(
             paginate("t", items, &request(Some(junk), 1)),
-            Err(QueryError::InvalidInput(_))
+            Err(QueryError::InvalidCursor)
         ));
     }
 

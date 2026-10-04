@@ -9,13 +9,13 @@ use crate::components::badge::Badge;
 use crate::components::error_panel;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL};
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::common::form::{FormFields, POLICIES, note, policy, policy_code};
 
 pub fn parse(
     channel: ChannelId,
     fields: &FormFields,
-) -> std::result::Result<OperatorAction, QueryError> {
+) -> std::result::Result<OperatorAction, UiError> {
     Ok(OperatorAction::SetPolicy {
         channel,
         policy: policy(fields, "policy")?,
@@ -39,7 +39,7 @@ pub async fn policy_form(
     action: String,
     current: PolicyKind,
     retained: Option<FormFields>,
-    error: Option<QueryError>,
+    error: Option<UiError>,
 ) -> Result<impl View> {
     let selected = retained
         .as_ref()

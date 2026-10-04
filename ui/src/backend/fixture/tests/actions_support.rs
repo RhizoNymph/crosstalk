@@ -8,7 +8,6 @@ use super::super::world::ChannelKey;
 use super::researcher;
 use crate::contract::actions::OperatorAction;
 use crate::contract::alerts::AlertState;
-use crate::contract::errors::{ConflictKind, QueryError};
 
 pub fn agent(b: &FixtureBackend, key: &str) -> AgentId {
     b.world.scenario.agent(key).expect("agent")
@@ -26,10 +25,6 @@ pub fn merge(b: &FixtureBackend, from: &str, into: &str) -> OperatorAction {
     )
     .expect("request");
     OperatorAction::MergeAgents(request)
-}
-
-pub fn conflict(kind: ConflictKind) -> Option<QueryError> {
-    Some(QueryError::Conflict(kind))
 }
 
 pub async fn audit_len(b: &FixtureBackend) -> usize {

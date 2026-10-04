@@ -24,11 +24,13 @@ use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::channels::ChannelSummary;
-use crate::contract::errors::{ConflictKind, QueryError};
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform};
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, invalid, note, policy};
 use crate::pages::view::view_state;
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromoteForm {
@@ -42,12 +44,20 @@ struct PromoteQuery {
 
 /// The seed of a channel that can be promoted: discovered, not superseded,
 /// with its seed resource known.
-pub fn promotable_seed(summary: &ChannelSummary) -> std::result::Result<&Locator, QueryError> {
-    if !matches!(summary.channel.origin, ChannelOrigin::Discovered { .. }) {
-        return Err(QueryError::Conflict(ConflictKind::ChannelNotDiscovered));
+pub fn promotable_seed(summary: &ChannelSummary) -> std::result::Result<&Locator, UiError> {
+    let channel = summary.channel.id;
+    if let Some(superseded) = summary.superseded {
+        return Err(UiError::Query(QueryError::Conflict(
+            ConflictKind::ChannelSuperseded {
+                channel,
+                by: superseded.into,
+            },
+        )));
     }
-    if summary.superseded.is_some() {
-        return Err(QueryError::Conflict(ConflictKind::ChannelSuperseded));
+    if !matches!(summary.channel.origin, ChannelOrigin::Discovered { .. }) {
+        return Err(UiError::Query(QueryError::Conflict(
+            ConflictKind::ChannelNotDiscovered { channel },
+        )));
     }
     summary
         .seed
@@ -62,7 +72,7 @@ pub fn parse(
     channel: ChannelId,
     seed: &Locator,
     fields: &FormFields,
-) -> std::result::Result<OperatorAction, QueryError> {
+) -> std::result::Result<OperatorAction, UiError> {
     let options = candidates(seed);
     let index = pick(&options, fields.text("pattern"))
         .map_err(|reason| invalid("pattern", reason))?
@@ -83,12 +93,12 @@ async fn submit(
     cx: &Cx,
     channel: ChannelId,
     fields: &FormFields,
-) -> std::result::Result<ChannelId, QueryError> {
+) -> std::result::Result<ChannelId, UiError> {
     let caller = caller(cx);
     let summary = backend(cx)
         .channel(&caller, channel)
         .await?
-        .ok_or(QueryError::NotFound)?;
+        .ok_or(UiError::Query(QueryError::NotFound))?;
     let action = parse(channel, promotable_seed(&summary)?, fields)?;
     match perform(cx, action).await? {
         ActionOutcome::ChannelPromoted(declared) => Ok(declared),
@@ -180,7 +190,12 @@ mod tests {
         });
         assert_eq!(
             promotable_seed(&superseded),
-            Err(QueryError::Conflict(ConflictKind::ChannelSuperseded))
+            Err(UiError::Query(QueryError::Conflict(
+                ConflictKind::ChannelSuperseded {
+                    channel: ChannelId::from_ulid(1),
+                    by: ChannelId::from_ulid(2),
+                }
+            )))
         );
         let mut seedless = discovered(1);
         seedless.seed = None;

@@ -13,10 +13,11 @@ use topcoat::router::content::Form;
 
 use crate::app::{backend, caller};
 use crate::backend::Backend;
-use crate::contract::errors::{InputError, QueryError};
 use crate::data::query::parse_strict;
+use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::url::view_state::{Defaults, RawViewState, ViewState};
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// The default window: the 24 hours before the backend's present.
 const DEFAULT_SPAN: Duration = Duration::from_secs(24 * 3600);
@@ -24,7 +25,7 @@ const DEFAULT_SPAN: Duration = Duration::from_secs(24 * 3600);
 /// What a view state without a window or version defaults to: the last 24
 /// hours before the backend's `now`, and its current topic version. Shared
 /// by pages and data routes.
-pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, QueryError> {
+pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, UiError> {
     let backend = backend(cx);
     let caller = caller(cx);
     let end = backend.now(&caller).await?;
@@ -32,10 +33,10 @@ pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, QueryError> {
     let span = u64::try_from(DEFAULT_SPAN.as_micros()).unwrap_or(u64::MAX);
     let start = Timestamp::from_micros(end.as_micros().saturating_sub(span));
     let window = TimeWindow::new(start, end).map_err(|_| {
-        QueryError::InvalidInput(InputError::Field {
-            field: "window",
-            reason: "the backend's present leaves an empty default window".to_owned(),
-        })
+        UiError::field(
+            "window",
+            "the backend's present leaves an empty default window",
+        )
     })?;
     Ok(Defaults {
         window,
@@ -44,9 +45,9 @@ pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, QueryError> {
 }
 
 /// The router error for defaults that could not be read.
-pub fn defaults_error(error: QueryError) -> topcoat::Error {
+pub fn defaults_error(error: UiError) -> topcoat::Error {
     match error {
-        QueryError::Forbidden { .. } => forbidden().into(),
+        UiError::Query(QueryError::Forbidden { .. }) => forbidden().into(),
         other => {
             tracing::error!(error = %other, "view defaults unavailable");
             internal_server_error(other).into()
@@ -80,7 +81,7 @@ pub async fn view_state(cx: &Cx) -> Result<ViewState> {
 /// endpoint does not see the page URL, so pages pass their state along;
 /// like any shard argument it is user input, parsed strictly (every
 /// required key) and reported as `InvalidInput` on the `state` field.
-pub async fn state_from_query(cx: &Cx, query: &str) -> std::result::Result<ViewState, QueryError> {
+pub async fn state_from_query(cx: &Cx, query: &str) -> std::result::Result<ViewState, UiError> {
     let Form(raw) =
         Form::<RawViewState>::from_bytes(query.as_bytes()).map_err(|e| invalid("state", e))?;
     let defaults = defaults(cx).await?;

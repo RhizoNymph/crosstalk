@@ -10,8 +10,8 @@ use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, SECTION, SECTION_TIT
 use crate::components::table::{ROW, TD, TD_MUTED};
 use crate::components::{data_table, error_panel, format_time, kind_badge};
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::QueryError;
 use crate::contract::verdict::{TransmissionVerdict, Verdict};
+use crate::error::UiError;
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, invalid, note, required};
 use crate::pages::common::lookup::OperatorNames;
@@ -56,7 +56,7 @@ impl Choice {
 pub fn parse(
     transmission: TransmissionId,
     fields: &FormFields,
-) -> std::result::Result<(OperatorAction, Flash), QueryError> {
+) -> std::result::Result<(OperatorAction, Flash), UiError> {
     let text = required(fields, "verdict")?;
     let choice = Choice::ALL
         .into_iter()
@@ -119,7 +119,7 @@ pub async fn verdict_section(
     rows: Option<Vec<VerdictRow>>,
     form: FormState,
     retained: Option<FormFields>,
-    error: Option<QueryError>,
+    error: Option<UiError>,
 ) -> Result<impl View> {
     let empty = rows.as_ref().is_some_and(Vec::is_empty);
     let chosen = retained
@@ -205,7 +205,6 @@ mod tests {
     use crosstalk_spec::support::Timestamp;
 
     use super::*;
-    use crate::contract::errors::InputError;
 
     #[test]
     fn choices_parse_into_set_verdict() {
@@ -241,10 +240,10 @@ mod tests {
         ] {
             assert!(matches!(
                 parse(id, &fields),
-                Err(QueryError::InvalidInput(InputError::Field {
+                Err(UiError::Field {
                     field: "verdict",
                     ..
-                }))
+                })
             ));
         }
     }

@@ -78,7 +78,7 @@ pub async fn channel_names(
                 .collect(),
         ),
         Err(error) => {
-            tracing::warn!(%error, channels = wanted.len(), "channel names unavailable");
+            tracing::warn!(error = ?error, channels = wanted.len(), "channel names unavailable");
             ChannelNames::default()
         }
     }

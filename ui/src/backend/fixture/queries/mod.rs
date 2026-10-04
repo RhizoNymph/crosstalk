@@ -22,8 +22,8 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 
 use crate::backend::Result;
-use crate::contract::errors::QueryError;
 use crate::contract::verdict::Verdict;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::store::State;
 use super::world::World;

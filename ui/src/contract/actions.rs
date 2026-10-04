@@ -6,11 +6,11 @@ use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use crosstalk_spec::observed::agent::MergeRequest;
 
-use super::MergeId;
-use super::SinkId;
 use super::agents::AgentLabel;
 use super::rules::{OperatorRuleStatus, RuleName, UserRuleSpec};
 use super::verdict::Verdict;
+use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::ids::SinkId;
 
 /// Replaces `crosstalk_spec::interfaces::l8_surface::OperatorAction`, adding
 /// items 14 to 18. Authors and times are stamped by the surface from the

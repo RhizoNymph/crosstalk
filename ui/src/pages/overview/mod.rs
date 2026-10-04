@@ -18,7 +18,7 @@ use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     data_table, empty_state, error_panel, format_time, href, kind_badge, route_badge,
 };
-use crate::contract::errors::QueryError;
+use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::status_of;
 use crate::pages::topology::drawer::model::EdgeItem;
@@ -135,7 +135,7 @@ async fn stat_tile(tile: Tile) -> Result<impl View> {
 
 #[component]
 async fn heaviest_edges(
-    edges: std::result::Result<Vec<(EdgeItem, String)>, QueryError>,
+    edges: std::result::Result<Vec<(EdgeItem, String)>, UiError>,
     topology_url: String,
 ) -> Result<impl View> {
     let empty = edges.as_ref().is_ok_and(Vec::is_empty);
@@ -173,7 +173,7 @@ async fn heaviest_edges(
 
 #[component]
 async fn newest_alerts(
-    alerts: std::result::Result<Vec<AlertRow>, QueryError>,
+    alerts: std::result::Result<Vec<AlertRow>, UiError>,
     inbox_url: String,
 ) -> Result<impl View> {
     let empty = alerts.as_ref().is_ok_and(Vec::is_empty);

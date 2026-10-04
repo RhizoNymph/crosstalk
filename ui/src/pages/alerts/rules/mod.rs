@@ -25,16 +25,16 @@ use crate::components::{
     content_hidden, data_table, empty_state, error_panel, flash_banner, href, page_header,
     state_badge,
 };
-use crate::contract::SinkId;
 use crate::contract::actions::OperatorAction;
-use crate::contract::errors::QueryError;
 use crate::contract::rules::{OperatorRuleStatus, RuleDef, RuleKind, SinkInfo, UserRule};
+use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::{FormFields, id, invalid, required};
 use crate::pages::common::lookup::{OperatorNames, operator_names};
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::ids::SinkId;
 
 pub const PATH: &str = "/alerts/rules";
 
@@ -56,13 +56,15 @@ async fn topic_labels(cx: &Cx, caller: &Caller, versions: Vec<TopicModelVersion>
     for version in versions {
         match backend(cx).topics(caller, version).await {
             Ok(topics) => labels.extend(topics.into_iter().map(|t| (t.id, t.label))),
-            Err(error) => tracing::warn!(%error, version = version.0, "topic labels unavailable"),
+            Err(error) => {
+                tracing::warn!(error = ?error, version = version.0, "topic labels unavailable")
+            }
         }
     }
     Some(labels)
 }
 
-pub async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<RulesData, QueryError> {
+pub async fn load(cx: &Cx, caller: &Caller) -> std::result::Result<RulesData, UiError> {
     require(caller, Permission::View)?;
     let rules = backend(cx).rules(caller).await?;
     let sinks = backend(cx).sinks(caller).await?;
@@ -92,9 +94,7 @@ pub fn status_code(status: OperatorRuleStatus) -> &'static str {
 }
 
 /// A validated enable or disable post.
-pub fn parse_toggle(
-    fields: &FormFields,
-) -> std::result::Result<(OperatorAction, Flash), QueryError> {
+pub fn parse_toggle(fields: &FormFields) -> std::result::Result<(OperatorAction, Flash), UiError> {
     if fields.text("action") != Some("set-enabled") {
         return Err(invalid("action", "unknown action"));
     }

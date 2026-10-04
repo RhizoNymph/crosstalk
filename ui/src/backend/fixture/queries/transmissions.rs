@@ -10,7 +10,6 @@ use crosstalk_spec::support::Similarity;
 use crate::backend::Result;
 use crate::backend::fixture::text::{self, Theme};
 use crate::backend::fixture::world::{TxRecord, co_accesses, confirmed, excerpt_text};
-use crate::contract::errors::QueryError;
 use crate::contract::evidence::{AccessDetail, MatchEvidence, TransmissionEvidence};
 use crate::contract::graph::{
     TransmissionSelector, TransmissionStateKind, TransmissionSummary, route_kind,
@@ -18,6 +17,7 @@ use crate::contract::graph::{
 use crate::contract::lists::{Page, PageRequest};
 use crate::contract::scope::Scope;
 use crate::contract::search::{SearchMode, SearchRequest};
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::Ctx;
 use super::page::{self, Key, newest_first};

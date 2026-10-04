@@ -10,12 +10,12 @@ use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
 use crate::backend::fixture::clock::{DAY, HOUR, MINUTE, Mint, SECOND, ago};
 use crate::backend::fixture::store::State;
 use crate::backend::fixture::text::Theme;
-use crate::contract::SinkId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::rules::{
     BuiltinRule, QueryText, RuleAuthor, RuleDef, RuleKind, RuleName, RuleStatus, SinkInfo,
     SinkKind, StaleReason, UserRule,
 };
+use crosstalk_spec::ids::SinkId;
 
 use super::history::{CONFIG_AT, OPERATOR_RESEARCHER, operator_action};
 use super::topics::{self, V1_UNMAPPED};

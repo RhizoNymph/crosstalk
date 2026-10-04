@@ -10,6 +10,7 @@ mod components;
 mod config;
 mod contract;
 mod data;
+mod error;
 mod pages;
 #[cfg(test)]
 mod testing;

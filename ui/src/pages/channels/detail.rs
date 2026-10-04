@@ -24,9 +24,9 @@ use crate::components::{
 };
 use crate::contract::alerts::Alert;
 use crate::contract::channels::{ChannelSummary, DetectionKind, OriginKind, policy_kind};
-use crate::contract::errors::QueryError;
 use crate::contract::lists::PageRequest;
 use crate::contract::research::{AuditFilter, AuditSubject};
+use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::audit::describe::is_policy_change;
 use crate::pages::audit::subject::subject_code;
@@ -131,9 +131,9 @@ pub fn abilities(caller: &Caller, header: &Header) -> Abilities {
 struct Loaded {
     header: Header,
     abilities: Abilities,
-    resources: std::result::Result<Vec<ResourceRow>, QueryError>,
-    alerts: std::result::Result<Vec<AlertRow>, QueryError>,
-    history: std::result::Result<Vec<HistoryRow>, QueryError>,
+    resources: std::result::Result<Vec<ResourceRow>, UiError>,
+    alerts: std::result::Result<Vec<AlertRow>, UiError>,
+    history: std::result::Result<Vec<HistoryRow>, UiError>,
 }
 
 async fn load(
@@ -141,7 +141,7 @@ async fn load(
     caller: &Caller,
     id: ChannelId,
     state: &ViewState,
-) -> std::result::Result<Option<Loaded>, QueryError> {
+) -> std::result::Result<Option<Loaded>, UiError> {
     require(caller, Permission::View)?;
     let backend = backend(cx);
     let Some(summary) = backend.channel(caller, id).await? else {
@@ -161,7 +161,7 @@ async fn load(
             let names = agent_names(cx, caller, ids.collect::<Vec<_>>()).await;
             Ok(resource_rows(&uses, &names, state))
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
 
     let rules = rule_names(cx, caller).await;
@@ -172,6 +172,7 @@ async fn load(
     let alerts = backend
         .alerts(caller, &filter, &PageRequest::first(PAGE_SIZE))
         .await
+        .map_err(UiError::from)
         .map(|page| {
             page.items
                 .iter()
@@ -187,6 +188,7 @@ async fn load(
     let history = backend
         .audit(caller, &audit_filter, &PageRequest::first(PAGE_SIZE))
         .await
+        .map_err(UiError::from)
         .map(|page| {
             let entries: Vec<_> = page
                 .items

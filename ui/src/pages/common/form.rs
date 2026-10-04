@@ -1,11 +1,11 @@
 //! Form bodies as raw pairs, and the validators that turn fields into typed
-//! values. Every validation failure is a `QueryError::InvalidInput` naming
+//! values. Every validation failure is a `UiError::InvalidInput` naming
 //! the field, so it renders next to the form like a backend error.
 
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use crosstalk_spec::support::Similarity;
 
-use crate::contract::errors::{InputError, QueryError};
+use crate::error::UiError;
 use crate::url::ulid::UlidId;
 
 /// Notes are free text; this bounds what one form can send.
@@ -47,24 +47,21 @@ impl FormFields {
     }
 }
 
-pub fn invalid(field: &'static str, reason: impl std::fmt::Display) -> QueryError {
-    QueryError::InvalidInput(InputError::Field {
-        field,
-        reason: reason.to_string(),
-    })
+pub fn invalid(field: &'static str, reason: impl std::fmt::Display) -> UiError {
+    UiError::field(field, reason)
 }
 
-pub fn required<'a>(fields: &'a FormFields, field: &'static str) -> Result<&'a str, QueryError> {
+pub fn required<'a>(fields: &'a FormFields, field: &'static str) -> Result<&'a str, UiError> {
     fields.text(field).ok_or_else(|| invalid(field, "required"))
 }
 
-pub fn id<T: UlidId>(fields: &FormFields, field: &'static str) -> Result<T, QueryError> {
+pub fn id<T: UlidId>(fields: &FormFields, field: &'static str) -> Result<T, UiError> {
     let text = required(fields, field)?;
     T::parse_ulid(text).map_err(|e| invalid(field, e))
 }
 
 /// An optional note: blank is `None`, longer than [`NOTE_MAX_CHARS`] fails.
-pub fn note(fields: &FormFields, field: &'static str) -> Result<Option<String>, QueryError> {
+pub fn note(fields: &FormFields, field: &'static str) -> Result<Option<String>, UiError> {
     match fields.text(field) {
         None => Ok(None),
         Some(text) if text.chars().count() > NOTE_MAX_CHARS => Err(invalid(
@@ -89,7 +86,7 @@ pub const POLICIES: [PolicyKind; 3] = [
     PolicyKind::Unreviewed,
 ];
 
-pub fn policy(fields: &FormFields, field: &'static str) -> Result<PolicyKind, QueryError> {
+pub fn policy(fields: &FormFields, field: &'static str) -> Result<PolicyKind, UiError> {
     let text = required(fields, field)?;
     POLICIES
         .into_iter()
@@ -98,7 +95,7 @@ pub fn policy(fields: &FormFields, field: &'static str) -> Result<PolicyKind, Qu
 }
 
 /// A similarity in `[0, 1]`, written as a decimal.
-pub fn similarity(fields: &FormFields, field: &'static str) -> Result<Similarity, QueryError> {
+pub fn similarity(fields: &FormFields, field: &'static str) -> Result<Similarity, UiError> {
     let text = required(fields, field)?;
     let value: f32 = text
         .parse()
@@ -133,10 +130,10 @@ mod tests {
         let err = id::<ChannelId>(&fields, "channel");
         assert!(matches!(
             err,
-            Err(QueryError::InvalidInput(InputError::Field {
+            Err(UiError::Field {
                 field: "channel",
                 ..
-            }))
+            })
         ));
         let missing = id::<ChannelId>(&FormFields::default(), "channel");
         assert_eq!(missing, Err(invalid("channel", "required")));
