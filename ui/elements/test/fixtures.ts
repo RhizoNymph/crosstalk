@@ -1,4 +1,4 @@
-/** The payloads `ui/src/data/fixtures.rs` writes, read as the elements fetch them. */
+/** The payloads `ui/src/data/fixtures/` writes, read as the elements fetch them. */
 
 import { readFileSync } from 'node:fs';
 

@@ -1,4 +1,4 @@
-/** Schema pieces shared by the payloads, mirroring `ui/src/data/topology.rs`. */
+/** Schema pieces shared by the payloads, mirroring `ui/src/data/topology/mod.rs`. */
 
 // A namespace import, not `{ z }`: it lets the bundler drop zod's locales
 // and JSON Schema tooling (about 85 KB instead of 450 KB minified).

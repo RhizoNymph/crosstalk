@@ -1,6 +1,6 @@
 /**
  * The `<ct-topology>` payload: `GET /data/topology?<view state>`, JSON.
- * Mirrors `TopologyPayload` in `ui/src/data/topology.rs`; see the doc
+ * Mirrors `TopologyPayload` in `ui/src/data/topology/mod.rs`; see the doc
  * comment there and "Element payloads" in `docs/features/ui.md`.
  */
 

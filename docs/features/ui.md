@@ -376,7 +376,7 @@ the backend embeds it, so editing the text re-embeds it.
 Each element reads one route under `/data/`. The Rust types in
 `ui/src/data/` define the payloads (each documented in its doc comment);
 `ui/elements/src/payloads/` mirrors them with zod schemas and a binary
-decoder. `ui/src/data/fixtures.rs` writes the payloads of hand-built
+decoder. `ui/src/data/fixtures/` writes the payloads of hand-built
 contract values to `ui/elements/test/fixtures/` and fails when they drift
 (`CT_UPDATE_FIXTURES=1 cargo test element_fixtures` regenerates them), so
 the TypeScript tests parse exactly what Rust emits.
@@ -505,11 +505,11 @@ Element inputs and outputs (`value`, announced with `change`):
 | `ui/src/data/query.rs` | `view_state(cx)`: the strict view-state parse (every required key or 400, never a redirect; same `ViewState::parse` and `pages::view::defaults`). `buckets(cx)`: `buckets=` in 1..=1000, default 96. |
 | `ui/src/data/errors.rs` | `query_error(QueryError)`: Forbidden → 403, NotFound → 404, VersionNotRetained / InvalidInput → 400 with the message, others → 500 (logged). |
 | `ui/src/data/names.rs` | Channel display names from a pattern or seed locator (`locator_name`, `pattern_name`, `shape_name`, `channel_name` for a `ChannelName`). |
-| `ui/src/data/topology.rs` | `GET /data/topology`: `TopologyPayload::{agents, channels}` and its node, edge and code types. |
+| `ui/src/data/topology/` | `GET /data/topology`: `TopologyPayload::{agents, channels}` (from the spec graphs; channel names from one `channel_names` call) and its node, edge and code types; `tests`. |
 | `ui/src/data/timeline.rs` | `GET /data/timeline`: `timeline_grid` (the aligned grid for `n` buckets), `TimelinePayload::new` from two `Total` series on that grid (buckets with `final`). |
 | `ui/src/data/projection/` | `GET /data/projection/{id}`: `format.rs` (binary layout, `ProjectionHeader`, `ProjectionTables`, `encode`), `mod.rs` (route, `tables`: names from one `agent_names` and one `channel_names` call), `decode.rs` (test-only strict decoder). |
 | `ui/src/data/elements.rs` | `TOPOLOGY_JS`, `PROJECTION_JS`, `TIMEBRUSH_JS`: the bundled elements as Topcoat assets. |
-| `ui/src/data/fixtures.rs`, `route_tests.rs` | Tests: hand-built spec graphs and series (and contract projections), the element fixture files written from them, and the routes through the router. |
+| `ui/src/data/fixtures/`, `route_tests.rs` | Tests: hand-built spec graphs and series (`graphs`) and contract projections (`mod`), the element fixture files written from them, and the routes through the router. |
 | `ui/elements/package.json`, `pnpm-workspace.yaml` | pnpm package; exact pins; `minimumReleaseAge` of a week for every transitive dependency. Scripts: `build`, `demo`, `smoke`, `test`, `typecheck`, `lint`. |
 | `ui/elements/scripts/build.mjs` | esbuild: `src/ct-*.ts` → `dist/<name>.js` (ESM, minified, external source map); `--serve` rebuilds and serves the package for the demo. |
 | `ui/elements/scripts/smoke.mjs` | Headless-Chrome smoke test of the demo over CDP, with screenshots in both colour schemes. |
