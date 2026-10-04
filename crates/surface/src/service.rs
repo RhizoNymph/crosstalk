@@ -15,7 +15,7 @@ use crosstalk_spec::paging::{Cursor, Page, PageSize};
 use crosstalk_spec::support::{Clock, NonEmpty, TimeWindow, Timestamp};
 
 use crate::config::SurfaceConfig;
-use crate::cursor::CursorKey;
+use crate::cursor::{CursorKey, SearchModels};
 use crate::ids::IdMinter;
 use crate::live::FeedHandle;
 use crate::stores::SurfaceStores;
@@ -28,6 +28,7 @@ pub struct Surface<S> {
     pub(crate) config: SurfaceConfig,
     pub(crate) ids: IdMinter,
     pub(crate) cursors: CursorKey,
+    pub(crate) search_models: SearchModels,
     pub(crate) feed: FeedHandle,
 }
 
@@ -61,6 +62,7 @@ impl<S: SurfaceStores> Surface<S> {
             config,
             ids,
             cursors,
+            search_models: SearchModels::default(),
             feed,
         }
     }
@@ -119,7 +121,7 @@ impl<S: SurfaceStores> Surface<S> {
     }
 
     /// The bucket-aligned window that stands for "all time": from the epoch
-    /// to the last bucket boundary a timestamp can hold.
+    /// to the last bucket boundary before year 10000.
     pub(crate) fn all_time(&self) -> Result<TimeWindow, QueryError> {
         all_time(self.bucket_width())
     }
@@ -138,10 +140,12 @@ pub(crate) fn require(caller: &Caller, permission: Permission) -> Result<(), Que
 }
 
 /// The bucket-aligned window from the epoch to the last bucket boundary a
-/// timestamp can hold.
+/// timestamp's wire text can hold (the end of year 9999), so stores that
+/// bind cursors to their window's JSON can encode it.
 pub(crate) fn all_time(width: BucketWidth) -> Result<TimeWindow, QueryError> {
     let width = width.as_micros().get();
-    let end = u64::MAX - u64::MAX % width;
+    let last = crosstalk_spec::wire::time::MAX.as_micros();
+    let end = last - last % width;
     TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(end)).map_err(|_| {
         QueryError::Store {
             reason: "the bucket width leaves no whole bucket".to_owned(),

@@ -14,7 +14,10 @@
 //! MAC   = BLAKE3-keyed(key, payload)[..16]
 //! ```
 
-use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use std::collections::VecDeque;
+use std::sync::{Mutex, PoisonError};
+
+use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::ids::RandomSource;
 use crosstalk_spec::paging::Cursor;
 use crosstalk_spec::support::{from_hex, hex};
@@ -126,5 +129,46 @@ impl RequestDigest {
 
     pub fn finish(self) -> [u8; 32] {
         *self.0.finalize().as_bytes()
+    }
+}
+
+/// The embedding model each search cursor's traversal was embedded with,
+/// for the newest [`SearchModels::CAPACITY`] cursors issued.
+///
+/// A search cursor is the index's, bound to the query it was issued for;
+/// a later page re-embeds the text with the current model, so after a
+/// model change the query no longer matches the cursor and an index would
+/// report the cursor, not the change. The surface remembers the model each
+/// cursor's traversal used and answers a later page embedded with another
+/// as `Conflict(EmbeddingModelChanged)` before asking the index. A cursor
+/// it no longer remembers (evicted, or issued by another node) is left to
+/// the index.
+#[derive(Debug, Default)]
+pub struct SearchModels {
+    issued: Mutex<VecDeque<(String, EmbeddingModel)>>,
+}
+
+impl SearchModels {
+    pub const CAPACITY: usize = 4096;
+
+    /// The model the traversal `token` continues was embedded with.
+    pub fn model(&self, token: &str) -> Option<EmbeddingModel> {
+        self.issued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .rev()
+            .find(|(issued, _)| issued == token)
+            .map(|(_, model)| model.clone())
+    }
+
+    /// Remember that the traversal continuing at `token` was embedded with
+    /// `model`.
+    pub fn remember(&self, token: &str, model: EmbeddingModel) {
+        let mut issued = self.issued.lock().unwrap_or_else(PoisonError::into_inner);
+        if issued.len() == Self::CAPACITY {
+            issued.pop_front();
+        }
+        issued.push_back((token.to_owned(), model));
     }
 }

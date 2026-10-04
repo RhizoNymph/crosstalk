@@ -15,7 +15,7 @@ use crosstalk_spec::interfaces::l8_surface::lists::{SearchMode, SearchRequest};
 use crosstalk_spec::interfaces::l8_surface::summary::{
     TopicUnder, TransmissionPage, TransmissionSelection, TransmissionSummary,
 };
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{Caller, ConflictKind, Permission, QueryError};
 use crosstalk_spec::paging::{PageRequest, SearchList, TransmissionList};
 use crosstalk_spec::support::TimeWindow;
 
@@ -80,6 +80,18 @@ impl<S: SurfaceStores> Surface<S> {
     ) -> Result<SearchResults, QueryError> {
         require(caller, Permission::Content)?;
         let text = request.text.clone();
+        let embedded = match request.mode {
+            SearchMode::Text => None,
+            SearchMode::Semantic | SearchMode::Hybrid => Some(self.stores.embedder().model()),
+        };
+        if let (Some(current), Some(cursor)) = (&embedded, &page.after)
+            && self
+                .search_models
+                .model(cursor.token())
+                .is_some_and(|first| first != *current)
+        {
+            return Err(QueryError::Conflict(ConflictKind::EmbeddingModelChanged));
+        }
         let query = match request.mode {
             SearchMode::Text => SearchQuery::Text(text),
             SearchMode::Semantic => SearchQuery::Semantic(self.embed(text.as_str()).await?),
@@ -88,11 +100,15 @@ impl<S: SurfaceStores> Surface<S> {
                 SearchQuery::Hybrid { text, embedding }
             }
         };
-        Ok(self
+        let results = self
             .stores
             .search()
             .query(&query, window, filter, page)
-            .await?)
+            .await?;
+        if let (Some(model), Some(next)) = (embedded, results.page.next()) {
+            self.search_models.remember(next.token(), model);
+        }
+        Ok(results)
     }
 
     async fn embed(
