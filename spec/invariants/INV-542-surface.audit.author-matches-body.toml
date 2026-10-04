@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.audit.author-matches-body"
-statement = "An AuditEntry's author is Config exactly when its body is a ConfigRecord, and otherwise is the OperatorId of the Caller its OperatorRecord or ExportRecord was authenticated as."
+statement = "An AuditEntry's author is Config exactly when its body is a ConfigRecord, and otherwise is the operator of the CallerSnapshot its OperatorRecord or ExportRecord keeps of the Caller it was authenticated as."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """

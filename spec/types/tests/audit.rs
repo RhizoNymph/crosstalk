@@ -16,8 +16,8 @@ use crate::interfaces::l8_surface::audit::{
 };
 use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
 use crate::interfaces::l8_surface::{
-    ActionError, ActionKind, ActionOutcome, ConflictKind, InputError, OperatorAction, Permission,
-    PermissionSet, QueryError,
+    ActionError, ActionKind, ActionOutcome, CallerSnapshot, ConflictKind, InputError,
+    OperatorAction, Permission, PermissionSet, QueryError,
 };
 use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor, MergeRequest};
 use crate::support::{Blake3, NonEmpty, TimeWindow};
@@ -192,7 +192,7 @@ fn forbidden_record_requires_missing_permission() {
             AuditOutcome::Forbidden { missing: required },
         )
         .expect("an auditor holds no action permission");
-        assert_eq!(record.caller(), &auditor);
+        assert_eq!(record.caller(), &CallerSnapshot::of(&auditor));
         assert_eq!(record.action(), &action);
         let other = if required == Permission::Govern {
             Permission::Triage

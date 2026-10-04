@@ -20,6 +20,7 @@ mod paging;
 mod provenance;
 mod requests;
 mod support;
+mod surface_actions;
 mod time;
 mod topology;
 

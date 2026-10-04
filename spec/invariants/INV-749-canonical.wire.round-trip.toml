@@ -47,6 +47,17 @@ unit = [
     "crosstalk_spec::tests::wire::analysis::insight::insight_events_golden_in_envelopes",
     "crosstalk_spec::tests::wire::analysis::insight::classification_causes_golden",
     "crosstalk_spec::tests::wire::analysis::projections::a_projection_travels_as_info_json_and_frame_bytes",
+    "crosstalk_spec::tests::wire::surface_actions::actions::every_action_request_golden",
+    "crosstalk_spec::tests::wire::surface_actions::actions::every_operator_action_golden",
+    "crosstalk_spec::tests::wire::surface_actions::actions::action_outcomes_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::surface_actions::audit::audit_entries_golden_for_every_body",
+    "crosstalk_spec::tests::wire::surface_actions::audit::operator_records_golden_for_every_action",
+    "crosstalk_spec::tests::wire::surface_actions::audit::audit_list_request_and_response_golden",
+    "crosstalk_spec::tests::wire::surface_actions::live::live_items_golden_with_every_variant",
+    "crosstalk_spec::tests::wire::surface_actions::live::cursor_reasons_ends_and_resumes_golden",
+    "crosstalk_spec::tests::wire::surface_actions::lists::sinks_golden_with_every_delivery_form",
+    "crosstalk_spec::tests::wire::surface_actions::lists::topic_page_golden",
+    "crosstalk_spec::tests::wire::surface_actions::operators::permission_sets_golden",
 ]
 
 [evidence-review]

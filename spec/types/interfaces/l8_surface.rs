@@ -182,9 +182,9 @@ use operators::Operator;
 use overview::OverviewCounts;
 use summary::{TransmissionPage, TransmissionSelection};
 
-pub use actions::{ActionKind, ActionOutcome, OperatorAction};
+pub use actions::{ActionKind, ActionOutcome, ActionRequest, OperatorAction};
 pub use errors::{ActionError, ConflictKind, InputError, QueryError};
-pub use permissions::{Caller, Permission, PermissionSet};
+pub use permissions::{Caller, CallerSnapshot, Permission, PermissionSet};
 pub use sinks::{AlertSink, SinkError, SinkInfo, SinkKind};
 
 /// The policy an operator asks for. The surface stamps the author and time
@@ -690,7 +690,10 @@ pub trait QueryApi {
 }
 
 pub trait OperatorActions {
-    /// Check the permission, apply the action and record it. `SetPolicy` on
+    /// Check the permission, apply the action and record it. A client
+    /// sends an [`ActionRequest`], never an action: the HTTP layer decodes
+    /// it (`decode_request`) and stamps it with the caller
+    /// ([`ActionRequest::into_action`]) before calling `act`. `SetPolicy` on
     /// a superseded channel is refused with `Conflict(ChannelSuperseded)`
     /// (read through `ChannelDirectory`) before `PolicyChanged` is
     /// published; `PromoteChannel` maps the registry's refusal

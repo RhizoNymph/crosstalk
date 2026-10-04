@@ -1,0 +1,50 @@
+[
+  {
+    "type": "alert_changed",
+    "data": {
+      "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "channel_changed",
+    "data": {
+      "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "agent_changed",
+    "data": {
+      "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+    }
+  },
+  {
+    "type": "rule_changed",
+    "data": {
+      "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    }
+  },
+  {
+    "type": "verdict_changed",
+    "data": {
+      "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  },
+  {
+    "type": "watermark",
+    "data": {
+      "at": "2026-10-04T12:30:00.000000Z"
+    }
+  },
+  {
+    "type": "topic_version_ready",
+    "data": {
+      "version": 4
+    }
+  },
+  {
+    "type": "projection_ready",
+    "data": {
+      "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+    }
+  }
+]

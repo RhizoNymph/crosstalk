@@ -225,7 +225,11 @@ Features Index:
       rewritten with CROSSTALK_BLESS=1. Converted so far: ids, support
       types, paging, the alert inbox and the query and action errors, with
       goldens; analysis (rules, topics, projections, insight events; floats
-      finite, projection info as JSON and frame as octet-stream); every
+      finite, projection info as JSON and frame as octet-stream); the
+      surface's actions (ActionRequest, the request a client sends, stamped
+      into an OperatorAction), audit log (records keep a CallerSnapshot,
+      never a Caller), live feed (with its SSE framing), operators, sinks,
+      list filters and overview, with goldens; every
       other type a wire root reaches has its serde derives and decode
       mirrors (stage 0), its goldens to follow per area.
     entry_points:
