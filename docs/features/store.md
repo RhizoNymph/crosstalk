@@ -280,6 +280,9 @@ so it must have no side effects outside the transaction.
    The file is gitignored, so one `.env.test` above the worktrees serves them
    all without exporting anything. Unset in both gives
    `TestDbError::NotConfigured`.
+   Pointing tests at the deployment's compose Postgres, and dropping leaked
+   `crosstalk_test_*` databases, is described in
+   [deploy.md](deploy.md#store-tests-against-the-compose-postgres).
 3. On a short-lived admin connection, runs `CREATE DATABASE
    "crosstalk_test_<pid>_<nanos>_<seq>" TEMPLATE template0`. The database
    starts empty: no extensions, even if `template1` has some.
