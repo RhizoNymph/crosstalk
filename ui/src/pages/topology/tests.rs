@@ -297,3 +297,95 @@ async fn edge_pages_follow_the_cursor() {
         second.rows.first().map(|r| r.id)
     );
 }
+
+/// The `aria-pressed` the page renders on the element carrying `marker`
+/// (the first `aria-pressed` after it, which is the same tag's).
+fn pressed_after(body: &str, marker: &str) -> Option<bool> {
+    let at = body.find(marker)?;
+    let rest = &body[at..];
+    let value = rest.find("aria-pressed=\"")? + "aria-pressed=\"".len();
+    Some(rest[value..].starts_with("true"))
+}
+
+fn list_item(code: &str) -> String {
+    format!("data-list-item=\"{code}\"")
+}
+
+fn pressed_items(body: &str) -> usize {
+    body.match_indices("data-list-item=\"")
+        .filter(|(at, _)| pressed_after(&body[*at..], "data-list-item") == Some(true))
+        .count()
+}
+
+#[tokio::test]
+async fn lists_show_the_views_agents_and_the_channels_behind_its_edges() {
+    let reply = get(&url("")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    let pi = format!("agent:{}", agent_labelled("pi-scraper").await.to_ulid());
+    let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
+    assert!(body.contains(&list_item(&pi)), "pi-scraper is listed");
+    assert!(
+        body.contains(&list_item(&wiki)),
+        "the hijacked wiki is listed"
+    );
+    assert!(body.contains("title=\"wiki.example.org/wiki/Agent_Coordination\""));
+    assert!(body.contains("Channels behind channel-routed edges"));
+    assert!(body.contains("placeholder=\"Filter agents\""));
+    assert_eq!(pressed_items(body), 0, "nothing selected, nothing marked");
+    assert_eq!(pressed_after(body, "data-list-tab=\"agents\""), Some(true));
+    assert_eq!(
+        pressed_after(body, "data-list-tab=\"channels\""),
+        Some(false)
+    );
+    assert!(
+        body.contains("data-list-clear=\"\" hidden"),
+        "clear control hidden"
+    );
+}
+
+#[tokio::test]
+async fn the_selected_agent_is_marked_from_sel() {
+    let pi = format!("agent:{}", agent_labelled("pi-scraper").await.to_ulid());
+    let reply = get(&url(&format!("&sel={pi}"))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    assert_eq!(pressed_after(body, &list_item(&pi)), Some(true));
+    assert_eq!(pressed_items(body), 1);
+    assert_eq!(pressed_after(body, "data-list-tab=\"agents\""), Some(true));
+    assert!(body.contains(&format!("data-drawer=\"{pi}\"")));
+    assert!(!body.contains("data-list-clear=\"\" hidden"));
+}
+
+#[tokio::test]
+async fn a_selected_channel_is_marked_on_the_channels_tab() {
+    let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
+    let reply = get(&url(&format!("&sel={wiki}"))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    assert_eq!(pressed_after(body, &list_item(&wiki)), Some(true));
+    assert_eq!(pressed_items(body), 1);
+    assert_eq!(
+        pressed_after(body, "data-list-tab=\"channels\""),
+        Some(true)
+    );
+    assert_eq!(pressed_after(body, "data-list-tab=\"agents\""), Some(false));
+}
+
+#[tokio::test]
+async fn channels_mode_lists_the_channel_nodes() {
+    let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
+    let path = url("").replace("g=agents", "g=channels");
+    let reply = get(&format!("{path}&sel={wiki}")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    assert!(body.contains("Channel nodes, by reads and writes"));
+    assert_eq!(pressed_after(body, &list_item(&wiki)), Some(true));
+    let pi = format!("agent:{}", agent_labelled("pi-scraper").await.to_ulid());
+    assert!(body.contains(&list_item(&pi)));
+    // Reads and writes, with the policy badge.
+    let item = &body[body.find(&list_item(&wiki)).expect("wiki item")..];
+    let end = item.find("</li>").expect("item end");
+    assert!(item[..end].contains(" r</span>"), "reads and writes shown");
+    assert!(item[..end].contains(">unreviewed<"), "policy badge");
+}

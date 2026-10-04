@@ -110,10 +110,13 @@ browser ────────────────────────
   arrive as `data-*` attributes bound to signals
   (`:data-highlight=$(sig.get())`) and observed with
   `attributeChangedCallback`. Binding and reading use only Topcoat's typed
-  expression vocabulary. The one `raw!` use is keeping the URL current:
-  after setting the signal, the handler rewrites one query key with
-  `history.replaceState` (or, for the time brush, navigates with
-  `location.assign`). Values reach `raw!` as runtime wrappers, so the
+  expression vocabulary. `raw!` is used for two things only. Keeping the
+  URL current: after setting the signal, the handler rewrites one query
+  key with `history.replaceState` (or, for the time brush, navigates with
+  `location.assign`); the topology graph's handler also scrolls the newly
+  selected list item into view. And the topology lists' case-insensitive
+  filter (`toLowerCase`, `includes`), with a Rust fallback that computes
+  the same on the server. Values reach `raw!` as runtime wrappers, so the
   JavaScript converts them with `String(value)` first.
 - **Shards take the view state as an argument.** A shard's endpoint does
   not see the page URL, so a page passes `state.to_query()` and the shard
@@ -232,8 +235,44 @@ a summary card (state, claims, counts; origin, detection, policy) with a
 link to its page and its heaviest edges; with nothing selected, the
 heaviest edges of the view. Listed edges select themselves on click.
 
-- Calls: `topology` (agents mode; header, drawer and filter choices) or
-  `channel_topology` (bipartite), both with their nodes; `series` (twice,
+Beside the graph, a panel lists what the graph draws, in two tabs with
+their counts: **Agents** (every agent node of the mode's graph: name,
+non-established state, sub-agent of whom, the first harness claim shown
+as a claim, transmissions in and out; heaviest first) and **Channels**
+(in agents mode the channels behind channel-routed edges, with their
+transmissions and edge counts; in channels mode the channel nodes, with
+their writes and reads; each with its policy badge; heaviest first). A
+thin bar under each row is its volume against the list's heaviest. Each
+list has a filter box (client-side, case-insensitive over name, id,
+parent, claimed harness and policy) with a live "n of N" count.
+
+Each row is a button whose click does exactly what clicking the item in
+the graph does: it sets the `sel` signal to the item's selection value
+(`agent:<ulid>`, `channel:<ulid>`), resets the drawer's cursor and
+rewrites the URL's `sel`; the graph's `data-highlight`, the drawer and the
+row's `aria-pressed` all follow the signal. Clicking the selected row
+again, or "Clear selection", clears it. Selecting in the graph marks the
+row, switches to its tab and scrolls it into view within the list; a page
+load opens the tab of the URL's selection (channels for a channel, else
+agents). Hovering a row previews its highlight (a `hover` signal the
+graph's `data-highlight` prefers while it is set). In agents mode a
+channel is not a node, so the graph highlights the edges routed through
+it and their endpoint agents. The lists are built from the same spec
+graphs as `/data/topology` (`pages::topology::lists::model`): agents mode
+reuses the page's `topology` read and adds one `channel_topology` (only
+when some edge is channel-routed) for the channels' policies, plus one
+`channel_names`; channels mode reads `channel_topology` and
+`channel_names`, as the payload does. The tab and filter text are not URL
+keys: they do not change what the view shows.
+
+Layout: at `xl` (1280 px and up) the graph and brush fill the left
+column and the lists sit above the drawer in a 24 rem right column; at
+`lg` the lists sit beside the graph (18 rem) and the drawer spans the
+width below; narrower, everything stacks.
+
+- Calls: `topology` (agents mode; header, lists, drawer and filter
+  choices) or `channel_topology` (bipartite; also, in agents mode, the
+  lists' channel policies), both with their nodes; `series` (twice,
   `Total`) for the time brush;
   `edge_transmissions`, `agent`, `channel`,
   `channels` and `topics` (filter choices), `agent_names`,
@@ -730,7 +769,7 @@ Element inputs and outputs (`value`, announced with `change`):
 
 | Element | Inputs | `value` |
 | --- | --- | --- |
-| `<ct-topology>` | `data-src`, `data-highlight` (a topology value), `data-collapse` (`"true"`) | `edge:<fromUlid>:<toUlid>:<routeCode>` \| `agent:<ulid>` \| `channel:<ulid>` \| `` |
+| `<ct-topology>` | `data-src`, `data-highlight` (a topology value; a `channel:` value in agents mode lights the edges routed through the channel and their endpoints), `data-collapse` (`"true"`) | `edge:<fromUlid>:<toUlid>:<routeCode>` \| `agent:<ulid>` \| `channel:<ulid>` \| `` |
 | `<ct-projection>` | `data-src`, `data-color-by` (`topic` \| `sender` \| `reader` \| `route` \| `channel`), `data-highlight` (comma-separated transmission ULIDs) | `lasso:<x>,<y>;<x>,<y>;…` \| `point:<ulid>` \| `` |
 | `<ct-timebrush>` | `data-src`, `data-from`, `data-to` (RFC 3339) | `<fromRfc3339>/<toRfc3339>` |
 
@@ -801,7 +840,7 @@ checks a fixture export only.
 | `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one; `<ct-live>` and its script for callers with View, and the page inside `data-live-region="page"`), `view.rs` (`defaults(cx)`: the default window, the 24 hours before `Present::now` on bucket boundaries, the bucket width from `Present::bucket_width` and the active version of `topic_versions`; `defaults_error`; async `view_state(cx)`: parse, default, redirect to canonical (an unaligned window to its snapped form); async `current_state(cx)` for the layout; async `state_from_query(cx, query)`: a shard's view-state argument, parsed strictly), one module per screen. |
 | `ui/src/pages/common/` | Shared by the pages. `action` (`perform`: `required_permission` checked, then `OperatorActions::act`, its `ActionError` a `UiError`; `settled`: `Flash::Unchanged` for an `Unchanged` outcome; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages; `ChannelPromoted { superseded }` as `promoted` or `promoted-<n>`, `Unchanged` as `unchanged`), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator names from the spec `Operator`s, `OperatorNames::of`; agent names from one `agent_names` call per `IdBatch`; `id_batches`: distinct ids in `IdBatch`es of at most `IdBatch::MAX`), `rules` (`all_rules`: `alert_rules` followed to its last page; `rule`; `RuleNames`, `rule_names`), `topics` (`default_version`; `all_topics`: a version's topics followed to their last page; `topic_trends`: one `series` grouped by topic on a 24-point grid, as `Trends`), `transmissions` (`summaries_by_id`: rows from one `transmissions_by_id` call, an empty or oversized selection refused as the spec's `TransmissionSelection` refuses it; `TransmissionRow` from a spec `TransmissionSummary`/`SummaryState`, `rows`, `transmission_table`; `route_text`, `ChannelNames` from one `channel_names` call per `IdBatch`, `summary_name` of a `ChannelRow`). |
 | `ui/src/pages/overview/` | `/`: `model` (`tiles` from one `overview` call; `load`: tiles, the heaviest edges of `topology`, newest open alerts), `mod` (the page). |
-| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush and drawer sharing the `sel` signal; `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`, `EdgeRow` from the spec's `EdgeTransmission`), `tests`. |
+| `ui/src/pages/topology/` | `/topology`: `mod` (page, header toggles, `workspace` with the graph, brush, lists and drawer sharing the `sel` signal (and the lists' `hover` and `tab` signals); `brush_window` (snapped outward to bucket boundaries), `timeline_src`; header counts from the spec graph), `selection` (`Selection`: the element's value grammar, parsed and encoded), `query` (`sel`, `collapse`; `submitted_filter` for the filter form), `filters` (choices, `filter_form`, `filter_chips`), `lists/` (`mod`: `graph_lists`, the tabbed agent and channel lists with filter boxes, and `ListTab`; `model`: `GraphLists`, `AgentItem`, `ChannelItem` and `Carried` built from the spec graphs by `agents_mode` and `channels_mode`, `load`, and `shown_label`/`matches`, the filter's server-side twins), `drawer/` (`mod`: the `topology_drawer` shard; `model`: argument validation and `load`, `edge_items`, `EdgeRow` from the spec's `EdgeTransmission`), `tests`. |
 | `ui/src/pages/transmission/` | `/transmissions/{id}` GET and POST `set-verdict`: `mod` (header from the transmission's `TransmissionSummary`, `TopicCell`, load), `model` (state in words, `Strength`, match kind and carrier labels, `ExcerptView` from a spec `Excerpt`, `QuoteView` (shown, or body dropped), co-access views from `AccessDetail`), `sections` (matches side by side, co-access timeline), `verdict` (form with the spec's `Verdict`, parser, rows from a `VerdictLog`; offered for `Triage`, saying the text is hidden without `Content`), `tests`. |
 | `ui/src/pages/explore/` | `/explore` GET and POST `fit`: `mod` (page, `ProjectionPanel`, colour-by and selection signals), `query` (`q`, `m`, `p`, `cb`, `ps`), `lasso` (`Polygon`: parse, even-odd point-in-polygon, `select` over stored points; `ProjectionSelection`), `results` (the `projection_results` shard), `search` (hits, form), `topics` (sidebar, `watch_url`), `fit` (parameters and form), `tests`. |
 | `ui/src/pages/topics/` | `/topics`: `mod` (page, version picker, tables), `model` (`version_tabs`, `topic_rows`, `remap_rows` with stale rules), `pin` (POST `/topics` `pin`/`unpin`: `PinTopicVersion`/`UnpinTopicVersion` for `Govern`, `choice` (unpin a pinned version, pin one neither dropped nor fitting), the picker's `pin_control`). |
@@ -830,7 +869,7 @@ checks a fixture export only.
 | `ui/elements/src/live/` | `<ct-live>`: `watch` (event kinds, `parseNotice` for each event's data, `parseWatch` tokens, `watches`), `refresh` (`refreshRegions` through the page runtime, `isEditing`), `element` (`LiveElement`: `EventSource`, debounce, notice; `value` is the last event id). |
 | `ui/elements/src/shared/` | `element.ts` (`PayloadElement`: the element contract, fetch/abort, status panels), `fetch.ts` (typed `LoadError`), `selection.ts` (value grammar), `theme.ts` and `color.ts` (tokens, light/dark), `ulid.ts`, `route.ts`, `format.ts`, `hash.ts`, `webgl.ts`, `result.ts`. |
 | `ui/elements/src/payloads/` | zod schemas mirroring `ui/src/data/` (`topology.ts`, `timeline.ts`), and the binary projection decoder (`projection.ts`). |
-| `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `curvature.ts` (edges sharing a pair of nodes bend apart: reciprocal pairs to opposite sides, same-direction routes fanned out; lone edges stay straight; drawn with `@sigma/edge-curve`), `element.ts`. When sub-agents are collapsed, clicking a merged edge selects the heaviest edge it stands for. |
+| `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight: a channel that is not a node lights the edges routed through it), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `curvature.ts` (edges sharing a pair of nodes bend apart: reciprocal pairs to opposite sides, same-direction routes fanned out; lone edges stay straight; drawn with `@sigma/edge-curve`), `element.ts`. When sub-agents are collapsed, clicking a merged edge selects the heaviest edge it stands for. |
 | `ui/elements/src/projection/` | `transform.ts` (data ↔ normalised), `lasso.ts` (point-in-polygon, simplification, rounding), `colors.ts` (colour-by and legend), `element.ts`. |
 | `ui/elements/src/timebrush/` | `model.ts` (axis, snapping, bars, ticks), `element.ts` (SVG). |
 | `ui/elements/test/` | vitest suites, and `fixtures/` (written by the Rust tests). |
@@ -924,7 +963,7 @@ and `alert_rules` (View).
 | --- | --- | --- | --- |
 | View defaults (every page, shard and data route) | `Present::now`, `Present::bucket_width` *(gap)*, `topic_versions` | `Timestamp`, `BucketWidth`, `TopicVersionHistory` (`active()`), `TimeWindow` | View |
 | Overview `/` | `overview`, `topology`, `alerts` (open, first five), `agent_names`, `channel_names`, `alert_rules`, `operators` | `OverviewCounts` (`EdgeTotals`, `QueueCounts`), `Watermarked`, `TopologyGraph`, `AlertFilter`, `Alert` | View |
-| Topology `/topology` (header, filter, brush) | `topology` (agents mode) or `channel_topology` (bipartite); `channels` and `topics` (filter choices); `Present::now`, `Present::bucket_width` *(gap)* (brush window) | `TopologyGraph`, `BipartiteGraph`, `TopologyFilter`, `Weighting`, `ChannelRow`, `TopicPage` | View; Content for topic choices |
+| Topology `/topology` (header, filter, brush, lists) | `topology` (agents mode) or `channel_topology` (bipartite; in agents mode too, for the lists' channel policies, when an edge is channel-routed); `channel_names` (list names); `channels` and `topics` (filter choices); `Present::now`, `Present::bucket_width` *(gap)* (brush window) | `TopologyGraph`, `BipartiteGraph`, `TopologyFilter`, `Weighting`, `ChannelRow`, `TopicPage` | View; Content for topic choices |
 | Topology drawer (shard) | `topology` (edge stats, heaviest edges), `edge_transmissions`, `agent`, `channel`, `agent_names`, `channel_names` | `EdgeSelector`, `EdgeTransmissionPage` (`EdgeTransmission`), `AgentDetail`, `ChannelRow` | View |
 | Evidence `/transmissions/{id}` | `transmissions_by_id` (one id), `transmission_evidence`, `verdicts`, `topics`, `agent_names`, `channel_names`, `operators`; `SetVerdict` | `TransmissionSelection`, `TransmissionSummary`, `TransmissionEvidence`, `ExcerptWindow`, `Excerpted`, `VerdictLog`, `Verdict` | View (header, verdict log); Content (matches, co-access, topic labels); Triage (`SetVerdict`) |
 | Explore `/explore` | `search`, `transmissions_by_id`, `fit_projection`, `projection_status`, `projection`, `topic_sizes`, `series` (grouped by topic), `topics` | `SearchRequest`, `SearchMode`, `SearchResults`, `ProjectionParams`, `ProjectionInfo`, `Projection`, `TopicSizes` | Content |

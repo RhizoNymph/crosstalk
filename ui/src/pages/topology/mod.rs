@@ -1,11 +1,13 @@
-//! `/topology`: the communication graph with its filter, time brush and
-//! selection drawer.
+//! `/topology`: the communication graph with its filter, time brush, agent
+//! and channel lists and selection drawer.
 //!
 //! The graph (`<ct-topology>`) and the time brush (`<ct-timebrush>`) load
 //! their payloads from `/data/`. The selection lives in three places kept
-//! in step: the `sel` signal (bound to the graph's `data-highlight` and
-//! read by the drawer shard), the graph's own `value`, and the URL's `sel`
-//! key (rewritten with `history.replaceState`). A page load starts the
+//! in step: the `sel` signal (bound to the graph's `data-highlight`, read
+//! by the drawer shard and the lists' `aria-pressed`), the graph's own
+//! `value`, and the URL's `sel` key (rewritten with
+//! `history.replaceState`). The graph and the lists both set the signal
+//! ([`lists`]), so selecting from either is the same. A page load starts the
 //! signal from the URL, so a selected edge is citeable. The time brush
 //! navigates to the same view with the brushed window: its payload's bucket
 //! edges are all bucket boundaries, so a brushed window is aligned and the
@@ -13,15 +15,17 @@
 
 pub mod drawer;
 pub mod filters;
+pub mod lists;
 pub mod query;
 pub mod selection;
 
 use crate::contract::present::Present;
 use std::time::Duration;
 
-use crosstalk_spec::aggregates::edge::Weighting;
+use crosstalk_spec::aggregates::edge::{TopologyGraph, Weighting};
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::series::BucketWidth;
+use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use topcoat::Result;
@@ -33,6 +37,8 @@ use topcoat::view::{View, component, view};
 
 use self::drawer::topology_drawer;
 use self::filters::{FilterChoices, chips, clear_href, filter_chips, filter_form, load_choices};
+use self::lists::model::{GraphLists, load as load_lists};
+use self::lists::{ListTab, graph_lists};
 use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
 use crate::app::{backend, caller};
 use crate::components::{Tab, error_panel, format_time, href, segmented};
@@ -99,22 +105,27 @@ struct Summary {
     watermark: String,
 }
 
-async fn summary(
+/// The agents-mode graph of the view: the header's numbers, and the lists'
+/// agents in agents mode.
+async fn agents_graph(
     cx: &Cx,
     caller: &Caller,
     state: &ViewState,
-) -> std::result::Result<Summary, UiError> {
+) -> std::result::Result<Watermarked<TopologyGraph>, UiError> {
     require(caller, Permission::View)?;
-    let graph = backend(cx)
+    Ok(backend(cx)
         .topology(
             caller,
             state.scope.window,
             state.weighting,
             &state.scope.topology_filter(),
         )
-        .await?;
+        .await?)
+}
+
+fn summary(graph: &Watermarked<TopologyGraph>) -> Summary {
     let value = &graph.value;
-    Ok(Summary {
+    Summary {
         agents: value
             .nodes
             .iter()
@@ -125,7 +136,7 @@ async fn summary(
             sum.saturating_add(e.stats.transmissions.get())
         }),
         watermark: format_time(graph.watermark.at()),
-    })
+    }
 }
 
 #[page("/topology")]
@@ -158,7 +169,12 @@ async fn topology_page(
     failure: Option<UiError>,
 ) -> Result<impl View> {
     let caller = caller(cx);
-    let loaded = summary(cx, &caller, &state).await;
+    let graph = agents_graph(cx, &caller, &state).await;
+    let lists = match &graph {
+        Ok(graph) => load_lists(cx, &caller, &state, &graph.value).await,
+        Err(error) => Err(error.clone()),
+    };
+    let loaded = graph.as_ref().map(summary).map_err(Clone::clone);
     let choices = match &loaded {
         Ok(_) => load_choices(cx, &caller, &state).await,
         Err(_) => FilterChoices::default(),
@@ -190,7 +206,7 @@ async fn topology_page(
                     filter_form(action: PATH.to_owned(), state: &state, extra: pairs.clone(), choices: choices)
                     filter_chips(chips: chip_list, clear: clear)
                 </div>
-                workspace(state: &state, query: &query)
+                workspace(state: &state, query: &query, lists: lists)
             },
         }
     })
@@ -273,9 +289,17 @@ async fn header_bar(
 const TOGGLE_ON: &str = "rounded border border-sky-600 bg-sky-50 px-2 py-0.5 text-xs text-sky-800 dark:border-sky-500 dark:bg-sky-950 dark:text-sky-200";
 const TOGGLE_OFF: &str = "rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800";
 
-/// The graph, the time brush and the drawer, sharing the selection signal.
+/// The graph, the time brush, the agent and channel lists and the drawer,
+/// sharing the selection signal. The graph's `data-highlight` shows the
+/// list item under the pointer (`hover`) when there is one, else the
+/// selection.
 #[component]
-async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<impl View> {
+async fn workspace(
+    cx: &Cx,
+    state: &ViewState,
+    query: &TopologyQuery,
+    lists: std::result::Result<GraphLists, UiError>,
+) -> Result<impl View> {
     let collapse = query.collapse;
     let topology_src = href("/data/topology", state, &[]);
     let backend = backend(cx);
@@ -288,21 +312,28 @@ async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<
     let brush_to = rfc3339(state.scope.window.end());
     let state_query = state.to_query();
     let initial = query.sel.encode();
+    let initial_tab = ListTab::for_selection(&query.sel).code();
     let sel = signal(cx, move || initial);
     let cursor = signal(cx, String::new);
+    let hover = signal(cx, String::new);
+    let tab = signal(cx, move || initial_tab.to_owned());
+    let (drawer_sel, drawer_cursor) = (sel.clone(), cursor.clone());
     Ok(view! {
-        <div class="flex flex-col gap-4 xl:flex-row">
-            <div class="min-w-0 flex-1">
+        <div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <div class="min-w-0 lg:col-start-1 lg:row-start-1 xl:row-span-2">
                 <ct-topology
                     class="block h-[36rem] rounded border border-zinc-200 dark:border-zinc-800"
                     data-src=(topology_src)
                     data-collapse=(collapse.then_some("true"))
-                    :data-highlight=$(sel.get())
+                    :data-highlight=$(if hover.get().is_empty() { sel.get() } else { hover.get() })
                     @change=$(|e: Event| {
                         let v = e.target.value;
                         sel.set(v.to_owned());
                         cursor.set("".to_owned());
-                        raw!("((value) => { const v = String(value); const kept = location.search.slice(1).split('&').filter((p) => p !== '' && p.split('=')[0] !== 'sel'); if (v !== '') kept.push('sel=' + encodeURIComponent(v).replace(/%3A/g, ':')); history.replaceState(history.state, '', location.pathname + '?' + kept.join('&')); })(${v})");
+                        hover.set("".to_owned());
+                        let next_tab = if v.starts_with("channel:") { "channels".to_owned() } else if v.starts_with("agent:") { "agents".to_owned() } else { tab.get() };
+                        tab.set(next_tab);
+                        raw!("((value) => { const v = String(value); const kept = location.search.slice(1).split('&').filter((p) => p !== '' && p.split('=')[0] !== 'sel'); if (v !== '') kept.push('sel=' + encodeURIComponent(v).replace(/%3A/g, ':')); history.replaceState(history.state, '', location.pathname + '?' + kept.join('&')); if (!v.startsWith('agent:') && !v.startsWith('channel:')) return; requestAnimationFrame(() => { const item = document.querySelector('[data-list-item=\"' + v + '\"]'); const box = item && item.closest('[data-list-scroll]'); if (!item || !box) return; const top = item.offsetTop; if (top < box.scrollTop || top + item.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = Math.max(0, top - box.clientHeight / 2); }); })(${v})");
                     })
                 ></ct-topology>
                 <ct-timebrush
@@ -315,10 +346,16 @@ async fn workspace(cx: &Cx, state: &ViewState, query: &TopologyQuery) -> Result<
                         raw!("((value) => { const v = String(value); const i = v.indexOf('/'); if (i < 0) return; const enc = (s) => encodeURIComponent(s).replace(/%3A/g, ':'); const kept = location.search.slice(1).split('&').filter((p) => { const k = p.split('=')[0]; return p !== '' && k !== 'from' && k !== 'to'; }); location.assign(location.pathname + '?from=' + enc(v.slice(0, i)) + '&to=' + enc(v.slice(i + 1)) + (kept.length > 0 ? '&' + kept.join('&') : '')); })(${_brushed})");
                     })
                 ></ct-timebrush>
-                <p class="mt-1 text-[11px] text-zinc-500">"Drag on the time brush to choose a window; click an edge or node to inspect it."</p>
+                <p class="mt-1 text-[11px] text-zinc-500">"Drag on the time brush to choose a window; click an edge or node, or an agent or channel in the lists, to inspect it."</p>
             </div>
-            <aside class="w-full shrink-0 xl:w-96">
-                topology_drawer(state: state_query, sel: sel, cursor: cursor)
+            <div class="min-w-0 lg:col-start-2 lg:row-start-1">
+                match lists {
+                    Ok(lists) => graph_lists(lists: lists, sel: &sel, cursor: &cursor, hover: &hover, tab: &tab),
+                    Err(error) => error_panel(error: &error),
+                }
+            </div>
+            <aside class="min-w-0 lg:col-span-2 xl:col-span-1 xl:col-start-2 xl:row-start-2">
+                topology_drawer(state: state_query, sel: drawer_sel, cursor: drawer_cursor)
             </aside>
         </div>
     })

@@ -32,7 +32,7 @@ pub mod timeline;
 pub mod topology;
 
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
 #[cfg(test)]
 mod route_tests;
 
