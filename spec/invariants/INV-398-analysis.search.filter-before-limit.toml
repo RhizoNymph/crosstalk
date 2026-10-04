@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.search.filter-before-limit"
+statement = "The hits of a filtered SearchIndex::query are the first limit hits, in rank order with ties broken by TransmissionId, of the same query under the default filter with no limit after removing the hits the filter does not admit."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Filtering the top-k after ranking returns fewer than limit hits, often none,
+for a narrow selection even when many admitted transmissions match. The
+filter must be part of the candidate query for both the full-text and the
+vector side of hybrid search, before fusion and truncation.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_filtered_search_is_filtered_ranking"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.perf.projection-latency"
+statement = "QueryApi::projection with a limit of 50,000 answers within 1 s at p99 over 1,000,000 projected transmissions."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+The UMAP view reloads on every filter or window change of a linked view.
+The bound assumes layout coordinates stored beside the embeddings with the
+filter fields indexed, and sampling by a precomputed key, and rules out
+running UMAP or a per-point agent lookup at query time. Each point is under
+100 bytes, so a full response stays within a few megabytes. The figures are
+a proposed initial threshold.
+"""
+
+[evidence]
+bench = "crosstalk::surface::bench::projection_50k_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

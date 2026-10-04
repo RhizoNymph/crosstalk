@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.projection.honours-filter"
+statement = "Every point ProjectionIndex::project returns is for a transmission whose FilterSubject, with sender and reader resolved through AgentDirectory::canonical at query time and its topic under the projection's topic version, TopologyFilter::admits."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The UMAP view is linked to the graph and search by one filter. A point the
+filter rejects would show content from outside the selection, which the
+operator reads as part of it.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_projection_points_admitted_by_filter"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

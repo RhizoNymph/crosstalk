@@ -42,6 +42,14 @@ impl<T> NonEmpty<T> {
         std::iter::once(&self.head).chain(self.tail.iter())
     }
 
+    /// The elements in order; never empty.
+    pub fn into_vec(self) -> Vec<T> {
+        let mut items = Vec::with_capacity(self.tail.len() + 1);
+        items.push(self.head);
+        items.extend(self.tail);
+        items
+    }
+
     /// Always at least 1.
     pub fn count(&self) -> NonZeroU32 {
         let tail = u32::try_from(self.tail.len()).unwrap_or(u32::MAX - 1);

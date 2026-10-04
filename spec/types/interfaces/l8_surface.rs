@@ -9,25 +9,40 @@
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
 //!   share) and `ContentExplorer` (search, topics, UMAP).
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
+//!
+//! **Lists.** Channels, agents, alert rules, dead letters and the
+//! transmissions behind an edge are read a page at a time with the cursors
+//! of [`crate::paging`], so a traversal is stable under concurrent inserts.
+//! Their filters and request types are in [`lists`].
+//!
+//! **Linked views.** `topology`, `search`, `projection` and
+//! `edge_transmissions` take the same [`TopologyFilter`] and apply it as
+//! [`TopologyFilter::admits`] defines, so a selection in one view narrows
+//! the others to the same transmissions. Each response reports the
+//! topic-model version its topics are under; responses with different
+//! versions are not linkable and the client re-queries.
 
-use crate::aggregates::alert::Alert;
-use crate::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
+pub mod lists;
+
+use crate::aggregates::alert::{Alert, AlertRuleDef};
+use crate::aggregates::edge::{
+    EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
+};
+use crate::aggregates::projection::{Projection, ProjectionToken};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::derived::flow::channel::Channel;
+use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::transmission::Transmission;
 use crate::ids::{AlertId, ChannelId, EventId, OperatorId, TransmissionId};
-use crate::interfaces::l2_transport::ConsumerGroup;
-use crate::interfaces::l6_analysis::{SearchHit, SearchQuery};
-use crate::observed::agent::MergeRequest;
+use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
+use crate::interfaces::l6_analysis::{SearchQuery, SearchResults};
+use crate::observed::agent::{Agent, MergeRequest};
+use crate::paging::{
+    AgentList, AlertRuleList, ChannelList, DeadLetterList, EdgeTransmissionList, Page, PageRequest,
+};
 use crate::support::TimeWindow;
 
-/// A point in a 2-D projection of transmission embeddings.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectedPoint {
-    pub transmission: TransmissionId,
-    pub x: f32,
-    pub y: f32,
-}
+use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
 
 /// The authenticated caller of a query or action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +53,9 @@ pub struct Caller {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Permission {
-    /// Topology, channels, alerts: no message content.
+    /// Topology, the transmissions behind an edge (ids, times, byte counts
+    /// and topic ids), channels, agents, alert rules and alerts: no message
+    /// content.
     View,
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
@@ -47,8 +64,8 @@ pub enum Permission {
     Govern,
     /// Acknowledge and resolve alerts.
     Triage,
-    /// Operate the pipeline: replay dead-lettered deliveries. A replay
-    /// re-runs a consumer on an old event, so it can reopen alerts or
+    /// Operate the pipeline: list and replay dead-lettered deliveries. A
+    /// replay re-runs a consumer on an old event, so it can reopen alerts or
     /// re-apply stale decisions.
     Operate,
 }
@@ -69,12 +86,52 @@ pub enum AlertStateKind {
     Suppressed,
 }
 
+/// Every method checks the caller's permission first and returns
+/// `Forbidden` without reading anything when it is missing. List methods
+/// return `InvalidCursor` for a cursor issued for a different request.
 pub trait QueryApi {
+    /// View.
     async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
 
+    /// View. Newest channel first.
+    async fn channels(
+        &self,
+        caller: &Caller,
+        filter: &ChannelFilter,
+        page: &PageRequest<ChannelList>,
+    ) -> Result<Page<Channel, ChannelList>, QueryError>;
+
+    /// View. Every stored agent, merged ones included (their state names
+    /// their canonical agent). Newest agent first.
+    async fn agents(
+        &self,
+        caller: &Caller,
+        filter: &AgentFilter,
+        page: &PageRequest<AgentList>,
+    ) -> Result<Page<Agent, AgentList>, QueryError>;
+
+    /// View. Newest rule first.
+    async fn alert_rules(
+        &self,
+        caller: &Caller,
+        filter: &AlertRuleFilter,
+        page: &PageRequest<AlertRuleList>,
+    ) -> Result<Page<AlertRuleDef, AlertRuleList>, QueryError>;
+
+    /// Operate. Dead letters of one consumer group, or of every group,
+    /// newest envelope first.
+    async fn dead_letters(
+        &self,
+        caller: &Caller,
+        group: Option<&ConsumerGroup>,
+        page: &PageRequest<DeadLetterList>,
+    ) -> Result<Page<DeadLetter, DeadLetterList>, QueryError>;
+
+    /// View.
     async fn alerts(&self, caller: &Caller, filter: &AlertFilter)
     -> Result<Vec<Alert>, QueryError>;
 
+    /// View.
     async fn topology(
         &self,
         caller: &Caller,
@@ -83,31 +140,51 @@ pub trait QueryApi {
         filter: &TopologyFilter,
     ) -> Result<TopologyGraph, QueryError>;
 
+    /// View. The transmissions `topology` counts into one of its edges for
+    /// the same window and filter (`EdgeStore::transmissions`): ids, times,
+    /// byte counts and topic ids, no content. Content is behind
+    /// `transmission` and `search`.
+    async fn edge_transmissions(
+        &self,
+        caller: &Caller,
+        edge: &EdgeSelector,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        page: &PageRequest<EdgeTransmissionList>,
+    ) -> Result<EdgeTransmissionPage, QueryError>;
+
+    /// Content.
     async fn search(
         &self,
         caller: &Caller,
         query: &SearchQuery,
         window: Option<TimeWindow>,
+        filter: &TopologyFilter,
         limit: u32,
-    ) -> Result<Vec<SearchHit>, QueryError>;
+    ) -> Result<SearchResults, QueryError>;
 
+    /// Content.
     async fn transmission(
         &self,
         caller: &Caller,
         id: TransmissionId,
     ) -> Result<Option<Transmission>, QueryError>;
 
+    /// Content.
     async fn topics(
         &self,
         caller: &Caller,
         version: Option<TopicModelVersion>,
     ) -> Result<Vec<Topic>, QueryError>;
 
+    /// Content. When `request.layout` names a layout that is no longer
+    /// current, returns `StaleProjection` with the current token and no
+    /// points, so a client never merges points from two layouts.
     async fn projection(
         &self,
         caller: &Caller,
-        window: TimeWindow,
-    ) -> Result<Vec<ProjectedPoint>, QueryError>;
+        request: &ProjectionRequest,
+    ) -> Result<Projection, QueryError>;
 }
 
 /// The policy an operator asks for. The surface stamps the author and time
@@ -117,6 +194,16 @@ pub enum PolicyKind {
     Unreviewed,
     Sanctioned,
     Unsanctioned,
+}
+
+impl PolicyKind {
+    pub fn of(policy: &Policy) -> Self {
+        match policy {
+            Policy::Unreviewed(_) => Self::Unreviewed,
+            Policy::Sanctioned(_) => Self::Sanctioned,
+            Policy::Unsanctioned(_) => Self::Unsanctioned,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,10 +240,22 @@ pub trait AlertSink {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryError {
-    Store { reason: String },
+    Store {
+        reason: String,
+    },
     NotFound,
     Forbidden,
-    BadRequest { reason: String },
+    BadRequest {
+        reason: String,
+    },
+    /// A cursor the surface did not issue, issued for a different list or
+    /// request, or no longer resumable (its pinned topic version is gone).
+    /// The client restarts from the first page.
+    InvalidCursor,
+    /// The projection layout the client holds is no longer current.
+    StaleProjection {
+        current: ProjectionToken,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

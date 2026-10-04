@@ -10,9 +10,18 @@
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
 //! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).
 //! - `SearchIndex`: `PgHybridSearch` (full-text plus pgvector).
+//! - `ProjectionIndex`: `PgProjection` (layout coordinates stored beside the
+//!   embeddings).
 //! - `AlertRuleEval`: one per [`AlertRuleKind`].
+//!
+//! Search and projection take the same [`TopologyFilter`] as the topology
+//! graph and apply it as [`TopologyFilter::admits`] defines, resolving agents
+//! (the transmission's and the filter's) through `AgentDirectory` at query
+//! time, so the views link.
 
 use crate::aggregates::alert::{AlertDraft, AlertRuleKind, TriageOutcome};
+use crate::aggregates::filter::TopologyFilter;
+use crate::aggregates::projection::{Projection, ProjectionLimit};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::derived::flow::channel::policy::Policy;
 use crate::events::Envelope;
@@ -49,13 +58,42 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// Hits in descending score, and the topic-model version the filter's
+/// topics were evaluated under (the active one at query time).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchResults {
+    pub topic_version: TopicModelVersion,
+    pub hits: Vec<SearchHit>,
+}
+
 pub trait SearchIndex {
+    /// Hits on confirmed transmissions whose `Confirmed::at` lies in `window`
+    /// (when given) and that `filter` admits, at most `limit` of them. The
+    /// filter is applied before ranking and truncation, so a filtered query
+    /// returns the best `limit` admitted hits, not the admitted part of the
+    /// best `limit` hits.
     async fn query(
         &self,
         query: &SearchQuery,
         window: Option<TimeWindow>,
+        filter: &TopologyFilter,
         limit: u32,
-    ) -> Result<Vec<SearchHit>, SearchError>;
+    ) -> Result<SearchResults, SearchError>;
+}
+
+/// The 2-D layout of transmission embeddings. See
+/// [`crate::aggregates::projection`] for layouts, tokens and sampling.
+pub trait ProjectionIndex {
+    /// The current layout's points for transmissions confirmed in `window`
+    /// that `filter` admits, sampled down to `limit`. Points carry canonical
+    /// agents resolved at query time. Before the first topic-model fit there
+    /// is no layout and the projection is empty.
+    async fn project(
+        &self,
+        window: TimeWindow,
+        filter: &TopologyFilter,
+        limit: ProjectionLimit,
+    ) -> Result<Projection, ProjectionError>;
 }
 
 /// What a rule may look up while evaluating, beyond the event itself.
@@ -112,6 +150,11 @@ pub enum TopicError {
 pub enum SearchError {
     Store { reason: String },
     BadQuery { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionError {
+    Store { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
