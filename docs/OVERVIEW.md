@@ -42,9 +42,10 @@ Overview:
       actions, alert sinks).
     ui: >
       The operator web UI (crosstalk-ui, Topcoat): server-rendered pages
-      plus WebGL custom elements for the topology graph and UMAP
-      projection. Reads and acts only through L8, behind a Backend trait
-      with a fixture implementation for development.
+      plus custom elements for the topology graph and UMAP projection
+      (WebGL) and the time brush (SVG), fed by the UI's own /data/ routes.
+      Reads and acts only through L8, behind a Backend trait with a fixture
+      implementation for development.
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -81,7 +82,12 @@ Features Index:
       transmission evidence, search and UMAP exploration, topics, channels,
       agents, alerts and rules, export, audit and pipeline. Defines the L8
       additions it needs.
-    entry_points: [ui/src/main.rs, ui/elements/src/index.ts]
+    entry_points:
+      - ui/src/main.rs
+      - ui/src/data/mod.rs
+      - ui/elements/src/ct-topology.ts
+      - ui/elements/src/ct-projection.ts
+      - ui/elements/src/ct-timebrush.ts
     depends_on: [type_spec]
     doc: docs/features/ui.md
 ```

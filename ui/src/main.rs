@@ -5,6 +5,7 @@ mod backend;
 mod components;
 mod config;
 mod contract;
+mod data;
 mod pages;
 mod url;
 

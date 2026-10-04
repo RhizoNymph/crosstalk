@@ -1,0 +1,682 @@
+{
+  "window": {
+    "from": "2026-10-02T00:00:00Z",
+    "to": "2026-10-03T00:00:00Z"
+  },
+  "bucketMs": 900000,
+  "watermark": "2026-10-02T23:22:30Z",
+  "buckets": [
+    {
+      "from": "2026-10-02T00:00:00Z",
+      "to": "2026-10-02T00:15:00Z",
+      "transmissions": 3,
+      "matchedBytes": 1527,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T00:15:00Z",
+      "to": "2026-10-02T00:30:00Z",
+      "transmissions": 6,
+      "matchedBytes": 4062,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T00:30:00Z",
+      "to": "2026-10-02T00:45:00Z",
+      "transmissions": 5,
+      "matchedBytes": 3715,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T00:45:00Z",
+      "to": "2026-10-02T01:00:00Z",
+      "transmissions": 5,
+      "matchedBytes": 3255,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T01:00:00Z",
+      "to": "2026-10-02T01:15:00Z",
+      "transmissions": 4,
+      "matchedBytes": 2684,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T01:15:00Z",
+      "to": "2026-10-02T01:30:00Z",
+      "transmissions": 5,
+      "matchedBytes": 2740,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T01:30:00Z",
+      "to": "2026-10-02T01:45:00Z",
+      "transmissions": 5,
+      "matchedBytes": 2970,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T01:45:00Z",
+      "to": "2026-10-02T02:00:00Z",
+      "transmissions": 5,
+      "matchedBytes": 3815,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T02:00:00Z",
+      "to": "2026-10-02T02:15:00Z",
+      "transmissions": 4,
+      "matchedBytes": 3592,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T02:15:00Z",
+      "to": "2026-10-02T02:30:00Z",
+      "transmissions": 6,
+      "matchedBytes": 5382,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T02:30:00Z",
+      "to": "2026-10-02T02:45:00Z",
+      "transmissions": 3,
+      "matchedBytes": 2457,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T02:45:00Z",
+      "to": "2026-10-02T03:00:00Z",
+      "transmissions": 5,
+      "matchedBytes": 2475,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T03:00:00Z",
+      "to": "2026-10-02T03:15:00Z",
+      "transmissions": 5,
+      "matchedBytes": 2580,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T03:15:00Z",
+      "to": "2026-10-02T03:30:00Z",
+      "transmissions": 3,
+      "matchedBytes": 1752,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T03:30:00Z",
+      "to": "2026-10-02T03:45:00Z",
+      "transmissions": 6,
+      "matchedBytes": 3090,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T03:45:00Z",
+      "to": "2026-10-02T04:00:00Z",
+      "transmissions": 5,
+      "matchedBytes": 3620,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T04:00:00Z",
+      "to": "2026-10-02T04:15:00Z",
+      "transmissions": 3,
+      "matchedBytes": 2697,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T04:15:00Z",
+      "to": "2026-10-02T04:30:00Z",
+      "transmissions": 3,
+      "matchedBytes": 2526,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T04:30:00Z",
+      "to": "2026-10-02T04:45:00Z",
+      "transmissions": 6,
+      "matchedBytes": 3960,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T04:45:00Z",
+      "to": "2026-10-02T05:00:00Z",
+      "transmissions": 6,
+      "matchedBytes": 4830,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T05:00:00Z",
+      "to": "2026-10-02T05:15:00Z",
+      "transmissions": 6,
+      "matchedBytes": 4140,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T05:15:00Z",
+      "to": "2026-10-02T05:30:00Z",
+      "transmissions": 6,
+      "matchedBytes": 4578,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T05:30:00Z",
+      "to": "2026-10-02T05:45:00Z",
+      "transmissions": 5,
+      "matchedBytes": 2665,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T05:45:00Z",
+      "to": "2026-10-02T06:00:00Z",
+      "transmissions": 4,
+      "matchedBytes": 2092,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T06:00:00Z",
+      "to": "2026-10-02T06:15:00Z",
+      "transmissions": 13,
+      "matchedBytes": 8970,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T06:15:00Z",
+      "to": "2026-10-02T06:30:00Z",
+      "transmissions": 12,
+      "matchedBytes": 9996,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T06:30:00Z",
+      "to": "2026-10-02T06:45:00Z",
+      "transmissions": 12,
+      "matchedBytes": 9144,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T06:45:00Z",
+      "to": "2026-10-02T07:00:00Z",
+      "transmissions": 11,
+      "matchedBytes": 8734,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T07:00:00Z",
+      "to": "2026-10-02T07:15:00Z",
+      "transmissions": 21,
+      "matchedBytes": 11256,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T07:15:00Z",
+      "to": "2026-10-02T07:30:00Z",
+      "transmissions": 22,
+      "matchedBytes": 13772,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T07:30:00Z",
+      "to": "2026-10-02T07:45:00Z",
+      "transmissions": 23,
+      "matchedBytes": 20217,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T07:45:00Z",
+      "to": "2026-10-02T08:00:00Z",
+      "transmissions": 16,
+      "matchedBytes": 9984,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T08:00:00Z",
+      "to": "2026-10-02T08:15:00Z",
+      "transmissions": 25,
+      "matchedBytes": 19125,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T08:15:00Z",
+      "to": "2026-10-02T08:30:00Z",
+      "transmissions": 28,
+      "matchedBytes": 15064,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T08:30:00Z",
+      "to": "2026-10-02T08:45:00Z",
+      "transmissions": 28,
+      "matchedBytes": 23352,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T08:45:00Z",
+      "to": "2026-10-02T09:00:00Z",
+      "transmissions": 28,
+      "matchedBytes": 14896,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T09:00:00Z",
+      "to": "2026-10-02T09:15:00Z",
+      "transmissions": 37,
+      "matchedBytes": 19129,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T09:15:00Z",
+      "to": "2026-10-02T09:30:00Z",
+      "transmissions": 40,
+      "matchedBytes": 22040,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T09:30:00Z",
+      "to": "2026-10-02T09:45:00Z",
+      "transmissions": 31,
+      "matchedBytes": 17980,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T09:45:00Z",
+      "to": "2026-10-02T10:00:00Z",
+      "transmissions": 36,
+      "matchedBytes": 24012,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T10:00:00Z",
+      "to": "2026-10-02T10:15:00Z",
+      "transmissions": 37,
+      "matchedBytes": 18352,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T10:15:00Z",
+      "to": "2026-10-02T10:30:00Z",
+      "transmissions": 46,
+      "matchedBytes": 40894,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T10:30:00Z",
+      "to": "2026-10-02T10:45:00Z",
+      "transmissions": 34,
+      "matchedBytes": 20570,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T10:45:00Z",
+      "to": "2026-10-02T11:00:00Z",
+      "transmissions": 34,
+      "matchedBytes": 28730,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T11:00:00Z",
+      "to": "2026-10-02T11:15:00Z",
+      "transmissions": 52,
+      "matchedBytes": 46488,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T11:15:00Z",
+      "to": "2026-10-02T11:30:00Z",
+      "transmissions": 47,
+      "matchedBytes": 29093,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T11:30:00Z",
+      "to": "2026-10-02T11:45:00Z",
+      "transmissions": 49,
+      "matchedBytes": 35182,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T11:45:00Z",
+      "to": "2026-10-02T12:00:00Z",
+      "transmissions": 38,
+      "matchedBytes": 26448,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T12:00:00Z",
+      "to": "2026-10-02T12:15:00Z",
+      "transmissions": 37,
+      "matchedBytes": 30821,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T12:15:00Z",
+      "to": "2026-10-02T12:30:00Z",
+      "transmissions": 31,
+      "matchedBytes": 19716,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T12:30:00Z",
+      "to": "2026-10-02T12:45:00Z",
+      "transmissions": 33,
+      "matchedBytes": 21252,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T12:45:00Z",
+      "to": "2026-10-02T13:00:00Z",
+      "transmissions": 29,
+      "matchedBytes": 17023,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T13:00:00Z",
+      "to": "2026-10-02T13:15:00Z",
+      "transmissions": 39,
+      "matchedBytes": 21372,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T13:15:00Z",
+      "to": "2026-10-02T13:30:00Z",
+      "transmissions": 38,
+      "matchedBytes": 31578,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T13:30:00Z",
+      "to": "2026-10-02T13:45:00Z",
+      "transmissions": 64,
+      "matchedBytes": 51648,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T13:45:00Z",
+      "to": "2026-10-02T14:00:00Z",
+      "transmissions": 53,
+      "matchedBytes": 41446,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T14:00:00Z",
+      "to": "2026-10-02T14:15:00Z",
+      "transmissions": 69,
+      "matchedBytes": 46161,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T14:15:00Z",
+      "to": "2026-10-02T14:30:00Z",
+      "transmissions": 64,
+      "matchedBytes": 41024,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T14:30:00Z",
+      "to": "2026-10-02T14:45:00Z",
+      "transmissions": 34,
+      "matchedBytes": 26078,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T14:45:00Z",
+      "to": "2026-10-02T15:00:00Z",
+      "transmissions": 47,
+      "matchedBytes": 38916,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T15:00:00Z",
+      "to": "2026-10-02T15:15:00Z",
+      "transmissions": 40,
+      "matchedBytes": 24400,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T15:15:00Z",
+      "to": "2026-10-02T15:30:00Z",
+      "transmissions": 34,
+      "matchedBytes": 23936,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T15:30:00Z",
+      "to": "2026-10-02T15:45:00Z",
+      "transmissions": 29,
+      "matchedBytes": 17371,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T15:45:00Z",
+      "to": "2026-10-02T16:00:00Z",
+      "transmissions": 36,
+      "matchedBytes": 22104,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T16:00:00Z",
+      "to": "2026-10-02T16:15:00Z",
+      "transmissions": 33,
+      "matchedBytes": 28512,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T16:15:00Z",
+      "to": "2026-10-02T16:30:00Z",
+      "transmissions": 30,
+      "matchedBytes": 18810,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T16:30:00Z",
+      "to": "2026-10-02T16:45:00Z",
+      "transmissions": 31,
+      "matchedBytes": 19282,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T16:45:00Z",
+      "to": "2026-10-02T17:00:00Z",
+      "transmissions": 36,
+      "matchedBytes": 31536,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T17:00:00Z",
+      "to": "2026-10-02T17:15:00Z",
+      "transmissions": 50,
+      "matchedBytes": 39150,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T17:15:00Z",
+      "to": "2026-10-02T17:30:00Z",
+      "transmissions": 42,
+      "matchedBytes": 31962,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T17:30:00Z",
+      "to": "2026-10-02T17:45:00Z",
+      "transmissions": 35,
+      "matchedBytes": 27300,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T17:45:00Z",
+      "to": "2026-10-02T18:00:00Z",
+      "transmissions": 36,
+      "matchedBytes": 29376,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T18:00:00Z",
+      "to": "2026-10-02T18:15:00Z",
+      "transmissions": 24,
+      "matchedBytes": 17208,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T18:15:00Z",
+      "to": "2026-10-02T18:30:00Z",
+      "transmissions": 20,
+      "matchedBytes": 13680,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T18:30:00Z",
+      "to": "2026-10-02T18:45:00Z",
+      "transmissions": 20,
+      "matchedBytes": 12960,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T18:45:00Z",
+      "to": "2026-10-02T19:00:00Z",
+      "transmissions": 17,
+      "matchedBytes": 11849,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T19:00:00Z",
+      "to": "2026-10-02T19:15:00Z",
+      "transmissions": 19,
+      "matchedBytes": 13737,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T19:15:00Z",
+      "to": "2026-10-02T19:30:00Z",
+      "transmissions": 15,
+      "matchedBytes": 8070,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T19:30:00Z",
+      "to": "2026-10-02T19:45:00Z",
+      "transmissions": 14,
+      "matchedBytes": 8540,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T19:45:00Z",
+      "to": "2026-10-02T20:00:00Z",
+      "transmissions": 16,
+      "matchedBytes": 7824,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T20:00:00Z",
+      "to": "2026-10-02T20:15:00Z",
+      "transmissions": 13,
+      "matchedBytes": 10517,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T20:15:00Z",
+      "to": "2026-10-02T20:30:00Z",
+      "transmissions": 14,
+      "matchedBytes": 9282,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T20:30:00Z",
+      "to": "2026-10-02T20:45:00Z",
+      "transmissions": 9,
+      "matchedBytes": 6813,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T20:45:00Z",
+      "to": "2026-10-02T21:00:00Z",
+      "transmissions": 10,
+      "matchedBytes": 8000,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T21:00:00Z",
+      "to": "2026-10-02T21:15:00Z",
+      "transmissions": 8,
+      "matchedBytes": 5184,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T21:15:00Z",
+      "to": "2026-10-02T21:30:00Z",
+      "transmissions": 7,
+      "matchedBytes": 3675,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T21:30:00Z",
+      "to": "2026-10-02T21:45:00Z",
+      "transmissions": 9,
+      "matchedBytes": 6975,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T21:45:00Z",
+      "to": "2026-10-02T22:00:00Z",
+      "transmissions": 8,
+      "matchedBytes": 6672,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T22:00:00Z",
+      "to": "2026-10-02T22:15:00Z",
+      "transmissions": 7,
+      "matchedBytes": 4809,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T22:15:00Z",
+      "to": "2026-10-02T22:30:00Z",
+      "transmissions": 5,
+      "matchedBytes": 4245,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T22:30:00Z",
+      "to": "2026-10-02T22:45:00Z",
+      "transmissions": 5,
+      "matchedBytes": 4045,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T22:45:00Z",
+      "to": "2026-10-02T23:00:00Z",
+      "transmissions": 7,
+      "matchedBytes": 3409,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T23:00:00Z",
+      "to": "2026-10-02T23:15:00Z",
+      "transmissions": 8,
+      "matchedBytes": 6504,
+      "final": true
+    },
+    {
+      "from": "2026-10-02T23:15:00Z",
+      "to": "2026-10-02T23:30:00Z",
+      "transmissions": 6,
+      "matchedBytes": 3240,
+      "final": false
+    },
+    {
+      "from": "2026-10-02T23:30:00Z",
+      "to": "2026-10-02T23:45:00Z",
+      "transmissions": 6,
+      "matchedBytes": 4152,
+      "final": false
+    },
+    {
+      "from": "2026-10-02T23:45:00Z",
+      "to": "2026-10-03T00:00:00Z",
+      "transmissions": 9,
+      "matchedBytes": 7848,
+      "final": false
+    }
+  ]
+}
