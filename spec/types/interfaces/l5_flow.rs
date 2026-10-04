@@ -43,7 +43,10 @@
 //! `Delegation`.
 //!
 //! Promotion (`ChannelRegistry::promote`) follows
-//! [`promotion::plan`](crate::derived::flow::channel::promotion::plan): in
+//! [`promotion::plan`](crate::derived::flow::channel::promotion::plan), run
+//! with the promotion's declaration over the stored channels; the surface's
+//! promotion preview reads `ChannelRegistry::promotion_coverage`, which runs
+//! the same plan over the same channels and changes nothing. A promotion: in
 //! one transaction the channel becomes declared under the same id, the
 //! operator's policy decision is recorded in its policy history, and every
 //! other discovered channel whose seed the pattern matches becomes
@@ -71,10 +74,11 @@ pub mod verdicts;
 
 use crate::aggregates::access::ResourceUsePage;
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
+use crate::derived::flow::channel::Declaration;
 use crate::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
 };
-use crate::derived::flow::channel::promotion::{Promotion, PromotionRefusal};
+use crate::derived::flow::channel::promotion::{Promotion, PromotionCoverage, PromotionRefusal};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
 use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
@@ -167,7 +171,8 @@ pub trait ChannelRegistry {
     async fn policy_history(&self, channel: ChannelId) -> Result<PolicyHistory, RegistryError>;
 
     /// Promote the discovered channel `channel` with `promotion`, as
-    /// [`promotion::plan`] decides, in one transaction: its origin becomes
+    /// [`promotion::plan`] decides for `promotion.declaration()` over the
+    /// stored channels, in one transaction: its origin becomes
     /// [`ChannelOrigin::promoted`] with the promotion's declaration (id,
     /// resources and detection unchanged); the promotion's policy decision is
     /// recorded as by [`ChannelRegistry::set_policy`]; every channel the plan
@@ -187,6 +192,22 @@ pub trait ChannelRegistry {
         channel: ChannelId,
         promotion: Promotion,
     ) -> Result<Promoted, PromoteError>;
+
+    /// What `promote` would do now for a promotion with `declaration`,
+    /// changing nothing: exactly [`promotion::coverage`] over the channels
+    /// `promote` would plan over, read in one snapshot, where a channel's
+    /// held resources are its seed resource and every resource stored on it.
+    /// A refusal is `Refused` with the `PromotionRefusal` that `promote`
+    /// would return in the same state; on success the coverage's superseded
+    /// channels are the ones `promote` would report in
+    /// [`Promoted::superseded`].
+    ///
+    /// [`promotion::coverage`]: crate::derived::flow::channel::promotion::coverage
+    async fn promotion_coverage(
+        &self,
+        channel: ChannelId,
+        declaration: &Declaration,
+    ) -> Result<PromotionCoverage, PromoteError>;
 
     /// The resources of `channel`'s canonical channel (its own and those of
     /// every channel it superseded) accessed within `window`, newest
@@ -280,8 +301,9 @@ pub enum RegistryError {
     InvalidCursor,
 }
 
-/// Why `ChannelRegistry::promote` failed. A refusal is the operator's to
-/// fix; a store failure may succeed on retry. Neither changed anything.
+/// Why `ChannelRegistry::promote` (or `promotion_coverage`) failed. A
+/// refusal is the operator's to fix; a store failure may succeed on retry.
+/// Neither changed anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromoteError {
     Store { reason: String },

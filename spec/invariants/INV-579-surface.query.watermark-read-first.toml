@@ -1,13 +1,15 @@
 [invariant]
 id = "surface.query.watermark-read-first"
-statement = "Every Watermarked response of QueryApi topology, channel_topology, series, edge_transmissions, channel_resources and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read."
+statement = "Every Watermarked response of QueryApi topology, channel_topology, series, edge_transmissions, channel_resources, channel, channels and topic_sizes carries a watermark that EdgeStore::watermark returned before any of the response's data was read."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 Topic sizes come from L6, not L7, so the surface reads L7's watermark
 before calling the catalog. Classifications under a version are written
 before the deliveries that carry them are acked, so the frontier covers
-them and the same watermark is sound for sizes.
+them and the same watermark is sound for sizes. Channel rows count
+accesses and confirmations by event time from L5, like channel_resources,
+so the watermark read first is sound for their counts too.
 """
 
 [evidence]

@@ -325,7 +325,7 @@ fn plan_promotes_in_place_and_supersedes_matching_discovered_channels() {
         },
     ];
     let promotion = promotion(team_pattern());
-    let plan = plan(channel(1), &promotion, &registry).expect("valid promotion");
+    let plan = plan(channel(1), promotion.declaration(), &registry).expect("valid promotion");
     assert_eq!(
         plan.origin,
         target
@@ -353,7 +353,11 @@ fn plan_refuses_an_unknown_channel() {
         seed: Some(&seed),
     }];
     assert_eq!(
-        plan(channel(9), &promotion(team_pattern()), &registry),
+        plan(
+            channel(9),
+            promotion(team_pattern()).declaration(),
+            &registry
+        ),
         Err(PromotionRefusal::UnknownChannel(channel(9)))
     );
 }
@@ -367,7 +371,11 @@ fn plan_refuses_a_superseded_channel_naming_its_superseder() {
         seed: Some(&seed),
     }];
     assert_eq!(
-        plan(channel(2), &promotion(team_pattern()), &registry),
+        plan(
+            channel(2),
+            promotion(team_pattern()).declaration(),
+            &registry
+        ),
         Err(PromotionRefusal::Superseded {
             channel: channel(2),
             by: channel(1),
@@ -383,7 +391,11 @@ fn plan_refuses_a_declared_channel() {
         seed: None,
     }];
     assert_eq!(
-        plan(channel(3), &promotion(team_pattern()), &registry),
+        plan(
+            channel(3),
+            promotion(team_pattern()).declaration(),
+            &registry
+        ),
         Err(PromotionRefusal::NotDiscovered(channel(3)))
     );
 }
@@ -397,7 +409,11 @@ fn plan_refuses_a_pattern_that_misses_the_seed() {
         seed: Some(&outside),
     }];
     assert_eq!(
-        plan(channel(1), &promotion(team_pattern()), &registry),
+        plan(
+            channel(1),
+            promotion(team_pattern()).declaration(),
+            &registry
+        ),
         Err(PromotionRefusal::PatternMissesSeed)
     );
     let unreadable = [Registered {
@@ -405,7 +421,11 @@ fn plan_refuses_a_pattern_that_misses_the_seed() {
         seed: None,
     }];
     assert_eq!(
-        plan(channel(1), &promotion(team_pattern()), &unreadable),
+        plan(
+            channel(1),
+            promotion(team_pattern()).declaration(),
+            &unreadable
+        ),
         Err(PromotionRefusal::PatternMissesSeed)
     );
 }
@@ -426,7 +446,11 @@ fn plan_refuses_a_pattern_overlapping_a_declared_channel() {
         },
     ];
     assert_eq!(
-        plan(channel(1), &promotion(team_pattern()), &registry),
+        plan(
+            channel(1),
+            promotion(team_pattern()).declaration(),
+            &registry
+        ),
         Err(PromotionRefusal::PatternOverlaps {
             existing: channel(5),
         })
@@ -451,7 +475,7 @@ fn plan_checks_in_order() {
         },
     ];
     assert!(matches!(
-        plan(channel(2), &overlapping, &registry),
+        plan(channel(2), overlapping.declaration(), &registry),
         Err(PromotionRefusal::Superseded { .. })
     ));
     // A missed seed before an overlap.
@@ -467,7 +491,7 @@ fn plan_checks_in_order() {
         },
     ];
     assert_eq!(
-        plan(channel(1), &overlapping, &registry),
+        plan(channel(1), overlapping.declaration(), &registry),
         Err(PromotionRefusal::PatternMissesSeed)
     );
 }
@@ -491,7 +515,12 @@ fn plan_supersedes_only_discovered_channels() {
             seed: Some(&seed_c),
         },
     ];
-    let plan = plan(channel(1), &promotion(team_pattern()), &registry).expect("valid");
+    let plan = plan(
+        channel(1),
+        promotion(team_pattern()).declaration(),
+        &registry,
+    )
+    .expect("valid");
     assert!(plan.superseded.is_empty());
 }
 
@@ -513,7 +542,12 @@ fn supersession_resolves_in_one_step() {
             seed: Some(&b),
         },
     ];
-    let plan = plan(channel(1), &promotion(team_pattern()), &registry).expect("valid");
+    let plan = plan(
+        channel(1),
+        promotion(team_pattern()).declaration(),
+        &registry,
+    )
+    .expect("valid");
     let mut channels = vec![Channel {
         origin: plan.origin.clone(),
         ..target.clone()

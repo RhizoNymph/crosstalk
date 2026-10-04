@@ -8,6 +8,7 @@ mod fixtures;
 mod agents;
 mod aggregates;
 mod audit;
+mod channel_reads;
 mod channels;
 mod events;
 mod filter;

@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.channels.names-resolve"
+statement = "QueryApi::channel_names returns exactly channels::resolve_names over the registered channels: keyed by each requested id the registry knows, the ChannelName of the channel that id resolves to, whose id is that channel in force and whose shape is its pattern when declared and its seed locator when discovered; unknown ids are absent, and more than ChannelName::MAX_BATCH ids is InvalidInput(TooManyIds) without reading anything."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Every page names the channels its rows mention in one call. Keying by the id
+asked for lets the page look up the id it holds, even a superseded one, and
+get the channel now in force, as every other read resolves it. Leaving
+unknown ids out instead of failing keeps one stale id from blanking a page.
+The cap, a full page, bounds the call by what any list can hand it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channel_reads::names_resolve_each_known_id_to_the_channel_in_force",
+    "crosstalk_spec::tests::channel_reads::names_refuse_a_batch_over_the_cap",
+    "crosstalk_spec::tests::channel_reads::a_name_is_only_built_for_a_channel_in_force_with_a_readable_seed",
+]
+property = "crosstalk::surface::tests::prop_channel_names_match_reference"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

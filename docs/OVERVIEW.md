@@ -47,7 +47,9 @@ Overview:
       their sinks, triage), L7 topology (edge and access buckets per time
       window, graphs with node metadata, the channel-centred graph, time
       series, and the watermark before which every bucket is final), L8
-      surface (the query API with cursor-paginated lists, linked views
+      surface (the query API with cursor-paginated lists, channel rows
+      carrying activity or their supersession, batch channel names, a
+      promotion preview computed by the promotion's own plan, linked views
       sharing one filter and one resolved topic-model version, typed query
       and action errors, the operator directory with a trusted single-user
       mode, operator actions with one permission each, the append-only
@@ -73,7 +75,11 @@ Overview:
     oldest unprocessed input, and announces topic-version activation back
     to L6, which then drops the versions its retention policy no longer
     keeps (TopicVersionDropped; L7 deletes their buckets) → L8 serves
-    topology, the channel-centred graph, a channel's resources, series,
+    topology, the channel-centred graph, a channel's resources, channel
+    rows (activity counted over the channel and every channel it superseded,
+    in an optional window that never changes which rows are listed), channel
+    names, promotion previews (the registry's promotion plan run without
+    effect, so a preview and the promotion agree), series,
     topic history, search, projections, verdicts, detection quality, lists
     and alerts. Every aggregate comes back with the watermark read before
     it; every linked view applies one TopologyFilter under one resolved (or
@@ -118,9 +124,10 @@ Features Index:
       operator directory (with a trusted single-user mode) and one
       permission per query and action; paginated lists; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
-      merged agents and superseded channels resolved at read time; the
-      channel-centred graph and graph nodes; stored projections and their
-      columnar frame; verdicts and detection quality; watermarked
+      merged agents and superseded channels resolved at read time; channel
+      list rows, the channel list filter, batch channel names and the
+      promotion preview; the channel-centred graph and graph nodes; stored
+      projections and their columnar frame; verdicts and detection quality; watermarked
       aggregates and retention; typed query and action errors with one
       From impl per store error; operator actions; the append-only audit
       log of actions and config changes; and the id-only SSE live feed fed
@@ -128,6 +135,7 @@ Features Index:
     entry_points:
       - spec/types/interfaces/l8_surface.rs
       - spec/types/interfaces/l8_surface/actions.rs
+      - spec/types/interfaces/l8_surface/channels.rs
       - spec/types/interfaces/l8_surface/live.rs
     depends_on: [type_spec]
     doc: docs/features/query_surface.md

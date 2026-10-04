@@ -11,7 +11,12 @@
 //!   ─▶ DetectEvent::ChannelPromoted
 //! ```
 //!
-//! [`plan`] is the reference for what a promotion does and refuses. Checks
+//! [`plan`] is the reference for what a promotion does and refuses, and
+//! [`coverage`] for what an operator is shown before promoting
+//! (`QueryApi::promotion_preview`): it runs the same `plan` and adds which
+//! resources the pattern covers, so a preview and a promotion in the same
+//! state never disagree. `plan` reads only the declaration (pattern, author,
+//! time), never the policy, so a preview needs no policy to ask. Checks
 //! run in this order and the first failure is the refusal: the channel is
 //! known; it is not superseded; it is discovered (not declared); the pattern
 //! matches its seed's locator; the pattern overlaps no other declared
@@ -28,9 +33,11 @@ use crate::derived::flow::channel::policy::{Decision, PolicyAuthor, PolicyDecisi
 use crate::derived::flow::channel::{
     Channel, ChannelOrigin, Declaration, NotPromotable, Supersession,
 };
-use crate::derived::flow::resource::{Locator, ResourcePattern};
+use std::collections::HashSet;
+
+use crate::derived::flow::resource::{Locator, Resource, ResourcePattern};
 use crate::ids::{ChannelId, OperatorId};
-use crate::support::Timestamp;
+use crate::support::{Capped, Timestamp};
 
 /// One promotion as the surface hands it to flow detection: the pattern and
 /// the policy decision, both authored by the calling operator at the time
@@ -135,30 +142,32 @@ impl PromotionPlan {
     }
 }
 
-/// Plan promoting `target` with `promotion` against every channel in the
-/// registry (`target` included). The policy decision is recorded separately
-/// with `PolicyHistory::record`, in the same transaction.
+/// Plan promoting `target` with `declaration` against every channel in the
+/// registry (`target` included). `ChannelRegistry::promote` passes
+/// [`Promotion::declaration`]; the promotion's policy decision is recorded
+/// separately with `PolicyHistory::record`, in the same transaction.
 pub fn plan(
     target: ChannelId,
-    promotion: &Promotion,
+    declaration: &Declaration,
     registry: &[Registered<'_>],
 ) -> Result<PromotionPlan, PromotionRefusal> {
     let entry = registry
         .iter()
         .find(|entry| entry.channel.id == target)
         .ok_or(PromotionRefusal::UnknownChannel(target))?;
-    let origin = entry
-        .channel
-        .origin
-        .promoted(promotion.declaration().clone())
-        .map_err(|refusal| match refusal {
-            NotPromotable::AlreadyDeclared => PromotionRefusal::NotDiscovered(target),
-            NotPromotable::Superseded(supersession) => PromotionRefusal::Superseded {
-                channel: target,
-                by: supersession.by,
-            },
-        })?;
-    let pattern = promotion.pattern();
+    let origin =
+        entry
+            .channel
+            .origin
+            .promoted(declaration.clone())
+            .map_err(|refusal| match refusal {
+                NotPromotable::AlreadyDeclared => PromotionRefusal::NotDiscovered(target),
+                NotPromotable::Superseded(supersession) => PromotionRefusal::Superseded {
+                    channel: target,
+                    by: supersession.by,
+                },
+            })?;
+    let pattern = &declaration.pattern;
     if !entry.seed.is_some_and(|seed| pattern.matches(seed)) {
         return Err(PromotionRefusal::PatternMissesSeed);
     }
@@ -177,7 +186,7 @@ pub fn plan(
     }
     let supersession = Supersession {
         by: target,
-        at: promotion.at(),
+        at: declaration.at,
     };
     let superseded = registry
         .iter()
@@ -195,4 +204,85 @@ pub fn plan(
         })
         .collect();
     Ok(PromotionPlan { origin, superseded })
+}
+
+/// How many covered, and how many uncovered, resources a coverage shows.
+/// A broad pattern can bring thousands of resources together; the totals
+/// are always exact.
+pub const COVERAGE_CAP: usize = 200;
+
+/// A coverage's resources: the newest [`COVERAGE_CAP`] and the exact total.
+pub type CappedResources = Capped<Resource, COVERAGE_CAP>;
+
+/// What an accepted promotion would take in: the channels [`plan`]
+/// supersedes and every resource held by the promoted channel or by one of
+/// them, split by whether the pattern matches its locator.
+///
+/// Built only by [`coverage`], so `superseded` is always the plan's (and
+/// complete: it is what the promotion records), and the two resource
+/// samples always partition the held resources by the pattern: their
+/// totals add up to the number of distinct held resources, and each shows
+/// the newest of its side.
+/// Uncovered resources are not dropped: they stay stored on their channel
+/// (the promoted one, or a superseded one that resolves to it), but no new
+/// resource outside the pattern joins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionCoverage {
+    superseded: Vec<ChannelId>,
+    covered: CappedResources,
+    uncovered: CappedResources,
+}
+
+impl PromotionCoverage {
+    /// The channels the promotion would supersede, as in
+    /// [`PromotionPlan::superseded`] (registry order). Never the promoted
+    /// channel.
+    pub fn superseded(&self) -> &[ChannelId] {
+        &self.superseded
+    }
+
+    /// Held resources the pattern matches: the newest (highest id) first,
+    /// at most [`COVERAGE_CAP`] of them, and how many there are.
+    pub fn covered(&self) -> &CappedResources {
+        &self.covered
+    }
+
+    /// Held resources the pattern does not match, sampled the same way.
+    pub fn uncovered(&self) -> &CappedResources {
+        &self.uncovered
+    }
+}
+
+/// [`plan`], plus the resources the promotion would cover.
+///
+/// `held(c)` lists every resource stored on channel `c`: its seed resource
+/// and `Channel::resources`, whenever seen. The held resources are those of
+/// `target` and of every channel the plan supersedes (a discovered target
+/// has superseded nothing, so that is every resource the promotion brings
+/// together). Each resource counts once, under `covered` when
+/// `declaration.pattern` matches its locator and under `uncovered`
+/// otherwise; each side shows its newest [`COVERAGE_CAP`] and counts all
+/// of them. A refusal is exactly `plan`'s refusal.
+pub fn coverage(
+    target: ChannelId,
+    declaration: &Declaration,
+    registry: &[Registered<'_>],
+    held: impl Fn(ChannelId) -> Vec<Resource>,
+) -> Result<PromotionCoverage, PromotionRefusal> {
+    let plan = plan(target, declaration, registry)?;
+    let superseded: Vec<ChannelId> = plan.superseded_ids().collect();
+    let mut seen = HashSet::new();
+    let (mut covered, mut uncovered): (Vec<Resource>, Vec<Resource>) = std::iter::once(target)
+        .chain(superseded.iter().copied())
+        .flat_map(held)
+        .filter(|resource| seen.insert(resource.id))
+        .partition(|resource| declaration.pattern.matches(&resource.locator));
+    let newest_first = |a: &Resource, b: &Resource| b.id.cmp(&a.id);
+    covered.sort_by(newest_first);
+    uncovered.sort_by(newest_first);
+    Ok(PromotionCoverage {
+        superseded,
+        covered: Capped::first(covered),
+        uncovered: Capped::first(uncovered),
+    })
 }
