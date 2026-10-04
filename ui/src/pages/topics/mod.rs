@@ -1,0 +1,381 @@
+//! `/topics`: the topic model's versions, the topics of one version with
+//! their terms, size and trend over the view's window, and the remap to the
+//! next version (which topics found no match, and which watched-topic
+//! rules that leaves stale).
+//!
+//! `ver` picks the version shown (default: the view's `v`); a link sets the
+//! view's `v` to it so every page reads that version. Topic labels and
+//! terms come from message text, so the page needs `Content`; without it
+//! the page says so.
+
+pub mod model;
+
+use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use topcoat::Result;
+use topcoat::context::Cx;
+use topcoat::router::{page, query_params};
+use topcoat::view::{View, component, view};
+
+use self::model::{RemapRow, TopicRow, VersionTab, remap_rows, topic_rows, version_tabs};
+use crate::app::{backend, caller, can};
+use crate::backend::Backend;
+use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
+use crate::components::sparkline::sparkline;
+use crate::components::table::{ROW, TD, TD_NUM};
+use crate::components::{Tab, data_table, empty_state, error_panel, href, page_header, segmented};
+use crate::contract::errors::QueryError;
+use crate::pages::common::action::{require, status_of};
+use crate::pages::common::form::invalid;
+use crate::pages::common::transmissions::Named;
+use crate::pages::explore::topics::{TREND_BUCKETS, watch_url};
+use crate::pages::view::view_state;
+use crate::url::view_state::ViewState;
+
+pub const PATH: &str = "/topics";
+
+#[query_params]
+struct RawTopicsQuery {
+    ver: Option<String>,
+}
+
+/// The `ver` key: a version number.
+pub fn parse_version(
+    text: Option<&str>,
+) -> std::result::Result<Option<TopicModelVersion>, QueryError> {
+    text.map(|t| {
+        t.parse::<u32>()
+            .map(TopicModelVersion)
+            .map_err(|_| invalid("ver", "not a topic model version"))
+    })
+    .transpose()
+}
+
+struct Loaded {
+    tabs: Vec<VersionTab>,
+    selected: TopicModelVersion,
+    /// The selected version's topics; an error when it is not retained.
+    topics: std::result::Result<Vec<TopicRow>, QueryError>,
+    /// The remap to the next version: its number and rows.
+    remap: Option<(u32, Vec<RemapRow>)>,
+}
+
+async fn load(
+    cx: &Cx,
+    caller: &Caller,
+    state: &ViewState,
+    selected: TopicModelVersion,
+) -> std::result::Result<Loaded, QueryError> {
+    let backend = backend(cx);
+    let versions = backend.topic_versions(caller).await?;
+    let tabs = version_tabs(&versions, state.scope.topic_version);
+    let newest = tabs.iter().find(|t| t.newest).map(|t| t.version);
+    let mut scope = state.scope.clone();
+    scope.topic_version = selected;
+    let topics = match backend.topics(caller, selected).await {
+        Ok(topics) => {
+            let stats = backend.topic_stats(caller, &scope, TREND_BUCKETS).await?;
+            let rows = topic_rows(&topics, &stats, |id| {
+                (Some(selected.0) == newest).then(|| watch_url(id, state))
+            });
+            let remap = match backend.topic_remap(caller, selected).await? {
+                Some(remap) => {
+                    let next = backend.topics(caller, remap.to).await.unwrap_or_default();
+                    let rules = backend.rules(caller).await?;
+                    Some((
+                        remap.to.0,
+                        remap_rows(&remap, &topics, &next, &rules, state),
+                    ))
+                }
+                None => None,
+            };
+            Ok((rows, remap))
+        }
+        Err(error) => Err(error),
+    };
+    let (topics, remap) = match topics {
+        Ok((rows, remap)) => (Ok(rows), remap),
+        Err(error) => (Err(error), None),
+    };
+    Ok(Loaded {
+        tabs,
+        selected,
+        topics,
+        remap,
+    })
+}
+
+#[page("/topics")]
+async fn topics_get(cx: &Cx) -> Result<impl View> {
+    let state = view_state(cx).await?;
+    let selected = query_params::<RawTopicsQuery>(cx)
+        .map_err(|e| invalid("query", e))
+        .and_then(|q| parse_version(q.ver.as_deref()))
+        .map(|v| v.unwrap_or(state.scope.topic_version));
+    Ok(view! { topics_page(state: state, selected: selected) })
+}
+
+#[component]
+async fn topics_page(
+    cx: &Cx,
+    state: ViewState,
+    selected: std::result::Result<TopicModelVersion, QueryError>,
+) -> Result<impl View> {
+    let caller = caller(cx);
+    let allowed = require(&caller, Permission::View).and(selected);
+    let content = can(&caller, Permission::Content);
+    Ok(view! {
+        page_header(title: "Topics", subtitle: "What transmissions are about, per topic-model version, and how topics carried over after a re-fit.")
+        match allowed {
+            Err(error) => {
+                (status_of(&error))
+                error_panel(error: &error)
+            },
+            Ok(_) if !content => {
+                <div class=(PANEL)>
+                    <p class="text-sm">"Topics need the Content permission: their labels and terms come from message text."</p>
+                </div>
+            },
+            Ok(selected) => topics_body(state: state, selected: selected),
+        }
+    })
+}
+
+/// The version picker and the link that makes the shown version the
+/// view's.
+struct Picker {
+    tabs: Vec<Tab>,
+    detail: String,
+    /// `None` when the shown version already is the view's.
+    use_url: Option<String>,
+}
+
+fn picker(state: &ViewState, tabs: &[VersionTab], selected: TopicModelVersion) -> Picker {
+    let detail = tabs
+        .iter()
+        .find(|t| t.version == selected.0)
+        .map(|t| t.detail.clone())
+        .unwrap_or_default();
+    let mut use_state = state.clone();
+    use_state.scope.topic_version = selected;
+    Picker {
+        tabs: tabs
+            .iter()
+            .map(|t| Tab {
+                label: format!(
+                    "{}{}{}",
+                    t.label,
+                    if t.pinned { " · pinned" } else { "" },
+                    if t.newest { " · newest" } else { "" }
+                ),
+                href: href(PATH, state, &[("ver", &t.version.to_string())]),
+                active: t.version == selected.0,
+            })
+            .collect(),
+        detail,
+        use_url: (selected != state.scope.topic_version).then(|| href(PATH, &use_state, &[])),
+    }
+}
+
+#[component]
+async fn topics_body(cx: &Cx, state: ViewState, selected: TopicModelVersion) -> Result<impl View> {
+    let caller = caller(cx);
+    let loaded = load(cx, &caller, &state, selected).await;
+    let picked = loaded
+        .as_ref()
+        .ok()
+        .map(|l| picker(&state, &l.tabs, l.selected));
+    let rules_url = href("/alerts/rules", &state, &[]);
+    Ok(view! {
+        if let Some(picked) = picked {
+            <div class="mb-4 flex flex-wrap items-center gap-3">
+                <span class=(FACET)>"Version"</span>
+                segmented(label: "Topic model version", items: picked.tabs)
+                <span class="text-xs text-zinc-500">(picked.detail)</span>
+                match picked.use_url {
+                    Some(url) => <a class=(format!("{LINK} text-xs")) href=(url)>"Use v" (selected.0) " in every view"</a>,
+                    None => <span class="text-xs text-zinc-500">"· the version every view reads"</span>,
+                }
+            </div>
+        }
+        match loaded {
+            Err(error) => {
+                (status_of(&error))
+                error_panel(error: &error)
+            },
+            Ok(loaded) => {
+                topic_table(topics: loaded.topics)
+                if let Some((to, rows)) = loaded.remap {
+                    remap_table(from: selected.0, to: to, rows: rows, rules_url: rules_url)
+                }
+            },
+        }
+    })
+}
+
+#[component]
+async fn topic_table(topics: std::result::Result<Vec<TopicRow>, QueryError>) -> Result<impl View> {
+    let empty = topics.as_ref().is_ok_and(Vec::is_empty);
+    Ok(view! {
+        <section class=(SECTION)>
+            <h2 class=(SECTION_TITLE)>"Topics in the window"</h2>
+            match topics {
+                Err(error) => {
+                    (status_of(&error))
+                    error_panel(error: &error)
+                },
+                Ok(_) if empty => empty_state(message: "This version has no topics: it was never fitted to traffic."),
+                Ok(rows) => data_table(
+                    headers: &["Topic", "Top terms", "Transmissions", "Trend", ""],
+                    for row in rows {
+                        <tr class=(ROW)>
+                            <td class=(format!("{TD} font-medium"))>(row.label.clone())</td>
+                            <td class=(TD)>
+                                <div class="flex flex-wrap gap-1">
+                                    for (term, weight) in row.terms {
+                                        <span class="inline-flex items-baseline gap-1 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] dark:bg-zinc-800">
+                                            (term) <span class="text-zinc-500">(weight)</span>
+                                        </span>
+                                    }
+                                </div>
+                            </td>
+                            <td class=(TD_NUM)>(row.transmissions)</td>
+                            <td class=(TD)>sparkline(values: row.trend, label: format!("{} over the window", row.label))</td>
+                            <td class=(TD)>
+                                if let Some(url) = row.watch {
+                                    <a class=(format!("{LINK} text-xs")) href=(url)>"Watch"</a>
+                                }
+                            </td>
+                        </tr>
+                    }
+                ),
+            }
+        </section>
+    })
+}
+
+#[component]
+async fn remap_table(
+    from: u32,
+    to: u32,
+    rows: Vec<RemapRow>,
+    rules_url: String,
+) -> Result<impl View> {
+    let unmapped = rows.iter().filter(|r| r.to.is_none()).count();
+    let empty = rows.is_empty();
+    Ok(view! {
+        <section class=(SECTION)>
+            <h2 class=(SECTION_TITLE)>
+                "Remap v" (from) " → v" (to)
+                <a class=(format!("{LINK} ml-2 normal-case tracking-normal font-normal")) href=(rules_url)>"alert rules"</a>
+            </h2>
+            if unmapped > 0 {
+                <p class="mb-2 text-xs text-amber-800 dark:text-amber-200">
+                    (unmapped) " of these topics found no match in v" (to) ". Watched-topic rules on them go stale until updated."
+                </p>
+            }
+            if empty {
+                empty_state(message: "No topics to carry over.")
+            } else {
+                data_table(
+                    headers: &["Topic", "Maps to", "Similarity", "Stale rules"],
+                    for row in rows {
+                        <tr class=(if row.to.is_none() { "bg-amber-50 dark:bg-amber-950/40" } else { ROW })>
+                            <td class=(TD)>(row.from)</td>
+                            match row.to {
+                                Some((label, similarity)) => {
+                                    <td class=(TD)>(label)</td>
+                                    <td class=(TD_NUM)>(similarity)</td>
+                                },
+                                None => {
+                                    <td class=(TD)><span class="text-xs font-medium text-amber-800 dark:text-amber-200">"unmapped"</span></td>
+                                    <td class=(TD_NUM)>"—"</td>
+                                },
+                            }
+                            <td class=(TD)>
+                                stale_rules(rules: row.stale_rules)
+                            </td>
+                        </tr>
+                    }
+                )
+            }
+        </section>
+    })
+}
+
+#[component]
+async fn stale_rules(rules: Vec<Named>) -> Result<impl View> {
+    Ok(view! {
+        <div class="flex flex-wrap gap-2 text-xs">
+            for rule in rules {
+                <a class=(LINK) href=(rule.url)>(rule.name)</a>
+            }
+        </div>
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use topcoat::router::StatusCode;
+
+    use super::*;
+    use crate::pages::topology::tests::fixture_state;
+    use crate::testing::get;
+
+    fn url(extra: &str) -> String {
+        format!("{PATH}?{}{extra}", fixture_state().to_query())
+    }
+
+    #[test]
+    fn versions_parse_as_numbers() {
+        assert_eq!(parse_version(None), Ok(None));
+        assert_eq!(parse_version(Some("1")), Ok(Some(TopicModelVersion(1))));
+        assert!(parse_version(Some("v1")).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_view_version_shows_its_topics_with_terms_and_watch_links() {
+        assert_eq!(get(PATH).await.status, StatusCode::TEMPORARY_REDIRECT);
+        let reply = get(&url("")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("v1 · pinned"));
+        assert!(reply.body.contains("v2 · newest"));
+        assert!(reply.body.contains("Credentials and API keys"));
+        assert!(reply.body.contains(">Watch</a>"));
+        assert!(reply.body.contains("<polyline"));
+        assert!(
+            !reply.body.contains("Remap v2"),
+            "the newest version has no successor"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_older_version_shows_its_remap_and_stale_rules() {
+        let reply = get(&url("&ver=1")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("Remap v1 → v2"));
+        assert!(reply.body.contains("Engineering chatter"));
+        assert!(reply.body.contains("unmapped"));
+        assert!(
+            reply.body.contains("href=\"/alerts/rules/"),
+            "the stale rule is linked"
+        );
+        assert!(reply.body.contains("Use v1 in every view"));
+        assert!(
+            !reply.body.contains(">Watch</a>"),
+            "new rules target the newest version"
+        );
+    }
+
+    #[tokio::test]
+    async fn unfitted_and_unknown_versions() {
+        let reply = get(&url("&ver=0")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("never fitted"));
+        let reply = get(&url("&ver=9")).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert!(reply.body.contains("no longer retained"));
+        let reply = get(&url("&ver=x")).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}

@@ -5,8 +5,13 @@ pub mod alerts;
 pub mod audit;
 pub mod channels;
 pub mod common;
+pub mod explore;
+pub mod export;
 pub mod overview;
 pub mod pipeline;
+pub mod topics;
+pub mod topology;
+pub mod transmission;
 pub mod view;
 
 use topcoat::Result;
@@ -61,6 +66,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <title>"crosstalk"</title>
+                <link rel="icon" href="data:,">
                 <link rel="stylesheet" href=(tailwind::stylesheet!())>
                 topcoat::runtime::script()
             </head>

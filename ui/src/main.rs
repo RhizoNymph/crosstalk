@@ -1,5 +1,9 @@
 //! The crosstalk operator UI.
 
+// Pages that embed shards nest component futures deeply enough that
+// checking they are `Send` exceeds the default limit of 128.
+#![recursion_limit = "256"]
+
 mod app;
 mod backend;
 mod components;

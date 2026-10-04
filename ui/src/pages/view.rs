@@ -9,9 +9,13 @@ use topcoat::router::error::{bad_request, forbidden, internal_server_error, redi
 use topcoat::router::parse_query_params;
 use topcoat::router::request::uri;
 
+use topcoat::router::content::Form;
+
 use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::contract::errors::{InputError, QueryError};
+use crate::data::query::parse_strict;
+use crate::pages::common::form::invalid;
 use crate::url::view_state::{Defaults, RawViewState, ViewState};
 
 /// The default window: the 24 hours before the backend's present.
@@ -70,4 +74,44 @@ pub async fn view_state(cx: &Cx) -> Result<ViewState> {
         return Err(redirect(format!("{path}?{}", parsed.state.to_query())).into());
     }
     Ok(parsed.state)
+}
+
+/// A view state handed to a shard as its canonical query string. A shard's
+/// endpoint does not see the page URL, so pages pass their state along;
+/// like any shard argument it is user input, parsed strictly (every
+/// required key) and reported as `InvalidInput` on the `state` field.
+pub async fn state_from_query(cx: &Cx, query: &str) -> std::result::Result<ViewState, QueryError> {
+    let Form(raw) =
+        Form::<RawViewState>::from_bytes(query.as_bytes()).map_err(|e| invalid("state", e))?;
+    let defaults = defaults(cx).await?;
+    parse_strict(&raw, defaults).map_err(|e| invalid("state", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::href::tests::state;
+    use crate::testing::cx;
+
+    #[tokio::test]
+    async fn shard_state_round_trips_and_rejects_partial_queries() {
+        let cx = cx();
+        let mut expected = state();
+        expected.scope.filter.route_kinds =
+            vec![crosstalk_spec::aggregates::edge::RouteKind::Channel];
+        let parsed = state_from_query(&cx, &expected.to_query())
+            .await
+            .expect("parse");
+        assert_eq!(parsed, expected);
+        assert!(
+            state_from_query(&cx, "from=2026-10-02T00:00:00Z")
+                .await
+                .is_err()
+        );
+        assert!(
+            state_from_query(&cx, &format!("{}&w=edges", "from=a"))
+                .await
+                .is_err()
+        );
+    }
 }

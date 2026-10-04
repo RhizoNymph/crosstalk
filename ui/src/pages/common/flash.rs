@@ -22,10 +22,13 @@ pub enum Flash {
     RuleEnabled,
     RuleDisabled,
     Replayed,
+    VerdictRecorded,
+    VerdictWithdrawn,
+    ProjectionFitted,
 }
 
 impl Flash {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 16] = [
         Self::PolicySet,
         Self::ChannelPromoted,
         Self::AgentRenamed,
@@ -39,6 +42,9 @@ impl Flash {
         Self::RuleEnabled,
         Self::RuleDisabled,
         Self::Replayed,
+        Self::VerdictRecorded,
+        Self::VerdictWithdrawn,
+        Self::ProjectionFitted,
     ];
 
     pub fn code(self) -> &'static str {
@@ -56,6 +62,9 @@ impl Flash {
             Self::RuleEnabled => "rule-enabled",
             Self::RuleDisabled => "rule-disabled",
             Self::Replayed => "replayed",
+            Self::VerdictRecorded => "verdict-recorded",
+            Self::VerdictWithdrawn => "verdict-withdrawn",
+            Self::ProjectionFitted => "projection-fitted",
         }
     }
 
@@ -81,6 +90,9 @@ impl Flash {
             Self::RuleEnabled => "Rule enabled.",
             Self::RuleDisabled => "Rule disabled.",
             Self::Replayed => "Dead letter replayed to its consumer group.",
+            Self::VerdictRecorded => "Verdict recorded.",
+            Self::VerdictWithdrawn => "Verdict withdrawn.",
+            Self::ProjectionFitted => "Projection fitted.",
         }
     }
 }

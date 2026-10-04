@@ -7,6 +7,8 @@ use topcoat::view::{View, component, view};
 
 use crate::contract::agents::AgentStateKind;
 use crate::contract::channels::{DetectionKind, OriginKind};
+use crate::contract::graph::TransmissionStateKind;
+use crate::contract::verdict::Verdict;
 
 /// What a badge's colour says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +159,47 @@ impl Badge for Strength {
         match self {
             Self::Strong => Tone::Good,
             Self::Weak => Tone::Muted,
+        }
+    }
+}
+
+/// Content-backed states read as settled; access-pattern-only states as
+/// weaker; a discarded transmission as gone.
+impl Badge for TransmissionStateKind {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Detected => "detected",
+            Self::AwaitingContent => "awaiting content",
+            Self::Suspected => "suspected",
+            Self::Confirmed => "confirmed",
+            Self::Classified => "classified",
+            Self::Aggregated => "aggregated",
+            Self::Discarded => "discarded",
+        }
+    }
+
+    fn tone(&self) -> Tone {
+        match self {
+            Self::Detected | Self::AwaitingContent => Tone::Neutral,
+            Self::Suspected => Tone::Warn,
+            Self::Confirmed | Self::Classified | Self::Aggregated => Tone::Info,
+            Self::Discarded => Tone::Muted,
+        }
+    }
+}
+
+impl Badge for Verdict {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Genuine => "genuine",
+            Self::FalseDetection => "false detection",
+        }
+    }
+
+    fn tone(&self) -> Tone {
+        match self {
+            Self::Genuine => Tone::Good,
+            Self::FalseDetection => Tone::Bad,
         }
     }
 }

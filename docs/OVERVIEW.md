@@ -78,13 +78,15 @@ Features Index:
     doc: docs/features/type_spec.md
   ui:
     description: >
-      Operator web UI: topology (agents or bipartite with channels),
-      transmission evidence, search and UMAP exploration, topics, channels,
+      Operator web UI: an overview, topology (agents or bipartite with
+      channels) with an edge drawer, transmission evidence with verdicts, search and UMAP exploration, topics, channels,
       agents, alerts and rules, export, audit and pipeline. Defines the L8
       additions it needs.
     entry_points:
       - ui/src/main.rs
       - ui/src/data/mod.rs
+      - ui/src/pages/topology/mod.rs
+      - ui/src/pages/explore/mod.rs
       - ui/elements/src/ct-topology.ts
       - ui/elements/src/ct-projection.ts
       - ui/elements/src/ct-timebrush.ts
