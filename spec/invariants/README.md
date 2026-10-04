@@ -85,8 +85,10 @@ statement is phrased. If a statement fits two classes, split it.
 
 ### `requires`: evidence kinds
 
-Each kind is separated from the others by a single question, so a given
-test is exactly one kind:
+Evidence is something that exercises or constrains the code itself. Design
+models (such as the stateviz lifecycle definition) check the design, not
+the code, so they are not evidence. Each kind is separated from the others
+by a single question, so a given test is exactly one kind:
 
 | Value | Evidence is | Distinguished by |
 | --- | --- | --- |
@@ -96,7 +98,6 @@ test is exactly one kind:
 | `fuzz` | Coverage-guided input generation whose only oracle is no panic, crash or hang. | The oracle is crash-freedom only. |
 | `dst` | A deterministic simulation test: seeded control of scheduling, time, delivery order and injected faults. | Concurrency, time or faults are simulated and replayable. |
 | `integration` | A test against a real external dependency (Postgres, NATS, an upstream provider). | A real external process is involved. |
-| `statechart` | A stateviz (cascade) definition check or scenario covering the lifecycle. | Checks the lifecycle model, not the code. |
 | `bench` | A benchmark that asserts a threshold. | Measures time or space against a bound. |
 | `lint` | A static rule over source code (clippy lint, deny rule, custom check). | Does not execute the code. |
 
@@ -105,8 +106,8 @@ test is exactly one kind:
 One key per entry in `requires`, and no others. Each value is a string or a
 list of strings: a Rust path for `type`, `unit`, `property`, `fuzz`, `dst`,
 `integration` and `bench` (for example
-`crosstalk_spec::tests::flow::confirmed_requires_one_origin`), a scenario or
-definition path for `statechart`, and the rule's name for `lint`. Paths name
+`crosstalk_spec::tests::flow::confirmed_requires_one_origin`), and the rule's
+name for `lint`. Paths name
 where the evidence lives, or will live once the implementation exists.
 
 ### `[evidence-review]`
