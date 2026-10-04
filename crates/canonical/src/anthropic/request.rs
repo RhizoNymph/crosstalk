@@ -21,7 +21,7 @@ use crosstalk_spec::observed::message::{MessageBody, SystemPart, Text, UserPart}
 use crosstalk_spec::support::NonEmpty;
 
 use super::blocks::{self, Assembled, MediaSink, UserItem};
-use crate::json::{Json, JsonError};
+use crosstalk_spec::observed::message::json::{Json, JsonError};
 
 /// Why a request body is not an Anthropic Messages request.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::ids::{self, AgentId, ConversationId, ExchangeId, InvalidUlidText, MessageHash};
 use crate::observed::client::ClientContext;
 use crate::support::Timestamp;
-use crate::wire::decode_text;
+use crate::wire::{Rejected, decode_text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +63,16 @@ impl ConnectionId {
     /// writes.
     pub fn from_ulid_text(text: &str) -> Result<Self, InvalidUlidText> {
         ids::parse_ulid_text(text).map(Self)
+    }
+}
+
+impl ids::EntityId for ConnectionId {
+    fn from_ulid(raw: u128) -> Self {
+        Self(raw)
+    }
+
+    fn as_ulid(self) -> u128 {
+        self.0
     }
 }
 
@@ -174,13 +184,130 @@ pub enum StopReason {
     Other,
 }
 
+/// The token counts a provider reported for one exchange, in one meaning
+/// across protocols:
+///
+/// | Field | Counts |
+/// | --- | --- |
+/// | `input` | every prompt token: read from the cache, written to it, or neither (OpenAI's `prompt_tokens`) |
+/// | `cache_read` | the part of `input` served from the prompt cache |
+/// | `cache_write` | the part of `input` written to the prompt cache; `None` when the protocol does not report cache writes (OpenAI, Gemini cache implicitly) |
+/// | `output` | every generated token, reasoning included |
+/// | `reasoning` | the part of `output` spent on reasoning; `None` when the protocol does not report it apart |
+///
+/// So `input - cache_read - cache_write` ([`TokenUsage::uncached_input`])
+/// is the prompt processed without the cache. Anthropic reports three
+/// disjoint prompt counts, which map as `input = input_tokens +
+/// cache_creation_input_tokens + cache_read_input_tokens`, `cache_read =
+/// cache_read_input_tokens` and `cache_write =
+/// Some(cache_creation_input_tokens)`.
+///
+/// Checked: the cache counts never exceed `input`, nor `reasoning`
+/// `output`, so the parts always sum within their whole. On the wire, the
+/// fields of [`TokenCounts`], decoded through [`TokenUsage::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", try_from = "TokenCounts")]
 pub struct TokenUsage {
+    input: u32,
+    output: u32,
+    cache_read: u32,
+    cache_write: Option<u32>,
+    reasoning: Option<u32>,
+}
+
+/// [`TokenUsage`]'s counts, unchecked: what a normalizer fills in from a
+/// provider's usage, and what decoding reads before the check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct TokenCounts {
     pub input: u32,
     pub output: u32,
     pub cache_read: u32,
+    pub cache_write: Option<u32>,
     pub reasoning: Option<u32>,
+}
+
+/// Why counts are not a [`TokenUsage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidTokenUsage {
+    /// `cache_read + cache_write` is more than `input`.
+    CachedBeyondInput { input: u32, cached: u64 },
+    /// `reasoning` is more than `output`.
+    ReasoningBeyondOutput { output: u32, reasoning: u32 },
+}
+
+impl TryFrom<TokenCounts> for TokenUsage {
+    type Error = Rejected<InvalidTokenUsage>;
+
+    fn try_from(counts: TokenCounts) -> Result<Self, Self::Error> {
+        Self::new(counts).map_err(|error| Rejected::new("token usage", error))
+    }
+}
+
+impl TokenUsage {
+    pub fn new(counts: TokenCounts) -> Result<Self, InvalidTokenUsage> {
+        let TokenCounts {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+        } = counts;
+        let cached = u64::from(cache_read) + u64::from(cache_write.unwrap_or(0));
+        if cached > u64::from(input) {
+            return Err(InvalidTokenUsage::CachedBeyondInput { input, cached });
+        }
+        if let Some(reasoning) = reasoning.filter(|reasoning| *reasoning > output) {
+            return Err(InvalidTokenUsage::ReasoningBeyondOutput { output, reasoning });
+        }
+        Ok(Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+        })
+    }
+
+    pub const fn input(&self) -> u32 {
+        self.input
+    }
+
+    pub const fn output(&self) -> u32 {
+        self.output
+    }
+
+    pub const fn cache_read(&self) -> u32 {
+        self.cache_read
+    }
+
+    pub const fn cache_write(&self) -> Option<u32> {
+        self.cache_write
+    }
+
+    pub const fn reasoning(&self) -> Option<u32> {
+        self.reasoning
+    }
+
+    /// The prompt tokens neither read from nor written to the cache.
+    pub fn uncached_input(&self) -> u32 {
+        // The check keeps the cache counts within `input`, so this never
+        // saturates.
+        self.input
+            .saturating_sub(self.cache_read)
+            .saturating_sub(self.cache_write.unwrap_or(0))
+    }
+
+    /// The counts, as [`TokenUsage::new`] took them.
+    pub const fn counts(&self) -> TokenCounts {
+        TokenCounts {
+            input: self.input,
+            output: self.output,
+            cache_read: self.cache_read,
+            cache_write: self.cache_write,
+            reasoning: self.reasoning,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

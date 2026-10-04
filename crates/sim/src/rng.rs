@@ -11,6 +11,8 @@ use std::num::{NonZeroU64, ParseIntError};
 use std::str::FromStr;
 use std::time::Duration;
 
+use crosstalk_spec::ids::RandomSource;
+
 /// The one number a simulation run is a function of. On the command line
 /// and in failure reports, a decimal `u64` (`CROSSTALK_SIM_SEED=<n>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -145,6 +147,15 @@ impl SimRng {
         SimRng {
             state: self.next_u64() ^ GOLDEN_GAMMA.rotate_left(17),
         }
+    }
+}
+
+/// A simulation's random stream is the spec's random source, so code that
+/// mints ids (`crosstalk_spec::ids::UlidGenerator`) draws them from the
+/// seed under simulation.
+impl RandomSource for SimRng {
+    fn next_u64(&mut self) -> u64 {
+        SimRng::next_u64(self)
     }
 }
 

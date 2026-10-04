@@ -13,7 +13,7 @@ would share a hash. Round-tripping rules out both.
 """
 
 [evidence]
-property = "crosstalk_canonical::tests::encoding_round_trips"
+property = "crosstalk_spec::tests::encoding::encoding_round_trips"
 
 [evidence-review]
 property = { agent = "true", human = "false" }

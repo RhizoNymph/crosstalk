@@ -28,20 +28,29 @@ spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
 ├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests), BLAKE3 content ids (incl. ConfigHash), secret digests
-├── support.rs             NonEmpty, NonBlank, DisplayText (checked), QueryText (checked: at most MAX characters, line breaks allowed), Capped (checked: capped list with exact total), Change, Timestamp, Clock (the injected wall clock: now; SystemClock reads the OS clock), TimeWindow (a WireRequest), ByteRange, Blake3 (hex), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests; EntityId), BLAKE3 content ids (incl. ConfigHash), secret digests
+├── ids/
+│   ├── mint.rs            UlidGenerator (over the injected Clock and a RandomSource; monotonic per generator: next_ulid, mint), SeededRandom (new, from_entropy), UlidExhausted
+│   └── secret.rs          DeploymentSecret (no serde, Clone or key accessor; Debug and Display show the version), KeyedHasher (the only maker of CredentialHash and AccountHash; rotation overlap), SecretDigests, InvalidSecret, InvalidRotation
+├── support.rs             NonEmpty, NonBlank, DisplayText (checked), QueryText (checked: at most MAX characters, line breaks allowed), Capped (checked: capped list with exact total), Change, Timestamp, Clock (the injected wall clock: now; SystemClock reads the OS clock), TimeWindow (a WireRequest), ByteRange, Blake3 (of, hex), hex and from_hex (raw bytes), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
 ├── wire/                  the JSON wire contract: conventions, requests and authority
 │   ├── mod.rs             conventions, WireRequest, decode_request, DecodeError, DecodeErrorKind, Rejected (checked constructors' refusals as decode errors)
 │   ├── time.rs            Timestamp as RFC 3339 UTC at microsecond precision (rfc3339, parse_rfc3339), InvalidTimestamp, TooLateForText, MAX
 │   ├── duration.rs        Duration as whole microseconds in a `<what>_micros` field (serde `with` module; micros, UnfitDuration)
-│   └── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
+│   ├── authority.rs       compile-time checks: Caller never serializes; server-stamped records are never WireRequests
+│   └── confidential.rs    compile-time checks: DeploymentSecret and KeyedHasher never serialize, clone or compare
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind; wire data but Dialect, Stability, EndpointKind (in process)
-│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store)
+│   ├── message.rs         Message (decoded only under its body's hash), MessageBody (role-shaped; serde in its encoding's shape), parts (Reasoning::Visible with its signature), MediaBlob (checked: hash of its bytes), CanonicalJson, PartRef; on the wire only PartRef, ToolCallId, ToolName (bodies stay in the blob store; their JSON appears only in a NormalizedExchange, in process)
 │   ├── message/
+│   │   ├── encoding.rs    the canonical encoding of a body (encode, decode: exactly the bytes encode writes, DecodeError) and its hash (hash, hash_bytes, message)
+│   │   ├── encoding/
+│   │   │   └── mirror.rs  the body's JSON shape (private serde mirrors) and MessageBody's serde through it
+│   │   ├── json.rs        JSON with exact numbers (Json, Number, JsonError, canonicalize): CanonicalJson's text, RFC 8785 but for numbers
+│   │   ├── json/          number.rs (exact decimals, ECMAScript layout), parse.rs (strict RFC 8259), write.rs (UTF-16 member order, JSON.stringify escapes)
 │   │   └── text.rs        Message::part_text (what a span location indexes), part_count, NoPartText, TOOL_RESULT_SEPARATOR
-│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ConnectionId (ULID text on the wire), ExchangeStage (in memory, no serde)
+│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, TokenUsage (checked: cache counts within input; TokenCounts), ConnectionId (ULID text on the wire), ExchangeStage (in memory, no serde)
 │   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest (checked, stamped: never a WireRequest)
 │   ├── agent/
 │   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases; decoding orders the entries and refuses a repeated claim)
@@ -92,7 +101,7 @@ spec/types/
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged; golden inside a full Envelope each
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
-│   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
+│   ├── l1_canonical.rs    Normalizer, NormalizedExchange (with its media; check, applied on decode: InvalidNormalizedExchange; serde for goldens, in process only), NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
@@ -144,8 +153,11 @@ spec/types/
 │           └── export.rs  POST /exports: content types, Content-Disposition file name
 └── tests/                 tests for the invariants checked at runtime, one module per subject
     ├── send.rs, send/     compile-time check that every async trait method's future is Send and every associated stream Send + 'static (Dummy, assert_send)
+    ├── encoding/          the message encoding and canonical JSON: pinned vectors, round trips, decode as encode's exact inverse, RFC 8785 vectors, exact numbers
+    ├── secrets.rs         keyed digests per version (BLAKE3's keyed vector), rotation overlaps, a secret never shown
+    ├── minting.rs         ULIDs: monotonic whatever the clock reads, distinct across generators, a function of clock and seed
     ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area; http/ the HTTP binding (TableClient: a QueryApi over the route table)
-    └── golden/            one file per wire shape, <area>/<name>.json; one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
+    └── golden/            one file per wire shape, <area>/<name>.json (encoding/vectors.json: the pinned message encodings); one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```
 
 ## Conventions
@@ -182,10 +194,18 @@ spec/types/
   unknown until content evidence arrives, so it lives in `Confirmed`.
 - **Ids never cross types.** Entity ids are ULIDs and content ids are BLAKE3
   digests, each its own newtype.
+- **Primitives every layer shares live here.** Layer crates cannot depend
+  on each other, so what several layers must compute identically is in the
+  spec: a message's canonical encoding, its hash and its strict decoder
+  (`observed/message/encoding.rs`, over the exact-number canonical JSON of
+  `observed/message/json.rs`), the keyed hasher behind secret digests and
+  the deployment secret it alone reads (`ids/secret.rs`), and the ULID
+  generator (`ids/mint.rs`). Each is pure, or takes its clock and
+  randomness as arguments. See `docs/features/spec_primitives.md`.
 - **The types are the wire format.** The only dependencies are `serde`
   and `serde_json`, pinned exactly (the UI's pins, declared once in the
   workspace's `[workspace.dependencies]`; the root `Cargo.lock` is
-  committed). Structs are objects with snake_case keys; enums with data
+  committed), and `blake3` for the digests above. Structs are objects with snake_case keys; enums with data
   are adjacently tagged (`{"type": "snake_case", "data": ..}`) and
   all-unit enums are snake_case strings; entity ids are ULID text, digests
   lower-case hex, timestamps RFC 3339 UTC at microsecond precision,

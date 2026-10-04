@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.usage.cache-writes-reported"
+statement = "When a protocol reports the prompt tokens written to the cache, the exchange's TokenUsage has them as cache_write and also counts them in input."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Anthropic bills cache writes above plain input, and an operator reading
+usage needs to tell a prompt that was cached from one that was merely
+long. Before cache_write existed the writes were folded into input with no
+trace. They stay in input, so input keeps one meaning across protocols
+(every prompt token, as OpenAI counts it), and cache_write says how much of
+it was written; None means the protocol does not report writes, not zero.
+The corpus cases pin cache reads, cache writes and neither.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::corpus_usage_maps_cache_tokens"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

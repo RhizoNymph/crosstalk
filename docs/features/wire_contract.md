@@ -54,10 +54,17 @@ travel, what decoding checks, its goldens) is a page under
   export digest's canonical row encoding and Parquet pages are defined
   with their types.
 - Types no wire root reaches keep no serde impls: traits, in-process
-  values (the proxy hot path, the message bodies the blob store holds,
-  readers' copies and drafts), store errors that map into `QueryError`,
-  config, and `Projection`, whose frame is binary. Each area page lists
-  its own.
+  values (the proxy hot path, readers' copies and drafts), store errors
+  that map into `QueryError`, config, and `Projection`, whose frame is
+  binary. Each area page lists its own. Two exceptions follow the
+  conventions without being wire values: a message body's serde is its
+  canonical encoding's shape (the blob store holds that shape's canonical
+  JSON, defined by `observed::message::encoding`, see
+  [spec_primitives.md](spec_primitives.md)), and `NormalizedExchange`
+  (L1 to its capture task, in process) has serde so normalizer goldens
+  pin one shape ([observed.md](wire/observed.md)).
+- Secrets: `DeploymentSecret` and `KeyedHasher` never serialize
+  (`wire/confidential.rs`).
 - Schema evolution beyond "change the golden and upgrade every node
   together": there is no versioned envelope and no tolerant reader.
 
@@ -90,6 +97,7 @@ node A ── NATS: Envelope JSON ──▶ node B: serde_json::from_slice::<Env
 | enum whose variants are all unit | snake_case string, `"acknowledged"` |
 | entity id (`AgentId`, `AlertId`, …) | 26 upper-case Crockford base32 characters, `"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"` (`ulid_text`, `from_ulid_text`) |
 | content id (`MessageHash`, `PromptHash`, `ConfigHash`), `Blake3` | 64 lower-case hex digits |
+| raw bytes (`MediaBlob`'s `bytes`) | lower-case hex, two digits per byte (`support::hex`, `from_hex`) |
 | secret digest (`CredentialHash`, `AccountHash`) | `{"key": <secret version>, "digest": "<hex>"}` |
 | `Timestamp` | RFC 3339 UTC at fixed microsecond precision, `"2026-10-04T12:34:56.789012Z"` |
 | `std::time::Duration` | whole microseconds, a number, in a field named `<what>_micros`: `"lag_micros": 30250000` ([flow](wire/flow.md#durations)) |
@@ -415,13 +423,14 @@ is in its golden.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `spec/Cargo.toml`, `Cargo.toml`, `Cargo.lock` | `serde = "=1.0.229"` (derive) and `serde_json = "=1.0.151"`, the UI's pins, declared in the root `[workspace.dependencies]`; the workspace lockfile resolves to the UI's versions | — |
+| `spec/Cargo.toml`, `Cargo.toml`, `Cargo.lock` | `serde = "=1.0.229"` (derive) and `serde_json = "=1.0.151"`, the UI's pins, declared in the root `[workspace.dependencies]`; the workspace lockfile resolves to the UI's versions. `blake3` is the spec's third dependency, for digests, not for the wire | — |
 | `spec/types/wire/mod.rs` | The conventions (and the three leniencies), the request marker and decoder, the refusal wrapper, the text decoder, the negative trait assertion macro | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `decode_text` (crate), `assert_not_impl!` (module) |
 | `spec/types/wire/time.rs` | `Timestamp`'s RFC 3339 text and its serde impls | `Timestamp::rfc3339`, `Timestamp::parse_rfc3339`, `InvalidTimestamp`, `TimestampField`, `TooLateForText`, `MAX`, `MAX_TEXT`, `TEXT_LEN` |
 | `spec/types/wire/duration.rs` | Durations as whole microseconds in `_micros` fields | `micros`, `UnfitDuration` |
 | `spec/types/wire/authority.rs` | The authority rules: one table of every authority and stamped type, one `assert_not_impl!` per type, and the `compile_fail` doctests | — |
+| `spec/types/wire/confidential.rs` | `DeploymentSecret` and `KeyedHasher` implement no `Serialize`, `Deserialize`, `Clone` or `PartialEq` (`assert_not_impl!`, `compile_fail` doctests) | — |
 | `spec/types/ids.rs` | Ids' text forms and serde impls; entity ids are requests; the ULID helpers `ConnectionId` reuses | `from_ulid_text`, `InvalidUlidText` |
-| `spec/types/support.rs` | The building blocks' wire forms | `Blake3::to_hex`, `Blake3::from_hex`, `InvalidHex`, `EmptyList`, `ShareOutOfRange`, `Finite`, `NotFinite`; `TimeWindow` is a request |
+| `spec/types/support.rs` | The building blocks' wire forms | `Blake3::to_hex`, `Blake3::from_hex`, `hex`, `from_hex`, `InvalidHex`, `EmptyList`, `ShareOutOfRange`, `Finite`, `NotFinite`; `TimeWindow` is a request |
 | `spec/types/paging.rs` | Page sizes, cursors, page requests (requests) and pages (checked when decoded) | `InvalidPage` |
 | `spec/types/batch.rs` | `IdBatch` as an array, decoded through `IdBatch::new`; a request | — |
 | `spec/types/aggregates/alert/mod.rs` | `Alert`, `AlertState`, `AlertSubject`, `SuppressReason` (the reference area's alert inbox); rules are in `alert/rules.rs` ([analysis](wire/analysis.md)) | — |
@@ -435,7 +444,7 @@ is in its golden.
 | `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
 | `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
-| `spec/types/tests/golden/<area>/` | 375 goldens: 374 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`) | — |
+| `spec/types/tests/golden/<area>/` | 377 goldens: 376 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`); plus `encoding/vectors.json`, the pinned message encodings ([spec_primitives.md](spec_primitives.md)) | — |
 
 ## Invariants and constraints
 
@@ -472,7 +481,8 @@ is in its golden.
 - A bus event's inner tag is its subject (`transport.wire.event-tag-is-subject`).
 - `None` is always written as `null`; no field is skipped when empty, so
   every shape is fixed.
-- The spec's only dependencies are `serde` and `serde_json`, pinned
-  exactly; no other crate is added for the wire.
+- The spec's only wire dependencies are `serde` and `serde_json`, pinned
+  exactly; no other crate is added for the wire (`blake3` computes
+  digests).
 
 The areas' own invariants are listed on their pages.

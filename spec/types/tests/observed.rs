@@ -122,3 +122,61 @@ fn secret_digests_remember_their_key_version() {
     assert_eq!(old.key(), SecretVersion(1));
     assert_ne!(old, new);
 }
+
+/// `canonical.usage.cache-within-input`: the cache counts are parts of the
+/// prompt and reasoning a part of the output, so no usage claims more
+/// cached or reasoning tokens than its whole.
+#[test]
+fn token_usage_keeps_its_parts_within_their_wholes() {
+    use crate::observed::exchange::{InvalidTokenUsage, TokenCounts, TokenUsage};
+
+    let counts = TokenCounts {
+        input: 3826,
+        output: 96,
+        cache_read: 3810,
+        cache_write: Some(16),
+        reasoning: Some(40),
+    };
+    let usage = TokenUsage::new(counts).unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(usage.counts(), counts);
+    assert_eq!(usage.uncached_input(), 0);
+    let unreported = TokenUsage::new(TokenCounts {
+        cache_write: None,
+        ..counts
+    })
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(unreported.uncached_input(), 16);
+    assert_eq!(
+        TokenUsage::new(TokenCounts {
+            cache_write: Some(17),
+            ..counts
+        }),
+        Err(InvalidTokenUsage::CachedBeyondInput {
+            input: 3826,
+            cached: 3827
+        })
+    );
+    // The sum is taken wide: two near-maximal counts do not wrap.
+    assert_eq!(
+        TokenUsage::new(TokenCounts {
+            input: u32::MAX,
+            cache_read: u32::MAX,
+            cache_write: Some(u32::MAX),
+            ..counts
+        }),
+        Err(InvalidTokenUsage::CachedBeyondInput {
+            input: u32::MAX,
+            cached: 2 * u64::from(u32::MAX)
+        })
+    );
+    assert_eq!(
+        TokenUsage::new(TokenCounts {
+            reasoning: Some(97),
+            ..counts
+        }),
+        Err(InvalidTokenUsage::ReasoningBeyondOutput {
+            output: 96,
+            reasoning: 97
+        })
+    );
+}

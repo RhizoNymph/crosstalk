@@ -11,14 +11,14 @@ workspace = true
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
 base64.workspace = true
-blake3.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 crosstalk-testkit = { path = "../testkit" }
 crosstalk-transport = { path = "../transport" }
+blake3.workspace = true
 proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }

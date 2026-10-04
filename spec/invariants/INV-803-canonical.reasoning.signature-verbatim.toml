@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.reasoning.signature-verbatim"
+statement = "A visible reasoning block's non-empty signature is carried into Reasoning::Visible byte for byte, and an empty or missing one is None."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The provider signs thinking blocks and refuses an echoed one whose
+signature changed, so the harness echoes it byte for byte. Keeping it
+verbatim keeps the response and its echo hashing alike
+(canonical.normalize.echo-stable) while the body still round-trips through
+the blob store with every field. A stream cut before its signature_delta,
+or a dialect without signatures, leaves an empty one; mapping that to None
+gives one body for "no signature" whichever way it was spelled.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::thinking_signatures_echo_like_their_responses"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

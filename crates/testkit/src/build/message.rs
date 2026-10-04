@@ -1,32 +1,22 @@
 //! Canonical messages and their content hashes.
 //!
-//! [`content_hash`] stands in for the normalizer's BLAKE3 over the canonical
-//! encoding (which L1 owns): it is a deterministic digest of the body, so
-//! equal bodies always hash equal and different bodies differ, which is what
-//! reconstruction and provenance tests rely on. It is not the production
-//! hash and never needs to match it.
+//! [`content_hash`] is the production message hash, the BLAKE3 of the
+//! body's canonical encoding (the spec's
+//! `crosstalk_spec::observed::message::encoding`), so equal bodies always
+//! hash equal, different bodies differ, and a built `NormalizedExchange`
+//! passes its own check.
 
 use crosstalk_spec::ids::MessageHash;
+use crosstalk_spec::observed::message::encoding;
 use crosstalk_spec::observed::message::{
     AssistantPart, CanonicalJson, Message, MessageBody, SystemPart, Text, ToolArguments, ToolCall,
     ToolCallId, ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent, UserPart,
 };
-use crosstalk_spec::support::{Blake3, NonEmpty};
+use crosstalk_spec::support::NonEmpty;
 
-use crate::ids::{expand, splitmix64};
-
-/// A digest of `body`'s content: FNV-1a over its debug rendering, mixed out
-/// to 32 bytes. Equal bodies give equal hashes.
+/// The hash of `body`: the BLAKE3 of its canonical encoding.
 pub fn content_hash(body: &MessageBody) -> MessageHash {
-    let rendered = format!("{body:?}");
-    let mut low: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut high: u64 = 0x8422_2325_cbf2_9ce4;
-    for byte in rendered.bytes() {
-        low = (low ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        high = splitmix64(high ^ u64::from(byte));
-    }
-    let raw = (u128::from(high) << 64) | u128::from(low);
-    MessageHash::from_digest(Blake3::from_bytes(expand(raw)))
+    encoding::hash(body)
 }
 
 /// `body` with its [`content_hash`].

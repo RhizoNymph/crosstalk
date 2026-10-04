@@ -1,119 +1,120 @@
 {
   "exchange": {
-    "continuation": {
-      "type": "full_history"
-    },
     "meta": {
+      "id": "01M3TC5H00000001R000000003",
+      "protocol": "anthropic_messages",
+      "transport": "http",
+      "model": "claude-opus-5-5",
       "client": {
-        "account": null,
-        "class": "main",
-        "credential": {
-          "hash": {
-            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff",
-            "key": 1
-          },
-          "scheme": "api_key"
-        },
-        "harness": {
-          "family": "claude_code",
-          "user_agent": "claude-cli/2.1.282 (external, cli)",
-          "version": "2.1.282"
-        },
-        "ids": {
-          "agent": null,
-          "parent_agent": null,
-          "session": "01m3tc5h00000001r000000001"
-        },
         "ingress": {
+          "type": "reverse_proxy",
           "data": {
             "route": "anthropic"
-          },
-          "type": "reverse_proxy"
+          }
         },
-        "previous_digests": null,
         "upstream": {
           "id": "anthropic",
           "kind": {
+            "type": "vendor_api",
             "data": {
               "type": "anthropic"
-            },
-            "type": "vendor_api"
+            }
           }
-        }
+        },
+        "credential": {
+          "scheme": "api_key",
+          "hash": {
+            "key": 1,
+            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff"
+          }
+        },
+        "account": null,
+        "previous_digests": null,
+        "harness": {
+          "family": "claude_code",
+          "version": "2.1.282",
+          "user_agent": "claude-cli/2.1.282 (external, cli)"
+        },
+        "ids": {
+          "session": "01m3tc5h00000001r000000001",
+          "agent": null,
+          "parent_agent": null
+        },
+        "class": "main"
       },
-      "id": "01M3TC5H00000001R000000003",
-      "model": "claude-opus-5-5",
-      "protocol": "anthropic_messages",
-      "started_at": "2026-10-01T00:00:00.000000Z",
-      "transport": "http"
+      "started_at": "2026-10-01T00:00:00.000000Z"
     },
-    "outcome": {
-      "data": {
-        "finished_at": "2026-10-01T00:00:03.000000Z",
-        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
-        "response": "4706994f13d02261cfea5a23ccdb97a329579531fcf2a469070391ff8333a586",
-        "response_id": "msg_01Nd2t64YO0wwqhCbV3ZqiNr",
-        "stop": "end_turn",
-        "usage": {
-          "cache_read": 3810,
-          "input": 3824,
-          "output": 19,
-          "reasoning": null
-        }
-      },
-      "type": "completed"
+    "continuation": {
+      "type": "full_history"
     },
     "request": [
       "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
       "3012e027f46536f583de9b7ec73b4a7f90833832bdae4b7396d9596747cc7d33"
-    ]
+    ],
+    "outcome": {
+      "type": "completed",
+      "data": {
+        "response": "4706994f13d02261cfea5a23ccdb97a329579531fcf2a469070391ff8333a586",
+        "response_id": "msg_01Nd2t64YO0wwqhCbV3ZqiNr",
+        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
+        "finished_at": "2026-10-01T00:00:03.000000Z",
+        "stop": "end_turn",
+        "usage": {
+          "input": 3824,
+          "output": 19,
+          "cache_read": 3810,
+          "cache_write": 0,
+          "reasoning": null
+        }
+      }
+    }
   },
-  "media": [],
   "messages": [
     {
+      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
       "body": {
+        "type": "system",
         "data": [
           {
-            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;",
-            "type": "text"
+            "type": "text",
+            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;"
           },
           {
-            "data": "You are Claude Code, Anthropic's official CLI for Claude.",
-            "type": "text"
+            "type": "text",
+            "data": "You are Claude Code, Anthropic's official CLI for Claude."
           },
           {
-            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>",
-            "type": "text"
+            "type": "text",
+            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>"
           }
-        ],
-        "type": "system"
-      },
-      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105"
+        ]
+      }
     },
     {
+      "hash": "3012e027f46536f583de9b7ec73b4a7f90833832bdae4b7396d9596747cc7d33",
       "body": {
+        "type": "user",
         "data": [
           {
-            "data": "Reply with one sentence: what is a monorepo?",
-            "type": "text"
+            "type": "text",
+            "data": "Reply with one sentence: what is a monorepo?"
           }
-        ],
-        "type": "user"
-      },
-      "hash": "3012e027f46536f583de9b7ec73b4a7f90833832bdae4b7396d9596747cc7d33"
+        ]
+      }
     },
     {
+      "hash": "4706994f13d02261cfea5a23ccdb97a329579531fcf2a469070391ff8333a586",
       "body": {
+        "type": "assistant",
         "data": [
           {
-            "data": "A monorepo is a single repository that holds the code of many related projects.",
-            "type": "text"
+            "type": "text",
+            "data": "A monorepo is a single repository that holds the code of many related projects."
           }
-        ],
-        "type": "assistant"
-      },
-      "hash": "4706994f13d02261cfea5a23ccdb97a329579531fcf2a469070391ff8333a586"
+        ]
+      }
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "media": []
 }

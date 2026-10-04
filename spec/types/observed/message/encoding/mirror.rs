@@ -1,18 +1,28 @@
 //! The JSON shape of a message body: private serde mirrors of the spec's
 //! message types, in the wire contract's conventions (snake_case keys,
-//! adjacently tagged enums, all-unit enums as strings, strict decoding).
+//! adjacently tagged enums, all-unit enums as strings, every option
+//! written, strict decoding).
 //!
 //! `Text` is its string, `CanonicalJson` its text as a JSON string (so its
 //! numbers stay exact), `MessageHash` its lower-case hex.
+//!
+//! [`MessageBody`]'s `Serialize` and `Deserialize` go through the mirror,
+//! so its serde form is the shape [`super::encode`] writes canonically;
+//! decoding refuses what no body holds (a tool message without results,
+//! canonical JSON that is not canonical) as [`super::DecodeError`]s.
 
-use crosstalk_spec::ids::MessageHash;
-use crosstalk_spec::observed::message::{
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::super::json;
+use super::super::{
     AssistantPart, CanonicalJson, Media, MediaKind, MessageBody, Reasoning, SystemPart, Text,
     ToolArguments, ToolCall, ToolCallId, ToolExecution, ToolName, ToolOutcome, ToolResult,
     ToolResultContent, Unknown, UserPart,
 };
-use crosstalk_spec::support::NonEmpty;
-use serde::{Deserialize, Serialize};
+use crate::ids::MessageHash;
+use crate::support::NonEmpty;
+use crate::wire::Rejected;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(
@@ -83,8 +93,13 @@ pub(super) struct UnknownItem {
     deny_unknown_fields
 )]
 pub(super) enum ReasoningItem {
-    Visible(String),
-    Opaque { signature: String },
+    Visible {
+        text: String,
+        signature: Option<String>,
+    },
+    Opaque {
+        signature: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -207,8 +222,11 @@ impl From<&AssistantPart> for AssistantItem {
     fn from(part: &AssistantPart) -> Self {
         match part {
             AssistantPart::Text(text) => Self::Text(text.0.clone()),
-            AssistantPart::Reasoning(Reasoning::Visible(text)) => {
-                Self::Reasoning(ReasoningItem::Visible(text.0.clone()))
+            AssistantPart::Reasoning(Reasoning::Visible { text, signature }) => {
+                Self::Reasoning(ReasoningItem::Visible {
+                    text: text.0.clone(),
+                    signature: signature.clone(),
+                })
             }
             AssistantPart::Reasoning(Reasoning::Opaque { signature }) => {
                 Self::Reasoning(ReasoningItem::Opaque {
@@ -284,7 +302,7 @@ impl From<&ToolResult> for ResultItem {
 
 /// `text` as canonical JSON, when it already is canonical JSON.
 fn canonical(text: String) -> Result<CanonicalJson, Invalid> {
-    match crate::json::canonicalize(&text) {
+    match json::canonicalize(&text) {
         Ok(canonical) if canonical.0 == text => Ok(canonical),
         _ => Err(Invalid::NonCanonicalJson),
     }
@@ -343,8 +361,11 @@ impl TryFrom<AssistantItem> for AssistantPart {
     fn try_from(item: AssistantItem) -> Result<Self, Invalid> {
         Ok(match item {
             AssistantItem::Text(text) => Self::Text(Text(text)),
-            AssistantItem::Reasoning(ReasoningItem::Visible(text)) => {
-                Self::Reasoning(Reasoning::Visible(Text(text)))
+            AssistantItem::Reasoning(ReasoningItem::Visible { text, signature }) => {
+                Self::Reasoning(Reasoning::Visible {
+                    text: Text(text),
+                    signature,
+                })
             }
             AssistantItem::Reasoning(ReasoningItem::Opaque { signature }) => {
                 Self::Reasoning(Reasoning::Opaque { signature })
@@ -422,6 +443,33 @@ impl TryFrom<ResultItem> for ToolResult {
                 OutcomeItem::Success => ToolOutcome::Success,
                 OutcomeItem::Error => ToolOutcome::Error,
             },
+        })
+    }
+}
+
+impl From<Invalid> for super::DecodeError {
+    fn from(invalid: Invalid) -> Self {
+        match invalid {
+            Invalid::EmptyTool => Self::EmptyTool,
+            Invalid::NonCanonicalJson => Self::NonCanonicalJson,
+        }
+    }
+}
+
+impl Serialize for MessageBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Body::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageBody {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let body = Body::deserialize(deserializer)?;
+        Self::try_from(body).map_err(|invalid| {
+            D::Error::custom(Rejected::new(
+                "message body",
+                super::DecodeError::from(invalid),
+            ))
         })
     }
 }

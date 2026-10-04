@@ -1,6 +1,6 @@
 //! JSON with exact numbers, and its canonical text.
 //!
-//! The spec's [`CanonicalJson`] is RFC 8785 text except that numbers keep
+//! [`CanonicalJson`] is RFC 8785 text except that numbers keep
 //! their exact decimal value instead of going through an IEEE double, so an
 //! integer id beyond 2^53 in a tool's arguments keeps every digit
 //! (`canonical.json.rfc8785-form`, `canonical.json.large-integers-exact`).
@@ -14,7 +14,7 @@ mod number;
 mod parse;
 mod write;
 
-use crosstalk_spec::observed::message::CanonicalJson;
+use super::CanonicalJson;
 
 pub use number::{MAX_EXPONENT_DIGITS, Number};
 pub use parse::{JsonError, MAX_DEPTH};

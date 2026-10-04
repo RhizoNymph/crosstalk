@@ -12,7 +12,7 @@ Every type below is a response or bus payload; none is a `WireRequest`
 (no client sends observed facts).
 
 - `observed/exchange.rs`: `Exchange`, `ExchangeMeta`, `Continuation`,
-  `ExchangeOutcome`, `ExchangeFailure`, `TokenUsage`, `ConnectionId`,
+  `ExchangeOutcome`, `ExchangeFailure`, `TokenUsage` (checked), `ConnectionId`,
   `ResponseId`, `ModelName` and the string enums `WireProtocol`,
   `Transport`, `StopReason`.
 - `observed/client.rs`: `ClientContext` and everything it holds
@@ -26,7 +26,14 @@ Every type below is a response or bus payload; none is a `WireRequest`
   `MergeRequest`, `MergeRecord`, `MergeVeto`, `ClaimSet`. `MergeRequest`,
   `MergeAuthor`, `MergeRecord`, `Reversal` and `MergeVeto` are stamped
   (`wire/authority.rs`).
-- `observed/message.rs`: only `PartRef`, `ToolCallId` and `ToolName`.
+- `observed/message.rs`: on the wire only `PartRef`, `ToolCallId` and
+  `ToolName`. `Message`, `MessageBody` and `MediaBlob` have serde in the
+  same conventions for `NormalizedExchange` (below) and the encoding, not
+  as wire values.
+- `interfaces/l1_canonical.rs`: `NormalizedExchange` and
+  `NormalizeWarning`, in process only (normalizer to capture task); their
+  serde pins the normalizers' goldens (`normalized_exchange_*.json` here,
+  and `crates/canonical/tests/golden/`).
 - `derived/provenance/span.rs`: `SpanLocation`, `RelaySource`.
 - `derived/provenance/matching.rs`: `ContentMatch` (checked), `Carrier`,
   `MatchKind`, `Codec`.
@@ -37,8 +44,9 @@ Every type below is a response or bus payload; none is a `WireRequest`
 In process only, with no serde: `ExchangeStage`; `Dialect`, `Stability`
 and `EndpointKind` (derived in process); `MergeConflict`,
 `AlreadyReverted`, `InvalidReversal`, `InvalidMergeTransition`,
-`RenameMerged` and `Strength`; the message bodies (they live in the blob
-store and never travel as JSON); `Span`, `SpanState`, `Origin`,
+`RenameMerged` and `Strength`; the message bodies as wire values (they
+live in the blob store as their canonical encoding, and their JSON appears
+only inside a `NormalizedExchange`); `Span`, `SpanState`, `Origin`,
 `SpanEvent` and `OriginatedSpan`; and everything in
 `interfaces/l3_reconstruction*.rs` (its traits, `Resolution`,
 `ThreadOutcome`, `ResolveError` and `AgentReadError`; `ResolveError`
@@ -85,6 +93,31 @@ with each payload; a rename is pinned with a label and cleared. The golden
 names come from an exhaustive match, so a new variant does not compile
 until it has a golden.
 
+## Token usage
+
+`TokenUsage` is checked: its fields are private, `TokenUsage::new` takes
+`TokenCounts` (the same fields, public) and refuses cache counts beyond
+`input` or reasoning beyond `output` (`InvalidTokenUsage`), and decoding
+goes through it. On the wire `{"input", "output", "cache_read",
+"cache_write", "reasoning"}`: `input` is every prompt token, `cache_read`
+and `cache_write` the parts of it read from and written to the prompt
+cache (`cache_write` is `null` when the protocol does not report writes),
+`reasoning` the part of `output` spent reasoning
+(`canonical.usage.cache-within-input`).
+
+## The normalized exchange
+
+`{"exchange": <Exchange>, "messages": [{"hash", "body"}], "warnings":
+[{"type": "unknown_block" | "orphan_tool_result", "data": ..}], "media":
+[{"hash", "bytes"}]}`. A body is its canonical encoding's shape (adjacently
+tagged parts, canonical JSON inside as strings; see
+[spec_primitives](../spec_primitives.md)); a media blob's bytes are
+lower-case hex. Decoding checks what `NormalizedExchange::check` checks:
+each message's hash is its body's, each blob's hash its bytes', messages
+are distinct and exactly the ones the exchange names, and media is in
+ascending hash order, once each, exactly the blobs the `Media` parts name
+(`canonical.normalized.decode-checked`).
+
 ## Renamed for the wire
 
 `CredentialScheme::OAuthAccessToken` became `OauthAccessToken` (the Rust
@@ -98,15 +131,20 @@ names still encode as `open_ai…`.
 | --- | --- |
 | `spec/types/observed/exchange.rs` | `ConnectionId`'s hand-written ULID-text serde |
 | `spec/types/observed/agent/merge.rs` | `MergeRecord` decoded through `MergeRequest::new`, `new` and `revert`; `InvalidMergeRecord`, `InvalidReversal` |
-| `spec/types/tests/wire/observed/{mod,exchange,identity,ingest}.rs` | Goldens and rejections for exchanges and client context, identity and the merge log, and ingest events in envelopes |
+| `spec/types/observed/exchange.rs` | `TokenUsage` decoded through `TokenUsage::new` (`TokenCounts`, `InvalidTokenUsage`) |
+| `spec/types/observed/message.rs` | `Message` decoded under its body's hash (`MessageHashMismatch`); `MediaBlob` (`InvalidMediaBlob`) |
+| `spec/types/observed/message/encoding/mirror.rs` | `MessageBody`'s serde through the encoding's mirror |
+| `spec/types/interfaces/l1_canonical.rs` | `NormalizedExchange` decoded through `check` (`InvalidNormalizedExchange`) |
+| `spec/types/tests/wire/observed/{mod,exchange,identity,ingest,normalized}.rs` | Goldens and rejections for exchanges and client context, identity and the merge log, ingest events in envelopes, and normalized exchanges |
 | `spec/types/tests/wire/provenance.rs` | Goldens and rejections for span locations, relay sources and content matches |
-| `spec/types/tests/golden/observed/`, `golden/provenance/` | 40 and 7 goldens |
+| `spec/types/tests/golden/observed/`, `golden/provenance/` | 42 and 7 goldens |
 
 ## Invariants
 
 `reconstruct.merge-record.revert-once`,
 `reconstruct.merge-record.reversal-within-merge`,
 `reconstruct.merge-veto.distinct-pair` and
-`reconstruct.claims.distinct-ordered` take the area's decode tests as
+`reconstruct.claims.distinct-ordered`, `canonical.usage.cache-within-input`
+and `canonical.normalized.decode-checked` take the area's decode tests as
 evidence, as do the general wire invariants (including
 `canonical.wire.id-encoding` for `ConnectionId`).

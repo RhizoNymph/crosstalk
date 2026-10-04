@@ -4,7 +4,6 @@
 //! one value.
 
 pub mod anthropic;
-pub mod body;
 pub mod json;
 
 /// Rendering choices (whitespace, member order, escapes, delta splits,

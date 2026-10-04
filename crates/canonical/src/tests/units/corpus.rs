@@ -4,12 +4,16 @@ use std::collections::BTreeMap;
 
 use crosstalk_spec::interfaces::l0_ingress::RawResponse;
 use crosstalk_spec::observed::exchange::{ExchangeOutcome, Transport};
-use crosstalk_spec::observed::message::{AssistantPart, Reasoning, ToolExecution};
+use crosstalk_spec::observed::message::{
+    AssistantPart, MessageBody, Reasoning, Text, ToolExecution,
+};
 use crosstalk_testkit::corpus::{BlockKind, Case, Endpoint, Expect};
 use serde_json::{Value, json};
 
 use crate::tests::golden::assert_normalization_golden;
-use crate::tests::support::{case, corpus, normalize, raw_bytes, response, response_parts};
+use crate::tests::support::{
+    case, corpus, normalize, ok, raw, raw_bytes, response, response_parts,
+};
 
 /// Every captured case normalizes to its golden.
 pub fn corpus_cases_match_goldens() {
@@ -23,7 +27,7 @@ pub fn corpus_cases_match_goldens() {
 fn block_kind(part: &AssistantPart) -> Option<BlockKind> {
     match part {
         AssistantPart::Text(_) => Some(BlockKind::Text),
-        AssistantPart::Reasoning(Reasoning::Visible(_)) => Some(BlockKind::Thinking),
+        AssistantPart::Reasoning(Reasoning::Visible { .. }) => Some(BlockKind::Thinking),
         AssistantPart::Reasoning(Reasoning::Opaque { .. }) => Some(BlockKind::RedactedThinking),
         AssistantPart::ToolCall(call) if call.execution == ToolExecution::Client => {
             Some(BlockKind::ToolUse)
@@ -42,7 +46,7 @@ pub fn corpus_cases_meet_their_expectations() {
             continue;
         };
         let normalization = normalize(&raw);
-        let exchange = &normalization.exchange;
+        let exchange = &normalization;
         assert!(
             exchange.warnings.is_empty(),
             "{}: {:?}",
@@ -94,24 +98,30 @@ pub fn corpus_cases_meet_their_expectations() {
 }
 
 /// The token usage the corpus's cache cases map to: every prompt token in
-/// `input`, cache reads in `cache_read`.
+/// `input`, cache reads in `cache_read`, cache writes in `cache_write`.
 pub fn corpus_usage_maps_cache_tokens() {
-    for (name, input, cache_read, output) in [
-        ("system_cache_control", 6 + 3816, 0, 7),
-        ("tool_use_streaming", 9 + 3810, 3810, 61),
-        ("text_turn", 14 + 3810, 3810, 19),
+    for (name, input, cache_read, cache_write, output) in [
+        ("system_cache_control", 6 + 3816, 0, 3816, 7),
+        ("tool_use_streaming", 9 + 3810, 3810, 0, 61),
+        ("text_turn", 14 + 3810, 3810, 0, 19),
     ] {
         let (_, raw) = case(name);
-        let ExchangeOutcome::Completed { usage, .. } = normalize(&raw).exchange.exchange.outcome
-        else {
+        let ExchangeOutcome::Completed { usage, .. } = normalize(&raw).exchange.outcome else {
             panic!("{name} completes");
         };
         let usage = usage.unwrap_or_else(|| panic!("{name}: usage"));
         assert_eq!(
-            (usage.input, usage.cache_read, usage.output, usage.reasoning),
-            (input, cache_read, output, None),
+            (
+                usage.input(),
+                usage.cache_read(),
+                usage.cache_write(),
+                usage.output(),
+                usage.reasoning()
+            ),
+            (input, cache_read, Some(cache_write), output, None),
             "{name}"
         );
+        assert_eq!(usage.uncached_input(), input - cache_read - cache_write);
     }
 }
 
@@ -242,16 +252,12 @@ pub fn recorded_transports_normalize_equal() {
         );
         let (one, two) = (normalize(&raw), normalize(&other));
         assert_eq!(
-            response(&one.exchange).map(|message| message.hash),
-            response(&two.exchange).map(|message| message.hash),
+            response(&one).map(|message| message.hash),
+            response(&two).map(|message| message.hash),
             "{}",
             case.name
         );
-        assert_eq!(
-            one.exchange.exchange.outcome, two.exchange.exchange.outcome,
-            "{}",
-            case.name
-        );
+        assert_eq!(one.exchange.outcome, two.exchange.outcome, "{}", case.name);
         compared += 1;
     }
     assert!(compared >= 8, "both directions are covered");
@@ -262,14 +268,90 @@ pub fn recorded_transports_normalize_equal() {
 pub fn recorded_echoes_hash_like_their_responses() {
     let (_, first) = case("tool_use_streaming");
     let (_, followup) = case("tool_result_followup");
-    let response = match normalize(&first).exchange.exchange.outcome {
+    let response = match normalize(&first).exchange.outcome {
         ExchangeOutcome::Completed { response, .. } => response,
         other => panic!("completed: {other:?}"),
     };
-    let request = normalize(&followup).exchange.exchange.request;
+    let request = normalize(&followup).exchange.request;
     assert_eq!(
         request.get(2),
         Some(&response),
         "system, user, then the echo"
     );
+}
+
+/// A thinking block keeps its signature (joined from its
+/// `signature_delta`s), and the harness's echo of the response, which
+/// carries the signature unchanged, hashes like the response; an echo with
+/// another signature is another message; an empty or missing signature is
+/// none.
+pub fn thinking_signatures_kept_and_echoed_alike() {
+    let (_, streamed) = case("thinking_streaming");
+    let normalization = normalize(&streamed);
+    let parts = response_parts(&normalization);
+    let [
+        AssistantPart::Reasoning(Reasoning::Visible {
+            text: thinking,
+            signature: Some(signature),
+        }),
+        AssistantPart::Text(answer),
+    ] = parts.as_slice()
+    else {
+        panic!("signed thinking, then text: {parts:?}");
+    };
+    assert_eq!(
+        signature,
+        "EqNrZpUTd52EaHrgdvgOqGkUPnUywNXrBhd6Pd1kulGivZU3jsDLyA4UeVtlBS8PBLYleZAjD95Wjlv9yQuUExpW==",
+        "the signature_delta, verbatim"
+    );
+    let ExchangeOutcome::Completed { response, .. } = normalization.exchange.outcome else {
+        panic!("completed");
+    };
+    let echo = |signature: &str| {
+        let request = json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [
+                    {"signature": signature, "thinking": thinking.0, "type": "thinking"},
+                    {"cache_control": {"type": "ephemeral"}, "text": answer.0, "type": "text"},
+                ]},
+                {"role": "user", "content": "go on"},
+            ],
+        });
+        let raw = raw(&request.to_string(), Transport::Http, ok("{}"));
+        normalize(&raw).exchange.request
+    };
+    assert_eq!(
+        echo(signature).get(1),
+        Some(&response),
+        "the echo hashes alike"
+    );
+    assert_ne!(
+        echo("EqOther==").get(1),
+        Some(&response),
+        "the signature is part of the message"
+    );
+    // An empty signature and none at all are the same: no signature.
+    for block in [
+        json!({"type": "thinking", "thinking": "hm", "signature": ""}),
+        json!({"type": "thinking", "thinking": "hm"}),
+    ] {
+        let request = json!({
+            "model": "m",
+            "messages": [{"role": "assistant", "content": [block]}],
+        });
+        let normalized = normalize(&raw(&request.to_string(), Transport::Http, ok("{}")));
+        let bodies = crate::tests::support::request_bodies(&normalized);
+        assert_eq!(
+            bodies,
+            vec![MessageBody::Assistant(vec![AssistantPart::Reasoning(
+                Reasoning::Visible {
+                    text: Text("hm".to_owned()),
+                    signature: None,
+                }
+            )])]
+        );
+    }
 }

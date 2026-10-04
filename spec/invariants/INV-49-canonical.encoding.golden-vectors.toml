@@ -17,7 +17,7 @@ any such change fail CI on every target.
 """
 
 [evidence]
-unit = "crosstalk_canonical::tests::golden_encodings_match_pinned_bytes"
+unit = "crosstalk_spec::tests::encoding::golden_encodings_match_pinned_bytes"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

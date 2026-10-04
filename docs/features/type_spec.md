@@ -51,10 +51,15 @@ The types follow data through the stack:
 2. **L1 canonicalization.** A `Normalizer` for the exchange's
    `WireProtocol`, handling its `Dialect`, turns a `RawExchange` into a
    `NormalizedExchange`: an `Exchange` that references messages by
-   `MessageHash`, plus the `Message`s and any `NormalizeWarning`s. Tool
+   `MessageHash`, plus the `Message`s, the `MediaBlob`s their `Media`
+   parts name and any `NormalizeWarning`s (checked by
+   `NormalizedExchange::check`). A message's hash is the BLAKE3 of its
+   body's canonical encoding (`observed::message::encoding`, over the
+   exact-number canonical JSON of `observed::message::json`), and every
+   layer that reads a stored body decodes it with the same module. Tool
    arguments are canonical JSON so echoed messages hash the same; unknown
-   blocks are kept as `Unknown` parts. Bodies go to the `BlobStore` first,
-   then `IngestEvent::ExchangeCaptured` is published.
+   blocks are kept as `Unknown` parts. Bodies and media go to the
+   `BlobStore` first, then `IngestEvent::ExchangeCaptured` is published.
 3. **L2 transport.** Every event is an `Envelope { id, at, BusEvent }`.
    Consumers subscribe by `Subject` within a `ConsumerGroup` and ack or
    nack each `Delivery`. Exhausted deliveries become `DeadLetter`s, which
@@ -310,15 +315,19 @@ The types follow data through the stack:
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run; a workspace member and the boundary crate every implementation crate depends on; its only dependencies are `serde` and `serde_json`, pinned exactly in the root `[workspace.dependencies]` (the root `Cargo.lock` is committed) | crate `crosstalk-spec` |
+| `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run; a workspace member and the boundary crate every implementation crate depends on; its only dependencies are `serde`, `serde_json` and `blake3` (message, media and keyed secret digests), pinned exactly in the root `[workspace.dependencies]` (the root `Cargo.lock` is committed); `proptest` is its one dev-dependency | crate `crosstalk-spec` |
 | `spec/types/wire/` | The JSON wire contract: conventions, `WireRequest`, `decode_request`, `Rejected`, timestamps' RFC 3339 text, the authority assertions ([wire_contract.md](wire_contract.md)) | `WireRequest`, `decode_request`, `DecodeError`, `DecodeErrorKind`, `Rejected`, `time`, `authority` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
-| `spec/types/ids.rs` | Typed ids, and their wire text | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) and `from_ulid_text`, `InvalidUlidText` |
-| `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `QueryText` (checked: trimmed, non-empty, at most `MAX` characters, line breaks allowed; `InvalidQueryText`), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `Clock` (the injected wall clock, `now`; `SystemClock` reads the OS clock; see [sim.md](sim.md)), `TimeWindow`, `ByteRange`, `Blake3` (`to_hex`, `from_hex`, `InvalidHex`), `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
+| `spec/types/ids.rs` | Typed ids, and their wire text | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) and `from_ulid_text`, `InvalidUlidText`; `EntityId` (every entity id and `ConnectionId`, for minting) |
+| `spec/types/ids/mint.rs` | The ULID generator ([spec_primitives.md](spec_primitives.md)) | `UlidGenerator` (`next_ulid`, `mint`), `RandomSource`, `SeededRandom` (`new`, `from_entropy`), `UlidExhausted`, `ulid_millis`, `MAX_ULID_MILLIS` |
+| `spec/types/ids/secret.rs` | The deployment secret and the keyed hasher ([spec_primitives.md](spec_primitives.md)) | `DeploymentSecret` (`new`, `from_hex`, `version`; `InvalidSecret`), `KeyedHasher` (`new`, `rotating`, `credential`, `account`; `InvalidRotation`), `SecretDigests` |
+| `spec/types/support.rs` | Shared building blocks, each with its wire form | `NonEmpty` (`EmptyList`), `NonBlank`, `DisplayText` (checked), `QueryText` (checked: trimmed, non-empty, at most `MAX` characters, line breaks allowed; `InvalidQueryText`), `Capped` (checked: at most `MAX` shown, exact total), `Change`, `Timestamp`, `Clock` (the injected wall clock, `now`; `SystemClock` reads the OS clock; see [sim.md](sim.md)), `TimeWindow`, `ByteRange`, `Blake3` (`of`, `to_hex`, `from_hex`, `InvalidHex`), `hex`, `from_hex`, `Similarity`, `Share` (`ShareOutOfRange`), `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
-| `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
+| `spec/types/observed/message.rs` | Canonical messages | `Message` (`new`; decoded only with its body's hash, `MessageHashMismatch`), `MessageBody` (serde in its encoding's shape), `Role`, `AssistantPart`, `UserPart`, `Reasoning` (`Visible { text, signature }`, `Opaque`), `Media`, `MediaBlob` (checked: hash of its bytes; `InvalidMediaBlob`), `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
+| `spec/types/observed/message/encoding.rs`, `encoding/mirror.rs` | The canonical encoding of a body and its hash ([spec_primitives.md](spec_primitives.md)) | `encode`, `decode` (`DecodeError`), `hash`, `hash_bytes`, `message` |
+| `spec/types/observed/message/json.rs`, `json/` | JSON with exact numbers; canonical text ([spec_primitives.md](spec_primitives.md)) | `Json`, `Number`, `JsonError`, `canonicalize`, `MAX_DEPTH`, `MAX_EXPONENT_DIGITS` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
-| `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
+| `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage`, `TokenUsage` (checked: cache counts within `input`, reasoning within `output`; `TokenCounts`, `InvalidTokenUsage`) |
 | `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
 | `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`; `InvalidReversal`, `InvalidMergeRecord`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
 | `spec/types/observed/agent/claims.rs` | Harness claims seen per agent | `SeenClaim`, `ClaimSet` (checked; `observe`, `union`), `DuplicateClaim` |
@@ -343,7 +352,7 @@ The types follow data through the stack:
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
 | `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`), `promotion_coverage` and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample` (its rows carry a `PointRoute`), `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (incl. `Stale`) (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
-| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
+| `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`, `encoding/` (the message encoding and canonical JSON: pinned vectors in `tests/golden/encoding/`, round trips, the exact-inverse decode, RFC 8785), `secrets.rs` (keyed digests, rotation overlaps, a secret never shown), `minting.rs` (ULID monotonicity and uniqueness); the surface's tests are listed in [query_surface.md](query_surface.md), [read_models.md](read_models.md) and [export.md](export.md); the wire contract's (`tests/wire/`, with goldens in `tests/golden/`) in [wire_contract.md](wire_contract.md) | — |
 | `spec/types/tests/send.rs`, `tests/send/{pipeline,detection,surface}.rs` | Compile-time check that every async trait method's future is `Send` and every associated stream or handle `Send + 'static`: an uninhabited `Dummy` implementing each trait with `async fn`, and one check function generic over each trait | `Dummy`, `assert_send`, `assert_send_static`, `arg` (test-only) |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
@@ -365,7 +374,12 @@ The types follow data through the stack:
   `InterceptAllowlist`, which can never contain a vendor auth host. An
   unrouted reverse-proxy request is answered locally with 421.
 - Credential and account digests are keyed BLAKE3 tagged with the
-  `SecretVersion` that computed them; rotation overlaps two versions.
+  `SecretVersion` that computed them; rotation overlaps two versions. Only
+  `KeyedHasher` reads a `DeploymentSecret`'s key, and neither serializes,
+  clones or formats it.
+- A `UlidGenerator`'s ids strictly increase whatever its clock reads; it
+  reads time from the injected `Clock` and randomness from a
+  `RandomSource`, so it is deterministic under simulation.
 - A `RetryPolicy` has a non-zero initial backoff no greater than its
   maximum; exhausted deliveries are dead-lettered, never redelivered on
   their own.
@@ -411,8 +425,9 @@ The types follow data through the stack:
 - A message's role is its `MessageBody` variant: tool calls appear only in
   assistant messages, tool results only in tool messages. Normalizers split
   provider messages that mix roles.
-- `MessageHash` is the BLAKE3 of a message's canonical encoding; messages are
-  immutable after hashing. An `Exchange` references messages by hash only,
+- `MessageHash` is the BLAKE3 of a message's canonical encoding
+  (`observed::message::encoding`), and `decode` accepts exactly the bytes
+  `encode` writes; messages are immutable after hashing. An `Exchange` references messages by hash only,
   and every referenced message is in the blob store before
   `ExchangeCaptured` is published, so a body `BlobStore::get` no longer
   returns was dropped by content retention.
@@ -536,8 +551,8 @@ The types follow data through the stack:
   every associated stream or per-connection handle is `Send + 'static`
   (`canonical.interface.send-futures`; checked by `tests/send.rs`). No
   method is a bare `async fn`.
-- The spec's only dependencies are `serde` and `serde_json`, pinned
-  exactly to the UI's versions with the lockfile committed; `cargo check`
+- The spec's only dependencies are `serde`, `serde_json` (both pinned
+  exactly to the UI's versions) and `blake3`, with the lockfile committed; `cargo check`
   and `cargo test` on `spec/Cargo.toml` must stay clean. Every type that
   crosses a process boundary follows the wire contract
   ([wire_contract.md](wire_contract.md)): it round-trips, a checked type

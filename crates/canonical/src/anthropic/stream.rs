@@ -32,8 +32,8 @@ use std::collections::BTreeMap;
 
 use super::blocks::Assembled;
 use super::usage::Usage;
-use crate::json::Json;
 use crate::sse;
+use crosstalk_spec::observed::message::json::Json;
 
 /// How the events ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,7 +1,7 @@
-//! Building the [`Normalization`] from a protocol's normalized request and
-//! response: shared by every normalizer.
+//! Building the [`NormalizedExchange`] from a protocol's normalized request
+//! and response: shared by every normalizer.
 //!
-//! - Every message body is hashed ([`crate::encoding`]) and kept once in
+//! - Every message body is hashed (the spec's `encoding`) and kept once in
 //!   `messages`, in order of first reference; the exchange references them
 //!   by hash, so every hash it holds resolves
 //!   (`canonical.exchange.references-resolve`).
@@ -29,47 +29,28 @@ use crosstalk_spec::observed::exchange::{
     Continuation, Exchange, ExchangeFailure, ExchangeOutcome, ResponseId, StopReason, TokenUsage,
 };
 use crosstalk_spec::observed::message::{
-    AssistantPart, Message, MessageBody, SystemPart, ToolResult, ToolResultContent, Unknown,
-    UserPart,
+    AssistantPart, MediaBlob, Message, MessageBody, SystemPart, ToolResult, ToolResultContent,
+    Unknown, UserPart,
 };
 
-use crate::encoding;
-
-/// A normalized exchange, plus the media bytes its messages reference by
-/// hash: what L1 writes to the blob store before announcing the exchange.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Normalization {
-    pub exchange: NormalizedExchange,
-    /// Each distinct media blob a `Media` part names, in hash order.
-    pub media: Vec<MediaBlob>,
-}
-
-/// Decoded media bytes and their hash ([`crate::encoding::hash_bytes`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaBlob {
-    pub hash: MessageHash,
-    pub bytes: Vec<u8>,
-}
-
-/// Media bytes found while normalizing, by hash.
+/// Media bytes found while normalizing, by hash: the exchange's `media`,
+/// each distinct blob once, in hash order.
 #[derive(Debug, Default)]
 pub(crate) struct MediaSink {
-    blobs: BTreeMap<MessageHash, Vec<u8>>,
+    blobs: BTreeMap<MessageHash, MediaBlob>,
 }
 
 impl MediaSink {
     /// Keeps `bytes` and returns their hash.
     pub(crate) fn add(&mut self, bytes: Vec<u8>) -> MessageHash {
-        let hash = encoding::hash_bytes(&bytes);
-        self.blobs.entry(hash).or_insert(bytes);
+        let blob = MediaBlob::new(bytes);
+        let hash = blob.hash();
+        self.blobs.entry(hash).or_insert(blob);
         hash
     }
 
     fn into_blobs(self) -> Vec<MediaBlob> {
-        self.blobs
-            .into_iter()
-            .map(|(hash, bytes)| MediaBlob { hash, bytes })
-            .collect()
+        self.blobs.into_values().collect()
     }
 }
 
@@ -97,7 +78,7 @@ struct MessageSet {
 
 impl MessageSet {
     fn add(&mut self, body: MessageBody) -> MessageHash {
-        let message = encoding::message(body);
+        let message = Message::new(body);
         let hash = message.hash;
         if self.seen.insert(hash) {
             self.messages.push(message);
@@ -111,7 +92,7 @@ pub(crate) fn assemble(
     request: Vec<MessageBody>,
     response: ResponseRead,
     sink: MediaSink,
-) -> Normalization {
+) -> NormalizedExchange {
     let continuation = raw.request.harness.continuation.clone();
     let response_body = match &response {
         ResponseRead::Completed { parts, .. } => Some(parts.as_slice()),
@@ -141,17 +122,15 @@ pub(crate) fn assemble(
             failure,
         },
     };
-    Normalization {
-        exchange: NormalizedExchange {
-            exchange: Exchange {
-                meta: raw.meta.clone(),
-                continuation,
-                request,
-                outcome,
-            },
-            messages: set.messages,
-            warnings,
+    NormalizedExchange {
+        exchange: Exchange {
+            meta: raw.meta.clone(),
+            continuation,
+            request,
+            outcome,
         },
+        messages: set.messages,
+        warnings,
         media: sink.into_blobs(),
     }
 }

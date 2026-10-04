@@ -3,7 +3,7 @@
 use proptest::prelude::*;
 
 use super::Style;
-use crate::json::{Json, Number};
+use crosstalk_spec::observed::message::json::{Json, Number};
 
 /// A JSON value as a test builds it: object names are distinct, so every
 /// spelling of it parses to one value.
@@ -26,15 +26,15 @@ pub struct GenNumber {
 }
 
 impl GenNumber {
-    /// The exact value, as the parser builds it.
+    /// The exact value, as the parser builds it from the plainest
+    /// spelling (`-digits e exponent`).
     pub fn value(&self) -> Number {
-        let (sign, exp) = if self.exponent < 0 {
-            (true, self.exponent.unsigned_abs().to_string())
-        } else {
-            (false, self.exponent.to_string())
-        };
-        Number::from_literal(self.negative, &self.digits, "", sign, &exp)
-            .unwrap_or_else(|_| Number::zero())
+        let sign = if self.negative { "-" } else { "" };
+        let literal = format!("{sign}{}e{}", self.digits, self.exponent);
+        match Json::parse(&literal) {
+            Ok(Json::Number(number)) => number,
+            other => panic!("{literal} is a number: {other:?}"),
+        }
     }
 
     /// One spelling of the number (`1`, `1.0`, `10e-1`, `0.1E+1`, ...).

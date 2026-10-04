@@ -3,6 +3,10 @@
 //! `crosstalk_canonical::tests::<name>`; each calls its body in `units`
 //! or `props`. Generators are in `generate`, raw exchange builders in
 //! `support`, the golden harness in `golden`.
+//!
+//! The encoding's and canonical JSON's own tests (pinned vectors, round
+//! trips, RFC 8785) are the spec's, beside the code
+//! (`crosstalk_spec::tests::encoding`).
 
 mod generate;
 mod golden;
@@ -14,17 +18,10 @@ use crosstalk_spec::observed::exchange::{ConnectionId, Continuation, ResponseId,
 use proptest::prelude::*;
 
 use generate::anthropic::{arb_blocks, arb_request, arb_response, arb_user_block};
-use generate::body::arb_body;
 use generate::json::{arb_json, arb_text};
 use props::{arb_delivery, arb_failure};
 
 // --- canonical encoding and hashing -------------------------------------
-
-/// `canonical.encoding.golden-vectors`.
-#[test]
-fn golden_encodings_match_pinned_bytes() {
-    units::encoding::golden_encodings_match_pinned_bytes();
-}
 
 /// `canonical.capture.blob-is-canonical-encoding`.
 #[test]
@@ -38,19 +35,7 @@ fn media_hash_is_of_decoded_bytes() {
     units::encoding::media_hash_is_of_decoded_bytes();
 }
 
-// --- canonical JSON -----------------------------------------------------
-
-/// `canonical.json.rfc8785-form`.
-#[test]
-fn rfc8785_structure_vectors() {
-    units::json::rfc8785_structure_vectors();
-}
-
-/// `canonical.json.rfc8785-form`.
-#[test]
-fn exact_decimal_number_vectors() {
-    units::json::exact_decimal_number_vectors();
-}
+// --- canonical JSON through the normalizer -----------------------------
 
 /// `canonical.json.large-integers-exact`.
 #[test]
@@ -191,6 +176,12 @@ fn recorded_echoes_hash_like_their_responses() {
     units::corpus::recorded_echoes_hash_like_their_responses();
 }
 
+/// `canonical.normalize.echo-stable`, for signed thinking.
+#[test]
+fn thinking_signatures_echo_like_their_responses() {
+    units::corpus::thinking_signatures_kept_and_echoed_alike();
+}
+
 // --- properties ---------------------------------------------------------
 
 fn arb_continuation() -> impl Strategy<Value = Continuation> {
@@ -225,32 +216,12 @@ fn arb_argument_text() -> impl Strategy<Value = String> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
-    /// `canonical.encoding.round-trips`.
-    #[test]
-    fn encoding_round_trips(body in arb_body()) {
-        props::encoding_round_trip(&body)?;
-    }
-
     /// `canonical.exchange.references-resolve`.
     #[test]
     fn exchange_hashes_resolve_to_messages(
         request in arb_request(), delivery in arb_delivery(), seed in any::<u64>()
     ) {
         props::exchange_hashes_resolve(&request, &delivery, seed)?;
-    }
-
-    /// `canonical.json.large-integers-exact`.
-    #[test]
-    fn large_integers_round_trip_exactly(
-        negative in any::<bool>(), digits in "[1-9][0-9]{15,60}", seed in any::<u64>()
-    ) {
-        props::large_integer_exact(negative, &digits, seed)?;
-    }
-
-    /// `canonical.json.rfc8785-form`.
-    #[test]
-    fn canonical_json_ignores_formatting(value in arb_json(), seeds in any::<(u64, u64)>()) {
-        props::canonical_ignores_formatting(&value, seeds)?;
     }
 
     /// `canonical.message.hash-is-blake3-of-encoding`.

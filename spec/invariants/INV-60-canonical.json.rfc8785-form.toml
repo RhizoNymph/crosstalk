@@ -20,10 +20,10 @@ unchanged.
 
 [evidence]
 unit = [
-  "crosstalk_canonical::tests::rfc8785_structure_vectors",
-  "crosstalk_canonical::tests::exact_decimal_number_vectors",
+  "crosstalk_spec::tests::encoding::rfc8785_structure_vectors",
+  "crosstalk_spec::tests::encoding::exact_decimal_number_vectors",
 ]
-property = "crosstalk_canonical::tests::canonical_json_ignores_formatting"
+property = "crosstalk_spec::tests::encoding::canonical_json_ignores_formatting"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

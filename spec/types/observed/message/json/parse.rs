@@ -7,6 +7,7 @@
 //! keeps its last value, as `JSON.parse` (which RFC 8785 builds on) does.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use super::Json;
 use super::number::Number;
@@ -15,27 +16,44 @@ use super::number::Number;
 pub const MAX_DEPTH: usize = 256;
 
 /// Why text is not JSON this parser accepts.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsonError {
-    #[error("not UTF-8 at byte {offset}")]
     NotUtf8 { offset: usize },
-    #[error("unexpected end of input")]
     UnexpectedEnd,
-    #[error("unexpected byte at offset {offset}")]
     Unexpected { offset: usize },
-    #[error("content after the value at offset {offset}")]
     Trailing { offset: usize },
-    #[error("nested deeper than {MAX_DEPTH} at offset {offset}")]
     TooDeep { offset: usize },
-    #[error("invalid escape at offset {offset}")]
     InvalidEscape { offset: usize },
-    #[error("unpaired surrogate escape at offset {offset}")]
     LoneSurrogate { offset: usize },
-    #[error("raw control character in a string at offset {offset}")]
     ControlInString { offset: usize },
-    #[error("number exponent out of range at offset {offset}")]
     ExponentOutOfRange { offset: usize },
 }
+
+impl fmt::Display for JsonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotUtf8 { offset } => write!(f, "not UTF-8 at byte {offset}"),
+            Self::UnexpectedEnd => f.write_str("unexpected end of input"),
+            Self::Unexpected { offset } => write!(f, "unexpected byte at offset {offset}"),
+            Self::Trailing { offset } => write!(f, "content after the value at offset {offset}"),
+            Self::TooDeep { offset } => {
+                write!(f, "nested deeper than {MAX_DEPTH} at offset {offset}")
+            }
+            Self::InvalidEscape { offset } => write!(f, "invalid escape at offset {offset}"),
+            Self::LoneSurrogate { offset } => {
+                write!(f, "unpaired surrogate escape at offset {offset}")
+            }
+            Self::ControlInString { offset } => {
+                write!(f, "raw control character in a string at offset {offset}")
+            }
+            Self::ExponentOutOfRange { offset } => {
+                write!(f, "number exponent out of range at offset {offset}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for JsonError {}
 
 pub(super) fn parse_bytes(bytes: &[u8]) -> Result<Json, JsonError> {
     let text = std::str::from_utf8(bytes).map_err(|error| JsonError::NotUtf8 {

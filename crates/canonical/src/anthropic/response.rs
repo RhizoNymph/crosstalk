@@ -26,7 +26,7 @@ use super::blocks::{self, Assembled, MediaSink};
 use super::stream::{self, StreamEnd};
 use super::usage::Usage;
 use crate::assemble::ResponseRead;
-use crate::json::Json;
+use crosstalk_spec::observed::message::json::Json;
 
 pub(crate) fn read(raw: &RawExchange, sink: &mut MediaSink) -> ResponseRead {
     let streamed = raw.meta.transport != Transport::Http;
