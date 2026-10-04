@@ -3,7 +3,7 @@
 //! topic version and enables it.
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::ids::AlertRuleId;
+use crosstalk_spec::ids::{AlertRuleId, TopicId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use topcoat::Result;
 use topcoat::context::Cx;
@@ -37,6 +37,24 @@ path_param!(rule_ulid);
 #[query_params]
 struct NewQuery {
     kind: Option<String>,
+    /// Preselects one topic of a new watched-topic rule.
+    topic: Option<String>,
+}
+
+/// A new rule's starting values. `?topic=<id>` (the explore page's "Watch"
+/// links) picks that topic when the form offers it.
+fn new_values(cx: &Cx, kind: RuleKindChoice, offered: &[TopicId]) -> Values {
+    let mut values = Values::defaults(kind);
+    let topic = query_params::<NewQuery>(cx)
+        .ok()
+        .and_then(|q| q.topic.as_deref())
+        .and_then(|t| TopicId::parse_ulid(t).ok());
+    if kind == RuleKindChoice::Watched
+        && let Some(topic) = topic.filter(|t| offered.contains(t))
+    {
+        values.topics = vec![topic.to_ulid()];
+    }
+    values
 }
 
 /// What the page edits.
@@ -271,7 +289,7 @@ async fn editor(
             },
             *kind,
             href(&format!("{PATH}/new"), state, &[]),
-            Values::defaults(*kind),
+            new_values(cx, *kind, &options.choices.topics),
             None,
         ),
         Target::Existing(id) => {

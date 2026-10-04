@@ -5,6 +5,7 @@ pub mod alerts;
 pub mod audit;
 pub mod channels;
 pub mod common;
+pub mod explore;
 pub mod overview;
 pub mod pipeline;
 pub mod topology;

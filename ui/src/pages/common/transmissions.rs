@@ -207,7 +207,7 @@ pub async fn transmission_table(rows: Vec<TransmissionRow>) -> Result<impl View>
                         </span>
                     </td>
                     <td class=(TD)>
-                        <div class="flex min-w-0 items-center gap-1.5">
+                        <div class="flex min-w-0 max-w-52 items-center gap-1.5">
                             route_badge(kind: row.route_kind)
                             match row.route_url {
                                 Some(url) => <a class=(format!("{LINK} truncate font-mono text-xs")) href=(url)>(row.route)</a>,
