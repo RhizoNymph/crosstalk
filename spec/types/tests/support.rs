@@ -1,6 +1,6 @@
 use crate::support::{
-    Blank, ByteRange, DisplayText, EmptyRange, EmptyWindow, InvalidText, NonBlank, NonEmpty,
-    OutOfRange, Share, Similarity, TimeWindow,
+    Blank, ByteRange, Clock, DisplayText, EmptyRange, EmptyWindow, InvalidText, NonBlank, NonEmpty,
+    OutOfRange, Share, Similarity, SystemClock, TimeWindow,
 };
 use crate::tests::fixtures::at;
 
@@ -113,4 +113,19 @@ fn display_text_rejects_blank_long_and_control_text() {
 fn display_text_counts_characters_not_bytes() {
     assert!(Short::new("éééé").is_ok());
     assert_eq!(Short::MAX_CHARS, 4);
+}
+
+#[test]
+fn system_clock_reads_the_wall_clock() {
+    // 2020-01-01T00:00:00Z: any machine running the tests is past it.
+    let after_2020 = at(1_577_836_800_000_000);
+    let clock: &dyn Clock = &SystemClock;
+    assert!(clock.now() > after_2020);
+}
+
+#[test]
+fn clock_is_shareable_across_tasks() {
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+    assert_send_sync::<dyn Clock>();
+    assert_send_sync::<SystemClock>();
 }

@@ -10,3 +10,7 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+thiserror.workspace = true
+# `test-util` gives paused time; sim is only ever a dev-dependency of a layer.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+tracing.workspace = true

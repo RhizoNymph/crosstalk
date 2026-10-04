@@ -26,6 +26,8 @@ Overview:
     of spec plus one empty library per implementation crate under crates/
     (crosstalk-<dir>), with the dependency rule between them enforced by an
     architecture test and every check run by scripts/check.sh (workspace).
+    crosstalk-sim is filled in: the deterministic simulation kit the dst
+    invariants are tested with (sim).
 
   subsystems:
     spec: >
@@ -304,4 +306,29 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
+  sim:
+    description: >
+      crosstalk-sim, the deterministic simulation kit for every dst
+      invariant (decision D4: tokio paused time plus an in-crate fault
+      layer, not turmoil). Sim::run drives an async scenario from one seed
+      on a current-thread runtime with paused time; every random choice
+      comes from a SplitMix64 stream forked from that seed; SimClock is the
+      spec's Clock on paused time, with steps and per-node skew; FaultPlan
+      describes the faults; FaultyBus wraps any spec EventBus with delay,
+      reorder, duplicate, drop-and-redeliver, crash on publish and crash
+      before ack, per subject; FaultyStore wraps any store call with
+      latency, failure before or after commit and crash after commit;
+      UpstreamFaultInjector picks a fault per upstream exchange; Node
+      supervises crashed nodes. The run's trace is hashed for determinism,
+      and a failure reports its seed and step (CROSSTALK_SIM_SEED reruns
+      it, CROSSTALK_SIM_SEEDS sweeps). The spec gained the Clock trait and
+      SystemClock it builds on.
+    entry_points:
+      - crates/sim/src/lib.rs
+      - crates/sim/src/driver.rs
+      - crates/sim/src/bus.rs
+      - crates/sim/src/store.rs
+      - spec/types/support.rs
+    depends_on: [type_spec, workspace]
+    doc: docs/features/sim.md
 ```

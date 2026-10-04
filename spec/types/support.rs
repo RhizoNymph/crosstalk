@@ -102,6 +102,39 @@ impl Timestamp {
     }
 }
 
+/// The source of wall-clock time. Implementation code takes a `Clock` it
+/// is handed at wiring time instead of reading the system clock, so a
+/// simulation can inject time (`canonical.clock.injected`): the gateway
+/// hands [`SystemClock`], and a deterministic simulation hands its virtual
+/// clock.
+///
+/// Wall time is not monotonic. An NTP step, or a simulated one, can make a
+/// later reading earlier than an earlier one, and two readings can be
+/// equal. A component that needs elapsed time, a deadline or the order of
+/// its own instants takes one reading and adds monotonic elapsed time from
+/// the runtime (`tokio::time::Instant`, which a simulation pauses and
+/// advances), never the difference of two readings
+/// (`canonical.clock.elapsed-from-monotonic`).
+pub trait Clock: Send + Sync {
+    /// The current wall-clock time.
+    fn now(&self) -> Timestamp;
+}
+
+/// The operating system's wall clock. A system time before the Unix epoch
+/// reads as the epoch, and one past [`u64::MAX`] microseconds as the
+/// largest [`Timestamp`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        let since_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Timestamp(u64::try_from(since_epoch.as_micros()).unwrap_or(u64::MAX))
+    }
+}
+
 /// A half-open time interval `[start, end)` with `start < end`.
 ///
 /// The reference instance of the validating-deserialization pattern
