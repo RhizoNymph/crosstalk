@@ -18,9 +18,18 @@
 //!               │       Suppressed
 //!               └─▶ deduplicated into an existing alert
 //! ```
+//!
+//! Every stored change to an alert (a deduplicated occurrence, a
+//! suppression, an acknowledgement, a resolution) bumps its
+//! [`AlertRevision`] by one and publishes `AlertChanged` with the alert after
+//! the change. Changes to one alert are compare-and-set on its revision, so
+//! revisions are consecutive and a reader that keeps the highest revision it
+//! has seen ends with the stored alert, whatever order the events arrive in.
 
 use crate::aggregates::topic::{Embedding, TopicModelVersion};
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
+use std::num::NonZeroU32;
+
 use crate::support::{NonEmpty, Similarity, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -150,6 +159,30 @@ pub enum AlertState {
         at: Timestamp,
         reason: SuppressReason,
     },
+}
+
+/// How many stored changes an alert has had: 1 when opened, one more per
+/// change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AlertRevision(NonZeroU32);
+
+impl AlertRevision {
+    /// The revision `AlertOpened` carries.
+    pub const OPENED: Self = Self(NonZeroU32::MIN);
+
+    pub const fn new(revision: NonZeroU32) -> Self {
+        Self(revision)
+    }
+
+    pub const fn get(self) -> NonZeroU32 {
+        self.0
+    }
+
+    /// The revision after one more change. `None` once the counter is
+    /// exhausted; the store rejects that change.
+    pub fn next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

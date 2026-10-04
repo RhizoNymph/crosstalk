@@ -1,7 +1,8 @@
 //! L7 topology: edge aggregation. Consumer group `topology`, triggered by
 //! `TransmissionClassified` (after analysis, so edges can be filtered by
 //! topic) and `TopicVersionReady` (switch queries to the new version's
-//! buckets). Graph queries resolve agents, including the ids named in a
+//! buckets; once `EdgeStore::activate` has switched, publish
+//! `TopicVersionActivated`). Graph queries resolve agents, including the ids named in a
 //! filter, through the `AgentDirectory`. A contribution rejected as a
 //! self-edge is a permanent outcome: its delivery is acked, not retried.
 //!

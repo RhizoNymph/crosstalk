@@ -14,7 +14,7 @@ cargo test  --manifest-path spec/Cargo.toml
 ```text
 spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
-├── ids.rs                 typed ids: ULID entity ids, BLAKE3 content ids
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids
 ├── support.rs             NonEmpty, Timestamp, TimeWindow, ByteRange, Similarity, Share
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
@@ -35,16 +35,16 @@ spec/types/
 │       └── channel/
 │           ├── mod.rs     Channel, ChannelOrigin
 │           ├── detection.rs DeclaredDetection, TrafficDetection
-│           └── policy.rs  Policy, Decision, TrafficVerdict
+│           └── policy.rs  Policy, PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), TopicSlot, EdgeStats, TopologyFilter, TopologyGraph
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
+│   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
-│   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
+│   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionActivated, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
@@ -54,7 +54,10 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
 │   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage
 │   ├── l7_topology.rs     EdgeStore
-│   └── l8_surface.rs      Caller, QueryApi, OperatorActions, AlertSink
+│   ├── l8_surface.rs      Caller, Permission, QueryApi, OperatorAction, OperatorActions, AlertSink
+│   └── l8_surface/
+│       ├── live.rs        LiveFeed, LiveUpdate, UpdateKinds, LiveScope, LiveCursor, FeedWindow, LiveConfig
+│       └── audit.rs       AuditLog, AuditRecord (checked), AuditOutcome, AuditFilter
 └── tests/                 tests for the invariants checked at runtime
 ```
 

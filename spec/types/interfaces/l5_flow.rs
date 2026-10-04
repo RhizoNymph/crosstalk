@@ -5,6 +5,13 @@
 //! accesses), `ContentMatched` (confirms transmissions), the clock (evidence
 //! windows and idle windows close) and `PolicyChanged`.
 //!
+//! Policy: the flow consumer turns each `PolicyChanged` into a
+//! [`PolicyDecision`] and records it with [`ChannelRegistry::set_policy`].
+//! A `PolicyChanged` carrying `Policy::Unreviewed(None)` holds no decision;
+//! it is a permanent failure (logged at warn and acked, not retried). Config
+//! decisions take the same path: a declared channel's initial policy, when it
+//! carries a decision, and every policy a config reload changes.
+//!
 //! Implementations:
 //! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,
 //!   `BashExtractor` (tree-sitter-bash), `FileToolExtractor`, `McpExtractor`,
@@ -21,7 +28,9 @@
 //! `Delegation`.
 
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
-use crate::derived::flow::channel::policy::{Policy, PolicyAuthor};
+use crate::derived::flow::channel::policy::{
+    Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
+};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
 use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
@@ -64,6 +73,8 @@ pub enum ChannelLookup {
 pub trait ChannelRegistry {
     async fn lookup(&self, locator: &Locator) -> Result<ChannelLookup, RegistryError>;
 
+    /// Declare a channel from config. When `policy` carries a decision, it
+    /// is the first entry of the channel's [`PolicyHistory`].
     async fn declare(
         &mut self,
         pattern: ResourcePattern,
@@ -71,8 +82,19 @@ pub trait ChannelRegistry {
         by: PolicyAuthor,
     ) -> Result<ChannelId, RegistryError>;
 
-    async fn set_policy(&mut self, channel: ChannelId, policy: Policy)
-    -> Result<(), RegistryError>;
+    /// Record a decision in the channel's [`PolicyHistory`] and set the
+    /// channel's policy to the history's current one, in one transaction.
+    /// Idempotent: a redelivered decision returns `Recorded::Duplicate` and
+    /// changes nothing. A decision older than the current one is kept in the
+    /// history and returns `Recorded::Superseded`.
+    async fn set_policy(
+        &mut self,
+        channel: ChannelId,
+        decision: PolicyDecision,
+    ) -> Result<Recorded, RegistryError>;
+
+    /// Every decision recorded for the channel, oldest first.
+    async fn policy_history(&self, channel: ChannelId) -> Result<PolicyHistory, RegistryError>;
 }
 
 /// What the correlator decided. The flow consumer applies these to stored

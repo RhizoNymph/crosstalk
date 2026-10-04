@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.audit.append-only"
+statement = "No audit record is ever modified or removed: a record returned by one AuditLog query is returned unchanged by every later query whose filter it matches."
+kind = "coordination"
+requires = ["type", "integration"]
+rationale = """
+An audit log that can be edited proves nothing. AuditLog exposes only
+append and query, and the store's role has no UPDATE or DELETE grant on
+the table, so neither the surface nor a compromised surface process can
+rewrite history. Retention, if ever needed, is an operational archive job
+outside the gateway.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::audit::AuditLog"
+integration = "crosstalk::surface::integration::audit_table_rejects_update_and_delete"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

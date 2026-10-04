@@ -5,6 +5,9 @@
 //! content, assign a topic, publish `TransmissionClassified`. The clock
 //! triggers periodic re-fits. `alerts` evaluates rules against detect and
 //! insight events and triages the drafts.
+//! A triage outcome that changes a stored alert (a deduplicated occurrence,
+//! a suppression) publishes `AlertChanged` with the alert's next
+//! `AlertRevision`.
 //!
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
