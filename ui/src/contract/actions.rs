@@ -4,9 +4,8 @@ use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, EventId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
-use crosstalk_spec::observed::agent::MergeRequest;
+use crosstalk_spec::observed::agent::{AgentLabel, MergeRequest};
 
-use super::agents::AgentLabel;
 use super::rules::{OperatorRuleStatus, RuleName, UserRuleSpec};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::MergeId;

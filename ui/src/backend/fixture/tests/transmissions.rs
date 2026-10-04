@@ -78,7 +78,7 @@ async fn edge_and_id_selectors() {
     }));
     // An edge whose ends resolve to one agent counts nothing.
     let alias = agent("al0");
-    let canonical = b.state.read().await.canonical_agent(alias);
+    let canonical = b.state.read().await.identity.canonical(alias);
     assert_ne!(alias, canonical);
     let self_edge = EdgeSelector::new(alias, canonical, Route::Unobserved).expect("two ids");
     assert!(

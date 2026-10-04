@@ -17,11 +17,9 @@ use topcoat::context::Cx;
 
 use crate::app::backend;
 use crate::backend::Backend;
-use crate::components::{
-    agent_name, format_bytes, format_share, format_time, format_time_short, href,
-};
-use crate::contract::agents::AgentStateKind;
+use crate::components::{agent_name, format_bytes, format_share, format_time_short, href};
 use crate::error::UiError;
+use crate::pages::agents::list::last_seen_text;
 use crate::pages::channels::list::Activity;
 use crate::pages::channels::model::origin_kind;
 use crate::pages::common::action::require;
@@ -37,6 +35,7 @@ use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::aggregates::node::CanonicalStateKind;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::paging::PageRequest;
 
@@ -114,7 +113,7 @@ pub struct EdgePanel {
 pub struct AgentPanel {
     pub name: String,
     pub url: String,
-    pub state: AgentStateKind,
+    pub state: CanonicalStateKind,
     pub claims: Vec<HarnessClaim>,
     pub parent: Option<Named>,
     pub transmissions_in: u64,
@@ -324,12 +323,13 @@ pub async fn load(
                 focus_url: focus_url(&state, vec![from, to], Vec::new(), sel),
             })
         }
-        Selection::Agent(id) => match backend.agent(caller, id).await? {
+        Selection::Agent(id) => match backend.agent(caller, id, state.scope.window).await? {
             None => Drawer::Missing("No agent has this id."),
             Some(detail) => {
-                let summary = detail.summary;
-                let canonical = summary.id;
-                let parent = match summary.parent {
+                let detail = detail.value;
+                let summary = detail.cluster.profile();
+                let canonical = summary.id();
+                let parent = match summary.parent() {
                     Some(parent) => {
                         let names = agent_names(cx, caller, [parent]).await;
                         Some(Named {
@@ -340,14 +340,19 @@ pub async fn load(
                     None => None,
                 };
                 Drawer::Agent(AgentPanel {
-                    name: agent_name(&summary),
+                    name: agent_name(summary),
                     url: agent_url(canonical, &state),
-                    state: summary.state,
-                    claims: summary.claims.into_iter().map(|c| c.claim).collect(),
+                    state: summary.state_kind(),
+                    claims: summary
+                        .claims()
+                        .entries()
+                        .iter()
+                        .map(|c| c.claim.clone())
+                        .collect(),
                     parent,
-                    transmissions_in: summary.transmissions_in,
-                    transmissions_out: summary.transmissions_out,
-                    last_seen: format_time(summary.last_seen),
+                    transmissions_in: detail.traffic.transmissions_in,
+                    transmissions_out: detail.traffic.transmissions_out,
+                    last_seen: last_seen_text(summary.last_seen()),
                     edges: listed(cx, caller, &view, |e| {
                         e.from == canonical || e.to == canonical
                     })

@@ -24,7 +24,6 @@ use crate::components::{
     Tone, agent_name, data_table, error_panel, href, kind_badge, page_header, short_id,
     state_badge, state_inputs,
 };
-use crate::contract::agents::{AgentDetail, AgentStateKind};
 use crate::error::UiError;
 use crate::pages::common::action::{Failure, done, perform, require, status_of};
 use crate::pages::common::flash::Flash;
@@ -33,6 +32,9 @@ use crate::pages::common::links::agent_url;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::agents::AgentDetail;
+use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 /// Agents offered as merge targets.
@@ -57,7 +59,7 @@ pub struct Side {
     pub id: AgentId,
     pub url: String,
     pub name: String,
-    pub state: AgentStateKind,
+    pub state: CanonicalStateKind,
     pub evidence: Vec<EvidenceRow>,
 }
 
@@ -69,15 +71,20 @@ pub struct Comparison {
     pub conflicts: Vec<String>,
 }
 
+/// Both canonical agents' own evidence side by side, shared evidence
+/// marked, and the harness ids that set them apart.
 pub fn compare(from: &AgentDetail, into: &AgentDetail, state: &ViewState) -> Comparison {
-    let from_evidence: Vec<&IdentityEvidence> = from.agent.evidence.iter().collect();
-    let into_evidence: Vec<&IdentityEvidence> = into.agent.evidence.iter().collect();
-    let side = |detail: &AgentDetail, other: &[&IdentityEvidence]| Side {
-        id: detail.summary.id,
-        url: agent_url(detail.summary.id, state),
-        name: agent_name(&detail.summary),
-        state: detail.summary.state,
-        evidence: evidence_rows(detail.agent.evidence.iter(), other),
+    let from_evidence: Vec<&IdentityEvidence> = from.cluster.agent().evidence.iter().collect();
+    let into_evidence: Vec<&IdentityEvidence> = into.cluster.agent().evidence.iter().collect();
+    let side = |detail: &AgentDetail, other: &[&IdentityEvidence]| {
+        let profile = detail.cluster.profile();
+        Side {
+            id: profile.id(),
+            url: agent_url(profile.id(), state),
+            name: agent_name(profile),
+            state: profile.state_kind(),
+            evidence: evidence_rows(detail.cluster.agent().evidence.iter(), other),
+        }
     };
     let from_side = side(from, &into_evidence);
     let shared = from_side.evidence.iter().filter(|r| r.shared).count();
@@ -93,10 +100,12 @@ async fn detail(
     cx: &Cx,
     caller: &Caller,
     id: AgentId,
+    state: &ViewState,
 ) -> std::result::Result<AgentDetail, UiError> {
     backend(cx)
-        .agent(caller, id)
+        .agent(caller, id, state.scope.window)
         .await?
+        .map(|detail| detail.value)
         .ok_or(UiError::Query(QueryError::NotFound))
 }
 
@@ -115,28 +124,40 @@ async fn load(
 ) -> std::result::Result<(Side, Stage), UiError> {
     require(caller, Permission::View)?;
     require(caller, Permission::Govern)?;
-    let from = detail(cx, caller, id).await?;
+    let from = detail(cx, caller, id, state).await?;
+    let from_id = from.cluster.profile().id();
     let Some(into) = into else {
         let page = backend(cx)
             .agents(
                 caller,
                 &Default::default(),
+                state.scope.window,
                 &crate::pages::common::paging::first(CHOICES),
             )
-            .await?;
+            .await?
+            .value;
         let choices = page
             .items()
             .iter()
-            .filter(|a| a.id != from.summary.id)
-            .map(|a| (a.id.to_ulid(), agent_name(a)))
+            .map(|row| &row.profile)
+            .filter(|a| a.id() != from_id)
+            .map(|a| (a.id().to_ulid(), agent_name(a)))
             .collect();
         let side = compare(&from, &from, state).from;
         return Ok((side, Stage::Pick(choices)));
     };
     let into_id = AgentId::parse_ulid(into).map_err(|e| invalid("into", e))?;
-    let into = detail(cx, caller, into_id).await?;
-    if into.summary.id == from.summary.id {
-        return Err(invalid("into", "both ids name the same agent"));
+    let into = detail(cx, caller, into_id, state).await?;
+    let canonical = into.cluster.profile().id();
+    if canonical == from_id {
+        // What the merge table would answer: both name one cluster.
+        return Err(UiError::Query(QueryError::Conflict(
+            ConflictKind::MergeIntoSelf {
+                from: id,
+                into: into_id,
+                canonical,
+            },
+        )));
     }
     let comparison = compare(&from, &into, state);
     Ok((comparison.from.clone(), Stage::Compare(comparison)))
@@ -302,17 +323,16 @@ mod tests {
 
     use super::*;
     use crate::components::href::tests::state;
-    use crate::pages::agents::detail::tests::detail as agent_detail;
+    use crate::pages::agents::detail::tests::{detail as agent_detail, detail_with};
     use crate::pages::agents::evidence::tests::{credential, harness};
     use crate::testing::{get, post};
 
     #[test]
     fn comparison_marks_shared_evidence_and_conflicts() {
         let a = agent_detail(1);
-        let mut b = agent_detail(2);
         let mut evidence = crosstalk_spec::support::NonEmpty::new(credential(1));
         evidence.push(harness("agent-2"));
-        b.agent.evidence = evidence;
+        let b = detail_with(2, evidence);
         let comparison = compare(&a, &b, &state());
         assert_eq!(comparison.shared, 1, "the stable credential");
         assert!(comparison.into.evidence.iter().any(|r| r.shared));

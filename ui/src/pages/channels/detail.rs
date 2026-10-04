@@ -558,7 +558,8 @@ mod tests {
             .iter()
             .flat_map(|u| u.writers().iter().chain(u.readers()).map(|e| e.agent))
             .collect();
-        let names = world().agent_names(&c, &ids).await.expect("names");
+        let batch = crosstalk_spec::batch::IdBatch::new(ids).expect("one batch");
+        let names = world().agent_names(&c, &batch).await.expect("names");
         let label = names
             .values()
             .find_map(|n| n.label.clone())

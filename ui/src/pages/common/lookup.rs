@@ -1,9 +1,10 @@
 //! Names for ids: operators from `operators`, rules from `rules`, agents
-//! from one `agent_names` call, and [`id_batches`] for name lookups over
-//! more ids than one `IdBatch` holds.
+//! from one `agent_names` call per `IdBatch`, and [`id_batches`] for name
+//! lookups over more ids than one `IdBatch` holds.
 
 use std::collections::HashMap;
 
+use crosstalk_spec::aggregates::agents::AgentName;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::policy::PolicyAuthor;
 use crosstalk_spec::ids::{AgentId, AlertRuleId, OperatorId};
@@ -125,17 +126,15 @@ impl AgentNames {
     }
 }
 
-/// Names for every distinct agent in `ids`, in one `agent_names` call. A
-/// failed lookup degrades to short ids rather than failing the page.
+/// Names for every distinct agent in `ids`, in one `agent_names` call per
+/// `IdBatch` ([`id_batches`]). A failed lookup degrades to short ids rather
+/// than failing the page.
 pub async fn agent_names(
     cx: &Cx,
     caller: &Caller,
     ids: impl IntoIterator<Item = AgentId>,
 ) -> AgentNames {
-    let mut wanted: Vec<AgentId> = ids.into_iter().collect();
-    wanted.sort_unstable();
-    wanted.dedup();
-    match backend(cx).agent_names(caller, &wanted).await {
+    match agent_names_by_batch(cx, caller, ids).await {
         Ok(names) => AgentNames(
             names
                 .iter()
@@ -143,10 +142,22 @@ pub async fn agent_names(
                 .collect(),
         ),
         Err(error) => {
-            tracing::warn!(error = ?error, agents = wanted.len(), "agent names unavailable");
+            tracing::warn!(error = ?error, "agent names unavailable");
             AgentNames::default()
         }
     }
+}
+
+async fn agent_names_by_batch(
+    cx: &Cx,
+    caller: &Caller,
+    ids: impl IntoIterator<Item = AgentId>,
+) -> Result<HashMap<AgentId, AgentName>, QueryError> {
+    let mut names = HashMap::new();
+    for batch in id_batches(ids)? {
+        names.extend(backend(cx).agent_names(caller, &batch).await?);
+    }
+    Ok(names)
 }
 
 /// The distinct ids of `ids`, ascending, as batches of at most

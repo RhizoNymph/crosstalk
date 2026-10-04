@@ -1,4 +1,5 @@
-//! `/agents`: canonical agents with their harness claims and volume,
+//! `/agents`: canonical agents with their harness claims and their
+//! transmissions in the view's window (the counts of their topology nodes),
 //! filtered by state and claimed harness (`state`, `claims`).
 
 use crosstalk_spec::interfaces::l8_surface::Permission;
@@ -17,16 +18,20 @@ use crate::components::{
     PageLinks, agent_name, claim_badge, data_table, empty_state, error_panel, family_name,
     filter_chip, format_time, href, kind_badge, page_header, pagination, short_id,
 };
-use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::invalid;
 use crate::pages::common::links::agent_url;
+use crate::pages::common::lookup::{AgentNames, agent_names};
 use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
+use crosstalk_spec::aggregates::agents::AgentRow as Row;
+use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::observed::agent::SeenClaim;
 use crosstalk_spec::paging::{AgentList, Cursor};
+use crosstalk_spec::support::Timestamp;
 
 const PATH: &str = "/agents";
 
@@ -36,27 +41,33 @@ pub struct AgentRow {
     pub name: String,
     /// Set when the name is a label, so the id is shown beside it.
     pub id: Option<String>,
-    pub state: AgentStateKind,
-    pub claims: Vec<ClaimSeen>,
+    pub state: CanonicalStateKind,
+    pub claims: Vec<SeenClaim>,
     pub parent: Option<(String, String)>,
     pub transmissions_in: u64,
     pub transmissions_out: u64,
     pub last_seen: String,
 }
 
-pub fn agent_row(agent: &AgentSummary, state: &ViewState) -> AgentRow {
+/// When an agent was last seen, in words; a registered agent that never
+/// sent traffic has no time.
+pub fn last_seen_text(last_seen: Option<Timestamp>) -> String {
+    last_seen.map_or_else(|| "never".to_owned(), format_time)
+}
+
+/// A row of the table; `names` names the parents.
+pub fn agent_row(row: &Row, names: &AgentNames, state: &ViewState) -> AgentRow {
+    let agent = &row.profile;
     AgentRow {
-        url: agent_url(agent.id, state),
+        url: agent_url(agent.id(), state),
         name: agent_name(agent),
-        id: agent.label.as_ref().map(|_| short_id(agent.id.to_ulid())),
-        state: agent.state,
-        claims: agent.claims.clone(),
-        parent: agent
-            .parent
-            .map(|p| (agent_url(p, state), short_id(p.to_ulid()))),
-        transmissions_in: agent.transmissions_in,
-        transmissions_out: agent.transmissions_out,
-        last_seen: format_time(agent.last_seen),
+        id: agent.label().map(|_| short_id(agent.id().to_ulid())),
+        state: agent.state_kind(),
+        claims: agent.claims().entries().to_vec(),
+        parent: agent.parent().map(|p| (agent_url(p, state), names.name(p))),
+        transmissions_in: row.traffic.transmissions_in,
+        transmissions_out: row.traffic.transmissions_out,
+        last_seen: last_seen_text(agent.last_seen()),
     }
 }
 
@@ -75,10 +86,17 @@ async fn load(
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;
     let page = backend(cx)
-        .agents(&caller, &query.filter(), &request)
-        .await?;
+        .agents(&caller, &query.filter(), state.scope.window, &request)
+        .await?
+        .value;
+    let parents = page.items().iter().filter_map(|row| row.profile.parent());
+    let names = agent_names(cx, &caller, parents.collect::<Vec<_>>()).await;
     Ok(Listing {
-        rows: page.items().iter().map(|a| agent_row(a, state)).collect(),
+        rows: page
+            .items()
+            .iter()
+            .map(|row| agent_row(row, &names, state))
+            .collect(),
         current: request.after,
         next: page.next().cloned(),
     })
@@ -128,7 +146,7 @@ async fn agents_get(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Agents",
-            subtitle: "Canonical agents. Harness claims are what clients said about themselves, not identity.",
+            subtitle: "Canonical agents. In and out count transmissions in the view's window. Harness claims are what clients said about themselves, not identity.",
         )
         <div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
             <div class="flex flex-wrap items-center gap-1.5">
@@ -179,7 +197,7 @@ async fn agents_get(cx: &Cx) -> Result<impl View> {
                             </td>
                             <td class=(TD)>
                                 match row.parent {
-                                    Some((url, label)) => <a class=(format!("{LINK} font-mono text-xs")) href=(url)>(label)</a>,
+                                    Some((url, label)) => <a class=(format!("{LINK} text-xs")) href=(url)>(label)</a>,
                                     None => <span class="text-xs text-zinc-400">"—"</span>,
                                 }
                             </td>
@@ -202,46 +220,93 @@ pub(crate) mod tests {
     use crosstalk_spec::support::Timestamp;
     use topcoat::router::StatusCode;
 
+    use crosstalk_spec::aggregates::agents::{AgentProfile, AgentProfileParts, AgentTraffic};
+    use crosstalk_spec::observed::agent::{ActiveAgentState, AgentLabel, ClaimSet};
+
     use super::*;
     use crate::components::href::tests::state;
-    use crate::contract::agents::AgentLabel;
     use crate::testing::get;
 
-    pub fn summary(id: u128) -> AgentSummary {
-        AgentSummary {
+    /// An established agent claiming Claude Code, seen at 2026-10-03.
+    pub fn parts(id: u128) -> AgentProfileParts {
+        let mut claims = ClaimSet::default();
+        claims.observe(
+            HarnessClaim {
+                family: HarnessFamily::ClaudeCode,
+                version: Some("2.1".into()),
+                user_agent: "claude-cli/2.1".into(),
+            },
+            Timestamp::from_micros(0),
+        );
+        AgentProfileParts {
             id: AgentId::from_ulid(id),
             label: None,
-            state: AgentStateKind::Established,
+            state: ActiveAgentState::Established {
+                since: Timestamp::from_micros(0),
+            },
             parent: None,
-            claims: vec![ClaimSeen {
-                claim: HarnessClaim {
-                    family: HarnessFamily::ClaudeCode,
-                    version: Some("2.1".into()),
-                    user_agent: "claude-cli/2.1".into(),
-                },
-                last_seen: Timestamp::from_micros(0),
-            }],
-            transmissions_in: 3,
-            transmissions_out: 5,
-            last_seen: Timestamp::from_micros(1_790_985_600_000_000),
+            aliases: Vec::new(),
+            claims,
+            last_seen: Some(Timestamp::from_micros(1_790_985_600_000_000)),
+        }
+    }
+
+    pub fn profile(parts: AgentProfileParts) -> AgentProfile {
+        AgentProfile::new(parts).expect("profile")
+    }
+
+    pub fn row(id: u128) -> Row {
+        Row {
+            profile: profile(parts(id)),
+            traffic: AgentTraffic {
+                transmissions_in: 3,
+                transmissions_out: 5,
+            },
         }
     }
 
     #[test]
     fn labelled_agents_show_their_id_too() {
-        let mut agent = summary(1);
-        let row = agent_row(&agent, &state());
-        assert_eq!(row.name, "…000001");
-        assert_eq!(row.id, None);
-        agent.label = AgentLabel::new("planner").ok();
-        agent.parent = Some(AgentId::from_ulid(2));
-        let row = agent_row(&agent, &state());
-        assert_eq!(row.name, "planner");
-        assert_eq!(row.id.as_deref(), Some("…000001"));
+        let plain = agent_row(&row(1), &AgentNames::default(), &state());
+        assert_eq!(plain.name, "…000001");
+        assert_eq!(plain.id, None);
+        assert_eq!((plain.transmissions_in, plain.transmissions_out), (3, 5));
+        let labelled = Row {
+            profile: profile(AgentProfileParts {
+                label: AgentLabel::new("planner").ok(),
+                parent: Some(AgentId::from_ulid(2)),
+                ..parts(1)
+            }),
+            ..row(1)
+        };
+        let names = AgentNames::from_pairs([(AgentId::from_ulid(2), "lead".to_owned())]);
+        let shown = agent_row(&labelled, &names, &state());
+        assert_eq!(shown.name, "planner");
+        assert_eq!(shown.id.as_deref(), Some("…000001"));
         assert!(
-            row.parent
-                .is_some_and(|(url, _)| url.starts_with("/agents/0000"))
+            shown
+                .parent
+                .is_some_and(|(url, name)| url.starts_with("/agents/0000") && name == "lead")
         );
+    }
+
+    #[test]
+    fn registered_agents_were_never_seen() {
+        let registered = Row {
+            profile: profile(AgentProfileParts {
+                state: ActiveAgentState::Registered {
+                    at: Timestamp::from_micros(0),
+                },
+                claims: ClaimSet::default(),
+                last_seen: None,
+                ..parts(1)
+            }),
+            ..row(1)
+        };
+        let shown = agent_row(&registered, &AgentNames::default(), &state());
+        assert_eq!(shown.last_seen, "never");
+        assert_eq!(shown.state, CanonicalStateKind::Registered);
+        assert!(shown.claims.is_empty());
     }
 
     #[tokio::test]

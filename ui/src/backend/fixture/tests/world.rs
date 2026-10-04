@@ -52,13 +52,12 @@ fn same_seed_same_world() {
     assert_eq!(a.world.resources, b.world.resources);
     assert_eq!(a.world.topics, b.world.topics);
     let (sa, sb) = (state_of(&a), state_of(&b));
-    assert_eq!(sa.agents, sb.agents);
+    assert_eq!(sa.identity, sb.identity);
     assert_eq!(sa.channels, sb.channels);
     assert_eq!(sa.alerts, sb.alerts);
     assert_eq!(sa.rules, sb.rules);
     assert_eq!(sa.audit, sb.audit);
     assert_eq!(sa.verdicts, sb.verdicts);
-    assert_eq!(sa.merges, sb.merges);
 }
 
 #[test]

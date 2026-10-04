@@ -16,11 +16,11 @@ use super::super::clock::{DAY, ago};
 use super::super::world::ChannelKey;
 use super::{caller, collect, day, first, graph_of, researcher, shared, week, window};
 use crate::backend::Backend;
-use crate::contract::agents::AgentState;
 use crate::contract::research::{AuditFilter, AuditSubject};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::observed::agent::AgentState;
 
 use super::reads_support::*;
 
@@ -53,8 +53,19 @@ async fn pagination_covers_every_item_exactly_once() {
     let ids: HashSet<_> = paged.iter().map(|t| t.id).collect();
     assert_eq!(ids.len(), paged.len());
 
-    let agents = collect(7, async |p| b.agents(&c, &Default::default(), &p).await).await;
+    let agents = collect(7, async |p| {
+        b.agents(&c, &Default::default(), scope.window, &p)
+            .await
+            .map(|rows| rows.value)
+    })
+    .await;
     assert_eq!(agents.len(), 40);
+    assert!(
+        agents
+            .windows(2)
+            .all(|w| w[0].profile.id() > w[1].profile.id()),
+        "newest agent first"
+    );
     let alerts = collect(50, async |p| {
         b.alerts(&c, &AlertFilter::default(), &p).await
     })
@@ -255,23 +266,36 @@ async fn channel_list_filters() {
 async fn agent_detail_resolves_aliases() {
     let b = shared();
     let c = researcher();
-    let detail = b.agent(&c, agent("al0")).await.expect("ok").expect("agent");
-    assert_eq!(detail.agent.id, agent("cc0"));
-    assert!(detail.aliases.iter().any(|a| a.id == agent("al0")));
-    assert!(detail.children.contains(&agent("cc0.a")));
-    assert!(!detail.merges.is_empty());
-    let pi2 = b.agent(&c, agent("al2")).await.expect("ok").expect("agent");
-    assert_eq!(pi2.agent.id, agent("pi2"));
-    assert_eq!(pi2.aliases.len(), 2, "both chained aliases resolve to pi2");
-    let omp3 = b
-        .agent(&c, agent("omp3"))
-        .await
-        .expect("ok")
-        .expect("agent");
-    assert!(!omp3.vetoes.is_empty());
-    assert!(matches!(omp3.agent.state, AgentState::Provisional { .. }));
-    let impersonator = b.agent(&c, agent("pi0")).await.expect("ok").expect("agent");
-    assert!(impersonator.summary.claims.len() >= 2);
+    let read = async |key: &str| {
+        b.agent(&c, agent(key), week().window)
+            .await
+            .expect("ok")
+            .expect("agent")
+            .value
+            .cluster
+    };
+    let detail = read("al0").await;
+    assert_eq!(detail.agent().id, agent("cc0"));
+    assert_eq!(
+        detail.lookup(),
+        crosstalk_spec::aggregates::agents::AgentLookup::Redirected { from: agent("al0") }
+    );
+    assert!(detail.aliases().iter().any(|a| a.id == agent("al0")));
+    assert!(detail.children().contains(&agent("cc0.a")));
+    assert!(!detail.merges().is_empty());
+    let pi2 = read("al2").await;
+    assert_eq!(pi2.agent().id, agent("pi2"));
+    assert_eq!(
+        pi2.aliases().len(),
+        2,
+        "both chained aliases resolve to pi2"
+    );
+    let omp3 = read("omp3").await;
+    assert!(!omp3.vetoes().is_empty());
+    assert!(matches!(omp3.agent().state, AgentState::Provisional { .. }));
+    assert!(omp3.merges().iter().any(|m| m.reverted().is_some()));
+    let impersonator = read("pi0").await;
+    assert!(impersonator.profile().claims().entries().len() >= 2);
 }
 
 #[tokio::test]
@@ -389,36 +413,45 @@ async fn same_seed_same_answers() {
         .await
     );
     assert_eq!(
-        a.agents(&c, &Default::default(), &first(100)).await,
-        b.agents(&c, &Default::default(), &first(100)).await
+        a.agents(&c, &Default::default(), week().window, &first(100))
+            .await,
+        b.agents(&c, &Default::default(), week().window, &first(100))
+            .await
     );
 }
 
 #[tokio::test]
 async fn agent_names_resolve_aliases_in_one_call() {
+    use crosstalk_spec::batch::IdBatch;
     use crosstalk_spec::ids::AgentId;
 
     let b = shared();
     let c = researcher();
     let (alias, plain) = (agent("al0"), agent("cc1"));
     let unknown = AgentId::from_ulid(1);
-    let names = b
-        .agent_names(&c, &[alias, plain, unknown])
-        .await
-        .expect("names");
+    let batch = IdBatch::new([alias, plain, unknown]).expect("batch");
+    let names = b.agent_names(&c, &batch).await.expect("names");
     assert_eq!(names.len(), 2, "unknown ids are left out");
-    let canonical = b.agent(&c, alias).await.expect("read").expect("agent");
-    assert_eq!(names[&alias].id, canonical.summary.id);
+    let canonical = b
+        .agent(&c, alias, week().window)
+        .await
+        .expect("read")
+        .expect("agent")
+        .value;
+    let profile = canonical.cluster.profile();
+    assert_eq!(names[&alias].id, profile.id());
     assert_ne!(
         names[&alias].id, alias,
         "an alias is named by its canonical agent"
     );
-    assert_eq!(names[&alias].label, canonical.summary.label);
+    assert_eq!(names[&alias].label.as_ref(), profile.label());
     assert_eq!(names[&plain].id, plain);
 
     let nobody = caller(&[Permission::Audit]);
     assert_eq!(
-        b.agent_names(&nobody, &[plain]).await.err(),
+        b.agent_names(&nobody, &IdBatch::new([plain]).expect("batch"))
+            .await
+            .err(),
         Some(QueryError::Forbidden {
             missing: Permission::View
         })
@@ -455,66 +488,86 @@ async fn one_alert_reads_by_id() {
 
 #[tokio::test]
 async fn agents_filter_by_state_claims_text_and_parent() {
+    use crosstalk_spec::aggregates::agents::AgentRow;
+    use crosstalk_spec::aggregates::agents::filter::{AgentFilter, AgentText};
+    use crosstalk_spec::aggregates::node::CanonicalStateKind;
     use crosstalk_spec::observed::client::HarnessFamily;
-
-    use crate::contract::agents::{AgentListFilter, AgentStateKind};
-    use crosstalk_spec::support::NonBlank;
 
     let b = shared();
     let c = researcher();
-    let list = async |filter: AgentListFilter| {
-        b.agents(&c, &filter, &first(BIG))
+    let list = async |filter: AgentFilter| -> Vec<AgentRow> {
+        b.agents(&c, &filter, week().window, &first(BIG))
             .await
             .expect("agents")
+            .value
             .into_parts()
             .0
     };
-    let all = list(AgentListFilter::default()).await;
-    let registered = list(AgentListFilter {
-        states: vec![AgentStateKind::Registered],
-        ..AgentListFilter::default()
+    let all = list(AgentFilter::default()).await;
+    let registered = list(AgentFilter {
+        states: vec![CanonicalStateKind::Registered],
+        ..AgentFilter::default()
     })
     .await;
     assert_eq!(registered.len(), 3, "three config-registered agents");
-    assert!(
-        registered
-            .iter()
-            .all(|a| a.state == AgentStateKind::Registered)
-    );
-    let claude = list(AgentListFilter {
-        harness_claims: vec![HarnessFamily::ClaudeCode],
-        ..AgentListFilter::default()
+    assert!(registered.iter().all(|a| {
+        a.profile.state_kind() == CanonicalStateKind::Registered
+            && a.profile.last_seen().is_none()
+            && a.traffic == Default::default()
+    }));
+    let claude = list(AgentFilter {
+        claimed: vec![HarnessFamily::ClaudeCode],
+        ..AgentFilter::default()
     })
     .await;
     assert!(!claude.is_empty() && claude.len() < all.len());
     assert!(claude.iter().all(|a| {
-        a.claims
+        a.profile
+            .claims()
+            .entries()
             .iter()
             .any(|s| s.claim.family == HarnessFamily::ClaudeCode)
     }));
-    let scraper = list(AgentListFilter {
-        text: NonBlank::new("PI-SCRAPER").ok(),
-        ..AgentListFilter::default()
+    let scraper = list(AgentFilter {
+        text: AgentText::new("PI-SCRAPER").ok(),
+        ..AgentFilter::default()
     })
     .await;
     assert_eq!(scraper.len(), 1);
     assert_eq!(
-        scraper[0].label.as_ref().map(|l| l.as_str()),
+        scraper[0].profile.label().map(|l| l.as_str()),
         Some("pi-scraper")
+    );
+    // An alias's id still finds the agent it was merged into.
+    let by_alias = list(AgentFilter {
+        text: AgentText::new(&agent("al0").ulid_text()).ok(),
+        ..AgentFilter::default()
+    })
+    .await;
+    assert_eq!(
+        by_alias.iter().map(|a| a.profile.id()).collect::<Vec<_>>(),
+        [agent("cc0")]
     );
     let parent = all
         .iter()
-        .find_map(|a| a.parent)
+        .find_map(|a| a.profile.parent())
         .expect("some agent has a parent");
-    let children = list(AgentListFilter {
+    let children = list(AgentFilter {
         parents: vec![parent],
-        ..AgentListFilter::default()
+        ..AgentFilter::default()
     })
     .await;
-    let detail = b.agent(&c, parent).await.expect("read").expect("agent");
+    let detail = b
+        .agent(&c, parent, week().window)
+        .await
+        .expect("read")
+        .expect("agent")
+        .value;
+    let mut listed: Vec<_> = children.iter().map(|a| a.profile.id()).collect();
+    listed.sort_unstable();
     assert_eq!(
-        children.iter().map(|a| a.id).collect::<Vec<_>>(),
-        detail.children,
-        "one level of the tree, in the detail's order"
+        listed,
+        detail.cluster.children(),
+        "one level of the tree, the detail's children"
     );
 }

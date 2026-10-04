@@ -11,15 +11,14 @@ use crosstalk_spec::aggregates::node::{
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
-use crosstalk_spec::observed::agent::{AgentLabel, ClaimSet};
 use crosstalk_spec::support::NonBlank;
 
 use crate::backend::Result;
 use crate::backend::fixture::store::ChannelRecord;
-use crate::contract::agents::AgentState;
 use crate::data::names::{locator_name, pattern_name};
 
 use super::Ctx;
+use super::agents::profile::{claims, parent};
 
 fn store(what: &str, detail: impl std::fmt::Debug) -> QueryError {
     QueryError::Store {
@@ -32,7 +31,7 @@ fn with_ancestors(ctx: &Ctx, ids: impl IntoIterator<Item = AgentId>) -> BTreeSet
     let mut wanted = BTreeSet::new();
     // A parent chain visits each agent at most once, so the number of
     // agents bounds it even if a bug made a cycle.
-    let bound = ctx.state.agents.len().max(1);
+    let bound = ctx.state.identity.len().max(1);
     for id in ids {
         let mut current = Some(ctx.agent(id));
         for _ in 0..bound {
@@ -44,36 +43,6 @@ fn with_ancestors(ctx: &Ctx, ids: impl IntoIterator<Item = AgentId>) -> BTreeSet
         }
     }
     wanted
-}
-
-/// The canonical form of `id`'s parent, never `id` itself.
-fn parent(ctx: &Ctx, id: AgentId) -> Option<AgentId> {
-    ctx.state
-        .agents
-        .get(&id)
-        .and_then(|r| r.agent.parent)
-        .map(|p| ctx.agent(p))
-        .filter(|p| *p != id)
-}
-
-fn state_kind(state: &AgentState) -> Option<CanonicalStateKind> {
-    match state {
-        AgentState::Registered { .. } => Some(CanonicalStateKind::Registered),
-        AgentState::Provisional { .. } => Some(CanonicalStateKind::Provisional),
-        AgentState::Established { .. } => Some(CanonicalStateKind::Established),
-        AgentState::Merged { .. } => None,
-    }
-}
-
-/// The claims seen on canonical `id` and every alias of it.
-fn claims(ctx: &Ctx, id: AgentId) -> ClaimSet {
-    let mut set = ClaimSet::default();
-    for member in ctx.members(id) {
-        for seen in ctx.world.claims.get(member).into_iter().flatten() {
-            set.observe(seen.claim.clone(), seen.last_seen);
-        }
-    }
-    set
 }
 
 /// Transmissions into and out of each agent on `edges`.
@@ -90,22 +59,16 @@ fn counts(edges: &[WeightedEdge]) -> BTreeMap<AgentId, (u64, u64)> {
 }
 
 fn agent_node(ctx: &Ctx, id: AgentId, (into, out): (u64, u64)) -> Result<AgentNode> {
-    let record = ctx
+    let agent = ctx
         .state
-        .agents
-        .get(&id)
+        .identity
+        .agent(id)
         .ok_or_else(|| store("unknown agent", id))?;
     let state_kind =
-        state_kind(&record.agent.state).ok_or_else(|| store("merged agent as a node", id))?;
-    let label = record
-        .label
-        .as_ref()
-        .map(|label| AgentLabel::new(label.as_str()))
-        .transpose()
-        .map_err(|e| store("label", e))?;
+        CanonicalStateKind::of(&agent.state).ok_or_else(|| store("merged agent as a node", id))?;
     Ok(AgentNode {
         id,
-        label,
+        label: agent.label.clone(),
         state_kind,
         parent: parent(ctx, id),
         claims: claims(ctx, id),

@@ -1,13 +1,15 @@
 //! The agents list's own query keys: `state` and `claims`, comma-separated
-//! codes like the shared view state's filter keys.
+//! codes like the shared view state's filter keys, mapped onto the spec's
+//! `AgentFilter` (`states`, `claimed`).
 
 use crosstalk_spec::observed::client::HarnessFamily;
 use topcoat::router::query_params;
 
 use crate::components::badge::Badge;
-use crate::contract::agents::{AgentListFilter, AgentStateKind};
 use crate::error::UiError;
 use crate::pages::common::form::invalid;
+use crosstalk_spec::aggregates::agents::filter::AgentFilter;
+use crosstalk_spec::aggregates::node::CanonicalStateKind;
 
 #[query_params]
 pub struct RawAgentQuery {
@@ -15,10 +17,10 @@ pub struct RawAgentQuery {
     pub claims: Option<String>,
 }
 
-pub const STATES: [AgentStateKind; 3] = [
-    AgentStateKind::Established,
-    AgentStateKind::Provisional,
-    AgentStateKind::Registered,
+pub const STATES: [CanonicalStateKind; 3] = [
+    CanonicalStateKind::Established,
+    CanonicalStateKind::Provisional,
+    CanonicalStateKind::Registered,
 ];
 
 pub const FAMILIES: [HarnessFamily; 5] = [
@@ -29,7 +31,7 @@ pub const FAMILIES: [HarnessFamily; 5] = [
     HarnessFamily::Unknown,
 ];
 
-pub fn state_code(state: AgentStateKind) -> &'static str {
+pub fn state_code(state: CanonicalStateKind) -> &'static str {
     state.label()
 }
 
@@ -46,7 +48,7 @@ pub fn family_code(family: &HarnessFamily) -> &'static str {
 /// The parsed list query: the filter it asks the backend for.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AgentQuery {
-    pub states: Vec<AgentStateKind>,
+    pub states: Vec<CanonicalStateKind>,
     pub claims: Vec<HarnessFamily>,
 }
 
@@ -82,11 +84,11 @@ impl AgentQuery {
         Ok(query)
     }
 
-    pub fn filter(&self) -> AgentListFilter {
-        AgentListFilter {
+    pub fn filter(&self) -> AgentFilter {
+        AgentFilter {
             states: self.states.clone(),
-            harness_claims: self.claims.clone(),
-            ..AgentListFilter::default()
+            claimed: self.claims.clone(),
+            ..AgentFilter::default()
         }
     }
 
@@ -113,7 +115,7 @@ impl AgentQuery {
         ]
     }
 
-    pub fn toggle_state(&self, state: AgentStateKind) -> Self {
+    pub fn toggle_state(&self, state: CanonicalStateKind) -> Self {
         let mut next = self.clone();
         if next.states.contains(&state) {
             next.states.retain(|s| *s != state);
@@ -149,7 +151,7 @@ mod tests {
     fn empty_query_is_unfiltered() {
         let query = AgentQuery::parse(&raw(None, Some(""))).expect("parse");
         assert_eq!(query, AgentQuery::default());
-        assert_eq!(query.filter(), AgentListFilter::default());
+        assert_eq!(query.filter(), AgentFilter::default());
     }
 
     #[test]
@@ -161,7 +163,10 @@ mod tests {
         .expect("parse");
         assert_eq!(
             query.states,
-            vec![AgentStateKind::Provisional, AgentStateKind::Established]
+            vec![
+                CanonicalStateKind::Provisional,
+                CanonicalStateKind::Established
+            ]
         );
         assert_eq!(query.claims, vec![HarnessFamily::Pi, HarnessFamily::OhMyPi]);
         assert!(
@@ -170,7 +175,7 @@ mod tests {
                 .contains(&("claims", "pi,oh-my-pi".to_owned()))
         );
         let filter = query.filter();
-        assert_eq!(filter.harness_claims, query.claims);
+        assert_eq!(filter.claimed, query.claims);
         assert!(filter.text.is_none() && filter.parents.is_empty());
     }
 
@@ -188,7 +193,7 @@ mod tests {
         let query = AgentQuery::default().toggle_claim(&HarnessFamily::Codex);
         assert_eq!(query.claims, vec![HarnessFamily::Codex]);
         assert!(query.toggle_claim(&HarnessFamily::Codex).claims.is_empty());
-        let query = query.toggle_state(AgentStateKind::Registered);
-        assert_eq!(query.states, vec![AgentStateKind::Registered]);
+        let query = query.toggle_state(CanonicalStateKind::Registered);
+        assert_eq!(query.states, vec![CanonicalStateKind::Registered]);
     }
 }

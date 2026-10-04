@@ -219,25 +219,37 @@ fn policies(state: &mut State, plan: &ChannelPlan) -> Result<(), GenError> {
 }
 
 fn agents(world: &World, state: &mut State) -> Result<(), GenError> {
-    let merges = state.merges.clone();
+    let merges = state.identity.merges().to_vec();
     for merge in &merges {
-        if let MergeAuthor::Operator(by) = merge.by {
-            let request = MergeRequest::new(merge.from, merge.into, merge.by)
+        if let MergeAuthor::Operator(by) = merge.by() {
+            let request = MergeRequest::new(merge.source(), merge.target(), merge.by())
                 .map_err(|e| GenError::invalid("MergeRequest", e))?;
             let action = OperatorAction::MergeAgents(request);
-            operator_action(state, merge.at, by, action, ActionOutcome::Merged(merge.id));
+            operator_action(
+                state,
+                merge.at(),
+                by,
+                action,
+                ActionOutcome::Merged(merge.id()),
+            );
         }
-        if let Some((by, at)) = merge.reverted {
-            let action = OperatorAction::Unmerge { merge: merge.id };
-            operator_action(state, at, by, action, ActionOutcome::Applied);
+        if let Some(reversal) = merge.reverted() {
+            let action = OperatorAction::Unmerge { merge: merge.id() };
+            operator_action(
+                state,
+                reversal.at,
+                reversal.by,
+                action,
+                ActionOutcome::Applied,
+            );
         }
     }
     let mut rng = Rng::fork(world.seed, "renames");
     let labelled: Vec<_> = state
-        .agents
-        .values()
-        .filter(|r| !world.scenario.cast.is_registered(r.agent.id))
-        .filter_map(|r| r.label.clone().map(|l| (r.agent.id, l)))
+        .identity
+        .agents()
+        .filter(|a| !world.scenario.cast.is_registered(a.id))
+        .filter_map(|a| a.label.clone().map(|l| (a.id, l)))
         .collect();
     for (agent, label) in labelled {
         let at = plus(START, rng.below(5 * DAY));

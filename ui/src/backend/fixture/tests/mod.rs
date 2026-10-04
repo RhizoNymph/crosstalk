@@ -2,6 +2,7 @@
 //! then every read and action through the `Backend` trait.
 
 mod actions_support;
+mod agents;
 mod channels;
 mod governance;
 mod graph;

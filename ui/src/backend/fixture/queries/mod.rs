@@ -4,18 +4,17 @@
 //! resolution and of the verdicts in force, so each record is resolved the
 //! same way within one response.
 
+pub mod agents;
 pub mod channels;
 pub mod evidence;
 pub mod graph;
 pub mod linked;
 pub mod lists;
-pub mod names;
 pub mod nodes;
 pub mod page;
 pub mod projection;
 pub mod search;
 pub mod series;
-pub mod summaries;
 pub mod topics;
 pub mod transmissions;
 
@@ -68,9 +67,9 @@ pub struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     pub fn new(world: &'a World, state: &'a State) -> Self {
         let agents: HashMap<AgentId, AgentId> = state
-            .agents
-            .keys()
-            .map(|id| (*id, state.canonical_agent(*id)))
+            .identity
+            .agents()
+            .map(|agent| (agent.id, state.identity.canonical(agent.id)))
             .collect();
         let mut members: BTreeMap<AgentId, Vec<AgentId>> = BTreeMap::new();
         for (id, canonical) in &agents {

@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
+use crosstalk_spec::aggregates::agents::filter::AgentFilter;
+use crosstalk_spec::aggregates::agents::{AgentDetail, AgentName, AgentRow};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -39,7 +41,6 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
 use crosstalk_spec::support::TimeWindow;
 
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::alerts::Alert;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
 use crate::contract::rules::{RuleDef, SinkInfo};
@@ -310,31 +311,37 @@ pub trait Backend: Send + Sync + 'static {
         pattern: &ResourcePattern,
     ) -> impl Future<Output = Result<PromotionPreview>> + Send;
 
-    // Agents (items 1, 5).
+    // Agents: exactly `QueryApi`'s methods.
 
+    /// View. One `AgentRow` per canonical agent `filter` admits, newest
+    /// agent first, with its traffic in `window` counted as its node in
+    /// `topology` under the default filter. The window restricts the
+    /// counts, never the rows; unaligned is `InvalidInput(UnalignedWindow)`.
     fn agents(
         &self,
         caller: &Caller,
-        filter: &AgentListFilter,
+        filter: &AgentFilter,
+        window: TimeWindow,
         page: &PageRequest<AgentList>,
-    ) -> impl Future<Output = Result<Page<AgentSummary, AgentList>>> + Send;
+    ) -> impl Future<Output = Result<Watermarked<Page<AgentRow, AgentList>>>> + Send;
 
-    /// Resolves aliases: asking for a merged agent returns its canonical
-    /// agent.
+    /// View. The cluster of the canonical agent `id` resolves to, with its
+    /// traffic in `window`; a merged `id` answers with
+    /// `AgentLookup::Redirected { from: id }`. `None` for an unknown id.
     fn agent(
         &self,
         caller: &Caller,
         id: AgentId,
-    ) -> impl Future<Output = Result<Option<AgentDetail>>> + Send;
+        window: TimeWindow,
+    ) -> impl Future<Output = Result<Option<Watermarked<AgentDetail>>>> + Send;
 
-    // Names. Both need `View`; unknown ids are left out.
-
-    /// Names for many agents at once, keyed by the id asked for. An alias
-    /// is named by its canonical agent.
+    /// View. For each known id of the batch, keyed by that id, its
+    /// canonical agent and that agent's label: an alias is named by the
+    /// agent it was merged into.
     fn agent_names(
         &self,
         caller: &Caller,
-        ids: &[AgentId],
+        ids: &IdBatch<AgentId>,
     ) -> impl Future<Output = Result<HashMap<AgentId, AgentName>>> + Send;
 
     /// View. Exactly `QueryApi::channel_names`: for each known id of the

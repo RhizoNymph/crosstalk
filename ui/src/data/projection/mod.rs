@@ -20,7 +20,6 @@ use std::collections::HashMap;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::Projection;
-use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
@@ -37,12 +36,12 @@ use super::require;
 use crate::app::{backend, caller, can};
 use crate::backend::Backend;
 use crate::components::{agent_name_of, short_id};
-use crate::contract::agents::AgentName;
 use crate::error::UiError;
 use crate::pages::common::lookup::id_batches;
 use crate::pages::common::paging::size;
 use crate::pages::common::topics::all_topics;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::aggregates::agents::AgentName;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::channels::ChannelName;
@@ -105,8 +104,8 @@ async fn agent_names<B: Backend>(
     ids: &[AgentId],
 ) -> Result<HashMap<AgentId, AgentName>, UiError> {
     let mut names = HashMap::with_capacity(ids.len());
-    for chunk in ids.chunks(IdBatch::<AgentId>::MAX) {
-        names.extend(backend.agent_names(caller, chunk).await?);
+    for batch in id_batches(ids.iter().copied())? {
+        names.extend(backend.agent_names(caller, &batch).await?);
     }
     Ok(names)
 }

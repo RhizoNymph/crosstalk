@@ -9,3 +9,6 @@ pub mod merge;
 pub mod query;
 pub mod sections;
 pub mod tree;
+
+#[cfg(test)]
+mod tests;

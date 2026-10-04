@@ -136,13 +136,19 @@ async fn every_method_answers_for_the_day_and_the_week() {
             .is_some()
     );
     assert!(
-        !b.agents(&c, &Default::default(), &first(50))
+        !b.agents(&c, &Default::default(), week().window, &first(50))
             .await
             .expect("agents")
+            .value
             .items()
             .is_empty()
     );
-    assert!(b.agent(&c, agent("cc0")).await.expect("agent").is_some());
+    assert!(
+        b.agent(&c, agent("cc0"), week().window)
+            .await
+            .expect("agent")
+            .is_some()
+    );
     assert!(
         !b.alerts(&c, &AlertFilter::default(), &first(50))
             .await
@@ -226,7 +232,7 @@ async fn topology_is_canonical_with_shares_summing_to_one() {
             assert!(value.edges.iter().all(|e| e.from != e.to), "no self-edges");
             let state = b.state.read().await;
             for id in node_ids(value) {
-                assert!(!state.is_merged(id), "nodes are canonical");
+                assert!(!state.identity.is_merged(id), "nodes are canonical");
             }
             let mut keys = HashSet::new();
             for e in &value.edges {
@@ -273,7 +279,7 @@ async fn edges_count_confirmations_by_their_time() {
     let b = shared();
     let state = b.state.read().await;
     let scope = day();
-    let canonical = |id| state.canonical_agent(id);
+    let canonical = |id| state.identity.canonical(id);
     let expected = b
         .world
         .transmissions

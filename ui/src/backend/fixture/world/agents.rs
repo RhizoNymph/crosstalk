@@ -11,18 +11,20 @@ use std::collections::{BTreeMap, HashMap};
 use crosstalk_spec::ids::{
     AccountHash, AgentId, CredentialHash, OperatorId, PromptHash, SecretVersion,
 };
-use crosstalk_spec::observed::agent::{IdentityEvidence, IdentityScope, MergeAuthor};
+use crosstalk_spec::observed::agent::{
+    Agent, AgentLabel, AgentState, ClaimSet, IdentityEvidence, IdentityScope, MergeAuthor,
+    MergeRequest,
+};
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily, UpstreamId};
 use crosstalk_spec::support::{Blake3, NonEmpty, Timestamp};
 
-use crate::contract::agents::{Agent, AgentLabel, AgentState, ClaimSeen, MergeRecord, MergeVeto};
 use crosstalk_spec::ids::MergeId;
 
 use super::GenError;
 use super::history::OPERATOR_RESEARCHER;
 use crate::backend::fixture::clock::{DAY, HOUR, Mint, START, ago, minus};
+use crate::backend::fixture::identity::Identity;
 use crate::backend::fixture::rng::Rng;
-use crate::backend::fixture::store::AgentRecord;
 
 /// The harness an agent runs in (what it really is, not what it claims).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,7 +175,8 @@ fn planned_merges() -> [PlannedMerge; 5] {
 /// The generated agents and their merge history.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Cast {
-    pub records: Vec<AgentRecord>,
+    /// The agents, merges and vetoes as history left them.
+    pub identity: Identity,
     keys: BTreeMap<String, AgentId>,
     pub families: HashMap<AgentId, Family>,
     pub impersonators: Vec<AgentId>,
@@ -181,8 +184,9 @@ pub struct Cast {
     pub active_until: HashMap<AgentId, Timestamp>,
     /// `(parent, child)` for every sub-agent.
     pub delegations: Vec<(AgentId, AgentId)>,
-    pub merges: Vec<MergeRecord>,
-    pub vetoes: Vec<MergeVeto>,
+    /// When each agent created from traffic was first seen: the exchange
+    /// that created it.
+    pub first_seen: HashMap<AgentId, Timestamp>,
 }
 
 impl Cast {
@@ -207,9 +211,9 @@ impl Cast {
     }
 
     pub fn is_registered(&self, agent: AgentId) -> bool {
-        self.records
-            .iter()
-            .any(|r| r.agent.id == agent && matches!(r.agent.state, AgentState::Registered { .. }))
+        self.identity
+            .agent(agent)
+            .is_some_and(|a| matches!(a.state, AgentState::Registered { .. }))
     }
 }
 
@@ -218,7 +222,8 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<Cast, GenError> {
     let mut keys = BTreeMap::new();
     let mut families = HashMap::new();
     let mut impersonators = Vec::new();
-    let mut records: Vec<AgentRecord> = Vec::new();
+    let mut first_seen_at = HashMap::new();
+    let mut records: Vec<Agent> = Vec::new();
 
     for spec in SPECS {
         let first_seen = minus(START, rng.between(DAY, 20 * DAY));
@@ -235,18 +240,19 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<Cast, GenError> {
                 since: first_seen.max(minus(START, rng.between(HOUR, DAY))),
             },
         };
+        if spec.state != Planned::Registered {
+            first_seen_at.insert(id, first_seen);
+        }
         let label = spec
             .label
             .map(AgentLabel::new)
             .transpose()
             .map_err(|e| GenError::invalid("AgentLabel", e))?;
-        records.push(AgentRecord {
-            agent: Agent {
-                id,
-                evidence: evidence(spec, &mut rng)?,
-                parent: None,
-                state,
-            },
+        records.push(Agent {
+            id,
+            evidence: evidence(spec, &mut rng)?,
+            parent: None,
+            state,
             label,
         });
     }
@@ -257,107 +263,55 @@ pub fn build(seed: u64, mint: &mut Mint) -> Result<Cast, GenError> {
             let parent = *keys
                 .get(parent)
                 .ok_or_else(|| GenError::Missing(format!("parent {parent}")))?;
-            record.agent.parent = Some(parent);
-            delegations.push((parent, record.agent.id));
+            record.parent = Some(parent);
+            delegations.push((parent, record.id));
         }
     }
 
     let mut cast = Cast {
-        records,
+        identity: Identity::new(records).map_err(|e| GenError::invalid("agent table", e))?,
         keys,
         families,
         impersonators,
         active_until: HashMap::new(),
         delegations,
-        merges: Vec::new(),
-        vetoes: Vec::new(),
+        first_seen: first_seen_at,
     };
     apply_merges(&mut cast, mint)?;
     Ok(cast)
 }
 
-/// Replays the planned merges the way `MergeAgents` applies them, and the
-/// one revert the way `Unmerge` does.
+/// Replays the planned merges through the merge table, as `MergeAgents`
+/// applies them, and the one revert as `Unmerge` does.
 fn apply_merges(cast: &mut Cast, mint: &mut Mint) -> Result<(), GenError> {
     for plan in planned_merges() {
         let from = cast.id(plan.from)?;
         let into = cast.id(plan.into)?;
+        let request = MergeRequest::new(from, into, plan.by)
+            .map_err(|e| GenError::invalid("MergeRequest", e))?;
         let id = MergeId::from_ulid(mint.ulid(plan.at));
-        let prior = record(cast, from)
-            .and_then(|r| r.agent.state.active())
-            .ok_or_else(|| GenError::Missing(format!("active state of {}", plan.from)))?;
-        let repointed: Vec<AgentId> = cast
-            .records
-            .iter()
-            .filter(|r| matches!(r.agent.state, AgentState::Merged { into: i, .. } if i == from))
-            .map(|r| r.agent.id)
-            .collect();
-        for agent in &repointed {
-            if let Some(r) = record_mut(cast, *agent)
-                && let AgentState::Merged { into: target, .. } = &mut r.agent.state
-            {
-                *target = into;
-            }
-        }
-        if let Some(r) = record_mut(cast, from) {
-            r.agent.state = AgentState::Merged {
-                into,
-                at: plan.at,
-                by: plan.by,
-                prior,
-            };
-        }
+        let repointed = cast
+            .identity
+            .merge(id, request, plan.at)
+            .map_err(|e| GenError::invalid("planned merge", e))?
+            .repointed()
+            .to_vec();
         cast.active_until.insert(from, plan.at);
         for agent in &repointed {
             cast.active_until.insert(*agent, plan.at);
         }
-        cast.merges.push(MergeRecord {
-            id,
-            from,
-            into,
-            by: plan.by,
-            at: plan.at,
-            repointed,
-            reverted: None,
-        });
         if let Some((by, at)) = plan.reverted {
-            revert(cast, id, by, at)?;
+            let reversal = cast
+                .identity
+                .unmerge(id, by, at)
+                .map_err(|e| GenError::invalid("planned revert", e))?;
+            cast.active_until.remove(&from);
+            for agent in &reversal.restored {
+                cast.active_until.remove(agent);
+            }
         }
     }
     Ok(())
-}
-
-fn revert(cast: &mut Cast, merge: MergeId, by: OperatorId, at: Timestamp) -> Result<(), GenError> {
-    let index = cast
-        .merges
-        .iter()
-        .position(|m| m.id == merge)
-        .ok_or_else(|| GenError::Missing("merge to revert".to_owned()))?;
-    let (from, into) = (cast.merges[index].from, cast.merges[index].into);
-    let prior = match record(cast, from).map(|r| &r.agent.state) {
-        Some(AgentState::Merged { prior, .. }) => *prior,
-        _ => return Err(GenError::Missing("merged state to revert".to_owned())),
-    };
-    if let Some(r) = record_mut(cast, from) {
-        r.agent.state = AgentState::from(prior);
-    }
-    cast.active_until.remove(&from);
-    cast.merges[index].reverted = Some((by, at));
-    cast.vetoes.push(MergeVeto {
-        a: from,
-        b: into,
-        by,
-        at,
-    });
-    Ok(())
-}
-
-fn record(cast: &Cast, id: AgentId) -> Option<&AgentRecord> {
-    cast.records.iter().find(|r| r.agent.id == id)
-}
-
-fn record_mut(cast: &mut Cast, id: AgentId) -> Option<&mut AgentRecord> {
-    cast.records.iter_mut().find(|r| r.agent.id == id)
 }
 
 fn digest(rng: &mut Rng) -> Blake3 {
@@ -454,34 +408,26 @@ fn own_claim(family: Family) -> HarnessClaim {
     }
 }
 
-/// The harness claims seen on each agent's exchanges. Impersonators claim
+/// The harness claims recorded for each agent's exchanges (the claim
+/// store: per attributed agent, never resolved). Impersonators claim
 /// Claude Code on their Claude subscription traffic and their own family
 /// elsewhere. Agents that never sent traffic have no claims.
 pub fn claims(
     cast: &Cast,
     last_activity: &HashMap<AgentId, Timestamp>,
-) -> HashMap<AgentId, Vec<ClaimSeen>> {
+) -> HashMap<AgentId, ClaimSet> {
     let mut out = HashMap::new();
-    for record in &cast.records {
-        let id = record.agent.id;
+    for agent in cast.identity.agents() {
+        let id = agent.id;
         let (Some(family), Some(last)) = (cast.families.get(&id), last_activity.get(&id)) else {
             continue;
         };
-        let mut seen = Vec::new();
+        let mut seen = ClaimSet::default();
         if cast.impersonators.contains(&id) {
-            seen.push(ClaimSeen {
-                claim: claude_code_claim(),
-                last_seen: *last,
-            });
-            seen.push(ClaimSeen {
-                claim: own_claim(*family),
-                last_seen: minus(*last, 7 * HOUR),
-            });
+            seen.observe(claude_code_claim(), *last);
+            seen.observe(own_claim(*family), minus(*last, 7 * HOUR));
         } else {
-            seen.push(ClaimSeen {
-                claim: own_claim(*family),
-                last_seen: *last,
-            });
+            seen.observe(own_claim(*family), *last);
         }
         out.insert(id, seen);
     }

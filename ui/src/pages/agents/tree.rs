@@ -4,6 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
+use crosstalk_spec::aggregates::agents::filter::AgentFilter;
+use crosstalk_spec::aggregates::node::CanonicalStateKind;
 use crosstalk_spec::ids::AgentId;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use topcoat::context::Cx;
@@ -11,7 +13,6 @@ use topcoat::context::Cx;
 use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{agent_name, short_id};
-use crate::contract::agents::{AgentListFilter, AgentStateKind};
 use crate::pages::common::links::agent_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -25,7 +26,7 @@ pub const MAX_NODES: usize = 60;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     pub name: String,
-    pub state: AgentStateKind,
+    pub state: CanonicalStateKind,
     pub children: Vec<AgentId>,
 }
 
@@ -36,7 +37,7 @@ pub struct TreeRow {
     pub url: String,
     pub name: String,
     /// `None` when the agent could not be read.
-    pub state: Option<AgentStateKind>,
+    pub state: Option<CanonicalStateKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -77,8 +78,8 @@ pub fn flatten(
 }
 
 /// Reads the sub-agents of `agent` a level at a time (one `agents` call
-/// per level, filtered by parent), up to the bounds. `roots` are its
-/// children as its detail lists them.
+/// per level, filtered by parent, over the view's window), up to the
+/// bounds. `roots` are its children as its detail lists them.
 pub async fn load(
     cx: &Cx,
     caller: &Caller,
@@ -100,19 +101,20 @@ pub async fn load(
             truncated = true;
             break;
         };
-        let filter = AgentListFilter {
+        let filter = AgentFilter {
             parents: parents.clone(),
-            ..AgentListFilter::default()
+            ..AgentFilter::default()
         };
         let page = match backend(cx)
             .agents(
                 caller,
                 &filter,
+                state.scope.window,
                 &crate::pages::common::paging::first(budget),
             )
             .await
         {
-            Ok(page) => page,
+            Ok(page) => page.value,
             Err(error) => {
                 tracing::warn!(error = ?error, agent = %agent.to_ulid(), "sub-agents unavailable");
                 break;
@@ -120,19 +122,21 @@ pub async fn load(
         };
         truncated |= page.next().is_some();
         let mut next = Vec::new();
-        for summary in page.items() {
-            if summary.id == agent || nodes.contains_key(&summary.id) {
+        for row in page.items() {
+            let profile = &row.profile;
+            let id = profile.id();
+            if id == agent || nodes.contains_key(&id) {
                 continue;
             }
-            if let Some(parent) = summary.parent.and_then(|p| nodes.get_mut(&p)) {
-                parent.children.push(summary.id);
+            if let Some(parent) = profile.parent().and_then(|p| nodes.get_mut(&p)) {
+                parent.children.push(id);
             }
-            next.push(summary.id);
+            next.push(id);
             nodes.insert(
-                summary.id,
+                id,
                 Node {
-                    name: agent_name(&summary),
-                    state: summary.state,
+                    name: agent_name(profile),
+                    state: profile.state_kind(),
                     children: Vec::new(),
                 },
             );
@@ -153,7 +157,7 @@ mod tests {
     fn node(name: &str, children: &[u128]) -> Node {
         Node {
             name: name.to_owned(),
-            state: AgentStateKind::Provisional,
+            state: CanonicalStateKind::Provisional,
             children: children.iter().map(|c| AgentId::from_ulid(*c)).collect(),
         }
     }

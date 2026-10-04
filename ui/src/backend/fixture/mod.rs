@@ -13,6 +13,7 @@
 
 mod actions;
 mod clock;
+mod identity;
 mod queries;
 mod rng;
 mod store;
@@ -25,6 +26,8 @@ mod tests;
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
+use crosstalk_spec::aggregates::agents::filter::AgentFilter;
+use crosstalk_spec::aggregates::agents::{AgentDetail, AgentName, AgentRow};
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -56,7 +59,6 @@ use tokio::sync::RwLock;
 
 use super::{Backend, Result};
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::alerts::Alert;
 use crate::contract::present::Present;
 use crate::contract::research::{AuditEntry, AuditFilter, Operator};
@@ -410,26 +412,32 @@ impl Backend for FixtureBackend {
     async fn agents(
         &self,
         caller: &Caller,
-        filter: &AgentListFilter,
+        filter: &AgentFilter,
+        window: TimeWindow,
         page: &PageRequest<AgentList>,
-    ) -> Result<Page<AgentSummary, AgentList>> {
+    ) -> Result<Watermarked<Page<AgentRow, AgentList>>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::agents(ctx, filter, page))
+        self.read(|ctx| queries::agents::list(ctx, filter, window, page))
             .await
     }
 
-    async fn agent(&self, caller: &Caller, id: AgentId) -> Result<Option<AgentDetail>> {
+    async fn agent(
+        &self,
+        caller: &Caller,
+        id: AgentId,
+        window: TimeWindow,
+    ) -> Result<Option<Watermarked<AgentDetail>>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::lists::agent(ctx, id))).await
+        self.read(|ctx| queries::agents::one(ctx, id, window)).await
     }
 
     async fn agent_names(
         &self,
         caller: &Caller,
-        ids: &[AgentId],
+        ids: &IdBatch<AgentId>,
     ) -> Result<HashMap<AgentId, AgentName>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::names::agents(ctx, ids))).await
+        self.read(|ctx| queries::agents::names(ctx, ids)).await
     }
 
     async fn channel_names(

@@ -26,19 +26,19 @@ use crosstalk_spec::support::{Blake3, Timestamp};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
-use crate::contract::agents::{AgentLabel, AgentName, AgentSummary};
 use crate::error::UiError;
 use crate::url::ulid::UlidId;
+use crosstalk_spec::aggregates::agents::{AgentName, AgentProfile};
 
 /// An agent's display name: its label, else its id's last six characters.
-pub fn agent_name(agent: &AgentSummary) -> String {
-    display_name(agent.id, agent.label.as_ref().map(AgentLabel::as_str))
+pub fn agent_name(agent: &AgentProfile) -> String {
+    display_name(agent.id(), agent.label().map(|label| label.as_str()))
 }
 
 /// [`agent_name`] for a batch-looked-up name: the canonical agent's label,
 /// else its id's tail.
 pub fn agent_name_of(name: &AgentName) -> String {
-    display_name(name.id, name.label.as_ref().map(AgentLabel::as_str))
+    display_name(name.id, name.label.as_ref().map(|label| label.as_str()))
 }
 
 /// [`agent_name`] for a graph's agent node.

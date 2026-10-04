@@ -7,8 +7,7 @@ use crosstalk_spec::observed::agent::Strength;
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
-use crate::contract::agents::AgentStateKind;
-use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 
 /// What a badge's colour says.
@@ -113,7 +112,7 @@ impl Badge for DetectionKind {
     }
 }
 
-impl Badge for AgentStateKind {
+impl Badge for CanonicalStateKind {
     fn label(&self) -> &'static str {
         match self {
             Self::Registered => "registered",

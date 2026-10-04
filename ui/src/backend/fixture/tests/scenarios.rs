@@ -15,10 +15,10 @@ use crosstalk_spec::observed::client::HarnessFamily;
 use super::super::FixtureBackend;
 use super::super::world::ChannelKey;
 use super::shared;
-use crate::contract::agents::AgentState;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::rules::{BuiltinRule, RuleKind, RuleStatus, StaleReason, UserRule};
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::observed::agent::AgentState;
 
 fn state_of(b: &FixtureBackend) -> tokio::sync::RwLockReadGuard<'_, super::super::store::State> {
     b.state.blocking_read()
@@ -29,26 +29,26 @@ fn cast_covers_every_family_state_and_scenario() {
     let b = shared();
     let state = state_of(b);
     let canonical = state
-        .agents
-        .values()
-        .filter(|r| !matches!(r.agent.state, AgentState::Merged { .. }))
+        .identity
+        .agents()
+        .filter(|a| !matches!(a.state, AgentState::Merged(_)))
         .count();
     assert_eq!(canonical, 40);
     for kind in ["Registered", "Provisional", "Established"] {
         assert!(
             state
-                .agents
-                .values()
-                .any(|r| format!("{:?}", r.agent.state).starts_with(kind)),
+                .identity
+                .agents()
+                .any(|a| format!("{:?}", a.state).starts_with(kind)),
             "{kind}"
         );
     }
-    assert!(state.agents.values().any(|r| r.label.is_some()));
+    assert!(state.identity.agents().any(|a| a.label.is_some()));
     assert!(
         state
-            .agents
-            .values()
-            .filter(|r| r.agent.parent.is_some())
+            .identity
+            .agents()
+            .filter(|a| a.parent.is_some())
             .count()
             >= 10
     );
@@ -60,12 +60,14 @@ fn cast_covers_every_family_state_and_scenario() {
         let claims = b.world.claims.get(&id).expect("claims");
         assert!(
             claims
+                .entries()
                 .iter()
                 .any(|c| c.claim.family == HarnessFamily::ClaudeCode),
             "{key}"
         );
         assert!(
             claims
+                .entries()
                 .iter()
                 .any(|c| matches!(c.claim.family, HarnessFamily::Pi | HarnessFamily::OhMyPi)),
             "{key}"
@@ -75,7 +77,7 @@ fn cast_covers_every_family_state_and_scenario() {
         .world
         .claims
         .values()
-        .flatten()
+        .flat_map(|set| set.entries())
         .map(|c| format!("{:?}", c.claim.family))
         .collect();
     assert_eq!(families.len(), 5, "{families:?}");
@@ -86,41 +88,51 @@ fn merge_history_has_resolver_operator_repointed_reverted_and_veto() {
     let b = shared();
     let state = state_of(b);
     let cast = &b.world.scenario.cast;
-    assert!(state.merges.iter().any(|m| m.by == MergeAuthor::Resolver));
+    let merges = state.identity.merges();
+    assert!(merges.iter().any(|m| m.by() == MergeAuthor::Resolver));
     assert!(
-        state
-            .merges
+        merges
             .iter()
-            .any(|m| matches!(m.by, MergeAuthor::Operator(_)))
+            .any(|m| matches!(m.by(), MergeAuthor::Operator(_)))
     );
-    let repointing = state
-        .merges
+    let repointing = merges
         .iter()
-        .find(|m| !m.repointed.is_empty())
+        .find(|m| !m.repointed().is_empty())
         .expect("repointing merge");
-    assert_eq!(repointing.repointed, vec![cast.get("al2").expect("al2")]);
-    let reverted = state
-        .merges
+    assert_eq!(repointing.repointed(), [cast.get("al2").expect("al2")]);
+    let reverted = merges
         .iter()
-        .find(|m| m.reverted.is_some())
+        .find(|m| m.reverted().is_some())
         .expect("reverted merge");
     assert!(
-        !state.is_merged(reverted.from),
+        !state.identity.is_merged(reverted.source()),
         "a reverted merge's agent is active again"
     );
+    let (from, into) = (reverted.source(), reverted.target());
     assert!(
         state
-            .vetoes
+            .identity
+            .vetoes()
             .iter()
-            .any(|v| v.a == reverted.from && v.b == reverted.into)
+            .any(|v| (v.a(), v.b()) == (from.min(into), from.max(into)))
     );
-    // Every alias resolves to a canonical agent that is not merged.
-    for record in state.agents.values() {
-        let canonical = state.canonical_agent(record.agent.id);
-        assert!(!state.is_merged(canonical));
+    // Every alias resolves to a canonical agent that is not merged, and
+    // is merged exactly by the one unreverted record naming it as source.
+    for agent in state.identity.agents() {
+        let canonical = state.identity.canonical(agent.id);
+        assert!(!state.identity.is_merged(canonical));
+        let merged_by: Vec<_> = merges
+            .iter()
+            .filter(|m| m.source() == agent.id && m.reverted().is_none())
+            .map(|m| m.id())
+            .collect();
+        match &agent.state {
+            AgentState::Merged(merged) => assert_eq!(merged_by, [merged.merge]),
+            _ => assert!(merged_by.is_empty()),
+        }
     }
     assert_eq!(
-        state.canonical_agent(cast.get("al2").expect("al2")),
+        state.identity.canonical(cast.get("al2").expect("al2")),
         cast.get("pi2").expect("pi2")
     );
 }

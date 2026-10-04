@@ -8,22 +8,16 @@ use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyHistory, Recorded};
 use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
-use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::support::Timestamp;
 
-use crate::contract::agents::{Agent, AgentLabel, AgentState, MergeRecord, MergeVeto};
 use crate::contract::alerts::Alert;
 use crate::contract::research::AuditEntry;
 use crate::contract::rules::RuleDef;
 
 use super::clock::Mint;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRecord {
-    pub agent: Agent,
-    pub label: Option<AgentLabel>,
-}
+use super::identity::Identity;
 
 /// A stored channel with its policy history. Built only through
 /// [`ChannelRecord::new`] and changed only through its methods, so the
@@ -101,10 +95,8 @@ impl Job {
 
 #[derive(Debug, Clone)]
 pub struct State {
-    pub agents: BTreeMap<AgentId, AgentRecord>,
-    /// Oldest first.
-    pub merges: Vec<MergeRecord>,
-    pub vetoes: Vec<MergeVeto>,
+    /// The agents, the merge log and the vetoes.
+    pub identity: Identity,
     pub channels: BTreeMap<ChannelId, ChannelRecord>,
     /// Each judged transmission's append-only log. A transmission never
     /// judged has no entry: its log is empty.
@@ -120,11 +112,9 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(agents: Vec<AgentRecord>, channels: Vec<ChannelRecord>, mint: Mint) -> Self {
+    pub fn new(identity: Identity, channels: Vec<ChannelRecord>, mint: Mint) -> Self {
         Self {
-            agents: agents.into_iter().map(|r| (r.agent.id, r)).collect(),
-            merges: Vec::new(),
-            vetoes: Vec::new(),
+            identity,
             channels: channels.into_iter().map(|r| (r.channel.id, r)).collect(),
             verdicts: BTreeMap::new(),
             alerts: Vec::new(),
@@ -136,21 +126,6 @@ impl State {
         }
     }
 
-    /// Follows merge aliases to the canonical agent. Unknown ids resolve to
-    /// themselves.
-    pub fn canonical_agent(&self, id: AgentId) -> AgentId {
-        let mut current = id;
-        // Merges never chain (the target of a merge is never merged), but
-        // stay bounded in case a bug makes them.
-        for _ in 0..self.agents.len().max(1) {
-            match self.agents.get(&current).map(|r| &r.agent.state) {
-                Some(AgentState::Merged { into, .. }) if *into != current => current = *into,
-                _ => return current,
-            }
-        }
-        current
-    }
-
     /// The channel in force for `id` (`Channel::canonical`: one step, a
     /// superseding channel is never superseded). Unknown ids resolve to
     /// themselves.
@@ -158,11 +133,5 @@ impl State {
         self.channels
             .get(&id)
             .map_or(id, |record| record.channel.canonical())
-    }
-
-    pub fn is_merged(&self, id: AgentId) -> bool {
-        self.agents
-            .get(&id)
-            .is_some_and(|r| r.agent.state.is_merged())
     }
 }

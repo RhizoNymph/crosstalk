@@ -10,7 +10,6 @@ use super::super::world::ChannelKey;
 use super::{caller, first, fresh, researcher, scope_with, week};
 use crate::backend::Backend;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::AgentLabel;
 use crate::contract::alerts::{AlertState, SuppressReason};
 use crate::contract::research::{AuditOutcome, AuditedAction};
 use crate::url::scope::ViewFilter;
@@ -18,6 +17,7 @@ use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
+use crosstalk_spec::observed::agent::AgentLabel;
 
 use super::actions_support::*;
 

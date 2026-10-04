@@ -60,15 +60,18 @@ pub async fn agent_labelled(label: &str) -> crosstalk_spec::ids::AgentId {
     let page = backend
         .agents(
             &everyone(),
-            &crate::contract::agents::AgentListFilter::default(),
+            &crosstalk_spec::aggregates::agents::filter::AgentFilter::default(),
+            fixture_state().scope.window,
             &first(500),
         )
         .await
-        .expect("agents");
+        .expect("agents")
+        .value;
     page.items()
         .iter()
-        .find(|a| a.label.as_ref().is_some_and(|l| l.as_str() == label))
-        .map(|a| a.id)
+        .map(|row| &row.profile)
+        .find(|a| a.label().is_some_and(|l| l.as_str() == label))
+        .map(|a| a.id())
         .expect("labelled agent")
 }
 

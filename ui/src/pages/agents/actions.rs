@@ -2,10 +2,11 @@
 //! merge confirmation.
 
 use crosstalk_spec::ids::{AgentId, OperatorId};
-use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
+use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
+use crosstalk_spec::observed::agent::{AgentLabel, MergeAuthor, MergeRequest};
+use crosstalk_spec::support::InvalidText;
 
 use crate::contract::actions::OperatorAction;
-use crate::contract::agents::AgentLabel;
 use crate::error::UiError;
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::{FormFields, id, invalid, required};
@@ -18,6 +19,15 @@ pub enum AgentForm {
     Unmerge,
 }
 
+/// Why a label was refused, in words.
+pub fn label_error(error: InvalidText) -> String {
+    match error {
+        InvalidText::Blank => "label is blank".to_owned(),
+        InvalidText::TooLong { max, .. } => format!("label is longer than {max} characters"),
+        InvalidText::ControlCharacter => "label holds a control character".to_owned(),
+    }
+}
+
 /// A validated post of the agent page, and the flash it ends with.
 pub fn parse(
     agent: AgentId,
@@ -26,7 +36,7 @@ pub fn parse(
     match fields.text("action") {
         Some("rename") => {
             let label = required(fields, "label")
-                .and_then(|raw| AgentLabel::new(raw).map_err(|e| invalid("label", e)))
+                .and_then(|raw| AgentLabel::new(raw).map_err(|e| invalid("label", label_error(e))))
                 .map_err(|e| (Some(AgentForm::Rename), e))?;
             Ok((
                 AgentForm::Rename,
@@ -55,7 +65,8 @@ pub fn parse(
     }
 }
 
-/// The merge an operator confirms: `from` becomes `into`.
+/// The merge an operator confirms: `from` becomes `into`. One id twice is
+/// refused here, before any call, as `InvalidInput(SelfMerge)`.
 pub fn merge_action(
     from: AgentId,
     into: AgentId,
@@ -63,7 +74,7 @@ pub fn merge_action(
 ) -> Result<OperatorAction, UiError> {
     MergeRequest::new(from, into, MergeAuthor::Operator(operator))
         .map(OperatorAction::MergeAgents)
-        .map_err(|_| invalid("into", "an agent cannot be merged into itself"))
+        .map_err(|e| UiError::Query(QueryError::from(ActionError::from(e))))
 }
 
 #[cfg(test)]
@@ -100,6 +111,14 @@ mod tests {
             Err((
                 Some(AgentForm::Rename),
                 invalid("label", "label is longer than 64 characters")
+            ))
+        );
+        let control = FormFields::from_pairs(&[("action", "rename"), ("label", "a\u{7}b")]);
+        assert_eq!(
+            parse(agent(), &control),
+            Err((
+                Some(AgentForm::Rename),
+                invalid("label", "label holds a control character")
             ))
         );
     }
@@ -145,6 +164,11 @@ mod tests {
         };
         assert_eq!(request.by(), MergeAuthor::Operator(operator));
         assert_eq!(request.source(), AgentId::from_ulid(1));
-        assert!(merge_action(AgentId::from_ulid(1), AgentId::from_ulid(1), operator).is_err());
+        assert_eq!(
+            merge_action(AgentId::from_ulid(1), AgentId::from_ulid(1), operator),
+            Err(UiError::Query(QueryError::InvalidInput(
+                crosstalk_spec::interfaces::l8_surface::InputError::SelfMerge
+            )))
+        );
     }
 }

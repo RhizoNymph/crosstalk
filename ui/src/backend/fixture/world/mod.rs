@@ -34,8 +34,8 @@ use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TopicId, TransmissionId};
+use crosstalk_spec::observed::agent::ClaimSet;
 
-use crate::contract::agents::ClaimSeen;
 use crate::contract::research::Operator;
 use crate::contract::rules::SinkInfo;
 
@@ -234,9 +234,11 @@ pub struct World {
     pub tx_index: HashMap<TransmissionId, usize>,
     /// Span records and the message bodies content retention kept.
     pub blobs: Blobs,
-    /// Harness claims per agent id as recorded (not resolved).
-    pub claims: HashMap<AgentId, Vec<ClaimSeen>>,
-    /// Last access or transmission per agent id as recorded.
+    /// Harness claims per agent id as recorded (the claim store: not
+    /// resolved; a canonical agent's are the union over its cluster).
+    pub claims: HashMap<AgentId, ClaimSet>,
+    /// When each agent id was last seen as recorded (the activity store):
+    /// its last access or transmission, else the exchange that created it.
     pub last_activity: HashMap<AgentId, crosstalk_spec::support::Timestamp>,
     pub topics: TopicModel,
     pub sinks: Vec<SinkInfo>,
@@ -277,9 +279,7 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
     let channel_records = channels::finish(&plan, &traffic)?;
     let mut blobs = std::mem::take(&mut traffic.blobs);
     let dropped = retention::drop_old_bodies(&traffic.transmissions, &mut blobs);
-    let mut state = State::new(cast.records.clone(), channel_records, mint);
-    state.merges = cast.merges.clone();
-    state.vetoes = cast.vetoes.clone();
+    let mut state = State::new(cast.identity.clone(), channel_records, mint);
 
     let mut world = World {
         seed,
@@ -327,7 +327,8 @@ fn link_accesses(transmissions: &[TxRecord]) -> HashMap<AccessId, Vec<Transmissi
 }
 
 fn last_activity(world: &World) -> HashMap<AgentId, crosstalk_spec::support::Timestamp> {
-    let mut out: HashMap<AgentId, crosstalk_spec::support::Timestamp> = HashMap::new();
+    let mut out: HashMap<AgentId, crosstalk_spec::support::Timestamp> =
+        world.scenario.cast.first_seen.clone();
     let mut bump = |agent: AgentId, at| {
         let slot = out.entry(agent).or_insert(at);
         if at > *slot {

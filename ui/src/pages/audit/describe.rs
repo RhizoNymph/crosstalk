@@ -91,7 +91,7 @@ mod tests {
     use crosstalk_spec::observed::agent::MergeAuthor;
 
     use super::*;
-    use crate::contract::agents::AgentLabel;
+    use crosstalk_spec::observed::agent::AgentLabel;
 
     fn op(action: OperatorAction) -> AuditedAction {
         AuditedAction::Operator(action)
