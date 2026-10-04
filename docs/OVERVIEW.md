@@ -19,8 +19,8 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: workspace scaffolded; the L2 blob store (blob_store) is
-    implemented, the other layers are not started. The data
+    Status: workspace scaffolded; L2's in-process bus and blob store
+    (transport) are implemented, the other layers are not started. The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -28,10 +28,14 @@ Overview:
     (crosstalk-<dir>), with the dependency rule between them enforced by an
     architecture test and every check run by scripts/check.sh (workspace).
     crosstalk-store (Postgres pool, per-layer migrations, extensions, typed
-    errors, serializable retries, test databases) is implemented (store);
-    the other crates are still empty.
+    errors, serializable retries, test databases) is implemented (store).
     crosstalk-sim is filled in: the deterministic simulation kit the dst
-    invariants are tested with (sim).
+    invariants are tested with (sim). crosstalk-testkit holds the builders,
+    the synthetic Anthropic corpus and the fake upstream and client
+    (testkit). crosstalk-transport has the in-process bus (MpscBus) with
+    consumer groups, retries, dead letters and envelope dedup, and the
+    content-addressed blob store (FsBlobStore, MemoryBlobStore)
+    (transport). The other crates are still empty.
 
   subsystems:
     spec: >
@@ -49,7 +53,9 @@ Overview:
     transport: >
       Crate crosstalk-transport. L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
-      between components.
+      between components. The in-process bus is one tokio task owning
+      every consumer group, delivery and dead letter; envelopes cross it
+      as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
@@ -341,22 +347,6 @@ Features Index:
       - scripts/inv_check.py
     depends_on: [type_spec]
     doc: docs/features/workspace.md
-  blob_store:
-    description: >
-      The L2 content-addressed blob store in crosstalk-transport (P2.2):
-      BlobStore on the filesystem (FsBlobStore: bodies at
-      <root>/<2 hex>/<62 hex> keyed by BLAKE3, written atomically through a
-      synced temporary file, rename and directory sync, rehashed on every
-      read with Corrupt on a mismatch, every operation one spawn_blocking
-      task) and in memory (MemoryBlobStore, for tests and the simulation).
-      Puts are idempotent and safe to race; a missing body is None. No
-      deletion hook: the spec defines no content retention for bodies.
-    entry_points:
-      - crates/transport/src/blob/mod.rs
-      - crates/transport/src/blob/fs/mod.rs
-      - crates/transport/src/blob/memory.rs
-    depends_on: [type_spec, workspace]
-    doc: docs/features/blob_store.md
   http_api:
     description: >
       The HTTP binding of the L8 surface, as checked spec: the route table
@@ -453,4 +443,36 @@ Features Index:
       - crates/testkit/corpus/README.md
     depends_on: [type_spec, workspace]
     doc: docs/features/testkit.md
+  transport:
+    description: >
+      crosstalk-transport, L2 (P2.1 and P2.2). The in-process bus
+      (MpscBus): consumer groups that each get every envelope and share it
+      among their subscriptions, at-least-once delivery with ack, nack, ack
+      timeouts and redelivery after a consumer crash, backoff from the
+      group's RetryPolicy, dead letters stored before release after the
+      retry budget, listed by cursor and replayed to one group, bounded
+      per-group capacity with waiting publishers, envelopes encoded as wire
+      JSON and decoded strictly (an undecodable payload is reported once
+      and terminated), a seeded shuffled delivery order for simulation,
+      structured config, and the Dedup wrapper over a per-group handled-id
+      record. Simulation tests on tokio's paused clock with a seeded fault
+      scenario. The content-addressed blob store: BlobStore on the
+      filesystem (FsBlobStore: bodies at <root>/<2 hex>/<62 hex> keyed by
+      BLAKE3, written atomically through a synced temporary file, rename
+      and directory sync, rehashed on every read with Corrupt on a
+      mismatch, every operation one spawn_blocking task) and in memory
+      (MemoryBlobStore, for tests and the simulation). Puts are idempotent
+      and safe to race; a missing body is None. No deletion hook: the spec
+      defines no content retention for bodies.
+    entry_points:
+      - crates/transport/src/lib.rs
+      - crates/transport/src/bus/mod.rs
+      - crates/transport/src/bus/actor.rs
+      - crates/transport/src/config.rs
+      - crates/transport/src/dedup.rs
+      - crates/transport/src/blob/mod.rs
+      - crates/transport/src/blob/fs/mod.rs
+      - crates/transport/src/blob/memory.rs
+    depends_on: [type_spec, wire_contract, workspace]
+    doc: docs/features/transport.md
 ```

@@ -14,4 +14,4 @@ false failure of an envelope that was handled successfully.
 dst = "crosstalk_transport::dst::dedup_acks_suppressed_duplicates"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

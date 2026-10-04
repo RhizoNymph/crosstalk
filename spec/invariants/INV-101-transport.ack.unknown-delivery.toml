@@ -16,5 +16,5 @@ unit = "crosstalk_transport::tests::ack_of_unheld_delivery_is_unknown"
 dst = "crosstalk_transport::dst::ack_after_ack_timeout_is_unknown"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-dst = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

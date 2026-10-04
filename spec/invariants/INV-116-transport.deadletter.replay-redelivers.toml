@@ -18,5 +18,5 @@ dst = "crosstalk_transport::dst::replay_redelivers_to_one_group"
 integration = "crosstalk_transport::integration::jetstream_replay_redelivers_to_one_group"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

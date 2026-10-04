@@ -18,9 +18,9 @@ P1.2 and P0.5.
 
 ## Non-scope
 
-- Any implementation. Every crate under `crates/` started as an empty library whose
-  crate doc says what it will implement; the per-layer roadmap items fill
-  them.
+- Any implementation. Every crate under `crates/` started as an empty
+  library whose crate doc says what it will implement; the per-layer
+  roadmap items fill them (`crosstalk-transport`: [transport](transport.md)).
 - The UI (`ui/`), which is excluded from the workspace and keeps its own
   package and lock.
 - CI configuration. `scripts/check.sh` is what CI runs once it exists.
@@ -67,7 +67,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 
 | File | Role |
 | --- | --- |
-| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*"]`, `exclude = ["ui"]`, `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`; for the blob store `blake3 = "=1.8.7"`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"`, `tracing = "=0.1.44"`, and the test pins `proptest = "=1.11.0"` (std only) and `tempfile = "=3.27.0"`; for the store `sqlx = "=0.9.0"` without default features, with `postgres`, `runtime-tokio`, `migrate` and `macros`, see [store](store.md) for decision D2; for `crosstalk-testkit`, `bytes = "=1.12.1"`, `http-body-util = "=0.1.5"`, `hyper = "=1.11.1"` and `hyper-util = "=0.1.21"`, plus the shared `thiserror`, `tokio` and `tracing`, each the UI's resolved version) |
+| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*"]`, `exclude = ["ui"]`, `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`; for `crosstalk-transport` (the bus and the blob store) `blake3 = "=1.8.7"`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"`, `tracing = "=0.1.44"`, and the test pins `proptest = "=1.11.0"` (std only) and `tempfile = "=3.27.0"`; for the store `sqlx = "=0.9.0"` without default features, with `postgres`, `runtime-tokio`, `migrate` and `macros`, see [store](store.md) for decision D2; for `crosstalk-testkit`, `bytes = "=1.12.1"`, `http-body-util = "=0.1.5"`, `hyper = "=1.11.1"` and `hyper-util = "=0.1.21"`, plus the shared `thiserror`, `tokio` and `tracing`, each the UI's resolved version) |
 | `Cargo.lock` | The workspace lock. It replaced `spec/Cargo.lock` and resolves the identical third-party versions (serde 1.0.229, serde_core, serde_derive, serde_json 1.0.151, syn 3.0.6, quote, proc-macro2, unicode-ident, itoa, memchr, zmij), with the same checksums |
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde and serde_json from the workspace pins |
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing; `crates/testkit/Cargo.toml`: see `docs/features/testkit.md`) |
@@ -227,7 +227,8 @@ any error.
   and the crates the rule names all exist.
 - Every member other than the spec depends on `crosstalk-spec`.
 - `tokio`'s `test-util` feature (paused time) is enabled only by
-  `crosstalk-sim`, which layer crates take only as a dev-dependency, so it
+  `crosstalk-sim`, which layer crates take only as a dev-dependency, and by
+  `crosstalk-transport`'s own dev-dependencies (its `dst` tests), so it
   never reaches a production build.
 - No evidence path uses the `crosstalk::<layer>::` form, and every path's
   crate exists.

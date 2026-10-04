@@ -14,4 +14,4 @@ records nothing, so the redelivery reaches consumer logic.
 dst = "crosstalk_transport::dst::dedup_never_suppresses_unhandled_id"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

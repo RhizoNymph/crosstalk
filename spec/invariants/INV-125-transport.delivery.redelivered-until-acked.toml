@@ -17,5 +17,5 @@ dst = "crosstalk_transport::dst::unacked_delivery_is_redelivered_until_budget"
 integration = "crosstalk_transport::integration::jetstream_redelivers_after_ack_wait"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

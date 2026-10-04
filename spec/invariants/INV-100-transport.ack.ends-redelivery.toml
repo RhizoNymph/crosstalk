@@ -17,5 +17,5 @@ dst = "crosstalk_transport::dst::acked_envelope_never_redelivered"
 integration = "crosstalk_transport::integration::jetstream_ack_is_confirmed_by_server"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }
