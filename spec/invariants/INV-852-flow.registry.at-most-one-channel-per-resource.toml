@@ -16,10 +16,10 @@ is a resource only.
 
 [evidence]
 unit = "crosstalk_memory::flow::registry::tests::traffic::a_second_discovery_finds_the_first_channel"
-dst = "crosstalk_flow::dst::concurrent_discovery_one_channel"
+dst = "crosstalk_flow::consumer::tests::dst::concurrent_discovery_one_channel"
 integration = "crosstalk_flow::registry::integration::pg_concurrent_discover"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

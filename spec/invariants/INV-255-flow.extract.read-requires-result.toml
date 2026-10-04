@@ -15,4 +15,4 @@ the call's arguments are what was written.
 property = "crosstalk_flow::extract::tests::no_read_without_result"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

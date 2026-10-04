@@ -974,4 +974,67 @@ Features Index:
       - crates/e2e/tests/smoke/main.rs
     depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
     doc: docs/features/e2e_smoke.md
+  flow_extract:
+    description: >
+      crosstalk-flow's extract module, L5 (P5): the spec's
+      ResourceExtractor over every known tool (Claude Code's file, fetch
+      and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
+      editor equivalents; HTTP tools such as http_request {method, url,
+      body?}, the method deciding the op; MCP tools mapped by typed JSON
+      configuration of tool name and argument paths to a resource and an
+      op). Every locator is canonical, so agents touching one thing meet
+      on one resource: lexical paths, relative paths against the stated
+      or tracked working directory (Opaque without one), normalized URLs,
+      folded MCP keys, MediaWiki pages as their canonical article URL
+      whatever URL or API reaches them, GitHub files and files of known
+      clones as the repository's file. A conservative shell lexer and
+      interpreter reads redirections, file readers, tee, curl, wget, cd,
+      git and gh. Each write carries its outcome (Delivered, Rejected,
+      Unknown), judged per tool in one place; reads need a delivered
+      result. ConversationContext learns the persistent shell's directory
+      and clones from shell calls. Builds the stored AccessOp with the
+      write's spans (originated plus self-relayed sources).
+    entry_points:
+      - crates/flow/src/extract/mod.rs
+      - crates/flow/src/extract/context.rs
+      - crates/flow/src/extract/outcome.rs
+      - crates/flow/src/extract/mcp/config.rs
+      - crates/flow/src/extract/spans.rs
+    depends_on: [type_spec, channel_semantics, workspace]
+    doc: docs/features/flow_extract.md
+  flow_correlator:
+    description: >
+      The L5 correlator and flow consumer in crosstalk-flow (P5, the M2
+      path). WindowedCorrelator (the spec's Correlator, one per shard)
+      pairs a write and a later read of one resource by another agent into
+      a CoAccess, opens the channel transmission, and at the close of the
+      read's evidence window confirms it with every held tool-result match
+      a write of the sender explains (origin span among the write's
+      spans), else suspects it; late matches confirm a suspicion, later
+      ones extend, expiry discards, content after a discard opens a new
+      transmission; a match no sender write explains (shared upstream)
+      confirms nothing. Delegation (parent links read through AgentReads),
+      Direct and Unobserved matches open confirmed at their exchange's
+      window close. Every pairing rule lives in correlate/pairing.rs, ready
+      for the eval PR's WriteOutcome. Shards are keyed by medium (canonical
+      channel or resource); a medium's evidence moves on discovery,
+      ChannelDiscovered, ChannelPromoted and any access resolved to a
+      channel. The flow consumer (group flow) records accesses
+      (add_resource, record_access, AccessRecorded), holds writes until
+      their outcome or settle time, feeds the shards, and applies each
+      decision through discover, TransmissionStore::save and
+      record_transmission before publishing ChannelCrossAccessed,
+      TransmissionConfirmed and TransmissionSuspected, one ordered step
+      queue with retries. Time is only input event times and ticks of the
+      injected clock, so replayed corpora settle on the replay clock. Its
+      input from extraction is a local type until the spec has an event
+      for it.
+    entry_points:
+      - crates/flow/src/correlate/windowed.rs
+      - crates/flow/src/correlate/pairing.rs
+      - crates/flow/src/consumer/mod.rs
+      - crates/flow/src/consumer/shards.rs
+      - crates/flow/src/consumer/apply.rs
+    depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
+    doc: docs/features/flow_correlator.md
 ```

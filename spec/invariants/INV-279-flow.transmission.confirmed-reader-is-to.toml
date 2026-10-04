@@ -12,7 +12,7 @@ catch.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::confirmed_reader_is_to"
+property = "crosstalk_flow::correlate::tests::props::confirmed_reader_is_to"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -13,7 +13,7 @@ not dropped, because they often select the resource (a page or thread id).
 """
 
 [evidence]
-property = "crosstalk_flow::resource::tests::equivalent_urls_share_resource_id"
+property = "crosstalk_flow::extract::resource::tests::equivalent_urls_share_resource_id"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
