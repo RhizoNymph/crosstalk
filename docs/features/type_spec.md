@@ -101,7 +101,13 @@ The types follow data through the stack:
    `Decoder`s, fingerprinted and looked up, with an optional
    `SemanticMatcher` for paraphrase. Hits on another agent's span become a
    `ContentMatch` (`DetectEvent::ContentMatched`); a hit in the output that
-   no visible input explains has carrier `ReaderOutput`.
+   no visible input explains has carrier `ReaderOutput`. Every
+   `SpanLocation` (a span's, or a match's `read_at`) is a byte range into
+   `Message::part_text` of the part it names (`observed/message/text.rs`:
+   a text part's text, visible reasoning, a tool call's argument text, a
+   tool result's text contents joined with `TOOL_RESULT_SEPARATOR`), on
+   its character boundaries, so the surface can cut evidence excerpts from
+   the stored bodies.
 6. **L5 flow.** `ResourceExtractor`s turn tool calls and results into
    `ExtractedAccess`es. The `ChannelRegistry` maps each `Locator` to a known,
    declared or new channel, and the access is stored as an `Access`. The
@@ -197,6 +203,9 @@ The types follow data through the stack:
    exactly as a graph over that step. Summing every value gives
    `TopologyGraph::total` for the same window, weighting, filter and topic
    version, and grouped by edge each series sums to that edge's stat.
+   `EdgeStore::totals` returns what a graph counts without building it
+   (`EdgeTotals::of` the graph: its transmissions, matched bytes and
+   distinct channels, under its version), for the overview.
    `EdgeStore::transmissions` lists the contributions behind one edge
    (`EdgeSelector`) from the same stored rows, a page at a time
    (`EdgeTransmissionPage`), with the first page's topic version pinned in
@@ -208,14 +217,14 @@ The types follow data through the stack:
    watermark from a `FrontierSource` at least once per bucket width
    (`EdgeStore::advance_watermark`), publishes `WatermarkAdvanced` on each
    strict advance, and refuses a contribution into a final bucket
-   (`LateContribution`). Graph, series and drill-down results come back
-   `Watermarked`. `EdgeStore::apply_access` counts each `AccessRecorded`
+   (`LateContribution`). Graph, totals, series and drill-down results come
+   back `Watermarked`. `EdgeStore::apply_access` counts each `AccessRecorded`
    into an `AccessEdge` bucket (agent, channel, op, bucket), idempotent on
    the access id, and `EdgeStore::channel_topology` answers the
    channel-centred graph. Every query resolves stored agents and
    channels through the two directories and fills graph nodes from the
    agent store, the claim store and the channel registry. Reads (graph,
-   channel topology, series, drill-down, watermark) fail with
+   totals, channel topology, series, drill-down, watermark) fail with
    `EdgeQueryError`; writes with `EdgeError`.
 9. **L8 surface.** `QueryApi` serves every read the UI makes,
    `OperatorActions::act` takes every operator action and forwards it to
@@ -236,6 +245,7 @@ The types follow data through the stack:
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `DisplayText` (checked), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share`, `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
+| `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
 | `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
 | `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
@@ -248,18 +258,18 @@ The types follow data through the stack:
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
 | `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `settle_after`), `InvalidTiming` |
-| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`), `Confirmed`, `Classification` |
+| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route` (`resolved`), `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`expire`, `confirmed`, `co_accesses`), `Confirmed`, `Classification` |
 | `spec/types/derived/flow/channel/mod.rs` | Channels, promotion and supersession | `Channel` (`canonical`), `ChannelOrigin` (`promoted`, `superseded`, `seed`, `detection_kind`), `Supersession`, `NotPromotable`, `NotSupersedable`, `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection`, `DetectionKind` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy, its history and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `PolicyKind`, `PolicyDecision` (checked from `Policy`), `PolicyHistory` (checked), `Recorded`, `TrafficVerdict` |
-| `spec/types/aggregates/edge.rs` | Topology edges and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph` (with `nodes`), `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
+| `spec/types/aggregates/edge.rs` | Topology edges, their totals and their drill-down | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyGraph` (with `nodes`), `EdgeTotals` (`of`), `EdgeSelector`, `EdgeTransmission`, `EdgeTransmissionPage`; re-exports `TopologyFilter` |
 | `spec/types/aggregates/series.rs` | Time series over the edge table | `BucketWidth`, `SeriesStep`, `SeriesGrid`, `SeriesGrouping`, `SeriesEdge`, `Series`, `SeriesGroups`, `TopologySeries`, `TopologyGraph::total`, `Weighting::stat`, `RouteKind::of` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
 | `spec/types/aggregates/topic_history.rs` | Topic-model versions, sizes and lineage | `TopicVersionStatus`, `CompletedFit`, `FitRecord`, `TopicVersionInfo` (`with_retention`), `TopicVersionHistory`, `TopicSize`, `TopicSizes`, `LineageLink`, `LineageEntry`, `TopicLineage` (`remap` to a `TopicWatch`), `RemapError` |
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `channel_topology`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `totals`, `channel_topology`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
@@ -325,7 +335,10 @@ The types follow data through the stack:
 - `MessageHash` is the BLAKE3 of a message's canonical encoding; messages are
   immutable after hashing. An `Exchange` references messages by hash only,
   and every referenced message is in the blob store before
-  `ExchangeCaptured` is published.
+  `ExchangeCaptured` is published, so a body `BlobStore::get` no longer
+  returns was dropped by content retention.
+- Every `SpanLocation` L4 records indexes `Message::part_text` of its part
+  and starts and ends on that text's character boundaries.
 - An agent always has at least one piece of identity evidence. A merged
   agent's target is never itself and never another merged agent.
 - Only originated spans are fingerprinted and indexed. Common spans are

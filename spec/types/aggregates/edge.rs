@@ -161,6 +161,47 @@ pub struct TopologyGraph {
     pub edges: Vec<WeightedEdge>,
 }
 
+/// What a [`TopologyGraph`] counts in total, without its nodes, edges or
+/// shares: what the overview shows for a window and filter
+/// (`EdgeStore::totals`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeTotals {
+    /// The version the filter's selector resolved to.
+    pub topic_version: TopicModelVersion,
+    /// Transmissions counted into the graph's edges.
+    pub transmissions: u64,
+    /// Their matched bytes.
+    pub matched_bytes: u64,
+    /// Active channels: the distinct canonical channels that some edge's
+    /// route names (`Route::Channel`), that is, every channel that carried
+    /// at least one transmission the graph counts.
+    pub active_channels: u64,
+}
+
+impl EdgeTotals {
+    /// The definition: the totals of `graph`'s edges. Weighting and shares
+    /// do not enter, so every weighting gives the same totals.
+    pub fn of(graph: &TopologyGraph) -> Self {
+        let mut channels = Vec::new();
+        let (mut transmissions, mut matched_bytes) = (0u64, 0u64);
+        for edge in &graph.edges {
+            transmissions = transmissions.saturating_add(edge.stats.transmissions.get());
+            matched_bytes = matched_bytes.saturating_add(edge.stats.matched_bytes.get());
+            if let Route::Channel(channel) = edge.route
+                && !channels.contains(&channel)
+            {
+                channels.push(channel);
+            }
+        }
+        Self {
+            topic_version: graph.topic_version,
+            transmissions,
+            matched_bytes,
+            active_channels: u64::try_from(channels.len()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 /// One edge of a [`TopologyGraph`]: canonical sender, canonical reader and
 /// route, as in a [`WeightedEdge`]. Ids that have since been merged away are
 /// resolved through `AgentDirectory` before matching; an edge whose two ends

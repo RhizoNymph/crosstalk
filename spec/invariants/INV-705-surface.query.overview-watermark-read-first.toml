@@ -1,0 +1,15 @@
+[invariant]
+id = "surface.query.overview-watermark-read-first"
+statement = "The watermark of every QueryApi::overview response is one EdgeStore::watermark returned before the totals, the alerts or the channels were read."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The activity counts come from buckets and are final before the watermark
+only if it was read first, as for every Watermarked response.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::overview_reads_watermark_first"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.part-text.defined"
+statement = "Message::part_text returns a text part's text, visible reasoning's text, a tool call's argument text (canonical JSON or the invalid text kept), and a tool result's Text contents joined with TOOL_RESULT_SEPARATOR; NotText for opaque reasoning, media, unknown blocks and a tool result without text; and NoSuchPart for an index past the last part."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A span location is a part and a byte range, so the range only means
+something against one agreed text per part. Segmentation, fingerprinting,
+matching and the evidence page's excerpts all read this function, so they
+cut the same bytes.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::part_text::text_parts_are_their_text",
+    "crosstalk_spec::tests::part_text::assistant_parts_index_text_reasoning_and_arguments",
+    "crosstalk_spec::tests::part_text::tool_results_join_their_text_contents_and_skip_the_rest",
+    "crosstalk_spec::tests::part_text::an_index_past_the_parts_names_no_part",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

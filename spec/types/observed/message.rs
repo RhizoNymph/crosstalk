@@ -10,6 +10,12 @@
 //! Blocks a normalizer does not recognize are kept as [`Unknown`] parts
 //! rather than dropping the exchange, so read-side detection still sees the
 //! rest of it and the exchange can be re-normalized later.
+//!
+//! **Part text.** Spans and content matches locate text by a [`PartRef`] and
+//! a byte range. The text a range indexes is [`Message::part_text`] of the
+//! part ([`text`]), so provenance and the evidence page cut the same bytes.
+
+pub mod text;
 
 use crate::ids::MessageHash;
 use crate::support::NonEmpty;

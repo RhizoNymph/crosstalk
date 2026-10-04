@@ -179,6 +179,35 @@ impl TransmissionState {
             | Self::Discarded { .. } => Err(NotSuspected),
         }
     }
+
+    /// The content evidence, in `Confirmed`, `Classified` and `Aggregated`.
+    pub fn confirmed(&self) -> Option<&Confirmed> {
+        match self {
+            Self::Confirmed(confirmed)
+            | Self::Classified { confirmed, .. }
+            | Self::Aggregated { confirmed, .. } => Some(confirmed),
+            Self::Detected
+            | Self::AwaitingContent { .. }
+            | Self::Suspected { .. }
+            | Self::Discarded { .. } => None,
+        }
+    }
+
+    /// The co-access records this state holds, in stored order: none while
+    /// `Detected`, the one being waited on, the suspected or discarded
+    /// ones, or a confirmed transmission's `Confirmed::co_access`.
+    pub fn co_accesses(&self) -> Vec<CoAccess> {
+        match self {
+            Self::Detected => Vec::new(),
+            Self::AwaitingContent { co_access, .. } => vec![*co_access],
+            Self::Suspected { co_access, .. } | Self::Discarded { co_access, .. } => {
+                co_access.iter().copied().collect()
+            }
+            Self::Confirmed(confirmed)
+            | Self::Classified { confirmed, .. }
+            | Self::Aggregated { confirmed, .. } => confirmed.co_access().to_vec(),
+        }
+    }
 }
 
 /// A transmission backed by at least one content match.

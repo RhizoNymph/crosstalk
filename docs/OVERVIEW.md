@@ -48,7 +48,10 @@ Overview:
       window, graphs with node metadata, the channel-centred graph, time
       series, and the watermark before which every bucket is final), L8
       surface (the query API with cursor-paginated lists, linked views
-      sharing one filter and one resolved topic-model version, typed query
+      sharing one filter and one resolved topic-model version, transmission
+      rows by id with a per-state shape, the evidence behind a transmission
+      with excerpts cut from stored bodies, one alert by id, the overview's
+      counts in one watermarked query, typed query
       and action errors, the operator directory with a trusted single-user
       mode, operator actions with one permission each, the append-only
       audit log of operator actions and config changes, the id-only SSE
@@ -78,7 +81,10 @@ Overview:
     and alerts. Every aggregate comes back with the watermark read before
     it; every linked view applies one TopologyFilter under one resolved (or
     pinned) topic-model version, with merged agents and superseded
-    channels resolved at read time; projection fits run as background jobs
+    channels resolved at read time; the evidence page cuts excerpts of
+    both sides of each content match from the blob store's bodies through
+    the spans' and matches' locations (a body content retention dropped is
+    reported, not an error); projection fits run as background jobs
     whose stored frames read back exactly. Every store publishes an id-only
     Changed after each committed change (agents, channels, verdicts,
     alerts, rules, topic versions, projection jobs, the watermark), which
@@ -116,7 +122,9 @@ Features Index:
     description: >
       The L8 contract the UI reads and acts through: callers from the
       operator directory (with a trusted single-user mode) and one
-      permission per query and action; paginated lists; linked views
+      permission per query and action; paginated lists; transmission rows
+      by id, transmission evidence with bounded excerpts, one alert by id
+      and the overview's counts; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
       merged agents and superseded channels resolved at read time; the
       channel-centred graph and graph nodes; stored projections and their
@@ -129,6 +137,10 @@ Features Index:
       - spec/types/interfaces/l8_surface.rs
       - spec/types/interfaces/l8_surface/actions.rs
       - spec/types/interfaces/l8_surface/live.rs
+      - spec/types/interfaces/l8_surface/summary.rs
+      - spec/types/interfaces/l8_surface/evidence.rs
+      - spec/types/interfaces/l8_surface/excerpt.rs
+      - spec/types/interfaces/l8_surface/overview.rs
     depends_on: [type_spec]
     doc: docs/features/query_surface.md
 ```

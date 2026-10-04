@@ -7,12 +7,16 @@ use crate::aggregates::projection::{FitFailure, ProjectionStatusKind};
 use crate::aggregates::series::BucketWidth;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::ids::{AuditId, EventId, ProjectionId, TopicId, TransmissionId};
-use crate::interfaces::l2_transport::{BusError, ConsumerGroup};
+use crate::interfaces::l2_transport::{BlobError, BusError, ConsumerGroup};
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l6_analysis::{CatalogError, EmbedError, ProjectionStoreError, SearchError};
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
+use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
+use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError};
 use crate::interfaces::l8_surface::{ConflictKind, InputError, QueryError};
+use crate::observed::message::text::NoPartText;
+use crate::tests::fixtures::{access, message, resource, span};
 
 const V: TopicModelVersion = TopicModelVersion(4);
 
@@ -273,4 +277,93 @@ fn audit_log_errors_map_to_typed_query_errors() {
         QueryError::from(AuditError::IdReused(AuditId::from_ulid(1))),
         QueryError::Store { .. }
     ));
+}
+
+#[test]
+fn blob_errors_are_store_failures() {
+    for error in [
+        BlobError::Unavailable { reason: store() },
+        BlobError::Corrupt(message(1)),
+    ] {
+        assert!(
+            matches!(QueryError::from(error.clone()), QueryError::Store { .. }),
+            "{error:?}"
+        );
+    }
+}
+
+/// One of every evidence error, behind exhaustive matches so a new variant
+/// does not compile until it is listed.
+fn every_evidence_error() -> Vec<EvidenceError> {
+    let errors = vec![
+        EvidenceError::Store { reason: store() },
+        EvidenceError::Blob(BlobError::Unavailable { reason: store() }),
+        EvidenceError::Blob(BlobError::Corrupt(message(1))),
+        EvidenceError::Missing(EvidenceRecord::Span(span(1))),
+        EvidenceError::Missing(EvidenceRecord::Access(access(1))),
+        EvidenceError::Missing(EvidenceRecord::Resource(resource(1))),
+        EvidenceError::Excerpt(ExcerptError::WrongMessage {
+            expected: message(1),
+            got: message(2),
+        }),
+        EvidenceError::Excerpt(ExcerptError::Part(NoPartText::NoSuchPart {
+            index: 3,
+            parts: 1,
+        })),
+        EvidenceError::Excerpt(ExcerptError::Part(NoPartText::NotText { index: 0 })),
+        EvidenceError::Excerpt(ExcerptError::Cut(CutError::OutsideText { end: 9, len: 4 })),
+        EvidenceError::Excerpt(ExcerptError::Cut(CutError::NotCharBoundary { at: 1 })),
+        EvidenceError::Invalid(InvalidEvidence::ResourceMismatch {
+            access: access(1),
+            expected: resource(1),
+            got: resource(2),
+        }),
+        EvidenceError::Invalid(InvalidEvidence::WrongAccess {
+            asked: access(1),
+            got: access(2),
+        }),
+    ];
+    for error in &errors {
+        match error {
+            EvidenceError::Store { .. }
+            | EvidenceError::Blob(BlobError::Unavailable { .. } | BlobError::Corrupt(_))
+            | EvidenceError::Missing(
+                EvidenceRecord::Span(_) | EvidenceRecord::Access(_) | EvidenceRecord::Resource(_),
+            )
+            | EvidenceError::Excerpt(
+                ExcerptError::WrongMessage { .. }
+                | ExcerptError::Part(NoPartText::NoSuchPart { .. } | NoPartText::NotText { .. })
+                | ExcerptError::Cut(CutError::OutsideText { .. } | CutError::NotCharBoundary { .. }),
+            )
+            | EvidenceError::Invalid(
+                InvalidEvidence::ResourceMismatch { .. } | InvalidEvidence::WrongAccess { .. },
+            ) => {}
+        }
+    }
+    errors
+}
+
+#[test]
+fn evidence_errors_are_store_failures_naming_their_cause() {
+    let mut reasons: Vec<String> = Vec::new();
+    for error in every_evidence_error() {
+        let QueryError::Store { reason } = QueryError::from(error.clone()) else {
+            panic!("{error:?} is not a store failure");
+        };
+        assert!(!reasons.contains(&reason), "{error:?} shares its reason");
+        reasons.push(reason);
+    }
+}
+
+#[test]
+fn evidence_blob_errors_map_as_blob_errors_do() {
+    let blob = BlobError::Corrupt(message(4));
+    assert_eq!(
+        QueryError::from(EvidenceError::Blob(blob.clone())),
+        QueryError::from(blob)
+    );
+    assert_eq!(
+        QueryError::from(EvidenceError::Store { reason: store() }),
+        QueryError::Store { reason: store() }
+    );
 }
