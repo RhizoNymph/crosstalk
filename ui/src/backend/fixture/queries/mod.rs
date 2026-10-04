@@ -9,6 +9,7 @@ pub mod graph;
 pub mod lists;
 pub mod names;
 pub mod page;
+pub mod promotion;
 pub mod scope;
 pub mod summaries;
 pub mod transmissions;

@@ -8,6 +8,7 @@ use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use crosstalk_spec::support::Timestamp;
 
+use super::errors::ConflictKind;
 use super::graph::ChannelShape;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,6 +107,22 @@ pub struct ChannelListFilter {
     pub detections: Vec<DetectionKind>,
     pub policies: Vec<PolicyKind>,
     pub include_superseded: bool,
+}
+
+/// What promoting a channel with a pattern would do (item 26), over every
+/// known resource rather than a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionPreview {
+    /// The resources the declared channel would hold: those of the channels
+    /// it supersedes (the promoted one included) that the pattern matches.
+    pub covered_resources: Vec<Resource>,
+    /// Resources of those channels the pattern does not match. They stay
+    /// with their superseded channel, which resolves to the declared one.
+    pub uncovered_resources: Vec<Resource>,
+    /// The other discovered channels promotion would supersede.
+    pub superseded_channels: Vec<ChannelId>,
+    /// Why `PromoteChannel` would be refused now, if it would be.
+    pub conflicts: Option<ConflictKind>,
 }
 
 /// One resource of a channel with who wrote and read it in a window.

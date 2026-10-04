@@ -27,6 +27,7 @@ use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
@@ -39,7 +40,9 @@ use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelName, ChannelSummary, ResourceUse};
+use crate::contract::channels::{
+    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
+};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -285,6 +288,18 @@ impl Backend for FixtureBackend {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::lists::channel_resources(ctx, id, window))
             .await
+    }
+
+    async fn promotion_preview(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        pattern: &ResourcePattern,
+    ) -> Result<PromotionPreview> {
+        require(caller, Permission::View)?;
+        let state = self.state.read().await;
+        let plan = queries::promotion::plan(&self.world, &state, id, pattern)?;
+        Ok(queries::promotion::preview(&self.world, plan, id))
     }
 
     async fn agents(&self, caller: &Caller, page: &PageRequest) -> Result<Page<AgentSummary>> {

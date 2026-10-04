@@ -1,8 +1,6 @@
 //! The promotion page: candidate patterns, the chosen one's coverage, and
 //! the confirm form.
 
-use std::num::NonZeroU32;
-
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
@@ -12,7 +10,7 @@ use topcoat::router::StatusCode;
 use topcoat::view::{View, component, view};
 
 use super::PromoteForm;
-use super::patterns::{Coverage, candidates, pick};
+use super::patterns::{candidates, pick};
 use super::promotable_seed;
 use crate::app::{backend, caller};
 use crate::backend::Backend;
@@ -20,9 +18,8 @@ use crate::components::badge::Badge;
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::locator::{format_pattern, pattern_kind};
 use crate::components::{empty_state, error_panel, href, locator_text, page_header, short_id};
-use crate::contract::channels::{ChannelListFilter, OriginKind};
+use crate::data::names::channel_name;
 use crate::contract::errors::QueryError;
-use crate::contract::lists::PageRequest;
 use crate::pages::channels::detail::channel_path;
 use crate::pages::channels::model::title;
 use crate::pages::common::action::{Failure, error_for, fields_for, require, status_of};
@@ -31,50 +28,63 @@ use crate::pages::common::links::channel_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 
-/// Discovered channels are read this many pages deep to find the ones a
-/// pattern would supersede.
-const OTHER_PAGES: usize = 5;
-const OTHER_PAGE_SIZE: NonZeroU32 = match NonZeroU32::new(100) {
-    Some(size) => size,
-    None => NonZeroU32::MIN,
-};
+/// What the chosen pattern would do, display-ready.
+struct Preview {
+    covered: Vec<Locator>,
+    uncovered: Vec<Locator>,
+    /// The other channels it supersedes: id, link and name.
+    superseded: Vec<(String, String, String)>,
+    /// Why promotion would be refused now.
+    conflict: Option<QueryError>,
+}
 
 struct Promotion {
     title: String,
     seed: Locator,
     options: Vec<ResourcePattern>,
     selected: Option<usize>,
-    coverage: Option<std::result::Result<Coverage, QueryError>>,
-    /// Whether the discovered list was cut short.
-    partial: bool,
+    preview: Option<std::result::Result<Preview, QueryError>>,
 }
 
-/// The seeds of other live discovered channels.
-async fn other_seeds(
+/// Asks the backend what `pattern` would do, and names the channels it
+/// would supersede.
+async fn preview(
     cx: &Cx,
     caller: &Caller,
-    except: ChannelId,
-) -> std::result::Result<(Vec<(ChannelId, Locator)>, bool), QueryError> {
-    let filter = ChannelListFilter {
-        origins: vec![OriginKind::Discovered],
-        ..ChannelListFilter::default()
-    };
-    let mut request = PageRequest::first(OTHER_PAGE_SIZE);
-    let mut seeds = Vec::new();
-    for _ in 0..OTHER_PAGES {
-        let page = backend(cx).channels(caller, &filter, &request).await?;
-        seeds.extend(
-            page.items
-                .into_iter()
-                .filter(|s| s.channel.id != except && s.superseded.is_none())
-                .filter_map(|s| s.seed.map(|seed| (s.channel.id, seed.locator))),
-        );
-        match page.next {
-            Some(next) => request.cursor = Some(next),
-            None => return Ok((seeds, false)),
-        }
-    }
-    Ok((seeds, true))
+    id: ChannelId,
+    pattern: &ResourcePattern,
+    state: &ViewState,
+) -> std::result::Result<Preview, QueryError> {
+    let preview = backend(cx).promotion_preview(caller, id, pattern).await?;
+    let names = backend(cx)
+        .channel_names(caller, &preview.superseded_channels)
+        .await?;
+    Ok(Preview {
+        covered: preview
+            .covered_resources
+            .into_iter()
+            .map(|r| r.locator)
+            .collect(),
+        uncovered: preview
+            .uncovered_resources
+            .into_iter()
+            .map(|r| r.locator)
+            .collect(),
+        superseded: preview
+            .superseded_channels
+            .iter()
+            .map(|other| {
+                (
+                    short_id(other.to_ulid()),
+                    channel_url(*other, state),
+                    names
+                        .get(other)
+                        .map_or_else(|| short_id(other.to_ulid()), channel_name),
+                )
+            })
+            .collect(),
+        conflict: preview.conflicts.map(QueryError::Conflict),
+    })
 }
 
 async fn load(
@@ -92,34 +102,16 @@ async fn load(
     let seed = promotable_seed(&summary)?.clone();
     let options = candidates(&seed);
     let selected = pick(&options, pattern).map_err(|reason| invalid("pattern", reason))?;
-    let mut partial = false;
-    let coverage = match selected.and_then(|i| options.get(i)) {
+    let preview = match selected.and_then(|i| options.get(i)) {
         None => None,
-        Some(pattern) => Some(
-            async {
-                let uses = backend(cx)
-                    .channel_resources(caller, id, state.scope.window)
-                    .await?;
-                let mut own: Vec<Locator> = vec![seed.clone()];
-                for locator in uses.into_iter().map(|u| u.resource.locator) {
-                    if !own.contains(&locator) {
-                        own.push(locator);
-                    }
-                }
-                let (others, cut) = other_seeds(cx, caller, id).await?;
-                partial = cut;
-                Ok(Coverage::new(pattern, &own, &others))
-            }
-            .await,
-        ),
+        Some(pattern) => Some(preview(cx, caller, id, pattern, state).await),
     };
     Ok(Some(Promotion {
         title: title(&summary),
         seed,
         options,
         selected,
-        coverage,
-        partial,
+        preview,
     }))
 }
 
@@ -214,51 +206,53 @@ pub async fn promote_page(
                         }
                     </ul>
                 </section>
-                match promotion.coverage {
+                match promotion.preview {
                     None => empty_state(message: "Pick a pattern to see what it covers."),
                     Some(Err(error)) => error_panel(error: &error),
-                    Some(Ok(coverage)) => {
-                        let missed = coverage.missed();
-                        let total = coverage.resources.len();
-                        let supersedes: Vec<_> = coverage
-                            .supersedes
-                            .iter()
-                            .map(|(other, seed)| (channel_url(*other, &state), short_id(other.to_ulid()), seed.clone()))
-                            .collect();
-                        let superseded_count = supersedes.len();
+                    Some(Ok(preview)) => {
+                        let covered_count = preview.covered.len();
+                        let uncovered_count = preview.uncovered.len();
+                        let superseded_count = preview.superseded.len();
                         <section class=(SECTION)>
                             <h2 class=(SECTION_TITLE)>"2. Check what it covers"</h2>
+                            if let Some(conflict) = preview.conflict {
+                                <div class="mb-2">error_panel(error: &conflict)</div>
+                            }
                             <p class="mb-2 text-sm">
-                                "Covers " <strong>(total - missed)</strong> " of " (total)
-                                " known resources of this channel (the seed and those seen in the selected window)."
+                                "The declared channel would hold " <strong>(covered_count)</strong>
+                                " known resources: every resource of the channels it supersedes that the pattern matches."
                             </p>
                             <ul class="mb-3 space-y-1 text-sm">
-                                for (locator, covered) in coverage.resources {
+                                for locator in preview.covered {
                                     <li class="flex items-center gap-2">
-                                        if covered {
-                                            <span class="w-20 text-xs text-emerald-700 dark:text-emerald-400">"covered"</span>
-                                        } else {
-                                            <span class="w-20 text-xs text-amber-700 dark:text-amber-400">"not covered"</span>
-                                        }
+                                        <span class="w-20 text-xs text-emerald-700 dark:text-emerald-400">"covered"</span>
                                         locator_text(locator: &locator)
                                     </li>
                                 }
                             </ul>
+                            if uncovered_count > 0 {
+                                <p class="mb-1 text-sm">(uncovered_count) " resources of these channels fall outside the pattern; they stay with their superseded channel:"</p>
+                                <ul class="mb-3 space-y-1 text-sm">
+                                    for locator in preview.uncovered {
+                                        <li class="flex items-center gap-2">
+                                            <span class="w-20 text-xs text-amber-700 dark:text-amber-400">"not covered"</span>
+                                            locator_text(locator: &locator)
+                                        </li>
+                                    }
+                                </ul>
+                            }
                             if superseded_count == 0 {
                                 <p class="text-sm text-zinc-500">"No other discovered channel is covered."</p>
                             } else {
                                 <p class="mb-1 text-sm">"Also supersedes " <strong>(superseded_count)</strong> " other discovered channels:"</p>
                                 <ul class="space-y-1 text-sm">
-                                    for (url, label, seed) in supersedes {
+                                    for (label, url, name) in preview.superseded {
                                         <li class="flex items-center gap-2">
                                             <a class=(format!("{LINK} font-mono text-xs")) href=(url)>(label)</a>
-                                            locator_text(locator: &seed)
+                                            <span class="break-all font-mono text-xs">(name)</span>
                                         </li>
                                     }
                                 </ul>
-                            }
-                            if promotion.partial {
-                                <p class="mt-1 text-xs text-amber-700 dark:text-amber-400">"Only the first discovered channels were checked; more may be covered."</p>
                             }
                         </section>
                     },

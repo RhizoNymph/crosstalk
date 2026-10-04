@@ -12,6 +12,7 @@ use std::future::Future;
 
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
+use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::{AgentId, AlertId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
@@ -22,7 +23,9 @@ use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
 use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelName, ChannelSummary, ResourceUse};
+use crate::contract::channels::{
+    ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
+};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -171,6 +174,16 @@ pub trait Backend: Send + Sync + 'static {
         id: ChannelId,
         window: TimeWindow,
     ) -> impl Future<Output = Result<Vec<ResourceUse>>> + Send;
+
+    /// What `PromoteChannel` with `pattern` would do (item 26). Needs
+    /// `View`; an unknown channel is `NotFound`, while the reasons it would
+    /// be refused are reported in the preview.
+    fn promotion_preview(
+        &self,
+        caller: &Caller,
+        id: ChannelId,
+        pattern: &ResourcePattern,
+    ) -> impl Future<Output = Result<PromotionPreview>> + Send;
 
     fn agents(
         &self,

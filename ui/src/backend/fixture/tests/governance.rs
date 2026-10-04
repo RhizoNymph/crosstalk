@@ -329,6 +329,83 @@ async fn rename_labels_canonical_agents_only() {
 }
 
 #[tokio::test]
+async fn promotion_previews_what_promote_then_does() {
+    let b = fresh();
+    let c = researcher();
+    let (wiki, talk) = (
+        channel(&b, ChannelKey::HijackedWiki),
+        channel(&b, ChannelKey::WikiTalk),
+    );
+    let pattern = ResourcePattern::UrlPrefix {
+        host: Host("wiki.example.org".to_owned()),
+        path_prefix: "/wiki".to_owned(),
+    };
+    let preview = b
+        .promotion_preview(&c, wiki, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(preview.conflicts, None);
+    assert_eq!(preview.superseded_channels, vec![talk]);
+    assert!(!preview.covered_resources.is_empty());
+    assert!(
+        preview
+            .covered_resources
+            .iter()
+            .all(|r| pattern.matches(&r.locator))
+    );
+    assert!(
+        preview
+            .uncovered_resources
+            .iter()
+            .all(|r| !pattern.matches(&r.locator))
+    );
+    let ActionOutcome::ChannelPromoted(new) = b
+        .act(
+            &c,
+            OperatorAction::PromoteChannel {
+                channel: wiki,
+                pattern: pattern.clone(),
+                policy: PolicyKind::Unreviewed,
+                note: None,
+            },
+        )
+        .await
+        .expect("promote")
+    else {
+        panic!("a promotion")
+    };
+    let declared = b.channel(&c, new).await.expect("ok").expect("declared");
+    let held: Vec<_> = preview.covered_resources.iter().map(|r| r.id).collect();
+    assert_eq!(declared.channel.resources, held, "the preview was exact");
+    // Afterwards the same preview reports why it would be refused.
+    let again = b
+        .promotion_preview(&c, wiki, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(again.conflicts, Some(ConflictKind::ChannelSuperseded));
+    let declared_preview = b
+        .promotion_preview(&c, new, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(
+        declared_preview.conflicts,
+        Some(ConflictKind::ChannelNotDiscovered)
+    );
+    let pastebin = channel(&b, ChannelKey::Pastebin);
+    let missed = b
+        .promotion_preview(&c, pastebin, &pattern)
+        .await
+        .expect("preview");
+    assert_eq!(missed.conflicts, Some(ConflictKind::PatternMissesSeed));
+    assert_eq!(
+        b.promotion_preview(&c, crosstalk_spec::ids::ChannelId::from_ulid(1), &pattern)
+            .await
+            .err(),
+        Some(QueryError::NotFound)
+    );
+}
+
+#[tokio::test]
 async fn promote_supersedes_covered_channels_and_graphs_follow() {
     let b = fresh();
     let c = researcher();
