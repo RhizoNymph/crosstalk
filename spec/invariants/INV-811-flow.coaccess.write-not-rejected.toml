@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.coaccess.write-not-rejected"
+statement = "No transmission holds a CoAccess whose write is an Access for a tool call whose tool result has outcome ToolOutcome::Error, whether the correlator processes that result before or after the read it would pair with."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Writes are extracted from the call, and the call's result arrives later,
+in the writer's next request (or in the same response for a server tool).
+A reader's read can be processed in between. If the correlator paired the
+write as soon as it saw it, a rejected write would already have opened an
+AwaitingContent or Suspected transmission by the time its error arrived,
+and no TransmissionUpdate takes a co-access back out. So the correlator
+must not pair a write until its outcome is known; a rejected write never
+seeds a transmission as a delivered message, in either order of arrival.
+In SALT, 119 of 513 sampled message sends were rejected, so this is a
+common case, not an edge one. Content the reader did receive (a shorter
+retry that succeeded) still confirms through the retry's own write. A
+write whose result never arrives is outside this invariant.
+"""
+
+[evidence]
+dst = "crosstalk_flow::dst::rejected_write_never_pairs"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

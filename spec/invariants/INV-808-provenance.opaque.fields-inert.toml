@@ -1,0 +1,26 @@
+[invariant]
+id = "provenance.opaque.fields-inert"
+statement = "Changing only the ToolCallIds, Reasoning::Opaque payloads, reasoning signatures and Unknown parts' raw JSON of the messages a ConversationDelta lists, so that every Message::part_text is unchanged, leaves the spans provenance extracts, the fingerprints it observes and indexes, and the ContentMatches it produces unchanged apart from message hashes."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Opaque fields are not content: no agent wrote a provider's thought
+signature, encrypted reasoning or a tool-call id, so none of them may
+become an originated span, add to a fingerprint's frequency, or produce a
+match. Agents behind one provider carry signatures and ids with shared
+prefixes and structure, and a Gemini tool-call id embeds a base64 thought
+signature after __thought__; if any of these reached the segmenter, the
+fingerprinter or the base64 decoder, agents that only share a provider
+would appear to transmit to each other. Swapping every opaque field for
+fresh random values must therefore change nothing provenance records
+except the message hashes that name the parts. The decoder side of the
+same rule is provenance.decode.part-text-input; keeping the blobs out of
+part text in the first place is canonical.opaque.outside-part-text.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::opaque_fields_change_no_span_or_match"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

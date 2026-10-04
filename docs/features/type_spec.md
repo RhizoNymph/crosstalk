@@ -371,6 +371,19 @@ The types follow data through the stack:
   agent's target is never itself and never another merged agent.
 - Only originated spans are fingerprinted and indexed. Common spans are
   never indexed.
+- Opaque fields are not content. Normalizers keep provider blobs
+  (encrypted or redacted reasoning, reasoning and thought signatures,
+  tool-call ids, including Gemini's `__thought__<base64>` ids) out of every
+  part text, and provenance segments, fingerprints and decodes part text
+  only, so changing those fields changes no span or match.
+- `MatchKind::Normalized` folds one level of JSON or YAML string escapes
+  as well as whitespace and case, on both sides: a span serialised into a
+  string literal in a reader's tool result matches as `Exact` or
+  `Normalized` (on AgentDojo only 9% of injected strings reach tool output
+  byte for byte; 49% need escapes undone).
+- Read-side matching scans only a delta's `new_inputs`, `new_system` and
+  output, never re-sent history, so one received message yields one
+  match per span, not one per later call.
 - A `ContentMatch` never has the same agent as origin and reader, and its
   non-zero `matched_bytes` never exceeds its read range
   (`ContentMatch::new`).
@@ -380,7 +393,10 @@ The types follow data through the stack:
   matches share one sender and one reader (`Confirmed::new`). The sender is
   known only from that state on.
 - A `CoAccess` joins a write and a later read of one resource by two
-  different agents within the window (`CoAccess::new`).
+  different agents within the window (`CoAccess::new`). A write whose tool
+  result has `ToolOutcome::Error` delivered nothing: it is not extracted
+  as a write once its result is known, and never pairs into a `CoAccess`,
+  whichever of its result and the read is processed first.
 - A transmission is one (reader exchange, sender, route); later matches
   extend it. Route precedence is Delegation, Channel, Direct, Unobserved.
 - No `EdgeKey` is a self-edge (`EdgeKey::new`); every `Embedding` has its
@@ -478,3 +494,24 @@ The types follow data through the stack:
   and on entity ids.
 - The spec has no dependencies; `cargo check` and `cargo test` on
   `spec/Cargo.toml` must stay clean.
+
+## Open design questions
+
+- **Shared upstream source.** Two agents can produce the same text without
+  communicating because both quote one resource. In SWE trajectory
+  corpora, about 14.5% of the novel assistant shingles of one task
+  reappear in a different task on the same repository, because both agents
+  quote the same repository file; yet only 0.18% of trajectory pairs share
+  20 or more such shingles. Provenance already classifies text the writer
+  copied from its own inputs as `Relayed(RelaySource::Input)`, which is
+  never indexed, but a writer that reproduces a file it did not read in
+  this conversation (from an earlier, compacted context, or from memory)
+  produces an `Originated` span, and a reader that then reads the same
+  file gets a `ToolResult` match from a sender it never heard from. Open:
+  a span that the reader could have obtained independently, from a
+  resource it read (`AccessOp::Read`) that holds the same text, should not
+  on that evidence alone confirm a transmission. Stating this needs a
+  notion the spec does not have yet: which resource a read's text came
+  from, and whether that resource held the span's text before the writer
+  wrote it. The low pair rate suggests a threshold on shared spans per
+  agent pair as a cheaper first filter.

@@ -1,0 +1,35 @@
+[invariant]
+id = "canonical.opaque.outside-part-text"
+statement = "No Message::part_text of a message Normalizer::normalize produces contains a provider's opaque blob from the wire: an encrypted or redacted reasoning payload, a reasoning or thought signature, or a tool-call id, including the base64 a Gemini id carries after __thought__."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Part text is all that provenance segments, fingerprints, decodes and
+matches (provenance.span.location-indexes-part-text). Opaque blobs are
+long base64 strings that share structure between agents of one provider
+(Anthropic thinking signatures and redacted_thinking data, OpenAI
+Responses encrypted_content, Gemini thoughtSignature, and Gemini tool-call
+ids that embed a thought signature as `__thought__<base64>`). In text they
+would be fingerprinted, observed toward frequency and fed to the base64
+decoder, which manufactures matches between unrelated agents that share a
+provider, as profiling of real agent datasets showed. They carry no
+content an agent wrote.
+
+Each blob therefore goes to a field part_text does not read:
+Reasoning::Opaque, a signature field beside visible reasoning text where
+the message type has one, ToolCall::id and ToolResult::call_id (kept
+verbatim, canonical.tool-call.id-verbatim), or an Unknown part. A normalizer never folds one into a Text part, the text of
+Reasoning::Visible, ToolArguments, or tool-result Text content. The unit
+tests feed each WireProtocol's fixtures with known blobs; the property
+test generates random blobs in every opaque wire field and checks that no
+part text contains any of them.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::opaque_blobs_never_in_part_text"
+property = "crosstalk_canonical::tests::generated_opaque_blobs_stay_out_of_part_text"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

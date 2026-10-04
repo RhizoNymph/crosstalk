@@ -20,7 +20,10 @@ pub enum Codec {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchKind {
     Exact,
-    /// Matched after whitespace and case normalization.
+    /// Matched after whitespace and case normalization and after one level
+    /// of JSON or YAML string escapes was folded (`\n`, `\"`, `\\`,
+    /// `\uXXXX`, YAML line continuations and folded newlines), applied
+    /// alike to the span's text and the reader's.
     Normalized,
     /// Matched after decoding, in the order the codecs were applied.
     Decoded(NonEmpty<Codec>),

@@ -1,0 +1,26 @@
+[invariant]
+id = "flow.extract.failed-write-no-access"
+statement = "ResourceExtractor::extract returns no Write access when given a tool result whose outcome is ToolOutcome::Error."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A write is the claim that the call's arguments reached the resource. A call
+the tool rejected (a message tool refusing an over-length message, a
+permission error, a missing path) delivered nothing, so no reader can have
+received its text through that resource. In SALT, 119 of 513 sampled
+message sends were rejected; recording each as a write would pair it with
+every later read of the channel and open transmissions for messages never
+sent. Reads already require a result (flow.extract.read-requires-result).
+
+ToolOutcome::Error is set only where the wire format flags a failed result
+(Anthropic is_error, an MCP isError the harness forwards). A tool that
+reports rejection only in its result text is not covered by this
+invariant.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::tests::no_write_from_failed_result"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

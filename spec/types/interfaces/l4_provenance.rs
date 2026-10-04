@@ -64,7 +64,10 @@ pub trait Decoder {
 pub trait Fingerprinter {
     fn params(&self) -> WinnowParams;
 
-    /// Fingerprints of `text` after whitespace and case normalization.
+    /// Fingerprints of `text` after whitespace and case normalization and
+    /// folding one level of JSON or YAML string escapes (see
+    /// `MatchKind::Normalized`). `text` is always part text, or decoded
+    /// part text: never a tool-call id, a signature or opaque reasoning.
     fn fingerprints(&self, text: &str) -> Vec<PositionedFingerprint>;
 }
 
