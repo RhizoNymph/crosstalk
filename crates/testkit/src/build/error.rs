@@ -12,7 +12,7 @@ use crosstalk_spec::aggregates::topic_history::{InvalidHistory, InvalidVersionIn
 use crosstalk_spec::derived::flow::evidence::InvalidCoAccess;
 use crosstalk_spec::derived::flow::transmission::MixedMatches;
 use crosstalk_spec::derived::provenance::matching::InvalidMatch;
-use crosstalk_spec::support::{Blank, EmptyRange, InvalidText, OutOfRange};
+use crosstalk_spec::support::{EmptyRange, InvalidQueryText, InvalidText, OutOfRange};
 
 /// A spec constructor refused the builder's values.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -31,8 +31,8 @@ pub enum BuildError {
     Similarity(OutOfRange),
     #[error("display text refused: {0:?}")]
     Text(InvalidText),
-    #[error("blank text refused")]
-    Blank(Blank),
+    #[error("query text refused: {0:?}")]
+    QueryText(InvalidQueryText),
     #[error("user rule refused: {0:?} is reserved for built-in rules")]
     ReservedRuleId(ReservedRuleId),
     #[error("topic version refused: {0:?}")]
@@ -59,7 +59,7 @@ from_refusal!(
     Embedding(InvalidEmbedding),
     Similarity(OutOfRange),
     Text(InvalidText),
-    Blank(Blank),
+    QueryText(InvalidQueryText),
     ReservedRuleId(ReservedRuleId),
     VersionInfo(InvalidVersionInfo),
     History(InvalidHistory),

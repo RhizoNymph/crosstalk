@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use crosstalk_spec::aggregates::alert::{
     Alert, AlertRuleDef, AlertState, AlertSubject, BuiltinRule, ContentRule, QueryWatch, RuleName,
-    RuleStatus, SemanticQuery, SuppressReason, TopicWatch, WatchedTopics,
+    RuleQueryText, RuleStatus, SemanticQuery, SuppressReason, TopicWatch, WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::ids::{AlertId, AlertRuleId, OperatorId, SinkId, TopicId};
-use crosstalk_spec::support::{NonBlank, NonEmpty, Similarity, Timestamp};
+use crosstalk_spec::support::{NonEmpty, Similarity, Timestamp};
 
 use crate::build::error::BuildError;
 use crate::ids::Ids;
@@ -349,7 +349,7 @@ impl UserRuleBuilder {
                 current,
             } => {
                 let query = SemanticQuery {
-                    text: NonBlank::new(&text)?,
+                    text: RuleQueryText::new(&text)?,
                     embedding: Embedding::new(model.clone(), unit_vector(&model))?,
                 };
                 ContentRule::SemanticQuery {
