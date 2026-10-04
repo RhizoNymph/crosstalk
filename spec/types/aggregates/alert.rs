@@ -3,17 +3,24 @@
 //! A rule evaluation produces an [`AlertDraft`] (the lifecycle's `Fired`).
 //! Triage either opens an [`Alert`] or folds the draft into an active (open
 //! or acknowledged) alert with the same rule and subject, so `Deduplicated`
-//! is a [`TriageOutcome`], not a stored state.
+//! is a [`TriageOutcome`], not a stored state. A draft whose rule stopped
+//! evaluating before triage opens nothing (`RuleInactive`).
 //!
 //! Sanctioning a channel suppresses the active alerts whose subject is that
 //! channel; alerts about transmissions on it stay, because content can be
 //! worth flagging on a sanctioned channel. Disabling a rule suppresses its
-//! active alerts.
+//! active alerts. Dismissing a suspected transmission suppresses its
+//! `SuspectedTransmission` alerts.
+//!
+//! Operators create and update content rules ([`ContentRule`]) and enable or
+//! disable any rule. A rule keeps its kind for life. Updating a rule leaves
+//! its alerts as they are.
 //!
 //! ```text
 //! draft ─triage─┬─▶ Open ─acknowledge─▶ Acknowledged ─resolve─▶ Resolved
 //!               │     └──────┬──────────────┘
-//!               │      channel sanctioned
+//!               │   sanctioned, rule disabled
+//!               │   or transmission dismissed
 //!               │            ▼
 //!               │       Suppressed
 //!               └─▶ deduplicated into an existing alert
@@ -30,7 +37,7 @@ use crate::aggregates::topic::{Embedding, TopicModelVersion};
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
 use std::num::NonZeroU32;
 
-use crate::support::{NonEmpty, Similarity, Timestamp};
+use crate::support::{NonBlank, NonEmpty, Similarity, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlertRuleKind {
@@ -61,7 +68,7 @@ pub enum AlertRule {
     /// new version becomes ready (`TopicVersionReady`), each topic is
     /// remapped to the new version's topic whose centroid is most similar, if
     /// that similarity reaches `remap_threshold`; a rule with any topic left
-    /// unmapped becomes [`RuleStatus::Stale`] instead of silently watching the
+    /// unmapped becomes [`TopicWatch::Stale`] instead of silently watching the
     /// wrong topics. Remapping at that moment switches the rule in step with
     /// new confirmations' classifications.
     ///
@@ -71,13 +78,40 @@ pub enum AlertRule {
     ///
     /// [`TopicLineage::remap`]: crate::aggregates::topic_history::TopicLineage::remap
     WatchedTopic {
-        version: TopicModelVersion,
-        topics: NonEmpty<TopicId>,
+        watch: TopicWatch,
         remap_threshold: Similarity,
     },
     SemanticQuery {
+        /// What the operator wrote; `query` is its embedding.
+        text: NonBlank,
         query: Embedding,
         threshold: Similarity,
+    },
+}
+
+/// Topics of one topic-model version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedTopics {
+    pub version: TopicModelVersion,
+    pub topics: NonEmpty<TopicId>,
+}
+
+/// Whether a watched-topic rule still names topics that mean something.
+/// Only watched-topic rules can be stale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopicWatch {
+    Current(WatchedTopics),
+    /// A re-fit to `unmapped_in` left a topic without a close counterpart.
+    /// The rule evaluates nothing until an operator updates it, which is the
+    /// only way back to `Current`. Its active alerts stay active: they were
+    /// valid when raised. Produced only by
+    /// [`TopicLineage::remap`](crate::aggregates::topic_history::TopicLineage::remap).
+    Stale {
+        last: WatchedTopics,
+        unmapped_in: TopicModelVersion,
+        /// The topics of `last` whose best link into `unmapped_in` is absent
+        /// or below the rule's threshold, in the rule's order.
+        unmapped: NonEmpty<TopicId>,
     },
 }
 
@@ -93,6 +127,56 @@ impl AlertRule {
             Self::SemanticQuery { .. } => AlertRuleKind::SemanticQuery,
         }
     }
+
+    pub fn is_stale(&self) -> bool {
+        matches!(
+            self,
+            Self::WatchedTopic {
+                watch: TopicWatch::Stale { .. },
+                ..
+            }
+        )
+    }
+}
+
+/// A rule an operator can create and edit: the content rules. The other
+/// kinds take no parameters; config provisions one rule of each, which
+/// operators can only enable and disable. A watched-topic definition is
+/// always current, so updating a stale rule makes it current.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContentRule {
+    WatchedTopic {
+        topics: WatchedTopics,
+        remap_threshold: Similarity,
+    },
+    SemanticQuery {
+        text: NonBlank,
+        query: Embedding,
+        threshold: Similarity,
+    },
+}
+
+impl From<ContentRule> for AlertRule {
+    fn from(rule: ContentRule) -> Self {
+        match rule {
+            ContentRule::WatchedTopic {
+                topics,
+                remap_threshold,
+            } => Self::WatchedTopic {
+                watch: TopicWatch::Current(topics),
+                remap_threshold,
+            },
+            ContentRule::SemanticQuery {
+                text,
+                query,
+                threshold,
+            } => Self::SemanticQuery {
+                text,
+                query,
+                threshold,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,14 +186,43 @@ pub struct AlertRuleDef {
     pub status: RuleStatus,
 }
 
+/// What an operator set. Staleness is separate ([`TopicWatch`]), so a rule
+/// can be disabled and stale at once, and enabling a stale rule does not
+/// make it evaluate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleStatus {
     Enabled,
     Disabled,
-    /// A watched-topic rule that could not be remapped after a re-fit. It
-    /// evaluates nothing until an operator updates it. Its active alerts stay
-    /// active: they were valid when raised.
-    Stale,
+}
+
+/// An update that would change a rule's kind. A rule keeps its kind for
+/// life, so its alerts keep their meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KindChanged {
+    pub from: AlertRuleKind,
+    pub to: AlertRuleKind,
+}
+
+impl AlertRuleDef {
+    /// Whether the rule produces drafts: enabled and not stale.
+    pub fn evaluates(&self) -> bool {
+        self.status == RuleStatus::Enabled && !self.rule.is_stale()
+    }
+
+    /// Replace the definition, keeping id and status. A stale watched-topic
+    /// rule becomes current. Rejects a definition of another kind, leaving
+    /// the rule unchanged.
+    pub fn update(&mut self, definition: ContentRule) -> Result<(), KindChanged> {
+        let rule = AlertRule::from(definition);
+        if rule.kind() != self.rule.kind() {
+            return Err(KindChanged {
+                from: self.rule.kind(),
+                to: rule.kind(),
+            });
+        }
+        self.rule = rule;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -135,6 +248,10 @@ pub enum TriageOutcome {
     Deduplicated {
         into: AlertId,
     },
+    /// The draft's rule no longer evaluates (disabled or stale by the time
+    /// the draft was triaged), so nothing was opened. Closes the race between
+    /// an evaluation and a disable.
+    RuleInactive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,8 +276,8 @@ pub enum AlertState {
         at: Timestamp,
         note: Option<String>,
     },
-    /// The condition stopped being alert-worthy, e.g. the channel was
-    /// sanctioned.
+    /// The condition stopped being alert-worthy: the channel was sanctioned,
+    /// the rule disabled, or the suspected transmission dismissed.
     Suppressed {
         at: Timestamp,
         reason: SuppressReason,
@@ -195,4 +312,6 @@ impl AlertRevision {
 pub enum SuppressReason {
     ChannelSanctioned,
     RuleDisabled,
+    /// An operator dismissed the suspected transmission the alert is about.
+    TransmissionDismissed,
 }

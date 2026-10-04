@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.agent-merge.records-restore-data"
+statement = "When IdentityResolver::merge marks agent a Merged, a's record holds a's state just before the merge as prior and lists in repointed every agent the merge repointed from a to the new target."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Unmerge restores exactly, and it can only restore what the merge recorded.
+Without the prior state the agent would come back Provisional and lose its
+Established standing; without the repointed list the agents merged into it
+earlier would stay with the target and the unmerge would split only one id
+off a cluster the operator meant to undo.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::merge_records_prior_and_repointed"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

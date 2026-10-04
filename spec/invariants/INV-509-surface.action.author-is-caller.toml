@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.action.author-is-caller"
+statement = "For UnmergeAgent, LabelAgent, PromoteChannel, DismissTransmission, CreateAlertRule, UpdateAlertRule and SetAlertRuleStatus, the operator the surface passes to L3, L5 or L6 is the Caller's OperatorId and any time it passes is the time it accepted the action."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+These actions carry no author or time, so a client cannot claim to be
+another operator. Unmerge records, label changes, promoted declarations and
+dismissals all name who did it; a fixed service identity there would make
+them unattributable.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::new_actions_stamp_caller"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

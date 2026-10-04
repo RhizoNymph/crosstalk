@@ -1,5 +1,6 @@
 use crate::support::{
-    ByteRange, EmptyRange, EmptyWindow, NonEmpty, OutOfRange, Share, Similarity, TimeWindow,
+    Blank, ByteRange, EmptyRange, EmptyWindow, NonBlank, NonEmpty, OutOfRange, Share, Similarity,
+    TimeWindow,
 };
 use crate::tests::fixtures::at;
 
@@ -76,4 +77,14 @@ fn share_rejects_out_of_range_and_nan() {
     assert!(Share::new(1.5).is_none());
     assert!(Share::new(-0.1).is_none());
     assert!(Share::new(f64::NAN).is_none());
+}
+
+#[test]
+fn non_blank_trims_and_rejects_whitespace() {
+    assert_eq!(
+        NonBlank::new("  deploy keys \n").map(|t| t.as_str().to_owned()),
+        Ok("deploy keys".to_owned())
+    );
+    assert_eq!(NonBlank::new(""), Err(Blank));
+    assert_eq!(NonBlank::new(" \t\n"), Err(Blank));
 }

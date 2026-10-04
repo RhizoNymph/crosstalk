@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.rule.enable-keeps-stale"
+statement = "AlertRuleStore::set_status(Enabled) on a stale watched-topic rule leaves it stale, so it still produces no drafts until it is updated."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A stale rule names topic ids from a superseded fit. Letting enable clear
+staleness would make the rule watch whatever those ids mean now, which is
+exactly what marking it stale prevents.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::enable_keeps_stale_rule_stale"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

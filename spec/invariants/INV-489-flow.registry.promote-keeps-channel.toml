@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.registry.promote-keeps-channel"
+statement = "After ChannelRegistry::promote returns Ok, the channel has the same id, resources, policy and detection as before, and its origin is its earlier origin promoted with the requested pattern."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Transmissions, edges and alerts reference the channel id, and the policy
+was an operator decision. Promotion that created a new declared channel
+would orphan that history and reset the policy to unreviewed.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::promote_keeps_channel"
+integration = "crosstalk::flow::tests::pg_promote_keeps_channel"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

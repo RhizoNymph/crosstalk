@@ -1,7 +1,7 @@
 //! Events from capture (L1) and reconstruction (L3).
 
 use crate::events::Subject;
-use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
+use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash, OperatorId};
 use crate::observed::agent::{IdentityEvidence, MergeAuthor};
 use crate::observed::exchange::Exchange;
 
@@ -20,6 +20,16 @@ pub enum IngestEvent {
         into: AgentId,
         by: MergeAuthor,
     },
+    /// An operator undid `agent`'s merge. Readers that cache the merge table
+    /// point `agent` at itself and every agent in `restored` at `agent`.
+    AgentUnmerged {
+        agent: AgentId,
+        /// The agent it resolved to until now.
+        was_into: AgentId,
+        /// Agents repointed through `agent` that now point at it again.
+        restored: Vec<AgentId>,
+        by: OperatorId,
+    },
 }
 
 impl IngestEvent {
@@ -29,6 +39,7 @@ impl IngestEvent {
             Self::ConversationDelta(_) => Subject::ConversationDelta,
             Self::AgentSeen { .. } => Subject::AgentSeen,
             Self::AgentMerged { .. } => Subject::AgentMerged,
+            Self::AgentUnmerged { .. } => Subject::AgentUnmerged,
         }
     }
 }

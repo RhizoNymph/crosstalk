@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-merge.redirect-recorded"
+statement = "A merge of agent a into a Merged agent t points a at t's target with t as the last of a's earlier_targets, and adds a to t's repointed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The request named t, and the redirect to t's target only keeps chains flat.
+Recording the redirect as a merge into t followed by a repoint means that
+unmerging t later returns a to t, as the request asked, instead of leaving
+a with an agent it was never merged into by name.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::redirected_merge_recorded_as_repoint"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

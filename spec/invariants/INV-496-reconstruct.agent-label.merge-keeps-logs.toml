@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent-label.merge-keeps-logs"
+statement = "Applying a merge or an unmerge changes no agent's label log."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The target keeps its label and the merged agent keeps its own, which the
+canonical agent's LabelView lists in its history. Because neither log is
+touched, an unmerge restores labels exactly with no bookkeeping.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::merge_and_unmerge_keep_label_logs"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

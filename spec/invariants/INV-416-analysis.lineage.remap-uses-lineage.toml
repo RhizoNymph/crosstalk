@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.lineage.remap-uses-lineage"
-statement = "When TopicVersionReady for version V is processed, every WatchedTopic rule that is not Stale and whose version is V's predecessor gets exactly the outcome of TopicLineage::remap over the stored lineage from the predecessor to V: version and topics replaced on Remapped, status Stale on Stale."
+statement = "When TopicVersionReady for version V is processed, every WatchedTopic rule whose TopicWatch is Current on V's predecessor gets exactly the TopicWatch that TopicLineage::remap returns over the stored lineage from the predecessor to V, and its RuleStatus is unchanged."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]

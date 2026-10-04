@@ -11,12 +11,15 @@
 //! ```
 //!
 //! A cross access is a read by an agent other than an earlier writer.
+//!
+//! A promoted channel keeps the `TrafficDetection` it had when it was
+//! discovered and continues on the traffic machine.
 
 use crate::derived::flow::evidence::CoAccess;
 use crate::ids::{AccessId, TransmissionId};
 use crate::support::Timestamp;
 
-/// Detection for a channel declared in config.
+/// Detection for a channel declared before any traffic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredDetection {
     /// No traffic yet, and the idle window has not closed.

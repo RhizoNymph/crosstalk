@@ -27,6 +27,7 @@
 
 use std::collections::HashSet;
 
+use crate::aggregates::alert::{TopicWatch, WatchedTopics};
 use crate::aggregates::edge::EdgeStats;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::TopicId;
@@ -473,21 +474,6 @@ pub enum InvalidLineage {
     BelowFloor { topic: TopicId },
 }
 
-/// The outcome of carrying a watched-topic rule from a lineage's `from`
-/// version to its `to` version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Remap {
-    /// Every watched topic's best link reaches the threshold. `topics` are
-    /// those links' topics in the rule's order, each listed once.
-    Remapped {
-        version: TopicModelVersion,
-        topics: NonEmpty<TopicId>,
-    },
-    /// The watched topics whose best link is below the threshold, or which
-    /// have no link because `to` has no topics. The rule becomes stale.
-    Stale { unmapped: NonEmpty<TopicId> },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemapError {
     /// The rule watches a version other than the lineage's `from`.
@@ -546,16 +532,22 @@ impl TopicLineage {
         self.entries.iter().find(|entry| entry.topic == topic)
     }
 
-    /// Carry a watched-topic rule on `version` over to `to`: each topic goes
-    /// to its best link if that reaches `threshold`. If any topic does not,
-    /// the rule is stale; it is never remapped to a subset of its topics.
-    /// This is the only remapping L6 applies on `TopicVersionReady`.
+    /// Carry a current watched-topic rule on `from` over to `to`, giving its
+    /// new [`TopicWatch`]. Each topic goes to its best link if that reaches
+    /// `threshold`, giving `Current` under `to` with those links' topics in
+    /// the rule's order, each listed once. If any topic does not (its best
+    /// link is below the threshold, or `to` has no topics), the rule becomes
+    /// `Stale` in `to`, listing those topics; it is never remapped to a subset
+    /// of its topics. The rule's `RuleStatus` is not touched. This is the
+    /// only remapping L6 applies on `TopicVersionReady`, and the only way a
+    /// rule becomes stale.
     pub fn remap(
         &self,
-        version: TopicModelVersion,
-        topics: &NonEmpty<TopicId>,
+        watched: &WatchedTopics,
         threshold: Similarity,
-    ) -> Result<Remap, RemapError> {
+    ) -> Result<TopicWatch, RemapError> {
+        let WatchedTopics { version, topics } = watched;
+        let version = *version;
         if version != self.from {
             return Err(RemapError::WrongVersion {
                 rule: version,
@@ -576,13 +568,17 @@ impl TopicLineage {
             }
         }
         if let Some(unmapped) = NonEmpty::from_vec(unmapped) {
-            return Ok(Remap::Stale { unmapped });
+            return Ok(TopicWatch::Stale {
+                last: watched.clone(),
+                unmapped_in: self.to,
+                unmapped,
+            });
         }
         // Every topic was mapped and `topics` is non-empty, so `mapped` is too.
         let topics = NonEmpty::from_vec(mapped).ok_or(RemapError::UnknownTopic(*topics.first()))?;
-        Ok(Remap::Remapped {
+        Ok(TopicWatch::Current(WatchedTopics {
             version: self.to,
             topics,
-        })
+        }))
     }
 }

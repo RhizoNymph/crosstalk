@@ -1,10 +1,11 @@
 use std::num::NonZeroU64;
 
+use crate::aggregates::alert::{TopicWatch, WatchedTopics};
 use crate::aggregates::edge::EdgeStats;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{
     CompletedFit, DuplicateTopic, FitRecord, InvalidHistory, InvalidLineage, InvalidLineageEntry,
-    InvalidVersionInfo, LineageEntry, LineageLink, Remap, RemapError, TopicLineage, TopicSize,
+    InvalidVersionInfo, LineageEntry, LineageLink, RemapError, TopicLineage, TopicSize,
     TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus, TopicVersionStatusKind,
 };
 use crate::events::Subject;
@@ -586,33 +587,40 @@ fn topics(ids: &[u128]) -> NonEmpty<TopicId> {
     NonEmpty::from_vec(ids.iter().copied().map(topic).collect()).expect("non-empty")
 }
 
+fn watched(version: u32, ids: &[u128]) -> WatchedTopics {
+    WatchedTopics {
+        version: v(version),
+        topics: topics(ids),
+    }
+}
+
+fn current(version: u32, ids: &[u128]) -> TopicWatch {
+    TopicWatch::Current(watched(version, ids))
+}
+
 #[test]
 fn remap_follows_best_links_in_rule_order_without_duplicates() {
     assert_eq!(
-        lineage().remap(v(1), &topics(&[14, 12, 13]), sim(0.5)),
-        Ok(Remap::Remapped {
-            version: v(2),
-            topics: topics(&[33, 31]),
-        })
+        lineage().remap(&watched(1, &[14, 12, 13]), sim(0.5)),
+        Ok(current(2, &[33, 31]))
     );
 }
 
 #[test]
 fn remap_threshold_is_inclusive() {
     assert_eq!(
-        lineage().remap(v(1), &topics(&[14]), sim(0.6)),
-        Ok(Remap::Remapped {
-            version: v(2),
-            topics: topics(&[33]),
-        })
+        lineage().remap(&watched(1, &[14]), sim(0.6)),
+        Ok(current(2, &[33]))
     );
 }
 
 #[test]
 fn remap_is_stale_when_any_best_link_is_below_threshold() {
     assert_eq!(
-        lineage().remap(v(1), &topics(&[12, 15, 14]), sim(0.7)),
-        Ok(Remap::Stale {
+        lineage().remap(&watched(1, &[12, 15, 14]), sim(0.7)),
+        Ok(TopicWatch::Stale {
+            last: watched(1, &[12, 15, 14]),
+            unmapped_in: v(2),
             unmapped: topics(&[15, 14]),
         })
     );
@@ -629,11 +637,8 @@ fn remap_ignores_the_lineage_floor() {
     )
     .expect("valid lineage");
     assert_eq!(
-        lineage.remap(v(1), &topics(&[15]), sim(0.15)),
-        Ok(Remap::Remapped {
-            version: v(2),
-            topics: topics(&[34]),
-        })
+        lineage.remap(&watched(1, &[15]), sim(0.15)),
+        Ok(current(2, &[34]))
     );
 }
 
@@ -642,8 +647,10 @@ fn remap_is_stale_when_successor_has_no_topics() {
     let lineage = TopicLineage::new(v(1), v(2), sim(0.5), vec![entry(12, None, Vec::new())])
         .expect("valid lineage");
     assert_eq!(
-        lineage.remap(v(1), &topics(&[12]), sim(0.0)),
-        Ok(Remap::Stale {
+        lineage.remap(&watched(1, &[12]), sim(0.0)),
+        Ok(TopicWatch::Stale {
+            last: watched(1, &[12]),
+            unmapped_in: v(2),
             unmapped: topics(&[12]),
         })
     );
@@ -652,14 +659,14 @@ fn remap_is_stale_when_successor_has_no_topics() {
 #[test]
 fn remap_rejects_other_versions_and_unknown_topics() {
     assert_eq!(
-        lineage().remap(v(0), &topics(&[12]), sim(0.5)),
+        lineage().remap(&watched(0, &[12]), sim(0.5)),
         Err(RemapError::WrongVersion {
             rule: v(0),
             lineage: v(1)
         })
     );
     assert_eq!(
-        lineage().remap(v(1), &topics(&[12, 99]), sim(0.5)),
+        lineage().remap(&watched(1, &[12, 99]), sim(0.5)),
         Err(RemapError::UnknownTopic(topic(99)))
     );
 }

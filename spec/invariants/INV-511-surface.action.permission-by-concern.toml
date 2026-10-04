@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.action.permission-by-concern"
+statement = "OperatorAction::required_permission returns Govern for SetPolicy, MergeAgents, UnmergeAgent, LabelAgent, PromoteChannel, CreateAlertRule, UpdateAlertRule and SetAlertRuleStatus, Triage for Acknowledge, Resolve and DismissTransmission, and Operate for ReplayDeadLetter."
+kind = "domain"
+property = "postcondition"
+requires = ["type", "unit"]
+rationale = """
+Govern covers identity and policy, including what the gateway alerts on;
+Triage covers working alerts, including dismissing the suspected
+transmission an alert is about; Operate covers the pipeline. The match is
+exhaustive, so a new action does not compile until it names a permission.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::OperatorAction::required_permission"
+unit = "crosstalk_spec::tests::surface::every_action_names_its_permission"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

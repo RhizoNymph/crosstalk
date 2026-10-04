@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.rule.update-makes-current"
+statement = "AlertRuleDef::update with a definition of the rule's kind replaces the definition, keeps its id and status and leaves a watched-topic rule current, and with another kind returns KindChanged and leaves the rule unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Updating is the only way a stale rule becomes current again, and the
+operator's enable or disable choice survives it. A rule keeps its kind for
+life because its alerts and their deduplication key name the rule; a
+watched-topic rule turning into a semantic one would relabel alerts it
+raised as something else.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::aggregates::updating_a_stale_rule_makes_it_current_and_keeps_its_status",
+    "crosstalk_spec::tests::aggregates::update_rejects_another_kind_and_leaves_the_rule",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -6,7 +6,7 @@ use crate::derived::flow::transmission::Route;
 use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::RelaySource;
 use crate::events::Subject;
-use crate::ids::{AccessId, AgentId, ChannelId, SpanId, TransmissionId};
+use crate::ids::{AccessId, AgentId, ChannelId, OperatorId, SpanId, TransmissionId};
 use std::num::NonZeroU64;
 
 use crate::support::{NonEmpty, Timestamp};
@@ -52,6 +52,14 @@ pub enum DetectEvent {
         channel: ChannelId,
         co_access: NonEmpty<CoAccess>,
     },
+    /// An operator dismissed a suspected transmission; it is now
+    /// `Discarded` with reason `Dismissed`. Alert triage suppresses its
+    /// `SuspectedTransmission` alerts.
+    TransmissionDismissed {
+        transmission: TransmissionId,
+        by: OperatorId,
+        at: Timestamp,
+    },
 }
 
 impl DetectEvent {
@@ -66,6 +74,7 @@ impl DetectEvent {
             Self::DeclaredChannelUnused { .. } => Subject::DeclaredChannelUnused,
             Self::TransmissionConfirmed { .. } => Subject::TransmissionConfirmed,
             Self::TransmissionSuspected { .. } => Subject::TransmissionSuspected,
+            Self::TransmissionDismissed { .. } => Subject::TransmissionDismissed,
         }
     }
 }

@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-label.well-formed"
+statement = "Every AgentLabel is trimmed, non-empty, at most 64 characters long and free of control characters."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Labels are shown in the topology view and matched by search. Blank labels
+look like no label, very long ones break layout, and control characters can
+spoof other text in logs and terminals. `AgentLabel` has a private field
+and is built only through `AgentLabel::new`.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::AgentLabel::new"
+unit = [
+    "crosstalk_spec::tests::agents::label_is_trimmed",
+    "crosstalk_spec::tests::agents::label_rejects_blank_long_and_control_text",
+    "crosstalk_spec::tests::agents::label_length_counts_characters_not_bytes",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

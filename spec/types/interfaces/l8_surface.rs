@@ -2,9 +2,15 @@
 //! feed, the audit log and alert delivery.
 //!
 //! Operator actions flow back down the stack: policy changes are published
-//! as `PolicyChanged` (applied by L5), and agent merges go to L3's identity
-//! resolver. Every action call, whatever its outcome, leaves one
-//! [`audit::AuditRecord`].
+//! as `PolicyChanged` (applied by L5); agent merges, unmerges and labels go
+//! to L3's identity resolver; channel promotion and transmission dismissal go
+//! to L5 (`ChannelRegistry::promote`, `TransmissionReview::dismiss`); alert
+//! rule management goes to L6's `AlertRuleStore`. Every action names its
+//! permission ([`OperatorAction::required_permission`]), checked before any
+//! effect. Wherever an action records an author or time, the surface stamps
+//! them from the authenticated caller and the time it accepted the action;
+//! callers cannot supply them. Every action call, whatever its outcome,
+//! leaves one [`audit::AuditRecord`].
 //!
 //! Implementations:
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
@@ -32,7 +38,7 @@ pub mod audit;
 pub mod lists;
 pub mod live;
 
-use crate::aggregates::alert::{Alert, AlertRuleDef};
+use crate::aggregates::alert::{Alert, AlertRuleDef, RuleStatus};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -42,11 +48,12 @@ use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
+use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
-use crate::ids::{AlertId, ChannelId, EventId, OperatorId, TransmissionId};
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, EventId, OperatorId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
-use crate::interfaces::l6_analysis::{SearchQuery, SearchResults};
-use crate::observed::agent::{Agent, MergeRequest};
+use crate::interfaces::l6_analysis::{RuleRequest, SearchQuery, SearchResults};
+use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
 use crate::paging::{
     AgentList, AlertRuleList, ChannelList, DeadLetterList, EdgeTransmissionList, Page, PageRequest,
 };
@@ -83,9 +90,11 @@ pub enum Permission {
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
     Content,
-    /// Policy changes and agent merges.
+    /// Identity and policy: channel policy and promotion, agent merges,
+    /// unmerges and labels, and alert rules (what the gateway alerts on).
     Govern,
-    /// Acknowledge and resolve alerts.
+    /// Work alerts: acknowledge, resolve, and dismiss the suspected
+    /// transmissions they are about.
     Triage,
     /// Operate the pipeline: list and replay dead-lettered deliveries. A
     /// replay re-runs a consumer on an old event, so it can reopen alerts or
@@ -258,7 +267,9 @@ pub trait QueryApi {
     async fn audit(&self, caller: &Caller, query: &AuditQuery) -> Result<AuditPage, QueryError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `OperatorAction` is `PartialEq` but not `Eq`: rule requests hold
+/// similarity thresholds, which are floats.
+#[derive(Debug, Clone, PartialEq)]
 pub enum OperatorAction {
     SetPolicy {
         channel: ChannelId,
@@ -268,12 +279,48 @@ pub enum OperatorAction {
     /// Built with `MergeAuthor::Operator` of the caller; self-merges cannot
     /// be expressed.
     MergeAgents(MergeRequest),
+    /// Undo `agent`'s merge exactly (`IdentityResolver::unmerge`).
+    UnmergeAgent {
+        agent: AgentId,
+    },
+    /// Set (`Some`) or clear (`None`) the display label of `agent`'s
+    /// canonical agent.
+    LabelAgent {
+        agent: AgentId,
+        label: Option<AgentLabel>,
+    },
+    /// Attach `pattern` to a discovered channel, making it declared.
+    PromoteChannel {
+        channel: ChannelId,
+        pattern: ResourcePattern,
+    },
     Acknowledge {
         alert: AlertId,
     },
     Resolve {
         alert: AlertId,
         note: Option<String>,
+    },
+    /// Discard a suspected transmission with reason `Dismissed`, which
+    /// suppresses its `SuspectedTransmission` alerts.
+    DismissTransmission {
+        transmission: TransmissionId,
+        note: Option<String>,
+    },
+    /// The client chooses the rule's id (a ULID), so a retried create is
+    /// idempotent.
+    CreateAlertRule {
+        id: AlertRuleId,
+        rule: RuleRequest,
+        status: RuleStatus,
+    },
+    UpdateAlertRule {
+        rule: AlertRuleId,
+        definition: RuleRequest,
+    },
+    SetAlertRuleStatus {
+        rule: AlertRuleId,
+        status: RuleStatus,
     },
     /// Redeliver a dead-lettered envelope to its consumer group.
     ReplayDeadLetter {
@@ -287,8 +334,15 @@ pub enum OperatorAction {
 pub enum ActionKind {
     SetPolicy,
     MergeAgents,
+    UnmergeAgent,
+    LabelAgent,
+    PromoteChannel,
     Acknowledge,
     Resolve,
+    DismissTransmission,
+    CreateAlertRule,
+    UpdateAlertRule,
+    SetAlertRuleStatus,
     ReplayDeadLetter,
 }
 
@@ -297,18 +351,36 @@ impl OperatorAction {
         match self {
             Self::SetPolicy { .. } => ActionKind::SetPolicy,
             Self::MergeAgents(_) => ActionKind::MergeAgents,
+            Self::UnmergeAgent { .. } => ActionKind::UnmergeAgent,
+            Self::LabelAgent { .. } => ActionKind::LabelAgent,
+            Self::PromoteChannel { .. } => ActionKind::PromoteChannel,
             Self::Acknowledge { .. } => ActionKind::Acknowledge,
             Self::Resolve { .. } => ActionKind::Resolve,
+            Self::DismissTransmission { .. } => ActionKind::DismissTransmission,
+            Self::CreateAlertRule { .. } => ActionKind::CreateAlertRule,
+            Self::UpdateAlertRule { .. } => ActionKind::UpdateAlertRule,
+            Self::SetAlertRuleStatus { .. } => ActionKind::SetAlertRuleStatus,
             Self::ReplayDeadLetter { .. } => ActionKind::ReplayDeadLetter,
         }
     }
 
-    /// The permission the caller must hold. Checked before any effect; a
-    /// caller without it gets `Forbidden`.
+    /// The permission the caller must hold, checked before any effect; a
+    /// caller without it gets `Forbidden`. Govern for identity, policy and
+    /// rules, Triage for alerts, Operate for the pipeline. No action needs
+    /// View, Content or Audit, which are read permissions.
     pub fn required_permission(&self) -> Permission {
         match self {
-            Self::SetPolicy { .. } | Self::MergeAgents(_) => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } => Permission::Triage,
+            Self::SetPolicy { .. }
+            | Self::MergeAgents(_)
+            | Self::UnmergeAgent { .. }
+            | Self::LabelAgent { .. }
+            | Self::PromoteChannel { .. }
+            | Self::CreateAlertRule { .. }
+            | Self::UpdateAlertRule { .. }
+            | Self::SetAlertRuleStatus { .. } => Permission::Govern,
+            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::DismissTransmission { .. } => {
+                Permission::Triage
+            }
             Self::ReplayDeadLetter { .. } => Permission::Operate,
         }
     }

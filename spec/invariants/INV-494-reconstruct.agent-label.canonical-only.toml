@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-label.canonical-only"
+statement = "IdentityResolver::set_label(a, change) appends change to the label log of a's canonical agent and to no other agent's log."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The label belongs to the agent the UI shows, which is the canonical one.
+Labelling a merged id directly would hide the label behind an alias and
+change what an unmerge restores, so a merged agent's log never changes
+after its merge.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::set_label_targets_canonical_agent"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

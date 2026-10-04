@@ -15,13 +15,15 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids
-├── support.rs             NonEmpty, Timestamp, TimeWindow, ByteRange, Similarity, Share
+├── support.rs             NonEmpty, NonBlank, Timestamp, TimeWindow, ByteRange, Similarity, Share
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
 │   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
-│   ├── agent.rs           Agent, IdentityEvidence, IdentityScope, AgentState, MergeRequest
+│   ├── agent.rs           Agent, IdentityEvidence, IdentityScope, AgentState, Merged, MergeRequest
+│   ├── agent/
+│   │   └── label.rs       AgentLabel, LabelLog, LabelView (display labels)
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
@@ -32,9 +34,9 @@ spec/types/
 │       ├── resource.rs    Resource, Locator, ResourcePattern
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
-│       ├── transmission.rs Transmission, Route, DelegationDirection, TransmissionState, Confirmed
+│       ├── transmission.rs Transmission, Route, TransmissionState, DiscardReason, Dismissal, Confirmed
 │       └── channel/
-│           ├── mod.rs     Channel, ChannelOrigin
+│           ├── mod.rs     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed
 │           ├── detection.rs DeclaredDetection, TrafficDetection
 │           └── policy.rs  Policy, PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
@@ -43,23 +45,23 @@ spec/types/
 │   ├── projection.rs      Projection, ProjectionLimit (checked), ProjectedPoint, ProjectionToken
 │   ├── series.rs          BucketWidth, SeriesStep, SeriesGrid, TopologySeries (checked), SeriesGroups
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked), Remap
-│   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision
+│   ├── topic_history.rs   TopicVersionHistory, TopicSizes, TopicLineage (checked, remap)
+│   └── alert.rs           AlertRule, TopicWatch, ContentRule, AlertRuleDef, RuleStatus, AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
-│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged
-│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
+│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged
+│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore
-│   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, set_label), AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
-│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage
+│   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator, TransmissionReview
+│   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
-│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, audit), OperatorAction, OperatorActions, AlertSink
+│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, audit), OperatorAction, ActionKind, OperatorActions, AlertSink
 │   └── l8_surface/
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
 │       ├── live.rs        LiveFeed, LiveUpdate, UpdateKinds, LiveScope, LiveCursor, FeedWindow, LiveConfig
@@ -72,8 +74,9 @@ spec/types/
 - **Invalid states are unrepresentable where the type system allows it.**
   Examples: a message's role is its body variant, so a tool call can only
   appear in an assistant message. A confirmed transmission holds a
-  `NonEmpty<ContentMatch>`. A declared channel and a discovered channel have
-  different detection enums.
+  `NonEmpty<ContentMatch>`. A channel declared before traffic and a
+  discovered or promoted channel have different detection enums. Only a
+  watched-topic rule can be stale.
 - **Opaque newtypes for server-issued values.** Cursors and projection
   tokens have private fields; clients only hand them back. A cursor's
   list is a type parameter, so one list's cursor does not fit another.
@@ -118,7 +121,9 @@ Code Assist) and self-hosted vLLM or SGLang. See
 - **Only generation is captured.** Token counting, model listing, probes and
   side routes are forwarded and not captured.
 - **Merges are aliases.** Stored records keep their agent ids and readers
-  resolve them through `AgentDirectory`.
+  resolve them through `AgentDirectory`. An operator unmerge restores the
+  merge table exactly from the `Merged` record.
+- **Labels are display only.** An agent label is never identity evidence.
 
 ## Mapping from the lifecycle definition
 
@@ -133,13 +138,13 @@ either to work around the simulator or because the types keep it in-process:
 | --- | --- |
 | `Agent.registered` | `AgentState::Registered`. Scenarios pre-declare every agent, so one first seen in traffic starts `registered` there and `Provisional` here |
 | `Channel.undiscovered` | no record: a channel exists once declared or discovered |
-| `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` |
+| `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` (under `DeclaredHistory::BeforeTraffic`) |
 | `Channel.observed` … `dormant` | `TrafficDetection` |
 | `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic`; `unreviewed.never_reviewed` / `unreviewed.reset` are `Unreviewed(None)` / `Unreviewed(Some(_))`; its `unused` trigger is the `SanctionedUnused` rule's policy check |
 | `ChannelSanctioned` | `PolicyChanged { policy: Sanctioned(_) }`; other policy changes are applied by the policy transition alone |
 | `Alert.fired` / `deduplicated` | `AlertDraft` / `TriageOutcome::Deduplicated` |
 | `Alert.subjectKind` / `subject` | `AlertSubject`: the channel for new-channel, traffic and sanctioned-unused alerts, the transmission for suspected-transmission and content alerts |
-| `ContentRule` machine | `AlertRuleDef` with `WatchedTopic` / `SemanticQuery` and `RuleStatus` `Enabled` / `Stale` (`Disabled` and `RuleDisabled` suppression are not modelled) |
+| `ContentRule` machine | `AlertRuleDef` with `WatchedTopic` / `SemanticQuery`; its `enabled` is `RuleStatus::Enabled` and its `stale` is `TopicWatch::Stale` (`Disabled` and `RuleDisabled` suppression are not modelled) |
 | `TopicModel` machine, `TopicModelRefitted` | the analyze consumer's in-process fit; `TopicVersionReady` is the bus event |
 | `ResponseCompleted`, `ExchangeFailed`, `ExchangeNormalized` | in-process on the proxy node (`RawExchange`, `NormalizedExchange`) |
 | `ContentMatched` / `DelegationMatched` / `DirectMatched` / `OutputMatched`, selected by `Exchange` stand-in fields | one `ContentMatched` carrying a `Carrier`; the correlator chooses the route (delegation direction and the direct carrier are not modelled) |

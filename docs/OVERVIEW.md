@@ -38,11 +38,11 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
-      topic sizes and lineage, search, alert rules), L7 topology (edge
-      aggregation per time window, graphs and time series), L8 surface
-      (query API with cursor-paginated lists and linked views sharing one
-      filter, UI, operator actions, append-only audit log, SSE live feed,
-      alert sinks).
+      topic sizes and lineage, search, alert rules and their management),
+      L7 topology (edge aggregation per time window, graphs and time
+      series), L8 surface (query API with cursor-paginated lists and linked
+      views sharing one filter, UI, operator actions with one permission
+      each, append-only audit log, SSE live feed, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -64,9 +64,11 @@ Overview:
     TopologyFilter, and streams new alerts and changed edges, channels and
     policies to the UI over SSE (resumable by cursor, with a resync marker
     when a cursor is too old). Operator actions flow back down: policy
-    changes to L5, which records every decision in the channel's policy
-    history, agent merges to L3. Every action call is recorded in the audit
-    log with its outcome.
+    changes and channel promotion to L5, which records every policy
+    decision in the channel's policy history; transmission dismissal
+    through L5's correlator (L6 then suppresses its alert); agent merges,
+    exact unmerges and display labels to L3; alert rule management to L6.
+    Every action call is recorded in the audit log with its outcome.
 
 Features Index:
   type_spec:

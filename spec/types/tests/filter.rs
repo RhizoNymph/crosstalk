@@ -1,9 +1,9 @@
-use crate::aggregates::alert::{AlertRule, AlertRuleDef, RuleStatus};
+use crate::aggregates::alert::{AlertRule, AlertRuleDef, RuleStatus, TopicWatch, WatchedTopics};
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::FilterSubject;
 use crate::derived::flow::channel::detection::DeclaredDetection;
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
-use crate::derived::flow::channel::{Channel, ChannelOrigin};
+use crate::derived::flow::channel::{Channel, ChannelOrigin, Declaration, DeclaredHistory};
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::ids::PromptHash;
@@ -12,7 +12,9 @@ use crate::interfaces::l8_surface::PolicyKind;
 use crate::interfaces::l8_surface::lists::{
     AgentFilter, AgentStateKind, AlertRuleFilter, ChannelFilter,
 };
-use crate::observed::agent::{Agent, AgentState, IdentityEvidence, MergeAuthor};
+use crate::observed::agent::{
+    Agent, AgentState, IdentityEvidence, LabelLog, MergeAuthor, MergeableState, Merged,
+};
 use crate::support::{Blake3, NonEmpty};
 use crate::tests::fixtures::{agent, at, channel};
 
@@ -140,10 +142,12 @@ fn declared_channel(policy: Policy) -> Channel {
     Channel {
         id: channel(1),
         origin: ChannelOrigin::Declared {
-            pattern: ResourcePattern::McpServer("wiki".into()),
-            by: PolicyAuthor::Config,
-            at: at(0),
-            detection: DeclaredDetection::AwaitingTraffic,
+            declaration: Declaration {
+                pattern: ResourcePattern::McpServer("wiki".into()),
+                by: PolicyAuthor::Config,
+                at: at(0),
+            },
+            history: DeclaredHistory::BeforeTraffic(DeclaredDetection::AwaitingTraffic),
         },
         resources: Vec::new(),
         policy,
@@ -175,16 +179,18 @@ fn agent_in(state: AgentState) -> Agent {
         )),
         parent: None,
         state,
+        labels: LabelLog::default(),
     }
 }
 
 #[test]
 fn agent_filter_matches_state_kind() {
-    let merged = agent_in(AgentState::Merged {
-        into: agent(2),
-        at: at(5),
-        by: MergeAuthor::Resolver,
-    });
+    let merged = agent_in(AgentState::Merged(Merged::new(
+        agent(2),
+        at(5),
+        MergeAuthor::Resolver,
+        MergeableState::Provisional { first_seen: at(1) },
+    )));
     let live = agent_in(AgentState::Provisional { first_seen: at(1) });
     let canonical = AgentFilter {
         states: vec![
@@ -205,10 +211,46 @@ fn alert_rule_filter_matches_status() {
         rule: AlertRule::NewChannel,
         status,
     };
-    let stale_only = AlertRuleFilter {
-        statuses: vec![RuleStatus::Stale],
+    let disabled_only = AlertRuleFilter {
+        statuses: vec![RuleStatus::Disabled],
+        stale: None,
     };
-    assert!(stale_only.matches(&rule(RuleStatus::Stale)));
-    assert!(!stale_only.matches(&rule(RuleStatus::Enabled)));
+    assert!(disabled_only.matches(&rule(RuleStatus::Disabled)));
+    assert!(!disabled_only.matches(&rule(RuleStatus::Enabled)));
     assert!(AlertRuleFilter::default().matches(&rule(RuleStatus::Disabled)));
+}
+
+#[test]
+fn alert_rule_filter_matches_staleness_apart_from_status() {
+    let last = WatchedTopics {
+        version: crate::aggregates::topic::TopicModelVersion(1),
+        topics: NonEmpty::new(topic(1)),
+    };
+    let watched = |watch, status| AlertRuleDef {
+        id: AlertRuleId::from_ulid(2),
+        rule: AlertRule::WatchedTopic {
+            watch,
+            remap_threshold: crate::support::Similarity::new(0.8).expect("in range"),
+        },
+        status,
+    };
+    let stale = TopicWatch::Stale {
+        last: last.clone(),
+        unmapped_in: crate::aggregates::topic::TopicModelVersion(2),
+        unmapped: NonEmpty::new(topic(1)),
+    };
+    let stale_only = AlertRuleFilter {
+        statuses: Vec::new(),
+        stale: Some(true),
+    };
+    // A disabled stale rule is still stale.
+    assert!(stale_only.matches(&watched(stale.clone(), RuleStatus::Disabled)));
+    assert!(stale_only.matches(&watched(stale.clone(), RuleStatus::Enabled)));
+    assert!(!stale_only.matches(&watched(TopicWatch::Current(last.clone()), RuleStatus::Enabled)));
+    let evaluating = AlertRuleFilter {
+        statuses: vec![RuleStatus::Enabled],
+        stale: Some(false),
+    };
+    assert!(evaluating.matches(&watched(TopicWatch::Current(last), RuleStatus::Enabled)));
+    assert!(!evaluating.matches(&watched(stale, RuleStatus::Enabled)));
 }

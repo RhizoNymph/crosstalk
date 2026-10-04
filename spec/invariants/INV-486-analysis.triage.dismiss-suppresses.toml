@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.triage.dismiss-suppresses"
+statement = "AlertTriage::transmission_dismissed moves exactly the Open or Acknowledged alerts of SuspectedTransmission rules whose subject is that transmission to Suppressed with reason TransmissionDismissed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+An operator dismissing a suspected transmission has judged it not a
+communication, so its alert should stop asking for attention, with a reason
+that says why. Alerts about other transmissions, and resolved alerts, keep
+their state.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::dismissal_suppresses_suspected_alerts"
+property = "crosstalk::analysis::tests::dismissal_suppresses_exactly"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

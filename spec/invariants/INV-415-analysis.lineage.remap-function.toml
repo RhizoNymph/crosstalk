@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.lineage.remap-function"
-statement = "TopicLineage::remap returns Remapped to the lineage's to version, with each watched topic replaced by its best link's topic in rule order without repeats, when every watched topic's best link reaches the threshold, and otherwise Stale listing exactly the watched topics whose best link is absent or below it."
+statement = "TopicLineage::remap returns TopicWatch::Current under the lineage's to version, with each watched topic replaced by its best link's topic in rule order without repeats, when every watched topic's best link reaches the threshold, and otherwise TopicWatch::Stale in the to version, keeping the rule's last topics and listing exactly the watched topics whose best link is absent or below it."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

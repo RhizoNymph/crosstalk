@@ -124,7 +124,7 @@ impl AuditOutcome {
 /// the permission is checked before anything else. A record that says an
 /// action was applied for a caller who could not apply it, or forbidden for
 /// one who could, cannot be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AuditRecord {
     id: AuditId,
     at: Timestamp,
@@ -230,7 +230,7 @@ pub struct AuditQuery {
     pub limit: NonZeroU32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AuditPage {
     /// Newest first, at most `min(limit, MAX_AUDIT_PAGE)`.
     pub records: Vec<AuditRecord>,

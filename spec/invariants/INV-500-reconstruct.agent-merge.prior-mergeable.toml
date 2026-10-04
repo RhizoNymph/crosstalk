@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-merge.prior-mergeable"
+statement = "The prior state in every Merged record is Provisional or Established."
+kind = "representation"
+requires = ["type"]
+rationale = """
+An unmerge returns the agent to its prior state. A Registered agent has
+sent no traffic and cannot be merged, and a Merged agent is already an
+alias, so restoring either would produce a state no merge could have left.
+`Merged::prior` is a `MergeableState`, which has only the Provisional and
+Established variants.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::MergeableState"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

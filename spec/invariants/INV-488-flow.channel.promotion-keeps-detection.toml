@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.channel.promotion-keeps-detection"
+statement = "ChannelOrigin::promoted on a discovered origin returns a Declared origin with the given declaration, the discovered seed as promoted-from and the same detection, and on a declared origin returns AlreadyDeclared."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Promotion attaches a pattern; it does not restart detection. Resetting an
+Active channel would hide its confirmed traffic until the next cross
+access. The seed and first access stay as the evidence the channel was
+found from.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::flow::promotion_keeps_detection_and_records_the_seed",
+    "crosstalk_spec::tests::flow::promotion_rejects_declared_channels",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -56,15 +56,23 @@ impl AgentFilter {
     }
 }
 
-/// Keeps rules whose status is listed.
+/// Keeps rules whose operator-set status is listed and, when `stale` is
+/// set, whose staleness ([`AlertRule::is_stale`]) equals it. Staleness is
+/// separate from status, so "stale rules" is `stale: Some(true)` with any
+/// statuses, and "rules that evaluate" is `[Enabled]` with `Some(false)`.
+///
+/// [`AlertRule::is_stale`]: crate::aggregates::alert::AlertRule::is_stale
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AlertRuleFilter {
     pub statuses: Vec<RuleStatus>,
+    pub stale: Option<bool>,
 }
 
 impl AlertRuleFilter {
     pub fn matches(&self, rule: &AlertRuleDef) -> bool {
-        self.statuses.is_empty() || self.statuses.contains(&rule.status)
+        let by_status = self.statuses.is_empty() || self.statuses.contains(&rule.status);
+        let by_staleness = self.stale.is_none_or(|stale| rule.rule.is_stale() == stale);
+        by_status && by_staleness
     }
 }
 

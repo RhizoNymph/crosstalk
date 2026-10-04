@@ -5,6 +5,7 @@
 
 mod fixtures;
 
+mod agents;
 mod aggregates;
 mod audit;
 mod events;
@@ -19,4 +20,5 @@ mod projection;
 mod provenance;
 mod series;
 mod support;
+mod surface;
 mod topic_history;
