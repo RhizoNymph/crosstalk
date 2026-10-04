@@ -23,6 +23,9 @@ const id = (n: number) =>
 const PLANNER = id(1);
 const RESEARCHER = id(2);
 const REVIEWER = id(4);
+const DOCS_WRITER = id(6);
+const channelId = (n: number) =>
+  `01K6HB7H000320002YXM0000${n.toString(32).toUpperCase().padStart(2, '0')}` as Ulid;
 
 describe('model', () => {
   it('sizes nodes by volume and edges by share', () => {
@@ -104,6 +107,44 @@ describe('model', () => {
     expect(
       highlightOf(collapsed, { kind: 'agent', id: '7ZZZZZZZZZZZZZZZZZZZZZZZZZ' as Ulid }),
     ).toBeNull();
+  });
+
+  it('highlights a channel in agents mode through the edges routed over it', () => {
+    const model = buildModel(agents(), false);
+    const handoff = channelId(1);
+    const highlight = highlightOf(model, { kind: 'channel', id: handoff });
+    const routed = model.edges.filter(
+      (e) => e.kind === 'transmission' && e.members.some((m) => m.route === `ch.${handoff}`),
+    );
+    expect(routed.length).toBe(2);
+    expect(highlight?.edges).toEqual(new Set(routed.map((e) => e.key)));
+    // planner → reviewer and docs-writer → reviewer.
+    expect(highlight?.nodes).toEqual(new Set([PLANNER, REVIEWER, DOCS_WRITER]));
+  });
+
+  it('highlights a channel in agents mode after collapsing', () => {
+    const collapsed = buildModel(agents(), true);
+    // ci-bot → planner and reviewer → deploy, both over the pastebin channel.
+    const highlight = highlightOf(collapsed, { kind: 'channel', id: channelId(2) });
+    expect(highlight?.edges.size).toBe(2);
+    expect(highlight?.nodes).toEqual(new Set([id(5), PLANNER, REVIEWER, id(10)]));
+  });
+
+  it('highlights nothing for a channel no drawn edge goes through', () => {
+    const model = buildModel(agents(), false);
+    expect(highlightOf(model, { kind: 'channel', id: channelId(9) })).toBeNull();
+    expect(highlightOf(model, { kind: 'channel', id: PLANNER })).toBeNull();
+  });
+
+  it('highlights a channel node with its accesses in channels mode', () => {
+    const model = buildModel(channels(), false);
+    const handoff = channelId(1);
+    const highlight = highlightOf(model, { kind: 'channel', id: handoff });
+    expect(highlight?.nodes).toEqual(new Set([handoff, PLANNER, REVIEWER, DOCS_WRITER]));
+    expect(highlight?.edges.size).toBe(3);
+    for (const key of highlight?.edges ?? []) {
+      expect(model.edges.find((e) => e.key === key)?.kind).toBe('access');
+    }
   });
 
   it('selects nodes by kind', () => {
