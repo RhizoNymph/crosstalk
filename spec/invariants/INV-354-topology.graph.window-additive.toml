@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.graph.window-additive"
+statement = "For adjacent aligned windows A and B queried with the same weighting, filter and topic_version, each edge's stats in the graph over their union equal the sum of its stats in the graph over A and in the graph over B."
+kind = "domain"
+property = "inductive"
+requires = ["property"]
+rationale = """
+Query windows are unions of buckets, and the base case is a single bucket,
+whose graph reports that bucket's stored stats (summed over the topic slots
+of the active version that the filter admits). The composition law makes
+every window's stats the sum of its buckets' stats: no transmission is
+counted in two buckets, none falls between buckets, and an edge absent
+from one part contributes zero. Shares are not additive (each window has
+its own total), so the law is stated over stats only.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::graph_stats_add_over_adjacent_windows"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

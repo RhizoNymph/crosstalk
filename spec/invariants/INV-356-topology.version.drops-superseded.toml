@@ -1,0 +1,22 @@
+[invariant]
+id = "topology.version.drops-superseded"
+statement = "Once activate has switched queries from version p to a newer version, the store holds no buckets of any version older than p."
+kind = "coordination"
+requires = ["property", "integration"]
+rationale = """
+Every re-fit adds a full copy of the edge buckets, one per version. Keeping
+them all would grow storage, and the scan cost of graph, linearly with the
+number of re-fits. The previous version p is kept so the view can still be
+compared with, or fall back to, the fit it just replaced; anything older is
+unreachable by queries (versions never roll back) and is dropped. In
+TimescaleEdgeStore this is a delete or chunk drop by version, which must
+finish before the next switch so at most two settled versions coexist.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::switch_drops_versions_older_than_previous"
+integration = "crosstalk::topology::integration::timescale_switch_drops_superseded_version_buckets"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.version.activate-after-complete"
+statement = "Graph queries switch to a topic-model version only after TopicVersionReady for it has arrived and L7 has processed, by applying or by rejecting as a self-edge, as many distinct transmissions classified under that version as the event's transmissions count."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A re-fit rebuilds every bucket under the new version, which takes a while.
+Switching early would show a graph built from part of the history, with
+edges and totals far below the truth. TopicVersionReady alone is not
+enough: the bus can redeliver a nacked TransmissionClassified for the new
+version after TopicVersionReady, so L7 counts what it has processed under
+the version and switches when the count reaches the event's
+`transmissions`. The count is of distinct (transmission, version) pairs, so
+redeliveries do not inflate it. Self-edge rejections are permanent
+outcomes for classifications L6 did count, so they count as processed;
+otherwise one corrupt contribution would block the version forever. Until
+the switch, queries keep the previous version.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::activation_waits_for_ready_count_of_processed_classifications"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

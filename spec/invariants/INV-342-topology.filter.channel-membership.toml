@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.filter.channel-membership"
+statement = "When a filter's channels list is non-empty, every edge in the graph has a Channel route on one of the listed channels."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A channel filter asks "who communicates through this wiki, bucket or
+queue". Non-channel routes (Delegation, Direct, Unobserved) have no channel,
+so a non-empty channel list excludes them rather than letting them through
+as unconstrained; otherwise a channel view would be swamped by
+orchestration traffic that never touched the channel.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::channel_filter_excludes_non_channel_routes"
+property = "crosstalk::topology::props::channel_filter_keeps_only_listed_channels"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }
