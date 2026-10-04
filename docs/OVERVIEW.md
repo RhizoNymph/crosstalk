@@ -18,8 +18,8 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: design. The data model is specified in spec/types; there is no
-    implementation yet.
+    Status: design. The data model is specified in spec/types; the operator
+    UI (ui/) runs against a fixture backend until the gateway exists.
 
   subsystems:
     ingest: >
@@ -38,8 +38,13 @@ Overview:
       channel registry, write/read correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, search, alert rules), L7 topology
-      (edge aggregation per time window), L8 surface (query API, UI, operator
+      (edge aggregation per time window), L8 surface (query API, operator
       actions, alert sinks).
+    ui: >
+      The operator web UI (crosstalk-ui, Topcoat): server-rendered pages
+      plus WebGL custom elements for the topology graph and UMAP
+      projection. Reads and acts only through L8, behind a Backend trait
+      with a fixture implementation for development.
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -54,8 +59,10 @@ Overview:
     channels and correlates cross-agent accesses and content matches into
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions and evaluates alert rules → L7 aggregates
-    edges → L8 serves topology, search and alerts. Operator actions flow
-    back down: policy changes to L5, agent merges to L3.
+    edges → L8 serves topology, search and alerts → the UI renders them,
+    with view state in the URL. Operator actions flow back down from the
+    UI through L8: policy changes and channel promotion to L5, merges,
+    unmerges and labels to L3, verdicts and rule changes to L6.
 
 Features Index:
   type_spec:
@@ -68,4 +75,13 @@ Features Index:
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
     doc: docs/features/type_spec.md
+  ui:
+    description: >
+      Operator web UI: topology (agents or bipartite with channels),
+      transmission evidence, search and UMAP exploration, topics, channels,
+      agents, alerts and rules, export, audit and pipeline. Defines the L8
+      additions it needs.
+    entry_points: [ui/src/main.rs, ui/elements/src/index.ts]
+    depends_on: [type_spec]
+    doc: docs/features/ui.md
 ```
