@@ -11,7 +11,8 @@ gateway never scanned or skips ones it did. This also pins down that the
 stored history includes each exchange's response, so the next request's
 echo of that response is not reported as new input. Compactions are left
 out because carried-over messages are excluded from new_inputs wherever
-they sit in the request.
+they sit in the request, yet stay in the stored history; their law is
+reconstruct.conversation.compaction-history.
 """
 
 [evidence]
