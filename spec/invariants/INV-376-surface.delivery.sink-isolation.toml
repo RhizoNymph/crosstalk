@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.delivery.sink-isolation"
+statement = "A sink that fails or hangs does not delay delivery of any alert to any other sink."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+If sinks were tried in sequence on one task, a dead webhook with long
+timeouts would hold back the Slack alert behind it. Each sink has its own
+delivery queue and retry schedule, fed by channel from the AlertOpened
+consumer.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::hung_sink_does_not_delay_other_sinks"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

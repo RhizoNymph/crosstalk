@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.perf.search-latency"
+statement = "QueryApi::search with a limit of at most 100 answers within 500 ms at p99 over an index of 1,000,000 transmissions."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+Search is the content explorer's entry point and runs as the operator
+types. The bound assumes an approximate vector index and a text index in
+Postgres and rules out exhaustive similarity scans. A limit cap keeps
+response size and snippet fetches from the blob store bounded.
+"""
+
+[evidence]
+bench = "crosstalk::surface::bench::search_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

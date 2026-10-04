@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.action.unauthorized-no-effect"
+statement = "An operator action whose Caller lacks the permission it requires (Govern for SetPolicy and MergeAgents, Triage for Acknowledge and Resolve, Operate for ReplayDeadLetter) returns Forbidden and publishes no event, forwards nothing to L3, replays nothing, writes no audit record and changes no stored state."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Operator actions change what the gateway alerts on (policy), whose traffic is
+whose (merges) and what operators are told is handled (alerts). A rejected
+request that still published a PolicyChanged or forwarded a merge would let
+any viewer sanction a channel or rewrite identity. Govern and Triage are
+separate so an on-call operator can work alerts without changing policy.
+The permission is checked before any effect, so Forbidden is all-or-nothing.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::set_policy_without_govern_has_no_effect", "crosstalk::surface::tests::merge_without_govern_has_no_effect", "crosstalk::surface::tests::alert_action_without_triage_has_no_effect"]
+integration = "crosstalk::surface::integration::forbidden_action_leaves_postgres_and_bus_unchanged"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

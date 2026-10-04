@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.action.alert-lifecycle-model"
+statement = "Whether an Acknowledge or Resolve is accepted, and the alert state it leaves, equal the alert lifecycle model applied to the alert's prior state, the Caller's OperatorId, the acceptance time and the requested note."
+kind = "domain"
+property = "model-based"
+requires = ["property", "unit"]
+rationale = """
+The model is the operator half of the lifecycle in aggregates/alert.rs:
+Acknowledge moves Open to Acknowledged{by, at}; Resolve moves Open or
+Acknowledged to Resolved{by, at, note}; an Acknowledge on Acknowledged or a
+Resolve on Resolved is accepted and changes nothing; every other pair
+(Acknowledge on Resolved or Suppressed, Resolve on Suppressed) returns
+BadRequest and changes nothing. An unknown alert returns NotFound. Without
+this, a suppressed alert could be reopened as acknowledged, or a resolve
+could overwrite who resolved it.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_alert_actions_match_lifecycle_model"
+unit = "crosstalk::surface::tests::alert_action_transition_table"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+unit = { agent = "false", human = "false" }

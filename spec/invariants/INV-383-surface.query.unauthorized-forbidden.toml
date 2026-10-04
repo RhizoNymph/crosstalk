@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.query.unauthorized-forbidden"
+statement = "Every QueryApi call whose Caller lacks the permission its endpoint requires (View for channel, alerts and topology; Content for transmission, search, topics and projection) returns Forbidden."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+The content explorer serves what agents wrote to each other, which can hold
+anything an agent saw. Topology, channels and alerts expose only who talks
+to whom and what was flagged. Separate View and Content permissions let an
+operator watch the graph without reading content. Topics are under Content
+(as Permission::Content documents) because their labels and terms come from
+message text. The check is per endpoint, so a new endpoint without a
+permission is a test failure rather than an open door.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::view_endpoints_without_view_forbidden", "crosstalk::surface::tests::content_endpoints_without_content_forbidden"]
+integration = "crosstalk::surface::integration::http_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

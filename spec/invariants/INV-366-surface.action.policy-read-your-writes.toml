@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.action.policy-read-your-writes"
+statement = "After SetPolicy returns Ok to a Caller, every later QueryApi::channel call by the same operator for that channel returns the new policy or one set after it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+PolicyChanged is applied asynchronously by L5. If QueryApi::channel read
+only L5's projection, an operator who just sanctioned a channel could
+reload the view, see it unreviewed and set it again. The surface serves
+channel reads from the store its own write committed to, or waits until the
+applied policy version is at least the one it wrote, so the operator's own
+write is visible on the next query.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::policy_read_your_writes_under_bus_delay"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

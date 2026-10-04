@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.action.alert-concurrent-single-transition"
+statement = "When several Acknowledge or Resolve requests for one alert race, the alert takes each transition at most once, recorded with the operator and time of the first request accepted."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Two operators clicking acknowledge, or a client retrying a timed-out
+request, must not produce two audit entries for one transition or let the
+second request overwrite the first's by and at. The update is a
+compare-and-set on the prior state, so the loser sees the new state and
+takes the idempotent no-op path of the lifecycle model.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::racing_alert_actions_single_transition"
+integration = "crosstalk::surface::integration::concurrent_acknowledge_postgres"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
