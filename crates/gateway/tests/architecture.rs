@@ -8,8 +8,9 @@
 //!    `client` or `gateway`, under any dependency kind, with one exception:
 //!    it may use `transport` as a dev-dependency (an in-process bus for its
 //!    tests);
-//! 2. `memory`, `sim` and `testkit` are only ever dev-dependencies of a
-//!    layer crate, never normal or build dependencies.
+//! 2. `memory`, `sim`, `testkit` and `world` are only ever
+//!    dev-dependencies of a layer crate, never normal or build
+//!    dependencies.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api` and
 //! `client` compose layer crates.
@@ -90,16 +91,23 @@ enum TestSupport {
     Memory,
     Sim,
     Testkit,
+    World,
 }
 
 impl TestSupport {
-    const ALL: [TestSupport; 3] = [TestSupport::Memory, TestSupport::Sim, TestSupport::Testkit];
+    const ALL: [TestSupport; 4] = [
+        TestSupport::Memory,
+        TestSupport::Sim,
+        TestSupport::Testkit,
+        TestSupport::World,
+    ];
 
     fn dir(self) -> &'static str {
         match self {
             TestSupport::Memory => "memory",
             TestSupport::Sim => "sim",
             TestSupport::Testkit => "testkit",
+            TestSupport::World => "world",
         }
     }
 }
@@ -157,7 +165,8 @@ enum Violation {
     LayerOnLayer { edge: Edge },
     /// A layer crate depends on `api`, `client` or `gateway`.
     LayerOnComposer { edge: Edge },
-    /// `memory`, `sim` or `testkit` is a non-dev dependency of a layer crate.
+    /// `memory`, `sim`, `testkit` or `world` is a non-dev dependency of a
+    /// layer crate.
     TestSupportNotDev { edge: Edge },
 }
 
@@ -526,6 +535,10 @@ fn roles_classify_by_package_name() {
     assert_eq!(
         Role::of("crosstalk-testkit"),
         Role::TestSupport(TestSupport::Testkit)
+    );
+    assert_eq!(
+        Role::of("crosstalk-world"),
+        Role::TestSupport(TestSupport::World)
     );
     assert_eq!(Role::of("crosstalk-store"), Role::Open);
     assert_eq!(Role::of("crosstalk-spec"), Role::Open);
