@@ -24,6 +24,13 @@ unit = [
     "crosstalk_spec::tests::wire::support::support_goldens",
     "crosstalk_spec::tests::wire::ids::ids_key_maps_by_their_text",
     "crosstalk_spec::tests::wire::time::timestamps_round_trip_across_the_range",
+    "crosstalk_spec::tests::wire::observed::exchange::exchanges_golden",
+    "crosstalk_spec::tests::wire::observed::exchange::connection_ids_are_ulid_text",
+    "crosstalk_spec::tests::wire::observed::identity::merge_log_golden",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_self_merge_and_a_second_reversal",
+    "crosstalk_spec::tests::wire::observed::identity::claim_sets_golden",
+    "crosstalk_spec::tests::wire::observed::ingest::every_ingest_event_golden_inside_an_envelope",
+    "crosstalk_spec::tests::wire::provenance::provenance_goldens",
 ]
 
 [evidence-review]

@@ -70,8 +70,9 @@ macro_rules! entity_id {
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// 128 bits as 26 base32 digits: the first carries the top 3 bits, each
-/// later one 5.
-fn ulid_text(raw: u128) -> String {
+/// later one 5. Crate-visible for 128-bit ids defined outside this module
+/// (`ConnectionId`).
+pub(crate) fn ulid_text(raw: u128) -> String {
     (0..26u32)
         .rev()
         .map(|digit| {
@@ -95,7 +96,7 @@ pub enum InvalidUlidText {
 }
 
 /// The inverse of [`ulid_text`].
-fn parse_ulid_text(text: &str) -> Result<u128, InvalidUlidText> {
+pub(crate) fn parse_ulid_text(text: &str) -> Result<u128, InvalidUlidText> {
     let bytes = text.as_bytes();
     if bytes.len() != 26 {
         return Err(InvalidUlidText::Length { got: bytes.len() });

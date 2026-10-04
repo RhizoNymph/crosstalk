@@ -26,6 +26,12 @@ unit = [
     "crosstalk_spec::tests::wire::ids::secret_digests_reject_unknown_and_missing_fields",
     "crosstalk_spec::tests::wire::support::fieldless_enums_are_strings",
     "crosstalk_spec::tests::wire::support::watermarked_refuses_unknown_fields",
+    "crosstalk_spec::tests::wire::observed::exchange::exchanges_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::observed::exchange::client_context_refuses_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::observed::exchange::message_references_refuse_unknown_fields",
+    "crosstalk_spec::tests::wire::observed::identity::agents_refuse_unknown_fields_variants_and_invalid_parts",
+    "crosstalk_spec::tests::wire::observed::ingest::ingest_envelopes_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::provenance::provenance_enums_refuse_unknown_and_invalid_variants",
 ]
 
 [evidence-review]

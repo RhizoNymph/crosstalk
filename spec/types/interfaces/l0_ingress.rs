@@ -110,7 +110,7 @@ pub trait UpstreamRouter {
 /// The scheme comes from the header and the token's shape for the upstream
 /// kind: `x-api-key`, and Bearer keys on a vendor API, are `ApiKey`; Bearer
 /// tokens on a subscription upstream (Anthropic `sk-ant-oat…`, ChatGPT and
-/// Google OAuth JWTs) are `OAuthAccessToken`; Copilot's minted tokens are
+/// Google OAuth JWTs) are `OauthAccessToken`; Copilot's minted tokens are
 /// `ExchangedToken`; the key of a self-hosted server is `ServerKey`.
 pub trait ClientIdentifier {
     fn credential(&self, head: &RequestHead, upstream: &Upstream) -> Option<CredentialRef>;

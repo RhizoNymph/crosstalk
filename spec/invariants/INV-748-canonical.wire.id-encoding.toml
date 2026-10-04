@@ -21,6 +21,7 @@ unit = [
     "crosstalk_spec::tests::wire::ids::blake3_hex_matches_reference_value",
     "crosstalk_spec::tests::wire::ids::content_ids_reject_anything_but_lower_case_hex",
     "crosstalk_spec::tests::wire::ids::ids_key_maps_by_their_text",
+    "crosstalk_spec::tests::wire::observed::exchange::connection_ids_are_ulid_text",
 ]
 
 [evidence-review]

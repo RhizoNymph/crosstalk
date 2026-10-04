@@ -1,0 +1,6 @@
+[
+  "base64",
+  "hex",
+  "url_encoding",
+  "unicode_normalization"
+]
