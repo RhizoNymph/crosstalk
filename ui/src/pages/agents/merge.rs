@@ -118,7 +118,7 @@ async fn load(
     let from = detail(cx, caller, id).await?;
     let Some(into) = into else {
         let page = backend(cx)
-            .agents(caller, &PageRequest::first(CHOICES))
+            .agents(caller, &Default::default(), &PageRequest::first(CHOICES))
             .await?;
         let choices = page
             .items

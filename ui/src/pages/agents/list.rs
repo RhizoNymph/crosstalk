@@ -1,23 +1,27 @@
-//! `/agents`: canonical agents with their harness claims and volume.
+//! `/agents`: canonical agents with their harness claims and volume,
+//! filtered by state and claimed harness (`state`, `claims`).
 
 use crosstalk_spec::interfaces::l8_surface::Permission;
 use topcoat::Result;
 use topcoat::context::Cx;
-use topcoat::router::page;
+use topcoat::router::{page, query_params};
 use topcoat::view::{View, view};
 
 use crate::app::{backend, caller};
 use crate::backend::Backend;
-use crate::components::form::LINK;
+use crate::components::form::{FACET, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
+use crate::components::badge::Badge;
 use crate::components::{
-    PageLinks, agent_name, claim_badge, data_table, empty_state, error_panel, format_time,
-    kind_badge, page_header, pagination, short_id,
+    PageLinks, agent_name, claim_badge, data_table, empty_state, error_panel, family_name,
+    filter_chip, format_time, href, kind_badge, page_header, pagination, short_id,
 };
 use crate::contract::agents::{AgentStateKind, AgentSummary, ClaimSeen};
 use crate::contract::errors::QueryError;
 use crate::contract::lists::Cursor;
+use super::query::{AgentQuery, FAMILIES, RawAgentQuery, STATES};
 use crate::pages::common::action::{require, status_of};
+use crate::pages::common::form::invalid;
 use crate::pages::common::links::agent_url;
 use crate::pages::common::paging::page_request;
 use crate::pages::view::view_state;
@@ -62,11 +66,17 @@ struct Listing {
     next: Option<Cursor>,
 }
 
-async fn load(cx: &Cx, state: &ViewState) -> std::result::Result<Listing, QueryError> {
+async fn load(
+    cx: &Cx,
+    query: &AgentQuery,
+    state: &ViewState,
+) -> std::result::Result<Listing, QueryError> {
     let caller = caller(cx);
     require(&caller, Permission::View)?;
     let request = page_request(cx)?;
-    let page = backend(cx).agents(&caller, &request).await?;
+    let page = backend(cx)
+        .agents(&caller, &query.filter(), &request)
+        .await?;
     Ok(Listing {
         rows: page.items.iter().map(|a| agent_row(a, state)).collect(),
         current: request.cursor,
@@ -74,24 +84,81 @@ async fn load(cx: &Cx, state: &ViewState) -> std::result::Result<Listing, QueryE
     })
 }
 
+/// A link to this list under another query.
+fn list_href(state: &ViewState, query: &AgentQuery) -> String {
+    let pairs = query.pairs();
+    let borrowed: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    href(PATH, state, &borrowed)
+}
+
 #[page("/agents")]
 async fn agents_get(cx: &Cx) -> Result<impl View> {
     let state = view_state(cx).await?;
-    let listing = load(cx, &state).await;
+    let parsed = query_params::<RawAgentQuery>(cx)
+        .map_err(|e| invalid("query", e))
+        .and_then(|raw| AgentQuery::parse(&raw));
+    let query = parsed.clone().unwrap_or_default();
+    let listing = match parsed {
+        Ok(query) => load(cx, &query, &state).await,
+        Err(error) => Err(error),
+    };
     let empty = listing.as_ref().is_ok_and(|l| l.rows.is_empty());
+    let filtered = query != AgentQuery::default();
+    let state_chips: Vec<_> = STATES
+        .iter()
+        .map(|s| {
+            (
+                s.label(),
+                list_href(&state, &query.toggle_state(*s)),
+                query.states.contains(s),
+            )
+        })
+        .collect();
+    let claim_chips: Vec<_> = FAMILIES
+        .iter()
+        .map(|f| {
+            (
+                family_name(f),
+                list_href(&state, &query.toggle_claim(f)),
+                query.claims.contains(f),
+            )
+        })
+        .collect();
+    let pairs = query.pairs();
     Ok(view! {
         page_header(
             title: "Agents",
             subtitle: "Canonical agents. Harness claims are what clients said about themselves, not identity.",
         )
+        <div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+            <div class="flex flex-wrap items-center gap-1.5">
+                <span class=(FACET)>"State"</span>
+                for (label, link, active) in state_chips {
+                    filter_chip(label: label, href: link, active: active)
+                }
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+                <span class=(FACET)>"Claims"</span>
+                for (label, link, active) in claim_chips {
+                    filter_chip(label: label, href: link, active: active)
+                }
+            </div>
+        </div>
         match listing {
             Err(error) => {
                 (status_of(&error))
                 error_panel(error: &error)
             },
+            Ok(_) if empty && filtered => empty_state(message: "No agents match these filters."),
             Ok(_) if empty => empty_state(message: "No agents yet. Agents appear once the gateway sees their traffic or they are registered in config."),
             Ok(listing) => {
-                let links = PageLinks::new(PATH, &state, &[], listing.current.as_ref(), listing.next.as_ref());
+                let links = PageLinks::new(
+                    PATH,
+                    &state,
+                    &pairs.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>(),
+                    listing.current.as_ref(),
+                    listing.next.as_ref(),
+                );
                 data_table(
                     headers: &["Agent", "State", "Harness claims", "Parent", "In", "Out", "Last seen"],
                     for row in listing.rows {
@@ -185,5 +252,25 @@ pub(crate) mod tests {
         assert!(reply.body.contains("claims"));
         let reply = get(&format!("/agents?{}&cursor=a%20b", state().to_query())).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn chips_filter_by_state_and_claimed_harness() {
+        let q = state().to_query();
+        // pi and oh-my-pi agents claim Claude Code; the pi scraper is one.
+        let reply = get(&format!("/agents?{q}&claims=claude-code")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains("pi-scraper"));
+        assert!(reply.body.contains("aria-pressed=\"true\""));
+        assert!(reply.body.contains("claims=claude-code"));
+        let reply = get(&format!("/agents?{q}&state=registered")).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert!(!reply.body.contains("pi-scraper"));
+        assert!(!reply.body.contains(">established</span>"));
+        let reply = get(&format!("/agents?{q}&state=registered&claims=codex")).await;
+        assert!(reply.body.contains("No agents match these filters."));
+        let reply = get(&format!("/agents?{q}&state=merged")).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(reply.body.contains("state: unknown value"));
     }
 }

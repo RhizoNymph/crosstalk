@@ -2,10 +2,11 @@
 
 use crosstalk_spec::ids::{AgentId, OperatorId};
 use crosstalk_spec::observed::agent::{IdentityEvidence, MergeAuthor};
-use crosstalk_spec::observed::client::HarnessClaim;
+use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
 use crosstalk_spec::support::{NonEmpty, Timestamp};
 
 use super::MergeId;
+use super::search::SearchText;
 
 /// An operator-chosen display name: trimmed, non-empty, at most
 /// [`AgentLabel::MAX_CHARS`] characters.
@@ -179,6 +180,21 @@ pub struct AgentName {
     /// The canonical agent.
     pub id: AgentId,
     pub label: Option<AgentLabel>,
+}
+
+/// Restricts the agents list (item 28). Empty lists and `None` do not
+/// restrict; fields combine with AND.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentListFilter {
+    pub states: Vec<AgentStateKind>,
+    /// Agents with a harness claim of one of these families. Claims are
+    /// what clients said, not identity.
+    pub harness_claims: Vec<HarnessFamily>,
+    /// Matches the label or the id's text, ignoring case.
+    pub text: Option<SearchText>,
+    /// Agents whose canonical parent is one of these: one level of a
+    /// sub-agent tree.
+    pub parents: Vec<AgentId>,
 }
 
 /// A row in the agents list.

@@ -6,7 +6,7 @@ use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use super::errors::ConflictKind;
 use super::graph::ChannelShape;
@@ -100,13 +100,18 @@ pub struct ChannelSummary {
     pub last_activity: Option<Timestamp>,
 }
 
-/// Restricts the channels list. Empty lists do not restrict.
+/// Restricts the channels list (items 1 and 28). Empty lists do not
+/// restrict.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChannelListFilter {
     pub origins: Vec<OriginKind>,
     pub detections: Vec<DetectionKind>,
     pub policies: Vec<PolicyKind>,
     pub include_superseded: bool,
+    /// When set, rows count writers, readers and transmissions in this
+    /// window only; `None` counts everything. Never drops a row, and
+    /// `last_activity` is always the latest activity overall.
+    pub window: Option<TimeWindow>,
 }
 
 /// What promoting a channel with a pattern would do (item 26), over every

@@ -39,7 +39,7 @@ use super::{Backend, Result};
 use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
@@ -302,9 +302,15 @@ impl Backend for FixtureBackend {
         Ok(queries::promotion::preview(&self.world, plan, id))
     }
 
-    async fn agents(&self, caller: &Caller, page: &PageRequest) -> Result<Page<AgentSummary>> {
+    async fn agents(
+        &self,
+        caller: &Caller,
+        filter: &AgentListFilter,
+        page: &PageRequest,
+    ) -> Result<Page<AgentSummary>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::lists::agents(ctx, page)).await
+        self.read(|ctx| queries::lists::agents(ctx, filter, page))
+            .await
     }
 
     async fn agent(&self, caller: &Caller, id: AgentId) -> Result<Option<AgentDetail>> {

@@ -22,7 +22,7 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentName, AgentSummary};
 use crate::contract::channels::{
     ChannelListFilter, ChannelName, ChannelSummary, PromotionPreview, ResourceUse,
 };
@@ -188,6 +188,7 @@ pub trait Backend: Send + Sync + 'static {
     fn agents(
         &self,
         caller: &Caller,
+        filter: &AgentListFilter,
         page: &PageRequest,
     ) -> impl Future<Output = Result<Page<AgentSummary>>> + Send;
 

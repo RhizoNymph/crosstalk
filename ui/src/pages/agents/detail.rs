@@ -111,7 +111,7 @@ async fn load(
         return Ok(None);
     };
     let operators = operator_names(cx, caller).await;
-    let tree = tree::load(cx, caller, &detail.children, state).await;
+    let tree = tree::load(cx, caller, detail.summary.id, &detail.children, state).await;
     Ok(Some(Loaded {
         profile: profile(id, &detail, &operators, state),
         tree,
@@ -353,5 +353,28 @@ pub(crate) mod tests {
             StatusCode::NOT_FOUND,
             "the stub knows no agent"
         );
+    }
+
+    #[tokio::test]
+    async fn the_sub_agent_tree_lists_children_by_name() {
+        use crate::testing::{operator, world};
+
+        let c = operator().caller();
+        let all = world()
+            .agents(&c, &Default::default(), &crate::contract::lists::PageRequest::first(
+                std::num::NonZeroU32::new(1000).expect("limit"),
+            ))
+            .await
+            .expect("agents")
+            .items;
+        let child = all
+            .iter()
+            .find(|a| a.parent.is_some())
+            .expect("a sub-agent");
+        let parent = child.parent.expect("parent");
+        let reply = get(&format!("/agents/{}?{}", parent.to_ulid(), state().to_query())).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(!reply.body.contains("No sub-agents."));
+        assert!(reply.body.contains(&agent_name(child)), "{}", agent_name(child));
     }
 }

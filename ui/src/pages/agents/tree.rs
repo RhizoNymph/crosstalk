@@ -1,6 +1,8 @@
-//! The sub-agent tree below an agent, read a bounded number of agents deep.
+//! The sub-agent tree below an agent, read a level at a time up to a
+//! bounded depth and number of agents.
 
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 
 use crosstalk_spec::ids::AgentId;
 use crosstalk_spec::interfaces::l8_surface::Caller;
@@ -9,7 +11,8 @@ use topcoat::context::Cx;
 use crate::app::backend;
 use crate::backend::Backend;
 use crate::components::{agent_name, short_id};
-use crate::contract::agents::AgentStateKind;
+use crate::contract::agents::{AgentListFilter, AgentStateKind};
+use crate::contract::lists::PageRequest;
 use crate::pages::common::links::agent_url;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -74,43 +77,64 @@ pub fn flatten(
     rows
 }
 
-/// Reads the agents below `roots`, breadth first, up to the bounds.
-pub async fn load(cx: &Cx, caller: &Caller, roots: &[AgentId], state: &ViewState) -> Tree {
-    let mut nodes = HashMap::new();
-    let mut frontier: Vec<AgentId> = roots.to_vec();
+/// Reads the sub-agents of `agent` a level at a time (one `agents` call
+/// per level, filtered by parent), up to the bounds. `roots` are its
+/// children as its detail lists them.
+pub async fn load(
+    cx: &Cx,
+    caller: &Caller,
+    agent: AgentId,
+    roots: &[AgentId],
+    state: &ViewState,
+) -> Tree {
+    let mut nodes: HashMap<AgentId, Node> = HashMap::new();
+    let mut parents = vec![agent];
     let mut truncated = false;
     for _ in 0..MAX_DEPTH {
-        let mut next = Vec::new();
-        for id in frontier {
-            if nodes.contains_key(&id) {
-                continue;
-            }
-            if nodes.len() >= MAX_NODES {
-                truncated = true;
-                break;
-            }
-            match backend(cx).agent(caller, id).await {
-                Ok(Some(detail)) => {
-                    next.extend(detail.children.iter().copied());
-                    nodes.insert(
-                        id,
-                        Node {
-                            name: agent_name(&detail.summary),
-                            state: detail.summary.state,
-                            children: detail.children,
-                        },
-                    );
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::debug!(%error, agent = %id.to_ulid(), "sub-agent unavailable");
-                }
-            }
-        }
-        if next.is_empty() {
+        if parents.is_empty() {
             break;
         }
-        frontier = next;
+        let Some(budget) = u32::try_from(MAX_NODES.saturating_sub(nodes.len()))
+            .ok()
+            .and_then(NonZeroU32::new)
+        else {
+            truncated = true;
+            break;
+        };
+        let filter = AgentListFilter {
+            parents: parents.clone(),
+            ..AgentListFilter::default()
+        };
+        let page = match backend(cx)
+            .agents(caller, &filter, &PageRequest::first(budget))
+            .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(%error, agent = %agent.to_ulid(), "sub-agents unavailable");
+                break;
+            }
+        };
+        truncated |= page.next.is_some();
+        let mut next = Vec::new();
+        for summary in page.items {
+            if summary.id == agent || nodes.contains_key(&summary.id) {
+                continue;
+            }
+            if let Some(parent) = summary.parent.and_then(|p| nodes.get_mut(&p)) {
+                parent.children.push(summary.id);
+            }
+            next.push(summary.id);
+            nodes.insert(
+                summary.id,
+                Node {
+                    name: agent_name(&summary),
+                    state: summary.state,
+                    children: Vec::new(),
+                },
+            );
+        }
+        parents = next;
     }
     Tree {
         rows: flatten(roots, &nodes, state),

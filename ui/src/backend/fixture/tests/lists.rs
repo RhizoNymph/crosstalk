@@ -41,7 +41,7 @@ async fn pagination_covers_every_item_exactly_once() {
     let ids: HashSet<_> = paged.iter().map(|t| t.id).collect();
     assert_eq!(ids.len(), paged.len());
 
-    let agents = collect(7, async |p| b.agents(&c, &p).await).await;
+    let agents = collect(7, async |p| b.agents(&c, &Default::default(), &p).await).await;
     assert_eq!(agents.len(), 40);
     let alerts = collect(50, async |p| {
         b.alerts(&c, &AlertFilter::default(), &p).await
@@ -532,8 +532,8 @@ async fn same_seed_same_answers() {
             .await
     );
     assert_eq!(
-        a.agents(&c, &first(100)).await,
-        b.agents(&c, &first(100)).await
+        a.agents(&c, &Default::default(), &first(100)).await,
+        b.agents(&c, &Default::default(), &first(100)).await
     );
 }
 
@@ -602,4 +602,102 @@ async fn one_alert_reads_by_id() {
             missing: Permission::View
         })
     );
+}
+
+#[tokio::test]
+async fn agents_filter_by_state_claims_text_and_parent() {
+    use crosstalk_spec::observed::client::HarnessFamily;
+
+    use crate::contract::agents::{AgentListFilter, AgentStateKind};
+    use crate::contract::search::SearchText;
+
+    let b = shared();
+    let c = researcher();
+    let list = async |filter: AgentListFilter| {
+        b.agents(&c, &filter, &first(BIG))
+            .await
+            .expect("agents")
+            .items
+    };
+    let all = list(AgentListFilter::default()).await;
+    let registered = list(AgentListFilter {
+        states: vec![AgentStateKind::Registered],
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert_eq!(registered.len(), 3, "three config-registered agents");
+    assert!(
+        registered
+            .iter()
+            .all(|a| a.state == AgentStateKind::Registered)
+    );
+    let claude = list(AgentListFilter {
+        harness_claims: vec![HarnessFamily::ClaudeCode],
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert!(!claude.is_empty() && claude.len() < all.len());
+    assert!(claude.iter().all(|a| {
+        a.claims
+            .iter()
+            .any(|s| s.claim.family == HarnessFamily::ClaudeCode)
+    }));
+    let scraper = list(AgentListFilter {
+        text: SearchText::new("PI-SCRAPER").ok(),
+        ..AgentListFilter::default()
+    })
+    .await;
+    assert_eq!(scraper.len(), 1);
+    assert_eq!(
+        scraper[0].label.as_ref().map(|l| l.as_str()),
+        Some("pi-scraper")
+    );
+    let parent = all
+        .iter()
+        .find_map(|a| a.parent)
+        .expect("some agent has a parent");
+    let children = list(AgentListFilter {
+        parents: vec![parent],
+        ..AgentListFilter::default()
+    })
+    .await;
+    let detail = b.agent(&c, parent).await.expect("read").expect("agent");
+    assert_eq!(
+        children.iter().map(|a| a.id).collect::<Vec<_>>(),
+        detail.children,
+        "one level of the tree, in the detail's order"
+    );
+}
+
+#[tokio::test]
+async fn channel_counts_follow_the_window() {
+    let b = shared();
+    let c = researcher();
+    let wiki = channel(ChannelKey::HijackedWiki);
+    let rows = async |window| {
+        let filter = ChannelListFilter {
+            window,
+            ..ChannelListFilter::default()
+        };
+        b.channels(&c, &filter, &first(BIG))
+            .await
+            .expect("channels")
+            .items
+            .into_iter()
+            .find(|s| s.channel.id == wiki)
+            .expect("wiki")
+    };
+    let all = rows(None).await;
+    let recent = rows(Some(day().window)).await;
+    assert!(recent.transmissions < all.transmissions);
+    assert!(recent.transmissions > 0);
+    assert!(recent.writers <= all.writers && recent.readers <= all.readers);
+    assert_eq!(recent.last_activity, all.last_activity);
+    let empty = crosstalk_spec::support::TimeWindow::new(
+        crosstalk_spec::support::Timestamp::from_micros(1),
+        crosstalk_spec::support::Timestamp::from_micros(2),
+    )
+    .expect("window");
+    let none = rows(Some(empty)).await;
+    assert_eq!((none.transmissions, none.writers, none.readers), (0, 0, 0));
 }

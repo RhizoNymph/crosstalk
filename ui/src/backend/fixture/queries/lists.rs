@@ -15,7 +15,7 @@ use crosstalk_spec::support::TimeWindow;
 use crate::contract::alerts::Alert;
 use crate::backend::Result;
 use crate::backend::fixture::world::confirmed;
-use crate::contract::agents::{AgentDetail, AgentSummary};
+use crate::contract::agents::{AgentDetail, AgentListFilter, AgentSummary};
 use crate::contract::channels::{
     ChannelListFilter, ChannelSummary, DetectionKind, OriginKind, ResourceUse, policy_kind,
 };
@@ -29,6 +29,7 @@ use crate::contract::research::{
     QualityRow,
 };
 use crate::contract::verdict::Verdict;
+use crate::url::ulid::UlidId;
 
 use super::Ctx;
 use super::page::{self, newest_first, oldest_first};
@@ -55,7 +56,7 @@ pub fn channels(
         .map(|r| {
             (
                 oldest_first(r.created, r.channel.id.as_ulid()),
-                summaries::channel(ctx, r),
+                summaries::channel(ctx, r, filter.window),
             )
         })
         .collect();
@@ -66,7 +67,7 @@ pub fn channel(ctx: &Ctx, id: ChannelId) -> Option<ChannelSummary> {
     ctx.state
         .channels
         .get(&id)
-        .map(|r| summaries::channel(ctx, r))
+        .map(|r| summaries::channel(ctx, r, None))
 }
 
 fn ranked(counts: HashMap<AgentId, u64>) -> Vec<(AgentId, u64)> {
@@ -117,13 +118,38 @@ pub fn channel_resources(ctx: &Ctx, id: ChannelId, window: TimeWindow) -> Result
         .collect())
 }
 
-pub fn agents(ctx: &Ctx, page: &PageRequest) -> Result<Page<AgentSummary>> {
+/// Whether a summary passes the agents list filter.
+fn keeps(filter: &AgentListFilter, summary: &AgentSummary) -> bool {
+    let text = filter.text.as_ref().map(|t| t.as_str().to_lowercase());
+    (filter.states.is_empty() || filter.states.contains(&summary.state))
+        && (filter.harness_claims.is_empty()
+            || summary
+                .claims
+                .iter()
+                .any(|c| filter.harness_claims.contains(&c.claim.family)))
+        && (filter.parents.is_empty()
+            || summary.parent.is_some_and(|p| filter.parents.contains(&p)))
+        && text.is_none_or(|needle| {
+            summary
+                .label
+                .as_ref()
+                .is_some_and(|l| l.as_str().to_lowercase().contains(&needle))
+                || summary.id.to_ulid().to_lowercase().contains(&needle)
+        })
+}
+
+pub fn agents(ctx: &Ctx, filter: &AgentListFilter, page: &PageRequest) -> Result<Page<AgentSummary>> {
     let counts = summaries::global_counts(ctx);
+    // Parents name canonical agents; an alias asks for its canonical agent.
+    let filter = AgentListFilter {
+        parents: filter.parents.iter().map(|p| ctx.agent(*p)).collect(),
+        ..filter.clone()
+    };
     let items = ctx
         .canonical_agents()
         .filter_map(|id| {
             let summary = summaries::agent(ctx, id, counts.get(&id).copied().unwrap_or_default())?;
-            Some(((0, id.as_ulid()), summary))
+            keeps(&filter, &summary).then(|| ((0, id.as_ulid()), summary))
         })
         .collect();
     page::paginate("agents", items, page)

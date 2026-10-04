@@ -7,7 +7,7 @@ use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::fixture::store::ChannelRecord;
 use crate::contract::agents::{AgentState, AgentStateKind, AgentSummary, ClaimSeen};
@@ -153,8 +153,10 @@ pub fn node(ctx: &Ctx, record: &ChannelRecord) -> ChannelNode {
 }
 
 /// The list row for a channel, counting the traffic of every channel
-/// superseded into it.
-pub fn channel(ctx: &Ctx, record: &ChannelRecord) -> ChannelSummary {
+/// superseded into it; within `window` when one is given. `last_activity`
+/// is always the latest overall.
+pub fn channel(ctx: &Ctx, record: &ChannelRecord, window: Option<TimeWindow>) -> ChannelSummary {
+    let counted = |at| window.is_none_or(|w: TimeWindow| w.contains(at));
     let members: HashSet<ChannelId> = ctx.channel_members(record.channel.id).into_iter().collect();
     let mut writers = HashSet::new();
     let mut readers = HashSet::new();
@@ -168,18 +170,22 @@ pub fn channel(ctx: &Ctx, record: &ChannelRecord) -> ChannelSummary {
         if !on {
             continue;
         }
+        last_activity = last_activity.max(Some(access.at));
+        if !counted(access.at) {
+            continue;
+        }
         let agent = ctx.agent(access.agent);
         match access.op.kind() {
             AccessKind::Write => writers.insert(agent),
             AccessKind::Read => readers.insert(agent),
         };
-        last_activity = last_activity.max(Some(access.at));
     }
     let transmissions = ctx
         .world
         .transmissions
         .iter()
         .filter(|t| matches!(t.transmission.route, Route::Channel(c) if members.contains(&c)))
+        .filter(|t| counted(t.transmission.opened_at))
         .count();
     let seed = match &record.channel.origin {
         ChannelOrigin::Discovered { seed, .. } => ctx.world.resource(*seed).cloned(),
