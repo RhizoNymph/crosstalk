@@ -4,8 +4,10 @@
 #   bash deploy/run.sh init   # writes deploy/.env with generated secrets
 #   bash deploy/run.sh up     # builds and starts everything
 #
-# Only the proxy listens beyond localhost (agents on other hosts point their
-# base URL at it); everything else binds 127.0.0.1. See
+# Only the proxy is published beyond localhost (agents on other hosts point
+# their base URL at it); every other published port binds 127.0.0.1.
+# node-exporter is the exception that is not published: it listens on the
+# host network at 0.0.0.0:19100 so Prometheus can reach it. See
 # docs/infrastructure.md for the layout and docs/features/deploy.md for the
 # contract the crosstalk binary implements.
 
@@ -109,7 +111,8 @@ services:
       # Blobs live in blobs/; the gateway may keep other files beside it.
       - data:/var/lib/crosstalk
     ports:
-      # Agents connect here: ANTHROPIC_BASE_URL=http://<host>:8080/anthropic
+      # Agents connect here: ANTHROPIC_BASE_URL=http://<host-ip>:<CROSSTALK_PROXY_PORT>/anthropic
+      # 8081 is the L8 API; the gateway binds it once the HTTP API (P7.1) exists.
       - ${CROSSTALK_PROXY_BIND:-0.0.0.0}:${CROSSTALK_PROXY_PORT:-8080}:8080
       - 127.0.0.1:${CROSSTALK_API_PORT:-8081}:8081
       - 127.0.0.1:${CROSSTALK_OPS_PORT:-9464}:9464
