@@ -1,9 +1,14 @@
 //! Alert rules and alerts.
 //!
 //! A rule evaluation produces an [`AlertDraft`] (the lifecycle's `Fired`).
-//! Triage either opens an [`Alert`] or folds the draft into an open alert
-//! with the same rule and subject, so `Deduplicated` is a
-//! [`TriageOutcome`], not a stored state.
+//! Triage either opens an [`Alert`] or folds the draft into an active (open
+//! or acknowledged) alert with the same rule and subject, so `Deduplicated`
+//! is a [`TriageOutcome`], not a stored state.
+//!
+//! Sanctioning a channel suppresses the active alerts whose subject is that
+//! channel; alerts about transmissions on it stay, because content can be
+//! worth flagging on a sanctioned channel. Disabling a rule suppresses its
+//! active alerts.
 //!
 //! ```text
 //! draft ─triage─┬─▶ Open ─acknowledge─▶ Acknowledged ─resolve─▶ Resolved
@@ -14,7 +19,7 @@
 //!               └─▶ deduplicated into an existing alert
 //! ```
 
-use crate::aggregates::topic::Embedding;
+use crate::aggregates::topic::{Embedding, TopicModelVersion};
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, TopicId, TransmissionId};
 use crate::support::{NonEmpty, Similarity, Timestamp};
 
@@ -37,12 +42,21 @@ pub enum AlertRule {
     UnreviewedTraffic,
     /// Confirmed traffic on a channel whose policy is unsanctioned.
     UnsanctionedTraffic,
-    /// A declared, sanctioned channel saw no traffic within its idle window.
+    /// A declared channel whose policy is sanctioned saw no traffic within
+    /// its idle window. Flow reports every unused declared channel; this rule
+    /// checks the policy.
     SanctionedUnused,
     /// A transmission was left with access-pattern evidence only.
     SuspectedTransmission,
+    /// Topic ids only mean something within one topic-model version. On a
+    /// re-fit, each topic is remapped to the new version's topic whose
+    /// centroid is most similar, if that similarity reaches
+    /// `remap_threshold`; a rule with any topic left unmapped becomes
+    /// [`RuleStatus::Stale`] instead of silently watching the wrong topics.
     WatchedTopic {
+        version: TopicModelVersion,
         topics: NonEmpty<TopicId>,
+        remap_threshold: Similarity,
     },
     SemanticQuery {
         query: Embedding,
@@ -68,7 +82,16 @@ impl AlertRule {
 pub struct AlertRuleDef {
     pub id: AlertRuleId,
     pub rule: AlertRule,
-    pub enabled: bool,
+    pub status: RuleStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleStatus {
+    Enabled,
+    Disabled,
+    /// A watched-topic rule that could not be remapped after a re-fit. It
+    /// evaluates nothing until an operator updates it.
+    Stale,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,8 +112,8 @@ pub struct AlertDraft {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriageOutcome {
     Opened(Alert),
-    /// An open alert with the same rule and subject already exists; its
-    /// occurrence count goes up instead.
+    /// An active (open or acknowledged) alert with the same rule and subject
+    /// already exists; its occurrence count goes up instead.
     Deduplicated {
         into: AlertId,
     },

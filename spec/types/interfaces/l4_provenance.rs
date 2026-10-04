@@ -3,8 +3,15 @@
 //! `ConversationDelta`.
 //!
 //! For each delta: the output is segmented into spans and the originated
-//! ones are indexed; the new inputs are decoded, fingerprinted and looked up,
-//! and hits on other agents' spans become content matches.
+//! ones are indexed; the new inputs (and a new system prompt) are decoded,
+//! fingerprinted and looked up, and hits on other agents' spans become
+//! content matches. The output is looked up too: another agent's text in an
+//! agent's output that none of its visible inputs contained is a match with
+//! carrier `ReaderOutput`, evidence of a channel the gateway cannot see.
+//!
+//! A fingerprint's frequency is the number of live (unexpired) spans of any
+//! origin whose text contains it. Fingerprints above the cutoff are
+//! boilerplate.
 //!
 //! Implementations:
 //! - `Segmenter`: `NovelRunSegmenter`.
@@ -12,15 +19,17 @@
 //!   `UrlDecoder`.
 //! - `Fingerprinter`: `Winnowing`.
 //! - `FingerprintIndex`: `PgFingerprintIndex`, `ShardedMemIndex`.
+//! - `SemanticMatcher`: `EmbeddingSimilarityMatcher`, an optional second
+//!   stage for paraphrase that produces `MatchKind::Semantic`.
 
 use crate::derived::provenance::fingerprint::{
     Fingerprint, FingerprintHit, PositionedFingerprint, WinnowParams,
 };
 use crate::derived::provenance::matching::Codec;
-use crate::derived::provenance::span::{Origin, SpanLocation};
+use crate::derived::provenance::span::{Origin, OriginatedSpan, SpanLocation};
 use crate::ids::SpanId;
 use crate::observed::message::Message;
-use crate::support::ByteRange;
+use crate::support::{ByteRange, Similarity};
 
 /// A span before it has an id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +68,10 @@ pub trait Fingerprinter {
 }
 
 pub trait FingerprintIndex {
+    /// Only originated spans can be indexed.
     async fn insert(
         &mut self,
-        span: SpanId,
+        span: &OriginatedSpan,
         fingerprints: &[PositionedFingerprint],
     ) -> Result<(), IndexError>;
 
@@ -76,6 +86,23 @@ pub trait FingerprintIndex {
 
     /// Remove the fingerprints of expired spans.
     async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
+}
+
+/// A candidate paraphrase: an originated span whose embedding is close to a
+/// window of the reader's text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticHit {
+    pub span: SpanId,
+    pub read_range: ByteRange,
+    pub score: Similarity,
+}
+
+pub trait SemanticMatcher {
+    async fn lookup(
+        &self,
+        text: &str,
+        threshold: Similarity,
+    ) -> Result<Vec<SemanticHit>, IndexError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

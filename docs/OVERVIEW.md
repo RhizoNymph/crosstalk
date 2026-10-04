@@ -13,14 +13,21 @@ Overview:
     topology view with edge weights, search, topic modeling, clustering, a
     UMAP view of message content, and alerts.
 
+    It works with Claude Code, Codex, pi and oh-my-pi, against vendor APIs,
+    subscription backends reached with OAuth (Claude Pro/Max, ChatGPT/Codex,
+    GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
+    HTTP, SSE and WebSocket.
+
     Status: design. The data model is specified in spec/types; there is no
     implementation yet.
 
   subsystems:
     ingest: >
-      L0 ingress (proxy hot path, provider adapters), L1 canonicalization
-      (wire format to canonical Exchange and Message), L3 reconstruction
-      (agent identity and conversation threading).
+      L0 ingress (reverse and forward proxy, upstream routing, credential
+      hashing, provider adapters, SSE framing and WebSocket taps), L1
+      canonicalization (wire format and dialect to canonical Exchange and
+      Message), L3 reconstruction (agent identity, merges, conversation
+      threading, WebSocket increment resolution).
     transport: >
       L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
@@ -35,7 +42,9 @@ Overview:
       actions, alert sinks).
 
   data_flow: >
-    Harness request → L0 proxy forwards upstream and tees the response →
+    Harness request (via its base URL, or via the gateway as HTTPS proxy) →
+    L0 routes it to its upstream, hashes the credential, forwards it unchanged
+    and tees the response (or each WebSocket turn) →
     RawExchange (in-process) → L1 normalizes, writes message bodies to the
     blob store, publishes ExchangeCaptured → L3 resolves the agent and
     threads the conversation, publishes ConversationDelta → L4 indexes the
@@ -50,9 +59,11 @@ Overview:
 Features Index:
   type_spec:
     description: >
-      The gateway's data model as type-checked Rust: observed facts,
-      derived inferences, aggregates, bus events and per-layer interfaces,
-      with tests for the invariants checked at runtime.
+      The gateway's data model as type-checked Rust: observed facts
+      (including clients, upstreams and credentials), derived inferences,
+      aggregates, bus events and per-layer interfaces, with tests for the
+      invariants checked at runtime. Harness and server wire behavior it is
+      based on is in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
     doc: docs/features/type_spec.md

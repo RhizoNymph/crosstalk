@@ -1,8 +1,13 @@
 //! Constructors for test values.
 
+use std::num::NonZeroU32;
+
+use crate::derived::flow::access::{Access, AccessOp, Extraction};
 use crate::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crate::derived::provenance::span::SpanLocation;
-use crate::ids::{AccessId, AgentId, ChannelId, ExchangeId, MessageHash, SpanId, TransmissionId};
+use crate::ids::{
+    AccessId, AgentId, ChannelId, ExchangeId, MessageHash, ResourceId, SpanId, TransmissionId,
+};
 use crate::observed::message::{PartRef, ToolCallId};
 use crate::support::{Blake3, ByteRange, Timestamp};
 
@@ -26,6 +31,10 @@ pub fn access(n: u128) -> AccessId {
     AccessId::from_ulid(n)
 }
 
+pub fn resource(n: u128) -> ResourceId {
+    ResourceId::from_ulid(n)
+}
+
 pub fn transmission(n: u128) -> TransmissionId {
     TransmissionId::from_ulid(n)
 }
@@ -34,10 +43,15 @@ pub fn at(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)
 }
 
+pub fn bytes(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).expect("fixture byte counts are non-zero")
+}
+
 pub fn message(byte: u8) -> MessageHash {
     MessageHash::from_digest(Blake3::from_bytes([byte; 32]))
 }
 
+/// A 64-byte read range.
 pub fn location() -> SpanLocation {
     SpanLocation {
         part: PartRef {
@@ -49,7 +63,7 @@ pub fn location() -> SpanLocation {
 }
 
 /// A tool-result match of `origin_agent`'s span in `reader`'s input.
-pub fn content_match(origin_agent: AgentId, reader: AgentId, bytes: u32) -> ContentMatch {
+pub fn content_match(origin_agent: AgentId, reader: AgentId, matched: u32) -> ContentMatch {
     ContentMatch::new(
         span(1),
         origin_agent,
@@ -58,7 +72,42 @@ pub fn content_match(origin_agent: AgentId, reader: AgentId, bytes: u32) -> Cont
         location(),
         Carrier::ToolResult(ToolCallId("call_1".into())),
         MatchKind::Exact,
-        bytes,
+        bytes(matched),
     )
-    .expect("fixture agents differ")
+    .expect("fixture agents differ and the match fits the read range")
+}
+
+pub fn write_access(id: u128, by: AgentId, on: ResourceId, when: u64) -> Access {
+    Access {
+        id: access(id),
+        agent: by,
+        exchange: exchange(id),
+        resource: on,
+        at: at(when),
+        via: Extraction::Structured,
+        op: AccessOp::Write {
+            call: PartRef {
+                message: message(2),
+                index: 0,
+            },
+            spans: Vec::new(),
+        },
+    }
+}
+
+pub fn read_access(id: u128, by: AgentId, on: ResourceId, when: u64) -> Access {
+    Access {
+        id: access(id),
+        agent: by,
+        exchange: exchange(id),
+        resource: on,
+        at: at(when),
+        via: Extraction::Structured,
+        op: AccessOp::Read {
+            result: PartRef {
+                message: message(3),
+                index: 0,
+            },
+        },
+    }
 }

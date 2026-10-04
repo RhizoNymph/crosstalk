@@ -5,7 +5,10 @@
 //! URL inside a bash command) gets the same [`ResourceId`]:
 //! - URL scheme and host lowercased, default ports and fragments removed,
 //!   query parameters sorted.
-//! - File paths absolute and with `.`/`..` resolved.
+//! - File paths absolute and with `.`/`..` resolved. A relative path is
+//!   resolved against the working directory the conversation states (harness
+//!   system prompts carry it); when none is known, the access is keyed as
+//!   `Locator::Opaque` on the tool and the path as written.
 
 use crate::ids::ResourceId;
 use crate::observed::message::ToolName;
@@ -47,7 +50,8 @@ pub struct Resource {
 }
 
 /// Matches locators. Used by declared channels, which exist before any of
-/// their resources have been seen.
+/// their resources have been seen. Prefixes match whole path segments only:
+/// `/shared` matches `/shared` and `/shared/x`, not `/shared-other/x`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourcePattern {
     Exact(Locator),
@@ -63,13 +67,21 @@ impl ResourcePattern {
             (Self::Exact(expected), _) => expected == locator,
             (Self::Host(host), Locator::Url { host: h, .. }) => host == h,
             (Self::UrlPrefix { host, path_prefix }, Locator::Url { host: h, path, .. }) => {
-                host == h && path.starts_with(path_prefix.as_str())
+                host == h && segment_prefix(path, path_prefix)
             }
             (Self::PathPrefix { host, prefix }, Locator::File { host: h, path }) => {
-                host == h && path.starts_with(prefix.as_str())
+                host == h && segment_prefix(path, prefix)
             }
             (Self::McpServer(server), Locator::Mcp { server: s, .. }) => server == s,
             _ => false,
         }
+    }
+}
+
+/// Whether `prefix` is `path` or an ancestor of it, by whole `/` segments.
+fn segment_prefix(path: &str, prefix: &str) -> bool {
+    match path.strip_prefix(prefix) {
+        Some(rest) => rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/'),
+        None => false,
     }
 }

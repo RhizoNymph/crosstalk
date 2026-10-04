@@ -5,7 +5,9 @@
 
 mod fixtures;
 
+mod aggregates;
 mod events;
 mod flow;
+mod observed;
 mod provenance;
 mod support;

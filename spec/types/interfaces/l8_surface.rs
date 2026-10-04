@@ -13,10 +13,11 @@
 use crate::aggregates::alert::Alert;
 use crate::aggregates::edge::{TopologyFilter, TopologyGraph, Weighting};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
-use crate::derived::flow::channel::policy::Policy;
+use crate::derived::flow::channel::Channel;
 use crate::derived::flow::transmission::Transmission;
-use crate::ids::{AgentId, AlertId, ChannelId, OperatorId, TransmissionId};
+use crate::ids::{AlertId, ChannelId, OperatorId, TransmissionId};
 use crate::interfaces::l6_analysis::{SearchHit, SearchQuery};
+use crate::observed::agent::MergeRequest;
 use crate::support::TimeWindow;
 
 /// A point in a 2-D projection of transmission embeddings.
@@ -27,9 +28,48 @@ pub struct ProjectedPoint {
     pub y: f32,
 }
 
+/// The authenticated caller of a query or action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    pub operator: OperatorId,
+    pub permissions: Vec<Permission>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Permission {
+    /// Topology, channels, alerts: no message content.
+    View,
+    /// Transmission content, search, projections.
+    Content,
+    /// Policy changes and agent merges.
+    Govern,
+    /// Acknowledge and resolve alerts.
+    Triage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AlertFilter {
+    pub states: Vec<AlertStateKind>,
+    pub channel: Option<ChannelId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlertStateKind {
+    Open,
+    Acknowledged,
+    Resolved,
+    Suppressed,
+}
+
 pub trait QueryApi {
+    async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
+
+    async fn alerts(&self, caller: &Caller, filter: &AlertFilter)
+    -> Result<Vec<Alert>, QueryError>;
+
     async fn topology(
         &self,
+        caller: &Caller,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
@@ -37,28 +77,50 @@ pub trait QueryApi {
 
     async fn search(
         &self,
+        caller: &Caller,
         query: &SearchQuery,
         window: Option<TimeWindow>,
         limit: u32,
     ) -> Result<Vec<SearchHit>, QueryError>;
 
-    async fn transmission(&self, id: TransmissionId) -> Result<Option<Transmission>, QueryError>;
+    async fn transmission(
+        &self,
+        caller: &Caller,
+        id: TransmissionId,
+    ) -> Result<Option<Transmission>, QueryError>;
 
-    async fn topics(&self, version: Option<TopicModelVersion>) -> Result<Vec<Topic>, QueryError>;
+    async fn topics(
+        &self,
+        caller: &Caller,
+        version: Option<TopicModelVersion>,
+    ) -> Result<Vec<Topic>, QueryError>;
 
-    async fn projection(&self, window: TimeWindow) -> Result<Vec<ProjectedPoint>, QueryError>;
+    async fn projection(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+    ) -> Result<Vec<ProjectedPoint>, QueryError>;
+}
+
+/// The policy an operator asks for. The surface stamps the author and time
+/// from the authenticated caller; callers cannot supply them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyKind {
+    Unreviewed,
+    Sanctioned,
+    Unsanctioned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperatorAction {
     SetPolicy {
         channel: ChannelId,
-        policy: Policy,
+        policy: PolicyKind,
+        note: Option<String>,
     },
-    MergeAgents {
-        from: AgentId,
-        into: AgentId,
-    },
+    /// Built with `MergeAuthor::Operator` of the caller; self-merges cannot
+    /// be expressed.
+    MergeAgents(MergeRequest),
     Acknowledge {
         alert: AlertId,
     },
@@ -69,7 +131,7 @@ pub enum OperatorAction {
 }
 
 pub trait OperatorActions {
-    async fn act(&self, by: OperatorId, action: OperatorAction) -> Result<(), QueryError>;
+    async fn act(&self, caller: &Caller, action: OperatorAction) -> Result<(), QueryError>;
 }
 
 pub trait AlertSink {

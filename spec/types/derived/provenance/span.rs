@@ -79,7 +79,67 @@ pub enum SpanState {
     },
 }
 
+/// What can happen to a span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanEvent {
+    Classify(Origin),
+    Index {
+        at: Timestamp,
+    },
+    /// Found in another agent's input or output.
+    Hit {
+        at: Timestamp,
+    },
+    Expire {
+        at: Timestamp,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IllegalTransition {
+    pub from: SpanState,
+    pub event: SpanEvent,
+}
+
 impl SpanState {
+    /// The only way a span's state changes. Rejects every edge not in the
+    /// lifecycle above.
+    pub fn advance(&self, event: SpanEvent) -> Result<SpanState, IllegalTransition> {
+        let next = match (self, event) {
+            (Self::Extracted, SpanEvent::Classify(Origin::Originated)) => Some(Self::Originated),
+            (Self::Extracted, SpanEvent::Classify(Origin::Relayed(source))) => {
+                Some(Self::Relayed { source })
+            }
+            (Self::Extracted, SpanEvent::Classify(Origin::Common)) => Some(Self::Common),
+            (Self::Originated, SpanEvent::Index { at }) => Some(Self::Indexed { at }),
+            (Self::Indexed { at: indexed_at }, SpanEvent::Hit { at }) => Some(Self::Propagated {
+                indexed_at: *indexed_at,
+                first_hit_at: at,
+                hits: NonZeroU32::MIN,
+            }),
+            (
+                Self::Propagated {
+                    indexed_at,
+                    first_hit_at,
+                    hits,
+                },
+                SpanEvent::Hit { .. },
+            ) => Some(Self::Propagated {
+                indexed_at: *indexed_at,
+                first_hit_at: *first_hit_at,
+                hits: hits.saturating_add(1),
+            }),
+            (Self::Indexed { .. } | Self::Propagated { .. }, SpanEvent::Expire { at }) => {
+                Some(Self::Expired { at })
+            }
+            _ => None,
+        };
+        next.ok_or_else(|| IllegalTransition {
+            from: self.clone(),
+            event,
+        })
+    }
+
     pub fn origin(&self) -> Option<Origin> {
         match self {
             Self::Extracted => None,
@@ -90,5 +150,29 @@ impl SpanState {
             | Self::Propagated { .. }
             | Self::Expired { .. } => Some(Origin::Originated),
         }
+    }
+}
+
+/// A span classified as originated and not yet expired: the only kind the
+/// fingerprint index accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginatedSpan(Span);
+
+impl OriginatedSpan {
+    /// `None` unless the span is `Originated`, `Indexed` or `Propagated`.
+    pub fn new(span: Span) -> Option<Self> {
+        match span.state {
+            SpanState::Originated | SpanState::Indexed { .. } | SpanState::Propagated { .. } => {
+                Some(Self(span))
+            }
+            SpanState::Extracted
+            | SpanState::Common
+            | SpanState::Relayed { .. }
+            | SpanState::Expired { .. } => None,
+        }
+    }
+
+    pub fn span(&self) -> &Span {
+        &self.0
     }
 }

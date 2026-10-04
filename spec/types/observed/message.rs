@@ -5,6 +5,10 @@
 //! only in tool messages. Normalizers split provider messages that mix them
 //! (Anthropic puts `tool_result` blocks inside user turns) into one canonical
 //! message per role, in their original order.
+//!
+//! Blocks a normalizer does not recognize are kept as [`Unknown`] parts
+//! rather than dropping the exchange, so read-side detection still sees the
+//! rest of it and the exchange can be re-normalized later.
 
 use crate::ids::MessageHash;
 use crate::support::NonEmpty;
@@ -49,6 +53,7 @@ pub struct Text(pub String);
 pub enum UserPart {
     Text(Text),
     Media(Media),
+    Unknown(Unknown),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +61,21 @@ pub enum AssistantPart {
     Text(Text),
     Reasoning(Reasoning),
     ToolCall(ToolCall),
+    /// The result of a server-executed tool call (provider-hosted web
+    /// search, web fetch, code execution), returned inside the response. Its
+    /// call is an earlier `ToolCall` with `ToolExecution::Server` in the same
+    /// message.
+    ServerToolResult(ToolResult),
+    Unknown(Unknown),
+}
+
+/// A block the normalizer did not recognize, kept verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unknown {
+    /// The provider's block type (`"type"` field, or equivalent).
+    pub kind: String,
+    /// The block as canonical JSON.
+    pub raw: CanonicalJson,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,10 +109,25 @@ pub struct ToolCallId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ToolName(pub String);
 
-/// Tool arguments exactly as the model produced them (JSON text). Kept raw:
-/// extraction parses it, but hashing and matching need the original bytes.
+/// JSON text in canonical form (RFC 8785): sorted keys, no insignificant
+/// whitespace, canonical numbers and escapes. Two semantically equal JSON
+/// values have the same canonical text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CanonicalJson(pub String);
+
+/// Tool-call arguments.
+///
+/// Stored canonically, because harnesses re-serialize arguments when they
+/// echo a response back in the next request (Anthropic `tool_use.input` is a
+/// JSON object, not text), and the echoed message must hash the same as the
+/// original.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolArguments(pub String);
+pub enum ToolArguments {
+    Json(CanonicalJson),
+    /// The model produced text that is not valid JSON (possible where the
+    /// protocol carries arguments as a string). Kept exactly.
+    Invalid(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
@@ -122,6 +157,7 @@ pub struct ToolResult {
 pub enum ToolResultContent {
     Text(Text),
     Media(Media),
+    Unknown(Unknown),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
