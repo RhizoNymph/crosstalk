@@ -14,15 +14,17 @@ cargo test  --manifest-path spec/Cargo.toml
 ```text
 spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
+├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
 ├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share
-├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), list markers (incl. AuditList)
+├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), list markers (incl. AuditList, ResourceUseList)
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
 │   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
 │   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest
 │   ├── agent/
+│   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases)
 │   │   └── merge.rs       MergeRecord (checked), MergedInto, Reversal, MergeVeto (checked): the merge log and exact unmerge
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
@@ -31,19 +33,22 @@ spec/types/
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
 │   │   └── matching.rs    ContentMatch, MatchKind, Codec, Carrier
 │   └── flow/
-│       ├── resource.rs    Resource, Locator, ResourcePattern
+│       ├── resource.rs    Resource, Locator, ResourcePattern (matches, overlaps)
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
 │       ├── timing.rs      CorrelationTiming (checked): evidence window, suspected TTL, settle_after
-│       ├── transmission.rs Transmission, Route, TransmissionState (expire), Confirmed
+│       ├── transmission.rs Transmission, Route (resolved), TransmissionState (expire), Confirmed
 │       ├── verdict.rs     Verdict, Judgeable (TransmissionState::judgeable), TransmissionVerdict (checked), VerdictLog, CurrentVerdict
 │       └── channel/
-│           ├── mod.rs     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed
-│           ├── detection.rs DeclaredDetection, TrafficDetection
+│           ├── mod.rs     Channel (canonical), ChannelOrigin (promoted, superseded), Supersession, Declaration, DeclaredHistory, Seed
+│           ├── promotion.rs Promotion (checked), Registered, plan, PromotionPlan, PromotionRefusal
+│           ├── detection.rs DeclaredDetection, TrafficDetection, DetectionKind
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph, EdgeTransmissionPage
-│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTransmissionPage
+│   ├── filter.rs          TopologyFilter (shared by every linked view), FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
+│   ├── node.rs            GraphNode, AgentNode, ChannelNode, CanonicalStateKind, CanonicalOriginKind, TopologyGraph::check_nodes
 │   ├── projection/
 │   │   ├── mod.rs         ProjectionParams (checked), ProjectionSpec, ProjectionInfo (checked, transitions), Fitted, FitFailure, Projection (checked)
 │   │   └── frame.rs       ProjectionFrame (checked; binary layout, encode, decode)
@@ -53,25 +58,25 @@ spec/types/
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   ├── topic_history.rs   TopicVersionHistory, TopicVersionInfo (checked, with retention), TopicSizes, TopicLineage (checked, remap)
 │   ├── watermark.rs       PipelineFrontier, Watermark::settled, Watermarked
-│   └── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertDraft, TriageOutcome, Alert, AlertRevision
+│   └── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
 │   ├── changed.rs         Changed: which entity a query returns changed (any store, for the live feed)
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged, AgentRenamed
-│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. VerdictSet)
+│   ├── detect.rs          L4/L5: span, match, access (with its channel), channel (incl. ChannelPromoted) and transmission events (incl. VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, TopicVersionDropped, WatermarkAdvanced, EdgeUpdated, AlertOpened, AlertChanged, AlertRuleChanged, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore
-│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, Threader
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (policy history, promote), Correlator
+│   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, resource use), Correlator
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError, EdgeQueryError
-│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, projections, verdicts, detection quality, audit, operators, sinks, watermark), QueryError, ConflictKind, InputError, OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink, SinkInfo
+│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError, EdgeQueryError
+│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views incl. channel topology, channel resources, series, topic history, policy history, projections, verdicts, detection quality, audit, operators, sinks, watermark), QueryError, ConflictKind, InputError, OperatorAction (subjects; incl. topic-version pins), ActionKind, OperatorActions, AlertSink, SinkInfo
 │   └── l8_surface/
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
 │       ├── query_errors.rs From impls: each store error to one QueryError
@@ -138,10 +143,15 @@ Code Assist) and self-hosted vLLM or SGLang. See
   fails to decode is still forwarded, just not captured.
 - **Only generation is captured.** Token counting, model listing, probes and
   side routes are forwarded and not captured.
-- **Merges are aliases.** Stored records keep their agent ids and readers
-  resolve them through `AgentDirectory`, whose caches must apply every
-  merge and unmerge. Merges are a log of `MergeRecord`s; an operator
-  unmerge reverts one record exactly and records a `MergeVeto`.
+- **Merges and supersessions are aliases.** Stored records keep their agent
+  and channel ids and readers resolve them through `AgentDirectory` and
+  `ChannelDirectory` (`aliases.rs`), whose caches must apply every merge and
+  unmerge. Merges are a log of `MergeRecord`s; an operator unmerge reverts
+  one record exactly and records a `MergeVeto`. A promotion supersedes the
+  discovered channels its pattern covers; nothing undoes a supersession.
+- **Harness claims are aggregated for display.** L3 keeps the distinct
+  claims seen per attributed agent; a canonical agent shows the union over
+  its aliases. Claims are never identity evidence.
 - **Labels are display only.** An agent label is never identity evidence,
   and only an active agent can be renamed.
 - **Verdicts sit beside detection.** An operator's `Genuine` or

@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.bipartite.transmissions-match-graph"
+statement = "For the same window, weighting and filter, read with no apply in between, EdgeStore::channel_topology's transmission edges equal EdgeStore::graph's edges and both report the same topic-model version."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+The two views are linked: switching between them must not change which
+communications are shown. Computing the channel view's transmissions
+separately, for example from access pairs, would drift from the graph
+whenever routing chose Delegation or Direct over Channel.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::channel_topology_transmissions_match_graph"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

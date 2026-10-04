@@ -1,0 +1,24 @@
+[invariant]
+id = "reconstruct.claims.distinct-ordered"
+statement = "A ClaimSet holds each HarnessClaim at most once, ordered by last_seen descending, ties ordered by harness family, then User-Agent, then version."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Claims are shown as a set with the most recent first. A repeated claim
+would show twice, and an order that depended on insertion would make two
+equal sets compare unequal after a merge.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::observed::agent::ClaimSet::from_entries",
+    "crosstalk_spec::observed::agent::ClaimSet::observe",
+]
+unit = [
+    "crosstalk_spec::tests::graph::a_stored_claim_set_lists_each_claim_once",
+    "crosstalk_spec::tests::graph::claim_ties_are_ordered_deterministically",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

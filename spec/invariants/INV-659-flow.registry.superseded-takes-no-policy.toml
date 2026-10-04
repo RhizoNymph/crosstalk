@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.registry.superseded-takes-no-policy"
+statement = "ChannelRegistry::set_policy on a superseded channel returns Superseded naming the channel and its superseding channel, and records nothing in its policy history."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A superseded channel's traffic is judged by the channel that absorbed it,
+so a decision recorded on it would never take effect while looking current
+in its history. The flow consumer logs and acks such a PolicyChanged,
+which can only come from a race with the promotion.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::set_policy_on_superseded_channel_refused"
+integration = "crosstalk::flow::tests::pg_set_policy_on_superseded_channel"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

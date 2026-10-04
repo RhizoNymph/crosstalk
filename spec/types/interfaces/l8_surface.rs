@@ -42,9 +42,11 @@
 //! with their own invariants (a policy history, the topic version history,
 //! topic sizes, a lineage, a graph, a series grid) are returned whole.
 //!
-//! **Linked views.** `topology`, `series`, `search`, `edge_transmissions`
-//! and `fit_projection` take the same [`TopologyFilter`] and apply it as
-//! [`TopologyFilter::admits`] defines, so a selection in one view narrows
+//! **Linked views.** `topology`, `channel_topology`, `series`, `search`,
+//! `edge_transmissions` and `fit_projection` take the same
+//! [`TopologyFilter`] and apply it as [`TopologyFilter::admits`] defines
+//! (and, for the channel-centred view's accesses,
+//! [`TopologyFilter::admits_access`]), so a selection in one view narrows
 //! the others to the same transmissions. The filter's
 //! [`TopicVersionSelector`] is resolved as [`crate::aggregates::filter`]
 //! defines; each response reports the version it resolved to, and a client
@@ -53,6 +55,12 @@
 //! `Conflict`, and no longer retained is `VersionNotRetained`. A filter
 //! naming topics outside the resolved version is
 //! `Conflict(TopicsNotInVersion)`.
+//!
+//! **Aliases.** Merged agents and superseded channels are resolved at read
+//! time ([`crate::aliases`]): every id a response names is canonical, and
+//! every id a request names is resolved before matching. Actions that change
+//! a channel (policy, promotion) refuse a superseded one with
+//! `Conflict(ChannelSuperseded)`, naming the channel to act on instead.
 //!
 //! **Watermarks.** `topology`, `series`, `edge_transmissions` and
 //! `topic_sizes` return their result [`Watermarked`]: with L7's watermark,
@@ -83,6 +91,7 @@ pub mod query_errors;
 
 use std::fmt;
 
+use crate::aggregates::access::{BipartiteGraph, ResourceUsePage};
 use crate::aggregates::alert::{Alert, AlertRuleDef, RuleName, UserRule};
 use crate::aggregates::edge::{
     EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
@@ -98,6 +107,7 @@ use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHis
 use crate::aggregates::watermark::{Watermark, Watermarked};
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::channel::policy::PolicyHistory;
+use crate::derived::flow::channel::promotion::PromotionRefusal;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::{Verdict, VerdictLog};
@@ -106,11 +116,13 @@ use crate::ids::{
     TopicId, TransmissionId,
 };
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
+use crate::interfaces::l5_flow::{PromoteError, RegistryError};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::observed::agent::{Agent, AgentLabel, MergeRequest};
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, Page, PageRequest, ProjectionList, SearchList, TopicList,
+    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
+    TopicList,
 };
 use crate::support::{TimeWindow, Timestamp};
 
@@ -151,8 +163,10 @@ impl Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Permission {
-    /// Topology, series, the transmissions behind an edge (ids, times, byte
-    /// counts and topic ids), channels, channel policy history, agents, alert
+    /// Topology (agent-centred and channel-centred, with node metadata and
+    /// harness claims), series, the transmissions behind an edge (ids, times,
+    /// byte counts and topic ids), channels, a channel's resources and who
+    /// used them, channel policy history, agents, alert
     /// rules, alerts and the topic history (versions, sizes, lineage): ids,
     /// counts, times and similarities, no message content and no topic
     /// labels or terms. Also verdict logs and detection quality.
@@ -243,7 +257,10 @@ impl fmt::Debug for PermissionSet {
 }
 
 /// Empty `states` means every state. `channel` keeps alerts whose subject is
-/// that channel or a transmission routed through it.
+/// that channel or a transmission routed through it, with the listed
+/// channel, the subject's channel and the transmission's route all resolved
+/// through supersession: filtering on a promoted channel shows the alerts
+/// still stored under the channels it superseded.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AlertFilter {
     pub states: Vec<AlertStateKind>,
@@ -339,6 +356,34 @@ pub trait QueryApi {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<TopologyGraph>, QueryError>;
+
+    /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels as
+    /// nodes, access edges (writes nobody read included) and the same
+    /// transmission edges as `topology`. An unaligned window is
+    /// `InvalidInput(UnalignedWindow)`.
+    ///
+    /// [`EdgeStore::channel_topology`]: crate::interfaces::l7_topology::EdgeStore::channel_topology
+    async fn channel_topology(
+        &self,
+        caller: &Caller,
+        window: TimeWindow,
+        weighting: Weighting,
+        filter: &TopologyFilter,
+    ) -> Result<BipartiteGraph, QueryError>;
+
+    /// View. Exactly [`ChannelRegistry::resource_use`]: the resources of
+    /// `channel`'s canonical channel accessed in `window`, newest first, with
+    /// canonical writers and readers. A superseded `channel` answers for the
+    /// channel that superseded it, named in the page. Unknown is `NotFound`.
+    ///
+    /// [`ChannelRegistry::resource_use`]: crate::interfaces::l5_flow::ChannelRegistry::resource_use
+    async fn channel_resources(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        window: TimeWindow,
+        page: &PageRequest<ResourceUseList>,
+    ) -> Result<ResourceUsePage, QueryError>;
 
     /// View. The transmissions `topology` counts into one of its edges for
     /// the same window and filter (`EdgeStore::transmissions`): ids, times,
@@ -523,10 +568,17 @@ pub enum OperatorAction {
         agent: AgentId,
         label: Option<AgentLabel>,
     },
-    /// Attach `pattern` to a discovered channel, making it declared.
+    /// Promote a discovered channel: attach `pattern`, making it declared
+    /// under the same id, record `policy` (with `note`) as the operator's
+    /// decision, and supersede every other discovered channel whose seed the
+    /// pattern matches. The surface stamps the operator and time into a
+    /// `Promotion` and calls `ChannelRegistry::promote`; success is
+    /// `ChannelPromoted(channel)`, the same id.
     PromoteChannel {
         channel: ChannelId,
         pattern: ResourcePattern,
+        policy: PolicyKind,
+        note: Option<String>,
     },
     Acknowledge {
         alert: AlertId,
@@ -693,8 +745,11 @@ impl OperatorAction {
 }
 
 pub trait OperatorActions {
-    /// Check the permission, apply the action and record it. A call that
-    /// returns `Ok` or an `ActionError` other than `Store` leaves exactly one
+    /// Check the permission, apply the action and record it. `SetPolicy` on
+    /// a superseded channel is refused with `Conflict(ChannelSuperseded)`
+    /// (read through `ChannelDirectory`) before `PolicyChanged` is
+    /// published; `PromoteChannel` maps the registry's refusal
+    /// (`ActionError::from`). A call that returns `Ok` or an `ActionError` other than `Store` leaves exactly one
     /// operator audit entry, whose outcome is what it returns
     /// (`AuditOutcome::of`): a `Succeeded` entry is written in the same
     /// transaction as the action's effect, and a `Forbidden` or `Rejected`
@@ -851,6 +906,51 @@ pub enum InputError {
     QueryNotEmbeddable,
     /// Search text longer than the embedding model's context.
     QueryTooLong,
+}
+
+impl From<PromotionRefusal> for ActionError {
+    fn from(refusal: PromotionRefusal) -> Self {
+        match refusal {
+            PromotionRefusal::UnknownChannel(_) => Self::NotFound,
+            PromotionRefusal::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            PromotionRefusal::NotDiscovered(channel) => {
+                Self::Conflict(ConflictKind::ChannelNotDiscovered { channel })
+            }
+            PromotionRefusal::PatternMissesSeed => {
+                Self::InvalidInput(InputError::PatternMissesSeed)
+            }
+            PromotionRefusal::PatternOverlaps { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+        }
+    }
+}
+
+impl From<PromoteError> for ActionError {
+    fn from(error: PromoteError) -> Self {
+        match error {
+            PromoteError::Store { reason } => Self::Store { reason },
+            PromoteError::Refused(refusal) => refusal.into(),
+        }
+    }
+}
+
+impl From<RegistryError> for QueryError {
+    fn from(error: RegistryError) -> Self {
+        match error {
+            RegistryError::Store { reason } => Self::Store { reason },
+            RegistryError::UnknownChannel(_) => Self::NotFound,
+            RegistryError::OverlappingDeclaration { existing } => {
+                Self::Conflict(ConflictKind::PatternOverlaps { existing })
+            }
+            RegistryError::Superseded { channel, by } => {
+                Self::Conflict(ConflictKind::ChannelSuperseded { channel, by })
+            }
+            RegistryError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
 }
 
 impl From<ActionError> for QueryError {

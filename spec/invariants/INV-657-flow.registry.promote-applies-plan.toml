@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.registry.promote-applies-plan"
+statement = "After ChannelRegistry::promote returns Ok, the channel has its id, resources and detection, its origin is the plan's origin, its policy history holds the promotion's decision and its policy is that history's current one, every channel the plan supersedes has the plan's superseded origin, and Promoted lists those channels; after an Err nothing has changed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The promotion, the policy decision and the supersessions are one operator
+action. Applying them separately would leave windows where the channel is
+declared with no reviewed policy, or where absorbed channels still accept
+resources the new pattern covers.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::promote_applies_plan"
+integration = "crosstalk::flow::tests::pg_promote_applies_plan_in_one_transaction"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

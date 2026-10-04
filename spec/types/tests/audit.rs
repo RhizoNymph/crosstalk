@@ -79,6 +79,8 @@ fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubje
             OperatorAction::PromoteChannel {
                 channel: channel(2),
                 pattern: wiki(),
+                policy: PolicyKind::Sanctioned,
+                note: None,
             },
             ActionKind::PromoteChannel,
             Permission::Govern,
@@ -364,6 +366,8 @@ fn operator_entry_subjects_include_created_ids() {
         OperatorAction::PromoteChannel {
             channel: channel(3),
             pattern: wiki(),
+            policy: PolicyKind::Sanctioned,
+            note: None,
         },
         AuditOutcome::Succeeded(ActionOutcome::ChannelPromoted(channel(3))),
     );

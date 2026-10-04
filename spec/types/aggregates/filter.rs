@@ -17,7 +17,11 @@
 //!
 //! A subject's agents are canonical (resolved through `AgentDirectory` when
 //! the view is computed; for a stored projection, when it was fitted), and
-//! so are the agents the filter lists.
+//! so are the agents the filter lists. Its route's channel is canonical
+//! (resolved through `ChannelDirectory`, so a transmission on a superseded
+//! channel counts on the channel that superseded it), and so are the
+//! channels the filter lists: listing a superseded channel selects its
+//! superseding channel. See [`crate::aliases`].
 //!
 //! **Topic version.** Every view evaluates topics (the filter's and the
 //! ones it reports) under one concrete topic-model version, which it reports
@@ -39,10 +43,29 @@
 //! The time window is not part of the filter: every view takes it
 //! separately and tests it against `Confirmed::at` with
 //! [`TimeWindow::contains`](crate::support::TimeWindow::contains).
+//!
+//! **Accesses.** The channel-centred view (`channel_topology`) also draws
+//! accesses: agent-to-channel reads and writes, counted whether or not
+//! anyone read what was written. Each access bucket is reduced to an
+//! [`AccessSubject`] and kept when [`TopologyFilter::admits_access`] holds:
+//!
+//! | Field | Admits an access when |
+//! | --- | --- |
+//! | `agents` | its canonical agent is the canonical form of a listed agent |
+//! | `channels` | its canonical channel is the canonical form of a listed channel |
+//! | `route_kinds` | `Channel` is listed: an access is a channel's traffic |
+//! | `topics` | its channel carries, in the window, a channel-routed confirmed transmission whose topic is listed |
+//! | `false_detections` | always: an access is not a detection; it only narrows which transmissions count for `topics` |
+//!
+//! An access has no topic of its own, so a topic filter keeps the accesses
+//! of channels the listed topics flowed through, and with them the writes
+//! there that nobody has read yet. The window is tested against
+//! `Access::at` (by bucket, like edges).
 
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicVersionHistory, TopicVersionStatus};
+use crate::aliases::Aliases;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, ChannelId, TopicId};
 
@@ -54,8 +77,9 @@ pub struct TopologyFilter {
     /// Keep transmissions whose sender OR reader is one of these (after alias
     /// resolution of both sides).
     pub agents: Vec<AgentId>,
-    /// Keep only channel-routed transmissions on these channels. Non-channel
-    /// routes never match a non-empty list.
+    /// Keep only channel-routed transmissions on these channels (after
+    /// supersession resolution of both sides). Non-channel routes never match
+    /// a non-empty list.
     pub channels: Vec<ChannelId>,
     pub route_kinds: Vec<RouteKind>,
     /// Keep only transmissions whose topic, under the response's topic-model
@@ -148,6 +172,7 @@ pub struct FilterSubject<'a> {
     pub from: AgentId,
     /// The canonical reader: `AgentDirectory::canonical(Transmission::to)`.
     pub to: AgentId,
+    /// The route with its channel canonical (`Route::resolved`).
     pub route: &'a Route,
     /// The topic under the response's topic-model version; `None` for an
     /// outlier or a transmission not classified under that version.
@@ -162,23 +187,35 @@ pub struct FilterSubject<'a> {
     pub false_detection: bool,
 }
 
+/// One access bucket as the channel-centred view's filter sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessSubject<'a> {
+    /// The canonical agent that read or wrote.
+    pub agent: AgentId,
+    /// The canonical channel accessed.
+    pub channel: ChannelId,
+    /// The topics, under the response's topic-model version, of the
+    /// channel-routed confirmed transmissions on `channel` in the window that
+    /// the filter's `false_detections` keeps. Outliers and unclassified
+    /// transmissions contribute none.
+    pub channel_topics: &'a [TopicId],
+}
+
 impl TopologyFilter {
-    /// Whether `subject` passes. `canonical` resolves the filter's listed
-    /// agents through the merge aliases (`AgentDirectory::canonical`), so a
-    /// listed id that has since been merged away still selects its agent.
-    pub fn admits(
-        &self,
-        subject: &FilterSubject<'_>,
-        canonical: impl Fn(AgentId) -> AgentId,
-    ) -> bool {
+    /// Whether `subject` passes. `aliases` resolves the filter's listed
+    /// agents through the merge aliases (`AgentDirectory::canonical`) and its
+    /// listed channels through supersession (`ChannelDirectory::canonical`),
+    /// so a listed id that has since been merged away or superseded still
+    /// selects what it became.
+    pub fn admits(&self, subject: &FilterSubject<'_>, aliases: impl Aliases) -> bool {
         let agents = self.agents.is_empty()
             || self
                 .agents
                 .iter()
-                .map(|&listed| canonical(listed))
+                .map(|&listed| aliases.agent(listed))
                 .any(|listed| listed == subject.from || listed == subject.to);
         let channels = self.channels.is_empty()
-            || matches!(subject.route, Route::Channel(channel) if self.channels.contains(channel));
+            || matches!(subject.route, Route::Channel(channel) if self.lists_channel(*channel, &aliases));
         let route_kinds = self.route_kinds.is_empty()
             || self.route_kinds.contains(&RouteKind::from(subject.route));
         let topics = self.topics.is_empty()
@@ -217,5 +254,35 @@ impl TopologyFilter {
             topic_version: TopicVersionSelector::Pinned(version),
             ..self
         }
+    }
+}
+
+impl TopologyFilter {
+    /// Whether an access bucket passes, as the module table defines.
+    /// `subject`'s agent and channel are canonical; `aliases` resolves the
+    /// filter's listed ids.
+    pub fn admits_access(&self, subject: &AccessSubject<'_>, aliases: impl Aliases) -> bool {
+        let agents = self.agents.is_empty()
+            || self
+                .agents
+                .iter()
+                .any(|&listed| aliases.agent(listed) == subject.agent);
+        let channels = self.channels.is_empty() || self.lists_channel(subject.channel, &aliases);
+        let route_kinds =
+            self.route_kinds.is_empty() || self.route_kinds.contains(&RouteKind::Channel);
+        let topics = self.topics.is_empty()
+            || subject
+                .channel_topics
+                .iter()
+                .any(|topic| self.topics.contains(topic));
+        agents && channels && route_kinds && topics
+    }
+
+    /// Whether the canonical `channel` is the canonical form of a listed
+    /// channel.
+    fn lists_channel(&self, channel: ChannelId, aliases: &impl Aliases) -> bool {
+        self.channels
+            .iter()
+            .any(|&listed| aliases.channel(listed) == channel)
     }
 }

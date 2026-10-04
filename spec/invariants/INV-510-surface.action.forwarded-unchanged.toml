@@ -1,18 +1,21 @@
 [invariant]
 id = "surface.action.forwarded-unchanged"
-statement = "Each MergeAgents, Unmerge, RenameAgent, CreateRule, UpdateRule and SetRuleEnabled that returns Ok passed exactly its requested ids, label, name, rule, sinks and enabled flag to IdentityResolver::merge, unmerge or rename, or AlertRuleStore::create, update or set_enabled."
+statement = "Each MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule and SetRuleEnabled that returns Ok passed exactly its requested ids, label, name, rule, sinks, enabled flag, pattern, policy and note to IdentityResolver::merge, unmerge or rename, ChannelRegistry::promote (a Promotion holding the requested pattern, policy and note, stamped with the caller and accept time), or AlertRuleStore::create, update or set_enabled."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 The surface owns none of these effects. A handler that swapped ids, dropped
-a sink or normalised a name differently would apply something the operator
-did not ask for, and the audit record, which stores the action, would no
-longer describe what happened.
+a sink or the note, or normalised a name or pattern differently would apply
+something the operator did not ask for, and the audit record, which stores
+the action, would no longer describe what happened.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::identity_and_rule_actions_forwarded_unchanged"
+unit = [
+    "crosstalk::surface::tests::identity_and_rule_actions_forwarded_unchanged",
+    "crosstalk::surface::tests::new_actions_forwarded_unchanged",
+]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

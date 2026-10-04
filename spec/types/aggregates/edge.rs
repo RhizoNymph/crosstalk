@@ -2,8 +2,10 @@
 //! topic and time bucket.
 //!
 //! Edges are stored under the agent ids the transmissions were attributed
-//! to. A graph query resolves every agent through the merge aliases first,
-//! sums edges that become equal, and drops edges that become self-edges.
+//! to and the channel ids they were routed through. A graph query resolves
+//! every agent through the merge aliases and every channel through
+//! supersession first ([`crate::aliases`]), sums edges that become equal,
+//! and drops edges that become self-edges.
 //!
 //! The transmissions counted into one edge of a graph can be listed with an
 //! [`EdgeSelector`] (see `EdgeStore::transmissions`), so a click on an edge
@@ -11,6 +13,7 @@
 
 use std::num::NonZeroU64;
 
+use crate::aggregates::node::GraphNode;
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, TopicId, TransmissionId};
@@ -136,17 +139,25 @@ pub struct WeightedEdge {
     pub share: Share,
 }
 
-/// The communication graph for one query window, over canonical agents.
+/// The communication graph for one query window, over canonical agents and
+/// canonical channels (a `Route::Channel` names the channel after
+/// supersession).
 ///
 /// Invariant: the shares of `edges` sum to 1 (within float error) unless
 /// `edges` is empty. Each edge's share is its stat under `weighting` divided
 /// by the total of that stat across the window, after filtering.
+///
+/// `nodes` describes every agent the edges name, and their ancestors, once
+/// each, with counts that agree with `edges` ([`TopologyGraph::check_nodes`],
+/// [`crate::aggregates::node`]). It holds no channel nodes; the
+/// channel-centred view does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopologyGraph {
     pub window: TimeWindow,
     pub weighting: Weighting,
     /// The version the filter's selector resolved to.
     pub topic_version: TopicModelVersion,
+    pub nodes: Vec<GraphNode>,
     pub edges: Vec<WeightedEdge>,
 }
 

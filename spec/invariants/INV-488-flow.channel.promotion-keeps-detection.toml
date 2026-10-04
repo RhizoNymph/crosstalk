@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.channel.promotion-keeps-detection"
-statement = "ChannelOrigin::promoted on a discovered origin returns a Declared origin with the given declaration, the discovered seed as promoted-from and the same detection, and on a declared origin returns AlreadyDeclared."
+statement = "ChannelOrigin::promoted on a discovered origin returns a Declared origin with the given declaration, the discovered seed as promoted-from and the same detection, on a declared origin returns NotPromotable::AlreadyDeclared, and on a superseded origin returns NotPromotable::Superseded with its supersession."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -8,13 +8,16 @@ rationale = """
 Promotion attaches a pattern; it does not restart detection. Resetting an
 Active channel would hide its confirmed traffic until the next cross
 access. The seed and first access stay as the evidence the channel was
-found from.
+found from. A superseded channel's resources already resolve to the
+channel that absorbed it, so it is refused with the supersession naming
+where to act instead.
 """
 
 [evidence]
 unit = [
     "crosstalk_spec::tests::flow::promotion_keeps_detection_and_records_the_seed",
     "crosstalk_spec::tests::flow::promotion_rejects_declared_channels",
+    "crosstalk_spec::tests::channels::superseded_channels_cannot_be_promoted",
 ]
 
 [evidence-review]

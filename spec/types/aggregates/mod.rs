@@ -8,11 +8,15 @@
 //! [`filter::TopologyFilter`] selects transmissions identically in every
 //! view built from them. [`retention`] decides which topic-model versions
 //! keep their per-version data, and [`watermark`] when an edge bucket is
-//! final.
+//! final. Graph responses describe their agents and channels with
+//! [`node::GraphNode`]s; the channel-centred view adds access edges
+//! ([`access`]).
 
+pub mod access;
 pub mod alert;
 pub mod edge;
 pub mod filter;
+pub mod node;
 pub mod projection;
 pub mod quality;
 pub mod retention;

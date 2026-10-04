@@ -1,0 +1,22 @@
+[invariant]
+id = "topology.bipartite.nodes-cover-endpoints"
+statement = "A BipartiteGraph holds exactly one node per access agent, access channel, transmission endpoint, transmission route channel and canonical ancestor of an agent among them, every parent named by a node, and agent transmission counts equal to its transmission edges'."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The channel-centred view renders agents and channels from the response
+alone. A route channel with no access in the window still needs a node so
+the transmission's route can be shown. BipartiteGraph::new applies the
+node rules shared with the agent-centred graph.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::access::BipartiteGraph::new"
+unit = [
+    "crosstalk_spec::tests::graph::a_bipartite_graph_holds_accesses_transmissions_and_both_node_kinds",
+    "crosstalk_spec::tests::graph::every_access_endpoint_and_route_channel_needs_a_node",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -29,9 +29,13 @@
 //! Alerts are delivered to the sinks their rule lists.
 //!
 //! Sanctioning a channel suppresses the active alerts whose subject is that
-//! channel; alerts about transmissions on it stay, because content can be
-//! worth flagging on a sanctioned channel. Disabling a rule suppresses its
-//! active alerts.
+//! channel, or a channel it superseded (subjects are compared
+//! [`AlertSubject::resolved`]); alerts about transmissions on it stay,
+//! because content can be worth flagging on a sanctioned channel. A
+//! promotion that sets `Sanctioned` sanctions the promoted channel.
+//! Deduplication compares stored subjects, so alerts on a superseded channel
+//! stay under its id and later traffic raises alerts on the superseding
+//! channel. Disabling a rule suppresses its active alerts.
 //!
 //! A `FalseDetection` verdict on a transmission suppresses every active
 //! alert whose subject is that transmission, whatever its rule, with reason
@@ -64,6 +68,7 @@ use std::num::NonZeroU32;
 
 use crate::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crate::aggregates::topic_history::{RemapError, TopicLineage};
+use crate::aliases::Aliases;
 use crate::ids::{
     AgentId, AlertId, AlertRuleId, ChannelId, OperatorId, SinkId, TopicId, TransmissionId,
 };
@@ -755,11 +760,31 @@ impl RuleRevision {
     }
 }
 
+/// What an alert is about. Stored as raised: an alert on a channel that is
+/// later superseded, or on an agent that is later merged, keeps that id.
+/// Readers that match subjects against a channel or agent (the alert inbox's
+/// channel filter, the live feed, sanction suppression) compare
+/// [`AlertSubject::resolved`] subjects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlertSubject {
     Channel(ChannelId),
     Transmission(TransmissionId),
     Agent(AgentId),
+}
+
+impl AlertSubject {
+    /// The subject with its channel resolved through supersession and its
+    /// agent through merges. A transmission subject is unchanged; its route
+    /// resolves separately ([`Route::resolved`]).
+    ///
+    /// [`Route::resolved`]: crate::derived::flow::transmission::Route::resolved
+    pub fn resolved(self, aliases: impl Aliases) -> Self {
+        match self {
+            Self::Channel(channel) => Self::Channel(aliases.channel(channel)),
+            Self::Agent(agent) => Self::Agent(aliases.agent(agent)),
+            Self::Transmission(_) => self,
+        }
+    }
 }
 
 /// A rule's output, before triage.

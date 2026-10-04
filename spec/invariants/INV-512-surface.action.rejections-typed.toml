@@ -1,18 +1,23 @@
 [invariant]
 id = "surface.action.rejections-typed"
-statement = "An identity or rule action rejected by L3 or L6 returns NotFound for an unknown agent, merge record or rule; Conflict with AgentMerged, MergeAlreadyReverted, RuleNotEditable or TopicVersionNotCurrent; and InvalidInput with UnknownTopics, UnknownSink or QueryNotEmbeddable."
+statement = "An operator action rejected by L3, L5 or L6 returns NotFound for an unknown agent, merge record, channel, transmission or rule; Conflict with AgentMerged, MergeAlreadyReverted, ChannelSuperseded, ChannelNotDiscovered, PatternOverlaps, RuleNotEditable or TopicVersionNotCurrent; and InvalidInput with PatternMissesSeed, UnknownTopics, UnknownSink or QueryNotEmbeddable."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 The UI shows these to the operator. Collapsing them into a store error
 would hide that a retry is pointless (already unmerged, a built-in rule) or
-that the request needs changing (rename the canonical agent instead, pick
-topics from the current version, choose a configured sink).
+that the request needs changing (rename the canonical agent instead,
+overlapping pattern, pick topics from the current version, choose a
+configured sink), or that the request belongs on another channel
+(superseded).
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::layer_rejections_map_to_action_errors"
+unit = [
+    "crosstalk::surface::tests::layer_rejections_map_to_action_errors",
+    "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors",
+]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

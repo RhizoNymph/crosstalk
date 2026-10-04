@@ -37,6 +37,18 @@
 //! `Route`, using the `AgentDirectory` and agent parent links for
 //! `Delegation`.
 //!
+//! Promotion (`ChannelRegistry::promote`) follows
+//! [`promotion::plan`](crate::derived::flow::channel::promotion::plan): in
+//! one transaction the channel becomes declared under the same id, the
+//! operator's policy decision is recorded in its policy history, and every
+//! other discovered channel whose seed the pattern matches becomes
+//! superseded by it; then one `ChannelPromoted` is published. Superseded
+//! channels are aliases: `ChannelDirectory` resolves them, every reader of
+//! stored channel ids goes through it, and nothing stored is rewritten. A
+//! `PolicyChanged` for a superseded channel (published before the
+//! promotion committed) is a permanent failure: logged at warn with the
+//! channel and its superseding channel, and acked.
+//!
 //! **Timing.** The correlator is configured with a [`CorrelationTiming`]: it
 //! pairs a write and a read within `correlation_window`, opens a channel
 //! transmission `AwaitingContent` until `window_closes_at(read.at)`, keeps it
@@ -52,17 +64,20 @@
 
 pub mod verdicts;
 
+use crate::aggregates::access::ResourceUsePage;
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
 use crate::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
 };
+use crate::derived::flow::channel::promotion::{Promotion, PromotionRefusal};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Locator, ResourcePattern};
 use crate::derived::flow::transmission::{Confirmed, NonChannelRoute};
 use crate::derived::provenance::matching::ContentMatch;
-use crate::ids::{AgentId, ChannelId, OperatorId, TransmissionId};
+use crate::ids::{AgentId, ChannelId, TransmissionId};
 use crate::observed::message::{ToolCall, ToolResult};
-use crate::support::{NonEmpty, Timestamp};
+use crate::paging::{PageRequest, ResourceUseList};
+use crate::support::{NonEmpty, TimeWindow, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedAccess {
@@ -85,14 +100,38 @@ pub trait ResourceExtractor {
     ) -> Result<Vec<ExtractedAccess>, ExtractError>;
 }
 
+/// Where a locator belongs. Never names a superseded channel: a resource of
+/// a superseded channel is `Known` on the channel that superseded it, so a
+/// superseded channel accepts no new resources or accesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelLookup {
-    /// Already a resource of this channel.
+    /// Already a resource of this channel, or of a channel it superseded.
     Known(ChannelId),
     /// First sighting, but it matches a declared channel's pattern.
     Declared(ChannelId),
     /// Matches nothing: the caller creates a discovered channel.
     New,
+}
+
+/// The supersession table. Every reader of stored channel ids (routes,
+/// accesses, edges, filters, alert subjects, graph nodes) resolves them
+/// through it, as agents resolve through `AgentDirectory`.
+pub trait ChannelDirectory {
+    /// The channel `id` resolves to: the promoted channel that superseded
+    /// it, else itself (`Channel::canonical`). One step: a superseding
+    /// channel is declared, so never superseded, and `canonical` of a
+    /// canonical id is that id.
+    fn canonical(&self, id: ChannelId) -> ChannelId;
+}
+
+/// What an accepted promotion changed besides the channel's origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Promoted {
+    /// The channels it superseded, as in `PromotionPlan::superseded`.
+    pub superseded: Vec<ChannelId>,
+    /// Where the operator's policy decision landed in the channel's policy
+    /// history: `Current` unless a later-timed decision already exists.
+    pub policy: Recorded,
 }
 
 pub trait ChannelRegistry {
@@ -111,7 +150,8 @@ pub trait ChannelRegistry {
     /// channel's policy to the history's current one, in one transaction.
     /// Idempotent: a redelivered decision returns `Recorded::Duplicate` and
     /// changes nothing. A decision older than the current one is kept in the
-    /// history and returns `Recorded::Superseded`.
+    /// history and returns `Recorded::Superseded`. A superseded channel
+    /// takes no decisions: `Superseded { channel, by }`, changing nothing.
     async fn set_policy(
         &mut self,
         channel: ChannelId,
@@ -121,24 +161,40 @@ pub trait ChannelRegistry {
     /// Every decision recorded for the channel, oldest first.
     async fn policy_history(&self, channel: ChannelId) -> Result<PolicyHistory, RegistryError>;
 
-    /// Attach `pattern` to the discovered channel `channel`
-    /// ([`ChannelOrigin::promoted`](crate::derived::flow::channel::ChannelOrigin::promoted)),
-    /// declared by operator `by` at `at`. Its id, resources, policy and
-    /// detection are unchanged, and later lookups of unseen locators that
-    /// match the pattern return `Declared(channel)`. Resources already on
-    /// other channels stay there (`Known` wins over `Declared`).
+    /// Promote the discovered channel `channel` with `promotion`, as
+    /// [`promotion::plan`] decides, in one transaction: its origin becomes
+    /// [`ChannelOrigin::promoted`] with the promotion's declaration (id,
+    /// resources and detection unchanged); the promotion's policy decision is
+    /// recorded as by [`ChannelRegistry::set_policy`]; every channel the plan
+    /// supersedes becomes [`ChannelOrigin::Superseded`] by `channel` at the
+    /// promotion time. Afterwards, lookups of unseen locators that match the
+    /// pattern return `Declared(channel)`, and lookups of a superseded
+    /// channel's resources return `Known(channel)`. Publishes one
+    /// `ChannelPromoted` after commit.
     ///
-    /// Rejects, changing nothing: an unknown channel, a channel already
-    /// declared (`NotDiscovered`), a pattern that does not match the
-    /// channel's seed locator (`PatternMissesSeed`), and a pattern that
-    /// overlaps another declared channel's (`OverlappingDeclaration`).
+    /// A refusal ([`PromotionRefusal`]) changes nothing.
+    ///
+    /// [`promotion::plan`]: crate::derived::flow::channel::promotion::plan
+    /// [`ChannelOrigin::promoted`]: crate::derived::flow::channel::ChannelOrigin::promoted
+    /// [`ChannelOrigin::Superseded`]: crate::derived::flow::channel::ChannelOrigin::Superseded
     async fn promote(
         &mut self,
         channel: ChannelId,
-        pattern: ResourcePattern,
-        by: OperatorId,
-        at: Timestamp,
-    ) -> Result<(), RegistryError>;
+        promotion: Promotion,
+    ) -> Result<Promoted, PromoteError>;
+
+    /// The resources of `channel`'s canonical channel (its own and those of
+    /// every channel it superseded) accessed within `window`, newest
+    /// resource first, with their canonical writers and readers and how
+    /// often each accessed it in the window
+    /// ([`ResourceUse`](crate::aggregates::access::ResourceUse)). Agents are
+    /// resolved through `AgentDirectory`, summing merged aliases.
+    async fn resource_use(
+        &self,
+        channel: ChannelId,
+        window: TimeWindow,
+        page: &PageRequest<ResourceUseList>,
+    ) -> Result<ResourceUsePage, RegistryError>;
 }
 
 /// What the correlator decided. The flow consumer applies these to stored
@@ -209,8 +265,20 @@ pub enum RegistryError {
     OverlappingDeclaration {
         existing: ChannelId,
     },
-    /// Promotion of a channel that is already declared.
-    NotDiscovered(ChannelId),
-    /// A promotion pattern that does not match the channel's own seed.
-    PatternMissesSeed,
+    /// A policy decision for a channel that `by` superseded.
+    Superseded {
+        channel: ChannelId,
+        by: ChannelId,
+    },
+    /// A cursor the registry did not issue, or issued for another channel
+    /// or window.
+    InvalidCursor,
+}
+
+/// Why `ChannelRegistry::promote` failed. A refusal is the operator's to
+/// fix; a store failure may succeed on retry. Neither changed anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromoteError {
+    Store { reason: String },
+    Refused(PromotionRefusal),
 }

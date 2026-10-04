@@ -10,8 +10,9 @@ Overview:
     discovers the channels agents use (including ones nobody declared, such
     as a public wiki agents start writing to), and records the content,
     topology and location of the communication. The records power a
-    topology view with edge weights, search, topic modeling, clustering, a
-    UMAP view of message content, and alerts.
+    topology view with edge weights and per-node metadata, a channel-centred
+    view of who reads and writes each channel, search, topic modeling,
+    clustering, a UMAP view of message content, and alerts.
 
     It works with Claude Code, Codex, pi and oh-my-pi, against vendor APIs,
     subscription backends reached with OAuth (Claude Pro/Max, ChatGPT/Codex,
@@ -26,8 +27,9 @@ Overview:
       L0 ingress (reverse and forward proxy, upstream routing, credential
       hashing, provider adapters, SSE framing and WebSocket taps), L1
       canonicalization (wire format and dialect to canonical Exchange and
-      Message), L3 reconstruction (agent identity, merges, conversation
-      threading, WebSocket increment resolution).
+      Message), L3 reconstruction (agent identity, merges, harness claims
+      seen per agent, conversation threading, WebSocket increment
+      resolution).
     transport: >
       L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
@@ -35,14 +37,15 @@ Overview:
     detect: >
       L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching) and L5 flow detection (resource extraction,
-      channel registry, write/read correlation into transmissions).
+      channel registry with promotion and supersession, write/read
+      correlation into transmissions).
     insight: >
       L6 analysis (embeddings, topics, the topic-model version history with
       topic sizes, lineage, pins and retention of old versions, paged
       search, stored projection jobs fitted in the background, alert rules
-      and their management), L7 topology (edge aggregation per time window,
-      graphs and time series, and the watermark before which every bucket
-      is final), L8 surface (query API with cursor-paginated lists, linked
+      and their management), L7 topology (edge and access aggregation per
+      time window, graphs with node metadata, the channel-centred graph,
+      time series, and the watermark before which every bucket is final), L8 surface (query API with cursor-paginated lists, linked
       views sharing one filter and one resolved topic-model version, typed
       query errors, stored projections served as a columnar binary frame,
       UI, operator directory with a trusted single-user mode, operator
@@ -57,15 +60,17 @@ Overview:
     without waiting for its body to decode, decodes the body concurrently
     off the hot path, and tees the response (or each WebSocket turn) →
     RawExchange (in-process) → L1 normalizes, writes message bodies to the
-    blob store, publishes ExchangeCaptured → L3 resolves the agent and
-    threads the conversation, publishes ConversationDelta → L4 indexes the
+    blob store, publishes ExchangeCaptured → L3 resolves the agent, records
+    its harness claim and threads the conversation, publishes
+    ConversationDelta → L4 indexes the
     agent's originated spans and matches new inputs against other agents'
     spans (ContentMatched); L5 turns tool calls into accesses, resolves
     channels and correlates cross-agent accesses and content matches into
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions, records topic-model versions and their
-    lineage, and evaluates alert rules → L7 aggregates edges and announces
-    topic-version activation back to L6, which then drops versions its
+    lineage, and evaluates alert rules → L7 aggregates edges (and, from
+    AccessRecorded, access buckets) and announces topic-version activation
+    back to L6, which then drops versions its
     retention policy no longer keeps (TopicVersionDropped, after which L7
     deletes their buckets); L7 also advances a watermark from the
     correlator's ticks and the oldest unprocessed input and publishes each
@@ -73,7 +78,10 @@ Overview:
     projections, lists and alerts (every aggregate with the watermark read
     before it), with the graph, series, search, projection and edge
     drill-down all filtered by one TopologyFilter under one resolved (or
-    pinned) topic-model version, runs projection fits as background jobs
+    pinned) topic-model version, serves the channel-centred graph (accesses,
+    unread writes included, beside the same transmissions) and a channel's
+    per-resource use, resolves merged agents and superseded channels at read
+    time, runs projection fits as background jobs
     whose stored frames read back exactly, pages the audit log like any
     other list, and streams id-only change events to the UI over SSE: every
     store publishes a Changed notification after each committed change to
@@ -84,7 +92,9 @@ Overview:
     trusted mode, the one operator with every permission). Operator actions
     flow back down: policy
     changes and channel promotion to L5, which records every policy
-    decision in the channel's policy history; verdicts on transmissions to
+    decision in the channel's policy history (a promotion keeps the channel
+    id, records the operator's policy and supersedes the discovered channels
+    its pattern covers, then publishes ChannelPromoted); verdicts on transmissions to
     L5's verdict log, beside the detector's state, which publishes
     VerdictSet (L6 suppresses the alerts of a false detection; L6 and L7
     views can exclude false detections at query time); agent merges (a log
@@ -104,7 +114,9 @@ Features Index:
       retention and the watermark that marks buckets final), bus events and
       per-layer interfaces (including the query surface's paginated lists,
       shared view filter and topic-version resolution, typed query errors,
-      stored projections and their columnar frame, the id-only SSE live
+      stored projections and their columnar frame, graph nodes, the
+      channel-centred graph and channel resources, promotion with
+      supersession, the id-only SSE live
       feed, the audit log of operator and config changes, the operator
       directory and trusted mode, channel policy history, operator actions
       with their permissions, and operator verdicts with the detection

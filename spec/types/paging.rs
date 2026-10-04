@@ -15,6 +15,7 @@
 //! | topics of a version | [`TopicList`] | `TopicId` |
 //! | stored projections | [`ProjectionList`] | `ProjectionId` |
 //! | search hits | [`SearchList`] | (score, `TransmissionId`) |
+//! | a channel's resources | [`ResourceUseList`] | `ResourceId` |
 //!
 //! A search hit's score is a fixed function of the query, the embedding
 //! model and the transmission (no rank fusion and no corpus statistics), so
@@ -31,7 +32,8 @@
 //!
 //! A cursor also binds the request it came from (which list, its filter, and
 //! for an edge list or search its window and the topic-model version its
-//! first page resolved). The server
+//! first page resolved; for a channel's resources its canonical channel and
+//! window). The server
 //! authenticates the token it issues; one it cannot verify, or one presented
 //! with a different request, is rejected as an invalid cursor. The marker
 //! type parameter makes presenting one list's cursor to another list a
@@ -76,6 +78,8 @@ list_marker! {
     ProjectionList;
     /// `QueryApi::search` and `SearchIndex::query`.
     SearchList;
+    /// `QueryApi::channel_resources` and `ChannelRegistry::resource_use`.
+    ResourceUseList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

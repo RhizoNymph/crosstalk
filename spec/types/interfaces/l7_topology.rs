@@ -58,11 +58,23 @@
 //! filter listing topics outside the resolved version fails with
 //! `TopicsNotInVersion`. Every response reports the resolved version.
 //!
+//! Accesses: the same consumer counts every `AccessRecorded` into an
+//! [`AccessEdge`] bucket (`EdgeStore::apply_access`), so the channel-centred
+//! view ([`EdgeStore::channel_topology`]) shows writes nobody has read yet.
+//!
+//! Read-time resolution: every query resolves stored agent ids through the
+//! `AgentDirectory` and stored channel ids (in routes and access buckets)
+//! through the `ChannelDirectory`, including the ids a filter names, then
+//! sums what became equal. Graph responses describe their nodes
+//! ([`crate::aggregates::node`]) from the agent store, L3's `ClaimStore` and
+//! the channel registry, read at query time.
+//!
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
 use std::num::NonZeroU64;
 
+use crate::aggregates::access::{AccessEdge, BipartiteGraph};
 use crate::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -72,9 +84,10 @@ use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
+use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crate::ids::{AgentId, TopicId, TransmissionId};
+use crate::ids::{AccessId, AgentId, ChannelId, TopicId, TransmissionId};
 use crate::paging::{EdgeTransmissionList, PageRequest};
 use crate::support::{TimeWindow, Timestamp};
 
@@ -88,6 +101,17 @@ pub struct EdgeContribution {
     pub at: Timestamp,
     pub matched_bytes: NonZeroU64,
     pub classification: Classification,
+}
+
+/// One recorded access, as the edge store counts it: an `AccessRecorded`
+/// event's access and channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessContribution {
+    pub access: AccessId,
+    pub agent: AgentId,
+    pub channel: ChannelId,
+    pub op: AccessKind,
+    pub at: Timestamp,
 }
 
 pub trait EdgeStore {
@@ -137,14 +161,39 @@ pub trait EdgeStore {
         frontier: PipelineFrontier,
     ) -> Result<Option<Watermark>, EdgeError>;
 
-    /// The graph, with the watermark read before its buckets. Fails with
-    /// `UnalignedWindow` for a window not on bucket boundaries.
+    /// Count one access into its bucket (agent and channel as recorded,
+    /// `op`, the bucket holding `at`) and return the bucket after the apply.
+    /// Idempotent on `access`: a redelivered access changes nothing and
+    /// returns the bucket as it is.
+    async fn apply_access(&mut self, access: &AccessContribution) -> Result<AccessEdge, EdgeError>;
+
+    /// The graph over canonical agents: edges resolved, summed, filtered and
+    /// shared, and one node per endpoint and ancestor
+    /// (`TopologyGraph::check_nodes` holds), with the watermark read before
+    /// its buckets. Fails with `UnalignedWindow` for a window not on bucket
+    /// boundaries.
     async fn graph(
         &self,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<TopologyGraph>, EdgeQueryError>;
+
+    /// The channel-centred graph: access buckets in `window` with agents and
+    /// channels resolved, filtered by [`TopologyFilter::admits_access`] and
+    /// summed per (agent, channel, op), with shares over all of them; the
+    /// transmission edges exactly as `graph` returns them for the same
+    /// window, weighting and filter, under the same topic version; nodes for
+    /// every agent and channel they name (`BipartiteGraph::new` holds); and
+    /// the store's watermark. The window must be bucket-aligned.
+    ///
+    /// [`TopologyFilter::admits_access`]: crate::aggregates::filter::TopologyFilter::admits_access
+    async fn channel_topology(
+        &self,
+        window: TimeWindow,
+        weighting: Weighting,
+        filter: &TopologyFilter,
+    ) -> Result<BipartiteGraph, EdgeError>;
 
     /// The applied contributions behind one edge: those `graph` counts into
     /// the edge (`from`, `to`, `route`) for the same window and filter, one

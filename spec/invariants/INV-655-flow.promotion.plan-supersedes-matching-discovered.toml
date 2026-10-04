@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.promotion.plan-supersedes-matching-discovered"
+statement = "When promotion::plan accepts, its origin is the channel's origin promoted with the promotion's declaration, and its superseded list is exactly the other discovered channels whose seed locator the pattern matches, each superseded by the promoted channel at the promotion time."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A wiki whose pages were each discovered as their own channel is one
+medium. Promoting one page with a pattern for the wiki must absorb the
+others, or their traffic keeps raising NewChannel and unreviewed-traffic
+alerts under ids the operator already reviewed. Declared and already
+superseded channels are never absorbed.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::plan_promotes_in_place_and_supersedes_matching_discovered_channels",
+    "crosstalk_spec::tests::channels::plan_supersedes_only_discovered_channels",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

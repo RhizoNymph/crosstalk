@@ -8,8 +8,10 @@ use crate::aggregates::alert::{
 };
 use crate::aggregates::edge::{EdgeKey, TopicSlot};
 use crate::aggregates::topic::TopicModelVersion;
-use crate::derived::flow::channel::policy::Policy;
+use crate::derived::flow::channel::policy::{Policy, PolicyKind};
+use crate::derived::flow::channel::promotion::Promotion;
 use crate::derived::flow::evidence::CoAccess;
+use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::{Classification, DirectCarrier, Route};
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::span::RelaySource;
@@ -38,6 +40,16 @@ use crate::tests::fixtures::{
     access, agent, at, channel, content_match, exchange, message, read_access, resource, span,
     transmission, write_access,
 };
+
+fn promotion() -> Promotion {
+    Promotion::new(
+        ResourcePattern::Host(Host("wiki.example".into())),
+        PolicyKind::Unsanctioned,
+        OperatorId::from_ulid(1),
+        at(10),
+        None,
+    )
+}
 
 fn co_access() -> CoAccess {
     CoAccess::new(
@@ -151,12 +163,10 @@ fn sample_events() -> Vec<BusEvent> {
             span: span(2),
             source: RelaySource::Span(span(1)),
         }),
-        BusEvent::Detect(DetectEvent::AccessRecorded(write_access(
-            1,
-            agent(1),
-            resource(1),
-            1,
-        ))),
+        BusEvent::Detect(DetectEvent::AccessRecorded {
+            access: write_access(1, agent(1), resource(1), 1),
+            channel: channel(1),
+        }),
         BusEvent::Detect(DetectEvent::ContentMatched(content_match(
             agent(1),
             agent(2),
@@ -174,6 +184,12 @@ fn sample_events() -> Vec<BusEvent> {
         BusEvent::Detect(DetectEvent::DeclaredChannelUnused {
             channel: channel(2),
             since: at(9),
+        }),
+        BusEvent::Detect(DetectEvent::ChannelPromoted {
+            channel: channel(1),
+            declaration: promotion().declaration().clone(),
+            policy: promotion().decision().clone(),
+            superseded: vec![channel(3)],
         }),
         BusEvent::Detect(DetectEvent::TransmissionConfirmed {
             transmission: transmission(1),
@@ -272,6 +288,7 @@ fn subjects_name_their_variant() {
             Subject::ChannelDiscovered,
             Subject::ChannelCrossAccessed,
             Subject::DeclaredChannelUnused,
+            Subject::ChannelPromoted,
             Subject::TransmissionConfirmed,
             Subject::TransmissionSuspected,
             Subject::VerdictSet,
@@ -308,6 +325,7 @@ fn every_subject() -> Vec<Subject> {
             | Subject::ChannelDiscovered
             | Subject::ChannelCrossAccessed
             | Subject::DeclaredChannelUnused
+            | Subject::ChannelPromoted
             | Subject::TransmissionConfirmed
             | Subject::TransmissionSuspected
             | Subject::VerdictSet
@@ -338,6 +356,7 @@ fn every_subject() -> Vec<Subject> {
         Subject::ChannelDiscovered,
         Subject::ChannelCrossAccessed,
         Subject::DeclaredChannelUnused,
+        Subject::ChannelPromoted,
         Subject::TransmissionConfirmed,
         Subject::TransmissionSuspected,
         Subject::VerdictSet,

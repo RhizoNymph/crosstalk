@@ -22,7 +22,8 @@
 //! drops are serialized in the catalog's store.
 //!
 //! `alerts` evaluates rules against detect and insight events and triages
-//! the drafts; it suppresses alerts on `PolicyChanged` (sanctioned), and on
+//! the drafts; it suppresses alerts on `PolicyChanged` and `ChannelPromoted`
+//! (sanctioned), and on
 //! `VerdictSet` keeps its copy of the transmission's current verdict
 //! ([`CurrentVerdict`]) and suppresses the transmission's active alerts when
 //! it is `FalseDetection` ([`AlertTriage::transmission_judged`]). On
@@ -347,7 +348,9 @@ pub trait AlertTriage {
     /// `FalseDetection` (read in the same transaction).
     async fn triage(&mut self, draft: AlertDraft) -> Result<TriageOutcome, TriageError>;
 
-    /// Suppress the active alerts whose subject is `channel`.
+    /// Suppress the active alerts whose subject is `channel` or a channel
+    /// it superseded (`AlertSubject::resolved`). Triggered by
+    /// `PolicyChanged` and `ChannelPromoted` carrying `Sanctioned`.
     async fn channel_sanctioned(&mut self, channel: ChannelId) -> Result<u32, TriageError>;
 
     /// Suppress the active alerts raised by `rule`.

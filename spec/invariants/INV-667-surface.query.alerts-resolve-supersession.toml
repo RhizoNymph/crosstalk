@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.query.alerts-resolve-supersession"
+statement = "QueryApi::alerts with a channel filter returns the alerts whose subject channel, or whose transmission's route channel, resolves to the canonical form of the filtered channel, including alerts stored under channels it superseded."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Alerts keep the subject they were raised on. Without read-time resolution,
+promoting a wiki would hide the alerts that made the operator look at it
+from the wiki's own alert list.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::alert_subjects_resolve_channels_and_agents",
+    "crosstalk::surface::tests::alert_filter_resolves_superseded_channels",
+]
+integration = "crosstalk::surface::tests::pg_alerts_after_promotion"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -35,6 +35,11 @@
 //! display name from its evidence and id. Earlier labels are in the audit
 //! log, one `RenameAgent` record per change.
 //!
+//! **Harness claims are aggregated, never evidence.** The harness claims
+//! seen on an agent's exchanges are kept per attributed agent as a
+//! [`ClaimSet`] and unioned over merge aliases at read time, so graph nodes
+//! can show what an agent claimed to be.
+//!
 //! **Harness ids are scoped.** Session and agent ids sent by a harness are
 //! client-asserted (oh-my-pi sends Claude Code's), so they only count as
 //! evidence within the [`IdentityScope`] they arrived in: the same session id
@@ -46,6 +51,9 @@ use crate::ids::{AccountHash, AgentId, CredentialHash, OperatorId, PromptHash};
 use crate::observed::client::UpstreamId;
 use crate::support::{Change, DisplayText, NonEmpty, Timestamp};
 
+mod claims;
+
+pub use claims::{ClaimSet, DuplicateClaim, SeenClaim};
 pub use merge::{
     AlreadyReverted, InvalidMergeTransition, MergeRecord, MergeVeto, MergedInto, Reversal,
 };

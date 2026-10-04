@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.query.registry-errors-typed"
+statement = "A registry failure behind a query maps to one QueryError: Store to Store, UnknownChannel to NotFound, OverlappingDeclaration to Conflict(PatternOverlaps), Superseded to Conflict(ChannelSuperseded) and InvalidCursor to InvalidCursor."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI acts on the error variant: retry a store failure, restart a
+traversal on an invalid cursor, follow a superseded channel to its
+superseder. A catch-all would hide which.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::channels::registry_errors_map_to_query_errors"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
