@@ -51,12 +51,7 @@ async fn current_version(
     cx: &Cx,
     caller: &Caller,
 ) -> std::result::Result<TopicModelVersion, QueryError> {
-    let versions = backend(cx).topic_versions(caller).await?;
-    Ok(versions
-        .iter()
-        .map(|v| v.version)
-        .max_by_key(|v| v.0)
-        .unwrap_or_else(|| backend(cx).current_topic_version()))
+    backend(cx).current_topic_version(caller).await
 }
 
 /// The topics and sinks a form may pick. Topics need `Content`: their
@@ -195,7 +190,7 @@ async fn submit(
 
 #[page("/alerts/rules/new")]
 async fn new_rule_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let kind = query_params::<NewQuery>(cx)
         .ok()
         .and_then(|q| q.kind.clone());
@@ -205,7 +200,7 @@ async fn new_rule_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/alerts/rules/new")]
 async fn new_rule_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let target = RuleKindChoice::parse(fields.text("kind")).map(Target::New);
     let error = match &target {
         Ok(target) => match submit(cx, target, &fields).await {
@@ -224,14 +219,14 @@ fn rule_id(cx: &Cx) -> Result<AlertRuleId> {
 
 #[page("/alerts/rules/{rule_ulid}")]
 async fn rule_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = rule_id(cx)?;
     Ok(view! { rule_page(state: state, target: Ok(Target::Existing(id)), failure: None) })
 }
 
 #[page(POST "/alerts/rules/{rule_ulid}")]
 async fn rule_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = rule_id(cx)?;
     let target = Target::Existing(id);
     let error = match submit(cx, &target, &fields).await {

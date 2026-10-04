@@ -112,7 +112,7 @@ fn list_href(state: &ViewState, query: &ListQuery) -> String {
 
 #[page("/channels")]
 async fn channels_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let parsed = query_params::<RawListQuery>(cx)
         .map_err(|e| crate::pages::common::form::invalid("query", e))
         .and_then(ListQuery::parse);

@@ -208,7 +208,7 @@ async fn load(
 
 #[page("/channels/{channel_ulid}")]
 async fn channel_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let flash = flash(cx);
     Ok(view! { channel_page(id: id, state: state, flash: flash, failure: None) })
@@ -216,7 +216,7 @@ async fn channel_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/channels/{channel_ulid}")]
 async fn channel_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let action = fields.text("action").map(str::to_owned);
     let failure = match action.as_deref() {

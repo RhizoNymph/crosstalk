@@ -128,7 +128,7 @@ async fn load(
 
 #[page("/alerts")]
 async fn alerts_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let tab = query_params::<InboxQuery>(cx)
         .map_err(|e| invalid("query", e))
         .and_then(|q| parse_tab(q.tab.as_deref()));
@@ -138,7 +138,7 @@ async fn alerts_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/alerts")]
 async fn alerts_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let (failure, tab) = match parse(&fields) {
         Ok((action, flash, tab)) => match perform(cx, action).await {
             Ok(_) => return Err(done(PATH, &state, &[("tab", tab_code(tab))], flash)),

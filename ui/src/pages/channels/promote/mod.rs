@@ -98,7 +98,7 @@ async fn submit(
 
 #[page("/channels/{channel_ulid}/promote")]
 async fn promote_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let pattern = query_params::<PromoteQuery>(cx)
         .ok()
@@ -108,7 +108,7 @@ async fn promote_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/channels/{channel_ulid}/promote")]
 async fn promote_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = channel_id(cx)?;
     let error = match submit(cx, id, &fields).await {
         Ok(declared) => {

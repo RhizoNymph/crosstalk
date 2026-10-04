@@ -67,12 +67,30 @@ fn different_seeds_differ() {
     assert_ne!(a.world.transmissions, b.world.transmissions);
 }
 
-#[test]
-fn now_and_versions() {
+#[tokio::test]
+async fn now_and_versions() {
+    use crate::backend::Backend;
+    use crate::contract::errors::QueryError;
+    use crosstalk_spec::interfaces::l8_surface::Permission;
+
     let b = shared();
-    assert_eq!(b.now(), NOW);
-    assert_eq!(b.current_topic_version(), TopicModelVersion(2));
+    let c = super::researcher();
+    assert_eq!(b.now(&c).await, Ok(NOW));
+    assert_eq!(b.current_topic_version(&c).await, Ok(TopicModelVersion(2)));
     assert_eq!(b.seed(), SEED);
+    let nobody = super::caller(&[]);
+    assert_eq!(
+        b.now(&nobody).await,
+        Err(QueryError::Forbidden {
+            missing: Permission::View
+        })
+    );
+    let viewer = super::caller(&[Permission::View]);
+    assert_eq!(
+        b.current_topic_version(&viewer).await,
+        Ok(TopicModelVersion(2)),
+        "the version number is not content"
+    );
 }
 
 #[test]

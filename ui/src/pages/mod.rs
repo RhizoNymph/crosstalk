@@ -46,7 +46,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let operator_name = operator(cx).name.clone();
     // Navigation carries the current view state, so the filter follows the
     // user between sections.
-    let query = current_state(cx).map(|state| state.to_query());
+    let query = current_state(cx).await.map(|state| state.to_query());
     let sections = SECTIONS.map(|(prefix, label)| {
         let href = match &query {
             Some(query) => format!("{prefix}?{query}"),

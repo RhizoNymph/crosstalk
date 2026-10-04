@@ -15,7 +15,7 @@ use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::DeadLetter;
 use crosstalk_spec::interfaces::l6_analysis::SearchHit;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller};
-use crosstalk_spec::support::TimeWindow;
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
@@ -42,6 +42,19 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 /// Every read and action the UI performs. Methods return `Send` futures so
 /// pages can call them from Topcoat's multi-threaded runtime.
 pub trait Backend: Send + Sync + 'static {
+    // The present (item 27). Both need `View`.
+
+    /// The end of the data a default view shows: the gateway's clock, or the
+    /// fixture's fixed `now`.
+    fn now(&self, caller: &Caller) -> impl Future<Output = Result<Timestamp>> + Send;
+
+    /// The newest fitted topic-model version, which views default to. The
+    /// version number is not content, so this needs only `View`.
+    fn current_topic_version(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<TopicModelVersion>> + Send;
+
     // Topology (items 3, 4, 6).
 
     fn topology(

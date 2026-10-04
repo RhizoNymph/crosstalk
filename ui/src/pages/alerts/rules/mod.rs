@@ -109,14 +109,14 @@ pub fn parse_toggle(
 
 #[page("/alerts/rules")]
 async fn rules_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let flash = flash(cx);
     Ok(view! { rules_page(state: state, flash: flash, failure: None) })
 }
 
 #[page(POST "/alerts/rules")]
 async fn rules_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let error = match parse_toggle(&fields) {
         Ok((action, flash)) => match perform(cx, action).await {
             Ok(_) => return Err(done(PATH, &state, &[], flash)),

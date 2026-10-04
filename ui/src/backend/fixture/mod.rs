@@ -94,17 +94,6 @@ impl FixtureBackend {
         self.world.seed
     }
 
-    /// The end of the generated data. Buckets before the watermark (ten
-    /// minutes earlier) are final.
-    pub fn now(&self) -> Timestamp {
-        clock::NOW
-    }
-
-    /// The latest fitted topic-model version.
-    pub fn current_topic_version(&self) -> TopicModelVersion {
-        self.world.topics.latest()
-    }
-
     /// Named handles into the generated world, for tests.
     #[cfg(test)]
     pub fn scenario(&self) -> &world::Scenario {
@@ -119,6 +108,18 @@ impl FixtureBackend {
 }
 
 impl Backend for FixtureBackend {
+    /// The end of the generated data. Buckets before the watermark (ten
+    /// minutes earlier) are final.
+    async fn now(&self, caller: &Caller) -> Result<Timestamp> {
+        require(caller, Permission::View)?;
+        Ok(clock::NOW)
+    }
+
+    async fn current_topic_version(&self, caller: &Caller) -> Result<TopicModelVersion> {
+        require(caller, Permission::View)?;
+        Ok(self.world.topics.latest())
+    }
+
     async fn topology(
         &self,
         caller: &Caller,

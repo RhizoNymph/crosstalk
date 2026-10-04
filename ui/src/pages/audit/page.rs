@@ -134,7 +134,7 @@ async fn load(
 
 #[page("/audit")]
 async fn audit_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let caller = caller(cx);
     let parsed = query_params::<RawAuditQuery>(cx)
         .map_err(|e| invalid("query", e))

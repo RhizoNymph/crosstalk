@@ -76,7 +76,7 @@ async fn load(cx: &Cx, state: &ViewState) -> std::result::Result<Listing, QueryE
 
 #[page("/agents")]
 async fn agents_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let listing = load(cx, &state).await;
     let empty = listing.as_ref().is_ok_and(|l| l.rows.is_empty());
     Ok(view! {

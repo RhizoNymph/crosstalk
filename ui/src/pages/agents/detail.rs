@@ -120,7 +120,7 @@ async fn load(
 
 #[page("/agents/{agent_ulid}")]
 async fn agent_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let flash = flash(cx);
     Ok(view! { agent_page(id: id, state: state, flash: flash, failure: None) })
@@ -128,7 +128,7 @@ async fn agent_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/agents/{agent_ulid}")]
 async fn agent_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let failure = match parse(id, &fields) {
         Ok((form, action, flash)) => match perform(cx, action).await {

@@ -140,7 +140,7 @@ async fn load(
 
 #[page("/agents/{agent_ulid}/merge")]
 async fn merge_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let id = agent_id(cx)?;
     let into = query_params::<MergeQuery>(cx)
         .ok()
@@ -150,7 +150,7 @@ async fn merge_get(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/agents/{agent_ulid}/merge")]
 async fn merge_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<impl View> {
-    let state = view_state(cx)?;
+    let state = view_state(cx).await?;
     let from = agent_id(cx)?;
     let caller = caller(cx);
     let result = match id::<AgentId>(&fields, "into") {
