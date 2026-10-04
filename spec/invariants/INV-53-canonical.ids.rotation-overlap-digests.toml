@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.ids.rotation-overlap-digests"
+statement = "While a previous SecretVersion is within its rotation overlap, the keyed hasher returns one digest of a value under every loaded version, the current one first."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Identity resolution links an agent's evidence across a rotation only if
+some exchange carries the credential's digest under both the old and the new
+key. Computing only the current digest during the overlap would make every
+agent look new at the moment of rotation; computing old digests after the
+overlap ends would keep a retired key in use. The proxy publishes what the
+hasher returns.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::canonical::tests::overlap_yields_current_and_previous_digests",
+  "crosstalk::canonical::tests::after_overlap_only_current_digest",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

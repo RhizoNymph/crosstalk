@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.normalize.system-prompt-first"
+statement = "A wire protocol's top-level system prompt field becomes a single System message at the start of the normalized request."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Anthropic (`system`), Gemini and Code Assist (`systemInstruction`) and
+OpenAI Responses (`instructions`, resent on every WebSocket turn) carry the
+system prompt outside the message list, while OpenAI Chat carries it as a
+message. Placing it as the first canonical message makes the same prompt
+hash the same across protocols, lets identity
+compute PromptHash from the canonical form, and lets provenance see system
+prompts as an input channel between agents.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::top_level_system_prompt_becomes_first_message"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

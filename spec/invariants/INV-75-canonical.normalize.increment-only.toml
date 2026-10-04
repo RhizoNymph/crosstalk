@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.normalize.increment-only"
+statement = "An Increment exchange's request holds exactly the messages normalized from that turn's client frame and none from an earlier turn."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Over WebSocket (Codex, pi and oh-my-pi in Codex mode) each
+`response.create` sends only the input added since `previous_response_id`.
+Reconstruction resolves the full history from the continuation. If L1
+filled in history from its own memory of the connection, it would guess at
+what the server holds, could duplicate messages reconstruction also adds,
+and would make the exchange depend on capture order.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::websocket_turn_request_is_its_increment"
+property = "crosstalk::canonical::tests::increment_request_comes_from_frame_alone"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

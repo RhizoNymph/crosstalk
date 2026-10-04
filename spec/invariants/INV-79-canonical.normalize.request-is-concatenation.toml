@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.normalize.request-is-concatenation"
+statement = "A normalized request, after its leading System message if any, is the in-order concatenation of each provider message normalized on its own."
+kind = "domain"
+property = "inductive"
+requires = ["property"]
+rationale = """
+Two guarantees in one law. Order: the request keeps the provider's message
+order, which threading needs to find the new suffix and provenance needs to
+know what an agent saw before it wrote. Context independence: a provider
+message normalizes the same wherever it sits in a history, so the hash of a
+turn does not change as the conversation grows. The base case is one
+provider message; the composition law is concatenation.
+"""
+
+[evidence]
+property = "crosstalk::canonical::tests::request_normalizes_message_by_message"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

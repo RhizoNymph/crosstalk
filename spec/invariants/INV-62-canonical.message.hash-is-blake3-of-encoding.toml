@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.message.hash-is-blake3-of-encoding"
+statement = "Every message in a NormalizedExchange has a hash equal to the BLAKE3 digest of its body's canonical encoding."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+MessageHash is a content id: request histories dedupe on it, threading
+matches prefixes by it and the blob store keys bodies by it. Message has
+public fields, so the type does not tie `hash` to `body`; a normalizer that
+hashed the wire bytes, or reused a stale hash after editing a body, would
+build messages whose id names different content. The check recomputes the
+digest for every message of generated exchanges.
+"""
+
+[evidence]
+property = "crosstalk::canonical::tests::normalized_hashes_match_encoding"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

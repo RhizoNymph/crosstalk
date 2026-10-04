@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.encoding.golden-vectors"
+statement = "Each golden message body encodes to its pinned canonical bytes on every supported target."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Hashes are computed independently on every proxy node and compared across
+nodes and over time: a message stored last month must hash the same when it
+is echoed back today. Anything platform- or release-dependent in the
+encoding (endianness, map iteration order, float formatting, a changed field
+order) would split one message into several ids and break history dedupe
+and threading. Pinned vectors covering every MessageBody and part variant
+(including Unknown in every part list, ServerToolResult, both ToolArguments
+variants and arguments holding integers beyond 2^53) make
+any such change fail CI on every target.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::golden_encodings_match_pinned_bytes"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

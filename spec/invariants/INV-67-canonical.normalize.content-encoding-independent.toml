@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.normalize.content-encoding-independent"
+statement = "Two RawExchanges that differ only in request_encoding normalize to equal NormalizedExchanges."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Codex compresses request bodies with zstd by default under ChatGPT auth,
+and other clients may gzip them. The proxy decodes the body before capture
+and records the encoding; compression is a transport detail, so the same
+request must produce the same messages and hashes whether it arrived
+compressed or not.
+"""
+
+[evidence]
+property = "crosstalk::canonical::tests::normalization_ignores_request_encoding"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

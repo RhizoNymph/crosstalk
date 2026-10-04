@@ -1,0 +1,30 @@
+[invariant]
+id = "canonical.json.rfc8785-form"
+statement = "Every CanonicalJson value L1 produces is the RFC 8785 serialization of the JSON value it encodes in every respect other than number formatting."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+Tool arguments and Unknown blocks are stored as CanonicalJson so that
+semantically equal JSON (different key order, whitespace, number spelling
+or escapes, as harnesses and dialects re-serialize it) has the same text and
+therefore the same message hash. RFC 8785 alone routes numbers through
+IEEE doubles, which would rewrite ids beyond 2^53 in tool arguments; the
+exception keeps exact values while still giving equal numbers (1, 1.0, 1e0)
+one spelling. CanonicalJson has a public field, so the type does not enforce
+the form. The unit cases are the RFC 8785 vectors other than its number
+vectors, plus exact-decimal number vectors; the property checks that
+permuting keys and reformatting a generated value leaves its canonical text
+unchanged.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::canonical::tests::rfc8785_structure_vectors",
+  "crosstalk::canonical::tests::exact_decimal_number_vectors",
+]
+property = "crosstalk::canonical::tests::canonical_json_ignores_formatting"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }
