@@ -157,36 +157,74 @@ viewable while retained.
 - Calls: `topics`, *topic stats*, *topic versions and remaps*.
 - Actions: *`CreateRule`* (watch).
 
-### Channels (`/channels`, `/channels/{id}`)
+### Channels (`/channels`, `/channels/{id}`, `/channels/{id}/promote`)
 
-A table with origin, detection state, policy and locator summary, and a
-review queue of unreviewed channels. The detail page shows resources with
-their locators, writers and readers, traffic over time, policy with its
-decision history, and the channel's alerts.
+A table with origin, detection state, policy, locator or pattern summary,
+writers, readers, transmissions and last activity, filtered by toggle
+chips (`origin`, `detection`, `policy`, `superseded` query keys, comma
+lists like the shared filter) and paged by cursor. The "Review queue" tab
+(`tab=review`) fixes the policy to unreviewed and hides superseded
+channels. The detail page shows origin and detection in words (with a link
+to the latest transmission), a banner linking the declared channel that
+superseded it, the policy with its decision (author, time, note) and the
+set-policy form, the resources accessed in the view's window with their
+writers and readers, the channel's alerts, and its policy history from the
+audit log. Traffic over time is not shown yet.
+
+Promotion is its own page. Candidate patterns are derived from the seed
+locator, most specific first (exact; URL path prefixes by whole segments,
+then host; file path prefixes; MCP server), so every candidate covers the
+seed. Picking one (`?pattern=<n>`) shows which of the channel's known
+resources it covers and which other discovered channels it would
+supersede, then a confirm form with policy and note.
 
 - Calls: *`channels`*, `channel`, *`channel_resources`*, `alerts`
-  (filtered by channel), *`audit`* (policy history).
-- Actions: `SetPolicy`, *`PromoteChannel`*.
+  (filtered by channel), *`audit`* (policy history), *`operators`*,
+  *`rules`* (rule names), *`agent`* (writer and reader names).
+- Actions: `SetPolicy`, *`PromoteChannel`* (`Govern`; hidden on superseded
+  channels, promotion only for discovered ones).
 
-### Agents (`/agents`, `/agents/{id}`)
+### Agents (`/agents`, `/agents/{id}`, `/agents/{id}/merge`)
 
-A table, and a detail page: identity evidence, harness claims (shown as
-"claimed", never as identity), the sub-agent tree, merge history, and
-edges in and out. Merge compares two agents' evidence side by side before
-confirming.
+A paged table (name, state, harness claims, parent, transmissions in and
+out, last seen), and a detail page: identity evidence (each variant with
+its scope and strength, most specific first, hashes abbreviated to their
+key version and first four bytes), harness claims (shown as "claims",
+never as identity), the sub-agent tree (read up to four levels and sixty
+agents deep), aliases, merge history with revert state and an unmerge
+button per merge in force, and merge vetoes. A URL naming an alias shows
+the canonical agent with a banner; actions always target the canonical
+agent. Rename validates `AgentLabel` and shows its error inline; clearing
+the label is a separate button.
 
-- Calls: *`agents`*, *`agent`*, *merge records*.
-- Actions: `MergeAgents`, *`Unmerge`*, *`RenameAgent`*.
+Merge is its own page: `/agents/{id}/merge` offers a target (pick from the
+agent list or paste an id), `?into=<id>` shows both agents' evidence side
+by side with shared evidence highlighted, warns when they share nothing or
+carry different harness ids in the same scope, and confirms a
+`MergeRequest` authored by the operator (the first agent becomes an alias
+of the second).
 
-### Alerts (`/alerts`, `/alerts/rules`)
+- Calls: *`agents`*, *`agent`*, *`operators`*.
+- Actions: `MergeAgents`, *`Unmerge`*, *`RenameAgent`* (`Govern`).
 
-An inbox by state (open, acknowledged, resolved, suppressed) with
-occurrence counts, linking each alert to its subject. The rules page
-lists built-in rules (enable or disable) and operator rules (create,
-edit, disable), shows stale watched-topic rules with their reason, and
-lists sinks with their last delivery result.
+### Alerts (`/alerts`, `/alerts/rules`, `/alerts/rules/new`, `/alerts/rules/{id}`)
 
-- Calls: `alerts`, *`rules`*, *`sinks`*.
+An inbox with one tab per state (`tab=open|acknowledged|resolved|
+suppressed`), showing rule name, subject link (channel, agent or
+transmission page), occurrences, raise time, who moved the alert to its
+state (and the resolution note or suppression reason). Open alerts can be
+acknowledged; open and acknowledged ones resolved with a note (`Triage`).
+When the shared filter names exactly one channel, the inbox is narrowed to
+it. The rules page lists built-in rules (enable or disable), operator
+rules (what they match, status, stale reason, author, sinks; edit, enable,
+disable, or "Update" when stale) and sinks with their last delivery.
+Watched-topic rules pick topics of the newest topic version (labels need
+`Content`). Semantic query rules cannot be saved yet: `UserRule::
+SemanticQuery` carries an `Embedding` the UI cannot compute, so the form
+validates and then reports that.
+
+- Calls: `alerts`, *`rules`*, *`sinks`*, *`topic_versions`*, `topics`,
+  *`operators`*.
 - Actions: `Acknowledge`, `Resolve`, *`CreateRule`*, *`UpdateRule`*,
   *`SetRuleEnabled`*.
 
@@ -194,10 +232,15 @@ lists sinks with their last delivery result.
 
 - **Export** (`/export`): pick dataset, window, filter, topic version and
   format; content needs `Content`. Calls *`export`*.
-- **Audit** (`/audit`): operator and config actions, filterable by
-  operator, subject and window. Calls *`audit`*, *`operators`*.
-- **Pipeline** (`/pipeline`): dead letters with replay. Calls
-  *`dead_letters`*; action `ReplayDeadLetter` (`Operate`).
+- **Audit** (`/audit`): operator and config actions with actor, a one-line
+  description, note, subject link and outcome (applied, or rejected with
+  the typed error), paged. Filters: `op` (operator), `subject`
+  (`ch.`/`ag.`/`tx.`/`ru.`/`al.` plus the id; every row has a "filter"
+  link) and `span=all` (otherwise the shared window). Calls *`audit`*,
+  *`operators`*.
+- **Pipeline** (`/pipeline`): dead letters (consumer group, event id, kind
+  and time, attempts, last error) with replay. Needs `Operate` to view.
+  Calls *`dead_letters`*; action `ReplayDeadLetter` (`Operate`).
 
 ## Data and control flow
 
@@ -213,8 +256,14 @@ lists sinks with their last delivery result.
 5. User interaction in an element sets its `value` and fires `change`; a
    page signal takes the value; shards that read the signal re-render on
    the server; the URL is updated.
-6. Operator actions are procedures that call `OperatorActions::act` and
-   re-render the affected shards from the returned `ActionOutcome`.
+6. Operator actions are HTML form posts to the page's own path (with the
+   view state in the action URL). The handler validates every field into
+   typed values (`pages/common/form.rs`), checks the action's permissions
+   and calls `Backend::act`. Success redirects (303) back to the page with
+   a `flash` code (never text, so a link cannot make a page say something
+   else); failure renders the same page with the typed `QueryError` next
+   to the form that failed, the submitted input kept, under a status that
+   follows the error (422 invalid input, 403, 404, 409 conflicts).
 7. Live updates: an SSE stream of `UiEvent`s (ids only) tells open pages
    which regions to re-query.
 
@@ -232,8 +281,15 @@ lists sinks with their last delivery result.
 | `ui/src/backend/mod.rs` | `Backend`: every read and action, returning `Send` futures. |
 | `ui/src/backend/fixture/` | `FixtureBackend`: deterministic synthetic world from a seed. |
 | `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query). |
-| `ui/src/pages/` | `mod.rs` (root layout and navigation), `view.rs` (`view_state(cx)`: parse, default, redirect to canonical), one module per screen. |
-| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting. |
+| `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one), `view.rs` (`view_state(cx)`: parse, default, redirect to canonical; `current_state(cx)` for the layout), one module per screen. |
+| `ui/src/pages/common/` | Shared by the governance pages. `action` (`perform`: permission check then `Backend::act`; `done`: 303 with flash; `Failure<F>` and `error_for`/`fields_for` to show an error next to its form; `status_of`), `flash` (`Flash` codes and messages), `form` (`FormFields`: a urlencoded body as pairs, keeping repeated keys; validators `id`, `required`, `note`, `policy`, `similarity`, all failing as `QueryError::InvalidInput`), `paging` (`cursor` key, `page_request`), `links` (entity URLs with the view state), `lookup` (operator, rule and agent names). |
+| `ui/src/pages/channels/` | `list` (`/channels`), `query` (list keys and toggles), `model` (shape, title, detection in words, decision), `detail` (`/channels/{id}` GET and POST `set-policy`), `sections` (resources, alerts, policy history), `policy` (set-policy form and parser), `promote/` (`patterns`: candidates from the seed and coverage; `mod`: GET and POST `/channels/{id}/promote`; `screen`: the page). |
+| `ui/src/pages/agents/` | `list` (`/agents`), `detail` (`/agents/{id}` GET and POST `rename`, `clear-label`, `unmerge`), `actions` (form parsers, `merge_action`), `evidence` (evidence rows, shared and conflicting evidence), `tree` (bounded sub-agent tree), `sections`, `merge` (`/agents/{id}/merge` GET and POST). |
+| `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`), `model` (alert rows), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`; `model`: rule and sink rows; `form`: watched-topic and semantic forms and parsers; `edit`: `/alerts/rules/new` and `/alerts/rules/{id}` GET and POST). |
+| `ui/src/pages/audit/` | `page` (`/audit`), `query` (`op`, `subject`, `span`), `describe` (an action in words, its note and subject), `subject` (subject codes and links). |
+| `ui/src/pages/pipeline/` | `/pipeline` GET and POST `replay`. |
+| `ui/src/components/` | Shared markup: route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting, `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state and evidence strength; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`), `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
+| `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body, and `cx`/`render` for rendering components. |
 | `ui/src/data/` | `#[route]` endpoints feeding the custom elements, and their payload types. |
 | `ui/elements/` | TypeScript custom elements (pnpm, strict TS, esbuild, vitest, biome). |
 
@@ -244,7 +300,13 @@ lists sinks with their last delivery result.
   for. Shards and procedures check permissions themselves: Topcoat does not
   run page guards for shard and procedure endpoints.
 - Every value the browser sends (signals, shard arguments, procedure
-  arguments, query strings) is validated into typed values before use.
+  arguments, query strings, form fields) is validated into typed values
+  before use. Page-specific query keys live in their own structs; an
+  unknown value is a 422 naming the key.
+- Action controls are rendered only for callers holding the action's
+  permission, and every post checks it again before calling the backend.
+- Links between pages carry the view state, so the filter follows the
+  user; page-specific keys (tabs, cursors, filters) do not leave the page.
 - Every graph, timeline and projection a page shows is fully determined by
   its URL and the data's watermark.
 - Elements never call L8 and never hold authorization logic.

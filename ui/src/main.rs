@@ -6,6 +6,8 @@ mod components;
 mod config;
 mod contract;
 mod pages;
+#[cfg(test)]
+mod testing;
 mod url;
 
 use topcoat::asset::{AssetBundle, RouterBuilderAssetExt};

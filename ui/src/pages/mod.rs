@@ -1,6 +1,12 @@
 //! One module per screen, plus the root layout.
 
+pub mod agents;
+pub mod alerts;
+pub mod audit;
+pub mod channels;
+pub mod common;
 pub mod overview;
+pub mod pipeline;
 pub mod view;
 
 use topcoat::Result;
@@ -11,6 +17,7 @@ use topcoat::tailwind;
 use topcoat::view::{View, view};
 
 use crate::app::operator;
+use crate::pages::view::current_state;
 
 /// Navigation sections: path prefix and label.
 const SECTIONS: [(&str, &str); 9] = [
@@ -37,6 +44,16 @@ fn nav_classes(active: bool) -> &'static str {
 async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let path = uri(cx).path().to_owned();
     let operator_name = operator(cx).name.clone();
+    // Navigation carries the current view state, so the filter follows the
+    // user between sections.
+    let query = current_state(cx).map(|state| state.to_query());
+    let sections = SECTIONS.map(|(prefix, label)| {
+        let href = match &query {
+            Some(query) => format!("{prefix}?{query}"),
+            None => prefix.to_owned(),
+        };
+        (href, label, path.starts_with(prefix))
+    });
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -52,9 +69,9 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
                     <nav class="w-44 shrink-0 border-r border-zinc-200 p-3 text-sm dark:border-zinc-800">
                         <a href="/" class="mb-4 block font-mono text-base font-semibold">"crosstalk"</a>
                         <ul class="space-y-0.5">
-                            for (prefix, label) in SECTIONS {
+                            for (href, label, active) in sections {
                                 <li>
-                                    <a href=(prefix) class=(nav_classes(path.starts_with(prefix)))>(label)</a>
+                                    <a href=(href) class=(nav_classes(active))>(label)</a>
                                 </li>
                             }
                         </ul>

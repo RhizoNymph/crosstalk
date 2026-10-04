@@ -27,6 +27,14 @@ fn defaults(cx: &Cx) -> Result<Defaults> {
     })
 }
 
+/// The request's view state when its query carries a complete, valid one;
+/// `None` otherwise. Never redirects: for the layout's navigation links.
+pub fn current_state(cx: &Cx) -> Option<ViewState> {
+    let raw: RawViewState = parse_query_params(cx).ok()?;
+    let parsed = ViewState::parse(&raw, defaults(cx).ok()?).ok()?;
+    parsed.complete.then_some(parsed.state)
+}
+
 /// The request's view state. An incomplete URL is redirected to its
 /// canonical form, so every URL a page is shown under reproduces it.
 pub fn view_state(cx: &Cx) -> Result<ViewState> {
