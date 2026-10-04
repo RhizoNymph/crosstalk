@@ -253,7 +253,9 @@ services:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
+      # Docker's data root at the same path inside, so cAdvisor finds what
+      # `docker info` reports (snap Docker: /var/snap/docker/common/var-lib-docker).
+      - ${DOCKER_ROOT_DIR:-/var/lib/docker}:${DOCKER_ROOT_DIR:-/var/lib/docker}:ro
       - /dev/disk/:/dev/disk:ro
 
   postgres-exporter:
