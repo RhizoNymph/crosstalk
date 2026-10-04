@@ -1,6 +1,7 @@
 # Follow mode
 
-Status: **design**. Nothing here is implemented yet. This document is the
+Status: **design**, with every decision decided ([Decisions](#decisions)).
+Nothing here is implemented yet. This document is the
 design and the requirements it puts on the spec (`crosstalk-spec`), the
 gateway and the fixture.
 
@@ -83,8 +84,9 @@ URLs](ui.md#view-state-and-urls), [Live updates](ui.md#live-updates) and the
      triggers a refetch;
    - bindings and signals keep working.
 
-   This replaces the undocumented dev-refresh hook `<ct-live>` uses today,
-   and it lets the topology and explore pages refresh at all.
+   This replaces the undocumented dev-refresh hook `<ct-live>` uses today
+   on every page (D6, accepted default), and it lets the topology and
+   explore pages refresh at all.
 4. **Elements update in place.** A `data-src` change that differs only in
    `from`/`to` (a slide), or a change of the new `data-rev` input (same URL,
    newer data), refetches quietly and merges the payload. There is no
@@ -102,8 +104,8 @@ URLs](ui.md#view-state-and-urls), [Live updates](ui.md#live-updates) and the
      following (default 30 s).
 
    Refreshes are throttled to one at a time, at most one per page interval
-   (5 s, or 10 s for topology and explore). They pause while the tab is
-   hidden or a form is being edited.
+   (5 s, or 10 s for topology and explore; D7, accepted default). They
+   pause while the tab is hidden or a form is being edited.
 6. **The spec must add** the present and the bucket width to `QueryApi`
    (S1, S2), a coalesced traffic event naming the buckets that changed (S3),
    channel events for listing flips caused by traffic (S4), data revisions
@@ -138,7 +140,8 @@ URLs](ui.md#view-state-and-urls), [Live updates](ui.md#live-updates) and the
 (`90m`, `6h`, `1d`, `7d`). A span must be a whole multiple of the bucket
 width and at most 31 days: the time brush draws at most 1000 hourly buckets,
 and a month of five-minute buckets is the most a graph query should
-aggregate on every refresh.
+aggregate on every refresh. The UI offers presets (15m, 1h, 6h, 1d, 7d),
+and any other valid span is accepted (D11, accepted default).
 
 - **`follow` and `from`/`to` are exclusive**
   (`ViewStateError::FollowWithWindow`). A followed URL is
@@ -156,10 +159,13 @@ aggregate on every refresh.
   So every request below the page is reproducible and cacheable, and a page
   and its shards and elements always agree on one window: the page resolved
   it once.
-- **Bare URLs default to following.** A URL without a window (`/`,
-  `/topology`) redirects to `follow=1d` rather than to a pinned last 24
-  hours, so an operator who opens the UI sees it move. This is a decision to
-  confirm (D2). The pinned alternative is today's behaviour.
+- **The overview and topology default to following** (D2, decided by the
+  user). `/` and `/topology` without a window redirect to `follow=1d`
+  rather than to a pinned last 24 hours, so an operator who opens the UI
+  sees it move.
+  - The other pages keep today's default, a pinned last 24 hours.
+  - Navigation links carry the current page query, so moving on from a
+    followed overview or topology keeps following.
 
 ### Types
 
@@ -219,7 +225,9 @@ impl PageView {
 
 The head is `align_up(present, bucket)`, the same end today's default window
 uses, so the followed window holds the newest data the gateway has, settled
-or not. The watermark was considered and rejected as the anchor (D1):
+or not. The user decided (D1) that a followed view follows the present and never
+lags behind it by anchoring at the watermark. The reasons the watermark was rejected
+as the anchor:
 
 - It trails the present by `settle_after = evidence_window + suspected_ttl`
   (`aggregates/watermark.rs`, `derived/flow/timing.rs`), a configured delay
@@ -232,9 +240,9 @@ or not. The watermark was considered and rejected as the anchor (D1):
 - Both the head and the watermark move in whole buckets, so neither gives
   a smoother slide.
 
-A settled-only variant (`follow=1d&edge=settled`, window
-`[watermark − span, watermark)`) is easy to add later with the same types
-if operators ask for numbers that never change under them. It is not in v1.
+There is no settled-only variant (a window ending at the watermark). Under
+D1 a followed window always ends at the head, and the provisional tail is
+marked rather than cut off.
 
 ### The provisional tail
 
@@ -269,7 +277,7 @@ when its end is after the watermark. Each surface shows it:
   whose window reaches the present: "Follow" means "this span, ending now".
 - **Copy link.** "Link" on a followed view is the pinned URL, the same
   href as Pin, so a copied link always reproduces what the copier saw,
-  subject to the provisional tail settling (D3). A pinned window that
+  subject to the provisional tail settling (D3, decided by the user). A pinned window that
   reaches past the watermark says so in its header, so a citation is honest
   about it. The live URL is the address bar's. Cutting the copied link at
   the watermark was considered: it would make the citation final but drop
@@ -293,7 +301,7 @@ The URL's `v` stays pinned while following, so every linked view still
 reads one version and a re-fit cannot change a followed view's topics under
 it. When a `topic-version` event makes another version active, the follow
 bar shows "v3 is now active · [Switch]", which links to the same followed
-view with `v=3` (D4). If a followed view's version is dropped by retention,
+view with `v=3` (D4, accepted default). If a followed view's version is dropped by retention,
 the page shows the typed `VersionNotRetained` error, as today, with the same
 switch link.
 
@@ -574,7 +582,7 @@ deterministic layout. Merged layouts are deterministic given the previous
 positions and the payload (no randomness), but they depend on the path: a
 followed graph can differ from a fresh load of the same pinned URL. The
 graph's meta line offers "re-layout", which runs the full layout on the
-current payload (D9). The invariant "same payload, same picture" becomes
+current payload (D9, decided by the user). The invariant "same payload, same picture" becomes
 "same payload, same picture at mount".
 
 New and removed nodes are not animated in v1. If they need emphasis, a
@@ -686,7 +694,7 @@ points. So:
   most points were placed rather than fitted, the layout no longer reflects
   the data's structure.
   - S8 carries the share of placed points. The UI suggests a re-fit above
-    50% placed (D8), as an operator action, never automatically, because
+    50% placed (D8, decided by the user), as an operator action, never automatically, because
     a re-fit changes the picture.
   - A gateway-side periodic refit with Procrustes alignment to the
     previous fit (S8b) is the alternative if transforms prove too
@@ -695,7 +703,7 @@ points. So:
 
 **Search.** Hits are in rank order (`(score, TransmissionId)` keyset), so
 new hits would land in the middle of the list and reorder it under the
-reader. In follow mode the hits are not re-run on refresh (D5). The results
+reader. In follow mode the hits are not re-run on refresh (D5, accepted default). The results
 header says "results for 13:05–14:05 · window has moved · [Update
 results]", and the button re-submits the search over the resolved window.
 The topic sidebar (`topic_sizes`, sparklines) is re-rendered with the page.
@@ -1109,7 +1117,7 @@ synchronously, in time order, before returning, so tests are exact.
 
 A test-only control route, `POST /_test/clock` (advance by a duration),
 exists only in builds with the `sim-clock` cargo feature, so a headless
-browser test can drive the clock (D10). Release builds have no such
+browser test can drive the clock (D10, accepted default). Release builds have no such
 route.
 
 ## Testing strategy
@@ -1127,6 +1135,9 @@ the implementation plan.
   - `page_query`, `pinned_query` and `follow_query` round trips.
 - **Router tests** (`ui/src/testing/`, `Session` over a manual-clock
   fixture):
+  - `/` and `/topology` without a window redirect to `follow=1d`, and
+    every other page without a window redirects to a pinned last 24 hours
+    (D2);
   - a followed page renders a resolved window;
   - its element `data-src`s, shard arguments and form actions carry
     `from`/`to` and never `follow`;
@@ -1344,18 +1355,22 @@ are relative to the fixture's crate root (`ui/src/backend/fixture/` today,
   provide what the merges need: graph events, `fixed` nodes,
   `setCustomBBox`, camera state, and `draw` that keeps the camera.
 
-## Decisions to confirm
+## Decisions
 
-| Id | Recommendation | Alternative |
-| --- | --- | --- |
-| D1 | Follow the present (head) and mark the provisional tail | Follow the watermark (always final, but lags `settle_after` and freezes during stalls) |
-| D2 | A URL without a window defaults to `follow=1d` | Keep defaulting to a pinned last 24 h |
-| D3 | Link and Pin give the resolved window, provisional tail included | Cut the copied window at the watermark |
-| D4 | Keep `v` pinned while following; announce a new active version | Follow the active version too |
-| D5 | Search results refresh only on "Update results" | Re-run search on every refresh |
-| D6 | Replace the dev-hook region swap with signal-driven page re-renders, and move `<ct-live>` into the pages that watch | Keep the region swap for non-WebGL pages |
-| D7 | 5 s refresh interval (10 s topology and explore); close the stream after 30 s hidden | Other values, or per-operator settings |
-| D8 | v1 does not follow projections (flag and re-fit). With S8, extensions, with a re-fit suggested above 50% placed points | Periodic gateway refits (S8b) |
-| D9 | Merged topology layouts are path-dependent, with a "re-layout" control | Always run the full deterministic layout (nodes jump on every slide) |
-| D10 | A test-only clock route behind a `sim-clock` cargo feature | Drive browser tests through a scaled live clock only |
-| D11 | Any bucket-multiple span up to 31 days, with presets offered (15m, 1h, 6h, 1d, 7d) | Presets only |
+Every decision is decided. The user decided D1, D2, D3, D8 and D9. The
+user did not comment on D4, D5, D6, D7, D10 and D11, so the
+recommendations stand as accepted defaults.
+
+| Id | Decision | Decided by | Not taken |
+| --- | --- | --- | --- |
+| D1 | Follow the present (head) and mark the provisional tail. A followed view never lags behind the present by anchoring at the watermark, and there is no settled-only variant. | the user | Follow the watermark (always final, but lags `settle_after` and freezes during stalls) |
+| D2 | `/` and `/topology` without a window default to `follow=1d`. Other pages keep the pinned last 24 hours. | the user | Keep defaulting to a pinned last 24 h everywhere |
+| D3 | Link and Pin give the resolved window, provisional tail included | the user | Cut the copied window at the watermark |
+| D4 | Keep `v` pinned while following, and announce a new active version | accepted default | Follow the active version too |
+| D5 | Search results refresh only on "Update results" | accepted default | Re-run search on every refresh |
+| D6 | Replace the dev-hook region swap with signal-driven page re-renders on every page, and move `<ct-live>` into the pages that watch | accepted default | Keep the region swap for non-WebGL pages |
+| D7 | 5 s refresh interval (10 s on topology and explore); close the stream after 30 s hidden | accepted default | Other values, or per-operator settings |
+| D8 | v1 does not follow projections: it shows the "fitted for another window" flag and offers a re-fit. With S8, new points are placed onto the existing fit, with a re-fit suggested above 50% placed points. | the user | Periodic gateway refits (S8b) |
+| D9 | Merged topology layouts depend on their history, with a "re-layout" control | the user | Always run the full deterministic layout (nodes jump on every slide) |
+| D10 | A test-only clock route behind a `sim-clock` cargo feature | accepted default | Drive browser tests through a scaled live clock only |
+| D11 | Any bucket-multiple span up to 31 days, with presets offered (15m, 1h, 6h, 1d, 7d) | accepted default | Presets only |
