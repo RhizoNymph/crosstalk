@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.channels.transmissions-cross-agent"
+statement = "QueryApi::channel_transmissions lists exactly the transmissions whose stored route resolves to the requested channel's canonical channel, whose crossing at the read is Crosses and that its filter keeps, newest opened first, each with ChannelTransmission::of's senders: canonical agents other than its reader."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An unconfirmed channel is reviewed through its suspected transmissions:
+each is the co-access evidence that made the channel, and a verdict on it
+is how an operator rejects or accepts that evidence. Listing a merged
+pair would ask for a verdict on something that is no longer a
+transmission; naming the senders lets a reviewer without Content see who
+wrote what the reader read.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::confirmation::a_channels_transmissions_name_their_senders_and_skip_merged_ones",
+    "crosstalk_ui::backend::fixture::tests::channels::an_unconfirmed_channel_lists_its_suspected_transmissions",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

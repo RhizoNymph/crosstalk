@@ -7,7 +7,12 @@
 //! export starts, and that resolution (and the copy of current verdicts a
 //! `FalseDetections::Exclude` filter reads) holds for the whole export. A
 //! projection point keeps what its frame stored at fit time. Every topic a
-//! row names belongs to the header's topic version.
+//! row names belongs to the header's topic version. A transmission whose
+//! sender and reader resolve to one agent under that resolution is in no
+//! dataset, as in every view: [`TransmissionRow::new`] refuses it, and
+//! edge, topic and projection rows come from views that drop it. An access
+//! row's channel is the channel holding its resource under that
+//! resolution, listed as a channel, as `channel_topology` draws it.
 //!
 //! **Order.** Each dataset's rows are sent in ascending [`RowKey`] order, and
 //! no two rows of one export share a key, so the rows of an export are a
@@ -71,14 +76,14 @@ use super::request::ExportDatasetKind;
 /// lists for it, resolved with the aliases captured when the export started
 /// and with its topic under the header's version, the strongest class of
 /// its content matches and, when the request includes content, its topic
-/// label and quoted text. When its sender and reader have since been merged
-/// they are equal (the topology graph drops such a transmission; the export
-/// lists it).
+/// label and quoted text.
 ///
 /// Built only through [`TransmissionRow::new`] and [`TransmissionRow::of`],
 /// which take a confirmed summary (`Confirmed`, `Classified` or
 /// `Aggregated`): the dataset holds confirmed transmissions, ordered and
-/// windowed by `Confirmed::at`, so every row has a [`Delivery`].
+/// windowed by `Confirmed::at`, so every row has a [`Delivery`]. Its sender
+/// and reader are different agents: a transmission whose two agents have
+/// since merged into one is a transmission nowhere, so it is not a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransmissionRow {
     summary: TransmissionSummary,
@@ -93,6 +98,8 @@ pub enum InvalidTransmissionRow {
     /// The transmission is not confirmed, so it has no `Confirmed::at` to
     /// order and window it by.
     NotConfirmed(TransmissionStateKind),
+    /// Its sender and reader resolve to this one agent.
+    WithinOneAgent(AgentId),
 }
 
 impl TransmissionRow {
@@ -104,6 +111,9 @@ impl TransmissionRow {
         let Some(&delivery) = summary.state.delivery() else {
             return Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()));
         };
+        if delivery.from == summary.to {
+            return Err(InvalidTransmissionRow::WithinOneAgent(summary.to));
+        }
         Ok(Self {
             summary,
             delivery,

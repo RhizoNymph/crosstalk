@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.filter.access-admission-confirmation"
+statement = "TopologyFilter::admits_access admits an access exactly when, for each non-empty field, its canonical agent is the canonical form of a listed agent, its canonical channel is the canonical form of a listed channel, Channel is a listed route kind and one of its channel's transmission topics in the window is listed, and, under UnconfirmedChannels::Exclude, its channel's confirmation is Confirmed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The channel-centred view draws accesses next to transmissions, so a
+selection must narrow both the same way. An access has no topic of its
+own, so a topic filter keeps the accesses of channels the listed topics
+flowed through. "Confirmed only" leaves out the accesses (and so the
+nodes) of channels whose cross-agent traffic is all unconfirmed, which is
+the only thing it changes in the graph.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channels::access_filter_applies_each_field",
+    "crosstalk_spec::tests::channels::access_on_a_channel_without_topics_fails_any_topic_filter",
+    "crosstalk_spec::tests::confirmation::unconfirmed_channels_decide_access_admission",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

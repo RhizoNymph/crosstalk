@@ -1,0 +1,27 @@
+[invariant]
+id = "surface.overview.queues-defined"
+statement = "QueryApi::overview returns as its activity EdgeStore::totals for its window and filter, and as its queues QueueCounts::tally over every stored alert, shown as AlertSubject::shown decides, and every stored channel's row under the filter's unconfirmed_channels: the shown alerts in state Open, the listed channels in force whose current policy is Unreviewed (unconfirmed ones only under Include), and under Include the number of channels listed as Channel(Unconfirmed), None under Exclude."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+The overview counts what the lists show, so every count links to a list
+that holds exactly it. Hidden channels and alerts about them are in no
+list, so they are in no count. The confirmed-only filter decides which
+channels count at all, so it narrows the channel queues too; the window
+does not, since queues are what waits now. An unconfirmed count of None
+under Exclude says the filter left them out, not that none exist.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::overview::queues_count_open_alerts_only",
+    "crosstalk_spec::tests::overview::queues_count_unreviewed_channels_that_are_not_superseded",
+    "crosstalk_spec::tests::confirmation::queues_count_listed_channels_and_honour_unconfirmed_channels",
+    "crosstalk_spec::tests::confirmation::alerts_about_hidden_subjects_are_not_shown_or_counted",
+]
+integration = "crosstalk::surface::integration::pg_overview_matches_lists"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

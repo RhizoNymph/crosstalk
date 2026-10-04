@@ -1,15 +1,15 @@
 //! Events from provenance (L4) and flow detection (L5).
 
 use crate::derived::flow::access::Access;
-use crate::derived::flow::channel::Declaration;
 use crate::derived::flow::channel::policy::PolicyDecision;
+use crate::derived::flow::channel::{Declaration, Seed};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::Route;
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::RelaySource;
 use crate::events::Subject;
-use crate::ids::{AccessId, AgentId, ChannelId, OperatorId, SpanId, TransmissionId};
+use crate::ids::{AgentId, ChannelId, OperatorId, SpanId, TransmissionId};
 use std::num::NonZeroU64;
 
 use crate::support::{NonEmpty, Timestamp};
@@ -27,16 +27,21 @@ pub enum DetectEvent {
     ContentMatched(ContentMatch),
     /// An access, with the channel the registry resolved its locator to when
     /// it was recorded: always a canonical channel, since lookups never
-    /// return a superseded one. L5 correlates it; L7 counts it into its
-    /// access bucket.
+    /// return a superseded one, and `None` for a resource on no channel (a
+    /// resource only, until a cross-agent transmission goes through it). L5
+    /// correlates it; L7 counts it into its resource's access bucket.
     AccessRecorded {
         access: Access,
-        channel: ChannelId,
+        channel: Option<ChannelId>,
     },
-    /// A channel no config declared. Raises `NewChannel`.
+    /// A channel no config declared, created by the first cross-agent
+    /// transmission through a resource on no channel
+    /// (`ChannelRegistry::discover`), never by an access alone. Published
+    /// once per discovered channel, after the transaction commits. Raises
+    /// `NewChannel`.
     ChannelDiscovered {
         channel: ChannelId,
-        first_access: AccessId,
+        seed: Seed,
     },
     /// Written by one agent, then read by another. Opens a transmission.
     ChannelCrossAccessed {
@@ -44,6 +49,8 @@ pub enum DetectEvent {
         co_access: CoAccess,
         reader: AgentId,
     },
+    /// A channel declared before traffic saw no cross-agent transmission
+    /// within its idle window.
     DeclaredChannelUnused {
         channel: ChannelId,
         since: Timestamp,

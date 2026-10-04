@@ -4,7 +4,9 @@ use std::num::NonZeroU64;
 
 use crate::aggregates::alert::{Alert, AlertState, AlertSubject, SuppressReason};
 use crate::aggregates::edge::{EdgeStats, EdgeTotals, TopologyGraph, WeightedEdge, Weighting};
+use crate::aggregates::filter::UnconfirmedChannels;
 use crate::aggregates::topic::TopicModelVersion;
+use crate::derived::flow::channel::confirmation::CrossTraffic;
 use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crate::derived::flow::channel::{
@@ -16,7 +18,7 @@ use crate::ids::{AlertId, AlertRuleId, OperatorId};
 use crate::interfaces::l8_surface::channels::ChannelCounts;
 use crate::interfaces::l8_surface::overview::QueueCounts;
 use crate::support::{Share, TimeWindow};
-use crate::tests::fixtures::{access, agent, at, channel, resource};
+use crate::tests::fixtures::{agent, at, channel, channel_row, resource, transmission};
 
 fn count(n: u64) -> NonZeroU64 {
     NonZeroU64::new(n).expect("non-zero")
@@ -116,13 +118,14 @@ fn decision() -> Decision {
 fn seed() -> Seed {
     Seed {
         resource: resource(1),
-        first_access: access(1),
+        first_transmission: transmission(1),
     }
 }
 
 fn observed() -> TrafficDetection {
-    TrafficDetection::Observed {
-        first_access: access(1),
+    TrafficDetection::Active {
+        since: at(1),
+        last_transmission: transmission(1),
     }
 }
 
@@ -167,7 +170,7 @@ fn queues_count_open_alerts_only() {
             },
         ),
     ];
-    let counts = QueueCounts::tally(&alerts, &[]);
+    let counts = QueueCounts::tally(&alerts, |_| true, &[], UnconfirmedChannels::Include);
     assert_eq!(counts.open_alerts, 2);
     assert_eq!(counts.unreviewed_channels, 0);
 }
@@ -208,7 +211,21 @@ fn queues_count_unreviewed_channels_that_are_not_superseded() {
         declared,
         superseded,
     ];
-    let counts = QueueCounts::tally(&[], &channels);
+    let rows: Vec<_> = channels
+        .into_iter()
+        .map(|channel| {
+            let traffic = if channel.origin.traffic().is_some() {
+                CrossTraffic {
+                    confirmed: 1,
+                    unconfirmed: 0,
+                }
+            } else {
+                CrossTraffic::NONE
+            };
+            channel_row(channel, traffic)
+        })
+        .collect();
+    let counts = QueueCounts::tally(&[], |_| true, &rows, UnconfirmedChannels::Include);
     assert_eq!(
         counts.unreviewed_channels, 3,
         "never reviewed, reset, declared"
