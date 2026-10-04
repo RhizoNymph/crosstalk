@@ -52,18 +52,67 @@ async fn view_endpoints_without_view_forbidden() {
     let filter = TopologyFilter::default();
     let window = minutes(0, 10);
     let view = Permission::View;
-    assert_forbidden(surface.topology(&caller, window, Weighting::Transmissions, &filter).await, view);
-    assert_forbidden(surface.channel_topology(&caller, window, Weighting::Transmissions, &filter).await, view);
+    assert_forbidden(
+        surface
+            .topology(&caller, window, Weighting::Transmissions, &filter)
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .channel_topology(&caller, window, Weighting::Transmissions, &filter)
+            .await,
+        view,
+    );
     assert_forbidden(surface.overview(&caller, window, &filter).await, view);
-    assert_forbidden(surface.series(&caller, grid(), Weighting::Transmissions, SeriesGrouping::Total, &filter).await, view);
-    assert_forbidden(surface.alerts(&caller, &AlertFilter::default(), &page(10)).await, view);
+    assert_forbidden(
+        surface
+            .series(
+                &caller,
+                grid(),
+                Weighting::Transmissions,
+                SeriesGrouping::Total,
+                &filter,
+            )
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .alerts(&caller, &AlertFilter::default(), &page(10))
+            .await,
+        view,
+    );
     assert_forbidden(surface.alert(&caller, AlertId::from_ulid(1)).await, view);
-    assert_forbidden(surface.alert_rules(&caller, &AlertRuleFilter::default(), &page(10)).await, view);
-    assert_forbidden(surface.alert_rule(&caller, AlertRuleId::from_ulid(1)).await, view);
-    assert_forbidden(surface.channels(&caller, &ChannelFilter::default(), &page(10)).await, view);
-    assert_forbidden(surface.agents(&caller, &AgentFilter::default(), window, &page(10)).await, view);
+    assert_forbidden(
+        surface
+            .alert_rules(&caller, &AlertRuleFilter::default(), &page(10))
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface.alert_rule(&caller, AlertRuleId::from_ulid(1)).await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .channels(&caller, &ChannelFilter::default(), &page(10))
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .agents(&caller, &AgentFilter::default(), window, &page(10))
+            .await,
+        view,
+    );
     assert_forbidden(surface.present(&caller).await, view);
-    assert_forbidden(surface.verdicts(&caller, TransmissionId::from_ulid(1)).await, view);
+    assert_forbidden(
+        surface
+            .verdicts(&caller, TransmissionId::from_ulid(1))
+            .await,
+        view,
+    );
     assert_forbidden(surface.detection_quality(&caller, window).await, view);
 }
 
@@ -84,25 +133,59 @@ async fn content_endpoints_without_content_forbidden() {
         mode: SearchMode::Text,
         text,
     };
-    assert_forbidden(surface.search(&caller, &request, None, &filter, &page(10)).await, content);
-    assert_forbidden(surface.transmission(&caller, TransmissionId::from_ulid(1)).await, content);
     assert_forbidden(
         surface
-            .transmission_evidence(&caller, TransmissionId::from_ulid(1), ExcerptWindow::DEFAULT)
+            .search(&caller, &request, None, &filter, &page(10))
             .await,
         content,
     );
-    assert_forbidden(surface.topics(&caller, TopicVersionSelector::Current, &page(10)).await, content);
+    assert_forbidden(
+        surface
+            .transmission(&caller, TransmissionId::from_ulid(1))
+            .await,
+        content,
+    );
+    assert_forbidden(
+        surface
+            .transmission_evidence(
+                &caller,
+                TransmissionId::from_ulid(1),
+                ExcerptWindow::DEFAULT,
+            )
+            .await,
+        content,
+    );
+    assert_forbidden(
+        surface
+            .topics(&caller, TopicVersionSelector::Current, &page(10))
+            .await,
+        content,
+    );
     let Ok(limit) = ProjectionLimit::new(100) else {
         panic!("limit");
     };
     let Ok(params) = ProjectionParams::new(limit, 15, 100, 7) else {
         panic!("params");
     };
-    assert_forbidden(surface.fit_projection(&caller, window, &filter, params).await, content);
-    assert_forbidden(surface.projection_status(&caller, ProjectionId::from_ulid(1)).await, content);
+    assert_forbidden(
+        surface
+            .fit_projection(&caller, window, &filter, params)
+            .await,
+        content,
+    );
+    assert_forbidden(
+        surface
+            .projection_status(&caller, ProjectionId::from_ulid(1))
+            .await,
+        content,
+    );
     assert_forbidden(surface.projections(&caller, &page(10)).await, content);
-    assert_forbidden(surface.projection(&caller, ProjectionId::from_ulid(1)).await, content);
+    assert_forbidden(
+        surface
+            .projection(&caller, ProjectionId::from_ulid(1))
+            .await,
+        content,
+    );
 }
 
 /// INV-407: lists without their permission are `Forbidden`.
@@ -113,15 +196,36 @@ async fn view_lists_without_view_forbidden() {
     let caller = fixture.caller(Who::Operator).await;
     let window = minutes(0, 10);
     let view = Permission::View;
-    assert_forbidden(surface.channels(&caller, &ChannelFilter::default(), &page(10)).await, view);
-    assert_forbidden(surface.agents(&caller, &AgentFilter::default(), window, &page(10)).await, view);
-    assert_forbidden(surface.alert_rules(&caller, &AlertRuleFilter::default(), &page(10)).await, view);
+    assert_forbidden(
+        surface
+            .channels(&caller, &ChannelFilter::default(), &page(10))
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .agents(&caller, &AgentFilter::default(), window, &page(10))
+            .await,
+        view,
+    );
+    assert_forbidden(
+        surface
+            .alert_rules(&caller, &AlertRuleFilter::default(), &page(10))
+            .await,
+        view,
+    );
     let Ok(edge) = EdgeSelector::new(agent(), AgentId::from_ulid(0xA1), Route::Unobserved) else {
         panic!("edge");
     };
     assert_forbidden(
         surface
-            .edge_transmissions(&caller, &edge, window, &TopologyFilter::default(), &page(10))
+            .edge_transmissions(
+                &caller,
+                &edge,
+                window,
+                &TopologyFilter::default(),
+                &page(10),
+            )
             .await,
         view,
     );
@@ -132,8 +236,20 @@ async fn view_lists_without_view_forbidden() {
 async fn dead_letters_without_operate_forbidden() {
     let fixture = Fixture::new().await;
     let caller = fixture.caller(Who::Admin).await;
-    assert!(fixture.surface.dead_letters(&caller, None, &page(10)).await.is_ok());
-    for who in [Who::Viewer, Who::Reader, Who::Auditor, Who::Triager, Who::Governor] {
+    assert!(
+        fixture
+            .surface
+            .dead_letters(&caller, None, &page(10))
+            .await
+            .is_ok()
+    );
+    for who in [
+        Who::Viewer,
+        Who::Reader,
+        Who::Auditor,
+        Who::Triager,
+        Who::Governor,
+    ] {
         let caller = fixture.caller(who).await;
         assert_forbidden(
             fixture.surface.dead_letters(&caller, None, &page(10)).await,
@@ -151,28 +267,52 @@ async fn history_endpoints_without_view_forbidden() {
     let view = Permission::View;
     assert_forbidden(
         surface
-            .series(&caller, grid(), Weighting::Transmissions, SeriesGrouping::Topic, &TopologyFilter::default())
+            .series(
+                &caller,
+                grid(),
+                Weighting::Transmissions,
+                SeriesGrouping::Topic,
+                &TopologyFilter::default(),
+            )
             .await,
         view,
     );
     assert_forbidden(surface.topic_versions(&caller).await, view);
     assert_forbidden(surface.topic_sizes(&caller, None, None).await, view);
-    assert_forbidden(surface.topic_lineage(&caller, TopicModelVersion(0)).await, view);
+    assert_forbidden(
+        surface.topic_lineage(&caller, TopicModelVersion(0)).await,
+        view,
+    );
 }
 
 /// INV-477: the audit log needs Audit.
 #[tokio::test]
 async fn audit_query_without_audit_forbidden() {
     let fixture = Fixture::new().await;
-    for who in [Who::Viewer, Who::Reader, Who::Triager, Who::Governor, Who::Operator] {
+    for who in [
+        Who::Viewer,
+        Who::Reader,
+        Who::Triager,
+        Who::Governor,
+        Who::Operator,
+    ] {
         let caller = fixture.caller(who).await;
         assert_forbidden(
-            fixture.surface.audit(&caller, &AuditFilter::default(), &page(10)).await,
+            fixture
+                .surface
+                .audit(&caller, &AuditFilter::default(), &page(10))
+                .await,
             Permission::Audit,
         );
     }
     let auditor = fixture.caller(Who::Auditor).await;
-    assert!(fixture.surface.audit(&auditor, &AuditFilter::default(), &page(10)).await.is_ok());
+    assert!(
+        fixture
+            .surface
+            .audit(&auditor, &AuditFilter::default(), &page(10))
+            .await
+            .is_ok()
+    );
 }
 
 /// INV-477: the policy history needs View.
@@ -198,7 +338,13 @@ async fn subscribe_without_view_forbidden() {
         Ok(_) => panic!("a stream opened without View"),
     }
     let viewer = fixture.caller(Who::Viewer).await;
-    assert!(fixture.surface.subscribe(&viewer, Resume::Fresh).await.is_ok());
+    assert!(
+        fixture
+            .surface
+            .subscribe(&viewer, Resume::Fresh)
+            .await
+            .is_ok()
+    );
 }
 
 /// INV-558: the operator directory needs View.
@@ -224,7 +370,13 @@ async fn watermark_without_view_forbidden() {
 #[tokio::test]
 async fn sinks_query_needs_govern() {
     let fixture = Fixture::new().await;
-    for who in [Who::Viewer, Who::Reader, Who::Auditor, Who::Triager, Who::Operator] {
+    for who in [
+        Who::Viewer,
+        Who::Reader,
+        Who::Auditor,
+        Who::Triager,
+        Who::Operator,
+    ] {
         let caller = fixture.caller(who).await;
         assert_forbidden(fixture.surface.sinks(&caller).await, Permission::Govern);
     }
@@ -244,7 +396,12 @@ async fn channel_views_without_view_forbidden() {
     assert_forbidden(
         fixture
             .surface
-            .channel_topology(&caller, window, Weighting::Transmissions, &TopologyFilter::default())
+            .channel_topology(
+                &caller,
+                window,
+                Weighting::Transmissions,
+                &TopologyFilter::default(),
+            )
             .await,
         Permission::View,
     );
@@ -267,7 +424,11 @@ async fn evidence_without_content_forbidden() {
     assert_forbidden(
         fixture
             .surface
-            .transmission_evidence(&caller, TransmissionId::from_ulid(9), ExcerptWindow::DEFAULT)
+            .transmission_evidence(
+                &caller,
+                TransmissionId::from_ulid(9),
+                ExcerptWindow::DEFAULT,
+            )
             .await,
         Permission::Content,
     );
@@ -279,7 +440,10 @@ async fn channel_reads_without_view_forbidden() {
     let fixture = Fixture::new().await;
     let caller = fixture.caller(Who::Operator).await;
     let view = Permission::View;
-    assert_forbidden(fixture.surface.channel(&caller, channel(), None).await, view);
+    assert_forbidden(
+        fixture.surface.channel(&caller, channel(), None).await,
+        view,
+    );
     let Ok(ids) = IdBatch::new([channel()]) else {
         panic!("batch");
     };
@@ -299,7 +463,13 @@ async fn agent_reads_without_view_forbidden() {
     let fixture = Fixture::new().await;
     let caller = fixture.caller(Who::Auditor).await;
     let view = Permission::View;
-    assert_forbidden(fixture.surface.agent(&caller, agent(), minutes(0, 10)).await, view);
+    assert_forbidden(
+        fixture
+            .surface
+            .agent(&caller, agent(), minutes(0, 10))
+            .await,
+        view,
+    );
     let Ok(ids) = IdBatch::new([agent()]) else {
         panic!("batch");
     };
@@ -318,11 +488,19 @@ async fn rows_alert_and_overview_without_view_forbidden() {
     assert_forbidden(
         fixture
             .surface
-            .transmissions_by_id(&caller, &selection, TopicVersionSelector::Current, &page(10))
+            .transmissions_by_id(
+                &caller,
+                &selection,
+                TopicVersionSelector::Current,
+                &page(10),
+            )
             .await,
         view,
     );
-    assert_forbidden(fixture.surface.alert(&caller, AlertId::from_ulid(1)).await, view);
+    assert_forbidden(
+        fixture.surface.alert(&caller, AlertId::from_ulid(1)).await,
+        view,
+    );
     assert_forbidden(
         fixture
             .surface

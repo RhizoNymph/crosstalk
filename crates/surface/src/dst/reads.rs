@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use crosstalk_sim::{CheckFailed, DurationRange};
 use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
-use crosstalk_spec::aggregates::series::{SeriesGroups, SeriesGrouping};
+use crosstalk_spec::aggregates::series::{SeriesGrouping, SeriesGroups};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::interfaces::l8_surface::lists::{AgentFilter, ChannelFilter};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_spec::interfaces::l8_surface::lists::{AgentFilter, ChannelFilter};
 use crosstalk_spec::paging::{ChannelList, PageRequest};
 use crosstalk_testkit::build::{ResourceBuilder, TransmissionBuilder};
 use crosstalk_testkit::ids::Ids;
@@ -85,7 +85,12 @@ crosstalk_sim::sim_test! {
 /// A writer that, minute after minute, counts a transmission into the
 /// current minute and then advances the watermark past it, with random
 /// pauses, until `minutes` minutes are final.
-async fn advance_with_traffic(fixture: Arc<Fixture>, agents: (AgentId, AgentId), minutes: u64, pauses: Vec<Duration>) {
+async fn advance_with_traffic(
+    fixture: Arc<Fixture>,
+    agents: (AgentId, AgentId),
+    minutes: u64,
+    pauses: Vec<Duration>,
+) {
     let mut ids = Ids::seeded(9);
     for (n, pause) in (0..minutes).zip(pauses) {
         let transmission = TransmissionBuilder::new(&mut ids)
@@ -103,16 +108,23 @@ async fn advance_with_traffic(fixture: Arc<Fixture>, agents: (AgentId, AgentId),
     }
 }
 
-async fn traffic_world(ctx: &crosstalk_sim::SimCtx, minutes: u64) -> Result<(Arc<Fixture>, (AgentId, AgentId), crosstalk_sim::SimTask<()>), CheckFailed> {
+async fn traffic_world(
+    ctx: &crosstalk_sim::SimCtx,
+    minutes: u64,
+) -> Result<(Arc<Fixture>, (AgentId, AgentId), crosstalk_sim::SimTask<()>), CheckFailed> {
     let fixture = Arc::new(Fixture::new().await);
     let mut ids = Ids::seeded(8);
     let agents = (ids.agent(), ids.agent());
     fixture.agent(agents.0, minute(0)).await;
     fixture.agent(agents.1, minute(0)).await;
     let mut rng = ctx.rng();
-    let range = DurationRange::new(Duration::ZERO, Duration::from_secs(2)).map_err(|error| failed("range", error))?;
+    let range = DurationRange::new(Duration::ZERO, Duration::from_secs(2))
+        .map_err(|error| failed("range", error))?;
     let pauses: Vec<Duration> = (0..minutes).map(|_| rng.duration_in(range)).collect();
-    let writer = ctx.spawn("writer", advance_with_traffic(Arc::clone(&fixture), agents, minutes, pauses));
+    let writer = ctx.spawn(
+        "writer",
+        advance_with_traffic(Arc::clone(&fixture), agents, minutes, pauses),
+    );
     Ok((fixture, agents, writer))
 }
 

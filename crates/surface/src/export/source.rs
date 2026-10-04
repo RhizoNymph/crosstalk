@@ -37,8 +37,8 @@ use crosstalk_spec::interfaces::l8_surface::export::rows::{
     AccessRow, EdgeRow, LabelContent, TopicContent, TopicRow, projection_rows,
 };
 use crosstalk_spec::interfaces::l8_surface::export::{
-    ExportBasis, ExportDataset, ExportPlan, ExportPlanError, ExportRequest, ExportRow,
-    ExportScope, ExportSource, RowSource, SourceFailure, settled_window,
+    ExportBasis, ExportDataset, ExportPlan, ExportPlanError, ExportRequest, ExportRow, ExportScope,
+    ExportSource, RowSource, SourceFailure, settled_window,
 };
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{TimeWindow, Timestamp, Watermark};
@@ -239,7 +239,10 @@ where
         width: NonZeroU64,
     ) -> Result<Vec<ExportRow>, ExportPlanError> {
         let mut rows = Vec::new();
-        for bucket in settled.map(|window| buckets(window, width)).unwrap_or_default() {
+        for bucket in settled
+            .map(|window| buckets(window, width))
+            .unwrap_or_default()
+        {
             let graph = self
                 .edges
                 .channel_topology(bucket, Weighting::Transmissions, filter)
@@ -289,7 +292,10 @@ where
             filter.topics.clone()
         };
         let mut rows = Vec::new();
-        for bucket in settled.map(|window| buckets(window, width)).unwrap_or_default() {
+        for bucket in settled
+            .map(|window| buckets(window, width))
+            .unwrap_or_default()
+        {
             // What each (from, to, route) carried in the bucket under the
             // whole filter, less what each topic carried: the outliers.
             let mut rest: BTreeMap<EdgeKey, Remainder> = BTreeMap::new();

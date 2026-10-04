@@ -31,7 +31,9 @@ async fn second_channel(fixture: &Fixture, scene: &mut Scene) -> ChannelId {
         .first_seen(minute(1))
         .build();
     let channel = scene.ids.channel();
-    fixture.channel(channel, &resource, scene.a2, minute(1)).await;
+    fixture
+        .channel(channel, &resource, scene.a2, minute(1))
+        .await;
     let read = access(&resource, scene.a3, AccessKind::Read, minute(2));
     fixture.record(&read, channel).await;
     channel
@@ -328,7 +330,12 @@ async fn overview_counts_activity_and_queues() {
     assert_eq!(overview.value.queues.unreviewed_channels, 1);
     let Ok(graph) = fixture
         .surface
-        .topology(&caller, minutes(0, 10), Weighting::Transmissions, &TopologyFilter::default())
+        .topology(
+            &caller,
+            minutes(0, 10),
+            Weighting::Transmissions,
+            &TopologyFilter::default(),
+        )
         .await
     else {
         panic!("graph");

@@ -229,7 +229,10 @@ async fn set_policy_without_govern_has_no_effect() {
     );
     assert!(fixture.world.bus.published().is_empty());
     assert!(fixture.published().is_empty());
-    assert_eq!(fixture.surface.policy_history(&admin, scene.c1).await, before);
+    assert_eq!(
+        fixture.surface.policy_history(&admin, scene.c1).await,
+        before
+    );
     let after = fixture.operator_entries().await;
     assert_eq!(after.len(), entries + 1);
     assert_eq!(
@@ -303,8 +306,14 @@ async fn every_action_outcome_is_audited() {
     let admin = fixture.caller(Who::Admin).await;
     let viewer = fixture.caller(Who::Viewer).await;
     let calls: Vec<(Caller, OperatorAction)> = vec![
-        (admin.clone(), OperatorAction::Acknowledge { alert: scene.alert }),
-        (admin.clone(), OperatorAction::Acknowledge { alert: scene.alert }),
+        (
+            admin.clone(),
+            OperatorAction::Acknowledge { alert: scene.alert },
+        ),
+        (
+            admin.clone(),
+            OperatorAction::Acknowledge { alert: scene.alert },
+        ),
         (
             admin.clone(),
             OperatorAction::Resolve {
@@ -312,7 +321,10 @@ async fn every_action_outcome_is_audited() {
                 note: Some("done".to_owned()),
             },
         ),
-        (admin.clone(), OperatorAction::Acknowledge { alert: scene.alert }),
+        (
+            admin.clone(),
+            OperatorAction::Acknowledge { alert: scene.alert },
+        ),
         (
             admin.clone(),
             OperatorAction::Unmerge {
@@ -331,7 +343,10 @@ async fn every_action_outcome_is_audited() {
             admin.clone(),
             OperatorAction::CreateRule {
                 name: rule_name("bad sink"),
-                rule: UserRule::watch_topic(TopicModelVersion(0), crosstalk_memory::model::build::topic_id(1)),
+                rule: UserRule::watch_topic(
+                    TopicModelVersion(0),
+                    crosstalk_memory::model::build::topic_id(1),
+                ),
                 sinks: vec![sink(9)],
             },
         ),
@@ -340,7 +355,10 @@ async fn every_action_outcome_is_audited() {
     for (caller, action) in calls {
         let before = fixture.operator_entries().await.len();
         let result = fixture.surface.act(&caller, action.clone()).await;
-        assert!(!matches!(result, Err(ActionError::Store { .. })), "{result:?}");
+        assert!(
+            !matches!(result, Err(ActionError::Store { .. })),
+            "{result:?}"
+        );
         let entries = fixture.operator_entries().await;
         assert_eq!(entries.len(), before + 1, "{action:?}");
         let (_, record) = &entries[0];
@@ -403,7 +421,10 @@ async fn identity_and_rule_actions_stamp_caller() {
         other => panic!("merge: {other:?}"),
     };
     assert_eq!(
-        fixture.surface.act(&caller, OperatorAction::Unmerge { merge }).await,
+        fixture
+            .surface
+            .act(&caller, OperatorAction::Unmerge { merge })
+            .await,
         Ok(ActionOutcome::Applied)
     );
     let record = merge_record(&fixture, scene.a1, merge).await;
@@ -507,12 +528,24 @@ async fn pin_and_unpin_outcomes() {
     let pin = |version| OperatorAction::PinTopicVersion { version };
     let unpin = |version| OperatorAction::UnpinTopicVersion { version };
     let unknown = TopicModelVersion(99);
-    assert_eq!(fixture.surface.act(&caller, pin(unknown)).await, Err(ActionError::NotFound));
-    assert_eq!(fixture.surface.act(&caller, unpin(unknown)).await, Err(ActionError::NotFound));
+    assert_eq!(
+        fixture.surface.act(&caller, pin(unknown)).await,
+        Err(ActionError::NotFound)
+    );
+    assert_eq!(
+        fixture.surface.act(&caller, unpin(unknown)).await,
+        Err(ActionError::NotFound)
+    );
 
     let ready = fixture.fit(minute(1), &[11, 12], false).await;
-    assert_eq!(fixture.surface.act(&caller, pin(ready)).await, Ok(ActionOutcome::Applied));
-    assert_eq!(fixture.surface.act(&caller, pin(ready)).await, Ok(ActionOutcome::Unchanged));
+    assert_eq!(
+        fixture.surface.act(&caller, pin(ready)).await,
+        Ok(ActionOutcome::Applied)
+    );
+    assert_eq!(
+        fixture.surface.act(&caller, pin(ready)).await,
+        Ok(ActionOutcome::Unchanged)
+    );
     let Ok(history) = fixture.world.catalog.versions().await else {
         panic!("history");
     };
@@ -526,8 +559,14 @@ async fn pin_and_unpin_outcomes() {
             at: accepted()
         })
     );
-    assert_eq!(fixture.surface.act(&caller, unpin(ready)).await, Ok(ActionOutcome::Applied));
-    assert_eq!(fixture.surface.act(&caller, unpin(ready)).await, Ok(ActionOutcome::Unchanged));
+    assert_eq!(
+        fixture.surface.act(&caller, unpin(ready)).await,
+        Ok(ActionOutcome::Applied)
+    );
+    assert_eq!(
+        fixture.surface.act(&caller, unpin(ready)).await,
+        Ok(ActionOutcome::Unchanged)
+    );
 
     // A version whose fit is running is fitting.
     let mut catalog = fixture.world.catalog.clone();
@@ -613,7 +652,10 @@ async fn identity_and_rule_actions_forwarded_unchanged() {
         rule: semantic("deploy keys or tokens"),
         sinks: vec![sink(2)],
     };
-    assert_eq!(fixture.surface.act(&caller, update).await, Ok(ActionOutcome::Applied));
+    assert_eq!(
+        fixture.surface.act(&caller, update).await,
+        Ok(ActionOutcome::Applied)
+    );
     let stored = rule_def(&fixture, rule).await;
     assert_eq!(stored.name(), "keys and tokens");
     assert_eq!(stored.sinks, vec![sink(2)]);
@@ -622,7 +664,10 @@ async fn identity_and_rule_actions_forwarded_unchanged() {
         id: rule,
         enabled: false,
     };
-    assert_eq!(fixture.surface.act(&caller, disable).await, Ok(ActionOutcome::Applied));
+    assert_eq!(
+        fixture.surface.act(&caller, disable).await,
+        Ok(ActionOutcome::Applied)
+    );
     assert_eq!(rule_def(&fixture, rule).await.status, RuleStatus::Disabled);
 }
 
@@ -803,7 +848,9 @@ async fn layer_rejections_map_to_action_errors() {
     assert!(act(OperatorAction::Unmerge { merge }).await.is_ok());
     assert_eq!(
         act(OperatorAction::Unmerge { merge }).await,
-        Err(ActionError::Conflict(ConflictKind::MergeAlreadyReverted { merge }))
+        Err(ActionError::Conflict(ConflictKind::MergeAlreadyReverted {
+            merge
+        }))
     );
 
     // L5 verdicts.
@@ -828,9 +875,11 @@ async fn layer_rejections_map_to_action_errors() {
             note: None
         })
         .await,
-        Err(ActionError::Conflict(ConflictKind::TransmissionNotJudgeable {
-            transmission: detected.id
-        }))
+        Err(ActionError::Conflict(
+            ConflictKind::TransmissionNotJudgeable {
+                transmission: detected.id
+            }
+        ))
     );
 
     // L6 rules.
@@ -861,7 +910,9 @@ async fn layer_rejections_map_to_action_errors() {
             sinks: vec![sink(9)]
         })
         .await,
-        Err(ActionError::InvalidInput(InputError::UnknownSink { sink: sink(9) }))
+        Err(ActionError::InvalidInput(InputError::UnknownSink {
+            sink: sink(9)
+        }))
     );
     assert_eq!(
         act(OperatorAction::CreateRule {
@@ -873,10 +924,12 @@ async fn layer_rejections_map_to_action_errors() {
             sinks: Vec::new()
         })
         .await,
-        Err(ActionError::Conflict(ConflictKind::TopicVersionNotCurrent {
-            requested: TopicModelVersion(5),
-            current: TopicModelVersion(0)
-        }))
+        Err(ActionError::Conflict(
+            ConflictKind::TopicVersionNotCurrent {
+                requested: TopicModelVersion(5),
+                current: TopicModelVersion(0)
+            }
+        ))
     );
     assert_eq!(
         act(OperatorAction::CreateRule {
@@ -918,11 +971,17 @@ async fn set_verdict_maps_outcomes() {
     };
     let id = scene.t1.transmission.id;
     assert_eq!(
-        fixture.surface.act(&caller, set(id, Some(Verdict::Genuine))).await,
+        fixture
+            .surface
+            .act(&caller, set(id, Some(Verdict::Genuine)))
+            .await,
         Ok(ActionOutcome::Applied)
     );
     assert_eq!(
-        fixture.surface.act(&caller, set(id, Some(Verdict::Genuine))).await,
+        fixture
+            .surface
+            .act(&caller, set(id, Some(Verdict::Genuine)))
+            .await,
         Ok(ActionOutcome::Unchanged)
     );
     assert_eq!(
@@ -932,7 +991,10 @@ async fn set_verdict_maps_outcomes() {
     assert_eq!(
         fixture
             .surface
-            .act(&caller, set(TransmissionId::from_ulid(3), Some(Verdict::Genuine)))
+            .act(
+                &caller,
+                set(TransmissionId::from_ulid(3), Some(Verdict::Genuine))
+            )
             .await,
         Err(ActionError::NotFound)
     );
@@ -949,9 +1011,11 @@ async fn set_verdict_maps_outcomes() {
                 .surface
                 .act(&caller, set(transmission.id, Some(Verdict::FalseDetection)))
                 .await,
-            Err(ActionError::Conflict(ConflictKind::TransmissionNotJudgeable {
-                transmission: transmission.id
-            }))
+            Err(ActionError::Conflict(
+                ConflictKind::TransmissionNotJudgeable {
+                    transmission: transmission.id
+                }
+            ))
         );
     }
 }
@@ -1003,7 +1067,9 @@ async fn second_channel(fixture: &Fixture, scene: &mut super::world::Scene) -> C
         .first_seen(minute(1))
         .build();
     let channel = scene.ids.channel();
-    fixture.channel(channel, &resource, scene.a2, minute(1)).await;
+    fixture
+        .channel(channel, &resource, scene.a2, minute(1))
+        .await;
     channel
 }
 
@@ -1050,7 +1116,13 @@ async fn actions_on_superseded_channel_conflict() {
         policy: PolicyKind::Sanctioned,
         note: None,
     };
-    assert!(fixture.surface.act(&caller, promote(scene.c1)).await.is_ok());
+    assert!(
+        fixture
+            .surface
+            .act(&caller, promote(scene.c1))
+            .await
+            .is_ok()
+    );
     let published = fixture.world.bus.published().len();
     let history = fixture.surface.policy_history(&caller, c2).await;
     let superseded = Err(ActionError::Conflict(ConflictKind::ChannelSuperseded {

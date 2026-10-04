@@ -118,7 +118,10 @@ impl<S: SurfaceStores> Surface<S> {
         let mut embeddings = self.stores.embedder().embed(&[text]).await?;
         if embeddings.len() != 1 {
             return Err(QueryError::Store {
-                reason: format!("embedder returned {} vectors for one text", embeddings.len()),
+                reason: format!(
+                    "embedder returned {} vectors for one text",
+                    embeddings.len()
+                ),
             });
         }
         embeddings.pop().ok_or_else(|| QueryError::Store {

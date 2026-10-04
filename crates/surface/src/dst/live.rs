@@ -355,7 +355,12 @@ impl<S: Subscription + Send> Subscription for Watched<S> {
         self.inner.ack(id).await
     }
 
-    async fn nack(&mut self, id: DeliveryId, retry_after: Duration, reason: String) -> Result<(), BusError> {
+    async fn nack(
+        &mut self,
+        id: DeliveryId,
+        retry_after: Duration,
+        reason: String,
+    ) -> Result<(), BusError> {
         self.inner.nack(id, retry_after, reason).await
     }
 }

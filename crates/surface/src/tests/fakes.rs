@@ -168,7 +168,10 @@ impl TestEvidence {
         lock(&self.records).failing = failing;
     }
 
-    fn read<T>(&self, read: impl FnOnce(&Records) -> Option<T>) -> Result<Option<T>, RecordReadError> {
+    fn read<T>(
+        &self,
+        read: impl FnOnce(&Records) -> Option<T>,
+    ) -> Result<Option<T>, RecordReadError> {
         let records = lock(&self.records);
         if records.failing {
             return Err(RecordReadError::Store {
