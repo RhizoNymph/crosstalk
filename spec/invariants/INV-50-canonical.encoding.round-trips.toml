@@ -16,4 +16,4 @@ would share a hash. Round-tripping rules out both.
 property = "crosstalk_canonical::tests::encoding_round_trips"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

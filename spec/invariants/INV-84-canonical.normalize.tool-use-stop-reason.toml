@@ -16,4 +16,4 @@ must follow from the response's content, not from the dialect's label.
 unit = "crosstalk_canonical::tests::tool_call_responses_stop_with_tool_use"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

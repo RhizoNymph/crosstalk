@@ -18,4 +18,4 @@ contains.
 property = "crosstalk_canonical::tests::continuation_carried_through"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -15,4 +15,4 @@ either hide the agent's output or mark input as originated by it.
 property = "crosstalk_canonical::tests::response_message_is_assistant"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

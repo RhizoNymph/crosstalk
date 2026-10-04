@@ -35,7 +35,12 @@ Overview:
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
     consumer groups, retries, dead letters and envelope dedup, and the
     content-addressed blob store (FsBlobStore, MemoryBlobStore)
-    (transport). The other crates are still empty.
+    (transport). crosstalk-canonical has the Anthropic Messages
+    normalizer (L1): pure functions from a RawExchange to a
+    NormalizedExchange, with streaming reassembly, the canonical message
+    encoding and its BLAKE3 hash, exact-number canonical JSON, and a step
+    that stores the bodies through BlobStore (canonical). The other crates
+    are still empty.
 
   subsystems:
     spec: >
@@ -475,4 +480,32 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, wire_contract, workspace]
     doc: docs/features/transport.md
+  canonical:
+    description: >
+      crosstalk-canonical, L1 (P2.5). AnthropicMessages, the spec's
+      Normalizer for Anthropic Messages in every dialect, as pure
+      functions: the request body (system prompt as a string or blocks,
+      user turns split into maximal runs of one role so tool results
+      become Tool messages, tool calls with canonical JSON arguments,
+      thinking and redacted thinking, base64 media as their own blobs,
+      cache_control markers dropped, unknown blocks kept and warned) and
+      the response, whole or reassembled from SSE events (interleaved
+      deltas, pings, message_delta usage, partial input_json, an error
+      event mid-stream giving the partial response plus the failure), to
+      the canonical Exchange, its messages and warnings (unknown blocks,
+      orphan tool results in a full history). The canonical encoding of a
+      message body (canonical JSON of its wire-convention shape) whose
+      BLAKE3 is the MessageHash and the blob store's key, with a strict
+      decoder; JSON with exact numbers and RFC 8785 text; token usage with
+      cache reads inside input; store() writes every body and media blob
+      through BlobStore. Goldens over the testkit corpus, properties over
+      generated requests and streams.
+    entry_points:
+      - crates/canonical/src/lib.rs
+      - crates/canonical/src/anthropic/mod.rs
+      - crates/canonical/src/encoding/mod.rs
+      - crates/canonical/src/json/mod.rs
+      - crates/canonical/src/capture.rs
+    depends_on: [type_spec, testkit, transport, workspace]
+    doc: docs/features/canonical.md
 ```

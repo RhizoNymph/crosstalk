@@ -15,4 +15,4 @@ would then index as the agent's output.
 unit = "crosstalk_canonical::tests::error_status_normalizes_to_upstream_failure"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

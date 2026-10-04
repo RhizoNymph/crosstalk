@@ -1,0 +1,27 @@
+[
+  {
+    "encoding": "{\"data\":[],\"type\":\"system\"}",
+    "hash": "6153093da3c6a189c70603207c0be07b60b8f20990d712c106dc618b60f0f769",
+    "name": "system_empty"
+  },
+  {
+    "encoding": "{\"data\":[{\"data\":\"You are Claude Code.\\n\",\"type\":\"text\"},{\"data\":{\"kind\":\"zz_policy\",\"raw\":\"{\\\"rules\\\":[1,2],\\\"type\\\":\\\"zz_policy\\\"}\"},\"type\":\"unknown\"}],\"type\":\"system\"}",
+    "hash": "63d8897d848e20266ce130c8740e864de75d5c6f21b1db73ba74fb053b16f5a0",
+    "name": "system_text_and_unknown"
+  },
+  {
+    "encoding": "{\"data\":[{\"data\":\" é \\\"quoted\\\" \\\\ \\t\\u0001😀 \",\"type\":\"text\"},{\"data\":{\"blob\":\"87da8eea1705a3b5da471f2e9ff924794004aef45804b611c8b0323c1049eae7\",\"kind\":\"image\"},\"type\":\"media\"},{\"data\":{\"blob\":\"3766ea034daff0edcb4a7ec39819c419dc49543e9b641344eeb050d22af4d58f\",\"kind\":\"audio\"},\"type\":\"media\"},{\"data\":{\"blob\":\"b71ded2f958937012ebb2586954f4c40a7afdaedbfcae2187e10824abb01cab1\",\"kind\":\"document\"},\"type\":\"media\"},{\"data\":{\"kind\":\"search_result\",\"raw\":\"{\\\"source\\\":\\\"s\\\",\\\"type\\\":\\\"search_result\\\"}\"},\"type\":\"unknown\"}],\"type\":\"user\"}",
+    "hash": "de27d2921128f6ce01a805e683cea47272ab1c247f8bb386ccd23cac57983a95",
+    "name": "user_every_part"
+  },
+  {
+    "encoding": "{\"data\":[{\"data\":{\"data\":\"Think first.\",\"type\":\"visible\"},\"type\":\"reasoning\"},{\"data\":{\"data\":{\"signature\":\"EqNrZpUTd52EaHrg+/==\"},\"type\":\"opaque\"},\"type\":\"reasoning\"},{\"data\":\"I'll look.\",\"type\":\"text\"},{\"data\":{\"arguments\":{\"data\":\"{\\\"after\\\":-9223372036854775809,\\\"id\\\":1234567890123456789,\\\"path\\\":\\\"/a\\\"}\",\"type\":\"json\"},\"execution\":\"client\",\"id\":\"toolu_01\",\"name\":\"Read\"},\"type\":\"tool_call\"},{\"data\":{\"arguments\":{\"data\":\"{\\\"query\\\": \\\"rust\",\"type\":\"invalid\"},\"execution\":\"server\",\"id\":\"srvtoolu_01\",\"name\":\"Read\"},\"type\":\"tool_call\"},{\"data\":{\"call_id\":\"srvtoolu_01\",\"content\":[{\"data\":\"result\",\"type\":\"text\"},{\"data\":{\"blob\":\"bff0a0fd4bb2db301741c4c9cbfced1085e2051e6009edb12b004330fa7f5111\",\"kind\":\"image\"},\"type\":\"media\"},{\"data\":{\"kind\":\"web_search_result\",\"raw\":\"{\\\"type\\\":\\\"web_search_result\\\",\\\"url\\\":\\\"https://example.com\\\"}\"},\"type\":\"unknown\"}],\"outcome\":\"error\"},\"type\":\"server_tool_result\"},{\"data\":{\"kind\":\"zz_widget\",\"raw\":\"{\\\"type\\\":\\\"zz_widget\\\"}\"},\"type\":\"unknown\"}],\"type\":\"assistant\"}",
+    "hash": "ae4dc19fc3f8bb1fb17c1dc88bc40994e52ef0ff0516edb3b1e5b123b620e646",
+    "name": "assistant_every_part"
+  },
+  {
+    "encoding": "{\"data\":[{\"call_id\":\"toolu_01\",\"content\":[{\"data\":\"     1\\t# Plan\\n\",\"type\":\"text\"}],\"outcome\":\"success\"},{\"call_id\":\"call_0123456789abcdef01234567\",\"content\":[],\"outcome\":\"error\"}],\"type\":\"tool\"}",
+    "hash": "7a5d1ce41773113128b8d585e98037eb8713dbee6bafb87723e4e5a1ec826f9a",
+    "name": "tool_results"
+  }
+]

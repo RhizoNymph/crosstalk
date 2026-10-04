@@ -17,4 +17,4 @@ result, losing the read it records.
 unit = "crosstalk_canonical::tests::server_tool_use_marked_server"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

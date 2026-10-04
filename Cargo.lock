@@ -198,7 +198,17 @@ dependencies = [
 name = "crosstalk-canonical"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "blake3",
  "crosstalk-spec",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

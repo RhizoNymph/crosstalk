@@ -19,5 +19,5 @@ unit = "crosstalk_canonical::tests::snowflake_id_survives_canonicalization"
 property = "crosstalk_canonical::tests::large_integers_round_trip_exactly"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

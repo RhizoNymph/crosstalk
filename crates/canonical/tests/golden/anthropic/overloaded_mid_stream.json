@@ -1,0 +1,114 @@
+{
+  "exchange": {
+    "continuation": {
+      "type": "full_history"
+    },
+    "meta": {
+      "client": {
+        "account": null,
+        "class": "main",
+        "credential": {
+          "hash": {
+            "digest": "01a0f4c2c40000000007000000000002d11cded273210003413b41003a3636ff",
+            "key": 1
+          },
+          "scheme": "api_key"
+        },
+        "harness": {
+          "family": "claude_code",
+          "user_agent": "claude-cli/2.1.282 (external, cli)",
+          "version": "2.1.282"
+        },
+        "ids": {
+          "agent": null,
+          "parent_agent": null,
+          "session": "01m3tc5h00000001r000000001"
+        },
+        "ingress": {
+          "data": {
+            "route": "anthropic"
+          },
+          "type": "reverse_proxy"
+        },
+        "previous_digests": null,
+        "upstream": {
+          "id": "anthropic",
+          "kind": {
+            "data": {
+              "type": "anthropic"
+            },
+            "type": "vendor_api"
+          }
+        }
+      },
+      "id": "01M3TC5H00000001R000000003",
+      "model": "claude-opus-5-5",
+      "protocol": "anthropic_messages",
+      "started_at": "2026-10-01T00:00:00.000000Z",
+      "transport": "sse"
+    },
+    "outcome": {
+      "data": {
+        "failed_at": "2026-10-01T00:00:03.000000Z",
+        "failure": {
+          "type": "upstream_error_event"
+        },
+        "first_chunk_at": "2026-10-01T00:00:00.400000Z",
+        "partial_response": "dcc2fcd758ddaf8ab1369f9dcbd3aca2c85651ba511d8236884aff3155a93f88"
+      },
+      "type": "failed"
+    },
+    "request": [
+      "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105",
+      "ab53590699a5c1be3be221a436ac3735b3672881b3e0950f04dc0392102a30f2"
+    ]
+  },
+  "media": [],
+  "messages": [
+    {
+      "body": {
+        "data": [
+          {
+            "data": "x-anthropic-billing-header: cc_version=2.1.282.REDACTED; cc_entrypoint=cli;",
+            "type": "text"
+          },
+          {
+            "data": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "type": "text"
+          },
+          {
+            "data": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n<env>\nWorking directory: /workspace\nIs directory a git repo: Yes\nPlatform: linux\n</env>",
+            "type": "text"
+          }
+        ],
+        "type": "system"
+      },
+      "hash": "23e845a2ff628bb360f4a7a6d273d25742f5d72877503f3920181da8dde1a105"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "Explain the build pipeline.",
+            "type": "text"
+          }
+        ],
+        "type": "user"
+      },
+      "hash": "ab53590699a5c1be3be221a436ac3735b3672881b3e0950f04dc0392102a30f2"
+    },
+    {
+      "body": {
+        "data": [
+          {
+            "data": "The build pipeline has three stages:",
+            "type": "text"
+          }
+        ],
+        "type": "assistant"
+      },
+      "hash": "dcc2fcd758ddaf8ab1369f9dcbd3aca2c85651ba511d8236884aff3155a93f88"
+    }
+  ],
+  "warnings": []
+}

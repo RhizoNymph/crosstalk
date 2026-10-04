@@ -18,5 +18,5 @@ unit = "crosstalk_canonical::tests::recorded_transports_normalize_equal"
 property = "crosstalk_canonical::tests::response_message_independent_of_transport"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }
