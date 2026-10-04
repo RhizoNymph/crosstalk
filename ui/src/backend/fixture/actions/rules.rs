@@ -46,10 +46,7 @@ fn validate(world: &World, rule: &UserRule, sinks: &[SinkId]) -> Result<()> {
             retained(world, *version)?;
             let current: TopicModelVersion = world.topics.latest();
             if *version != current {
-                return Err(invalid(
-                    "rule.version",
-                    "watched topics must belong to the current topic version",
-                ));
+                return Err(QueryError::Conflict(ConflictKind::TopicVersionNotCurrent));
             }
             let known = |t| world.topics.topics_of(*version).any(|k| k.id == t);
             if topics.iter().any(|t| !known(*t)) {
@@ -140,10 +137,7 @@ pub fn set_enabled(
         .find(|r| r.id == id)
         .ok_or(QueryError::NotFound)?;
     if matches!(def.status, RuleStatus::Stale(_)) && status == OperatorRuleStatus::Enabled {
-        return Err(invalid(
-            "status",
-            "a stale rule is re-targeted and enabled with UpdateRule",
-        ));
+        return Err(QueryError::Conflict(ConflictKind::RuleStale));
     }
     def.status = match status {
         OperatorRuleStatus::Enabled => RuleStatus::Enabled,

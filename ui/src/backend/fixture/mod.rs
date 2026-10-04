@@ -59,6 +59,8 @@ use store::State;
 use world::World;
 
 pub use world::GenError;
+#[cfg(test)]
+pub use world::ChannelKey;
 
 #[derive(Debug)]
 pub struct FixtureBackend {
@@ -101,6 +103,12 @@ impl FixtureBackend {
     /// The latest fitted topic-model version.
     pub fn current_topic_version(&self) -> TopicModelVersion {
         self.world.topics.latest()
+    }
+
+    /// Named handles into the generated world, for tests.
+    #[cfg(test)]
+    pub fn scenario(&self) -> &world::Scenario {
+        &self.world.scenario
     }
 
     /// Runs a read under the state's read lock.

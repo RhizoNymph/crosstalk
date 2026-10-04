@@ -232,11 +232,11 @@ async fn merge_redirects_and_rejects() {
         b.act(&c, merge(&b, "al0", "cx0")).await.err(),
         conflict(ConflictKind::AgentMerged)
     );
-    // A target that resolves to the source is invalid.
-    assert!(matches!(
-        b.act(&c, merge(&b, "pi2", "al3")).await,
-        Err(QueryError::InvalidInput(_))
-    ));
+    // A target that resolves to the source is a conflict.
+    assert_eq!(
+        b.act(&c, merge(&b, "pi2", "al3")).await.err(),
+        conflict(ConflictKind::MergeIntoSelf)
+    );
     // An operator merge clears the veto on the pair.
     let (omp3, omp1) = (agent(&b, "omp3"), agent(&b, "omp1"));
     assert!(
@@ -497,27 +497,33 @@ async fn rules_are_created_updated_and_disabled() {
     let def = rules.iter().find(|r| r.id == id).expect("rule");
     assert_eq!(def.status, RuleStatus::Enabled);
     assert_eq!(def.rule, RuleKind::User(rule.clone()));
-    // Invalid definitions.
+    // Invalid definitions: an older topic version, an unknown sink.
     let old = watch(&b, 1, super::super::text::Theme::Incidents);
-    for (bad_rule, bad_sinks) in [
-        (old, sinks.clone()),
-        (rule.clone(), vec![crate::contract::SinkId::from_ulid(9)]),
-    ] {
-        let result = b
-            .act(
-                &c,
-                OperatorAction::CreateRule {
-                    name: name.clone(),
-                    rule: bad_rule,
-                    sinks: bad_sinks,
-                },
-            )
-            .await;
-        assert!(
-            matches!(result, Err(QueryError::InvalidInput(_))),
-            "{result:?}"
-        );
-    }
+    let on_old = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: name.clone(),
+                rule: old,
+                sinks: sinks.clone(),
+            },
+        )
+        .await;
+    assert_eq!(on_old.err(), conflict(ConflictKind::TopicVersionNotCurrent));
+    let unknown_sink = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: name.clone(),
+                rule: rule.clone(),
+                sinks: vec![crate::contract::SinkId::from_ulid(9)],
+            },
+        )
+        .await;
+    assert!(
+        matches!(unknown_sink, Err(QueryError::InvalidInput(_))),
+        "{unknown_sink:?}"
+    );
     // Built-ins can only be switched.
     let builtin = rules
         .iter()
@@ -576,7 +582,7 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| matches!(r.status, RuleStatus::Stale(_)))
         .expect("stale")
         .id;
-    assert!(matches!(
+    assert_eq!(
         b.act(
             &c,
             OperatorAction::SetRuleEnabled {
@@ -584,9 +590,10 @@ async fn rules_are_created_updated_and_disabled() {
                 status: OperatorRuleStatus::Enabled
             }
         )
-        .await,
-        Err(QueryError::InvalidInput(_))
-    ));
+        .await
+        .err(),
+        conflict(ConflictKind::RuleStale)
+    );
     let retarget = watch(&b, 2, super::super::text::Theme::CodeReview);
     b.act(
         &c,

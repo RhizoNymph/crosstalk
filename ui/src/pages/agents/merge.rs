@@ -344,4 +344,18 @@ mod tests {
             "the stub backend knows no agent"
         );
     }
+    #[tokio::test]
+    async fn merging_into_an_alias_of_the_source_is_a_conflict() {
+        use crate::testing::agent_id;
+
+        let (source, alias) = (agent_id("pi2").to_ulid(), agent_id("al3").to_ulid());
+        let url = format!("/agents/{source}/merge?{}", state().to_query());
+        let reply = post(&url, &format!("into={alias}")).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert!(
+            reply
+                .body
+                .contains("the merge target resolves to the source agent")
+        );
+    }
 }

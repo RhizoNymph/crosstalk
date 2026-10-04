@@ -9,7 +9,7 @@ use crate::backend::fixture::store::State;
 use crate::contract::MergeId;
 use crate::contract::actions::ActionOutcome;
 use crate::contract::agents::{AgentLabel, AgentState, MergeRecord, MergeVeto};
-use crate::contract::errors::{ConflictKind, InputError, QueryError};
+use crate::contract::errors::{ConflictKind, QueryError};
 
 fn exists(state: &State, id: AgentId) -> Result<()> {
     if state.agents.contains_key(&id) {
@@ -32,10 +32,7 @@ pub fn merge(state: &mut State, by: OperatorId, request: &MergeRequest) -> Resul
         .ok_or(QueryError::Conflict(ConflictKind::AgentMerged))?;
     let into = state.canonical_agent(target);
     if into == source {
-        return Err(QueryError::InvalidInput(InputError::Field {
-            field: "into",
-            reason: "the target is merged into the source".to_owned(),
-        }));
+        return Err(QueryError::Conflict(ConflictKind::MergeIntoSelf));
     }
     let repointed: Vec<AgentId> = state
         .agents
