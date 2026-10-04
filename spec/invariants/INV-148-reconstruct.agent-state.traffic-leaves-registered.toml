@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.agent-state.traffic-leaves-registered"
+statement = "After an exchange is attributed to an agent, that agent's state is not Registered."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Registered means declared in config but never seen. An agent that has sent
+traffic and still reads as Registered would show as unused to operators and
+alert rules while its exchanges flow. Agents discovered from traffic are
+therefore created Provisional, and a Registered agent moves to Provisional
+on its first attributed exchange.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::reconstruct::tests::first_exchange_moves_registered_to_provisional",
+  "crosstalk::reconstruct::tests::discovered_agent_starts_provisional",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

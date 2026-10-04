@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.evidence.harness-claim-never-evidence"
+statement = "No IdentityEvidence variant carries the harness claim (family, version or user agent) of an exchange."
+kind = "representation"
+requires = ["type"]
+rationale = """
+pi and oh-my-pi send Claude Code's User-Agent and `x-app` headers on Claude
+subscription traffic, so the harness family is a claim anyone can make.
+Using it as evidence would let one harness's agents match another's.
+`IdentityEvidence` has no variant that holds a `HarnessClaim` or its fields,
+so the claim cannot enter resolution.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::IdentityEvidence"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

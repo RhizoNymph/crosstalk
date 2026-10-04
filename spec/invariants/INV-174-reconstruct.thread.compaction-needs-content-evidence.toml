@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.thread.compaction-needs-content-evidence"
+statement = "An exchange whose request carries no content evidence of summarizing a stored conversation is never threaded as Compacts, whatever its RequestClass hint."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Request-class headers are client-asserted and off by default, and a harness
+can mislabel a request. A hint alone would let any request cut a
+conversation's lineage and drop carried-over messages from scanning. Hints
+are inputs to the CompactionThreader, weighed with content heuristics such
+as a summary turn or Codex's trailing compaction trigger.
+"""
+
+[evidence]
+unit = [
+  "crosstalk::reconstruct::tests::compaction_hint_without_summary_is_not_compaction",
+  "crosstalk::reconstruct::tests::compaction_hint_with_summary_is_compaction",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
