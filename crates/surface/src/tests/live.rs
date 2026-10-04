@@ -30,7 +30,11 @@ async fn first_two(fixture: &Fixture, resume: Resume) -> (LiveItem, LiveItem) {
     let LiveItem::Event { cursor, .. } = second else {
         panic!("second item {second:?}");
     };
-    assert_eq!(cursor.seq, head.seq + 1, "the event after the resync was appended after its head");
+    assert_eq!(
+        cursor.seq,
+        head.seq + 1,
+        "the event after the resync was appended after its head"
+    );
     (first, second)
 }
 
@@ -64,7 +68,13 @@ async fn unresumable_cursor_gets_resync_first() {
             seq: fixture.feed.head().seq - 1,
             ..fixture.feed.head()
         };
-        assert_eq!(first, LiveItem::Resync { cursor: head, reason });
+        assert_eq!(
+            first,
+            LiveItem::Resync {
+                cursor: head,
+                reason
+            }
+        );
     }
     // Entries older than the retention are gone: a cursor before them
     // resyncs as expired.

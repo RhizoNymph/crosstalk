@@ -83,8 +83,9 @@ impl<S: SurfaceStores> Surface<S> {
                             channel.id, supersession.by
                         ))
                     })?;
-                let into = SupersededInto::of(supersession, &superseding)
-                    .map_err(|error| store(format!("supersession of {:?}: {error:?}", channel.id)))?;
+                let into = SupersededInto::of(supersession, &superseding).map_err(|error| {
+                    store(format!("supersession of {:?}: {error:?}", channel.id))
+                })?;
                 ChannelStanding::Superseded(into)
             }
             None => ChannelStanding::InForce(self.activity(&channel, window, routed).await?),
@@ -210,7 +211,10 @@ impl<S: SurfaceStores> Surface<S> {
 
     /// When the transmission the channel's detection last confirmed was
     /// confirmed; `None` before any confirmation.
-    async fn latest_confirmation(&self, channel: &Channel) -> Result<Option<Timestamp>, QueryError> {
+    async fn latest_confirmation(
+        &self,
+        channel: &Channel,
+    ) -> Result<Option<Timestamp>, QueryError> {
         let last = match channel.origin.traffic() {
             Some(
                 TrafficDetection::Active {
@@ -225,7 +229,11 @@ impl<S: SurfaceStores> Surface<S> {
             }
         };
         let transmission = self.stores.transmissions().transmission(last).await?;
-        Ok(transmission
-            .and_then(|transmission| transmission.state.confirmed().map(|confirmed| confirmed.at())))
+        Ok(transmission.and_then(|transmission| {
+            transmission
+                .state
+                .confirmed()
+                .map(|confirmed| confirmed.at())
+        }))
     }
 }

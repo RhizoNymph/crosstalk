@@ -16,7 +16,9 @@ use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{AlertId, ChannelId};
 use crosstalk_spec::interfaces::l6_analysis::AlertTriage;
 use crosstalk_spec::interfaces::l6_analysis::alerts::AlertReads;
-use crosstalk_spec::interfaces::l8_surface::live::{LiveFeed, LiveItem, LiveStream, Resume, UiEvent};
+use crosstalk_spec::interfaces::l8_surface::live::{
+    LiveFeed, LiveItem, LiveStream, Resume, UiEvent,
+};
 use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ActionOutcome, ConflictKind, OperatorAction, OperatorActions, QueryApi,
 };
@@ -204,9 +206,10 @@ crosstalk_sim::sim_test! {
                         raised_at: minute(30 + step),
                     };
                     let mut store = fixture.world.alerts.clone();
-                    match store.triage(draft).await.map_err(|error| failed("triage", error))? {
-                        crosstalk_spec::aggregates::alert::TriageOutcome::Opened(alert) => alerts.push(alert.id),
-                        _ => {}
+                    if let crosstalk_spec::aggregates::alert::TriageOutcome::Opened(alert) =
+                        store.triage(draft).await.map_err(|error| failed("triage", error))?
+                    {
+                        alerts.push(alert.id);
                     }
                 }
                 1 => {

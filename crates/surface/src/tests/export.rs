@@ -89,7 +89,11 @@ async fn abandoned_export_is_audited() {
     fixture.scene().await;
     fixture.watermark(minute(5)).await;
     let caller = fixture.caller(Who::Viewer).await;
-    let export = match fixture.surface.export(&caller, &accesses(ExportFormat::Jsonl)).await {
+    let export = match fixture
+        .surface
+        .export(&caller, &accesses(ExportFormat::Jsonl))
+        .await
+    {
         Ok(export) => export,
         Err(error) => panic!("export: {error:?}"),
     };
@@ -204,7 +208,11 @@ async fn export_before_the_watermark_is_empty() {
     let fixture = Fixture::new().await;
     fixture.scene().await;
     let viewer = fixture.caller(Who::Viewer).await;
-    let export = match fixture.surface.export(&viewer, &accesses(ExportFormat::Jsonl)).await {
+    let export = match fixture
+        .surface
+        .export(&viewer, &accesses(ExportFormat::Jsonl))
+        .await
+    {
         Ok(export) => export,
         Err(error) => panic!("export: {error:?}"),
     };

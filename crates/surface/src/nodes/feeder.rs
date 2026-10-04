@@ -76,8 +76,12 @@ impl Refresh {
                 | Changed::Projection(_),
             ) => {}
             BusEvent::Ingest(IngestEvent::AgentSeen { agent, .. })
-            | BusEvent::Ingest(IngestEvent::AgentRenamed { agent, .. }) => refresh.agents.push(*agent),
-            BusEvent::Ingest(IngestEvent::ConversationDelta(delta)) => refresh.agents.push(delta.agent),
+            | BusEvent::Ingest(IngestEvent::AgentRenamed { agent, .. }) => {
+                refresh.agents.push(*agent)
+            }
+            BusEvent::Ingest(IngestEvent::ConversationDelta(delta)) => {
+                refresh.agents.push(delta.agent)
+            }
             BusEvent::Ingest(IngestEvent::AgentMerged {
                 from,
                 into,
@@ -242,7 +246,9 @@ where
                     Err(error) => {
                         tracing::warn!(error = %error, event = ?delivery.envelope.id, "node facts not refreshed");
                         let retry = std::time::Duration::from_secs(1);
-                        subscription.nack(delivery.id, retry, error.to_string()).await
+                        subscription
+                            .nack(delivery.id, retry, error.to_string())
+                            .await
                     }
                 };
                 if let Err(error) = settled {
@@ -314,7 +320,10 @@ where
     /// The facts of `channel` when it is in force: its origin, detection
     /// and policy kinds, and its pattern (declared before traffic) or seed
     /// locator with the count of the further resources it holds.
-    async fn channel_facts(&self, channel: &Channel) -> Result<Option<ChannelFacts>, NodeFeedError> {
+    async fn channel_facts(
+        &self,
+        channel: &Channel,
+    ) -> Result<Option<ChannelFacts>, NodeFeedError> {
         let Some(origin) = CanonicalOriginKind::of(&channel.origin) else {
             return Ok(None);
         };
@@ -324,9 +333,15 @@ where
                 history: DeclaredHistory::BeforeTraffic(_),
             } => {
                 let held = self.held_resources(channel.id).await?;
-                summary(channel.id, &pattern_text(&declaration.pattern), u64::try_from(held.len()).unwrap_or(u64::MAX))
+                summary(
+                    channel.id,
+                    &pattern_text(&declaration.pattern),
+                    u64::try_from(held.len()).unwrap_or(u64::MAX),
+                )
             }
-            ChannelOrigin::Declared { .. } | ChannelOrigin::Discovered { .. } | ChannelOrigin::Superseded { .. } => {
+            ChannelOrigin::Declared { .. }
+            | ChannelOrigin::Discovered { .. }
+            | ChannelOrigin::Superseded { .. } => {
                 let held = self.held_resources(channel.id).await?;
                 let seed = channel
                     .origin
@@ -334,7 +349,8 @@ where
                     .and_then(|seed| held.get(&seed.resource).map(locator_text));
                 match seed {
                     Some(text) => {
-                        let further = u64::try_from(held.len().saturating_sub(1)).unwrap_or(u64::MAX);
+                        let further =
+                            u64::try_from(held.len().saturating_sub(1)).unwrap_or(u64::MAX);
                         summary(channel.id, &text, further)
                     }
                     None => id_summary(channel.id),
@@ -355,7 +371,10 @@ where
     async fn held_resources(
         &self,
         channel: ChannelId,
-    ) -> Result<HashMap<crosstalk_spec::ids::ResourceId, crosstalk_spec::derived::flow::resource::Locator>, NodeFeedError> {
+    ) -> Result<
+        HashMap<crosstalk_spec::ids::ResourceId, crosstalk_spec::derived::flow::resource::Locator>,
+        NodeFeedError,
+    > {
         let window = all_time()?;
         let mut request = PageRequest {
             size: largest()?,
@@ -363,7 +382,10 @@ where
         };
         let mut held = HashMap::new();
         loop {
-            let page = self.channels.resource_use(channel, window, &request).await?;
+            let page = self
+                .channels
+                .resource_use(channel, window, &request)
+                .await?;
             let (uses, next) = page.page.into_parts();
             for used in uses {
                 held.insert(used.resource().id, used.resource().locator.clone());

@@ -14,6 +14,7 @@ pub(crate) mod fakes;
 mod live;
 mod nodes;
 mod permissions;
+mod props;
 mod reads;
 pub(crate) mod world;
 

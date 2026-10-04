@@ -40,4 +40,6 @@ pub use stores::{EvidenceRecords, RecordReadError, SurfaceStores};
 #[cfg(test)]
 mod dst;
 #[cfg(test)]
+mod props;
+#[cfg(test)]
 mod tests;

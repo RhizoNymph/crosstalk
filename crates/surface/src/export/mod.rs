@@ -123,11 +123,7 @@ impl<S: SurfaceStores> Surface<S> {
         QueryError,
     > {
         let watermark = self.stores.edges().watermark().await?;
-        let plan = self
-            .stores
-            .export_source()
-            .plan(request, watermark)
-            .await?;
+        let plan = self.stores.export_source().plan(request, watermark).await?;
         self.config
             .export_limits
             .check(plan.rows)

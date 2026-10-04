@@ -69,7 +69,12 @@ impl<S: SurfaceStores> Surface<S> {
                 Ok(ActionOutcome::Applied)
             }
             OperatorAction::RenameAgent { agent, label } => {
-                let changed = self.stores.agents().clone().rename(agent, label, by).await?;
+                let changed = self
+                    .stores
+                    .agents()
+                    .clone()
+                    .rename(agent, label, by)
+                    .await?;
                 Ok(change(changed))
             }
             OperatorAction::PromoteChannel {
@@ -77,7 +82,10 @@ impl<S: SurfaceStores> Surface<S> {
                 pattern,
                 policy,
                 note,
-            } => self.promote(caller, channel, pattern, policy, note, at).await,
+            } => {
+                self.promote(caller, channel, pattern, policy, note, at)
+                    .await
+            }
             OperatorAction::Acknowledge { alert } => {
                 let changed = self
                     .stores

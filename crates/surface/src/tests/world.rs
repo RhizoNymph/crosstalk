@@ -14,8 +14,6 @@ use crosstalk_memory::analysis::projection::{InMemoryProjectionStore, Projection
 use crosstalk_memory::analysis::search::InMemorySearchIndex;
 use crosstalk_memory::flow::{MemoryChannels, MemoryVerdicts};
 use crosstalk_memory::model::build::{test_model, topic as build_topic, topic_id, unit};
-use crosstalk_spec::aggregates::topic::Topic;
-use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycle;
 use crosstalk_memory::reconstruct::MemoryAgents;
 use crosstalk_memory::support::{IdSequence, ManualClock, Outbox, drain};
 use crosstalk_memory::surface::audit::InMemoryAuditLog;
@@ -23,29 +21,36 @@ use crosstalk_memory::surface::operators::InMemoryOperatorStore;
 use crosstalk_memory::surface::sinks::{InMemorySinkRegistry, SinkConfig};
 use crosstalk_memory::topology::env::Env;
 use crosstalk_memory::topology::store::{EdgeStoreConfig, InMemoryEdgeStore};
-use crosstalk_spec::aggregates::alert::{AlertDraft, AlertRuleConfig, AlertSubject, BuiltinRule, TriageOutcome};
+use crosstalk_spec::aggregates::alert::{
+    AlertDraft, AlertRuleConfig, AlertSubject, BuiltinRule, TriageOutcome,
+};
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrid, SeriesStep};
+use crosstalk_spec::aggregates::topic::Topic;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark};
 use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
 use crosstalk_spec::events::BusEvent;
-use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::ClassificationCause;
 use crosstalk_spec::ids::{
     AccessId, AgentId, AlertId, ChannelId, ConfigHash, ExchangeId, MessageHash, OperatorId,
     SeededRandom, SinkId,
 };
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
-use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{AgentLifecycle, AgentOrigin, NewAgent};
+use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
+    AgentLifecycle, AgentOrigin, NewAgent,
+};
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l6_analysis::AlertTriage;
+use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycle;
 use crosstalk_spec::interfaces::l7_topology::{AccessContribution, EdgeContribution, EdgeStore};
-use crosstalk_spec::interfaces::l8_surface::export::{ExportFormat, ExportFormats, ExportLimits, GatewayVersion};
+use crosstalk_spec::interfaces::l8_surface::export::{
+    ExportFormat, ExportFormats, ExportLimits, GatewayVersion,
+};
 use crosstalk_spec::interfaces::l8_surface::live::{FeedEpoch, LiveConfig};
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, OperatorConfig, OperatorName, OperatorStore, RequestIdentity,
@@ -59,7 +64,9 @@ use crosstalk_transport::{BusConfig, DeadLetters, MpscBus};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::interfaces::l8_surface::audit::{AuditBody, AuditEntry, AuditFilter, AuditLog, OperatorRecord};
+use crosstalk_spec::interfaces::l8_surface::audit::{
+    AuditBody, AuditEntry, AuditFilter, AuditLog, OperatorRecord,
+};
 use crosstalk_spec::paging::{AuditList, PageRequest};
 use crosstalk_testkit::build::{ResourceBuilder, TransmissionBuilder, TransmissionParts};
 use crosstalk_testkit::ids::Ids;
@@ -150,7 +157,7 @@ pub struct World {
     pub export: Export,
     pub nodes: NodeCache,
     /// Keeps the dead letters' bus running.
-    pub mpsc: MpscBus,
+    pub _bus: MpscBus,
 }
 
 impl SurfaceStores for World {
@@ -317,7 +324,8 @@ impl Fixture {
         let (outbox, events) = Outbox::channel();
         let clock = ManualClock::at(minute(0));
         let agents = MemoryAgents::new(IdSequence::new(1 << 90), outbox.clone());
-        let channels = MemoryChannels::new(agents.clone(), IdSequence::new(2 << 90), outbox.clone());
+        let channels =
+            MemoryChannels::new(agents.clone(), IdSequence::new(2 << 90), outbox.clone());
         let directory = Directory {
             agents: agents.clone(),
             channels: channels.clone(),
@@ -368,7 +376,9 @@ impl Fixture {
         };
         let edges = InMemoryEdgeStore::new(
             EdgeStoreConfig {
-                bucket_width: BucketWidth::from_micros(NonZeroU64::new(WIDTH).unwrap_or(NonZeroU64::MIN)),
+                bucket_width: BucketWidth::from_micros(
+                    NonZeroU64::new(WIDTH).unwrap_or(NonZeroU64::MIN),
+                ),
                 timing,
             },
             Env {
@@ -380,13 +390,12 @@ impl Fixture {
         );
         let audit = InMemoryAuditLog::new();
         let operators = InMemoryOperatorStore::new(audit.clone(), IdSequence::new(3 << 90));
-        let sink_registry = InMemorySinkRegistry::new(sinks.iter().enumerate().map(|(n, id)| {
-            SinkConfig {
+        let sink_registry =
+            InMemorySinkRegistry::new(sinks.iter().enumerate().map(|(n, id)| SinkConfig {
                 id: *id,
                 kind: SinkKind::Log,
                 name: format!("sink {n}"),
-            }
-        }));
+            }));
         let Ok(mpsc) = MpscBus::start(BusConfig::default()) else {
             panic!("bus");
         };
@@ -415,7 +424,7 @@ impl Fixture {
             evidence: TestEvidence::default(),
             export,
             nodes,
-            mpsc,
+            _bus: mpsc,
         };
         let feed = FeedWriter::spawn(config.live, FeedEpoch(7));
         let surface = Surface::new(
@@ -500,17 +509,6 @@ impl Fixture {
         events
     }
 
-    /// The `Changed` notifications among `published`.
-    pub fn changes(&mut self) -> Vec<Changed> {
-        self.published()
-            .into_iter()
-            .filter_map(|event| match event {
-                BusEvent::Changed(changed) => Some(changed),
-                BusEvent::Ingest(_) | BusEvent::Detect(_) | BusEvent::Insight(_) => None,
-            })
-            .collect()
-    }
-
     // ---- seeding through the spec's write traits -------------------------
 
     /// Create agent `id` from traffic first seen at `at`.
@@ -578,7 +576,10 @@ impl Fixture {
         };
         if let Route::Channel(channel) = transmission.route {
             let mut registry = self.world.channels.clone();
-            if let Err(error) = registry.confirm(channel, transmission.id, confirmed.at()).await {
+            if let Err(error) = registry
+                .confirm(channel, transmission.id, confirmed.at())
+                .await
+            {
                 panic!("confirm {:?}: {error:?}", transmission.id);
             }
         }
@@ -684,7 +685,11 @@ impl Fixture {
         self.record(&t1.read, c1).await;
         self.transmission(&t1.transmission).await;
         let alert = self
-            .alert(BuiltinRule::NewChannel, AlertSubject::Channel(c1), minute(0))
+            .alert(
+                BuiltinRule::NewChannel,
+                AlertSubject::Channel(c1),
+                minute(0),
+            )
             .await;
         Scene {
             a1,
@@ -740,7 +745,12 @@ impl Fixture {
         let mut request: PageRequest<AuditList> = super::page(500);
         let mut entries = Vec::new();
         loop {
-            let page = match self.world.audit.query(&AuditFilter::default(), &request).await {
+            let page = match self
+                .world
+                .audit
+                .query(&AuditFilter::default(), &request)
+                .await
+            {
                 Ok(page) => page,
                 Err(error) => panic!("audit: {error:?}"),
             };

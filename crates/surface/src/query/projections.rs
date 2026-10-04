@@ -28,9 +28,8 @@ impl<S: SurfaceStores> Surface<S> {
     ) -> Result<ProjectionId, QueryError> {
         require(caller, Permission::Content)?;
         let (version, topics) = self.resolve_version(filter.topic_version).await?;
-        let outside = filter.topics_outside(version, |topic| {
-            topics.contains(&topic).then_some(version)
-        });
+        let outside =
+            filter.topics_outside(version, |topic| topics.contains(&topic).then_some(version));
         if !outside.is_empty() {
             return Err(QueryError::Conflict(ConflictKind::TopicsNotInVersion {
                 version,

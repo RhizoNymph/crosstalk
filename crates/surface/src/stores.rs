@@ -74,22 +74,10 @@ pub enum RecordReadError {
 /// wherever it is needed.
 pub trait SurfaceStores: Send + Sync + 'static {
     /// L3: merges, unmerges, renames, alias resolution and the agent reads.
-    type Agents: AgentDirectory
-        + IdentityResolver
-        + AgentReads
-        + Clone
-        + Send
-        + Sync
-        + 'static;
+    type Agents: AgentDirectory + IdentityResolver + AgentReads + Clone + Send + Sync + 'static;
     /// L5's registry: lookups of stored channels, policies, promotion and
     /// resource use.
-    type Channels: ChannelDirectory
-        + ChannelRegistry
-        + ChannelReads
-        + Clone
-        + Send
-        + Sync
-        + 'static;
+    type Channels: ChannelDirectory + ChannelRegistry + ChannelReads + Clone + Send + Sync + 'static;
     /// L5's transmissions and their verdict logs.
     type Transmissions: TransmissionStore + TransmissionVerdicts + Clone + Send + Sync + 'static;
     /// L6's topic catalog.

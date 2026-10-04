@@ -55,9 +55,14 @@ async fn alert_in(fixture: &Fixture, start: Start, n: u128) -> AlertId {
 /// note.
 #[tokio::test]
 async fn alert_action_transition_table() {
-    for (n, start) in [Start::Open, Start::Acknowledged, Start::Resolved, Start::Suppressed]
-        .into_iter()
-        .enumerate()
+    for (n, start) in [
+        Start::Open,
+        Start::Acknowledged,
+        Start::Resolved,
+        Start::Suppressed,
+    ]
+    .into_iter()
+    .enumerate()
     {
         for resolve in [false, true] {
             let fixture = Fixture::new().await;
@@ -86,7 +91,9 @@ async fn alert_action_transition_table() {
                     AlertState::Acknowledged { by, at },
                 ),
                 (Start::Open, true) => (
-                    Err(ActionError::Conflict(ConflictKind::AlertNotAcknowledged { alert })),
+                    Err(ActionError::Conflict(ConflictKind::AlertNotAcknowledged {
+                        alert,
+                    })),
                     before.clone(),
                 ),
                 (Start::Acknowledged, false) => (Ok(ActionOutcome::Unchanged), before.clone()),
@@ -99,7 +106,9 @@ async fn alert_action_transition_table() {
                     },
                 ),
                 (Start::Resolved | Start::Suppressed, _) => (
-                    Err(ActionError::Conflict(ConflictKind::AlertNotActive { alert })),
+                    Err(ActionError::Conflict(ConflictKind::AlertNotActive {
+                        alert,
+                    })),
                     before.clone(),
                 ),
             };

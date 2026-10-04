@@ -49,9 +49,7 @@ use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
-use crosstalk_spec::interfaces::l8_surface::channels::{
-    ChannelName, ChannelRow, PromotionPreview,
-};
+use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest};
@@ -62,9 +60,7 @@ use crosstalk_spec::interfaces::l8_surface::operators::Operator;
 use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::sinks::SinkInfo;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
-use crosstalk_spec::interfaces::l8_surface::{
-    AlertFilter, Caller, Present, QueryApi, QueryError,
-};
+use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Present, QueryApi, QueryError};
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
@@ -362,7 +358,11 @@ impl<S: SurfaceStores> QueryApi for Surface<S> {
         self.projections_query(caller, page).await
     }
 
-    async fn projection(&self, caller: &Caller, id: ProjectionId) -> Result<Projection, QueryError> {
+    async fn projection(
+        &self,
+        caller: &Caller,
+        id: ProjectionId,
+    ) -> Result<Projection, QueryError> {
         self.projection_query(caller, id).await
     }
 

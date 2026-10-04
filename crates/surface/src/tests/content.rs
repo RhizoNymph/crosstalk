@@ -7,7 +7,9 @@ use crosstalk_memory::model::build::test_model;
 use crosstalk_spec::aggregates::edge::TopologyFilter;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::transmission::{Confirmed, Route, Transmission, TransmissionState};
+use crosstalk_spec::derived::flow::transmission::{
+    Confirmed, Route, Transmission, TransmissionState,
+};
 use crosstalk_spec::derived::provenance::span::{Span, SpanState};
 use crosstalk_spec::ids::{ExchangeId, TransmissionId};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
@@ -80,7 +82,11 @@ async fn rows_by_id_follow_the_selection() {
     let mut expected = vec![scene.t1.transmission.id, suspected.id, detected.id];
     expected.sort_by(|a, b| b.cmp(a));
     assert_eq!(listed, expected);
-    assert!(versions.iter().all(|version| *version == TopicModelVersion(0)));
+    assert!(
+        versions
+            .iter()
+            .all(|version| *version == TopicModelVersion(0))
+    );
     let Some(t1) = rows.iter().find(|row| row.id == scene.t1.transmission.id) else {
         panic!("t1");
     };
@@ -246,10 +252,20 @@ async fn search_modes_embed_only_when_needed() {
         let before = fixture.world.embedder.embedded();
         let result = fixture
             .surface
-            .search(&caller, &search(mode, "deploy keys"), None, &filter, &page(5))
+            .search(
+                &caller,
+                &search(mode, "deploy keys"),
+                None,
+                &filter,
+                &page(5),
+            )
             .await;
         assert!(result.is_ok(), "{mode:?}: {result:?}");
-        assert_eq!(fixture.world.embedder.embedded() - before, embeds, "{mode:?}");
+        assert_eq!(
+            fixture.world.embedder.embedded() - before,
+            embeds,
+            "{mode:?}"
+        );
     }
 }
 
@@ -301,7 +317,8 @@ async fn evidence_quotes_both_sides_and_reports_dropped_bodies() {
         Ok(content) => content,
         Err(error) => panic!("{error:?}"),
     };
-    let Ok(confirmed) = Confirmed::new(NonEmpty::new(content), vec![scene.t1.co_access], minute(1)) else {
+    let Ok(confirmed) = Confirmed::new(NonEmpty::new(content), vec![scene.t1.co_access], minute(1))
+    else {
         panic!("confirmed");
     };
     let transmission = Transmission {
@@ -334,7 +351,11 @@ async fn evidence_quotes_both_sides_and_reports_dropped_bodies() {
         *evidence.matches()[0].read(),
         Excerpted::BodyDropped { message: read_hash }
     );
-    let agents: Vec<_> = evidence.accesses().iter().map(|detail| detail.agent()).collect();
+    let agents: Vec<_> = evidence
+        .accesses()
+        .iter()
+        .map(|detail| detail.agent())
+        .collect();
     assert_eq!(agents, [scene.a1, scene.a2]);
 
     // A missing span record is a store fault, reported as `Store`.
@@ -356,7 +377,11 @@ async fn evidence_quotes_both_sides_and_reports_dropped_bodies() {
     assert_eq!(
         fixture
             .surface
-            .transmission_evidence(&caller, TransmissionId::from_ulid(3), ExcerptWindow::DEFAULT)
+            .transmission_evidence(
+                &caller,
+                TransmissionId::from_ulid(3),
+                ExcerptWindow::DEFAULT
+            )
             .await,
         Ok(None)
     );

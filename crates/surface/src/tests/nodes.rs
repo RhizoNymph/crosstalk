@@ -16,7 +16,9 @@ use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, EventBus, RetryPol
 use crosstalk_spec::interfaces::l3_reconstruction::ClaimStore;
 use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
 use crosstalk_spec::interfaces::l7_topology::NodeFacts;
-use crosstalk_spec::interfaces::l8_surface::{ActionRequest, OperatorAction, OperatorActions, QueryApi};
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionRequest, OperatorAction, OperatorActions, QueryApi,
+};
 use crosstalk_spec::observed::agent::AgentLabel;
 use crosstalk_spec::support::Timestamp;
 use crosstalk_testkit::build::ResourceBuilder;
@@ -36,7 +38,13 @@ fn label(text: &str) -> AgentLabel {
 }
 
 /// A second channel on the wiki, and a declared one elsewhere.
-async fn more_channels(fixture: &Fixture, scene: &mut Scene) -> (crosstalk_spec::ids::ChannelId, crosstalk_spec::ids::ChannelId) {
+async fn more_channels(
+    fixture: &Fixture,
+    scene: &mut Scene,
+) -> (
+    crosstalk_spec::ids::ChannelId,
+    crosstalk_spec::ids::ChannelId,
+) {
     let resource = ResourceBuilder::new(&mut scene.ids)
         .url("https", "wiki.example", "/b", None)
         .first_seen(minute(1))
@@ -109,7 +117,10 @@ async fn node_facts_rebuild_from_the_stores() {
     };
     assert_eq!(a1.state, CanonicalStateKind::Provisional);
     assert_eq!(a1.claims.entries().len(), 2, "{:?}", a1.claims);
-    assert_eq!(cache.agent(scene.a2).and_then(|facts| facts.label), Some(label("reader")));
+    assert_eq!(
+        cache.agent(scene.a2).and_then(|facts| facts.label),
+        Some(label("reader"))
+    );
     assert_eq!(cache.agent(scene.a3), None, "a merged agent is no node");
 
     let Some(c1) = cache.channel(scene.c1) else {
@@ -138,7 +149,10 @@ async fn node_facts_follow_events() {
     fixture.relay().await;
     let cache = fixture.world.nodes.clone();
     assert!(cache.agent(scene.a3).is_some());
-    assert_eq!(cache.channel(scene.c1).map(|facts| facts.origin), Some(CanonicalOriginKind::Discovered));
+    assert_eq!(
+        cache.channel(scene.c1).map(|facts| facts.origin),
+        Some(CanonicalOriginKind::Discovered)
+    );
     let admin = fixture.caller(Who::Admin).await;
 
     assert!(
@@ -155,7 +169,10 @@ async fn node_facts_follow_events() {
             .is_ok()
     );
     fixture.relay().await;
-    assert_eq!(cache.agent(scene.a1).and_then(|facts| facts.label), Some(label("writer")));
+    assert_eq!(
+        cache.agent(scene.a1).and_then(|facts| facts.label),
+        Some(label("writer"))
+    );
 
     let merge = match fixture
         .surface
@@ -173,7 +190,13 @@ async fn node_facts_follow_events() {
     };
     fixture.relay().await;
     assert_eq!(cache.agent(scene.a3), None);
-    assert!(fixture.surface.act(&admin, OperatorAction::Unmerge { merge }).await.is_ok());
+    assert!(
+        fixture
+            .surface
+            .act(&admin, OperatorAction::Unmerge { merge })
+            .await
+            .is_ok()
+    );
     fixture.relay().await;
     assert!(cache.agent(scene.a3).is_some());
 
@@ -192,7 +215,10 @@ async fn node_facts_follow_events() {
             .is_ok()
     );
     fixture.relay().await;
-    assert_eq!(cache.channel(scene.c1).map(|facts| facts.policy), Some(PolicyKind::Unsanctioned));
+    assert_eq!(
+        cache.channel(scene.c1).map(|facts| facts.policy),
+        Some(PolicyKind::Unsanctioned)
+    );
 
     assert!(
         fixture
@@ -241,7 +267,12 @@ async fn graphs_describe_nodes_from_the_cache() {
     let window = minutes(0, 10);
     let Ok(graph) = fixture
         .surface
-        .topology(&admin, window, Weighting::Transmissions, &TopologyFilter::default())
+        .topology(
+            &admin,
+            window,
+            Weighting::Transmissions,
+            &TopologyFilter::default(),
+        )
         .await
     else {
         panic!("topology");
@@ -253,13 +284,20 @@ async fn graphs_describe_nodes_from_the_cache() {
     assert_eq!(reader, Some(Some(label("reader"))));
     let Ok(bipartite) = fixture
         .surface
-        .channel_topology(&admin, window, Weighting::Transmissions, &TopologyFilter::default())
+        .channel_topology(
+            &admin,
+            window,
+            Weighting::Transmissions,
+            &TopologyFilter::default(),
+        )
         .await
     else {
         panic!("channel topology");
     };
     let summary = bipartite.value.nodes().iter().find_map(|node| match node {
-        GraphNode::Channel(channel) if channel.id == scene.c1 => Some(channel.locator_summary.as_str().to_owned()),
+        GraphNode::Channel(channel) if channel.id == scene.c1 => {
+            Some(channel.locator_summary.as_str().to_owned())
+        }
         _ => None,
     });
     assert_eq!(summary.as_deref(), Some("https://wiki.example/a"));
@@ -281,14 +319,21 @@ async fn node_facts_consume_the_bus() {
         panic!("retry");
     };
     let subscription = match bus
-        .subscribe(&[Subject::Changed], ConsumerGroup("nodes".to_owned()), retry)
+        .subscribe(
+            &[Subject::Changed],
+            ConsumerGroup("nodes".to_owned()),
+            retry,
+        )
         .await
     {
         Ok(subscription) => subscription,
         Err(error) => panic!("subscribe: {error:?}"),
     };
     let consumer = fixture.node_feeder.clone().consume(subscription);
-    for (n, changed) in [Changed::Agent(scene.a1), Changed::Channel(scene.c1)].into_iter().enumerate() {
+    for (n, changed) in [Changed::Agent(scene.a1), Changed::Channel(scene.c1)]
+        .into_iter()
+        .enumerate()
+    {
         let envelope = Envelope {
             id: EventId::from_ulid(0xE0 + n as u128),
             at: Timestamp::from_micros(1),

@@ -31,7 +31,11 @@ async fn alert_filter_cases() {
     let scene = fixture.scene().await;
     let caller = fixture.caller(Who::Admin).await;
     let other = fixture
-        .alert(BuiltinRule::NewChannel, AlertSubject::Agent(scene.a1), minute(1))
+        .alert(
+            BuiltinRule::NewChannel,
+            AlertSubject::Agent(scene.a1),
+            minute(1),
+        )
         .await;
     let on_transmission = fixture
         .alert(
@@ -52,7 +56,11 @@ async fn alert_filter_cases() {
         let caller = caller.clone();
         async move {
             match surface.alerts(&caller, &filter, &page(100)).await {
-                Ok(page) => page.items().iter().map(|alert| alert.id).collect::<BTreeSet<_>>(),
+                Ok(page) => page
+                    .items()
+                    .iter()
+                    .map(|alert| alert.id)
+                    .collect::<BTreeSet<_>>(),
                 Err(error) => panic!("alerts: {error:?}"),
             }
         }
@@ -107,7 +115,11 @@ async fn alert_filter_resolves_superseded_channels() {
     let c2 = scene.ids.channel();
     fixture.channel(c2, &resource, scene.a2, minute(1)).await;
     let on_c2 = fixture
-        .alert(BuiltinRule::NewChannel, AlertSubject::Channel(c2), minute(1))
+        .alert(
+            BuiltinRule::NewChannel,
+            AlertSubject::Channel(c2),
+            minute(1),
+        )
         .await;
     let caller = fixture.caller(Who::Admin).await;
     let promote = OperatorAction::PromoteChannel {
@@ -126,7 +138,11 @@ async fn alert_filter_resolves_superseded_channels() {
         let caller = caller.clone();
         async move {
             match surface.alerts(&caller, &filter(channel), &page(100)).await {
-                Ok(page) => page.items().iter().map(|alert| alert.id).collect::<BTreeSet<_>>(),
+                Ok(page) => page
+                    .items()
+                    .iter()
+                    .map(|alert| alert.id)
+                    .collect::<BTreeSet<_>>(),
                 Err(error) => panic!("alerts: {error:?}"),
             }
         }
@@ -157,7 +173,10 @@ async fn alert_by_id_matches_the_list() {
     }
     assert!(listed.items().iter().any(|alert| alert.id == scene.alert));
     assert_eq!(
-        fixture.surface.alert(&caller, AlertId::from_ulid(0xABCD)).await,
+        fixture
+            .surface
+            .alert(&caller, AlertId::from_ulid(0xABCD))
+            .await,
         Ok(None)
     );
 }
@@ -184,7 +203,10 @@ async fn alert_rule_is_the_listed_rule() {
             &caller,
             OperatorAction::CreateRule {
                 name,
-                rule: crosstalk_spec::aggregates::alert::UserRule::SemanticQuery { text, threshold },
+                rule: crosstalk_spec::aggregates::alert::UserRule::SemanticQuery {
+                    text,
+                    threshold,
+                },
                 sinks: Vec::new(),
             },
         )
@@ -266,7 +288,10 @@ async fn present_reports_the_default_remap_threshold() {
     let Ok(present) = fixture.surface.present(&caller).await else {
         panic!("present");
     };
-    assert_eq!(present.default_remap_threshold, config().default_remap_threshold);
+    assert_eq!(
+        present.default_remap_threshold,
+        config().default_remap_threshold
+    );
     assert_eq!(present.export_formats, config().export_formats);
 }
 
@@ -417,23 +442,43 @@ async fn agent_rows_are_canonical() {
     else {
         panic!("agents");
     };
-    let ids: Vec<AgentId> = rows.value.items().iter().map(|row| row.profile.id()).collect();
+    let ids: Vec<AgentId> = rows
+        .value
+        .items()
+        .iter()
+        .map(|row| row.profile.id())
+        .collect();
     assert!(ids.contains(&scene.a1));
     assert!(ids.contains(&scene.a2));
     assert!(!ids.contains(&scene.a3));
-    let Some(a1) = rows.value.items().iter().find(|row| row.profile.id() == scene.a1) else {
+    let Some(a1) = rows
+        .value
+        .items()
+        .iter()
+        .find(|row| row.profile.id() == scene.a1)
+    else {
         panic!("a1");
     };
     assert_eq!(a1.profile.aliases(), [scene.a3]);
     assert_eq!(a1.traffic.transmissions_out, 1);
-    let Some(a2) = rows.value.items().iter().find(|row| row.profile.id() == scene.a2) else {
+    let Some(a2) = rows
+        .value
+        .items()
+        .iter()
+        .find(|row| row.profile.id() == scene.a2)
+    else {
         panic!("a2");
     };
     assert_eq!(a2.traffic.transmissions_in, 1);
     // The page carries the watermark the traffic was read under.
     assert_eq!(
         rows.watermark,
-        fixture.world.edges.watermark().await.unwrap_or(rows.watermark)
+        fixture
+            .world
+            .edges
+            .watermark()
+            .await
+            .unwrap_or(rows.watermark)
     );
 }
 
@@ -491,7 +536,11 @@ async fn list_filter_cases() {
         statuses: vec![crosstalk_spec::aggregates::alert::RuleStatus::Disabled],
         stale: None,
     };
-    let Ok(listed) = fixture.surface.alert_rules(&caller, &rules, &page(50)).await else {
+    let Ok(listed) = fixture
+        .surface
+        .alert_rules(&caller, &rules, &page(50))
+        .await
+    else {
         panic!("rules");
     };
     assert_eq!(listed.items().len(), 1);
