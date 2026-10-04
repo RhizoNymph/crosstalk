@@ -86,9 +86,10 @@ pub async fn render(view: impl View, cx: &Cx) -> String {
     view.first().await.expect("view renders").render(cx)
 }
 
-/// A read-only copy of the harness world, for finding the ids of its
-/// scenario entities. Same seed, same ids.
-fn world() -> &'static FixtureBackend {
+/// A copy of the harness world, for finding the ids of its scenario
+/// entities and what the backend says about them. Same seed, same ids.
+/// Never act on it: tests share it.
+pub fn world() -> &'static FixtureBackend {
     static WORLD: OnceLock<FixtureBackend> = OnceLock::new();
     WORLD.get_or_init(|| FixtureBackend::new(SEED))
 }

@@ -7,6 +7,7 @@
 
 pub mod fixture;
 
+use std::collections::HashMap;
 use std::future::Future;
 
 use crosstalk_spec::aggregates::edge::Weighting;
@@ -20,8 +21,8 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelSummary, ResourceUse};
+use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
+use crate::contract::channels::{ChannelListFilter, ChannelName, ChannelSummary, ResourceUse};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -184,6 +185,24 @@ pub trait Backend: Send + Sync + 'static {
         caller: &Caller,
         id: AgentId,
     ) -> impl Future<Output = Result<Option<AgentDetail>>> + Send;
+
+    // Names (item 24). Both need `View`; unknown ids are left out.
+
+    /// Names for many agents at once, keyed by the id asked for. An alias
+    /// is named by its canonical agent.
+    fn agent_names(
+        &self,
+        caller: &Caller,
+        ids: &[AgentId],
+    ) -> impl Future<Output = Result<HashMap<AgentId, AgentName>>> + Send;
+
+    /// Names for many channels at once, keyed by the id asked for. A
+    /// superseded channel is named by the channel in force.
+    fn channel_names(
+        &self,
+        caller: &Caller,
+        ids: &[ChannelId],
+    ) -> impl Future<Output = Result<HashMap<ChannelId, ChannelName>>> + Send;
 
     // Alerts and rules (items 1, 18).
 

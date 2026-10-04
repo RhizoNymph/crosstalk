@@ -22,6 +22,7 @@ mod world;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::edge::Weighting;
@@ -37,8 +38,8 @@ use super::{Backend, Result};
 use crate::contract::alerts::Alert;
 use crate::contract::ProjectionId;
 use crate::contract::actions::{ActionOutcome, OperatorAction};
-use crate::contract::agents::{AgentDetail, AgentSummary};
-use crate::contract::channels::{ChannelListFilter, ChannelSummary, ResourceUse};
+use crate::contract::agents::{AgentDetail, AgentName, AgentSummary};
+use crate::contract::channels::{ChannelListFilter, ChannelName, ChannelSummary, ResourceUse};
 use crate::contract::errors::QueryError;
 use crate::contract::evidence::TransmissionEvidence;
 use crate::contract::graph::{
@@ -294,6 +295,24 @@ impl Backend for FixtureBackend {
     async fn agent(&self, caller: &Caller, id: AgentId) -> Result<Option<AgentDetail>> {
         require(caller, Permission::View)?;
         self.read(|ctx| Ok(queries::lists::agent(ctx, id))).await
+    }
+
+    async fn agent_names(
+        &self,
+        caller: &Caller,
+        ids: &[AgentId],
+    ) -> Result<HashMap<AgentId, AgentName>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::names::agents(ctx, ids))).await
+    }
+
+    async fn channel_names(
+        &self,
+        caller: &Caller,
+        ids: &[ChannelId],
+    ) -> Result<HashMap<ChannelId, ChannelName>> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| Ok(queries::names::channels(ctx, ids))).await
     }
 
     async fn alerts(

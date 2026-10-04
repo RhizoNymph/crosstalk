@@ -7,6 +7,7 @@
 pub mod content;
 pub mod graph;
 pub mod lists;
+pub mod names;
 pub mod page;
 pub mod scope;
 pub mod summaries;

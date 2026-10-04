@@ -482,4 +482,29 @@ mod tests {
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert!(reply.body.contains("not found"));
     }
+
+    #[tokio::test]
+    async fn resources_name_their_agents_from_one_lookup() {
+        use crate::backend::fixture::ChannelKey;
+        use crate::testing::{channel_id, operator, world};
+
+        let wiki = channel_id(ChannelKey::HijackedWiki);
+        let c = operator().caller();
+        let uses = world()
+            .channel_resources(&c, wiki, state().scope.window)
+            .await
+            .expect("resources");
+        let ids: Vec<_> = uses
+            .iter()
+            .flat_map(|u| u.writers.iter().chain(u.readers.iter()).map(|(a, _)| *a))
+            .collect();
+        let names = world().agent_names(&c, &ids).await.expect("names");
+        let label = names
+            .values()
+            .find_map(|n| n.label.clone())
+            .expect("a labelled agent uses the wiki");
+        let reply = get(&format!("/channels/{}?{}", wiki.to_ulid(), state().to_query())).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains(label.as_str()), "{label:?}");
+    }
 }

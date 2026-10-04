@@ -172,6 +172,15 @@ pub struct ClaimSeen {
     pub last_seen: Timestamp,
 }
 
+/// What an agent is called (item 24): its canonical agent and that agent's
+/// label. Asking for an alias names the agent it was merged into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentName {
+    /// The canonical agent.
+    pub id: AgentId,
+    pub label: Option<AgentLabel>,
+}
+
 /// A row in the agents list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSummary {

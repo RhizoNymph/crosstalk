@@ -8,6 +8,8 @@ use crosstalk_spec::ids::{AgentId, ChannelId, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
 use crosstalk_spec::support::Timestamp;
 
+use super::graph::ChannelShape;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OriginKind {
     Declared,
@@ -73,6 +75,15 @@ pub struct Supersession {
     pub into: ChannelId,
     pub by: OperatorId,
     pub at: Timestamp,
+}
+
+/// What a channel is called (item 24): the channel in force (after
+/// supersession) and its pattern or seed locator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelName {
+    /// The channel in force.
+    pub id: ChannelId,
+    pub shape: ChannelShape,
 }
 
 /// A row in the channels list, and the head of the channel page.

@@ -536,3 +536,45 @@ async fn same_seed_same_answers() {
         b.agents(&c, &first(100)).await
     );
 }
+
+#[tokio::test]
+async fn names_resolve_aliases_and_supersession_in_one_call() {
+    use crosstalk_spec::ids::{AgentId, ChannelId};
+
+    use crate::contract::graph::ChannelShape;
+
+    let b = shared();
+    let c = researcher();
+    let (alias, plain) = (agent("al0"), agent("cc1"));
+    let unknown = AgentId::from_ulid(1);
+    let names = b
+        .agent_names(&c, &[alias, plain, unknown])
+        .await
+        .expect("names");
+    assert_eq!(names.len(), 2, "unknown ids are left out");
+    let canonical = b.agent(&c, alias).await.expect("read").expect("agent");
+    assert_eq!(names[&alias].id, canonical.summary.id);
+    assert_ne!(names[&alias].id, alias, "an alias is named by its canonical agent");
+    assert_eq!(names[&alias].label, canonical.summary.label);
+    assert_eq!(names[&plain].id, plain);
+
+    let (old, declared) = (
+        channel(ChannelKey::OldTeamNotes),
+        channel(ChannelKey::TeamNotes),
+    );
+    let names = b
+        .channel_names(&c, &[old, ChannelId::from_ulid(1)])
+        .await
+        .expect("names");
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[&old].id, declared);
+    assert!(matches!(names[&old].shape, ChannelShape::Pattern(_)));
+
+    let nobody = caller(&[]);
+    assert_eq!(
+        b.agent_names(&nobody, &[plain]).await.err(),
+        Some(QueryError::Forbidden {
+            missing: Permission::View
+        })
+    );
+}

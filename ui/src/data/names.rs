@@ -7,7 +7,7 @@ use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 
 use crate::components::short_id;
-use crate::contract::channels::ChannelSummary;
+use crate::contract::channels::{ChannelName, ChannelSummary};
 use crate::contract::graph::{ChannelNode, ChannelShape};
 use crate::url::ulid::UlidId;
 
@@ -53,12 +53,22 @@ fn with_host(host: Option<&Host>, path: &str) -> String {
     }
 }
 
-/// A graph channel node's name.
-pub fn channel_node_name(node: &ChannelNode) -> String {
-    match &node.shape {
+/// A channel's name from its shape: the pattern or the seed locator.
+pub fn shape_name(shape: &ChannelShape) -> String {
+    match shape {
         ChannelShape::Pattern(pattern) => pattern_name(pattern),
         ChannelShape::Seed(locator) => locator_name(locator),
     }
+}
+
+/// A graph channel node's name.
+pub fn channel_node_name(node: &ChannelNode) -> String {
+    shape_name(&node.shape)
+}
+
+/// A batch-looked-up channel's name.
+pub fn channel_name(name: &ChannelName) -> String {
+    shape_name(&name.shape)
 }
 
 /// A channel list row's name: the declared pattern, else the seed resource,
