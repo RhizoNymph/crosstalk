@@ -8,7 +8,7 @@ use crate::aggregates::filter::{FalseDetections, FilterSubject, TopologyFilter};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::{
-    Classification, Confirmed, DiscardReason, Route, Transmission, TransmissionState,
+    Classification, Confirmed, Route, Transmission, TransmissionState,
 };
 use crate::derived::flow::verdict::{
     CurrentVerdict, InvalidVerdictRecord, Judgeable, NotJudgeable, Observed, TransmissionVerdict,
@@ -71,8 +71,8 @@ pub fn every_state() -> Vec<(TransmissionState, bool)> {
         ),
         (
             TransmissionState::Discarded {
+                at: at(9),
                 co_access: NonEmpty::new(co_access()),
-                reason: DiscardReason::Expired { at: at(9) },
             },
             true,
         ),
@@ -144,8 +144,8 @@ fn judgeable_carries_the_detector_evidence() {
     };
     assert_eq!(suspected.judgeable(), Ok(Judgeable::Suspected(&co)));
     let discarded = TransmissionState::Discarded {
+        at: at(9),
         co_access: co.clone(),
-        reason: DiscardReason::Expired { at: at(9) },
     };
     assert_eq!(discarded.judgeable(), Ok(Judgeable::Discarded(&co)));
     let aggregated = TransmissionState::Aggregated {

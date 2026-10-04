@@ -7,7 +7,8 @@ requires = ["unit"]
 rationale = """
 Alerts were valid under the definition that raised them; editing a rule is
 not a decision about them. Disabling is the action that suppresses, so an
-operator who only tunes a threshold does not lose the alerts being worked.
+operator who only tunes a threshold or renames a rule does not lose the
+alerts being worked.
 """
 
 [evidence]

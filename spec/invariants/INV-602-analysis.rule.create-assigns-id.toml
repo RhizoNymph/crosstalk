@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.rule.create-assigns-id"
+statement = "AlertRuleStore::create that returns Ok(id) stored one new enabled, current user rule under id, an id no other rule had and outside the reserved range, with the caller as creator."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The server assigns rule ids, so the client learns the id only from
+ActionOutcome::RuleCreated and navigates to it. A retried create after a
+timeout makes a second rule; the audit log shows both, and the operator can
+disable one.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::rules::new_user_rules_are_enabled_and_current"
+integration = "crosstalk::analysis::tests::pg_create_rule_assigns_fresh_id"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

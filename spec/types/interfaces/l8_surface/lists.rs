@@ -71,7 +71,9 @@ pub struct AlertRuleFilter {
 impl AlertRuleFilter {
     pub fn matches(&self, rule: &AlertRuleDef) -> bool {
         let by_status = self.statuses.is_empty() || self.statuses.contains(&rule.status);
-        let by_staleness = self.stale.is_none_or(|stale| rule.rule.is_stale() == stale);
+        let by_staleness = self
+            .stale
+            .is_none_or(|stale| rule.rule().is_stale() == stale);
         by_status && by_staleness
     }
 }

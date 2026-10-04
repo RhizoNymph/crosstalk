@@ -1,6 +1,8 @@
-use crate::aggregates::alert::{AlertRuleKind, RuleStatus};
+use crate::aggregates::alert::AlertRuleKind;
+use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::{PolicyAuthor, PolicyKind};
 use crate::derived::flow::resource::{Host, ResourcePattern};
+use crate::derived::flow::verdict::Verdict;
 use crate::ids::{
     AccountHash, AlertId, AlertRuleId, AuditId, ConfigHash, EventId, MergeId, SecretVersion,
 };
@@ -38,7 +40,8 @@ fn wiki() -> ResourcePattern {
 
 /// One action of every variant whose arguments need no fixtures beyond ids,
 /// with its kind, required permission and subjects. Rule creation and
-/// update are covered by `tests::surface`; their subject is the rule id.
+/// update are covered by `tests::surface`; an update's subject is the rule
+/// id, and a creation's is the id its outcome carries.
 fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubject>)> {
     let rule = AlertRuleId::from_ulid(4);
     let alert = AlertId::from_ulid(3);
@@ -56,17 +59,19 @@ fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubje
             vec![AuditSubject::Agent(agent(1)), AuditSubject::Agent(agent(2))],
         ),
         (
-            OperatorAction::UnmergeAgent { agent: agent(5) },
-            ActionKind::UnmergeAgent,
+            OperatorAction::Unmerge {
+                merge: MergeId::from_ulid(5),
+            },
+            ActionKind::Unmerge,
             Permission::Govern,
-            vec![AuditSubject::Agent(agent(5))],
+            vec![AuditSubject::Merge(MergeId::from_ulid(5))],
         ),
         (
-            OperatorAction::LabelAgent {
+            OperatorAction::RenameAgent {
                 agent: agent(6),
                 label: Some(AgentLabel::new("planner").expect("valid")),
             },
-            ActionKind::LabelAgent,
+            ActionKind::RenameAgent,
             Permission::Govern,
             vec![AuditSubject::Agent(agent(6))],
         ),
@@ -80,11 +85,11 @@ fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubje
             vec![AuditSubject::Channel(channel(2))],
         ),
         (
-            OperatorAction::SetAlertRuleStatus {
-                rule,
-                status: RuleStatus::Disabled,
+            OperatorAction::SetRuleEnabled {
+                id: rule,
+                enabled: false,
             },
-            ActionKind::SetAlertRuleStatus,
+            ActionKind::SetRuleEnabled,
             Permission::Govern,
             vec![AuditSubject::Rule(rule)],
         ),
@@ -101,11 +106,12 @@ fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubje
             vec![AuditSubject::Alert(alert)],
         ),
         (
-            OperatorAction::DismissTransmission {
+            OperatorAction::SetVerdict {
                 transmission: transmission(8),
+                verdict: Some(Verdict::FalseDetection),
                 note: None,
             },
-            ActionKind::DismissTransmission,
+            ActionKind::SetVerdict,
             Permission::Triage,
             vec![AuditSubject::Transmission(transmission(8))],
         ),
@@ -117,6 +123,14 @@ fn every_action() -> Vec<(OperatorAction, ActionKind, Permission, Vec<AuditSubje
             ActionKind::ReplayDeadLetter,
             Permission::Operate,
             Vec::new(),
+        ),
+        (
+            OperatorAction::PinTopicVersion {
+                version: TopicModelVersion(3),
+            },
+            ActionKind::PinTopicVersion,
+            Permission::Govern,
+            vec![AuditSubject::TopicVersion(TopicModelVersion(3))],
         ),
     ]
 }

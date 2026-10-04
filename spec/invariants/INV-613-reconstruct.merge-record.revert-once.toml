@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.merge-record.revert-once"
+statement = "MergeRecord::revert on a record already reverted returns AlreadyReverted and keeps the first reversal, and IdentityResolver::unmerge on such a record returns MergeAlreadyReverted and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A record describes one merge; reverting it twice could restore agents that
+later decisions moved, or record a second veto under another operator's
+name. The surface reports the repeat as Conflict(MergeAlreadyReverted) so
+the UI can say it was already undone.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::a_record_is_reverted_at_most_once",
+    "crosstalk_spec::tests::agents::a_record_cannot_be_reverted_twice",
+]
+integration = "crosstalk::reconstruct::tests::pg_unmerge_twice_conflicts"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -79,12 +79,13 @@ Overview:
     the operator directory config defines (in trusted mode, the one
     operator with every permission). Operator actions flow back down: policy
     changes and channel promotion to L5, which records every policy
-    decision in the channel's policy history; transmission dismissal
-    through L5's correlator (L6 then suppresses its alert); verdicts on
-    transmissions to L5's verdict log, beside the detector's state, which
-    publishes VerdictSet (L6 suppresses the alerts of a false detection;
-    L6 and L7 views can exclude false detections at query time); agent merges,
-    exact unmerges and display labels to L3; alert rule management and
+    decision in the channel's policy history; verdicts on transmissions to
+    L5's verdict log, beside the detector's state, which publishes
+    VerdictSet (L6 suppresses the alerts of a false detection; L6 and L7
+    views can exclude false detections at query time); agent merges (a log
+    of records), unmerges of one record (with a veto against re-merging)
+    and renames to L3; alert rule management (built-in rules enabled or
+    disabled, user rules created and edited, and their sinks) and
     topic-version pins to L6.
     Every action call is recorded in the audit log with its outcome, and
     so is every change a config load makes.

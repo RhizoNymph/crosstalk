@@ -1,14 +1,15 @@
 [invariant]
 id = "reconstruct.agent-unmerged.lists-restored"
-statement = "The AgentUnmerged published for an unmerge of a names a, the agent a resolved to before the unmerge as was_into, and in restored exactly the agents whose target the unmerge changed."
+statement = "The AgentUnmerged published for a revert of record m names m's id, m.source as agent, the agent m.source resolved to just before as was_into, and in restored exactly the agents whose target the revert changed."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 Readers that cache the merge table apply the event without reading the
-store: a points at itself and every restored agent points at a. A missing
-agent would keep resolving to the old target in that cache; an extra one
-would be split off a cluster it still belongs to.
+store: the agent points at itself and every restored agent points at it. A
+missing agent would keep resolving to the old target in that cache; an
+extra one would be split off a cluster it still belongs to. was_into can
+differ from m.target when a later merge moved the target.
 """
 
 [evidence]

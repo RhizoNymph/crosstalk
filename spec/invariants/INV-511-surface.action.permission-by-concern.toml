@@ -1,19 +1,24 @@
 [invariant]
 id = "surface.action.permission-by-concern"
-statement = "OperatorAction::required_permission returns Govern for SetPolicy, MergeAgents, UnmergeAgent, LabelAgent, PromoteChannel, CreateAlertRule, UpdateAlertRule and SetAlertRuleStatus, Triage for Acknowledge, Resolve and DismissTransmission, and Operate for ReplayDeadLetter."
+statement = "OperatorAction::required_permission returns Govern for SetPolicy, MergeAgents, Unmerge, RenameAgent, PromoteChannel, CreateRule, UpdateRule and SetRuleEnabled, Triage for Acknowledge and Resolve, and Operate for ReplayDeadLetter."
 kind = "domain"
 property = "postcondition"
 requires = ["type", "unit"]
 rationale = """
-Govern covers identity and policy, including what the gateway alerts on;
-Triage covers working alerts, including dismissing the suspected
-transmission an alert is about; Operate covers the pipeline. The match is
-exhaustive, so a new action does not compile until it names a permission.
+Govern covers identity and policy, including what the gateway alerts on and
+where; Triage covers working alerts; Operate covers the pipeline. The match
+is exhaustive, so a new action does not compile until it names a
+permission, and the tests sample every ActionKind.
 """
 
 [evidence]
 type = "crosstalk_spec::interfaces::l8_surface::OperatorAction::required_permission"
-unit = "crosstalk_spec::tests::surface::every_action_names_its_permission"
+unit = [
+    "crosstalk_spec::tests::surface::every_action_names_its_permission",
+    "crosstalk_spec::tests::surface::every_action_names_its_kind",
+    "crosstalk_spec::tests::surface::samples_cover_every_action_kind",
+    "crosstalk_spec::tests::surface::no_action_needs_a_read_permission",
+]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

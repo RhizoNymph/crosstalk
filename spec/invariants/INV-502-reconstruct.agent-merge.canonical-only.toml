@@ -1,0 +1,21 @@
+[invariant]
+id = "reconstruct.agent-merge.canonical-only"
+statement = "IdentityResolver::merge refuses a request whose source or target is merged with AgentMerged naming that agent's canonical agent, and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A record must name the agent every reader resolves to, so that reverting it
+restores a state that existed. Redirecting a merge into an alias to the
+alias's target would record a merge the operator did not ask for and need
+mutable records to undo. The UI shows canonical agents, so this is refused
+only for stale views, which can reload.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::agents::merging_a_merged_agent_is_refused"
+integration = "crosstalk::reconstruct::tests::pg_merge_refuses_merged_agents"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,6 +1,6 @@
 //! Events from analysis (L6), topology (L7) and the surface (L8).
 
-use crate::aggregates::alert::{Alert, AlertRevision};
+use crate::aggregates::alert::{Alert, AlertRevision, AlertRuleDef, RuleRevision};
 use crate::aggregates::edge::EdgeKey;
 use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::transmission::{Classification, Route};
@@ -71,6 +71,14 @@ pub enum InsightEvent {
         alert: Alert,
         revision: AlertRevision,
     },
+    /// A rule was created or changed: by an operator (L8, through
+    /// `AlertRuleStore`), or by L6 when it went stale. `rule` is the rule
+    /// after the change and `revision` its new revision
+    /// ([`RuleRevision::CREATED`] for a new rule).
+    AlertRuleChanged {
+        rule: AlertRuleDef,
+        revision: RuleRevision,
+    },
     /// From the surface: an operator or config changed a channel's policy.
     /// Flow detection applies it; alert triage suppresses alerts on newly
     /// sanctioned channels.
@@ -91,6 +99,7 @@ impl InsightEvent {
             Self::EdgeUpdated(_) => Subject::EdgeUpdated,
             Self::AlertOpened(_) => Subject::AlertOpened,
             Self::AlertChanged { .. } => Subject::AlertChanged,
+            Self::AlertRuleChanged { .. } => Subject::AlertRuleChanged,
             Self::PolicyChanged { .. } => Subject::PolicyChanged,
         }
     }

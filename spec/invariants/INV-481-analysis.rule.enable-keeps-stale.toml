@@ -1,17 +1,21 @@
 [invariant]
 id = "analysis.rule.enable-keeps-stale"
-statement = "AlertRuleStore::set_status(Enabled) on a stale watched-topic rule leaves it stale, so it still produces no drafts until it is updated."
+statement = "AlertRuleDef::set_enabled(true) on a stale rule leaves it stale, so it still produces no drafts until it is updated."
 kind = "domain"
 property = "postcondition"
-requires = ["unit"]
+requires = ["unit", "integration"]
 rationale = """
-A stale rule names topic ids from a superseded fit. Letting enable clear
-staleness would make the rule watch whatever those ids mean now, which is
-exactly what marking it stale prevents.
+A stale rule names topic ids from a superseded fit, or a query embedded
+with a model the embedder no longer uses. Letting enable clear staleness
+would make the rule watch whatever those ids mean now, or compare vectors
+from two models, which is exactly what marking it stale prevents. No
+operator action sets or clears staleness directly.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::enable_keeps_stale_rule_stale"
+unit = "crosstalk_spec::tests::rules::set_enabled_reports_whether_it_changed_and_never_clears_staleness"
+integration = "crosstalk::analysis::tests::pg_enable_keeps_stale_rule_stale"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

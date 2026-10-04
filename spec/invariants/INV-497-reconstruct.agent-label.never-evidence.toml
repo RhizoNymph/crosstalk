@@ -7,8 +7,8 @@ requires = ["property"]
 rationale = """
 Labels are free text chosen for display. If resolution read them, an
 operator naming two agents alike could merge them, and renaming one could
-split traffic. Labels are not an IdentityEvidence variant and live in a
-separate LabelLog, so resolution has no reason to read them; this pins it.
+split traffic. Labels are not an IdentityEvidence variant, so resolution
+has no reason to read them; this pins it.
 """
 
 [evidence]

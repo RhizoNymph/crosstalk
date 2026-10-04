@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::aggregates::alert::{AlertRule, AlertRuleKind};
+use crate::aggregates::alert::{AlertRule, AlertRuleKind, BuiltinRule};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor, TrafficVerdict};
@@ -10,8 +10,7 @@ use crate::derived::flow::channel::{
 use crate::derived::flow::evidence::{CoAccess, InvalidCoAccess};
 use crate::derived::flow::resource::{Host, Locator, ResourcePattern};
 use crate::derived::flow::transmission::{
-    Classification, Confirmed, DiscardReason, Dismissal, MixedMatches, NotSuspected,
-    TransmissionState,
+    Classification, Confirmed, MixedMatches, NotSuspected, TransmissionState,
 };
 use crate::ids::{OperatorId, TransmissionId};
 use crate::observed::message::ToolName;
@@ -260,23 +259,27 @@ fn policy_routes_traffic() {
 #[test]
 fn every_alert_rule_reports_its_kind() {
     let cases = [
-        (AlertRule::NewChannel, AlertRuleKind::NewChannel),
+        (BuiltinRule::NewChannel, AlertRuleKind::NewChannel),
         (
-            AlertRule::UnreviewedTraffic,
+            BuiltinRule::UnreviewedTraffic,
             AlertRuleKind::UnreviewedTraffic,
         ),
         (
-            AlertRule::UnsanctionedTraffic,
+            BuiltinRule::UnsanctionedTraffic,
             AlertRuleKind::UnsanctionedTraffic,
         ),
-        (AlertRule::SanctionedUnused, AlertRuleKind::SanctionedUnused),
         (
-            AlertRule::SuspectedTransmission,
+            BuiltinRule::SanctionedUnused,
+            AlertRuleKind::SanctionedUnused,
+        ),
+        (
+            BuiltinRule::SuspectedTransmission,
             AlertRuleKind::SuspectedTransmission,
         ),
     ];
     for (rule, kind) in cases {
         assert_eq!(rule.kind(), kind);
+        assert_eq!(AlertRule::Builtin(rule).kind(), kind);
     }
 }
 
@@ -375,45 +378,24 @@ fn suspected() -> TransmissionState {
     }
 }
 
-fn dismissal() -> Dismissal {
-    Dismissal {
-        by: OperatorId::from_ulid(7),
-        at: at(9),
-        note: Some("backup job, not an agent".into()),
-    }
-}
-
 #[test]
-fn dismiss_discards_a_suspected_transmission_with_its_co_accesses() {
+fn expire_discards_a_suspected_transmission_with_its_co_accesses() {
     let mut state = suspected();
     let TransmissionState::Suspected { co_access, .. } = suspected() else {
         unreachable!("fixture is suspected")
     };
-    assert_eq!(state.dismiss(dismissal()), Ok(()));
+    assert_eq!(state.expire(at(8)), Ok(()));
     assert_eq!(
         state,
         TransmissionState::Discarded {
+            at: at(8),
             co_access,
-            reason: DiscardReason::Dismissed(dismissal()),
         }
     );
 }
 
 #[test]
-fn expire_discards_a_suspected_transmission_as_expired() {
-    let mut state = suspected();
-    assert_eq!(state.expire(at(8)), Ok(()));
-    assert!(matches!(
-        state,
-        TransmissionState::Discarded {
-            reason: DiscardReason::Expired { at: when },
-            ..
-        } if when == at(8)
-    ));
-}
-
-#[test]
-fn only_suspected_transmissions_can_be_discarded() {
+fn only_suspected_transmissions_expire() {
     let confirmed = Confirmed::new(
         NonEmpty::new(content_match(agent(1), agent(2), 8)),
         Vec::new(),
@@ -451,13 +433,6 @@ fn only_suspected_transmissions_can_be_discarded() {
         discarded,
     ];
     for state in others {
-        let mut dismissed = state.clone();
-        assert_eq!(
-            dismissed.dismiss(dismissal()),
-            Err(NotSuspected),
-            "{state:?}"
-        );
-        assert_eq!(dismissed, state);
         let mut expired = state.clone();
         assert_eq!(expired.expire(at(9)), Err(NotSuspected), "{state:?}");
         assert_eq!(expired, state);

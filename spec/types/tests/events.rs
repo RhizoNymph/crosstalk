@@ -2,7 +2,10 @@ use std::collections::HashSet;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use crate::aggregates::alert::{Alert, AlertRevision, AlertState, AlertSubject};
+use crate::aggregates::alert::{
+    Alert, AlertRevision, AlertRuleDef, AlertState, AlertSubject, BuiltinRule, RuleRevision,
+    RuleStatus,
+};
 use crate::aggregates::edge::{EdgeKey, TopicSlot};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::channel::policy::Policy;
@@ -17,8 +20,8 @@ use crate::events::insight::ClassificationCause;
 use crate::events::insight::InsightEvent;
 use crate::events::{BusEvent, Subject};
 use crate::ids::ConversationId;
-use crate::ids::{AlertId, AlertRuleId, OperatorId};
-use crate::observed::agent::{IdentityEvidence, IdentityScope, MergeAuthor};
+use crate::ids::{AlertId, AlertRuleId, MergeId, OperatorId};
+use crate::observed::agent::{AgentLabel, IdentityEvidence, IdentityScope, MergeAuthor};
 use crate::observed::client::UpstreamId;
 use crate::observed::client::{
     ClientContext, HarnessIds, IngressMode, RequestClass, RouteName, Upstream, UpstreamKind, Vendor,
@@ -122,14 +125,22 @@ fn sample_events() -> Vec<BusEvent> {
             },
         }),
         BusEvent::Ingest(IngestEvent::AgentMerged {
+            merge: MergeId::from_ulid(1),
             from: agent(1),
             into: agent(2),
+            repointed: vec![agent(3)],
             by: MergeAuthor::Resolver,
         }),
         BusEvent::Ingest(IngestEvent::AgentUnmerged {
+            merge: MergeId::from_ulid(1),
             agent: agent(1),
             was_into: agent(2),
             restored: vec![agent(3)],
+            by: OperatorId::from_ulid(1),
+        }),
+        BusEvent::Ingest(IngestEvent::AgentRenamed {
+            agent: agent(2),
+            label: Some(AgentLabel::new("planner").expect("valid label")),
             by: OperatorId::from_ulid(1),
         }),
         BusEvent::Detect(DetectEvent::SpanOriginated {
@@ -178,11 +189,6 @@ fn sample_events() -> Vec<BusEvent> {
             channel: channel(1),
             co_access: NonEmpty::new(co_access()),
         }),
-        BusEvent::Detect(DetectEvent::TransmissionDismissed {
-            transmission: transmission(2),
-            by: OperatorId::from_ulid(1),
-            at: at(9),
-        }),
         BusEvent::Detect(DetectEvent::VerdictSet {
             transmission: transmission(2),
             verdict: Some(Verdict::FalseDetection),
@@ -228,6 +234,10 @@ fn sample_events() -> Vec<BusEvent> {
             },
             revision: AlertRevision::OPENED.next().expect("2 fits"),
         }),
+        BusEvent::Insight(InsightEvent::AlertRuleChanged {
+            rule: AlertRuleDef::builtin(BuiltinRule::NewChannel, RuleStatus::Disabled, Vec::new()),
+            revision: RuleRevision::CREATED.next().expect("2 fits"),
+        }),
         BusEvent::Insight(InsightEvent::PolicyChanged {
             channel: channel(1),
             policy: Policy::Unreviewed(None),
@@ -254,6 +264,7 @@ fn subjects_name_their_variant() {
             Subject::AgentSeen,
             Subject::AgentMerged,
             Subject::AgentUnmerged,
+            Subject::AgentRenamed,
             Subject::SpanOriginated,
             Subject::SpanRelayed,
             Subject::AccessRecorded,
@@ -263,7 +274,6 @@ fn subjects_name_their_variant() {
             Subject::DeclaredChannelUnused,
             Subject::TransmissionConfirmed,
             Subject::TransmissionSuspected,
-            Subject::TransmissionDismissed,
             Subject::VerdictSet,
             Subject::TransmissionClassified,
             Subject::TopicVersionReady,
@@ -273,6 +283,7 @@ fn subjects_name_their_variant() {
             Subject::EdgeUpdated,
             Subject::AlertOpened,
             Subject::AlertChanged,
+            Subject::AlertRuleChanged,
             Subject::PolicyChanged,
             Subject::Changed,
         ]
@@ -289,6 +300,7 @@ fn every_subject() -> Vec<Subject> {
             | Subject::AgentSeen
             | Subject::AgentMerged
             | Subject::AgentUnmerged
+            | Subject::AgentRenamed
             | Subject::SpanOriginated
             | Subject::SpanRelayed
             | Subject::ContentMatched
@@ -298,7 +310,6 @@ fn every_subject() -> Vec<Subject> {
             | Subject::DeclaredChannelUnused
             | Subject::TransmissionConfirmed
             | Subject::TransmissionSuspected
-            | Subject::TransmissionDismissed
             | Subject::VerdictSet
             | Subject::TransmissionClassified
             | Subject::TopicVersionReady
@@ -308,6 +319,7 @@ fn every_subject() -> Vec<Subject> {
             | Subject::EdgeUpdated
             | Subject::AlertOpened
             | Subject::AlertChanged
+            | Subject::AlertRuleChanged
             | Subject::PolicyChanged
             | Subject::Changed => subject,
         }
@@ -318,6 +330,7 @@ fn every_subject() -> Vec<Subject> {
         Subject::AgentSeen,
         Subject::AgentMerged,
         Subject::AgentUnmerged,
+        Subject::AgentRenamed,
         Subject::SpanOriginated,
         Subject::SpanRelayed,
         Subject::ContentMatched,
@@ -327,7 +340,6 @@ fn every_subject() -> Vec<Subject> {
         Subject::DeclaredChannelUnused,
         Subject::TransmissionConfirmed,
         Subject::TransmissionSuspected,
-        Subject::TransmissionDismissed,
         Subject::VerdictSet,
         Subject::TransmissionClassified,
         Subject::TopicVersionReady,
@@ -337,6 +349,7 @@ fn every_subject() -> Vec<Subject> {
         Subject::EdgeUpdated,
         Subject::AlertOpened,
         Subject::AlertChanged,
+        Subject::AlertRuleChanged,
         Subject::PolicyChanged,
         Subject::Changed,
     ]

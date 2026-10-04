@@ -53,14 +53,6 @@ pub enum DetectEvent {
         channel: ChannelId,
         co_access: NonEmpty<CoAccess>,
     },
-    /// An operator dismissed a suspected transmission; it is now
-    /// `Discarded` with reason `Dismissed`. Alert triage suppresses its
-    /// `SuspectedTransmission` alerts.
-    TransmissionDismissed {
-        transmission: TransmissionId,
-        by: OperatorId,
-        at: Timestamp,
-    },
     /// An operator's verdict on a transmission was appended to its
     /// `VerdictLog` at `revision` (`verdict` is `None` for a withdrawal).
     /// Published once per appended record by L5's verdict store, in the
@@ -91,7 +83,6 @@ impl DetectEvent {
             Self::DeclaredChannelUnused { .. } => Subject::DeclaredChannelUnused,
             Self::TransmissionConfirmed { .. } => Subject::TransmissionConfirmed,
             Self::TransmissionSuspected { .. } => Subject::TransmissionSuspected,
-            Self::TransmissionDismissed { .. } => Subject::TransmissionDismissed,
             Self::VerdictSet { .. } => Subject::VerdictSet,
         }
     }

@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent-rename.applies-label"
+statement = "Agent::rename on an active agent sets its label to the requested one and returns Applied, or returns Unchanged when the label already matches."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Rename both sets and clears (None), and an Unchanged result lets the
+surface report a repeated request as ActionOutcome::Unchanged and the audit
+log record it as such.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::agents::rename_sets_clears_and_reports_no_change"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

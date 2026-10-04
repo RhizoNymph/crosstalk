@@ -21,6 +21,7 @@ mod projection;
 mod provenance;
 mod quality;
 mod retention;
+mod rules;
 mod series;
 mod support;
 mod surface;

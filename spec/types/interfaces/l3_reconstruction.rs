@@ -12,9 +12,11 @@
 //! - `AgentDirectory`: the merge table. Every reader of stored agent ids
 //!   resolves them through it.
 //!
-//! Operators reach L3 through the surface: merges, exact unmerges and
-//! display labels. An unmerge changes only the merge table, so graphs and
-//! edges split again on their next read.
+//! Operators reach L3 through the surface: merges, unmerges of one merge
+//! record, and renames. A merge or unmerge changes only the merge table, so
+//! graphs and edges join or split again on their next read. The merge log,
+//! its revert procedure and merge vetoes are in
+//! [`crate::observed::agent::merge`].
 //!
 //! After every committed change to a stored agent (creation, a registered
 //! agent from config, a state change, a merge, an unmerge, a label), L3
@@ -51,13 +53,15 @@
 //! not its canonical agent; readers resolve through `AgentDirectory`.
 
 use crate::events::ingest::ConversationDelta;
-use crate::ids::{AgentId, ConversationId, OperatorId};
+use crate::ids::{AgentId, ConversationId, MergeId, OperatorId};
 #[cfg(doc)]
-use crate::observed::agent::Merged;
-use crate::observed::agent::{IdentityEvidence, LabelChange, MergeRequest};
+use crate::observed::agent::Agent;
+use crate::observed::agent::{
+    AgentLabel, IdentityEvidence, MergeRecord, MergeRequest, MergeVeto, Reversal,
+};
 use crate::observed::exchange::{Exchange, ExchangeMeta};
 use crate::observed::message::Message;
-use crate::support::NonEmpty;
+use crate::support::{Change, NonEmpty, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -76,35 +80,64 @@ pub enum Resolution {
     },
 }
 
+/// Alias resolution. Every reader of stored agent ids resolves them here.
+///
+/// Implementations that cache the merge table must apply each
+/// `AgentMerged` (the source and every agent in `repointed` resolve to
+/// `into`) and `AgentUnmerged` (the agent resolves to itself and every agent
+/// in `restored` to it) before serving a read that follows the event, or
+/// drop the cache. A cache that misses an unmerge keeps showing the agents
+/// as one.
 pub trait AgentDirectory {
     /// The agent `id` resolves to after merges: itself unless merged.
     fn canonical(&self, id: AgentId) -> AgentId;
 }
 
 pub trait IdentityResolver {
-    /// Apply a merge and publish one `AgentMerged`. Repoints agents already
-    /// merged into the source ([`Merged::repoint`]), so no merge chain is
-    /// ever longer than one, and records on the source's [`Merged`] its
-    /// prior state and the agents it repointed. A merge into a merged agent
-    /// is redirected to that agent's target, recorded as a merge into it
-    /// followed by a repoint, and listed in its `repointed`.
-    async fn merge(&mut self, request: MergeRequest) -> Result<(), ResolveError>;
-
-    /// Undo `agent`'s merge exactly, as operator `by`. The agent returns to
-    /// [`Merged::prior`], and every agent in its [`Merged::repointed`] that
-    /// was repointed away from it points at it again
-    /// ([`Merged::restore_through`]). Publishes one `AgentUnmerged` listing
-    /// those agents. Stored records are untouched; readers see the split on
-    /// their next `AgentDirectory::canonical` call.
+    /// Apply a merge at `at` and publish one `AgentMerged`, following the
+    /// procedure in [`crate::observed::agent::merge`]. Returns the record.
     ///
-    /// `NotMerged` when `agent` is not merged, so a repeated unmerge changes
-    /// nothing and publishes nothing.
-    async fn unmerge(&mut self, agent: AgentId, by: OperatorId) -> Result<(), ResolveError>;
+    /// Refuses, changing nothing and publishing nothing: an unknown agent
+    /// (`UnknownAgent`); a source or target that is merged (`AgentMerged`,
+    /// naming its canonical agent); and a `MergeAuthor::Resolver` request
+    /// between clusters that a [`MergeVeto`] separates (`Vetoed`). A
+    /// `MergeAuthor::Operator` request between such clusters goes ahead and
+    /// deletes every veto that separated them, in the same transaction.
+    async fn merge(
+        &mut self,
+        request: MergeRequest,
+        at: Timestamp,
+    ) -> Result<MergeRecord, ResolveError>;
 
-    /// Record `change` in the label log of `agent`'s canonical agent. A
-    /// merged agent's labels never change. Labels are never identity
-    /// evidence: `resolve` does not read them.
-    async fn set_label(&mut self, agent: AgentId, change: LabelChange) -> Result<(), ResolveError>;
+    /// Revert merge record `merge` exactly, as operator `by` at `at`: its
+    /// source returns to its prior state, the agents it repointed and that
+    /// nothing has moved since point at the source again, and a
+    /// [`MergeVeto`] between its source and target is recorded. Publishes
+    /// one `AgentUnmerged` listing the restored agents. Stored records are
+    /// untouched; readers see the split on their next
+    /// `AgentDirectory::canonical` call.
+    ///
+    /// `UnknownMerge` for an id with no record, and `MergeAlreadyReverted`
+    /// for a record already reverted, changing nothing and publishing
+    /// nothing.
+    async fn unmerge(
+        &mut self,
+        merge: MergeId,
+        by: OperatorId,
+        at: Timestamp,
+    ) -> Result<Reversal, ResolveError>;
+
+    /// Set or clear the label of `agent` ([`Agent::rename`]) and publish one
+    /// `AgentRenamed` when it changed. `AgentMerged` for a merged agent,
+    /// which keeps its label; the rename is not redirected to the canonical
+    /// agent. Labels are never identity evidence: `resolve` does not read
+    /// them.
+    async fn rename(
+        &mut self,
+        agent: AgentId,
+        label: Option<AgentLabel>,
+        by: OperatorId,
+    ) -> Result<Change, ResolveError>;
 
     async fn resolve(
         &mut self,
@@ -161,10 +194,15 @@ pub enum ResolveError {
         reason: String,
     },
     UnknownAgent(AgentId),
-    /// An unmerge of an agent that is not merged.
-    NotMerged(AgentId),
-    /// A label change older than the canonical agent's last one.
-    LabelOutOfOrder(AgentId),
+    UnknownMerge(MergeId),
+    /// A merge naming, or a rename of, a merged agent.
+    AgentMerged {
+        agent: AgentId,
+        into: AgentId,
+    },
+    MergeAlreadyReverted(MergeId),
+    /// A resolver merge between clusters an operator kept apart.
+    Vetoed(MergeVeto),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

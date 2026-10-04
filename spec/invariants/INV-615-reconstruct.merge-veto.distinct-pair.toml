@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.merge-veto.distinct-pair"
+statement = "Every MergeVeto names two different agents with the lower id first."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A veto of an agent against itself would block nothing and could only come
+from a bug. Storing the pair in order makes (a, b) and (b, a) the same row,
+so a unique index can hold one veto per pair. MergeVeto has private fields
+and is built only through MergeVeto::new and MergeVeto::of, whose record
+cannot name one agent twice.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::MergeVeto::new"
+unit = "crosstalk_spec::tests::agents::veto_rejects_a_self_pair_and_orders_its_pair"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
