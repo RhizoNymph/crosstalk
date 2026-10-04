@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.agent-traffic.ordered-keys"
+statement = "EdgeStore::agent_traffic returns its per-agent traffic in a BTreeMap keyed by AgentId, so its entries, and the keys of its JSON object, are in ascending id order, which is ascending ULID text order."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A HashMap's iteration order is random, so its JSON has no fixed form:
+the same answer encodes differently from run to run, and a golden of more
+than one entry would be flaky. Ascending ULID text is the same order as
+ascending id because the text is fixed-length Crockford base32, whose
+alphabet is in ASCII order; so the encoded object is sorted as text too.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l7_topology::EdgeStore::agent_traffic"
+unit = ["crosstalk_spec::tests::wire::agents::agent_traffic_golden"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

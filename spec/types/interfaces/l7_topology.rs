@@ -72,7 +72,7 @@
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use crate::aggregates::access::{AccessEdge, BipartiteGraph};
@@ -241,11 +241,14 @@ pub trait EdgeStore {
     /// graph, and zero when it has no node there. Unknown agents count
     /// zero. The watermark is read before the buckets, as for `graph`.
     /// Fails like `graph` (`UnalignedWindow`, the active version's errors).
+    ///
+    /// A `BTreeMap`, so the map has one order: ascending id, which is also
+    /// ascending ULID text, the order its keys take when it is encoded.
     async fn agent_traffic(
         &self,
         window: TimeWindow,
         agents: &[AgentId],
-    ) -> Result<Watermarked<HashMap<AgentId, AgentTraffic>>, EdgeQueryError>;
+    ) -> Result<Watermarked<BTreeMap<AgentId, AgentTraffic>>, EdgeQueryError>;
 
     /// The width of every bucket in this store. Graph windows and series
     /// grids must be aligned to it.

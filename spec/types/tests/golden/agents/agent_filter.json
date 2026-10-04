@@ -1,0 +1,14 @@
+{
+  "states": [
+    "provisional",
+    "established"
+  ],
+  "claimed": [
+    "claude_code",
+    "codex"
+  ],
+  "text": "plan",
+  "parents": [
+    "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4"
+  ]
+}

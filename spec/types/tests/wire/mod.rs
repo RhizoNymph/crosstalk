@@ -8,7 +8,9 @@
 
 pub mod harness;
 
+mod agents;
 mod alerts;
+mod bus;
 mod errors;
 mod flow;
 mod ids;
@@ -18,6 +20,7 @@ mod provenance;
 mod requests;
 mod support;
 mod time;
+mod topology;
 
 use std::path::Path;
 

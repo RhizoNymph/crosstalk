@@ -29,7 +29,7 @@ use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
-use crate::aggregates::edge::{WeightedEdge, Weighting};
+use crate::aggregates::edge::{TopologyGraph, WeightedEdge, Weighting, share_is, stat_total};
 use crate::aggregates::node::{GraphNode, InvalidNodes, check_nodes};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::access::AccessKind;
@@ -132,8 +132,9 @@ impl From<BipartiteGraph> for BipartiteParts {
 }
 
 impl BipartiteGraph {
-    /// How far a share may sit from its exact ratio (float error).
-    pub const SHARE_TOLERANCE: f64 = 1e-9;
+    /// How far a share may sit from its exact ratio (float error): the
+    /// same as the agent-centred graph's.
+    pub const SHARE_TOLERANCE: f64 = TopologyGraph::SHARE_TOLERANCE;
 
     pub fn new(parts: BipartiteParts) -> Result<Self, InvalidBipartite> {
         let mut edges = HashSet::new();
@@ -151,21 +152,21 @@ impl BipartiteGraph {
                 return Err(InvalidBipartite::DuplicateAccess { index });
             }
         }
-        let access_total = total(parts.accesses.iter().map(|access| access.accesses));
+        let access_total = stat_total(parts.accesses.iter().map(|access| access.accesses));
         for (index, access) in parts.accesses.iter().enumerate() {
             if !share_is(access.share, access.accesses, access_total) {
                 return Err(InvalidBipartite::AccessShare { index });
             }
         }
         let weighting = parts.weighting;
-        let stat_total = total(
+        let transmission_total = stat_total(
             parts
                 .transmissions
                 .iter()
                 .map(|edge| weighting.stat(edge.stats)),
         );
         for (index, edge) in parts.transmissions.iter().enumerate() {
-            if !share_is(edge.share, weighting.stat(edge.stats), stat_total) {
+            if !share_is(edge.share, weighting.stat(edge.stats), transmission_total) {
                 return Err(InvalidBipartite::TransmissionShare { index });
             }
         }
@@ -216,18 +217,6 @@ impl BipartiteGraph {
     pub fn into_parts(self) -> BipartiteParts {
         self.parts
     }
-}
-
-fn total(values: impl Iterator<Item = NonZeroU64>) -> u64 {
-    values.fold(0, |sum, value| sum.saturating_add(value.get()))
-}
-
-/// Whether `share` is `value / total`. Precision loss in the casts is
-/// within the tolerance for any realistic count.
-#[allow(clippy::cast_precision_loss)]
-fn share_is(share: Share, value: NonZeroU64, total: u64) -> bool {
-    let exact = value.get() as f64 / total as f64;
-    (share.get() - exact).abs() <= BipartiteGraph::SHARE_TOLERANCE
 }
 
 /// How often one canonical agent read or wrote a resource in a window.

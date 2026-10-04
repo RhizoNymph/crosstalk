@@ -13,12 +13,20 @@ use serde::{Deserialize, Serialize};
 use crate::events::{Envelope, Subject};
 use crate::ids::{EventId, MessageHash};
 use crate::paging::{DeadLetterList, Page, PageRequest};
+use crate::wire::WireRequest;
 
 /// Consumers in the same group share deliveries: each event goes to one of
 /// them. Different groups each get every event. On the wire, the name.
+///
+/// A request: `QueryApi::dead_letters` takes the group whose dead letters
+/// to list from the client. Any name decodes; a name no consumer uses lists
+/// no letters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ConsumerGroup(pub String);
+
+/// A client names the group whose dead letters it lists.
+impl WireRequest for ConsumerGroup {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeliveryId(pub u64);
@@ -118,7 +126,9 @@ impl RetryPolicy {
 
 /// A delivery that exhausted its retries. Kept for an operator to inspect
 /// and replay; never redelivered on its own. A response
-/// (`QueryApi::dead_letters`), never a request: it holds an [`Envelope`].
+/// (`QueryApi::dead_letters`), never a request: it holds an [`Envelope`],
+/// which the publishing node stamped. On the wire, `{"group": "flow",
+/// "envelope": {..}, "attempts": 5, "last_error": ".."}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DeadLetter {

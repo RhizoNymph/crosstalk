@@ -11,11 +11,12 @@
 //! [`EdgeSelector`] (see `EdgeStore::transmissions`), so a click on an edge
 //! drills down to exactly what it counts.
 
+use std::collections::HashSet;
 use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
-use crate::aggregates::node::GraphNode;
+use crate::aggregates::node::{GraphNode, InvalidNodes};
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::transmission::Route;
 use crate::ids::{AgentId, TopicId, TransmissionId};
@@ -183,8 +184,15 @@ pub struct WeightedEdge {
 /// each, with counts that agree with `edges` ([`TopologyGraph::check_nodes`],
 /// [`crate::aggregates::node`]). It holds no channel nodes; the
 /// channel-centred view does.
+///
+/// [`TopologyGraph::check`] states all of these rules; `EdgeStore::graph`
+/// returns only graphs that pass it. The fields are public, so code can
+/// build a graph that fails it (tests do, to exercise one rule at a time),
+/// but JSON cannot: on the wire it is its fields, and decoding refuses a
+/// graph that fails [`TopologyGraph::check`] (through the private mirror
+/// `RawTopologyGraph`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", try_from = "RawTopologyGraph")]
 pub struct TopologyGraph {
     pub window: TimeWindow,
     pub weighting: Weighting,
@@ -192,6 +200,99 @@ pub struct TopologyGraph {
     pub topic_version: TopicModelVersion,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<WeightedEdge>,
+}
+
+/// [`TopologyGraph`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTopologyGraph {
+    window: TimeWindow,
+    weighting: Weighting,
+    topic_version: TopicModelVersion,
+    nodes: Vec<GraphNode>,
+    edges: Vec<WeightedEdge>,
+}
+
+impl TryFrom<RawTopologyGraph> for TopologyGraph {
+    type Error = Rejected<InvalidGraph>;
+
+    fn try_from(raw: RawTopologyGraph) -> Result<Self, Self::Error> {
+        let graph = Self {
+            window: raw.window,
+            weighting: raw.weighting,
+            topic_version: raw.topic_version,
+            nodes: raw.nodes,
+            edges: raw.edges,
+        };
+        match graph.check() {
+            Ok(()) => Ok(graph),
+            Err(error) => Err(Rejected::new("topology graph", error)),
+        }
+    }
+}
+
+/// Why a [`TopologyGraph`] breaks its rules. Checks run in the order of the
+/// variants and the first failure is returned; `index` is the edge's
+/// position in `edges`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidGraph {
+    /// An edge from an agent to itself.
+    SelfEdge {
+        index: usize,
+    },
+    /// A second edge with the same (from, to, route).
+    DuplicateEdge {
+        index: usize,
+    },
+    /// A share other than the edge's stat under the weighting over the
+    /// total of that stat.
+    Share {
+        index: usize,
+    },
+    Nodes(InvalidNodes),
+}
+
+impl TopologyGraph {
+    /// How far a share may sit from its exact ratio (float error).
+    pub const SHARE_TOLERANCE: f64 = 1e-9;
+
+    /// Whether the graph keeps every rule of the type: no self-edge, no
+    /// (from, to, route) twice, each share its stat under `weighting` over
+    /// the total of that stat (so the shares sum to 1 unless there are no
+    /// edges), and nodes as [`TopologyGraph::check_nodes`] requires.
+    pub fn check(&self) -> Result<(), InvalidGraph> {
+        let mut seen = HashSet::new();
+        for (index, edge) in self.edges.iter().enumerate() {
+            if edge.from == edge.to {
+                return Err(InvalidGraph::SelfEdge { index });
+            }
+            if !seen.insert((edge.from, edge.to, &edge.route)) {
+                return Err(InvalidGraph::DuplicateEdge { index });
+            }
+        }
+        let weighting = self.weighting;
+        let total = stat_total(self.edges.iter().map(|edge| weighting.stat(edge.stats)));
+        for (index, edge) in self.edges.iter().enumerate() {
+            if !share_is(edge.share, weighting.stat(edge.stats), total) {
+                return Err(InvalidGraph::Share { index });
+            }
+        }
+        self.check_nodes().map_err(InvalidGraph::Nodes)
+    }
+}
+
+/// The sum of some non-zero stats, saturating.
+pub(crate) fn stat_total(values: impl Iterator<Item = NonZeroU64>) -> u64 {
+    values.fold(0, |sum, value| sum.saturating_add(value.get()))
+}
+
+/// Whether `share` is `value / total`, within
+/// [`TopologyGraph::SHARE_TOLERANCE`]. Precision loss in the casts is within
+/// the tolerance for any realistic count.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn share_is(share: Share, value: NonZeroU64, total: u64) -> bool {
+    let exact = value.get() as f64 / total as f64;
+    (share.get() - exact).abs() <= TopologyGraph::SHARE_TOLERANCE
 }
 
 /// What a [`TopologyGraph`] counts in total, without its nodes, edges or
