@@ -10,9 +10,11 @@
 //! keep their per-version data, and [`watermark`] when an edge bucket is
 //! final. Graph responses describe their agents and channels with
 //! [`node::GraphNode`]s; the channel-centred view adds access edges
-//! ([`access`]).
+//! ([`access`]). The agents list and an agent's page read [`agents`]: one
+//! row per canonical agent, with its traffic counted as its graph node's.
 
 pub mod access;
+pub mod agents;
 pub mod alert;
 pub mod edge;
 pub mod filter;

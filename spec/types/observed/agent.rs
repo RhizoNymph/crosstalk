@@ -55,7 +55,8 @@ mod claims;
 
 pub use claims::{ClaimSet, DuplicateClaim, SeenClaim};
 pub use merge::{
-    AlreadyReverted, InvalidMergeTransition, MergeRecord, MergeVeto, MergedInto, Reversal,
+    AlreadyReverted, InvalidMergeTransition, MergeConflict, MergeRecord, MergeVeto, MergedInto,
+    Reversal,
 };
 
 /// An operator's display label for an agent: trimmed, non-empty, at most 64
@@ -234,7 +235,9 @@ pub enum MergeAuthor {
 }
 
 /// A request to merge `from` into `into`. Built only through
-/// [`MergeRequest::new`], which rejects a self-merge.
+/// [`MergeRequest::new`], which rejects a self-merge. Two different ids of
+/// one cluster pass here and are refused by the merge table
+/// ([`MergeRequest::conflict`], `MergeConflict::IntoSelf`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeRequest {
     from: AgentId,

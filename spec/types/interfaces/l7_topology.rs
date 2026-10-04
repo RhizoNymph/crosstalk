@@ -72,9 +72,11 @@
 //! Implementations: `TimescaleEdgeStore` (continuous aggregates),
 //! `InMemoryEdgeStore` (tests).
 
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 
 use crate::aggregates::access::{AccessEdge, BipartiteGraph};
+use crate::aggregates::agents::AgentTraffic;
 use crate::aggregates::edge::{
     EdgeKey, EdgeSelector, EdgeTransmissionPage, TopologyFilter, TopologyGraph, Weighting,
 };
@@ -213,6 +215,21 @@ pub trait EdgeStore {
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
     ) -> Result<Watermarked<EdgeTransmissionPage>, EdgeQueryError>;
+
+    /// The traffic of each listed agent's canonical agent in `window`,
+    /// keyed by the id listed: for canonical agent `a`, the sums of the
+    /// transmissions of the edges into and out of `a` that `graph` returns
+    /// for the same window and `TopologyFilter::default()` (active version,
+    /// every route and topic, false detections included, self-edges after
+    /// resolving merges dropped), so they equal `a`'s node counts in that
+    /// graph, and zero when it has no node there. Unknown agents count
+    /// zero. The watermark is read before the buckets, as for `graph`.
+    /// Fails like `graph` (`UnalignedWindow`, the active version's errors).
+    async fn agent_traffic(
+        &self,
+        window: TimeWindow,
+        agents: &[AgentId],
+    ) -> Result<Watermarked<HashMap<AgentId, AgentTraffic>>, EdgeQueryError>;
 
     /// The width of every bucket in this store. Graph windows and series
     /// grids must be aligned to it.

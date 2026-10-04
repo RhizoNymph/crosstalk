@@ -59,7 +59,11 @@ The types follow data through the stack:
    applies `MergeRequest`s, and the `AgentDirectory` resolves merged ids.
    Merges are a log (`observed::agent::merge`): each merge appends an
    immutable `MergeRecord { id, from, into, by, at, repointed }` and returns
-   it. Both agents must be canonical; the source becomes
+   it. `MergeRequest::conflict` refuses it first: two different ids that
+   already resolve to one canonical agent are `MergeIntoSelf` (whatever
+   else holds), and otherwise a merged source or target is `AgentMerged`;
+   a request naming one id twice cannot be built (`SelfMerge`). Both agents
+   must be canonical; the source becomes
    `AgentState::Merged(MergedInto)` holding the record's id and its prior
    `ActiveAgentState` (Registered, Provisional or Established), and every
    agent merged into the source is repointed to the target and listed in
@@ -85,6 +89,12 @@ The types follow data through the stack:
    kept, so redelivery and reordering change nothing). `ClaimStore::claims`
    reads a canonical agent's claims as `ClaimSet::union` over every agent
    resolving to it, so merges and unmerges change no stored claim.
+   `ActivityStore::record` keeps, the same way, the latest exchange start
+   per attributed agent, and `last_seen` reads the latest over a canonical
+   agent's cluster. `AgentReads` (`l3_reconstruction/agents.rs`) serves the
+   surface's agent reads from one snapshot: `list` (canonical agents an
+   `AgentFilter` admits, as `AgentProfile`s), `cluster` (an
+   `AgentCluster`, following a merged id) and `names` (an `IdBatch`).
    The `Threader` resolves `Continuation::Increment` exchanges through the
    stored response chain and gives a `ThreadOutcome` holding a
    `ConversationDelta` (new inputs, new system prompt, output), which is
@@ -212,7 +222,9 @@ The types follow data through the stack:
    `Watermarked`. `EdgeStore::apply_access` counts each `AccessRecorded`
    into an `AccessEdge` bucket (agent, channel, op, bucket), idempotent on
    the access id, and `EdgeStore::channel_topology` answers the
-   channel-centred graph. Every query resolves stored agents and
+   channel-centred graph. `EdgeStore::agent_traffic` gives listed agents'
+   transmissions in and out over a window, equal to their node counts in
+   `graph` under the default filter (for agent rows). Every query resolves stored agents and
    channels through the two directories and fills graph nodes from the
    agent store, the claim store and the channel registry. Reads (graph,
    channel topology, series, drill-down, watermark) fail with
@@ -232,13 +244,13 @@ The types follow data through the stack:
 | --- | --- | --- |
 | `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run | crate `crosstalk-spec` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
-| `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
+| `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `AuditId`, `MergeId`, `ProjectionId`, `SinkId`, `ConfigHash`, `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash`; every entity id's `ulid_text` (Crockford base32) |
 | `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `DisplayText` (checked), `Change`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share`, `Watermark` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
 | `spec/types/observed/agent.rs` | Agent identity and labels | `Agent` (`rename`), `AgentLabel`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `ActiveAgentState`, `MergeRequest`, `MergeAuthor` |
-| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
+| `spec/types/observed/agent/merge.rs` | The merge log, exact unmerge and vetoes | `MergeConflict`, `MergeRequest::conflict`, `MergeRecord` (checked, `revert`), `Reversal`, `MergedInto`, `Agent::merge_away`, `Agent::repoint`, `Agent::revert`, `Agent::restore`, `MergeVeto` (checked, `separates`) |
 | `spec/types/observed/agent/claims.rs` | Harness claims seen per agent | `SeenClaim`, `ClaimSet` (checked; `observe`, `union`), `DuplicateClaim` |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
@@ -259,7 +271,7 @@ The types follow data through the stack:
 | `spec/types/aggregates/alert.rs` | Alert rules and alerts | `BuiltinRule`, `UserRule`, `RuleDefinition`, `RuleName`, `AlertRuleConfig`, `SemanticQuery`, `TopicWatch`, `QueryWatch`, `StaleReason`, `ContentRule`, `AlertRule`, `AlertRuleKind`, `AlertRuleDef` (checked; `evaluates`, `set_enabled`, `update`, `remap`, `embedding_model_changed`), `AlertRuleSet`, `RuleStatus`, `RuleRevision`, `AlertDraft`, `TriageOutcome` (incl. `OperatorRejected`), `Alert`, `AlertState`, `SuppressReason` (incl. `OperatorRejected`), `AlertRevision` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent` (including `AgentMerged`, `AgentUnmerged`, `AgentRenamed`), `ConversationDelta`, `DetectEvent` (including `VerdictSet`), `InsightEvent` (including `AlertChanged`, `AlertRuleChanged`, `TopicVersionActivated`, `TopicVersionDropped`, `WatermarkAdvanced`) |
-| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `channel_topology`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
+| `spec/types/interfaces/l0_ingress.rs` … `l7_topology.rs` | One module per pipeline layer | the traits listed in the data flow above, and their error enums: `IdentityResolver::merge`, `unmerge` and `rename`, `AgentDirectory`, `ClaimStore`, `ResolveError` (with `MergeIntoSelf`, `of_conflict`), and in `l3_reconstruction/agents.rs` `AgentReads`, `ActivityStore`, `AgentReadError` (L3); `ChannelDirectory`, `ChannelRegistry::set_policy`, `policy_history`, `promote` (`Promoted`, `PromoteError`) and `resource_use` (L5); `AlertTriage::transmission_judged`, `TopicCatalog` (with `pin`, `unpin`, `enforce_retention`, paged `topics`), `SearchIndex` (paged), `ProjectionStore`, `ProjectionSource`, `LayoutFitter`, `Sample`, `SearchError`, `ProjectionStoreError`, `ProjectionJobError`, `AlertRuleStore`, `RuleError` (L6); `EdgeStore::judge`, `apply_access` (`AccessContribution`), `channel_topology`, `agent_traffic`, `series`, `transmissions`, `drop_version`, `watermark`, `advance_watermark`, `FrontierSource`, `EdgeError` (writes) and `EdgeQueryError` (reads) (L7). L8 is in [query_surface.md](query_surface.md) |
 | `spec/types/tests/` | Invariant tests: `observed.rs`, `infrastructure.rs`, `agents.rs` (a reference merge table and a seeded random walk over merges and reverts), `provenance.rs`, `flow.rs`, `policy.rs`, `rules.rs` (built-in and user rules), `aggregates.rs`, `series.rs`, `topic_history.rs`, `support.rs`; the surface's tests are listed in [query_surface.md](query_surface.md) | — |
 | `spec/invariants/` | One TOML file per invariant, with its evidence (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
@@ -297,7 +309,8 @@ The types follow data through the stack:
   does. Rotating credentials and prompt fingerprints never establish an
   agent alone.
 - Merges are aliases resolved at read time; a merge request is never a
-  self-merge.
+  self-merge, and a merge of two ids of one cluster is refused as
+  `MergeIntoSelf` before any other merge refusal.
 - Merges are a log of immutable records; both agents of a merge are
   canonical, so chains are never longer than one. An agent is merged by
   exactly one unreverted record, the one that names it as source.

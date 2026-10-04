@@ -67,6 +67,17 @@ pub enum ConflictKind {
     AgentMerged { agent: AgentId, into: AgentId },
     /// Reverting a merge that was already reverted.
     MergeAlreadyReverted { merge: MergeId },
+    /// Merging two different agents that already resolve to one canonical
+    /// agent, `canonical`: one is merged into the other, or both into
+    /// `canonical`. Checked before `AgentMerged`, since naming the canonical
+    /// agent instead would still merge it into itself. The same request
+    /// with one id twice is `InvalidInput(SelfMerge)` and never reaches the
+    /// merge table.
+    MergeIntoSelf {
+        from: AgentId,
+        into: AgentId,
+        canonical: AgentId,
+    },
     /// Acting on a channel that has been superseded by another.
     ChannelSuperseded { channel: ChannelId, by: ChannelId },
     /// Promoting a channel that is not a discovered channel.
@@ -131,6 +142,13 @@ pub enum InputError {
     /// Text the embedding model cannot embed because it is longer than the
     /// model's context: a search's text, or a semantic rule's query.
     QueryTooLong,
+    /// A merge naming one agent as both source and target
+    /// (`MergeRequest::new` refuses it): invalid whatever the merge table
+    /// holds.
+    SelfMerge,
+    /// A batch lookup naming more distinct ids than it takes
+    /// (`IdBatch::MAX`).
+    TooManyIds { max: usize, got: usize },
 }
 
 impl From<ActionError> for QueryError {

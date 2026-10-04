@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.agent-merge.canonical-only"
-statement = "IdentityResolver::merge refuses a request whose source or target is merged with AgentMerged naming that agent's canonical agent, and changes nothing."
+statement = "IdentityResolver::merge refuses a request whose source and target resolve to different canonical agents and whose source or target is merged with AgentMerged naming that agent's canonical agent (the source's when both are merged), and changes nothing."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]
@@ -9,11 +9,17 @@ A record must name the agent every reader resolves to, so that reverting it
 restores a state that existed. Redirecting a merge into an alias to the
 alias's target would record a merge the operator did not ask for and need
 mutable records to undo. The UI shows canonical agents, so this is refused
-only for stale views, which can reload.
+only for stale views, which can reload. Two agents of one cluster are
+refused with MergeIntoSelf instead
+(reconstruct.agent-merge.into-self-refused): naming the canonical agent
+would not help them.
 """
 
 [evidence]
-unit = "crosstalk_spec::tests::agents::merging_a_merged_agent_is_refused"
+unit = [
+    "crosstalk_spec::tests::agents::merging_a_merged_agent_is_refused",
+    "crosstalk_spec::tests::agent_reads::merging_a_merged_agent_of_another_cluster_names_it",
+]
 integration = "crosstalk::reconstruct::tests::pg_merge_refuses_merged_agents"
 
 [evidence-review]

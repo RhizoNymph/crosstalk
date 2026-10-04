@@ -25,8 +25,31 @@ macro_rules! entity_id {
             pub const fn as_ulid(self) -> u128 {
                 self.0
             }
+
+            /// The id as ULID text: 26 upper-case characters of Crockford
+            /// base32, most significant first. The form ids take in URLs,
+            /// and the form an agent filter's text is matched against.
+            pub fn ulid_text(self) -> String {
+                ulid_text(self.0)
+            }
         }
     )*};
+}
+
+/// Crockford's base32 alphabet: digits and upper-case letters without I, L,
+/// O and U.
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// 128 bits as 26 base32 digits: the first carries the top 3 bits, each
+/// later one 5.
+fn ulid_text(raw: u128) -> String {
+    (0..26u32)
+        .rev()
+        .map(|digit| {
+            let index = (raw >> (5 * digit)) & 0x1f;
+            char::from(CROCKFORD[index as usize])
+        })
+        .collect()
 }
 
 macro_rules! content_id {

@@ -4,9 +4,17 @@
 //! is written, except that an unmerge marks it reverted ([`MergeRecord::revert`]).
 //!
 //! **Merging `from` into `into`** (`IdentityResolver::merge`):
-//! 1. Both agents are canonical (not `Merged`), so the record names the
-//!    target every reader resolves to and no chain is ever longer than one.
-//!    A request naming a merged agent is refused.
+//! 1. [`MergeRequest::conflict`] holds no conflict. The two agents resolve
+//!    to different canonical agents: two different ids of one cluster (one
+//!    merged into the other, or both into a third) are refused as
+//!    [`MergeConflict::IntoSelf`], since merging a cluster into itself has
+//!    no meaning whichever ids name it. Then both agents are canonical (not
+//!    `Merged`), so the record names the target every reader resolves to
+//!    and no chain is ever longer than one: a request naming a merged agent
+//!    is refused as [`MergeConflict::Merged`]. A request naming one id
+//!    twice cannot be built at all ([`MergeRequest::new`] returns
+//!    `SelfMerge`); `IntoSelf` is the same refusal once aliases are
+//!    resolved, which needs the merge table.
 //! 2. `from` becomes [`AgentState::Merged`] with its active state as
 //!    `prior` ([`Agent::merge_away`]).
 //! 3. Every agent merged into `from` is repointed to `into`
@@ -39,6 +47,44 @@ use crate::ids::{AgentId, MergeId, OperatorId};
 use crate::support::Timestamp;
 
 use super::{ActiveAgentState, Agent, AgentState, MergeAuthor, MergeRequest, SelfMerge};
+
+/// Why the merge table refuses a [`MergeRequest`], whoever asked for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeConflict {
+    /// The request's two agents already resolve to `canonical`: one is
+    /// merged into the other, or both into `canonical`.
+    IntoSelf { canonical: AgentId },
+    /// `agent`, named by the request, is merged into `into`; the request
+    /// should name `into`. Only returned when the two agents resolve to
+    /// different canonical agents.
+    Merged { agent: AgentId, into: AgentId },
+}
+
+impl MergeRequest {
+    /// Whether the merge table refuses this request, given the current
+    /// states of its source and target: [`MergeConflict::IntoSelf`] when
+    /// both resolve to one canonical agent, else
+    /// [`MergeConflict::Merged`] for a merged source, then a merged target;
+    /// `None` when both are canonical. Vetoes are checked after this, and
+    /// only for resolver merges.
+    pub fn conflict(&self, source: &AgentState, target: &AgentState) -> Option<MergeConflict> {
+        let from = source.merged_into().unwrap_or(self.from);
+        let into = target.merged_into().unwrap_or(self.into);
+        if from == into {
+            return Some(MergeConflict::IntoSelf { canonical: from });
+        }
+        if let Some(canonical) = source.merged_into() {
+            return Some(MergeConflict::Merged {
+                agent: self.from,
+                into: canonical,
+            });
+        }
+        target.merged_into().map(|canonical| MergeConflict::Merged {
+            agent: self.into,
+            into: canonical,
+        })
+    }
+}
 
 /// One merge: `from` (read with [`MergeRecord::source`]) merged into `into`
 /// ([`MergeRecord::target`]). Built only through [`MergeRecord::new`];

@@ -15,7 +15,8 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, MergeId, ProjectionId, SinkId), BLAKE3 content ids (incl. ConfigHash)
+├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000), TooManyIds: batch lookups such as agent names
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, MergeId, ProjectionId, SinkId; ulid_text), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), Change, Timestamp, TimeWindow, ByteRange, Similarity, Share, Watermark
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList)
 ├── observed/              facts from the wire
@@ -25,7 +26,7 @@ spec/types/
 │   ├── agent.rs           Agent (rename), AgentLabel, IdentityEvidence, IdentityScope, AgentState, ActiveAgentState, MergeRequest
 │   ├── agent/
 │   │   ├── claims.rs      SeenClaim, ClaimSet (checked; observe, union over aliases)
-│   │   └── merge.rs       MergeRecord (checked), MergedInto, Reversal, MergeVeto (checked): the merge log and exact unmerge
+│   │   └── merge.rs       MergeRecord (checked), MergedInto, Reversal, MergeVeto (checked), MergeConflict (MergeRequest::conflict): the merge log and exact unmerge
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
@@ -46,6 +47,9 @@ spec/types/
 │           └── policy.rs  Policy, PolicyKind (re-exported by L8), PolicyDecision, PolicyHistory (checked), TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── access.rs          AccessEdge, WeightedAccess, BipartiteGraph (checked), ResourceUse (checked), ResourceUsePage
+│   ├── agents/
+│   │   ├── mod.rs         AgentProfile (checked), AgentTraffic, AgentRow, AgentCluster (checked), AgentLookup, AgentDetail, AgentName: canonical agent rows and details
+│   │   └── filter.rs      AgentFilter (matches, text_matches), AgentText
 │   ├── alert.rs           BuiltinRule, UserRule, RuleDefinition, TopicWatch, QueryWatch, StaleReason, AlertRuleDef (checked), AlertRuleSet, RuleRevision, AlertSubject (resolved), AlertDraft, TriageOutcome, Alert, AlertRevision
 │   ├── edge.rs            EdgeKey (checked), EdgeSelector (checked), TopicSlot, EdgeStats, TopologyGraph (with nodes), EdgeTransmissionPage
 │   ├── filter.rs          TopologyFilter (shared by every linked view): FilterSubject, admits, AccessSubject, admits_access, TopicVersionSelector (resolve), VersionUnavailable
@@ -69,19 +73,21 @@ spec/types/
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore (list, replay), BlobStore
-│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename), AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
+│   ├── l3_reconstruction/
+│   │   └── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelDirectory, ChannelRegistry (policy history, promote with supersession, resource use), Correlator
 │   ├── l5_flow/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog (pins, retention), SearchIndex, ProjectionStore, ProjectionSource, LayoutFitter, AlertRuleEval, AlertTriage, AlertRuleStore
-│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
-│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi, OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
+│   ├── l7_topology.rs     EdgeStore (graph, channel topology, access buckets, agent traffic, series, edge drill-down, judge, drop_version, watermark), FrontierSource, EdgeError (writes), EdgeQueryError (reads)
+│   ├── l8_surface.rs      Caller (built only by the directory), Permission, PermissionSet, QueryApi (incl. agents, agent, agent_names), OperatorActions, AlertFilter, AlertSink, SinkInfo; re-exports the action and error types
 │   └── l8_surface/
-│       ├── actions.rs     OperatorAction (kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
-│       ├── errors.rs      QueryError, ActionError, ConflictKind, InputError
+│       ├── actions.rs     OperatorAction (merge_agents, kind, required_permission, subjects), ActionKind, ActionOutcome (subjects), SupersededChannels
+│       ├── errors.rs      QueryError, ActionError, ConflictKind (incl. MergeIntoSelf), InputError (incl. SelfMerge, TooManyIds)
 │       ├── query_errors.rs the From impls: each store error to one QueryError or ActionError
-│       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, SearchRequest, TopicPage
+│       ├── lists.rs       ChannelFilter, AgentFilter (re-exported), AlertRuleFilter, SearchRequest, TopicPage
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveCursor, FeedWindow (checked), LiveConfig (checked)
 │       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), AuditOutcome, ConfigChange, AuditSubject, AuditFilter
 │       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
@@ -161,6 +167,11 @@ Code Assist) and self-hosted vLLM or SGLang. See
 - **Harness claims are aggregated for display.** L3 keeps the distinct
   claims seen per attributed agent; a canonical agent shows the union over
   its aliases. Claims are never identity evidence.
+- **Agent rows are canonical.** The agents list shows canonical agents
+  only, with claims and last-seen times unioned over their aliases and
+  transmission counts over the query's window, equal to their graph node
+  counts; an agent's detail follows a merged id to its canonical agent and
+  says so. A merge of two ids of one cluster is `MergeIntoSelf`.
 - **Labels are display only.** An agent label is never identity evidence,
   and only an active agent can be renamed.
 - **Verdicts sit beside detection.** An operator's `Genuine` or

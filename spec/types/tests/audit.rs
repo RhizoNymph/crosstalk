@@ -544,6 +544,7 @@ fn every_conflict() -> Vec<ConflictKind> {
             ConflictKind::AlertNotActive { .. }
             | ConflictKind::AgentMerged { .. }
             | ConflictKind::MergeAlreadyReverted { .. }
+            | ConflictKind::MergeIntoSelf { .. }
             | ConflictKind::ChannelSuperseded { .. }
             | ConflictKind::ChannelNotDiscovered { .. }
             | ConflictKind::PatternOverlaps { .. }
@@ -572,6 +573,11 @@ fn every_conflict() -> Vec<ConflictKind> {
         },
         ConflictKind::MergeAlreadyReverted {
             merge: MergeId::from_ulid(3),
+        },
+        ConflictKind::MergeIntoSelf {
+            from: agent(1),
+            into: agent(3),
+            canonical: agent(2),
         },
         ConflictKind::ChannelSuperseded {
             channel: channel(2),
@@ -625,7 +631,9 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::PatternMissesSeed
             | InputError::UnknownTopics
             | InputError::UnknownSink { .. }
-            | InputError::QueryTooLong => input,
+            | InputError::QueryTooLong
+            | InputError::SelfMerge
+            | InputError::TooManyIds { .. } => input,
         }
     }
     [
@@ -637,6 +645,11 @@ fn every_input_error() -> Vec<InputError> {
             sink: SinkId::from_ulid(1),
         },
         InputError::QueryTooLong,
+        InputError::SelfMerge,
+        InputError::TooManyIds {
+            max: 1000,
+            got: 1001,
+        },
     ]
     .into_iter()
     .map(declared)

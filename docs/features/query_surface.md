@@ -16,7 +16,9 @@ that produces the data is in [type_spec.md](type_spec.md).
   one `TopologyFilter` and one resolved topic-model version (topology, the
   channel-centred topology, series, search, edge drill-down, projection
   fits), the topic history, stored projections and their columnar frame,
-  verdict logs and detection quality, and every aggregate's watermark.
+  verdict logs and detection quality, every aggregate's watermark, and the
+  agent read models (canonical agent rows, one agent's detail following
+  merges, batch agent names).
 - Typed errors: `QueryError` and `ActionError`, and how every store error
   behind a query or an action maps to one.
 - Operator actions, each with one required permission: channel policy and
@@ -65,7 +67,8 @@ anything, and returns `Forbidden { missing }` without effect when the
 caller lacks it. View is structure: ids, counts, times, similarities, the
 topology (agent-centred and channel-centred, with node metadata and
 harness claims), series, edge drill-down rows, channels and their
-resources, policy histories, agents, rules, alerts, the topic history,
+resources, policy histories, agents (rows, details and names), rules,
+alerts, the topic history,
 verdict logs and detection quality; no message text and no topic labels.
 Content is anything derived from message text: transmissions, search,
 topics, projections and their jobs. Govern is identity, policy, rules and
@@ -87,7 +90,7 @@ match every variant with no wildcard arm.
 | Action | Permission | Effect | Success | Audit subjects |
 | --- | --- | --- | --- | --- |
 | `SetPolicy { channel, policy, note }` | Govern | publishes `PolicyChanged` (L5 records it); a superseded channel is refused first | `Applied` | the channel |
-| `MergeAgents(MergeRequest)` | Govern | `IdentityResolver::merge` (L3) | `Merged(MergeId)` | both agents, then the merge |
+| `MergeAgents(MergeRequest)` (built by `OperatorAction::merge_agents`) | Govern | `IdentityResolver::merge` (L3) | `Merged(MergeId)` | both agents, then the merge |
 | `Unmerge { merge }` | Govern | `IdentityResolver::unmerge` (L3) | `Applied` | the merge |
 | `RenameAgent { agent, label }` | Govern | `IdentityResolver::rename` (L3) | `Applied` / `Unchanged` | the agent |
 | `PromoteChannel { channel, pattern, policy, note }` | Govern | `ChannelRegistry::promote` with a `Promotion` (L5) | `ChannelPromoted { channel, superseded }` | the channel and every channel it superseded |
@@ -133,7 +136,7 @@ query that reads it (`events/changed.rs` has the full table):
 
 | `Changed` | Published by, after | `UiEvent` | Re-query |
 | --- | --- | --- | --- |
-| `Agent(AgentId)` | L3: creation, state change, merge (source, target, repointed agents), unmerge (source, former target, restored agents), rename | `AgentChanged` | `agents` |
+| `Agent(AgentId)` | L3: creation (and the new agent's canonical parent), state change, merge (source, target, repointed agents), unmerge (source, former target, restored agents), for a merge or unmerge also the agents whose stored parent is one of those and the source's canonical parent, rename; not activity (claims, last seen) | `AgentChanged` | `agents`, `agent`, `agent_names` |
 | `Channel(ChannelId)` | L5: discovery, declaration, new resource, detection change, recorded policy decision; a promotion announces the promoted channel and every channel it superseded (`Changed::promotion`) | `ChannelChanged` | `channel`, `policy_history`, `channel_resources` |
 | `Verdict(TransmissionId)` | L5 verdict store: a verdict set or withdrawn | `VerdictChanged` | `verdicts`, `detection_quality`, views excluding false detections |
 | `Alert(AlertId)` | L6 triage (open, deduplicate, suppress), L8 acknowledge and resolve | `AlertChanged` | `alerts` |
@@ -187,9 +190,89 @@ version history, topic sizes, a lineage, a graph, a series) are not paged.
 A page with a next cursor is never empty, so following cursors always ends.
 List filters (`ChannelFilter`, `AgentFilter`, `AlertRuleFilter`, in
 `l8_surface/lists.rs`, and `AuditFilter`) are defined by their `matches`
-methods; empty lists do not restrict. `AlertRuleFilter` selects on the
+methods; empty lists do not restrict. `AgentFilter` is defined in
+`aggregates/agents/filter.rs`, because L3 applies it, and re-exported
+from `lists.rs` (see Agents). `AlertRuleFilter` selects on the
 operator-set `RuleStatus` and, separately, on staleness, so a stale-rule
 list includes disabled stale rules.
+
+### Agents
+
+The agents list, an agent's page and the names shown beside every row
+(`aggregates/agents/`). L3 supplies identity through `AgentReads`
+(`l3_reconstruction/agents.rs`), one snapshot per call; L7 supplies traffic
+through `EdgeStore::agent_traffic`; the surface joins them.
+
+- **Rows are canonical agents.** `QueryApi::agents(caller, filter, window,
+  page)` (View) returns a `Watermarked` page of `AgentRow { profile,
+  traffic }`, newest agent first (`AgentList`, keyed by `AgentId`). An
+  `AgentProfile` (checked) holds the id, the canonical agent's label, its
+  `ActiveAgentState`, its canonical parent (never itself or an alias), its
+  aliases (every agent resolving to it, ascending), the `ClaimSet::union`
+  of its and its aliases' harness claims with their last-seen times, and
+  `last_seen`, the latest exchange start of any of them (`None` only for a
+  registered agent never seen). A merged agent is never a row, whatever
+  the filter: its claims, activity and traffic already count toward its
+  canonical agent, so a row of its own would count them twice and
+  disagree with the graph. `AgentFilter::states` lists
+  `CanonicalStateKind`s, so it cannot ask for one.
+- **Traffic is windowed, not lifetime.** `AgentTraffic { transmissions_in,
+  transmissions_out }` for each row is `EdgeStore::agent_traffic(window,
+  ids)`: the agent's node counts in `graph(window, Transmissions,
+  TopologyFilter::default())` (merges resolved, self-edges dropped, every
+  route and topic, false detections included), zero without a node. So a
+  row agrees with the graph the operator came from, its counts are final
+  before the watermark like every aggregate, and the cost is bounded by
+  the window. The window restricts counts, never rows; an unaligned window
+  is `InvalidInput(UnalignedWindow)`. The page's watermark is the one
+  `agent_traffic` read before its buckets; labels, claims and last-seen
+  times come from L3 and are not settled by it. Activity is not announced
+  on the live feed (it changes with every exchange); clients refresh rows
+  on each `Watermark` event, as for every `Watermarked` query.
+- **The filter.** `AgentFilter { states, claimed, text, parents }`; empty
+  lists and no text do not restrict, fields combine with AND:
+
+  | Field | Keeps a canonical agent when |
+  | --- | --- |
+  | `states` | its `CanonicalStateKind` is listed |
+  | `claimed` | a claim in its unioned `ClaimSet`, seen at any time, has a listed `HarnessFamily` (claims, never identity evidence) |
+  | `text` (`AgentText`: trimmed, 1 to 64 characters, no controls) | the text is a substring of its label, both lowercased with Unicode's default mapping (`str::to_lowercase`, not full case folding: `ß` ≠ `ss`), or a prefix, ignoring ASCII case, of the ULID text (`ulid_text`, Crockford base32) of the agent or of one of its aliases; Crockford's `I`/`L`/`O` aliases are not applied |
+  | `parents` | its canonical parent equals the canonical form of a listed agent: one level of the sub-agent tree |
+
+  Labels match anywhere because they are words; ids match only from their
+  start because they are random after the time prefix, so a substring of
+  one would match nearly anything. An alias's id finds the agent it was
+  merged into; a merged agent's own label is shown nowhere, so it is not
+  matched.
+- **Detail.** `QueryApi::agent(caller, id, window)` (View) returns
+  `Option<Watermarked<AgentDetail { cluster, traffic }>>`, `None` for an
+  unknown id. The `AgentCluster` (checked) is the agent `id` resolves to:
+  its profile; its `Agent` record (evidence included, agreeing with the
+  profile); its aliases' records (each `Merged` into it, keeping the
+  `prior` state an unmerge restores); its children (canonical agents whose
+  canonical parent it is, ascending; the paged form is `agents` with
+  `parents: [id]`); every `MergeRecord` naming it or an alias as source,
+  target or repointed agent, oldest first, reverted ones with their
+  `Reversal`; every `MergeVeto` with an end in the cluster; and the
+  `AgentLookup`: `Canonical`, or `Redirected { from: id }` when `id` is
+  merged. The detail is a whole value, like a policy history.
+- **Names.** `QueryApi::agent_names(caller, ids)` (View) takes an
+  `IdBatch<AgentId>` (`batch.rs`: distinct, ascending, at most 1,000, twice
+  the largest page, so one page's senders and readers fit; more is
+  `TooManyIds`, returned as `InvalidInput(TooManyIds)`) and returns
+  `HashMap<AgentId, AgentName { id, label }>` keyed by the id asked for:
+  the canonical agent and its label. Unknown ids are left out, not errors.
+- **Merging a cluster into itself.** `OperatorAction::merge_agents(caller,
+  from, into)` builds the action; one id twice is `SelfMerge`, which never
+  becomes an action, so it never reaches `act` or the audit log, and the
+  surface returns `InvalidInput(SelfMerge)`. Two different ids that the
+  merge table resolves to one agent (one merged into the other, or both
+  into a third) are refused by L3 with `MergeIntoSelf`, checked before
+  `AgentMerged` (`MergeRequest::conflict`): naming the canonical agent
+  instead would still merge it into itself. `act` returns
+  `Conflict(MergeIntoSelf { from, into, canonical })` and audits it as
+  rejected. The first needs no state, so it is an input error; the second
+  needs the merge table, so it is a conflict.
 
 ### Linked views
 
@@ -331,9 +414,14 @@ variant for variant (`l8_surface/errors.rs`). How each store error becomes
 one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
-`ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError` and
-`BusError` (the dead-letter list); for actions `PromotionRefusal` and
-`PromoteError`. The edge store's writes fail with `EdgeError`, which never
+`ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
+`BusError` (the dead-letter list), `AgentReadError` (agent reads) and
+`TooManyIds` (`InvalidInput(TooManyIds)`); for actions `PromotionRefusal`,
+`PromoteError`, `ResolveError` (merges, unmerges and renames:
+`UnknownAgent` and `UnknownMerge` to `NotFound`, `AgentMerged`,
+`MergeIntoSelf` and `MergeAlreadyReverted` to the same-named conflicts, a
+resolver-only `Vetoed` to `Store`) and `SelfMerge`
+(`InvalidInput(SelfMerge)`). The edge store's writes fail with `EdgeError`, which never
 reaches a query.
 
 Retention shows up by what was dropped: `VersionNotRetained` for a
@@ -571,6 +659,10 @@ policy.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/types/aliases.rs` | Read-time resolution of merged agents and superseded channels | `Aliases`, `Resolve`, `NoAliases` |
+| `spec/types/batch.rs` | Bounded id batches for lookups | `IdBatch` (checked: distinct, ascending, at most `MAX` = 1,000), `TooManyIds` |
+| `spec/types/aggregates/agents/mod.rs` | Agent read models | `AgentProfile` (checked), `AgentProfileParts`, `InvalidProfile`, `AgentTraffic`, `AgentRow`, `AgentCluster` (checked), `AgentClusterParts`, `InvalidCluster`, `AgentLookup`, `AgentDetail`, `AgentName` (`of`); `CanonicalStateKind: From<ActiveAgentState>` |
+| `spec/types/aggregates/agents/filter.rs` | The agents list filter | `AgentFilter` (`matches`, `text_matches`), `AgentText` |
+| `spec/types/interfaces/l3_reconstruction/agents.rs` | L3's agent reads | `AgentReads` (`list`, `cluster`, `names`), `ActivityStore` (`record`, `last_seen`), `AgentReadError` |
 | `spec/types/paging.rs` | Cursor pagination for list queries | `PageSize`, `Cursor`, `PageRequest`, `Page`, `PageOverflow`, `ChannelList`, `AgentList`, `AlertRuleList`, `AlertList`, `DeadLetterList`, `EdgeTransmissionList`, `SearchList`, `TopicList`, `ProjectionList`, `AuditList`, `ResourceUseList` |
 | `spec/types/derived/flow/verdict.rs` | Operator verdicts beside the detector's state | `Verdict`, `Judgeable`, `NotJudgeable`, `TransmissionState::judgeable`, `TransmissionVerdict` (checked), `VerdictRevision`, `VerdictLog` (checked append), `VerdictRecorded`, `CurrentVerdict` (`observe`, `is_false_detection`), `Observed` |
 | `spec/types/derived/flow/channel/promotion.rs` | What a promotion does and refuses | `Promotion` (checked), `Registered`, `plan`, `PromotionPlan`, `PromotionRefusal` |
@@ -584,15 +676,15 @@ policy.
 | `spec/types/aggregates/watermark.rs` | When a bucket is final | `PipelineFrontier`, `Watermark::settled`, `finalizes`, `advance`, `Watermarked`; re-exports `Watermark` |
 | `spec/types/events/changed.rs` | Change notifications for the live feed | `Changed` (`promotion`) |
 | `spec/types/interfaces/l5_flow/verdicts.rs` | The L5 verdict store | `TransmissionVerdicts` (`set`, `log`, `quality`), `VerdictError` |
-| `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi`, `OperatorActions`, `Caller` (built only by the directory), `Permission`, `PermissionSet`, `AlertFilter`, `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError`; re-exports the action and error types |
-| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind`, `InputError` |
-| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `AgentFilter`, `AgentStateKind`, `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
-| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError` (to `QueryError`) and `PromotionRefusal`, `PromoteError` (to `ActionError`) |
+| `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (incl. `agents`, `agent`, `agent_names`), `OperatorActions`, `Caller` (built only by the directory), `Permission`, `PermissionSet`, `AlertFilter`, `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError`; re-exports the action and error types |
+| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed | `QueryError`, `ActionError`, `ConflictKind` (incl. `MergeIntoSelf`), `InputError` (incl. `SelfMerge`, `TooManyIds`) |
+| `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |
+| `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`, `BusError`, `AgentReadError`, `TooManyIds` (to `QueryError`) and `PromotionRefusal`, `PromoteError`, `ResolveError`, `SelfMerge` (to `ActionError`) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor`, `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem`, `LiveEnd`, `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody`, `OperatorRecord` (checked), `ConfigRecord`, `ConfigChange`, `ConfigOutcome`, `AuditAuthor`, `AuditSubject`, `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
-| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph) | — |
+| `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `graph.rs` (supersession, promotion, graph nodes, the channel-centred graph); `agent_reads.rs` (agent profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings) | — |
 
 ## Invariants and constraints
 
@@ -707,4 +799,17 @@ policy.
   `edge_transmissions`, `channel_resources`, `topic_sizes`) carries the
   watermark `EdgeStore::watermark` returned before any of its data was
   read; a stored projection carries the watermark its sample was read
-  under.
+  under; `agents` and `agent` carry the one `EdgeStore::agent_traffic`
+  read before the buckets of their counts.
+- Agent rows are canonical agents only, whatever the filter; their counts
+  equal their node counts in `topology` for the same window under the
+  default filter. `AgentProfile` and `AgentCluster` are checked (no
+  self or alias parent, distinct aliases merged into the agent, a redirect
+  only from an alias, children outside the cluster, merge records and
+  vetoes about the cluster, once each). `AgentFilter::matches` is the
+  list's definition. `agent(id)` answers for `canonical(id)` and says when
+  it redirected. `agent_names` keys by the id asked for and leaves unknown
+  ids out; a batch is at most 1,000 distinct ids.
+- A merge of two ids of one cluster is `Conflict(MergeIntoSelf)`, refused
+  by L3 before `AgentMerged` and vetoes; one id twice is
+  `InvalidInput(SelfMerge)` and never reaches `act`.
