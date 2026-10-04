@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crosstalk_spec::aggregates::edge::RouteKind;
-use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector, TopologyFilter};
+use crosstalk_spec::aggregates::filter::{
+    FalseDetections, TopicVersionSelector, TopologyFilter, UnconfirmedChannels,
+};
 use crosstalk_spec::aggregates::projection::{ProjectionLimit, ProjectionParams, ProjectionSpec};
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::Watermark;
@@ -333,6 +335,8 @@ pub struct FilterSeed {
     pub topics: Vec<(u32, u8)>,
     pub pinned: Option<u32>,
     pub exclude: bool,
+    /// Leave out channels whose cross-agent traffic is all unconfirmed.
+    pub confirmed_only: bool,
 }
 
 pub fn filter_seed() -> impl Strategy<Value = FilterSeed> {
@@ -343,15 +347,17 @@ pub fn filter_seed() -> impl Strategy<Value = FilterSeed> {
         prop::collection::vec((0u32..4, 0u8..3), 0..2),
         prop::option::weighted(0.25, 0u32..4),
         any::<bool>(),
+        prop::bool::weighted(0.25),
     )
         .prop_map(
-            |(agents, channels, route_kinds, topics, pinned, exclude)| FilterSeed {
+            |(agents, channels, route_kinds, topics, pinned, exclude, confirmed_only)| FilterSeed {
                 agents,
                 channels,
                 route_kinds,
                 topics,
                 pinned,
                 exclude,
+                confirmed_only,
             },
         )
 }
@@ -385,6 +391,11 @@ impl FilterSeed {
                 FalseDetections::Exclude
             } else {
                 FalseDetections::Include
+            },
+            unconfirmed_channels: if self.confirmed_only {
+                UnconfirmedChannels::Exclude
+            } else {
+                UnconfirmedChannels::Include
             },
         }
     }
@@ -627,6 +638,8 @@ where
                             topic: k.map(|k| topic_of(*version, k)),
                             confirmed_at: at,
                             matched_bytes: non_zero(1),
+                            from: agent(1),
+                            to: agent(2),
                         };
                         let version = TopicModelVersion(*version);
                         let theirs = subject.assign(transmission(*n), version, assignment).await;

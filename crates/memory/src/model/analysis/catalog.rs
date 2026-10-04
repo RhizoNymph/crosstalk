@@ -1,6 +1,6 @@
 //! `check_topic_catalog`: the topic catalog against the reference, and its
 //! sizes against an independent count of the assignments
-//! (`analysis.sizes.match-assignments`).
+//! (`analysis.sizes.match-cross-agent-assignments`).
 
 use std::collections::BTreeMap;
 
@@ -20,7 +20,7 @@ use crosstalk_spec::support::{Change, Timestamp};
 
 use crate::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
 use crate::model::build::{
-    non_zero, operator, similarity, test_model, topic, transmission, ts, unit, window,
+    agent, non_zero, operator, similarity, test_model, topic, transmission, ts, unit, window,
 };
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
 use crate::support::Outbox;
@@ -205,6 +205,8 @@ async fn apply<S: CatalogSubject>(
                 topic: k.map(|k| topic_of(version, k)),
                 confirmed_at: ts(*at),
                 matched_bytes: non_zero(*bytes),
+                from: agent(1),
+                to: agent(2),
             };
             Outcome::Assigned(store.assign(transmission(*t), version, assignment).await)
         }
@@ -227,7 +229,8 @@ async fn apply<S: CatalogSubject>(
 }
 
 /// The harness's own count of a version's assignments
-/// (`analysis.sizes.match-assignments`): per topic and over outliers.
+/// (`analysis.sizes.match-cross-agent-assignments`; no agent is merged in
+/// this harness): per topic and over outliers.
 fn expected_sizes(
     assignments: &BTreeMap<(TopicModelVersion, TransmissionId), StoredAssignment>,
     version: TopicModelVersion,
@@ -301,6 +304,8 @@ where
                                 topic: k.map(|k| topic_of(version, k)),
                                 confirmed_at: ts(*at),
                                 matched_bytes: non_zero(*bytes),
+                                from: agent(1),
+                                to: agent(2),
                             },
                         );
                     }
