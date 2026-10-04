@@ -58,7 +58,12 @@ Overview:
     stage that normalizes with L1, stores bodies in FsBlobStore and
     publishes ExchangeCaptured on MpscBus, and persists each captured
     exchange through a bus consumer to an append-only exchange log, a P3
-    stopgap because the spec has no exchange store (gateway). The other
+    stopgap because the spec has no exchange store (gateway). That
+    composition is a library entry point, crosstalk_gateway::pipeline::
+    Pipeline (build over any blob store, bus and injected clock), and a
+    pre-normalized exchange enters it through Pipeline::ingest, the same
+    path the capture stage takes after L1 (P3.1), so the eval harness can
+    drive the real layers under simulated time. The other
     crates are still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
@@ -129,9 +134,11 @@ Overview:
       transaction retries, and a database-per-test harness gated on
       TEST_DATABASE_URL), crosstalk-memory (in-memory reference stores and
       the model-based harnesses the Postgres stores reuse; L3 to L8 done),
-      crosstalk-sim (deterministic simulation) and crosstalk-testkit
-      (builders, recorded corpus, fake upstreams). Layer crates may depend
-      on store; memory, sim and testkit are their dev-dependencies only.
+      crosstalk-sim (deterministic simulation), crosstalk-testkit
+      (builders, recorded corpus, fake upstreams) and crosstalk-world (the
+      synthetic week the UI and the tests share, seeded through the write
+      traits). Layer crates may depend on store; memory, sim, testkit and
+      world are their dev-dependencies only.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -374,10 +381,10 @@ Features Index:
       The virtual Cargo workspace (members spec and crates/*, ui excluded,
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
-      crates never depend on each other or on api, client or gateway, take
-      transport only as a dev-dependency, take memory, sim and testkit
-      only as dev-dependencies, and never depend on the tool crate demo)
-      checked by an architecture test over cargo
+      crates never depend on each other or on the composers api, client,
+      eval or gateway, take transport only as a dev-dependency, take
+      memory, sim and testkit only as dev-dependencies, and never depend
+      on the tool crate demo) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
       validator), and the invariant evidence path convention
       (crosstalk_spec:: or crosstalk_<crate>::, checked by
@@ -684,9 +691,22 @@ Features Index:
       sockets with testkit's fake upstream, harness and corpus (against
       L1's goldens), with a simulation of the capture stage under blob
       store faults (INV-48), and by hand with scripts/try-claude-code.sh.
+      The composition behind the proxy is the library entry point
+      pipeline::Pipeline (P3.1): Pipeline::build(Settings, Deps, clock)
+      over any spec BlobStore and EventBus subscribes and spawns the
+      role's stages (capture stage, exchange log), and
+      Pipeline::ingest(NormalizedExchange, at) stores the blobs (same
+      retry), mints the envelope id at at and publishes ExchangeCaptured;
+      the capture stage calls it after normalizing, so there is one path
+      after L1. Envelope ids reach the bus in strictly increasing order
+      under concurrent ingests. Every serve role builds one; the eval
+      harness (crosstalk-eval, a composer) builds one over simulated
+      stores and time.
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
+      - crates/gateway/src/pipeline/mod.rs
+      - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs
@@ -703,7 +723,9 @@ Features Index:
       observability (host, container, Postgres and log metrics, dashboards,
       alert rules). Defines the contract the crosstalk binary implements:
       serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
-      endpoints and the config file's top-level keys.
+      endpoints and the config file's top-level keys. Also notes for
+      running on a shared host (snap Docker, host port clashes, syncing a
+      checkout, a smoke test, inspecting the distroless gateway).
     entry_points:
       - deploy/compose.yaml
       - deploy/run.sh
@@ -741,4 +763,33 @@ Features Index:
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]
     doc: docs/features/demo.md
+  world:
+    description: >
+      crosstalk-world (crates/world, TestSupport): the UI fixture's
+      synthetic week ported onto the spec's write traits. World::new(seed,
+      at) gives the config a host builds its stores with (operators, sinks,
+      built-in rules, embedding model and embedder, catalog retention,
+      bucket width, correlator timing) and the world's clock;
+      World::seed(&mut stores) declares config's channels, generates the
+      cast, channels, topics and about 5,000 transmissions with their
+      accesses, matches and encoded bodies, assembles every write the
+      pipeline, surface and config would have made as timed steps, and
+      runs them in time order through the write traits (operator actions
+      audited), returning the Scenario handles (agents by fixture key,
+      ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
+      anchor and store implementation; ids are ULIDs minted at their
+      entity's time. Tests seed the memory stores and assert every scenario
+      through the read traits; four channel-semantics tests wait for that
+      port. The feature doc lists the divergences from the UI fixture and
+      the gap list: fixture reads no store or spec trait answers.
+    entry_points:
+      - crates/world/src/lib.rs
+      - crates/world/src/seed.rs
+      - crates/world/src/stores.rs
+      - crates/world/src/generate/mod.rs
+      - crates/world/src/assemble/mod.rs
+      - crates/world/src/run/mod.rs
+      - crates/world/tests/support/mod.rs
+    depends_on: [type_spec, memory, transport, workspace]
+    doc: docs/features/world.md
 ```

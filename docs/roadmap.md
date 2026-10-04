@@ -395,6 +395,9 @@ then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
 `Role::of`) drives the real layers through it on dataset corpora under sim
 time. Depends on P3; P4 and P5 consume it.
 
+- [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and `crosstalk-eval` registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
+- [ ] `crosstalk-eval` driving the real layers through it on dataset corpora.
+
 ## P4 Identity and provenance (parallel)
 
 Both consume bus events, so they can be developed against recorded event
@@ -488,12 +491,10 @@ streams from testkit without waiting for P3.
 4. After P7.2: add `AppBackend::Remote` over `crosstalk-client`. Send `ActionRequest`, and adopt the spec's SSE and JSONL framing wherever the browser-facing formats can match it.
 
 ## Open decisions
-- **D1: topic modeling, UMAP and embeddings.** Implement clustering
-  (HDBSCAN plus c-TF-IDF) and UMAP in Rust, or run them in a Python sidecar
-  behind the `TopicModel` and `LayoutFitter` traits. Embeddings come from an
-  OpenAI-compatible endpoint either way; the choice is which model and who
-  hosts it. Proposed: start with a sidecar behind the traits, and keep
-  determinism (seeds) in the contract.
+- **D1: topic modeling, UMAP and embeddings.** Decided: Python. Clustering
+  (HDBSCAN plus c-TF-IDF) and UMAP run in a Python sidecar behind the spec's
+  `TopicModel` and `LayoutFitter` traits, with determinism (seeds) in the
+  contract. Embeddings come from an OpenAI-compatible endpoint.
 - **D2: SQL access.** Decided: sqlx.
 - **D3: time-series storage.** Decided: plain Postgres with partitioned
   bucket tables. The deployment runs plain Postgres 18 (pgvector, pg_trgm),

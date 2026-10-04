@@ -1,10 +1,10 @@
-//! Single-node wiring: the proxy, the capture stage, the bus, the blob
-//! store, the exchange log and the ops listener, as tokio tasks joined by
-//! channels, for one [`Role`].
+//! Single-node wiring: the proxy and the ops listener around a
+//! [`Pipeline`] (the capture stage, the bus, the blob store and the
+//! exchange log), as tokio tasks joined by channels, for one [`Role`].
 //!
 //! ```text
-//! client ─▶ proxy (L0, crosstalk-ingress) ─ RawExchange, bounded mpsc ─▶ capture stage
-//!                                                                         │ normalize (L1)
+//! client ─▶ proxy (L0, crosstalk-ingress) ─ RawExchange, bounded mpsc ─▶ Pipeline: capture stage
+//!                                                                         │ normalize (L1), ingest
 //!                                                                         │ store ─▶ FsBlobStore (blobs.root)
 //!                                                                         ▼ publish
 //!                                    MpscBus (L2) ── ExchangeCaptured ──▶ group exchange-log
@@ -14,11 +14,12 @@
 //!
 //! [`start`] opens what the role needs, builds the proxy (reading its
 //! secrets through the caller's environment lookup), binds the listeners,
-//! subscribes the exchange log before anything can be published, and
-//! spawns the tasks. [`Running::shutdown`] stops in dependency order: the
-//! proxy listener (in-flight exchanges drain), the capture stage (the
-//! channel drains), the exchange log's group (the bus drains), the bus,
-//! the log (synced), then the ops listener.
+//! starts the bus, builds the [`Pipeline`] with the role's stages (the
+//! capture stage for a proxy role, the exchange log for a pipeline role),
+//! and spawns the proxy and ops listeners. [`Running::shutdown`] stops in
+//! dependency order: the proxy listener (in-flight exchanges drain), the
+//! pipeline (the capture channel drains, the exchange log's group drains,
+//! the bus stops, the log is synced), then the ops listener.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -27,9 +28,7 @@ use std::time::Duration;
 
 use crosstalk_ingress::capture::CaptureSender;
 use crosstalk_ingress::{BuildError, anthropic_proxy};
-use crosstalk_spec::events::Subject;
-use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
-use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus};
+use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::support::Clock;
 use crosstalk_transport::blob::{FsBlobStore, OpenError};
 use crosstalk_transport::{MpscBus, StartError as BusStartError};
@@ -38,15 +37,13 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::capture::{CaptureStage, PipelineStats, PutRetry};
 use crate::config::{ConfigError, GatewayConfig};
-use crate::log::consumer::{self, LogStats};
 use crate::log::{ExchangeLog, LogError};
 use crate::ops::{HealthReport, Ops, Phase, Readiness};
+use crate::pipeline::{self, Deps, Pipeline, Settings};
 use crate::role::Role;
 use crate::server::{self, DrainReport, ServeOptions};
 use crate::store::{StoreProbe, store_config};
-use crate::tasks::Tasks;
 
 /// Why the gateway did not start. Nothing is left running.
 #[derive(Debug, thiserror::Error)]
@@ -74,8 +71,8 @@ pub enum StartError {
     },
     #[error("starting the bus: {0}")]
     Bus(#[from] BusStartError),
-    #[error("subscribing the exchange log: {0:?}")]
-    Subscribe(BusError),
+    #[error("building the pipeline: {0}")]
+    Pipeline(#[from] pipeline::BuildError),
 }
 
 /// How the shutdown went.
@@ -88,13 +85,12 @@ pub struct ShutdownReport {
     pub log_drained: bool,
 }
 
-/// The proxy and the capture stage, when the role runs them.
+/// The proxy listener, when the role runs it.
 #[derive(Debug)]
 struct ProxyTasks {
     addr: SocketAddr,
     stop: watch::Sender<bool>,
     server: JoinHandle<DrainReport>,
-    capture: JoinHandle<()>,
 }
 
 /// A running gateway.
@@ -103,12 +99,10 @@ pub struct Running {
     role: Role,
     data_dir: PathBuf,
     ops_addr: SocketAddr,
-    bus: MpscBus,
-    blobs: FsBlobStore,
+    pipeline: Pipeline<FsBlobStore, MpscBus>,
     ops: Ops,
     phase: watch::Sender<Phase>,
     proxy: Option<ProxyTasks>,
-    log: Option<JoinHandle<()>>,
     stop_ops: watch::Sender<bool>,
     ops_server: JoinHandle<DrainReport>,
     store: Option<JoinHandle<Option<crosstalk_store::Store>>>,
@@ -131,7 +125,7 @@ pub async fn start(
         .map(|section| store_config(section, &lookup))
         .transpose()?;
     let blobs = FsBlobStore::open(&config.blobs.root).await?;
-    let log = match role.runs_pipeline() {
+    let exchange_log = match role.runs_pipeline() {
         true => Some(ExchangeLog::open(&config.exchange_log_path()?).await?),
         false => None,
     };
@@ -151,48 +145,34 @@ pub async fn start(
     };
     let ops_listener = bind("ops", config.ops.listen).await?;
     let ops_addr = local_addr("ops", &ops_listener)?;
-
-    let bus = MpscBus::start(config.bus.clone())?;
-    let subscription = match log {
-        Some(_) => Some(
-            bus.subscribe(
-                &[Subject::ExchangeCaptured],
-                consumer::group(),
-                config.bus.retry,
-            )
-            .await
-            .map_err(StartError::Subscribe)?,
-        ),
-        None => None,
-    };
-
-    let mut tasks = Tasks::new();
-    let pipeline = Arc::new(PipelineStats::new());
-    let log_stats = Arc::new(LogStats::new());
-    let (phase, phase_watch) = watch::channel(Phase::Ok);
-    let drain = config.shutdown.drain_timeout();
-
-    let log = match (log, subscription) {
-        (Some(log), Some(subscription)) => Some(tasks.spawn(
-            "exchange_log",
-            consumer::run(subscription, log, Arc::clone(&log_stats)),
-        )),
-        _ => None,
-    };
-    let mut capture_stats = None;
-    let proxy = match proxy {
+    let (proxy, captured) = match proxy {
         Some((proxy, captured, listener)) => {
             let addr = local_addr("proxy", &listener)?;
+            (Some((proxy, listener, addr)), Some(captured))
+        }
+        None => (None, None),
+    };
+
+    let pipeline = Pipeline::build(
+        Settings::from_config(config),
+        Deps {
+            blobs,
+            bus: MpscBus::start(config.bus.clone())?,
+            id_entropy: SeededRandom::from_entropy(),
+            capture: captured,
+            exchange_log,
+        },
+        clock,
+    )
+    .await?;
+
+    let mut tasks = pipeline.tasks().clone();
+    let (phase, phase_watch) = watch::channel(Phase::Ok);
+    let drain = config.shutdown.drain_timeout();
+    let mut capture_stats = None;
+    let proxy = match proxy {
+        Some((proxy, listener, addr)) => {
             capture_stats = Some(proxy.stats());
-            let stage = CaptureStage::new(
-                blobs.clone(),
-                bus.clone(),
-                Arc::clone(&clock),
-                UlidGenerator::new(clock, SeededRandom::from_entropy()),
-                Arc::clone(&pipeline),
-                PutRetry::from(config.pipeline),
-            );
-            let capture = tasks.spawn("capture", stage.run(captured));
             let (stop, stopped) = watch::channel(false);
             let server = tasks.spawn(
                 "proxy",
@@ -210,12 +190,7 @@ pub async fn start(
                     },
                 ),
             );
-            Some(ProxyTasks {
-                addr,
-                stop,
-                server,
-                capture,
-            })
+            Some(ProxyTasks { addr, stop, server })
         }
         None => None,
     };
@@ -230,8 +205,8 @@ pub async fn start(
         role,
         phase: phase_watch,
         capture: capture_stats,
-        pipeline,
-        log: log_stats,
+        pipeline: Arc::clone(pipeline.stats()),
+        log: Arc::clone(pipeline.log_stats()),
         tasks,
         store: store_probe,
     };
@@ -258,12 +233,10 @@ pub async fn start(
         role,
         data_dir,
         ops_addr,
-        bus,
-        blobs,
+        pipeline,
         ops,
         phase,
         proxy,
-        log,
         stop_ops,
         ops_server,
         store,
@@ -339,12 +312,17 @@ impl Running {
 
     /// The in-process bus, for additional consumers.
     pub fn bus(&self) -> &MpscBus {
-        &self.bus
+        self.pipeline.bus()
     }
 
     /// The blob store the capture stage writes to.
     pub fn blobs(&self) -> &FsBlobStore {
-        &self.blobs
+        self.pipeline.blobs()
+    }
+
+    /// The pipeline the role runs.
+    pub fn pipeline(&self) -> &Pipeline<FsBlobStore, MpscBus> {
+        &self.pipeline
     }
 
     /// What `GET /healthz` would answer now.
@@ -365,34 +343,20 @@ impl Running {
         tracing::info!(role = %self.role, "gateway shutting down");
         // Fails only when no reader of the phase is left.
         let _ = self.phase.send(Phase::Draining);
-        let mut report = ShutdownReport {
-            capture_drained: true,
-            log_drained: true,
-            ..ShutdownReport::default()
-        };
-        let mut capture = None;
+        let mut report = ShutdownReport::default();
         if let Some(proxy) = self.proxy {
             let _ = proxy.stop.send(true);
             report.proxy = proxy.server.await.unwrap_or_else(|error| {
                 tracing::error!(error = %error, "the proxy task failed");
                 DrainReport::default()
             });
-            capture = Some(proxy.capture);
         }
+        // The proxy and its connections are gone, so the capture channel
+        // closes once the last per-exchange capture task has handed off.
         // From here on, one deadline for the capture stage and the log.
-        let deadline = Instant::now() + self.flush;
-        if let Some(capture) = capture {
-            // The proxy and its connections are gone; the channel closes
-            // once the last per-exchange capture task has handed off.
-            report.capture_drained = join_by("capture stage", capture, deadline).await;
-        }
-        if let Some(log) = self.log {
-            report.log_drained = wait_for_group(&self.bus, deadline).await;
-            self.bus.shutdown().await;
-            join_by("exchange log consumer", log, deadline).await;
-        } else {
-            self.bus.shutdown().await;
-        }
+        let drained = self.pipeline.shutdown(Instant::now() + self.flush).await;
+        report.capture_drained = drained.capture;
+        report.log_drained = drained.log;
         if let Some(store) = self.store {
             store.abort();
             if let Ok(Some(store)) = store.await {
@@ -412,56 +376,5 @@ impl Running {
             "gateway stopped"
         );
         report
-    }
-}
-
-/// Wait for `task` until `deadline`; abort it after that. True when it
-/// ended on its own.
-async fn join_by(name: &'static str, mut task: JoinHandle<()>, deadline: Instant) -> bool {
-    match tokio::time::timeout_at(deadline, &mut task).await {
-        Ok(Ok(())) => true,
-        Ok(Err(error)) => {
-            tracing::error!(task = name, error = %error, "task failed");
-            false
-        }
-        Err(_) => {
-            tracing::warn!(
-                task = name,
-                "task did not finish before the flush deadline; aborting"
-            );
-            task.abort();
-            false
-        }
-    }
-}
-
-/// Wait until the exchange log's group holds nothing, until `deadline`.
-async fn wait_for_group(bus: &MpscBus, deadline: Instant) -> bool {
-    let group = consumer::group();
-    let empty = async {
-        loop {
-            match bus.depth(&group).await {
-                Ok(Some(depth))
-                    if depth.ready
-                        + depth.delayed
-                        + depth.held
-                        + depth.exhausted
-                        + depth.waiting
-                        > 0 => {}
-                Ok(_) => return true,
-                Err(error) => {
-                    tracing::warn!(error = ?error, "reading the exchange log's group depth failed");
-                    return false;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    };
-    match tokio::time::timeout_at(deadline, empty).await {
-        Ok(drained) => drained,
-        Err(_) => {
-            tracing::warn!("the exchange log did not catch up before the flush deadline");
-            false
-        }
     }
 }

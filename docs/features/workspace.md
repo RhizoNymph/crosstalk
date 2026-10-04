@@ -88,12 +88,12 @@ list only what some member uses.
 
 Layer crates talk to each other only through the spec (bus events and spec
 traits handed to them at wiring time), and composition happens in the
-gateway. The roles:
+gateway (and the composers beside it). The roles:
 
 | Role | Crates |
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
-| composition | `api`, `client`, `gateway` |
+| composition | `api`, `client`, `eval`, `gateway` (`eval` is registered before `crates/eval` exists; the member check does not require it yet) |
 | test support | `memory`, `sim`, `testkit` |
 | tool | `demo` |
 | open | `spec`, `store`, and every third-party crate |
@@ -102,7 +102,7 @@ The rules, applied to every declared dependency (normal, dev and build,
 including optional and target-specific ones) of every workspace member:
 
 1. A layer crate never depends on another layer crate, nor on `api`,
-   `client` or `gateway`, under any kind, except that it may depend on
+   `client`, `eval` or `gateway`, under any kind, except that it may depend on
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
@@ -130,6 +130,9 @@ parses the JSON with `serde_json`.
 - `workspace_obeys_the_dependency_rule` fails with every violation listed.
 - `workspace_has_every_crate_the_rule_names` fails if a crate the rule
   names is missing, so the rule can never pass vacuously after a rename.
+  `Composer::required` exempts `eval` until `crates/eval` lands (roadmap
+  P3.1); `eval_composes_gateway_and_layers_and_is_not_yet_required`
+  checks that it is classified as a composer meanwhile.
 - `every_crate_depends_on_the_spec` fails if a member other than the spec
   lacks a normal dependency on `crosstalk-spec`.
 - The other tests exercise `check` on hand-built edges: every layer pair

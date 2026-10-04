@@ -273,8 +273,16 @@ so it must have no side effects outside the transaction.
 1. Requires a multi-threaded tokio runtime. Otherwise it fails with
    `RuntimeProblem::{NoRuntime, CurrentThread}`; the reason is in teardown
    below.
-2. Reads `TEST_DATABASE_URL`, an admin-capable URL. Unset gives
+2. Reads `TEST_DATABASE_URL`, an admin-capable URL, from the process
+   environment or, failing that, from the nearest `.env.test` (`TEST_ENV_FILE`)
+   in the working directory or an ancestor: dotenv lines (`NAME=value`,
+   optional `export ` and quotes, `#` comments; the last assignment wins).
+   The file is gitignored, so one `.env.test` above the worktrees serves them
+   all without exporting anything. Unset in both gives
    `TestDbError::NotConfigured`.
+   Pointing tests at the deployment's compose Postgres, and dropping leaked
+   `crosstalk_test_*` databases, is described in
+   [deploy.md](deploy.md#store-tests-against-the-compose-postgres).
 3. On a short-lived admin connection, runs `CREATE DATABASE
    "crosstalk_test_<pid>_<nanos>_<seq>" TEMPLATE template0`. The database
    starts empty: no extensions, even if `template1` has some.
@@ -309,7 +317,7 @@ is named `crosstalk_test_*` and dies with the disposable container.
 
 `TestDb::new_or_skip(test)` is the gate: when `TEST_DATABASE_URL` is unset it
 writes `skipping <test>: TEST_DATABASE_URL is not set (run scripts/test-db.sh
-and export the URL it prints)` straight to the stderr handle, which libtest
+and export the URL it prints, or put it in .env.test)` straight to the stderr handle, which libtest
 does not capture, so the line shows in a plain `cargo test`. It then returns
 `Ok(None)`, and the test returns early as a pass:
 

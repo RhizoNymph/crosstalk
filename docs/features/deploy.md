@@ -33,11 +33,11 @@
 
 Listeners:
 
-| Port | Config key | Serves |
+| Container port | Config key | Serves |
 |---|---|---|
-| 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:8080/anthropic`. |
+| 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:<CROSSTALK_PROXY_PORT>/anthropic` (host port, default 8080). |
 | 8081 | `api.listen` | The L8 HTTP binding (bearer token from `api.token`). |
-| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process alive), `GET /readyz` (database reachable, migrations at head, every role's tasks running). |
+| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters), `GET /readyz` (database reachable, migrations at head, every role's tasks running). |
 
 Environment:
 
@@ -59,7 +59,7 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | `api` | `{"listen": SocketAddr, "token": {"env": String}}` |
 | `ops` | `{"listen": SocketAddr}` |
 | `store` | `{"pool": crosstalk_store::config::PoolSettings}` |
-| `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
+| `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is mounted at `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
 
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
@@ -107,13 +107,15 @@ without breaking the linking of exchanges across the change:
       exits.
    3. `crosstalk` starts only after `migrate` has succeeded.
 3. At runtime:
-   - Agents send requests to `:8080`, and the proxy forwards them upstream.
+   - Agents send requests to the proxy's host port (`CROSSTALK_PROXY_PORT`,
+     default 8080), and the proxy forwards them upstream.
    - Capture feeds the in-process pipeline, which writes to Postgres and
      the `data` volume (`/var/lib/crosstalk`).
-   - The UI and operators read through `:8081`.
+   - The UI and operators read through the API (`CROSSTALK_API_PORT`,
+     default 8081).
 4. Observability:
-   - Prometheus scrapes node-exporter (over host networking, via
-     `host.docker.internal`), cAdvisor, postgres-exporter, Loki, Alloy,
+   - Prometheus scrapes node-exporter (on the host network at port 19100,
+     via `host.docker.internal`), cAdvisor, postgres-exporter, Loki, Alloy,
      Grafana and `crosstalk:9464`.
    - Alloy tails every container in the `crosstalk` project through the
      Docker socket and pushes its logs to Loki.
@@ -124,18 +126,20 @@ without breaking the linking of exchanges across the change:
 
 | File | Role |
 |---|---|
-| `deploy/compose.yaml` | Every service, volume, port bind and healthcheck. Only the proxy binds beyond 127.0.0.1. |
+| `deploy/compose.yaml` | Every service, volume, port bind and healthcheck. The proxy publishes on `CROSSTALK_PROXY_BIND` (0.0.0.0); every other published port on `CROSSTALK_BIND` (127.0.0.1 unless set); node-exporter listens on the host network. |
 | `deploy/crosstalk.Dockerfile` (+ `.dockerignore`) | Builds the gateway from the repository root on the nightly in `rust-toolchain.toml` (minimal profile). The runtime image is distroless `cc-debian13:nonroot`. |
 | `deploy/ui.Dockerfile` (+ `.dockerignore`) | Builds the elements bundle (pnpm 11.27.1, frozen lockfile), then the Topcoat binary. The context is the repository root, because `ui/` depends on `spec/` by path and `spec/` inherits from the root workspace. |
 | `deploy/config/crosstalk.json` | Gateway config (contract above). |
 | `deploy/config/ui.json` | UI config (fixture backend until the HTTP backend lands). |
-| `deploy/.env.example` | Every variable compose reads, with the defaults. |
-| `deploy/run.sh` | `init`, `up`, `infra`, `down`, `logs`, `ps`, `psql`, `urls`. |
+| `deploy/.env.example` | Every variable compose reads, with the defaults: secrets, host ports and binds, `DOCKER_ROOT_DIR` (Docker's data root, for cAdvisor) and Postgres/Prometheus tuning. |
+| `deploy/run.sh` | `init`, `up`, `infra`, `down`, `logs`, `ps`, `psql`, `urls`. Sets `DOCKER_ROOT_DIR` from `docker info` unless the environment or `deploy/.env` does. |
 | `deploy/postgres/init/` | First-start SQL: extensions and the monitor role. |
 | `deploy/prometheus/prometheus.yml` | Scrape jobs: `prometheus`, `node`, `cadvisor`, `postgres`, `loki`, `alloy`, `grafana`, `crosstalk`. |
 | `deploy/prometheus/rules/infrastructure.yml` | Infra alert rules (group `crosstalk-infra`). |
+| `deploy/prometheus/rules/gateway.yml` | Gateway health alert rules (group `crosstalk-gateway`) on the gateway's own `/metrics`: normalize, store and publish failures, capture drops and decode errors, exchange log write failures, nothing published while capturing, stuck draining. |
 | `deploy/grafana/provisioning/` | Datasources (uids `prometheus`, `loki`) and the dashboard provider. |
 | `deploy/grafana/dashboards/infrastructure.json` | Host, containers, Postgres, logs and monitoring-stack panels, plus a crosstalk-process row. |
+| `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
 | `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). |
@@ -169,13 +173,233 @@ FROM pg_database WHERE datname LIKE 'crosstalk\_test\_%' \gexec
 `WITH (FORCE)` ends any sessions still connected; `\gexec` runs each
 generated statement.
 
+## Running on a shared host
+
+What it took to bring the stack up on a homelab box that other projects
+also use (node0, at 10.1.1.69, in the examples). None of it needs a code
+change; the knobs are `deploy/.env` and, for node-exporter, two config
+lines.
+
+### Before you start
+
+On the host, before the stack's first start (once it runs, its own ports
+show as taken):
+
+```sh
+docker info --format '{{.SecurityOptions}} {{.DockerRootDir}}'
+for p in 8080 8081 9464 3000 3001 9090 12345 5432 19100; do
+  ss -Hltn "sport = :$p" | grep -q . && echo "port $p is taken"
+done
+```
+
+- A data root under `/var/snap/docker/` means snap Docker (below);
+  `name=rootless` among the security options means rootless Docker, which
+  has the same no-`rslave` limit.
+- Every port the loop prints needs another host port (below) before
+  `run.sh up`. A listener on any address counts: publishing
+  `127.0.0.1:5432` fails while another process holds `0.0.0.0:5432`.
+
+To find who holds a port:
+
+```sh
+sudo ss -ltnp 'sport = :9100'                              # docker-proxy: a published container port
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep 9100    # names that container
+```
+
+### Snap Docker
+
+- **`/` is not a shared mount**, so a bind with `rslave` fails ("path / is
+  mounted on / but it is not a shared or slave mount"). node-exporter binds
+  `/:/host:ro` without it; a filesystem mounted after node-exporter starts
+  shows up once it restarts.
+- **The data root is `/var/snap/docker/common/var-lib-docker`**, not
+  `/var/lib/docker`. Mounting the latter into cAdvisor failed with "mkdir
+  /var/lib/docker: read-only file system". Compose mounts
+  `${DOCKER_ROOT_DIR}` instead, and `run.sh` fills it from `docker info
+  --format '{{.DockerRootDir}}'` unless `deploy/.env` sets it. Set it in
+  `deploy/.env` when running `docker compose` without `run.sh`.
+- **Confinement may refuse bind mounts outside `$HOME` and `/media`.**
+  Compose binds `deploy/config/`, `deploy/prometheus/` and the other
+  config from the checkout, so keep the checkout under `$HOME`.
+
+### Port clashes
+
+Every host port but node-exporter's is a variable in `deploy/.env`:
+
+| Listener | Variable | Default | On node0 |
+|---|---|---|---|
+| Proxy (agents) | `CROSSTALK_PROXY_PORT` | 8080 | 18080 (8080 was taken) |
+| Operator API | `CROSSTALK_API_PORT` | 8081 | 18081 |
+| Ops (`/healthz`, `/readyz`, `/metrics`) | `CROSSTALK_OPS_PORT` | 9464 | 19464 |
+| UI | `CROSSTALK_UI_PORT` | 3000 | default |
+| Grafana | `GRAFANA_PORT` | 3001 | default |
+| Prometheus | `PROMETHEUS_PORT` | 9090 | default |
+| Alloy | `ALLOY_PORT` | 12345 | default |
+| Postgres | `POSTGRES_PORT` | 5432 | default |
+| node-exporter | none: compose.yaml and prometheus.yml | 19100 | default |
+
+- **The variables move only the host side.** Container ports stay
+  8080/8081/9464, so `deploy/config/crosstalk.json`, the container
+  healthcheck and Prometheus's scrape of `crosstalk:9464` do not change.
+  After editing `deploy/.env`, `bash deploy/run.sh up` recreates the
+  affected containers and `bash deploy/run.sh urls` prints the new
+  addresses. Anything outside the stack follows by hand: the agents' base
+  URL, and the SSH tunnel for the store tests.
+- **node-exporter has no port mapping.** It runs on the host network, so
+  its listen address is a host port. It left 9100 because another
+  project's MinIO publishes 9100 and 9101 (`rbs-minio`, 9100→9000 and
+  9101→9001). Prometheus scraping someone else's port shows as the `node`
+  target down with `received unsupported Content-Type "text/html"` (that
+  was MinIO's console on 9101). To move it, change both together:
+  - `--web.listen-address` on `node-exporter` in `deploy/compose.yaml`;
+  - the `node` job's target in `deploy/prometheus/prometheus.yml`.
+
+  Then `bash deploy/run.sh up` and `docker restart crosstalk-prometheus-1`
+  (see the single-file mounts under syncing).
+
+### Reaching the stack from a tailnet or the LAN
+
+By default only the proxy is reachable from other machines; the API, ops
+port, UI, Grafana, Prometheus, Alloy and Postgres bind 127.0.0.1. One
+variable in `deploy/.env` moves all of them:
+
+| `CROSSTALK_BIND` | Reachable from |
+|---|---|
+| `127.0.0.1` (default) | this machine only (SSH tunnels from elsewhere) |
+| `0.0.0.0` | this machine, the LAN and the tailnet |
+| the host's tailnet IP (`tailscale ip -4`, e.g. `100.x.y.z`) | the tailnet only, and **not** this machine's 127.0.0.1 |
+
+`0.0.0.0` is the simple choice on a trusted LAN, and what node0 uses:
+
+```
+echo "CROSSTALK_BIND=0.0.0.0" >> deploy/.env
+bash deploy/run.sh up && bash deploy/run.sh urls
+```
+
+`up` recreates the containers whose ports changed. A tailnet IP keeps the
+services off the LAN, but they then stop answering on the host's
+127.0.0.1: the smoke test's `curl 127.0.0.1:<ops port>` and any SSH tunnel
+to `127.0.0.1:5432` (the store tests') must use the tailnet IP instead, and
+Tailscale must be up before the stack starts (after a reboot Docker may
+start first; `bash deploy/run.sh up` again fixes it).
+Grafana keeps its admin password, Postgres its role password and the
+operator API its bearer token; Prometheus, Alloy and the ops endpoints
+(`/metrics`, `/healthz`) have no authentication, so anyone who can reach
+the bind address can read them.
+
+### Reaching the proxy from agent machines
+
+Agents point at the host's IP and the proxy's host port:
+
+```sh
+export ANTHROPIC_BASE_URL=http://10.1.1.69:18080/anthropic
+```
+
+A name that works for `ssh` may resolve nowhere else. `node0` resolved
+only through the SSH config, so `ssh` and `rsync` reached it but Claude
+Code with `ANTHROPIC_BASE_URL=http://node0:18080/anthropic` failed with
+`EAI_AGAIN`. Use the IP, or add the host to `/etc/hosts` on each agent
+machine; `getent hosts node0` shows whether a name resolves outside SSH.
+The proxy speaks plain HTTP, so keep it on a trusted network (accepted
+for now; see `docs/infrastructure.md`).
+
+### Syncing a checkout to the host
+
+The checkout reaches the host by rsync rather than git, so any worktree
+can be deployed (a worktree's `.git` is only a pointer file):
+
+```sh
+rsync -a --exclude deploy/.env --exclude target --exclude .claude <checkout>/ node0:<dir>/
+```
+
+- **No `--delete`, and `deploy/.env` excluded**, so the host's generated
+  secrets survive. Files deleted from the checkout stay on the host until
+  removed by hand.
+- **Data survives a re-sync.** Volumes are named after the compose project
+  (`name: crosstalk`), not the directory: `crosstalk_pgdata`,
+  `crosstalk_data` and the rest.
+- **Single-file bind mounts keep the old file.** rsync replaces a changed
+  file with a new inode, and a running container still sees the old one.
+  `run.sh up` does not recreate a container whose compose definition is
+  unchanged, so restart the one that mounts the file, e.g. `docker restart
+  crosstalk-prometheus-1` after changing `prometheus.yml`. The same goes
+  for `crosstalk.json`, `ui.json`, `loki.yaml` and `config.alloy`.
+  Directory mounts (`rules/`, Grafana's provisioning and dashboards) see
+  new files.
+
+### Smoke test
+
+The end-to-end check that passed on node0. On the host:
+
+```sh
+bash deploy/run.sh up
+docker inspect -f '{{.State.ExitCode}}' crosstalk-migrate-1   # 0
+curl -s 127.0.0.1:<ops port>/readyz                            # "ready": true
+curl -s 127.0.0.1:<ops port>/healthz                           # note capture.captured
+```
+
+From an agent machine:
+
+```sh
+ANTHROPIC_BASE_URL=http://<host-ip>:<proxy port>/anthropic claude -p "say hi"
+```
+
+Then `/healthz` again: `capture.captured` has gone up (one `claude -p`
+may make more than one generation request), and `pipeline.published` and
+`log.written` with it.
+
+### Inspecting the distroless gateway
+
+The runtime image has no shell, `ls` or `curl`: `docker exec
+crosstalk-crosstalk-1 ls` fails with "executable file not found". Work
+from the host instead.
+
+- **Health.** `curl -s 127.0.0.1:<ops port>/healthz` returns the counters
+  (`docs/features/gateway.md` has the shape); `/readyz` returns each
+  check. An exchange that went all the way counts in `capture.captured`,
+  `pipeline.published` and `log.written`. Any other non-zero counter names
+  where exchanges stopped: `capture`'s others before the pipeline,
+  `pipeline.normalize_failed` when L1 refused the request,
+  `store_failed` and `publish_failed` after it, `log.write_failed` at the
+  exchange log.
+- **Logs.** One JSON object per line, with a top-level `level`:
+
+  ```sh
+  docker logs crosstalk-crosstalk-1 2>&1 | grep -iE '"level":"(WARN|ERROR)"'
+  ```
+
+  Each warning carries the `exchange` id and an `error` field. A rising
+  `normalize_failed` pairs with `exchange not normalized; dropped`, whose
+  `error` says what L1 refused; on node0 the first real request counted
+  `captured` 1 and `normalize_failed` 1, and that line named the cause.
+  The same lines are in Grafana Explore as `{service="crosstalk",
+  level=~"WARN|ERROR"}`.
+- **Files.** The `data` volume on the host, under Docker's data root:
+
+  ```sh
+  sudo ls "$(docker info --format '{{.DockerRootDir}}')/volumes/crosstalk_data/_data"
+  ```
+
+  `docker cp crosstalk-crosstalk-1:/var/lib/crosstalk/<path> .` copies
+  a file out without a shell.
+- **The binary.** `docker exec` can still run it by path:
+  `docker exec crosstalk-crosstalk-1 /usr/local/bin/crosstalk inspect
+  --config /etc/crosstalk/crosstalk.json [<exchange-id>]`.
+
 ## Invariants and constraints
 
 - **Secrets never live in a tracked file.**
   - `deploy/.env` is git-ignored and written with mode 600.
   - Config files only name environment variables.
   - Each container receives only the secrets it uses.
-- **Only the proxy listens off-host.** Every other port binds 127.0.0.1.
+- **Only the proxy is published off-host by default.** Every other
+  published port binds `CROSSTALK_BIND`, 127.0.0.1 unless `deploy/.env`
+  sets the host's tailnet IP or 0.0.0.0 (see "Reaching the stack from a
+  tailnet or the LAN"); none of those services has TLS, and Prometheus,
+  Alloy and the ops port have no authentication. node-exporter is the exception that is not published:
+  it runs on the host network and listens on `0.0.0.0:19100`, because
+  Prometheus reaches it through the Docker bridge (`host-gateway`), so
+  host metrics are readable from the LAN unless a firewall blocks the port.
 - **Every image is pinned to a release at least a week old:**
 
   | Image | Version |
