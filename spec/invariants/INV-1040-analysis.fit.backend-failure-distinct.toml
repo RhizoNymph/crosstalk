@@ -1,0 +1,26 @@
+[invariant]
+id = "analysis.fit.backend-failure-distinct"
+statement = "A topic or layout fit whose fitting service timed out, could not be reached, answered with a status or body outside its contract, or replied with content the contract forbids returns TopicError::Backend or LayoutError::Backend, never TooFewSamples or a FitFailure, and leaves the topic model's current version unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A FitFailure is recorded as a projection job's permanent failure, so it
+must mean "this input cannot be fitted": only the sidecar's deterministic
+refusals (too_few_points, non_finite_layout) and a non-finite coordinate
+qualify. A timeout or a crashed sidecar recorded as a FitFailure would fail
+a job that a requeue would have completed; recorded as TooFewSamples it
+would make the analyzer wait for more data that changes nothing. And a
+topic fit that did not complete must not replace the topics assign
+classifies under.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_analysis::remote::tests::layout::transport_failures_are_backend_errors",
+    "crosstalk_analysis::remote::tests::topics::sidecar_failures_are_backend_errors_and_change_nothing",
+    "crosstalk_analysis::remote::tests::topics::timeout_and_unreachable_sidecar_are_backend_errors",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

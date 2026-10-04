@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.embedder.key-never-disclosed"
+statement = "The embeddings API key appears only in the Authorization header of requests to the configured endpoint: never in an EmbedError, an EmbedderError, a Debug rendering or a log record."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+Embedding errors travel far: EmbedError::Model becomes a QueryError's
+Store reason and a RuleError, and every failure is logged. A key echoed by
+an upstream's error body or a Debug print of the config would land in the
+operator UI and in Loki. ApiKey's Debug is redacted, the header is marked
+sensitive, and errors carry the status and body, never the request.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_analysis::remote::tests::embedder::malformed_replies_are_model_errors",
+    "crosstalk_analysis::remote::tests::embedder::api_key_comes_from_the_environment_and_never_shows",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

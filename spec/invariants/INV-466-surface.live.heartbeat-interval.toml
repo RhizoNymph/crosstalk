@@ -11,7 +11,7 @@ heartbeat can always replay.
 """
 
 [evidence]
-dst = "crosstalk_surface::dst::idle_stream_sends_heartbeat"
+dst = "crosstalk_surface::dst::live::idle_stream_sends_heartbeat"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

@@ -15,7 +15,7 @@ promotion that retired it. Sorting and deduplicating
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::promote_returns_same_channel"
+unit = "crosstalk_surface::tests::actions::promote_returns_same_channel"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

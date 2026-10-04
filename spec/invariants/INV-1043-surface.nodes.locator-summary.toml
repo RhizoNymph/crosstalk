@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.nodes.locator-summary"
+statement = "The locator_summary NodeFacts gives a channel in force is the text of its pattern when it was declared before traffic, otherwise the text of its seed resource's locator, followed by \" (+n)\" when its canonical channel holds n > 0 further accessed resources, and the channel's id summary when the seed's locator cannot be read."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+ChannelNode::locator_summary is what the UI shows for a channel that has no
+label, and the spec defines it in prose only (`https://wiki.example/a
+(+12)`). One text form per locator and pattern, and the count taken from the
+resources the canonical channel holds (its own and its superseded channels'),
+keep the summary the same on every graph and after a promotion, so a node
+does not change name between two reads of the same state.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::nodes::node_facts_rebuild_from_the_stores"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

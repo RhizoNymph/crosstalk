@@ -14,7 +14,7 @@ lets the form offer topics a create will accept.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::present_reports_the_rule_store_version"
+unit = "crosstalk_surface::tests::reads::present_reports_the_rule_store_version"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -14,9 +14,9 @@ the operator who made the call.
 """
 
 [evidence]
-unit = "crosstalk_surface::tests::set_policy_stamps_caller_and_time"
-property = "crosstalk_surface::tests::prop_set_policy_decision_author_is_caller"
+unit = "crosstalk_surface::tests::actions::set_policy_stamps_caller_and_time"
+property = "crosstalk_surface::tests::props::actions::prop_set_policy_decision_author_is_caller"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

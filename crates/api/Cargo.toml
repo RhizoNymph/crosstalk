@@ -3,10 +3,20 @@ name = "crosstalk-api"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "The HTTP and SSE server for the crosstalk L8 surface."
+description = "The HTTP and SSE server for the crosstalk L8 surface, and the in-process surface over the reference stores."
 
 [lints]
 workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-memory = { path = "../memory" }
+crosstalk-surface = { path = "../surface" }
+crosstalk-transport = { path = "../transport" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+crosstalk-testkit = { path = "../testkit" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

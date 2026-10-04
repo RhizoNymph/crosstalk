@@ -1,6 +1,27 @@
 //! The ops listener's documents: the health JSON, readiness, metrics text.
 
 use super::*;
+use crate::normalize_failure::{FailureCounts, FailureReason, NormalizeFailure};
+use crosstalk_spec::observed::exchange::WireProtocol;
+
+/// The refusals behind `report()`'s `normalize_failed: 7`.
+fn failures() -> FailureCounts {
+    FailureCounts::default()
+        .with(
+            NormalizeFailure {
+                reason: FailureReason::RequestBody,
+                protocol: WireProtocol::AnthropicMessages,
+            },
+            5,
+        )
+        .with(
+            NormalizeFailure {
+                reason: FailureReason::UnsupportedProtocol,
+                protocol: WireProtocol::OpenAiChat,
+            },
+            2,
+        )
+}
 
 fn report() -> HealthReport {
     HealthReport {
@@ -73,7 +94,7 @@ fn health_report_decoding_is_strict() {
 
 #[test]
 fn metrics_are_prometheus_text_with_every_counter() {
-    let text = metrics::render(&report());
+    let text = metrics::render(&report(), &failures());
     for line in [
         "# TYPE crosstalk_capture_exchanges_total counter",
         "crosstalk_draining 0",
@@ -85,7 +106,9 @@ fn metrics_are_prometheus_text_with_every_counter() {
         "crosstalk_capture_uncaptured_total{reason=\"response_too_large\"} 6",
         "crosstalk_capture_uncaptured_total{reason=\"ids_exhausted\"} 13",
         "crosstalk_pipeline_exchanges_total{outcome=\"published\"} 3",
-        "crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\"} 7",
+        "crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\",reason=\"request_body\",protocol=\"anthropic_messages\"} 5",
+        "crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\",reason=\"unsupported_protocol\",protocol=\"open_ai_chat\"} 2",
+        "crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\",reason=\"request_body\",protocol=\"gemini_generate\"} 0",
         "crosstalk_pipeline_exchanges_total{outcome=\"store_failed\"} 8",
         "crosstalk_pipeline_exchanges_total{outcome=\"publish_failed\"} 10",
         "crosstalk_pipeline_blob_put_retries_total 9",
@@ -111,10 +134,51 @@ fn metrics_are_prometheus_text_with_every_counter() {
         ..report()
     };
     assert!(
-        metrics::render(&draining)
+        metrics::render(&draining, &failures())
             .lines()
             .any(|line| line == "crosstalk_draining 1")
     );
+}
+
+/// The `normalize_failed` outcome is only its reason and protocol series,
+/// one per pair: summed by outcome they are the health report's total, and
+/// no unlabelled series counts the refusals twice.
+#[test]
+fn normalize_failed_series_sum_to_the_total() {
+    let text = metrics::render(&report(), &failures());
+    let refusals: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.starts_with("crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\"")
+        })
+        .collect();
+    assert_eq!(refusals.len(), 10, "2 reasons by 5 protocols: {refusals:?}");
+    let sum: u64 = refusals
+        .iter()
+        .map(|line| {
+            line.rsplit(' ')
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .expect("a count")
+        })
+        .sum();
+    assert_eq!(sum, report().pipeline.normalize_failed);
+    assert!(
+        refusals
+            .iter()
+            .all(|line| line.contains(",reason=\"") && line.contains(",protocol=\"")),
+        "{refusals:?}"
+    );
+    for outcome in ["published", "store_failed", "publish_failed"] {
+        let line = format!("crosstalk_pipeline_exchanges_total{{outcome=\"{outcome}\"}} ");
+        assert_eq!(
+            text.lines()
+                .filter(|candidate| candidate.starts_with(&line))
+                .count(),
+            1,
+            "{outcome} keeps its one series"
+        );
+    }
 }
 
 #[test]

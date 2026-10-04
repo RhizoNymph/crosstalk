@@ -1,12 +1,13 @@
 //! The computational doubles keep the contracts the stores rely on.
 
 use std::num::NonZeroU16;
-use std::sync::Arc;
 
 use crosstalk_spec::aggregates::projection::{FitFailure, ProjectionLimit, ProjectionParams};
+use crosstalk_spec::aggregates::topic::Embedding;
 use crosstalk_spec::aggregates::topic::{Assignment, TopicModelVersion};
 use crosstalk_spec::interfaces::l6_analysis::{
-    EmbedError, Embedder, LayoutFitter, RuleContext, TopicError, TopicModel,
+    EmbedError, Embedder, FitDocument, LayoutError, LayoutFitter, RuleContext, TopicError,
+    TopicModel,
 };
 
 use super::support::model;
@@ -15,16 +16,19 @@ use crate::analysis::fakes::{
 };
 use crate::analysis::support::similarity as cosine;
 use crate::model::build::{channel, similarity, test_model, transmission, ts, unit};
-use crate::support::ManualClock;
 
 fn topic_model() -> FakeTopicModel {
-    FakeTopicModel::new(
-        model(),
-        2,
-        2,
-        similarity(0.5).unwrap(),
-        Arc::new(ManualClock::at(ts(9))),
-    )
+    FakeTopicModel::new(model(), 2, 2, similarity(0.5).unwrap())
+}
+
+fn documents(embeddings: &[Embedding]) -> Vec<FitDocument<'_>> {
+    embeddings
+        .iter()
+        .map(|embedding| FitDocument {
+            text: "",
+            embedding,
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -57,16 +61,29 @@ fn unfitted_model_has_version_zero_and_assigns_outliers() {
     assert_eq!(assignment, Assignment::Outlier);
 }
 
-#[test]
-fn fit_returns_version_above_current_with_member_mean_centroids() {
+#[tokio::test]
+async fn fit_returns_version_above_current_with_member_mean_centroids() {
     // analysis.topic.refit-new-version and centroid-mean, for the double
     let topics = topic_model();
     let a = unit(&model(), 1.0, 0.0, 0.0).unwrap();
     let b = unit(&model(), 0.0, 1.0, 0.0).unwrap();
     let a2 = unit(&model(), 1.0, 0.2, 0.0).unwrap();
-    let (version, fitted) = topics.fit(&[a.clone(), b.clone(), a2.clone()]).unwrap();
+    let version = TopicModelVersion(1);
+    let fitted = topics
+        .fit(
+            version,
+            &documents(&[a.clone(), b.clone(), a2.clone()]),
+            ts(9),
+        )
+        .await
+        .unwrap();
     assert!(version > TopicModelVersion(0));
     assert_eq!(topics.version(), version);
+    assert!(
+        fitted
+            .iter()
+            .all(|topic| topic.version == version && topic.fitted_at == ts(9))
+    );
     assert_eq!(fitted.len(), 2);
     let mean: Vec<f32> = a
         .values()
@@ -87,10 +104,27 @@ fn fit_returns_version_above_current_with_member_mean_centroids() {
         Assignment::Topic { topic, .. } => assert_eq!(topic, fitted[0].id),
         Assignment::Outlier => panic!("a member is assigned its topic"),
     }
-    let (next, _) = topics.fit(&[a, b]).unwrap();
-    assert!(next > version);
     assert_eq!(
-        topics.fit(&[unit(&model(), 1.0, 0.0, 0.0).unwrap()]),
+        topics
+            .fit(version, &documents(&[a.clone(), b.clone()]), ts(10))
+            .await,
+        Err(TopicError::VersionNotNewer {
+            current: version,
+            requested: version
+        })
+    );
+    let next = TopicModelVersion(3);
+    topics.fit(next, &documents(&[a, b]), ts(10)).await.unwrap();
+    assert!(next > version);
+    assert_eq!(topics.version(), next);
+    assert_eq!(
+        topics
+            .fit(
+                TopicModelVersion(4),
+                &documents(&[unit(&model(), 1.0, 0.0, 0.0).unwrap()]),
+                ts(11)
+            )
+            .await,
         Err(TopicError::TooFewSamples { needed: 2, got: 1 })
     );
 }
@@ -109,15 +143,15 @@ fn assign_rejects_embedding_of_other_model() {
     );
 }
 
-#[test]
-fn prop_layout_is_deterministic() {
+#[tokio::test]
+async fn prop_layout_is_deterministic() {
     // analysis.projection.deterministic-layout, for the double
     let embeddings: Vec<_> = (0..5)
         .map(|n| unit(&model(), 1.0, n as f32, 0.5).unwrap())
         .collect();
     let params = ProjectionParams::new(ProjectionLimit::new(10).unwrap(), 2, 100, 12_345).unwrap();
-    let first = FakeLayoutFitter.fit(&embeddings, params).unwrap();
-    let second = FakeLayoutFitter.fit(&embeddings, params).unwrap();
+    let first = FakeLayoutFitter.fit(&embeddings, params).await.unwrap();
+    let second = FakeLayoutFitter.fit(&embeddings, params).await.unwrap();
     let bits = |layout: &[[f32; 2]]| {
         layout
             .iter()
@@ -127,8 +161,11 @@ fn prop_layout_is_deterministic() {
     assert_eq!(bits(&first), bits(&second));
     assert_eq!(first.len(), embeddings.len());
     assert_eq!(
-        FakeLayoutFitter.fit(&embeddings[..2], params),
-        Err(FitFailure::TooFewPoints { needed: 3, got: 2 })
+        FakeLayoutFitter.fit(&embeddings[..2], params).await,
+        Err(LayoutError::Failed(FitFailure::TooFewPoints {
+            needed: 3,
+            got: 2
+        }))
     );
 }
 

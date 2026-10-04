@@ -18,8 +18,8 @@ unit = [
     "crosstalk_spec::tests::channel_reads::names_resolve_each_known_id_to_the_channel_in_force",
     "crosstalk_spec::tests::channel_reads::a_name_is_only_built_for_a_channel_in_force_with_a_readable_seed",
 ]
-property = "crosstalk_surface::tests::prop_channel_names_match_reference"
+property = "crosstalk_surface::tests::props::channels::prop_channel_names_match_reference"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -5,12 +5,16 @@
 use std::fmt::Write as _;
 
 use super::{HealthReport, Phase};
+use crate::normalize_failure::{FailureCounts, protocol_code};
 
 /// The exposition format's content type.
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
-/// Render `report` as Prometheus text.
-pub fn render(report: &HealthReport) -> String {
+/// Render `report` as Prometheus text. The `normalize_failed` outcome is
+/// one series per reason and protocol, from `failures`, every pair present
+/// (zeros included) and no unlabelled total beside them, so `sum by
+/// (outcome)` is the refusal total.
+pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
     let mut out = String::new();
     let draining = u64::from(report.status == Phase::Draining);
     gauge(
@@ -24,44 +28,56 @@ pub fn render(report: &HealthReport) -> String {
         &mut out,
         "crosstalk_capture_exchanges_total",
         "Generation exchanges the proxy handed to the capture stage.",
-        &[(None, capture.captured)],
+        &[(&[], capture.captured)],
     );
     counter(
         &mut out,
         "crosstalk_capture_uncaptured_total",
         "Requests the proxy forwarded without capturing, by reason.",
         &[
-            (Some(("reason", "unclassified")), capture.unclassified),
-            (Some(("reason", "decode_error")), capture.decode_error),
-            (Some(("reason", "channel_full")), capture.channel_full),
-            (Some(("reason", "channel_closed")), capture.channel_closed),
+            (&[("reason", "unclassified")], capture.unclassified),
+            (&[("reason", "decode_error")], capture.decode_error),
+            (&[("reason", "channel_full")], capture.channel_full),
+            (&[("reason", "channel_closed")], capture.channel_closed),
             (
-                Some(("reason", "response_too_large")),
+                &[("reason", "response_too_large")],
                 capture.response_too_large,
             ),
-            (Some(("reason", "ids_exhausted")), capture.ids_exhausted),
+            (&[("reason", "ids_exhausted")], capture.ids_exhausted),
         ],
     );
     let pipeline = &report.pipeline;
+    let refusals: Vec<[(&str, &str); 3]> = failures
+        .iter()
+        .map(|(failure, _)| {
+            [
+                ("outcome", "normalize_failed"),
+                ("reason", failure.reason.code()),
+                ("protocol", protocol_code(failure.protocol)),
+            ]
+        })
+        .collect();
+    let published: [(&str, &str); 1] = [("outcome", "published")];
+    let mut samples: Vec<(&[(&str, &str)], u64)> = vec![(&published, pipeline.published)];
+    samples.extend(
+        refusals
+            .iter()
+            .zip(failures.iter())
+            .map(|(labels, (_, count))| (labels.as_slice(), count)),
+    );
+    samples.push((&[("outcome", "store_failed")], pipeline.store_failed));
+    samples.push((&[("outcome", "publish_failed")], pipeline.publish_failed));
     counter(
         &mut out,
         "crosstalk_pipeline_exchanges_total",
-        "Exchanges the capture stage finished, by outcome.",
-        &[
-            (Some(("outcome", "published")), pipeline.published),
-            (
-                Some(("outcome", "normalize_failed")),
-                pipeline.normalize_failed,
-            ),
-            (Some(("outcome", "store_failed")), pipeline.store_failed),
-            (Some(("outcome", "publish_failed")), pipeline.publish_failed),
-        ],
+        "Exchanges the capture stage finished, by outcome; refusals also by reason and protocol.",
+        &samples,
     );
     counter(
         &mut out,
         "crosstalk_pipeline_blob_put_retries_total",
         "Blob put attempts that failed and were retried.",
-        &[(None, pipeline.store_retries)],
+        &[(&[], pipeline.store_retries)],
     );
     let log = &report.log;
     counter(
@@ -69,9 +85,9 @@ pub fn render(report: &HealthReport) -> String {
         "crosstalk_exchange_log_deliveries_total",
         "ExchangeCaptured deliveries the exchange log handled, by outcome.",
         &[
-            (Some(("outcome", "written")), log.written),
-            (Some(("outcome", "duplicate")), log.duplicates),
-            (Some(("outcome", "write_failed")), log.write_failed),
+            (&[("outcome", "written")], log.written),
+            (&[("outcome", "duplicate")], log.duplicates),
+            (&[("outcome", "write_failed")], log.write_failed),
         ],
     );
     out
@@ -84,17 +100,21 @@ fn gauge(out: &mut String, name: &str, help: &str, value: u64) {
     let _ = writeln!(out, "{name} {value}");
 }
 
-fn counter(out: &mut String, name: &str, help: &str, samples: &[(Option<(&str, &str)>, u64)]) {
+/// A counter's samples, each with its labels (none for an unlabelled
+/// sample). Label values are fixed codes, so none needs escaping.
+fn counter(out: &mut String, name: &str, help: &str, samples: &[(&[(&str, &str)], u64)]) {
     let _ = writeln!(out, "# HELP {name} {help}");
     let _ = writeln!(out, "# TYPE {name} counter");
-    for (label, value) in samples {
-        match label {
-            Some((key, label)) => {
-                let _ = writeln!(out, "{name}{{{key}=\"{label}\"}} {value}");
-            }
-            None => {
-                let _ = writeln!(out, "{name} {value}");
-            }
+    for (labels, value) in samples {
+        if labels.is_empty() {
+            let _ = writeln!(out, "{name} {value}");
+            continue;
         }
+        let _ = write!(out, "{name}{{");
+        for (at, (key, label)) in labels.iter().enumerate() {
+            let comma = if at == 0 { "" } else { "," };
+            let _ = write!(out, "{comma}{key}=\"{label}\"");
+        }
+        let _ = writeln!(out, "}} {value}");
     }
 }

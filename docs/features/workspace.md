@@ -45,7 +45,7 @@ crates/
   reconstruct/             crosstalk-reconstruct  P4.1   L3: identity, merges, threading
   provenance/              crosstalk-provenance   P4.2   L4: segmenter, decoders, fingerprints
   flow/                    crosstalk-flow         P5     L5: resources, channels, correlator, verdicts
-  analysis/                crosstalk-analysis     P6.2/3 L6: embeddings, topics, search, alerts
+  analysis/                crosstalk-analysis     P6.2/3 L6: embeddings, topics, search, alerts (sidecar adapters: analysis.md)
   topology/                crosstalk-topology     P6.1   L7: edges, graphs, series, watermark
   surface/                 crosstalk-surface      P2.6   L8: QueryApi, actions, live feed, export
   api/                     crosstalk-api          P7.1   HTTP + SSE server for the L8 surface
@@ -77,6 +77,7 @@ target `crosstalk` (`crates/gateway/src/main.rs`).
 | `crates/memory/Cargo.toml` | Adds `blake3`, `proptest`, `serde_json`, `thiserror`, `tokio` (`sync`, `rt`, `macros`) and `tracing` from the workspace pins: the reference stores and their exported property harnesses |
 | `crates/gateway/Cargo.toml` | The `crosstalk` binary; depends on the layer crates `canonical`, `ingress`, `transport` and on `store`, plus `bytes`, `http-body-util`, `hyper` (client, http1, server), `hyper-util` (tokio), `serde`, `serde_json`, `thiserror`, `tokio` (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), `tracing` and `tracing-subscriber` (env-filter, fmt, json, std, which bring in `matchers`, `regex-automata`, `aho-corasick`, `tracing-serde` and `valuable`); dev: `crosstalk-sim`, `crosstalk-testkit`, `tempfile`; see [gateway.md](gateway.md) |
 | `crates/sim/Cargo.toml` | Adds `thiserror`, `tracing` and `tokio` with `macros`, `rt`, `sync`, `time` and `test-util` (paused time); see [sim.md](sim.md) |
+| `crates/analysis/Cargo.toml` | The HTTP adapters' pins (`src/remote/`): `blake3`, `bytes`, `http-body-util`, `hyper` (client, http1), `hyper-rustls` (http1, ring, tls12, webpki-tokio), `hyper-util` (client-legacy, http1, tokio), `serde`, `serde_json`, `thiserror`, `tokio` (sync, time), `tracing`; dev: `crosstalk-testkit`, `proptest`, `tokio` (macros, net, rt, rt-multi-thread); see [analysis.md](analysis.md). No new workspace pin |
 | `crates/ingress/Cargo.toml` | The proxy's pins: `blake3`, `bytes`, `flate2 = "=1.1.10"`, `http-body-util`, `hyper` (client, http1, server), `hyper-rustls = "=0.27.10"` (no default features; http1, ring, tls12, webpki-tokio), `hyper-util` (client-legacy, http1, tokio), `serde`, `serde_json`, `thiserror`, `tokio`, `tracing`, `zstd = "=0.13.3"` (no default features); dev: `crosstalk-sim`, `crosstalk-testkit`, `proptest`, `tower-service = "=0.3.3"`, `tracing-subscriber = "=0.3.23"` (fmt, std); see [ingress.md](ingress.md) |
 
 A crate that needs a new third-party dependency adds its exact pin to
@@ -93,7 +94,7 @@ gateway (and the composers beside it). The roles:
 | Role | Crates |
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
-| composition | `api`, `client`, `eval`, `gateway` (`eval` is registered before `crates/eval` exists; the member check does not require it yet) |
+| composition | `api`, `client`, `e2e`, `eval`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
 | test support | `memory`, `sim`, `testkit` |
 | tool | `demo` |
 | open | `spec`, `store`, and every third-party crate |
@@ -102,7 +103,7 @@ The rules, applied to every declared dependency (normal, dev and build,
 including optional and target-specific ones) of every workspace member:
 
 1. A layer crate never depends on another layer crate, nor on `api`,
-   `client`, `eval` or `gateway`, under any kind, except that it may depend on
+   `client`, `e2e`, `eval` or `gateway`, under any kind, except that it may depend on
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
@@ -133,6 +134,9 @@ parses the JSON with `serde_json`.
   `Composer::required` exempts `eval` until `crates/eval` lands (roadmap
   P3.1); `eval_composes_gateway_and_layers_and_is_not_yet_required`
   checks that it is classified as a composer meanwhile.
+- `e2e_composes_gateway_and_layers_and_no_layer_uses_it` checks that
+  `e2e` may depend on the gateway and every layer, and that a layer's
+  dependency on it, of any kind, is `LayerOnComposer`.
 - `every_crate_depends_on_the_spec` fails if a member other than the spec
   lacks a normal dependency on `crosstalk-spec`.
 - The other tests exercise `check` on hand-built edges: every layer pair

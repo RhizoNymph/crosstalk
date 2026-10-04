@@ -1,0 +1,8 @@
+# Only the sidecar's sources reach the build context.
+*
+!sidecar/topics/pyproject.toml
+!sidecar/topics/uv.lock
+!sidecar/topics/.python-version
+!sidecar/topics/src
+**/__pycache__
+**/*.pyc

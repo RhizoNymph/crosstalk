@@ -34,9 +34,9 @@ is 48 cases of at most 40 operations; the pipeline harnesses' own tests run
 runtime.
 
 No store reads a clock: every store method that depends on the time takes
-it as an argument. `support::ManualClock` implements the spec's `Clock`
-for the one computation double that stamps its output (`FakeTopicModel`'s
-`fitted_at`).
+it as an argument, and so does `TopicModel::fit` (`FakeTopicModel` stamps
+`fitted_at` with the `at` it is given). `support::ManualClock` implements
+the spec's `Clock` for tests that need one to move.
 
 ## Pipeline stores (L3–L5)
 
@@ -80,7 +80,7 @@ resource, record an access, set a detection, apply a confirmation) with
 | `Outbox` | The sending half of an unbounded `tokio::sync::mpsc` channel of `BusEvent`s. The L3–L5 stores publish right after their critical section, the L6–L8 stores from inside it (in commit order); either way a re-query after any event sees the change. `Outbox::none()` drops events; `drain` empties a receiver |
 | `IdSequence` | Deterministic increasing ids (`base + 1`, `base + 2`, …; default base `1 << 80`, above the reserved rule ids) for ids a store creates (`MergeId`, declared `ChannelId`, rule and alert ids, config audit ids). Clones share the counter. Drawn only for accepted operations (`peek` and `skip` for an operation that draws several) |
 | `CursorBook<B, K>`, `page_after` | Page cursors: a token is a key into the issuing store's book, bound to the request (`B`) and resuming after `K`. An unknown token, one from another store, or one presented with another request is `InvalidCursor`. `page_after` cuts one page of the already filtered items and issues the next cursor only when more follow |
-| `ManualClock` | A spec `Clock` a test moves, for `FakeTopicModel` |
+| `ManualClock` | A spec `Clock` a test moves |
 
 The harness runner is `model::run` (`HarnessConfig`, `same`, `holds`,
 `Divergence`, `ModelMismatch`), shared by every harness here and by the
