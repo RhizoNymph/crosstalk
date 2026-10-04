@@ -143,7 +143,28 @@ holds:
 | --- | --- |
 | `channel()` | the stored `Channel` under its own id |
 | `seed()` | its seed `Resource`, present exactly when the channel has a seed |
-| `standing()` | `InForce(ChannelActivity)` when the channel is in force, `Superseded(SupersededInto { into, by, at })` exactly when it is superseded, with its own supersession |
+| `standing()` | `InForce { traffic: CrossTraffic, activity: ChannelActivity }` when the channel is in force, `Superseded(SupersededInto { into, by, at })` exactly when it is superseded, with its own supersession |
+| `listing()`, `confirmation()` | derived, never stored: `Listing::of` its origin and traffic (`None` when superseded), and the listing's confirmation |
+
+**Traffic and listing.** A channel exists once a transmission between two
+different agents goes through it. `traffic` is `CrossTraffic::tally` over
+every transmission whose route resolves to the channel, all time, with
+agents resolved through merges at the read: `confirmed` (crossing
+transmissions in `Confirmed`, `Classified` or `Aggregated`) and
+`unconfirmed` (crossing ones in `AwaitingContent`, `Suspected` or
+`Discarded`: a co-access between two agents, no content match). From it:
+
+| Traffic | Origin | Listing | Shown |
+| --- | --- | --- | --- |
+| a confirmed crossing transmission | any | `Channel(Confirmed)` | listed, counted, drawn |
+| only unconfirmed ones | any | `Channel(Unconfirmed)` | listed, counted and drawn, marked "unconfirmed"; left out under `UnconfirmedChannels::Exclude` |
+| none | declared (before traffic, or promoted) | `Declaration` | listed apart as declared with no traffic yet; counted as no channel, never drawn |
+| none | discovered | `Hidden` | in no list, graph or count; `channel(id)` still answers, with its policy history; an unmerge lists it again |
+
+Merges only remove crossing transmissions at read time, so a row whose
+stored detection has no traffic (declared, awaiting traffic or unused)
+cannot carry any: `ChannelRow::new` refuses it (`TrafficWithoutDetection`).
+Verdicts change neither traffic nor listing.
 
 `ChannelActivity` is `Never` (no access and no transmission ever; refused
 for a channel whose detection shows traffic) or `Seen { last, counts }`.
@@ -175,12 +196,14 @@ routed through a superseded channel likewise advances the superseding
 channel's detection, never the superseded one's
 ([query_surface.md](query_surface.md#promotion-and-supersession)).
 
-**Filter.** `ChannelFilter { origin, detections, policies, window }`
-(`l8_surface/lists.rs`):
+**Filter.** `ChannelFilter { origin, listings, detections, policies,
+window }` (`l8_surface/lists.rs`); `matches` takes the `ChannelRow`, so the
+channel and its listing cannot disagree. It never keeps a hidden channel.
 
 | Field | Keeps a channel when |
 | --- | --- |
 | `origin: OriginFilter` | `InForce(kinds)` (the default): it is in force and its `CanonicalOriginKind` is listed, or `kinds` is empty. `WithSuperseded(kinds)`: the same, or it is superseded. `Superseded`: it is superseded |
+| `listings` | in force: its `ListingKind` (`Confirmed`, `Unconfirmed`, `Declaration`) is listed, or the list is empty. A superseded channel has no listing and is selected by `origin` alone. "Confirmed only" is the listings without `Unconfirmed` |
 | `detections` | its own `detection_kind()` is listed (a superseded channel's is frozen) |
 | `policies` | its own current policy kind is listed (a superseded channel takes no decisions) |
 | `window` | always: it changes the counts on each row, never which rows are listed or a row's `last` |
@@ -190,6 +213,20 @@ origins plus a flag, so "superseded only, but exclude superseded" cannot
 be asked. The page cursor binds the whole filter, window included. The
 watermark is read from L7 before the registry and the buckets, and the UI
 re-queries rows on `Watermark` as well as `ChannelChanged`.
+
+**Transmissions.** `channel_transmissions(channel, filter, version, page)`
+(`l8_surface/channel_traffic.rs`, View) lists the cross-agent transmissions
+whose route resolves to the channel's canonical channel, newest opened
+first (`ChannelTransmissionList`, keyed by `(opened_at, id)`), each a
+`ChannelTransmission::of`: the `TransmissionSummary` plus its `senders`,
+the canonical agents its evidence names other than its reader (the
+confirmed sender, or the writers of its co-accesses). A transmission whose
+agents have merged into one is not listed. `ChannelTransmissionFilter {
+confirmation }` keeps unconfirmed (awaiting content, suspected, discarded)
+or confirmed ones, or both; the channel page lists an unconfirmed
+channel's suspected transmissions with it, each with its verdict. Topics
+are under the version the first page resolves; the cursor binds the
+canonical channel, the filter and the version. Not `Watermarked`.
 
 **Promotion preview.** `promotion_preview(channel, pattern)` shows what
 `PromoteChannel { channel, pattern, .. }` would do if sent now:
@@ -376,12 +413,20 @@ overview's counts without paging any list:
   channels that carried at least one counted transmission. Also the
   resolved topic version. Fails as `topology` does (unaligned window, the
   version's errors, `TopicsNotInVersion`).
-- **Queues** (`QueueCounts`), not scoped: **open alerts** are the alerts
-  whose `AlertState` is `Open` (not acknowledged, resolved or suppressed),
-  as `alerts` with `states: [Open]` lists them; **unreviewed channels**
-  are the channels not superseded whose current `Policy` is `Unreviewed`
-  (never reviewed or reset), the review queue. A superseded channel is
-  reviewed through its superseding channel. `QueueCounts::tally` is the
+- **Queues** (`QueueCounts`), not scoped by the window: **open alerts**
+  are the alerts the alert list shows (`AlertSubject::shown`: not about a
+  hidden channel or a transmission whose agents merged into one) whose
+  `AlertState` is `Open` (not acknowledged, resolved or suppressed), as
+  `alerts` with `states: [Open]` lists them; **unreviewed channels** are
+  the listed channels in force (channels and declarations, never a hidden
+  one) whose current `Policy` is `Unreviewed` (never reviewed or reset),
+  the review queue; **unconfirmed channels** are the channels listed as
+  `Channel(Unconfirmed)`, whose suspected transmissions await content or a
+  verdict. A superseded channel is reviewed through its superseding
+  channel. The filter's `unconfirmed_channels` applies (it decides which
+  channels count at all): under `Exclude`, unconfirmed channels are neither
+  unreviewed nor counted, and `unconfirmed_channels` is `None` rather than
+  0, so "left out" is not shown as "none". `QueueCounts::tally` is the
   definition. A backlog does not depend on a window: an alert raised last
   week still waits.
 
@@ -403,8 +448,10 @@ The keys of `ChannelCounts::routed` are exactly the channels
 window `active_channels` equals the number of rows of
 `channels(ChannelFilter::default())` whose `transmissions` is non-zero.
 "Active" means exactly that. It is not a row's `ChannelActivity::Seen`,
-which is wider: any access or confirmation ever, so a channel written to
-and never read is `Seen` but not active. Under a non-default filter the
+which is wider: any access or confirmation ever, so a channel quiet in the
+window, or an unconfirmed one, is `Seen` but not active. Every active
+channel is confirmed: the graph counts confirmed transmissions between
+different agents only. Under a non-default filter the
 overview is narrower than the rows by design: the rows have no topology
 filter.
 
@@ -427,12 +474,14 @@ through it. Alert ids are never aliased.
 | `spec/types/derived/flow/channel/promotion.rs` (part) | What a promotion would cover | `coverage`, `PromotionCoverage` (built only by `coverage`), `COVERAGE_CAP`, `CappedResources` |
 | `spec/types/support.rs` (part) | A capped list with its exact total | `Capped` (checked: `new`, `first`, `hidden`, `is_complete`), `InvalidCapped` |
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
-| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked), `InvalidChannelRow`, `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
-| `spec/types/interfaces/l8_surface/lists.rs` (part) | The channel list filter | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`; re-exports `AgentFilter` and `AgentText` |
+| `spec/types/derived/flow/channel/confirmation.rs` | What a channel's cross-agent traffic shows at read time | `Confirmation`, `CrossTraffic` (`tally`, `confirmation`), `Listing` (`of`, `kind`, `confirmation`), `ListingKind` |
+| `spec/types/interfaces/l8_surface/channel_traffic.rs` | A channel's transmissions, for review | `ChannelTransmission` (`of`, `senders`, `confirmation`), `ChannelTransmissionFilter` (`matches`), `ChannelTransmissionPage` |
+| `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked; `traffic`, `listing`, `confirmation`), `InvalidChannelRow` (incl. `TrafficWithoutDetection`), `ChannelStanding` (`InForce { traffic, activity }`), `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`) |
+| `spec/types/interfaces/l8_surface/lists.rs` (part) | The channel list filter | `ChannelFilter` (origin, listings, detections, policies, counts-only window; `matches` a `ChannelRow`), `OriginFilter`; re-exports `AgentFilter` and `AgentText` |
 | `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage` |
 | `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `EvidenceError`, `EvidenceRecord` |
 | `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked; `DEFAULT`, `MATCH_ONLY`), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError` |
-| `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally`) |
+| `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally` over shown alerts and channel rows, with `unconfirmed_channels`) |
 | `spec/types/tests/` | `agent_reads.rs` (profiles and clusters, the agents filter, id text, id batches, merging a cluster into itself, agent error mappings); `channel_reads.rs` (channel rows and counts, the channel filter, names, the preview's agreement with promotion); `summary.rs`, `evidence.rs`, `excerpt.rs`, `part_text.rs` (transmission rows, evidence, excerpts, part text, export content from evidence); `overview.rs` (totals, queues, and their agreement with channel rows) | — |
 
 ## Invariants and constraints
@@ -457,9 +506,16 @@ through it. Alert ids are never aliased.
   traversal of the same channel and window, over itself and every channel
   it superseded, and transmissions as `ChannelCounts::routed` of the
   default-filter graph for that window.
+- A row's listing and confirmation are derived from its origin and its
+  `CrossTraffic` (merges resolved at the read), never stored, so they
+  cannot disagree with the traffic; a row with cross-agent traffic on a
+  channel whose stored detection has none is refused.
 - `ChannelFilter::matches` never reads the window, so filters differing
-  only in window list the same channels; the default lists every channel
-  in force and no superseded one.
+  only in window list the same channels; it never keeps a hidden channel;
+  the default lists every confirmed and unconfirmed channel and every
+  declaration in force, and no superseded one.
+- `channel_transmissions` lists only transmissions that cross agents at
+  the read, each with senders other than its reader.
 - With the default filter and the same window, the overview's
   `active_channels` equals the number of channel rows with non-zero
   `transmissions`; both count from the one topology graph.
