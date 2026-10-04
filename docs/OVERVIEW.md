@@ -41,9 +41,11 @@ Overview:
       topic sizes and lineage, search, alert rules and their management),
       L7 topology (edge aggregation per time window, graphs and time
       series), L8 surface (query API with cursor-paginated lists and linked
-      views sharing one filter, UI, operator actions with one permission
-      each, operator verdicts on transmissions and the detection quality
-      they measure, append-only audit log, SSE live feed, alert sinks).
+      views sharing one filter, UI, operator directory with a trusted
+      single-user mode, operator actions with one permission each,
+      operator verdicts on transmissions and the detection quality they
+      measure, append-only audit log of operator actions and config
+      changes, an id-only SSE live feed, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -63,9 +65,13 @@ Overview:
     topic history, search, projections, lists and alerts, with the graph,
     search, projection and edge drill-down all filtered by one
     TopologyFilter, pages the audit log like any other list, and streams
-    new alerts and changed edges, channels and
-    policies to the UI over SSE (resumable by cursor, with a resync marker
-    when a cursor is too old). Operator actions flow back down: policy
+    id-only change events to the UI over SSE: every store publishes a
+    Changed notification after each committed change to an agent, channel,
+    alert, rule, topic version, projection layout or the watermark, and the
+    UI re-queries what the event names (resumable by cursor, with a resync
+    marker when a cursor is too old). Each request becomes a Caller through
+    the operator directory config defines (in trusted mode, the one
+    operator with every permission). Operator actions flow back down: policy
     changes and channel promotion to L5, which records every policy
     decision in the channel's policy history; transmission dismissal
     through L5's correlator (L6 then suppresses its alert); verdicts on
@@ -73,7 +79,8 @@ Overview:
     publishes VerdictSet (L6 suppresses the alerts of a false detection;
     L6 and L7 views can exclude false detections at query time); agent merges,
     exact unmerges and display labels to L3; alert rule management to L6.
-    Every action call is recorded in the audit log with its outcome.
+    Every action call is recorded in the audit log with its outcome, and
+    so is every change a config load makes.
 
 Features Index:
   type_spec:
@@ -82,9 +89,10 @@ Features Index:
       (including clients, upstreams and credentials), derived inferences,
       aggregates (including time series and topic history), bus events and
       per-layer interfaces (including the query surface's paginated lists,
-      shared view filter and projection, the SSE live feed, the audit log,
-      channel policy history, operator actions with their permissions, and
-      operator verdicts with the detection quality report),
+      shared view filter and projection, the id-only SSE live feed, the
+      audit log of operator and config changes, the operator directory and
+      trusted mode, channel policy history, operator actions with their
+      permissions, and operator verdicts with the detection quality report),
       with tests for the invariants checked at runtime and one TOML file per
       invariant in spec/invariants. Harness and server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.

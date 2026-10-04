@@ -27,6 +27,12 @@
 //! `AlertRevision`. The surface manages rules directly through
 //! `AlertRuleStore`.
 //!
+//! For the live feed, L6 publishes `Changed` after every committed change:
+//! `Alert` for an opened, deduplicated or suppressed alert; `Rule` for a
+//! created (by an operator or config), updated, enabled, disabled or newly
+//! stale rule; `TopicVersion` for each status change in the catalog; and
+//! `Projection` when a new layout becomes current.
+//!
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.
 //! - `TopicModel`: `UmapHdbscanTopics` (BERTopic-style).

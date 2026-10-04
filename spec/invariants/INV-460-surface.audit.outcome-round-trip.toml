@@ -1,18 +1,19 @@
 [invariant]
 id = "surface.audit.outcome-round-trip"
-statement = "AuditOutcome::of maps Ok(Applied) to Applied, Ok(Unchanged) to Unchanged, Forbidden to Forbidden, NotFound to Rejected(NotFound), and BadRequest and Store to Rejected Invalid and Failed with the same reason, and AuditOutcome::result inverts it."
+statement = "AuditOutcome::of maps Ok(o) to Succeeded(o), Forbidden { missing } to Forbidden { missing }, NotFound, Conflict and InvalidInput to Rejected with the same variant and detail, and Store to Rejected(Failed) with the same reason, and AuditOutcome::result inverts it exactly."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
-The record must say exactly what the operator was told. Losing the reason
-of a rejection, or recording a no-op acknowledgement as Applied, would
-make the log disagree with the response; Unchanged keeps the losing
-request of a race from looking like a second transition.
+The entry must say exactly what the operator was told. Losing the detail
+of a rejection, recording a no-op acknowledgement as Applied, or dropping
+an id the outcome created (a rule, a promoted channel, a merge) would make
+the log disagree with the response; Unchanged keeps the losing request of
+a race from looking like a second transition.
 """
 
 [evidence]
-unit = ["crosstalk_spec::tests::audit::outcome_maps_every_result_and_back", "crosstalk_spec::tests::audit::outcome_keeps_rejection_reason"]
+unit = ["crosstalk_spec::tests::audit::outcome_maps_every_result_and_back", "crosstalk_spec::tests::audit::outcome_keeps_rejection_detail"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.audit.append-only"
-statement = "No audit record is ever modified or removed: a record returned by one AuditLog query is returned unchanged by every later query whose filter it matches."
+statement = "No audit entry, operator or config, is ever modified or removed: an entry returned by one AuditLog query is returned unchanged by every later query whose filter it matches."
 kind = "coordination"
 requires = ["type", "integration"]
 rationale = """

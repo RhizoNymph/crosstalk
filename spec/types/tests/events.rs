@@ -10,6 +10,7 @@ use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::transmission::{Classification, DirectCarrier, Route};
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
 use crate::derived::provenance::span::RelaySource;
+use crate::events::changed::Changed;
 use crate::events::detect::DetectEvent;
 use crate::events::ingest::{ConversationDelta, IngestEvent};
 use crate::events::insight::ClassificationCause;
@@ -226,6 +227,7 @@ fn sample_events() -> Vec<BusEvent> {
             channel: channel(1),
             policy: Policy::Unreviewed(None),
         }),
+        BusEvent::Changed(Changed::Channel(channel(1))),
     ]
 }
 
@@ -265,6 +267,7 @@ fn subjects_name_their_variant() {
             Subject::AlertOpened,
             Subject::AlertChanged,
             Subject::PolicyChanged,
+            Subject::Changed,
         ]
     );
 }
@@ -296,7 +299,8 @@ fn every_subject() -> Vec<Subject> {
             | Subject::EdgeUpdated
             | Subject::AlertOpened
             | Subject::AlertChanged
-            | Subject::PolicyChanged => subject,
+            | Subject::PolicyChanged
+            | Subject::Changed => subject,
         }
     }
     [
@@ -323,6 +327,7 @@ fn every_subject() -> Vec<Subject> {
         Subject::AlertOpened,
         Subject::AlertChanged,
         Subject::PolicyChanged,
+        Subject::Changed,
     ]
     .into_iter()
     .map(declared)

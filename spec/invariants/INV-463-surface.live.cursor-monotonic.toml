@@ -1,18 +1,18 @@
 [invariant]
 id = "surface.live.cursor-monotonic"
-statement = "Within one stream every item's cursor has the same epoch and a seq no lower than the previous item's, Update items have strictly increasing seqs, and a Heartbeat's seq is that of the newest entry the stream has delivered or filtered out."
+statement = "Within one stream every item's cursor has the same epoch and a seq no lower than the previous item's, Event items have strictly increasing seqs, and a Heartbeat's seq is that of the newest entry the stream has delivered or passed over."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
 The client resumes from the last event id it saw. If cursors went
-backwards it would replay updates it already applied; if a heartbeat
-lagged behind entries the stream had filtered out, a client whose filter
-admits little would hold an old cursor and resync needlessly once it left
-retention.
+backwards it would replay events it already handled; if a heartbeat lagged
+behind entries the stream had passed over (events the caller may not
+receive), a client that receives few events would hold an old cursor and
+resync needlessly once it left retention.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::stream_cursors_monotonic_under_filtering"
+dst = "crosstalk::surface::dst::stream_cursors_monotonic_when_passing_over"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

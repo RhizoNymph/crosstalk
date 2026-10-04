@@ -19,7 +19,12 @@
 //! | L5 | [`l5_flow`] | `ConversationDelta`, `ContentMatched`, clock, policy | channel and transmission events |
 //! | L6 | [`l6_analysis`] | `TransmissionConfirmed`, `TopicVersionActivated`, clock, detect events | `TransmissionClassified`, `TopicVersionReady`, `AlertOpened`, `AlertChanged` |
 //! | L7 | [`l7_topology`] | `TransmissionClassified`, `TopicVersionReady` | `EdgeUpdated`, `TopicVersionActivated` |
-//! | L8 | [`l8_surface`] | `AlertOpened`, `EdgeUpdated`, live feed subjects, operator | `PolicyChanged`, `AlertChanged`, agent merges, SSE |
+//! | L8 | [`l8_surface`] | `AlertOpened`, `Changed`, operator, config | `PolicyChanged`, `AlertChanged`, agent merges, SSE `UiEvent`s |
+//!
+//! Every store whose entities a surface query returns (L3 agents, L5
+//! channels, L6 alerts, rules, topic versions and projection layouts, L7's
+//! watermark) also publishes [`Changed`](crate::events::changed::Changed)
+//! after every committed change to one of them, for the live feed.
 
 pub mod l0_ingress;
 pub mod l1_canonical;

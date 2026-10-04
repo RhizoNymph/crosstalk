@@ -14,7 +14,7 @@ cargo test  --manifest-path spec/Cargo.toml
 ```text
 spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId), BLAKE3 content ids (incl. ConfigHash)
 ├── support.rs             NonEmpty, NonBlank, Timestamp, TimeWindow, ByteRange, Similarity, Share
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest, Page (checked), list markers (incl. AuditList)
 ├── observed/              facts from the wire
@@ -51,6 +51,7 @@ spec/types/
 │   └── alert.rs           AlertRule, TopicWatch, ContentRule, AlertRuleDef, RuleStatus, AlertDraft, TriageOutcome, Alert, AlertState, AlertRevision
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
+│   ├── changed.rs         Changed: which entity a query returns changed (any store, for the live feed)
 │   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed, VerdictSet)
 │   └── insight.rs         L6–L8: TransmissionClassified, TopicVersionReady, TopicVersionActivated, EdgeUpdated, AlertOpened, AlertChanged, PolicyChanged
@@ -65,11 +66,12 @@ spec/types/
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel, TopicCatalog, SearchIndex, ProjectionIndex, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore (graph, series, edge drill-down)
-│   ├── l8_surface.rs      Caller, Permission, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit), OperatorAction, ActionKind, OperatorActions, AlertSink
+│   ├── l8_surface.rs      Caller (checked), Permission, PermissionSet, QueryApi (lists, linked views, series, topic history, policy history, verdicts, detection quality, audit, operators), OperatorAction (subjects), ActionKind, OperatorActions, AlertSink
 │   └── l8_surface/
 │       ├── lists.rs       ChannelFilter, AgentFilter, AlertRuleFilter, ProjectionRequest
-│       ├── live.rs        LiveFeed, LiveUpdate, UpdateKinds, LiveScope, LiveCursor, FeedWindow, LiveConfig
-│       └── audit.rs       AuditLog, AuditRecord (checked), AuditOutcome, AuditFilter
+│       ├── live.rs        LiveFeed, UiEvent (id only), LiveCursor, FeedWindow (checked), LiveConfig (checked)
+│       ├── audit.rs       AuditLog, AuditEntry, OperatorRecord (checked), ConfigChange, AuditSubject, AuditFilter
+│       └── operators.rs   AccessConfig (trusted or authenticated), OperatorDirectory (checked), Operator, OperatorName
 └── tests/                 tests for the invariants checked at runtime
 ```
 

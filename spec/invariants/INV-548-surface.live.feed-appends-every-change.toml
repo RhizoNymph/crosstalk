@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.live.feed-appends-every-change"
+statement = "Every Changed notification delivered to consumer group live is appended to the feed log as UiEvent::from of it before its delivery is acked."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Acking first would lose the notification if the feed writer crashed before
+appending, and no later event would announce that change. Bus delivery is
+at least once, so an append may repeat; a repeated id-only event costs one
+extra re-query and changes nothing the client shows.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::feed_writer_appends_before_ack"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

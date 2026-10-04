@@ -17,6 +17,12 @@
 //! decisions take the same path: a declared channel's initial policy, when it
 //! carries a decision, and every policy a config reload changes.
 //!
+//! After every committed change to a stored channel (discovery, a
+//! declaration, a new resource, any detection change including turning
+//! dormant, a recorded policy decision, a promotion) flow publishes
+//! `Changed::Channel` for it. A `PolicyChanged` is announced to the UI only
+//! this way, once recorded, never by the surface that published it.
+//!
 //! Implementations:
 //! - `ResourceExtractor`: `WebFetchExtractor`, `HttpToolExtractor`,
 //!   `BashExtractor` (tree-sitter-bash), `FileToolExtractor`, `McpExtractor`,

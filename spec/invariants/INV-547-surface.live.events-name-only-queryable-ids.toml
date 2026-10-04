@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.live.events-name-only-queryable-ids"
+statement = "Every UiEvent a stream delivers carries only an alert, channel, agent or rule id, a watermark, a topic-model version or a projection layout token, and is visible_to the stream's Caller: the Caller holds View, and Content as well for ProjectionReady."
+kind = "confidentiality"
+requires = ["type", "unit", "dst"]
+rationale = """
+The feed carries no state, so it cannot leak content or stale data, but an
+id is itself information. Each event names only what the query it asks the
+client to re-run returns to that caller. A layout token is returned only
+by projection, which needs Content, so ProjectionReady is passed over for
+View-only callers rather than handing them a value no View query shows.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::live::UiEvent"
+unit = ["crosstalk_spec::tests::live::only_projection_ready_needs_content", "crosstalk_spec::tests::live::viewer_sees_every_event_but_projection_ready"]
+dst = "crosstalk::surface::dst::stream_passes_over_events_caller_cannot_query"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+dst = { agent = "false", human = "false" }

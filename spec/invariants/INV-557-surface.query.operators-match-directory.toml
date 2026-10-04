@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.query.operators-match-directory"
+statement = "For a Caller with View, QueryApi::operators returns exactly the entries of the stored OperatorDirectory, former operators included, in id order."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI resolves every author id through this list. A missing former
+operator, or one listed with permissions it no longer has, would mislabel
+history or mislead the reader about who can act now.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::operators_query_returns_directory"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

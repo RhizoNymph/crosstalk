@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.topic.change-announced"
+statement = "L6 publishes Changed::TopicVersion at least once after each committed status change of a topic-model version in the catalog, and Changed::Projection at least once after each projection layout becomes current, never before the change is visible to topic_versions or projection respectively."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The UI learns that topic-scoped views and the projection need reloading
+only from these. Publishing the layout token before the layout is current
+would make projection return StaleProjection to a client holding the
+announced token.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::topic_changes_announced_after_commit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

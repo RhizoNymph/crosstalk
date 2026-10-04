@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.from-changed"
+statement = "UiEvent::from maps Changed::Alert, Channel, Agent, Rule, Watermark, TopicVersion and Projection to AlertChanged, ChannelChanged, AgentChanged, RuleChanged, Watermark, TopicVersionReady and ProjectionReady respectively, each naming the same id or value."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The feed writer interprets no other bus event, so this mapping is the
+whole contract between the stores and the UI. A variant mapped to the
+wrong event would send the client to re-query the wrong view, and the
+change would stay invisible until a resync.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::live::every_notification_becomes_the_event_naming_the_same_id", "crosstalk_spec::tests::live::notifications_travel_on_one_subject"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

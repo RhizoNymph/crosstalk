@@ -10,7 +10,7 @@
 //! | alert rules | [`AlertRuleList`] | `AlertRuleId` |
 //! | dead letters | [`DeadLetterList`] | (`Envelope::id`, `ConsumerGroup`) |
 //! | transmissions on an edge | [`EdgeTransmissionList`] | (`Confirmed::at`, `TransmissionId`) |
-//! | the audit log | [`AuditList`] | (`AuditRecord::at`, `AuditId`) |
+//! | the audit log | [`AuditList`] | (`AuditEntry::at`, `AuditId`) |
 //!
 //! A [`Cursor`] holds the sort key of the last item served, so the next page
 //! is "the items after that key that match the request" (keyset

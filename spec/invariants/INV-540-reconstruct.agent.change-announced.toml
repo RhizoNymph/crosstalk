@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent.change-announced"
+statement = "After every committed change to a stored agent (creation from traffic or config, a state change, a merge, an unmerge, a label set or cleared) L3 publishes Changed::Agent at least once for every agent whose QueryApi::agents entry changed, and never before that change is visible to QueryApi::agents."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The live feed tells the UI to re-query an agent only when L3 says it
+changed. A merge changes two entries and an unmerge changes the agent, its
+former target and every restored agent; announcing fewer leaves a stale
+graph legend. Announcing before the commit is visible lets the client re-query too early and keep the old entry with no further event coming.
+"""
+
+[evidence]
+dst = "crosstalk::reconstruct::dst::agent_changes_announced_after_commit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

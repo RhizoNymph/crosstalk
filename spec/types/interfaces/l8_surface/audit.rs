@@ -1,31 +1,65 @@
-//! The audit log: one record per operator action call.
+//! The audit log: one entry per operator action call, and one per change
+//! config made.
 //!
 //! ```text
-//! act(caller, action) ─permission─┬─ missing ──────────────▶ record Forbidden, no effect
-//!                                 └─ held ─▶ apply ─┬─ Ok ──▶ record Succeeded (Applied, Unchanged, …)
+//! act(caller, action) ─permission─┬─ missing ──────────────▶ Operator entry: Forbidden, no effect
+//!                                 └─ held ─▶ apply ─┬─ Ok ──▶ Operator entry: Succeeded
 //!                                                   │         (same transaction as the effect)
-//!                                                   └─ Err ─▶ record Rejected, no effect
+//!                                                   └─ Err ─▶ Operator entry: Rejected, no effect
+//! config load ─ diff against stored state ─▶ ConfigChange* ─▶ Config entry each: Applied or Rejected
+//!                                                             (same transaction as the change)
 //! ```
 //!
-//! A record holds the [`OperatorAction`] value itself, not a per-action
-//! shape, so every action, including ones added later, is audited the same
-//! way. The log is append-only: [`AuditLog`] has no update or delete, and
-//! the store's role has no `UPDATE` or `DELETE` grant on it.
+//! An entry's [`AuditBody`] is either an operator's call or a change config
+//! made, never a mix: a config change is a [`ConfigChange`], not an
+//! [`OperatorAction`] with a made-up author, and an operator entry always
+//! carries the [`Caller`] as authenticated. [`AuditEntry::by`] derives the
+//! author from the body, so the two cannot disagree.
 //!
-//! The log answers "who did what, when, and what came of it" across all
-//! actions. The per-channel record of policy decisions, including the ones
-//! config makes, is the channel's `PolicyHistory`.
+//! A config load records only what it changes: loading a config the stored
+//! state already reflects records nothing.
+//!
+//! The log is append-only: [`AuditLog`] has no update or delete, and the
+//! store's role has no `UPDATE` or `DELETE` grant on it. Per-channel policy
+//! decisions are also kept in the channel's `PolicyHistory`; the log answers
+//! "who did what, when, to what, and what came of it" across everything.
 
-use crate::ids::{AuditId, OperatorId};
-use crate::interfaces::l8_surface::{
-    ActionError, ActionKind, ActionOutcome, Caller, ConflictKind, InputError, OperatorAction,
-    Permission,
+use crate::aggregates::alert::AlertRuleKind;
+use crate::derived::flow::channel::policy::PolicyAuthor;
+use crate::derived::flow::resource::ResourcePattern;
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ConfigHash, MergeId, OperatorId,
+    TransmissionId,
 };
+use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
+use crate::interfaces::l8_surface::{
+    ActionError, ActionOutcome, Caller, ConflictKind, InputError, OperatorAction, Permission,
+    PermissionSet, PolicyKind,
+};
+use crate::observed::agent::IdentityEvidence;
 use crate::paging::{AuditList, Page, PageRequest};
-use crate::support::{TimeWindow, Timestamp};
+use crate::support::{NonEmpty, TimeWindow, Timestamp};
 
-/// What a call recorded in the log came to: the exact result `act`
-/// returned, split so the log can be filtered by kind.
+/// Who made an audited change: config, or an operator. The same type that
+/// authors a policy decision, so a `SetPolicy` entry and the decision it
+/// made name the same author.
+pub type AuditAuthor = PolicyAuthor;
+
+/// An entity an audited action or change touched. The log's subject filter
+/// matches on these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AuditSubject {
+    Agent(AgentId),
+    Channel(ChannelId),
+    Alert(AlertId),
+    Rule(AlertRuleId),
+    Transmission(TransmissionId),
+    Merge(MergeId),
+    Operator(OperatorId),
+}
+
+/// What an operator call came to: the exact result `act` returned, split so
+/// the log can tell refusals from failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditOutcome {
     Succeeded(ActionOutcome),
@@ -37,14 +71,14 @@ pub enum AuditOutcome {
     },
 }
 
-/// Why a permitted action was refused or failed: every `ActionError` except
-/// `Forbidden`, which is its own outcome.
+/// Why a permitted action, or a config change, was refused or failed:
+/// every `ActionError` except `Forbidden`, which is its own outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
     NotFound,
     Conflict(ConflictKind),
     InvalidInput(InputError),
-    /// A store or bus failure; the action's transaction rolled back.
+    /// A store or bus failure; the transaction rolled back.
     Failed {
         reason: String,
     },
@@ -104,70 +138,54 @@ impl AuditOutcome {
 
 /// One operator action call.
 ///
-/// Built only through [`AuditRecord::new`]: the outcome is `Forbidden`
-/// exactly when the caller lacks the action's required permission, because
-/// the permission is checked before anything else. A record that says an
-/// action was applied for a caller who could not apply it, or forbidden for
-/// one who could, cannot be built.
+/// Built only through [`OperatorRecord::new`]: the outcome is `Forbidden`
+/// exactly when the caller lacks the action's required permission, and then
+/// names that permission, because the permission is checked before anything
+/// else. A record that says an action was attempted by a caller who could
+/// not attempt it, or forbidden to one who could, cannot be built.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AuditRecord {
-    id: AuditId,
-    at: Timestamp,
+pub struct OperatorRecord {
     caller: Caller,
     action: OperatorAction,
     outcome: AuditOutcome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvalidAuditRecord {
+pub enum InvalidOperatorRecord {
     /// `Forbidden`, but the caller holds the required permission.
     ForbiddenButPermitted { required: Permission },
-    /// Applied, unchanged or rejected, but the caller lacks the required
-    /// permission, so the action could not have been attempted.
+    /// Succeeded or rejected, but the caller lacks the required permission,
+    /// so the action could not have been attempted.
     AttemptedWithoutPermission { required: Permission },
     /// `Forbidden`, but naming a permission other than the one the action
     /// requires.
     WrongMissingPermission { required: Permission },
 }
 
-impl AuditRecord {
-    /// `at` is when the action was accepted or refused; for an applied
-    /// `SetPolicy` it equals the decision's time.
+impl OperatorRecord {
     pub fn new(
-        id: AuditId,
-        at: Timestamp,
         caller: Caller,
         action: OperatorAction,
         outcome: AuditOutcome,
-    ) -> Result<Self, InvalidAuditRecord> {
+    ) -> Result<Self, InvalidOperatorRecord> {
         let required = action.required_permission();
         let permitted = caller.has(required);
         match (&outcome, permitted) {
             (AuditOutcome::Forbidden { .. }, true) => {
-                Err(InvalidAuditRecord::ForbiddenButPermitted { required })
+                Err(InvalidOperatorRecord::ForbiddenButPermitted { required })
             }
             (AuditOutcome::Forbidden { missing }, false) if *missing != required => {
-                Err(InvalidAuditRecord::WrongMissingPermission { required })
+                Err(InvalidOperatorRecord::WrongMissingPermission { required })
             }
             (AuditOutcome::Forbidden { .. }, false) => Ok(()),
-            (_, false) => Err(InvalidAuditRecord::AttemptedWithoutPermission { required }),
+            (_, false) => Err(InvalidOperatorRecord::AttemptedWithoutPermission { required }),
             (_, true) => Ok(()),
         }?;
         Ok(Self {
-            id,
-            at,
             caller,
             action,
             outcome,
         })
-    }
-
-    pub fn id(&self) -> AuditId {
-        self.id
-    }
-
-    pub fn at(&self) -> Timestamp {
-        self.at
     }
 
     /// The caller as authenticated for the call, with the permissions it
@@ -183,47 +201,171 @@ impl AuditRecord {
     pub fn outcome(&self) -> &AuditOutcome {
         &self.outcome
     }
-}
 
-/// Empty lists do not restrict; non-empty ones combine with AND.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AuditFilter {
-    /// Keep records whose `at` lies in the window.
-    pub window: Option<TimeWindow>,
-    pub operators: Vec<OperatorId>,
-    pub actions: Vec<ActionKind>,
-    pub outcomes: Vec<OutcomeKind>,
-}
-
-impl AuditFilter {
-    pub fn matches(&self, record: &AuditRecord) -> bool {
-        let in_window = self
-            .window
-            .is_none_or(|window| window.contains(record.at()));
-        let by_operator =
-            self.operators.is_empty() || self.operators.contains(&record.caller().operator);
-        let of_action = self.actions.is_empty() || self.actions.contains(&record.action().kind());
-        let with_outcome =
-            self.outcomes.is_empty() || self.outcomes.contains(&record.outcome().kind());
-        in_window && by_operator && of_action && with_outcome
+    /// The action's subjects, then the id its outcome created, if any.
+    pub fn subjects(&self) -> Vec<AuditSubject> {
+        let mut subjects = self.action.subjects();
+        if let AuditOutcome::Succeeded(outcome) = self.outcome
+            && let Some(created) = outcome.subject()
+            && !subjects.contains(&created)
+        {
+            subjects.push(created);
+        }
+        subjects
     }
 }
 
-/// Append-only storage for audit records. There is no update or delete.
-pub trait AuditLog {
-    /// Append one record. Idempotent on `AuditRecord::id`: appending the
-    /// same record again is a no-op, and a different record with a used id
-    /// is `IdReused`.
-    async fn append(&mut self, record: AuditRecord) -> Result<(), AuditError>;
+/// One change config made, on load or reload. Each names its target, so
+/// the log reads as a list of facts, not as a copy of the config file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigChange {
+    /// Declared a channel before traffic (`ChannelRegistry::declare`). An
+    /// `Unreviewed` policy records no decision.
+    DeclareChannel {
+        channel: ChannelId,
+        pattern: ResourcePattern,
+        policy: PolicyKind,
+        note: Option<String>,
+    },
+    /// Recorded a config policy decision for a declared channel
+    /// (`ChannelRegistry::set_policy` with `PolicyAuthor::Config`).
+    SetPolicy {
+        channel: ChannelId,
+        policy: PolicyKind,
+        note: Option<String>,
+    },
+    /// Registered an agent before its traffic (`AgentState::Registered`).
+    RegisterAgent {
+        agent: AgentId,
+        evidence: NonEmpty<IdentityEvidence>,
+    },
+    /// Provisioned a built-in alert rule.
+    ProvisionRule {
+        rule: AlertRuleId,
+        kind: AlertRuleKind,
+    },
+    /// Switched how requests are authenticated. Switching to `Trusted`
+    /// turns off login; it is always recorded on its own entry.
+    SetAccessMode(AccessMode),
+    /// Defined an operator, or changed its name or permissions. In trusted
+    /// mode this is the trusted operator with every permission.
+    SetOperator {
+        operator: OperatorId,
+        name: OperatorName,
+        permissions: PermissionSet,
+    },
+    /// Config no longer defines this operator: it keeps its name, loses
+    /// every permission, and gets no further `Caller`.
+    RemoveOperator { operator: OperatorId },
+}
 
-    /// The records `filter` matches, a page at a time with the cursors of
-    /// [`crate::paging`]: newest first by `(at, id)`, so records appended
+impl ConfigChange {
+    pub fn subjects(&self) -> Vec<AuditSubject> {
+        match self {
+            Self::DeclareChannel { channel, .. } | Self::SetPolicy { channel, .. } => {
+                vec![AuditSubject::Channel(*channel)]
+            }
+            Self::RegisterAgent { agent, .. } => vec![AuditSubject::Agent(*agent)],
+            Self::ProvisionRule { rule, .. } => vec![AuditSubject::Rule(*rule)],
+            Self::SetAccessMode(_) => Vec::new(),
+            Self::SetOperator { operator, .. } | Self::RemoveOperator { operator } => {
+                vec![AuditSubject::Operator(*operator)]
+            }
+        }
+    }
+}
+
+/// A config change either took effect or was refused (a declared pattern
+/// overlapping another channel's, for example). A change the stored state
+/// already reflects is not a change and is not recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigOutcome {
+    Applied,
+    Rejected(Rejection),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigRecord {
+    /// The config document whose load made the change.
+    pub config: ConfigHash,
+    pub change: ConfigChange,
+    pub outcome: ConfigOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuditBody {
+    Operator(OperatorRecord),
+    Config(ConfigRecord),
+}
+
+/// One entry of the audit log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuditEntry {
+    pub id: AuditId,
+    /// When the action was accepted or refused, or when config made the
+    /// change. For an applied `SetPolicy` it equals the decision's time.
+    pub at: Timestamp,
+    pub body: AuditBody,
+}
+
+impl AuditEntry {
+    pub fn by(&self) -> AuditAuthor {
+        match &self.body {
+            AuditBody::Operator(record) => AuditAuthor::Operator(record.caller().operator()),
+            AuditBody::Config(_) => AuditAuthor::Config,
+        }
+    }
+
+    /// Every entity the entry touched, without duplicates.
+    pub fn subjects(&self) -> Vec<AuditSubject> {
+        match &self.body {
+            AuditBody::Operator(record) => record.subjects(),
+            AuditBody::Config(record) => record.change.subjects(),
+        }
+    }
+}
+
+/// `QueryApi::audit`'s filter. An empty `by` and a `None` do not restrict;
+/// the fields combine with AND.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AuditFilter {
+    /// Keep entries by any of these authors. `AuditAuthor::Config` selects
+    /// config changes.
+    pub by: Vec<AuditAuthor>,
+    /// Keep entries that touched this entity, as named in the action or
+    /// change or created by it. Ids are matched as recorded, not resolved
+    /// through merges.
+    pub subject: Option<AuditSubject>,
+    /// Keep entries whose `at` lies in the window.
+    pub window: Option<TimeWindow>,
+}
+
+impl AuditFilter {
+    pub fn matches(&self, entry: &AuditEntry) -> bool {
+        let by = self.by.is_empty() || self.by.contains(&entry.by());
+        let subject = self
+            .subject
+            .is_none_or(|subject| entry.subjects().contains(&subject));
+        let in_window = self.window.is_none_or(|window| window.contains(entry.at));
+        by && subject && in_window
+    }
+}
+
+/// Append-only storage for audit entries. There is no update or delete.
+pub trait AuditLog {
+    /// Append one entry. Idempotent on `AuditEntry::id`: appending the same
+    /// entry again is a no-op, and a different entry with a used id is
+    /// `IdReused`.
+    async fn append(&mut self, entry: AuditEntry) -> Result<(), AuditError>;
+
+    /// The entries `filter` matches, a page at a time with the cursors of
+    /// [`crate::paging`]: newest first by `(at, id)`, so entries appended
     /// during a traversal never shift a page.
     async fn query(
         &self,
         filter: &AuditFilter,
         page: &PageRequest<AuditList>,
-    ) -> Result<Page<AuditRecord, AuditList>, AuditError>;
+    ) -> Result<Page<AuditEntry, AuditList>, AuditError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

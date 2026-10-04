@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.audit.outcome-matches-permission"
-statement = "An AuditRecord's outcome is Forbidden exactly when its Caller lacks its action's required permission."
+statement = "An OperatorRecord's outcome is Forbidden exactly when its Caller lacks its action's required permission, and then names that permission as missing."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
@@ -11,8 +11,8 @@ whoever investigates an incident from the log.
 """
 
 [evidence]
-type = "crosstalk_spec::interfaces::l8_surface::audit::AuditRecord::new"
-unit = ["crosstalk_spec::tests::audit::forbidden_record_requires_missing_permission", "crosstalk_spec::tests::audit::attempted_record_requires_permission", "crosstalk_spec::tests::audit::every_action_reports_its_kind_and_permission"]
+type = "crosstalk_spec::interfaces::l8_surface::audit::OperatorRecord::new"
+unit = ["crosstalk_spec::tests::audit::forbidden_record_requires_missing_permission", "crosstalk_spec::tests::audit::attempted_record_requires_permission", "crosstalk_spec::tests::audit::every_action_reports_its_kind_permission_and_subjects"]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

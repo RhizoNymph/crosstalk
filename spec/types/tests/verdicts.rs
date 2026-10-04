@@ -14,15 +14,16 @@ use crate::derived::flow::verdict::{
     CurrentVerdict, InvalidVerdictRecord, Judgeable, NotJudgeable, Observed, TransmissionVerdict,
     Verdict, VerdictLog, VerdictRecorded, VerdictRevision,
 };
-use crate::ids::{AuditId, OperatorId};
-use crate::interfaces::l8_surface::audit::{AuditOutcome, AuditRecord, InvalidAuditRecord};
+use crate::ids::OperatorId;
+use crate::interfaces::l8_surface::audit::{AuditOutcome, InvalidOperatorRecord, OperatorRecord};
 use crate::interfaces::l8_surface::{
-    ActionError, ActionKind, ActionOutcome, Caller, ConflictKind, OperatorAction, Permission,
+    ActionError, ActionKind, ActionOutcome, ConflictKind, OperatorAction, Permission,
 };
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
     agent, at, channel, content_match, read_access, resource, transmission, write_access,
 };
+use crate::tests::operators::caller;
 
 pub fn co_access() -> CoAccess {
     CoAccess::new(
@@ -103,8 +104,10 @@ pub fn transmission_in(n: u128, state: TransmissionState) -> Transmission {
     }
 }
 
+const OPERATOR: u128 = 7;
+
 fn operator() -> OperatorId {
-    OperatorId::from_ulid(7)
+    OperatorId::from_ulid(OPERATOR)
 }
 
 fn suspected() -> Transmission {
@@ -410,40 +413,28 @@ fn set_verdict_needs_triage_alone() {
 
 #[test]
 fn set_verdict_audit_records_follow_triage() {
-    let triager = Caller {
-        operator: operator(),
-        permissions: vec![Permission::Triage],
-    };
-    let reader = Caller {
-        operator: operator(),
-        permissions: vec![Permission::View, Permission::Content],
-    };
+    let triager = caller(OPERATOR, &[Permission::Triage]);
+    let reader = caller(OPERATOR, &[Permission::View, Permission::Content]);
     for action in set_verdicts() {
         for outcome in [ActionOutcome::Applied, ActionOutcome::Unchanged] {
-            AuditRecord::new(
-                AuditId::from_ulid(1),
-                at(1),
+            OperatorRecord::new(
                 triager.clone(),
                 action.clone(),
                 AuditOutcome::Succeeded(outcome),
             )
             .expect("Triage suffices");
             assert_eq!(
-                AuditRecord::new(
-                    AuditId::from_ulid(1),
-                    at(1),
+                OperatorRecord::new(
                     reader.clone(),
                     action.clone(),
                     AuditOutcome::Succeeded(outcome),
                 ),
-                Err(InvalidAuditRecord::AttemptedWithoutPermission {
+                Err(InvalidOperatorRecord::AttemptedWithoutPermission {
                     required: Permission::Triage
                 })
             );
         }
-        AuditRecord::new(
-            AuditId::from_ulid(2),
-            at(2),
+        OperatorRecord::new(
             reader.clone(),
             action,
             AuditOutcome::Forbidden {

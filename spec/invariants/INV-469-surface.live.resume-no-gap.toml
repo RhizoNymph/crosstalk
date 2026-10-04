@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.live.resume-no-gap"
-statement = "A stream whose resume plan is Replay after seq n delivers, in feed order and each exactly once, every feed entry after n that its subscription admits, with no entry skipped where replay from the log hands over to live delivery."
+statement = "A stream whose resume plan is Replay after seq n delivers, in feed order and each exactly once, every feed entry after n whose event is visible_to its Caller, with no entry skipped where replay from the log hands over to live delivery."
 kind = "coordination"
 requires = ["dst"]
 rationale = """

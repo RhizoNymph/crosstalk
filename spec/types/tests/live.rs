@@ -1,345 +1,96 @@
 use std::collections::HashSet;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::aggregates::alert::{Alert, AlertRevision, AlertState, AlertSubject};
-use crate::aggregates::edge::{EdgeKey, RouteKind, TopicSlot, TopologyFilter};
+use crate::aggregates::projection::ProjectionToken;
 use crate::aggregates::topic::TopicModelVersion;
-use crate::derived::flow::channel::policy::{Decision, PolicyAuthor, PolicyDecision, PolicyKind};
-use crate::derived::flow::evidence::CoAccess;
-use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
-use crate::events::insight::InsightEvent;
+use crate::events::changed::Changed;
 use crate::events::{BusEvent, Subject};
-use crate::ids::{AlertId, AlertRuleId, OperatorId, TopicId};
+use crate::ids::{AlertId, AlertRuleId};
+use crate::interfaces::l8_surface::Permission;
 use crate::interfaces::l8_surface::live::{
-    ChannelChange, FeedEpoch, FeedWindow, FloorAboveHead, InvalidLiveConfig, LiveConfig,
-    LiveCursor, LiveItem, LiveScope, LiveUpdate, LiveUpdateKind, NoUpdateKinds, Resume, ResumePlan,
-    ResyncReason, ScopeKeys, UpdateKinds,
+    FeedEpoch, FeedWindow, FloorAboveHead, InvalidLiveConfig, LiveConfig, LiveCursor, LiveItem,
+    Resume, ResumePlan, ResyncReason, UiEvent,
 };
-use crate::interfaces::l8_surface::{Caller, Permission};
-use crate::support::TimeWindow;
-use crate::tests::fixtures::{
-    access, agent, at, channel, read_access, resource, transmission, write_access,
-};
+use crate::support::Watermark;
+use crate::tests::fixtures::{agent, at, channel};
+use crate::tests::operators::caller;
 
-fn alert() -> Alert {
-    Alert {
-        id: AlertId::from_ulid(1),
-        rule: AlertRuleId::from_ulid(1),
-        subject: AlertSubject::Channel(channel(1)),
-        raised_at: at(9),
-        occurrences: 1,
-        state: AlertState::Open,
-    }
-}
-
-fn edge_key() -> EdgeKey {
-    EdgeKey::new(
-        agent(1),
-        agent(2),
-        Route::Channel(channel(1)),
-        TopicSlot {
-            version: TopicModelVersion(1),
-            topic: Some(TopicId::from_ulid(1)),
-        },
-        TimeWindow::new(at(0), at(60)).expect("non-empty"),
-    )
-    .expect("different agents")
-}
-
-fn co_access() -> CoAccess {
-    CoAccess::new(
-        &write_access(1, agent(1), resource(1), 1),
-        &read_access(2, agent(2), resource(1), 2),
-        Duration::from_secs(60),
-    )
-    .expect("valid co-access")
-}
-
-/// One update of every variant.
-fn every_update() -> Vec<LiveUpdate> {
+/// One notification of every variant, with the event it becomes.
+fn every_change() -> Vec<(Changed, UiEvent)> {
+    let alert = AlertId::from_ulid(1);
+    let rule = AlertRuleId::from_ulid(2);
+    let version = TopicModelVersion(3);
+    let token = ProjectionToken::new(version, 1);
+    let watermark = Watermark(at(60));
     vec![
-        LiveUpdate::AlertOpened(alert()),
-        LiveUpdate::AlertChanged {
-            alert: alert(),
-            revision: AlertRevision::OPENED.next().expect("2 fits"),
-        },
-        LiveUpdate::EdgeUpdated(edge_key()),
-        LiveUpdate::ChannelDiscovered {
-            channel: channel(1),
-            first_access: access(1),
-        },
-        LiveUpdate::ChannelChanged {
-            channel: channel(1),
-            change: ChannelChange::CrossAccessed {
-                co_access: co_access(),
-                reader: agent(2),
-            },
-        },
-        LiveUpdate::PolicyChanged {
-            channel: channel(1),
-            decision: PolicyDecision {
-                kind: PolicyKind::Sanctioned,
-                decision: Decision {
-                    by: PolicyAuthor::Operator(OperatorId::from_ulid(1)),
-                    at: at(5),
-                    note: None,
-                },
-            },
-        },
-        LiveUpdate::TransmissionConfirmed {
-            transmission: transmission(1),
-            from: agent(1),
-            to: agent(2),
-            route: Route::Channel(channel(1)),
-            at: at(8),
-            matched_bytes: NonZeroU64::MIN,
-        },
-        LiveUpdate::TopicVersionActivated {
-            version: TopicModelVersion(2),
-        },
+        (Changed::Alert(alert), UiEvent::AlertChanged { id: alert }),
+        (
+            Changed::Channel(channel(1)),
+            UiEvent::ChannelChanged { id: channel(1) },
+        ),
+        (
+            Changed::Agent(agent(1)),
+            UiEvent::AgentChanged { id: agent(1) },
+        ),
+        (Changed::Rule(rule), UiEvent::RuleChanged { id: rule }),
+        (
+            Changed::Watermark(watermark),
+            UiEvent::Watermark { at: watermark },
+        ),
+        (
+            Changed::TopicVersion(version),
+            UiEvent::TopicVersionReady { version },
+        ),
+        (
+            Changed::Projection(token),
+            UiEvent::ProjectionReady { id: token },
+        ),
     ]
 }
 
 #[test]
-fn every_kind_is_listed_once_and_has_an_update() {
-    let listed: HashSet<LiveUpdateKind> = LiveUpdateKind::ALL.into_iter().collect();
-    assert_eq!(listed.len(), LiveUpdateKind::ALL.len());
-    let produced: HashSet<LiveUpdateKind> = every_update().iter().map(LiveUpdate::kind).collect();
-    assert_eq!(produced, listed);
+fn every_notification_becomes_the_event_naming_the_same_id() {
+    let changes = every_change();
+    for (changed, event) in &changes {
+        assert_eq!(UiEvent::from(*changed), *event);
+    }
+    let events: HashSet<_> = changes.iter().map(|(_, event)| *event).collect();
+    assert_eq!(events.len(), changes.len());
 }
 
 #[test]
-fn only_transmissions_need_content() {
-    for kind in LiveUpdateKind::ALL {
-        let expected = if kind == LiveUpdateKind::TransmissionConfirmed {
+fn notifications_travel_on_one_subject() {
+    for (changed, _) in every_change() {
+        assert_eq!(BusEvent::Changed(changed).subject(), Subject::Changed);
+    }
+}
+
+#[test]
+fn only_projection_ready_needs_content() {
+    for (_, event) in every_change() {
+        let expected = if matches!(event, UiEvent::ProjectionReady { .. }) {
             Permission::Content
         } else {
             Permission::View
         };
-        assert_eq!(kind.required_permission(), expected, "{kind:?}");
+        assert_eq!(event.required_permission(), expected, "{event:?}");
     }
 }
 
 #[test]
-fn every_kind_has_a_bus_source() {
-    for kind in LiveUpdateKind::ALL {
-        assert!(!kind.sources().is_empty(), "{kind:?}");
+fn viewer_sees_every_event_but_projection_ready() {
+    let viewer = caller(1, &[Permission::View]);
+    let reader = caller(2, &[Permission::View, Permission::Content]);
+    for (_, event) in every_change() {
+        let projection = matches!(event, UiEvent::ProjectionReady { .. });
+        assert_eq!(event.visible_to(&viewer), !projection, "{event:?}");
+        assert!(event.visible_to(&reader), "{event:?}");
     }
-    assert!(
-        LiveUpdateKind::ChannelChanged
-            .sources()
-            .contains(&Subject::TransmissionConfirmed)
-    );
-}
-
-#[test]
-fn new_insight_events_have_their_own_subjects() {
-    let changed = BusEvent::Insight(InsightEvent::AlertChanged {
-        alert: alert(),
-        revision: AlertRevision::OPENED,
-    });
-    let activated = BusEvent::Insight(InsightEvent::TopicVersionActivated {
-        version: TopicModelVersion(2),
-        previous: TopicModelVersion(1),
-    });
-    assert_eq!(changed.subject(), Subject::AlertChanged);
-    assert_eq!(activated.subject(), Subject::TopicVersionActivated);
-}
-
-#[test]
-fn alert_revisions_count_from_one() {
-    assert_eq!(AlertRevision::OPENED.get(), NonZeroU32::MIN);
-    let second = AlertRevision::OPENED.next().expect("2 fits");
-    assert_eq!(second.get().get(), 2);
-    assert!(second > AlertRevision::OPENED);
-    assert_eq!(AlertRevision::new(NonZeroU32::MAX).next(), None);
-}
-
-#[test]
-fn update_kinds_reject_empty() {
-    assert_eq!(UpdateKinds::new([]), Err(NoUpdateKinds));
-}
-
-#[test]
-fn update_kinds_hold_what_was_asked() {
-    let kinds = UpdateKinds::new([
-        LiveUpdateKind::EdgeUpdated,
-        LiveUpdateKind::AlertOpened,
-        LiveUpdateKind::EdgeUpdated,
-    ])
-    .expect("not empty");
-    assert!(kinds.contains(LiveUpdateKind::AlertOpened));
-    assert!(kinds.contains(LiveUpdateKind::EdgeUpdated));
-    assert!(!kinds.contains(LiveUpdateKind::TransmissionConfirmed));
-    assert_eq!(
-        kinds.iter().collect::<Vec<_>>(),
-        vec![LiveUpdateKind::AlertOpened, LiveUpdateKind::EdgeUpdated]
-    );
-    let all = UpdateKinds::all();
-    assert_eq!(all.iter().collect::<Vec<_>>(), LiveUpdateKind::ALL.to_vec());
-}
-
-#[test]
-fn missing_permission_names_what_the_caller_lacks() {
-    let viewer = Caller {
-        operator: OperatorId::from_ulid(1),
-        permissions: vec![Permission::View],
-    };
-    let nobody = Caller {
-        operator: OperatorId::from_ulid(2),
-        permissions: Vec::new(),
-    };
-    let reader = Caller {
-        operator: OperatorId::from_ulid(3),
-        permissions: vec![Permission::View, Permission::Content],
-    };
-    let view_kinds = UpdateKinds::new([LiveUpdateKind::AlertOpened, LiveUpdateKind::EdgeUpdated])
-        .expect("not empty");
-    assert_eq!(view_kinds.missing_permission(&viewer), None);
-    assert_eq!(
-        view_kinds.missing_permission(&nobody),
-        Some(Permission::View)
-    );
-    assert_eq!(
-        UpdateKinds::all().missing_permission(&viewer),
-        Some(Permission::Content)
-    );
-    assert_eq!(UpdateKinds::all().missing_permission(&reader), None);
-}
-
-fn edge_scope() -> LiveScope {
-    LiveScope::Scoped(ScopeKeys::routed(
-        vec![agent(1), agent(2)],
-        &Route::Channel(channel(1)),
-        Some(TopicId::from_ulid(1)),
-    ))
-}
-
-#[test]
-fn routed_keys_carry_channel_only_for_channel_routes() {
-    let on_channel = ScopeKeys::routed(Vec::new(), &Route::Channel(channel(3)), None);
-    assert_eq!(on_channel.channel, Some(channel(3)));
-    assert_eq!(on_channel.route, Some(RouteKind::Channel));
-    let cases = [
-        (
-            Route::Delegation(DelegationDirection::ChildToParent),
-            RouteKind::Delegation,
-        ),
-        (Route::Direct(DirectCarrier::UserTurn), RouteKind::Direct),
-        (Route::Unobserved, RouteKind::Unobserved),
-    ];
-    for (route, kind) in cases {
-        let keys = ScopeKeys::routed(Vec::new(), &route, None);
-        assert_eq!(keys.channel, None);
-        assert_eq!(keys.route, Some(kind));
+    let auditor = caller(3, &[Permission::Audit]);
+    for (_, event) in every_change() {
+        assert!(!event.visible_to(&auditor), "{event:?}");
     }
-    let channel_keys = ScopeKeys::channel(channel(4), Vec::new());
-    assert_eq!(channel_keys.channel, Some(channel(4)));
-    assert_eq!(channel_keys.route, Some(RouteKind::Channel));
-}
-
-#[test]
-fn empty_filter_admits_everything() {
-    let filter = TopologyFilter::default();
-    assert!(LiveScope::Global.admitted_by(&filter));
-    assert!(edge_scope().admitted_by(&filter));
-    assert!(LiveScope::Scoped(ScopeKeys::default()).admitted_by(&filter));
-}
-
-#[test]
-fn global_updates_pass_any_filter() {
-    let filter = TopologyFilter {
-        agents: vec![agent(9)],
-        channels: vec![channel(9)],
-        route_kinds: vec![RouteKind::Direct],
-        topics: vec![TopicId::from_ulid(9)],
-        ..TopologyFilter::default()
-    };
-    assert!(LiveScope::Global.admitted_by(&filter));
-    assert!(!edge_scope().admitted_by(&filter));
-}
-
-#[test]
-fn agent_filter_matches_sender_or_reader() {
-    let sender = TopologyFilter {
-        agents: vec![agent(1)],
-        ..TopologyFilter::default()
-    };
-    let reader = TopologyFilter {
-        agents: vec![agent(2), agent(7)],
-        ..TopologyFilter::default()
-    };
-    let other = TopologyFilter {
-        agents: vec![agent(7)],
-        ..TopologyFilter::default()
-    };
-    assert!(edge_scope().admitted_by(&sender));
-    assert!(edge_scope().admitted_by(&reader));
-    assert!(!edge_scope().admitted_by(&other));
-    let channel_only = LiveScope::Scoped(ScopeKeys::channel(channel(1), Vec::new()));
-    assert!(!channel_only.admitted_by(&sender));
-}
-
-#[test]
-fn channel_filter_keeps_only_those_channels() {
-    let filter = TopologyFilter {
-        channels: vec![channel(1)],
-        ..TopologyFilter::default()
-    };
-    assert!(edge_scope().admitted_by(&filter));
-    assert!(LiveScope::Scoped(ScopeKeys::channel(channel(1), Vec::new())).admitted_by(&filter));
-    assert!(!LiveScope::Scoped(ScopeKeys::channel(channel(2), Vec::new())).admitted_by(&filter));
-    let delegated = LiveScope::Scoped(ScopeKeys::routed(
-        vec![agent(1), agent(2)],
-        &Route::Delegation(DelegationDirection::ParentToChild),
-        None,
-    ));
-    assert!(!delegated.admitted_by(&filter));
-}
-
-#[test]
-fn route_kind_filter_matches_route() {
-    let direct = TopologyFilter {
-        route_kinds: vec![RouteKind::Direct],
-        ..TopologyFilter::default()
-    };
-    let channel_kind = TopologyFilter {
-        route_kinds: vec![RouteKind::Channel],
-        ..TopologyFilter::default()
-    };
-    assert!(!edge_scope().admitted_by(&direct));
-    assert!(edge_scope().admitted_by(&channel_kind));
-    let agent_alert = LiveScope::Scoped(ScopeKeys {
-        agents: vec![agent(1)],
-        ..ScopeKeys::default()
-    });
-    assert!(!agent_alert.admitted_by(&channel_kind));
-}
-
-#[test]
-fn topic_filter_never_matches_a_missing_topic() {
-    let filter = TopologyFilter {
-        topics: vec![TopicId::from_ulid(1)],
-        ..TopologyFilter::default()
-    };
-    assert!(edge_scope().admitted_by(&filter));
-    let unclassified = LiveScope::Scoped(ScopeKeys::routed(
-        vec![agent(1), agent(2)],
-        &Route::Channel(channel(1)),
-        None,
-    ));
-    assert!(!unclassified.admitted_by(&filter));
-}
-
-#[test]
-fn filter_fields_combine_with_and() {
-    let filter = TopologyFilter {
-        agents: vec![agent(1)],
-        channels: vec![channel(2)],
-        ..TopologyFilter::default()
-    };
-    assert!(!edge_scope().admitted_by(&filter));
 }
 
 #[test]
@@ -468,9 +219,9 @@ fn every_item_carries_its_cursor() {
         seq: 5,
     };
     let items = [
-        LiveItem::Update {
+        LiveItem::Event {
             cursor,
-            update: LiveUpdate::TopicVersionActivated {
+            event: UiEvent::TopicVersionReady {
                 version: TopicModelVersion(1),
             },
         },

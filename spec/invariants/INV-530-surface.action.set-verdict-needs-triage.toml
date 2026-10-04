@@ -8,7 +8,7 @@ rationale = """
 Judging is triage work. Content is not also required: the action reveals
 no message text (its outcome, record and event hold none), reading the
 text to judge from is gated by the Content queries, and one permission
-per action keeps AuditRecord's Forbidden check exact. A Triage-only
+per action keeps OperatorRecord's Forbidden check exact. A Triage-only
 operator can still judge suspected transmissions from their structure.
 """
 
