@@ -20,7 +20,7 @@ pub struct ChannelFilter {
 
 impl ChannelFilter {
     pub fn matches(&self, channel: &Channel) -> bool {
-        self.policies.is_empty() || self.policies.contains(&PolicyKind::of(&channel.policy))
+        self.policies.is_empty() || self.policies.contains(&channel.policy.kind())
     }
 }
 

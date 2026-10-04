@@ -1,14 +1,19 @@
-//! L8 surface: the query API, the UI's data, operator actions and alert
-//! delivery.
+//! L8 surface: the query API, the UI's data, operator actions, the live
+//! feed, the audit log and alert delivery.
 //!
 //! Operator actions flow back down the stack: policy changes are published
 //! as `PolicyChanged` (applied by L5), and agent merges go to L3's identity
-//! resolver.
+//! resolver. Every action call, whatever its outcome, leaves one
+//! [`audit::AuditRecord`].
 //!
 //! Implementations:
 //! - `QueryApi`: the axum HTTP service backing `GraphView` (topology, edge
 //!   share, the time brush and trend lines), `TopicHistory` (versions, sizes,
-//!   lineage) and `ContentExplorer` (search, topics, UMAP).
+//!   lineage), `ContentExplorer` (search, topics, UMAP), the channel policy
+//!   history and the audit log.
+//! - `LiveFeed` ([`live`]): the SSE endpoint the UI subscribes to for new
+//!   alerts and changed edges, channels and policies.
+//! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
 //! - `AlertSink`: `WebhookSink`, `SlackSink`, `LogSink`.
 //!
 //! **Lists.** Channels, agents, alert rules, dead letters and the
@@ -23,7 +28,9 @@
 //! topic-model version its topics are under; responses with different
 //! versions are not linkable and the client re-queries.
 
+pub mod audit;
 pub mod lists;
+pub mod live;
 
 use crate::aggregates::alert::{Alert, AlertRuleDef};
 use crate::aggregates::edge::{
@@ -34,7 +41,7 @@ use crate::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crate::aggregates::topic::{Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::derived::flow::channel::Channel;
-use crate::derived::flow::channel::policy::Policy;
+use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::transmission::Transmission;
 use crate::ids::{AlertId, ChannelId, EventId, OperatorId, TransmissionId};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
@@ -45,7 +52,12 @@ use crate::paging::{
 };
 use crate::support::TimeWindow;
 
+use audit::{ActionEffect, AuditPage, AuditQuery};
 use lists::{AgentFilter, AlertRuleFilter, ChannelFilter, ProjectionRequest};
+
+/// The policy an operator asks for. The surface stamps the author and time
+/// from the authenticated caller; callers cannot supply them.
+pub use crate::derived::flow::channel::policy::PolicyKind;
 
 /// The authenticated caller of a query or action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,12 +66,19 @@ pub struct Caller {
     pub permissions: Vec<Permission>,
 }
 
+impl Caller {
+    pub fn has(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Permission {
     /// Topology, series, the transmissions behind an edge (ids, times, byte
-    /// counts and topic ids), channels, agents, alert rules, alerts and the
-    /// topic history (versions, sizes, lineage): ids, counts, times and
-    /// similarities, no message content and no topic labels or terms.
+    /// counts and topic ids), channels, channel policy history, agents, alert
+    /// rules, alerts and the topic history (versions, sizes, lineage): ids,
+    /// counts, times and similarities, no message content and no topic
+    /// labels or terms.
     View,
     /// Transmission content, search, topics (their labels and terms come
     /// from message text) and projections.
@@ -72,6 +91,9 @@ pub enum Permission {
     /// replay re-runs a consumer on an old event, so it can reopen alerts or
     /// re-apply stale decisions.
     Operate,
+    /// Read the audit log: every operator action, who asked for it and
+    /// what came of it, including refused ones.
+    Audit,
 }
 
 /// Empty `states` means every state. `channel` keeps alerts whose subject is
@@ -96,6 +118,15 @@ pub enum AlertStateKind {
 pub trait QueryApi {
     /// View.
     async fn channel(&self, caller: &Caller, id: ChannelId) -> Result<Option<Channel>, QueryError>;
+
+    /// View. Every policy decision recorded for the channel, config and
+    /// operator alike, oldest first; its last entry is the channel's current
+    /// policy. `None` for an unknown channel.
+    async fn policy_history(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+    ) -> Result<Option<PolicyHistory>, QueryError>;
 
     /// View. Newest channel first.
     async fn channels(
@@ -222,25 +253,9 @@ pub trait QueryApi {
         caller: &Caller,
         request: &ProjectionRequest,
     ) -> Result<Projection, QueryError>;
-}
 
-/// The policy an operator asks for. The surface stamps the author and time
-/// from the authenticated caller; callers cannot supply them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyKind {
-    Unreviewed,
-    Sanctioned,
-    Unsanctioned,
-}
-
-impl PolicyKind {
-    pub fn of(policy: &Policy) -> Self {
-        match policy {
-            Policy::Unreviewed(_) => Self::Unreviewed,
-            Policy::Sanctioned(_) => Self::Sanctioned,
-            Policy::Unsanctioned(_) => Self::Unsanctioned,
-        }
-    }
+    /// Audit. One page of the audit log, newest first.
+    async fn audit(&self, caller: &Caller, query: &AuditQuery) -> Result<AuditPage, QueryError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,8 +282,52 @@ pub enum OperatorAction {
     },
 }
 
+/// Which action, without its arguments. The audit log filters on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionKind {
+    SetPolicy,
+    MergeAgents,
+    Acknowledge,
+    Resolve,
+    ReplayDeadLetter,
+}
+
+impl OperatorAction {
+    pub fn kind(&self) -> ActionKind {
+        match self {
+            Self::SetPolicy { .. } => ActionKind::SetPolicy,
+            Self::MergeAgents(_) => ActionKind::MergeAgents,
+            Self::Acknowledge { .. } => ActionKind::Acknowledge,
+            Self::Resolve { .. } => ActionKind::Resolve,
+            Self::ReplayDeadLetter { .. } => ActionKind::ReplayDeadLetter,
+        }
+    }
+
+    /// The permission the caller must hold. Checked before any effect; a
+    /// caller without it gets `Forbidden`.
+    pub fn required_permission(&self) -> Permission {
+        match self {
+            Self::SetPolicy { .. } | Self::MergeAgents(_) => Permission::Govern,
+            Self::Acknowledge { .. } | Self::Resolve { .. } => Permission::Triage,
+            Self::ReplayDeadLetter { .. } => Permission::Operate,
+        }
+    }
+}
+
 pub trait OperatorActions {
-    async fn act(&self, caller: &Caller, action: OperatorAction) -> Result<(), QueryError>;
+    /// Check the permission, apply the action and record it. A call that
+    /// returns `Ok`, `Forbidden`, `NotFound` or `BadRequest` leaves exactly
+    /// one audit record, whose outcome is what it returns
+    /// (`AuditOutcome::of`): an `Applied` or `Unchanged` record is written in
+    /// the same transaction as the action's effect, and a `Forbidden` or
+    /// `Rejected` one with no effect. A `Store` error had no effect and
+    /// leaves at most one record, written when the audit log is still
+    /// reachable.
+    async fn act(
+        &self,
+        caller: &Caller,
+        action: OperatorAction,
+    ) -> Result<ActionEffect, QueryError>;
 }
 
 pub trait AlertSink {

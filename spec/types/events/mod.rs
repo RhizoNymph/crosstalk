@@ -55,6 +55,7 @@ pub enum Subject {
     TopicVersionActivated,
     EdgeUpdated,
     AlertOpened,
+    AlertChanged,
     PolicyChanged,
 }
 

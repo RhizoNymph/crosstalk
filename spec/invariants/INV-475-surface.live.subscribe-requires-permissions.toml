@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.live.subscribe-requires-permissions"
+statement = "LiveFeed::subscribe returns Forbidden and opens no stream when the Caller lacks the permission any requested update kind requires: Content for TransmissionConfirmed and View for every other kind."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Each kind needs the permission of the QueryApi endpoint that serves the
+same data, so the live feed is never a way around the query permissions: a
+View caller who cannot call QueryApi::transmission must not receive
+TransmissionConfirmed either. Refusing the whole subscription, rather than
+silently dropping the forbidden kinds, tells the UI what it asked for and
+could not get. The permission per kind is
+LiveUpdateKind::required_permission and the check is
+UpdateKinds::missing_permission.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::subscribe_without_view_forbidden", "crosstalk::surface::tests::subscribe_transmissions_without_content_forbidden"]
+integration = "crosstalk::surface::integration::sse_route_enforces_kind_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

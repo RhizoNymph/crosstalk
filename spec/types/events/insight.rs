@@ -1,6 +1,6 @@
 //! Events from analysis (L6), topology (L7) and the surface (L8).
 
-use crate::aggregates::alert::Alert;
+use crate::aggregates::alert::{Alert, AlertRevision};
 use crate::aggregates::edge::EdgeKey;
 use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::transmission::{Classification, Route};
@@ -43,15 +43,25 @@ pub enum InsightEvent {
         version: TopicModelVersion,
         transmissions: u64,
     },
-    /// From topology: graph and series queries now read `version`'s buckets
-    /// instead of `previous`'s. The topic catalog marks `version` active and
-    /// every older version superseded by it.
+    /// From topology (L7): every bucket of `version` is complete, and graph
+    /// and series queries now read `version`'s buckets instead of
+    /// `previous`'s. Published once `EdgeStore::activate` has switched, never
+    /// for a version older than the active one. The topic catalog marks
+    /// `version` active and every older version superseded by it.
     TopicVersionActivated {
         version: TopicModelVersion,
         previous: TopicModelVersion,
     },
     EdgeUpdated(EdgeKey),
+    /// Revision 1 (`AlertRevision::OPENED`).
     AlertOpened(Alert),
+    /// A stored alert changed: triage (L6) folded a draft into it or
+    /// suppressed it, or an operator (L8) acknowledged or resolved it.
+    /// `alert` is the alert after the change and `revision` its new revision.
+    AlertChanged {
+        alert: Alert,
+        revision: AlertRevision,
+    },
     /// From the surface: an operator or config changed a channel's policy.
     /// Flow detection applies it; alert triage suppresses alerts on newly
     /// sanctioned channels.
@@ -69,6 +79,7 @@ impl InsightEvent {
             Self::TopicVersionActivated { .. } => Subject::TopicVersionActivated,
             Self::EdgeUpdated(_) => Subject::EdgeUpdated,
             Self::AlertOpened(_) => Subject::AlertOpened,
+            Self::AlertChanged { .. } => Subject::AlertChanged,
             Self::PolicyChanged { .. } => Subject::PolicyChanged,
         }
     }

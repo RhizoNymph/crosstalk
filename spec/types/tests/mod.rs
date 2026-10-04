@@ -6,12 +6,15 @@
 mod fixtures;
 
 mod aggregates;
+mod audit;
 mod events;
 mod filter;
 mod flow;
 mod infrastructure;
+mod live;
 mod observed;
 mod paging;
+mod policy;
 mod projection;
 mod provenance;
 mod series;

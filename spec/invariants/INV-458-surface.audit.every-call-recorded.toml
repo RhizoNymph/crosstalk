@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.audit.every-call-recorded"
+statement = "Every OperatorActions::act call that returns Ok, Forbidden, NotFound or BadRequest leaves exactly one audit record, holding the call's Caller and action and an outcome whose AuditOutcome::result equals what the call returned."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The audit log answers who tried to do what and what came of it, so refused
+attempts matter as much as applied ones: a run of Forbidden policy changes
+from a viewer is the signal. Recording the OperatorAction value itself,
+not a per-action shape, covers actions added later without a schema
+change. Applied and Unchanged records are written in the action's
+transaction; Forbidden and Rejected ones carry no effect. A Store error is
+excluded because the log itself may be unreachable then.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::every_action_outcome_is_audited", "crosstalk::surface::tests::forbidden_action_is_audited"]
+property = "crosstalk::surface::tests::prop_one_audit_record_per_act_call"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

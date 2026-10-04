@@ -14,7 +14,10 @@
 //! triages the drafts; on `TopicVersionReady` it remaps every watched-topic
 //! rule on the predecessor with [`TopicLineage::remap`] over the stored
 //! lineage, so a rule becomes `Stale` exactly when the lineage shows a
-//! watched topic without a successor above the rule's threshold.
+//! watched topic without a successor above the rule's threshold. A triage
+//! outcome that changes a stored alert (a deduplicated occurrence, a
+//! suppression) publishes `AlertChanged` with the alert's next
+//! `AlertRevision`.
 //!
 //! Implementations:
 //! - `Embedder`: `LocalOnnxEmbedder`, `ApiEmbedder`.

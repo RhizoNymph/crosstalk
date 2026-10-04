@@ -41,7 +41,8 @@ Overview:
       topic sizes and lineage, search, alert rules), L7 topology (edge
       aggregation per time window, graphs and time series), L8 surface
       (query API with cursor-paginated lists and linked views sharing one
-      filter, UI, operator actions, alert sinks).
+      filter, UI, operator actions, append-only audit log, SSE live feed,
+      alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -60,8 +61,12 @@ Overview:
     topic-version activation back to L6 → L8 serves topology, time series,
     topic history, search, projections, lists and alerts, with the graph,
     search, projection and edge drill-down all filtered by one
-    TopologyFilter. Operator actions flow
-    back down: policy changes to L5, agent merges to L3.
+    TopologyFilter, and streams new alerts and changed edges, channels and
+    policies to the UI over SSE (resumable by cursor, with a resync marker
+    when a cursor is too old). Operator actions flow back down: policy
+    changes to L5, which records every decision in the channel's policy
+    history, agent merges to L3. Every action call is recorded in the audit
+    log with its outcome.
 
 Features Index:
   type_spec:
@@ -70,9 +75,10 @@ Features Index:
       (including clients, upstreams and credentials), derived inferences,
       aggregates (including time series and topic history), bus events and
       per-layer interfaces (including the query surface's paginated lists,
-      shared view filter and projection), with tests for the invariants
-      checked at runtime and one TOML file per invariant in spec/invariants.
-      Harness and server wire behavior it is
+      shared view filter and projection, the SSE live feed, the audit log
+      and channel policy history), with tests for the invariants checked at
+      runtime and one TOML file per invariant in spec/invariants. Harness and
+      server wire behavior it is
       based on is in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []

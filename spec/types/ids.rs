@@ -74,6 +74,8 @@ entity_id! {
     OperatorId;
     /// One event on the bus. Consumers deduplicate on it.
     EventId;
+    /// One recorded operator action call, in the audit log.
+    AuditId;
 }
 
 content_id! {

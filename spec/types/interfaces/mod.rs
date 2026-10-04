@@ -17,9 +17,9 @@
 //! | L3 | [`l3_reconstruction`] | `ExchangeCaptured` | `ConversationDelta`, `AgentSeen`, `AgentMerged` |
 //! | L4 | [`l4_provenance`] | `ConversationDelta` | `SpanOriginated`, `SpanRelayed`, `ContentMatched` |
 //! | L5 | [`l5_flow`] | `ConversationDelta`, `ContentMatched`, clock, policy | channel and transmission events |
-//! | L6 | [`l6_analysis`] | `TransmissionConfirmed`, `TopicVersionActivated`, clock, detect events | `TransmissionClassified`, `TopicVersionReady`, `AlertOpened` |
+//! | L6 | [`l6_analysis`] | `TransmissionConfirmed`, `TopicVersionActivated`, clock, detect events | `TransmissionClassified`, `TopicVersionReady`, `AlertOpened`, `AlertChanged` |
 //! | L7 | [`l7_topology`] | `TransmissionClassified`, `TopicVersionReady` | `EdgeUpdated`, `TopicVersionActivated` |
-//! | L8 | [`l8_surface`] | `AlertOpened`, `EdgeUpdated`, operator | `PolicyChanged`, agent merges |
+//! | L8 | [`l8_surface`] | `AlertOpened`, `EdgeUpdated`, live feed subjects, operator | `PolicyChanged`, `AlertChanged`, agent merges, SSE |
 
 pub mod l0_ingress;
 pub mod l1_canonical;

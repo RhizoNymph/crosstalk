@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.alert.revision-consecutive"
+statement = "For every alert, AlertOpened carries revision 1 and each AlertChanged carries the alert as stored after that change with a revision exactly one above the alert's previous revision, whether triage or an operator action made the change."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Alert changes come from two producers (L6 triage folding drafts and
+suppressing, L8 acknowledging and resolving) with separate outboxes, so
+their events can arrive out of order. With consecutive revisions a live
+client keeps the highest revision it has seen and ends with the stored
+alert; without them an older snapshot arriving late would undo an
+acknowledgement on screen. Each change is a compare-and-set on the stored
+revision, which also serves surface.action.alert-concurrent-single-
+transition.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::alert_revisions_consecutive_across_triage_and_actions"
+integration = "crosstalk::surface::integration::alert_revision_compare_and_set_postgres"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }
