@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-unmerge.leaves-fresh-merges"
+statement = "Unmerging a changes no agent that was unmerged, or unmerged and merged again, after it was repointed through a."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+An operator who split an agent off a cluster, or merged it somewhere else,
+made a later decision than the merge being undone. Pulling that agent back
+to a would silently reverse the later decision. A fresh merge starts with
+empty earlier_targets, so restore_through leaves it alone.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::unmerge_leaves_a_fresh_merge_alone",
+    "crosstalk_spec::tests::agents::unmerge_out_of_order_returns_repointed_agents_to_the_unmerged_one",
+]
+property = "crosstalk::reconstruct::tests::unmerge_leaves_later_decisions"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

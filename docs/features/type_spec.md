@@ -52,6 +52,17 @@ The types follow data through the stack:
    (known agent, new agent, or conflict) from the most specific
    `IdentityEvidence`, with harness ids scoped by `IdentityScope`; it also
    applies `MergeRequest`s, and the `AgentDirectory` resolves merged ids.
+   A merge records on the source's `Merged` its prior `MergeableState` and
+   the agents it repointed; a merge into a merged agent is redirected to
+   that agent's target and recorded as a merge followed by a repoint. An
+   operator unmerge (`IdentityResolver::unmerge`) returns the agent to its
+   prior state and points every agent repointed through it back at it
+   (`Merged::restore_through`), then publishes `AgentUnmerged`; stored
+   records are untouched, so graphs split again on their next read.
+   `IdentityResolver::set_label` appends to the canonical agent's
+   `LabelLog`; labels are never identity evidence, merges and unmerges
+   change no log, and `LabelView` shows the target's label with differing
+   alias labels as history.
    The `Threader` resolves `Continuation::Increment` exchanges through the
    stored response chain and gives a `ThreadOutcome` holding a
    `ConversationDelta` (new inputs, new system prompt, output), which is
@@ -76,22 +87,39 @@ The types follow data through the stack:
    `TransmissionUpdate`s, which move a `Transmission` through
    `TransmissionState`, choosing its `Route` (`Delegation`, `Channel`,
    `Direct`, `Unobserved`, in that precedence). Channel and transmission
-   events are published.
+   events are published. An operator can promote a discovered channel
+   (`ChannelRegistry::promote`): it keeps its id, resources, policy and
+   `TrafficDetection`, gains a non-overlapping pattern that must match its
+   seed, and its origin becomes `Declared` with `DeclaredHistory::Promoted`
+   recording the seed. An operator can dismiss a suspected transmission
+   (`TransmissionReview::dismiss`): the request goes through the owning
+   correlator shard (`Correlator::on_dismiss`), so it is ordered with late
+   matches, and the transmission becomes `Discarded` with
+   `DiscardReason::Dismissed`; `TransmissionDismissed` is published.
 7. **L6 analysis.** For each `TransmissionConfirmed`, the `Embedder` and
    `TopicModel` produce a versioned `Classification`
    (`TransmissionClassified`); a re-fit re-classifies everything and then
    publishes `TopicVersionReady`. `AlertRuleEval`s turn envelopes into
    `AlertDraft`s, which `AlertTriage` opens or deduplicates
-   (`TriageOutcome`), and suppresses on sanctioning or rule disabling.
+   (`TriageOutcome`), or drops as `RuleInactive` when the rule stopped
+   evaluating, and suppresses on sanctioning, rule disabling or
+   `TransmissionDismissed`. Operators manage rules through `AlertRuleStore`:
+   create and update content rules from a `RuleRequest` (a watched-topic
+   request must name the current topic-model version; a semantic query's
+   text is embedded), and enable or disable any rule. A rule keeps its kind;
+   updating a stale watched-topic rule is the only way it becomes current.
 8. **L7 topology.** The `EdgeStore` applies each `EdgeContribution` to its
    `EdgeKey` bucket (per topic-model version), activates a version once it is
    complete, and answers `TopologyGraph` queries over canonical agents with
    per-edge `Share`s.
 9. **L8 surface.** `QueryApi` serves channels, alerts, the topology,
    search, transmissions, topics and projections to an authenticated
-   `Caller` with `Permission`s. `OperatorActions` publish `PolicyChanged`
-   (stamping author and time from the caller) and agent merges back down the
-   stack, and `AlertSink`s deliver alerts.
+   `Caller` with `Permission`s. `OperatorActions::act` checks
+   `OperatorAction::required_permission` before any effect, then publishes
+   `PolicyChanged` or forwards the action down the stack: merges, unmerges
+   and labels to L3, channel promotion and transmission dismissal to L5,
+   alert rule management to L6. It stamps every author and time from the
+   caller. `AlertSink`s deliver alerts.
 
 ## Files
 
@@ -100,11 +128,12 @@ The types follow data through the stack:
 | `spec/Cargo.toml` | Builds the spec as a library so it type-checks and its tests run | crate `crosstalk-spec` |
 | `spec/types/mod.rs` | Crate root, tier overview | — |
 | `spec/types/ids.rs` | Typed ids | `AgentId`, `ExchangeId`, `SpanId`, `ChannelId`, `TransmissionId`, … `MessageHash`, `PromptHash`, `CredentialHash`, `AccountHash` |
-| `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
+| `spec/types/support.rs` | Shared building blocks | `NonEmpty`, `NonBlank`, `Timestamp`, `TimeWindow`, `ByteRange`, `Blake3`, `Similarity`, `Share` |
 | `spec/types/observed/client.rs` | Ingress, upstream, credential and harness facts | `IngressMode`, `Upstream`, `UpstreamKind`, `Dialect`, `CredentialScheme`, `CredentialRef`, `HarnessClaim`, `HarnessIds`, `RequestClass`, `ClientContext`, `EndpointKind` |
 | `spec/types/observed/message.rs` | Canonical messages | `Message`, `MessageBody`, `Role`, `AssistantPart`, `UserPart`, `ToolCall`, `ToolArguments`, `CanonicalJson`, `ToolResult`, `Unknown`, `PartRef` |
 | `spec/types/observed/exchange.rs` | Exchanges and their pipeline stage | `Exchange`, `ExchangeMeta`, `WireProtocol`, `Transport`, `Continuation`, `ResponseId`, `ExchangeOutcome`, `ExchangeFailure`, `ExchangeStage` |
-| `spec/types/observed/agent.rs` | Agent identity | `Agent`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `MergeRequest`, `MergeAuthor` |
+| `spec/types/observed/agent.rs` | Agent identity, merge records and exact unmerge | `Agent`, `IdentityEvidence`, `IdentityScope`, `Strength`, `AgentState`, `Merged`, `MergeableState`, `MergeRequest`, `MergeAuthor` |
+| `spec/types/observed/agent/label.rs` | Display labels | `AgentLabel`, `Labeled`, `LabelChange`, `LabelLog`, `LabelView`, `PastLabel` |
 | `spec/types/observed/conversation.rs` | Threaded conversations | `Conversation`, `ConversationOrigin` |
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
@@ -112,17 +141,18 @@ The types follow data through the stack:
 | `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern`, `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp`, `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess`, `InvalidCoAccess` |
-| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState`, `Confirmed`, `Classification` |
-| `spec/types/derived/flow/channel/mod.rs` | Channels | `Channel`, `ChannelOrigin` |
+| `spec/types/derived/flow/transmission.rs` | Transmissions and their lifecycle | `Transmission`, `Route`, `DelegationDirection`, `DirectCarrier`, `TransmissionState` (`dismiss`, `expire`), `DiscardReason`, `Dismissal`, `Confirmed`, `Classification` |
+| `spec/types/derived/flow/channel/mod.rs` | Channels and promotion | `Channel`, `ChannelOrigin` (`promoted`), `Declaration`, `DeclaredHistory`, `Seed` |
 | `spec/types/derived/flow/channel/detection.rs` | Channel detection lifecycle | `DeclaredDetection`, `TrafficDetection` |
 | `spec/types/derived/flow/channel/policy.rs` | Channel policy and traffic routing | `Policy`, `Decision`, `PolicyAuthor`, `TrafficVerdict` |
 | `spec/types/aggregates/edge.rs` | Topology edges | `EdgeKey`, `TopicSlot`, `EdgeStats`, `Edge`, `Weighting`, `RouteKind`, `TopologyFilter`, `TopologyGraph` |
 | `spec/types/aggregates/topic.rs` | Embeddings and topics | `Embedding`, `EmbeddingModel`, `Topic`, `TopicModelVersion`, `TopicAssignment`, `Assignment` |
-| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `AlertRuleDef`, `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState` |
+| `spec/types/aggregates/alert.rs` | Alert rules and alerts | `AlertRule`, `AlertRuleKind`, `TopicWatch`, `WatchedTopics`, `ContentRule`, `AlertRuleDef` (`evaluates`, `update`), `RuleStatus`, `AlertDraft`, `TriageOutcome`, `Alert`, `AlertState`, `SuppressReason` |
 | `spec/types/events/mod.rs` | Bus envelope and subjects | `Envelope`, `BusEvent`, `Subject` |
 | `spec/types/events/{ingest,detect,insight}.rs` | Events by producing layer | `IngestEvent`, `ConversationDelta`, `DetectEvent`, `InsightEvent` |
-| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums |
-| `spec/types/tests/` | Invariant tests | — |
+| `spec/types/interfaces/l0_ingress.rs` … `l8_surface.rs` | One module per layer | the traits listed in the data flow above, and their error enums; `IdentityResolver::unmerge` and `set_label` (L3), `ChannelRegistry::promote`, `TransmissionReview`, `DismissError` (L5), `AlertRuleStore`, `RuleRequest`, `RuleError` (L6), `OperatorAction::required_permission` (L8) |
+| `spec/types/tests/` | Invariant tests; `agents.rs` holds a reference merge table for exact unmerge | — |
+| `spec/invariants/` | One TOML file per invariant (see its README) | — |
 | `docs/research/harness-wire-protocols.md` | What each supported harness and server sends, with sources | — |
 
 ## Invariants and constraints
@@ -159,6 +189,15 @@ The types follow data through the stack:
   agent alone.
 - Merges are aliases resolved at read time; a merge request is never a
   self-merge.
+- An unmerge restores exactly: the agent returns to its `Merged::prior`
+  (always Provisional or Established), every agent repointed through it
+  points at it again unless it was unmerged or merged afresh since, and one
+  `AgentUnmerged` lists them. Merge then unmerge is the identity on the
+  merge table and on every topology graph.
+- Labels are display only: never identity evidence, set on the canonical
+  agent, untouched by merges and unmerges. An `AgentLabel` is trimmed,
+  non-empty, at most 64 characters and free of control characters, and a
+  `LabelLog` is in time order.
 - Tool arguments are canonical JSON, so an echoed message hashes like the
   original.
 - A conversation's stored history holds non-system messages only. A
@@ -193,12 +232,25 @@ The types follow data through the stack:
   extend it. Route precedence is Delegation, Channel, Direct, Unobserved.
 - No `EdgeKey` is a self-edge (`EdgeKey::new`); every `Embedding` has its
   model's dimension and unit norm (`Embedding::new`).
-- A declared channel's detection is `DeclaredDetection` and a discovered
-  channel's is `TrafficDetection`, so a declared, never-used channel is
-  representable and a discovered, never-accessed one is not.
+- A channel declared before traffic has `DeclaredDetection`; a discovered
+  or promoted channel has `TrafficDetection`. So a declared, never-used
+  channel is representable and a discovered or promoted, never-accessed one
+  is not. Promotion keeps the channel's id, resources, policy and detection;
+  its pattern matches its seed and overlaps no other declared pattern.
+- Only a suspected transmission can be discarded, by expiry or by an
+  operator's dismissal; a dismissal and a late match on it are ordered in
+  the correlator shard, so exactly one applies.
 - Confirmed traffic on a channel raises an alert unless its policy is
   sanctioned (`Policy::on_traffic`).
 - Deduplication is a triage outcome, not an alert state.
+- Only watched-topic rules can be stale, and staleness is separate from
+  the operator's enabled or disabled status. A rule evaluates only when
+  enabled and current; updating is the only way out of stale; a rule keeps
+  its kind; operators create and edit content rules only. Once a disable
+  returns, the rule has no active alerts and triage opens none for it.
+- Every operator action names one permission: Govern for identity, policy
+  and alert rules; Triage for alerts and dismissals; Operate for the
+  pipeline. The surface stamps author and time from the caller.
 - In a `TopologyGraph`, edge shares sum to 1 unless there are no edges.
 - `TimeWindow` and `ByteRange` are never empty. `Similarity` and `Share` are
   never NaN or outside `0..=1`.

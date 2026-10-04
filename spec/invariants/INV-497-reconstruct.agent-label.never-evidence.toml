@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-label.never-evidence"
+statement = "IdentityResolver::resolve returns the same Resolution for an exchange whatever labels the stored agents carry."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Labels are free text chosen for display. If resolution read them, an
+operator naming two agents alike could merge them, and renaming one could
+split traffic. Labels are not an IdentityEvidence variant and live in a
+separate LabelLog, so resolution has no reason to read them; this pins it.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::resolution_ignores_labels"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

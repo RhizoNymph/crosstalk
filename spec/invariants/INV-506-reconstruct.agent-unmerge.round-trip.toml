@@ -1,0 +1,25 @@
+[invariant]
+id = "reconstruct.agent-unmerge.round-trip"
+statement = "Merging a into b and then unmerging a, with no other merge or unmerge in between, leaves every agent's state as it was before the merge."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+This is what restore exactly means for operators: an unmerge is the inverse
+of the merge it undoes, including for agents that were merged into a
+earlier and repointed to b. Merge records and alerts keyed on agents depend
+on the merge table returning to its earlier value. The spec tests check the
+documented procedure on hand-built tables; the property test checks the
+resolver.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::merge_then_unmerge_round_trips",
+    "crosstalk_spec::tests::agents::unmerge_of_the_latest_merge_restores_the_table_exactly",
+]
+property = "crosstalk::reconstruct::tests::merge_unmerge_round_trip"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

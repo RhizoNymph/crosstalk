@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-unmerge.restore-through"
+statement = "Merged::restore_through(t) on a record whose earlier_targets contain t sets into to t and removes t and every later entry from earlier_targets, and on any other record changes nothing and returns false."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the step that returns agents repointed through an unmerged agent to
+it. Cutting the history at t, not just popping the last entry, makes
+unmerges exact in any order: if a was repointed through b and then through
+c, unmerging b first still returns a to b. A record without t in its
+history was unmerged or merged afresh since, and must not move.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::restore_through_returns_to_that_target_and_forgets_later_repoints",
+    "crosstalk_spec::tests::agents::restore_through_an_older_target_skips_later_ones",
+    "crosstalk_spec::tests::agents::restore_through_an_unrelated_agent_changes_nothing",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

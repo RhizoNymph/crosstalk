@@ -39,7 +39,7 @@ Overview:
     insight: >
       L6 analysis (embeddings, topics, search, alert rules), L7 topology
       (edge aggregation per time window), L8 surface (query API, UI, operator
-      actions, alert sinks).
+      actions with one permission each, alert sinks).
 
   data_flow: >
     Harness request (via its base URL, or via the gateway as HTTPS proxy) →
@@ -55,7 +55,10 @@ Overview:
     transmissions (TransmissionConfirmed / Suspected) → L6 embeds and
     classifies transmissions and evaluates alert rules → L7 aggregates
     edges → L8 serves topology, search and alerts. Operator actions flow
-    back down: policy changes to L5, agent merges to L3.
+    back down: policy changes and channel promotion to L5, transmission
+    dismissal through L5's correlator (L6 then suppresses its alert), agent
+    merges, exact unmerges and display labels to L3, alert rule management
+    to L6.
 
 Features Index:
   type_spec:

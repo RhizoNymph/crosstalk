@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.action.forwarded-unchanged"
+statement = "Each UnmergeAgent, LabelAgent, PromoteChannel, DismissTransmission, CreateAlertRule, UpdateAlertRule and SetAlertRuleStatus that returns Ok passed exactly its requested ids, label, pattern, note, rule request and status to IdentityResolver::unmerge or set_label, ChannelRegistry::promote, TransmissionReview::dismiss, or AlertRuleStore::create, update or set_status."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The surface owns none of these effects. A handler that swapped ids, dropped
+the note or normalised the pattern differently would apply something the
+operator did not ask for, and the audit record, which stores the action,
+would no longer describe what happened.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::new_actions_forwarded_unchanged"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -12,6 +12,10 @@
 //! - `AgentDirectory`: the merge table. Every reader of stored agent ids
 //!   resolves them through it.
 //!
+//! Operators reach L3 through the surface: merges, exact unmerges and
+//! display labels. An unmerge changes only the merge table, so graphs and
+//! edges split again on their next read.
+//!
 //! Identity resolution uses the most specific evidence present
 //! (`IdentityEvidence::specificity`). Harness ids count only within their
 //! `IdentityScope`. Rotating credentials and prompt fingerprints are weak:
@@ -41,8 +45,10 @@
 //! not its canonical agent; readers resolve through `AgentDirectory`.
 
 use crate::events::ingest::ConversationDelta;
-use crate::ids::{AgentId, ConversationId};
-use crate::observed::agent::{IdentityEvidence, MergeRequest};
+use crate::ids::{AgentId, ConversationId, OperatorId};
+#[cfg(doc)]
+use crate::observed::agent::Merged;
+use crate::observed::agent::{IdentityEvidence, LabelChange, MergeRequest};
 use crate::observed::exchange::{Exchange, ExchangeMeta};
 use crate::observed::message::Message;
 use crate::support::NonEmpty;
@@ -70,9 +76,29 @@ pub trait AgentDirectory {
 }
 
 pub trait IdentityResolver {
-    /// Apply a merge. Repoints agents already merged into `from`, so no
-    /// merge chain is ever longer than one.
+    /// Apply a merge and publish one `AgentMerged`. Repoints agents already
+    /// merged into the source ([`Merged::repoint`]), so no merge chain is
+    /// ever longer than one, and records on the source's [`Merged`] its
+    /// prior state and the agents it repointed. A merge into a merged agent
+    /// is redirected to that agent's target, recorded as a merge into it
+    /// followed by a repoint, and listed in its `repointed`.
     async fn merge(&mut self, request: MergeRequest) -> Result<(), ResolveError>;
+
+    /// Undo `agent`'s merge exactly, as operator `by`. The agent returns to
+    /// [`Merged::prior`], and every agent in its [`Merged::repointed`] that
+    /// was repointed away from it points at it again
+    /// ([`Merged::restore_through`]). Publishes one `AgentUnmerged` listing
+    /// those agents. Stored records are untouched; readers see the split on
+    /// their next `AgentDirectory::canonical` call.
+    ///
+    /// `NotMerged` when `agent` is not merged, so a repeated unmerge changes
+    /// nothing and publishes nothing.
+    async fn unmerge(&mut self, agent: AgentId, by: OperatorId) -> Result<(), ResolveError>;
+
+    /// Record `change` in the label log of `agent`'s canonical agent. A
+    /// merged agent's labels never change. Labels are never identity
+    /// evidence: `resolve` does not read them.
+    async fn set_label(&mut self, agent: AgentId, change: LabelChange) -> Result<(), ResolveError>;
 
     async fn resolve(
         &mut self,
@@ -125,8 +151,14 @@ pub trait Threader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
-    Store { reason: String },
+    Store {
+        reason: String,
+    },
     UnknownAgent(AgentId),
+    /// An unmerge of an agent that is not merged.
+    NotMerged(AgentId),
+    /// A label change older than the canonical agent's last one.
+    LabelOutOfOrder(AgentId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

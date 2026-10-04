@@ -177,3 +177,28 @@ impl Share {
         self.0
     }
 }
+
+/// Text with at least one non-whitespace character, stored trimmed.
+///
+/// Used for operator-written text that must say something, such as a
+/// semantic alert rule's query.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NonBlank(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Blank;
+
+impl NonBlank {
+    pub fn new(text: &str) -> Result<Self, Blank> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            Err(Blank)
+        } else {
+            Ok(Self(trimmed.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}

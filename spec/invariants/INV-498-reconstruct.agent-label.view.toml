@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-label.view"
+statement = "LabelView::of returns the canonical agent's own current label as current, never an alias's, and lists in history its superseded labels and each alias's current label that differs from it, oldest first."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Pins what the UI shows after a merge: the target keeps its label, and a
+conflicting label of a merged agent stays visible as history instead of
+disappearing. An alias label equal to the current one adds nothing. The
+view also rejects a merged agent as canonical and an agent not merged into
+it as an alias.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::label_view_keeps_the_target_label_and_lists_differing_alias_labels",
+    "crosstalk_spec::tests::agents::label_view_of_an_unlabeled_target_shows_no_alias_label_as_current",
+    "crosstalk_spec::tests::agents::label_view_rejects_merged_canonical_and_foreign_aliases",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

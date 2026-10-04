@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.rule.create-id-idempotent"
+statement = "AlertRuleStore::create with an id already in use returns Ok and changes nothing when the stored rule came from the same request, and returns DuplicateId and changes nothing otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The client chooses the rule id so a create that timed out can be retried
+without making a second rule that raises every alert twice. A different
+request under the same id is a client bug and must not overwrite a rule.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::create_rule_idempotent_on_id"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

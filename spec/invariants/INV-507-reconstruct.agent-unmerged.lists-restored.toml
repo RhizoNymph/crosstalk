@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-unmerged.lists-restored"
+statement = "The AgentUnmerged published for an unmerge of a names a, the agent a resolved to before the unmerge as was_into, and in restored exactly the agents whose target the unmerge changed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Readers that cache the merge table apply the event without reading the
+store: a points at itself and every restored agent points at a. A missing
+agent would keep resolving to the old target in that cache; an extra one
+would be split off a cluster it still belongs to.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::agent_unmerged_lists_restored_agents"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -5,6 +5,7 @@
 
 mod fixtures;
 
+mod agents;
 mod aggregates;
 mod events;
 mod flow;
@@ -12,3 +13,4 @@ mod infrastructure;
 mod observed;
 mod provenance;
 mod support;
+mod surface;

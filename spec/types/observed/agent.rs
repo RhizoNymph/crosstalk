@@ -7,9 +7,12 @@
 //!
 //! ```text
 //! Registered ─first traffic─▶ Provisional ─corroborated─▶ Established
-//!                                  │                          │
-//!                                  └──────── merge ───────────┴─▶ Merged
+//!                               │    ▲                     │    ▲
+//!                               └────┼───── merge ─────────┴────┼──▶ Merged
+//!                                    └──────── unmerge ─────────┴──────┘
 //! ```
+//!
+//! An unmerge returns a merged agent to the state it was merged from.
 //!
 //! `Registered` is an agent the deployment declared in config that has not
 //! sent traffic yet. Agents discovered from traffic start in `Provisional`.
@@ -20,6 +23,18 @@
 //! auditable, and a transmission between two agents that are later merged
 //! becomes a self-edge that queries drop.
 //!
+//! **Unmerges restore exactly.** An operator can undo a merge. The [`Merged`]
+//! record holds the agent's state before the merge and the agents repointed
+//! through it, so the unmerged agent returns to that state and those agents
+//! point at it again. No stored record changes, so graphs and edges split
+//! again on their next read.
+//!
+//! **Labels are for display.** An operator can give the canonical agent a
+//! free-text [`AgentLabel`]. It is shown and searchable but is never identity
+//! evidence. A merge or unmerge changes no agent's labels: the target keeps
+//! its label, and a merged agent keeps its own, which the canonical agent's
+//! [`LabelView`] lists in its history when it differs.
+//!
 //! **Harness ids are scoped.** Session and agent ids sent by a harness are
 //! client-asserted (oh-my-pi sends Claude Code's), so they only count as
 //! evidence within the [`IdentityScope`] they arrived in: the same session id
@@ -28,6 +43,13 @@
 use crate::ids::{AccountHash, AgentId, CredentialHash, OperatorId, PromptHash};
 use crate::observed::client::UpstreamId;
 use crate::support::{NonEmpty, Timestamp};
+
+mod label;
+
+pub use label::{
+    AgentLabel, InvalidLabel, InvalidLabelView, LabelChange, LabelLog, LabelView, Labeled,
+    OutOfOrder, PastLabel,
+};
 
 /// The authenticated context a harness id is interpreted in: the exchange's
 /// account if it has one, else its credential if that is stable, else its
@@ -108,6 +130,8 @@ pub struct Agent {
     /// same scope, or from the session's main agent for a harness sub-agent.
     pub parent: Option<AgentId>,
     pub state: AgentState,
+    /// Operator-chosen display labels. Never identity evidence.
+    pub labels: LabelLog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,17 +146,102 @@ pub enum AgentState {
     Established {
         since: Timestamp,
     },
-    /// This agent turned out to be `into`. Its records keep its own id and
-    /// resolve to `into` at read time.
-    ///
-    /// `into` is never this agent and is never itself `Merged`: a merge into
-    /// a merged agent is redirected to that agent's target, and agents
-    /// already merged into this one are repointed to `into`.
-    Merged {
-        into: AgentId,
-        at: Timestamp,
-        by: MergeAuthor,
-    },
+    /// This agent turned out to be another. Its records keep its own id and
+    /// resolve to [`Merged::into`] at read time.
+    Merged(Merged),
+}
+
+/// The states an agent can be merged from, and so the states an unmerge
+/// returns it to. A `Registered` agent has sent no traffic and a `Merged` one
+/// is already an alias, so neither can be merged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeableState {
+    Provisional { first_seen: Timestamp },
+    Established { since: Timestamp },
+}
+
+impl From<MergeableState> for AgentState {
+    fn from(state: MergeableState) -> Self {
+        match state {
+            MergeableState::Provisional { first_seen } => Self::Provisional { first_seen },
+            MergeableState::Established { since } => Self::Established { since },
+        }
+    }
+}
+
+/// A merged agent's record: where it resolves to, and what an unmerge needs
+/// to restore exactly.
+///
+/// `into` is never this agent and is never itself `Merged`. A merge into a
+/// merged agent `t` is redirected to `t`'s target and recorded as a merge
+/// into `t` followed by a repoint ([`Merged::repoint`]), with the source
+/// listed in `t`'s `repointed`. When an agent is merged, every agent merged
+/// into it is repointed to the new target and listed in its `repointed`.
+///
+/// Unmerging agent `x` returns it to `prior`, then calls
+/// [`Merged::restore_through`] with `x` on each agent in `x`'s `repointed`
+/// that is still merged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    pub into: AgentId,
+    pub at: Timestamp,
+    pub by: MergeAuthor,
+    /// The state this agent was in when it was merged.
+    pub prior: MergeableState,
+    /// The targets this agent pointed at before later merges repointed it,
+    /// oldest first. Empty for an agent never repointed.
+    pub earlier_targets: Vec<AgentId>,
+    /// Agents repointed through this one: those merged into it that its own
+    /// merge repointed to its target, and merges into it that were redirected
+    /// to its target.
+    pub repointed: Vec<AgentId>,
+}
+
+impl Merged {
+    /// The record of a merge into `into`, before any repointing.
+    pub fn new(into: AgentId, at: Timestamp, by: MergeAuthor, prior: MergeableState) -> Self {
+        Self {
+            into,
+            at,
+            by,
+            prior,
+            earlier_targets: Vec::new(),
+            repointed: Vec::new(),
+        }
+    }
+
+    /// This agent's target was merged into `to`: point at `to` and remember
+    /// the target it replaces.
+    pub fn repoint(&mut self, to: AgentId) {
+        self.earlier_targets.push(self.into);
+        self.into = to;
+    }
+
+    /// `through` was unmerged. If this agent was repointed away from
+    /// `through`, point it at `through` again and forget the repoints after
+    /// it. Returns whether the target changed. An agent that was unmerged and
+    /// merged afresh since then has no earlier targets, so it is untouched.
+    pub fn restore_through(&mut self, through: AgentId) -> bool {
+        match self.earlier_targets.iter().position(|t| *t == through) {
+            Some(index) => {
+                self.earlier_targets.truncate(index);
+                self.into = through;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl AgentState {
+    /// The state an unmerge returns this agent to: `None` unless it is
+    /// merged.
+    pub fn unmerged(&self) -> Option<AgentState> {
+        match self {
+            Self::Merged(merged) => Some(merged.prior.into()),
+            Self::Registered { .. } | Self::Provisional { .. } | Self::Established { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -15,7 +15,7 @@ use crate::events::insight::ClassificationCause;
 use crate::events::insight::InsightEvent;
 use crate::events::{BusEvent, Subject};
 use crate::ids::ConversationId;
-use crate::ids::{AlertId, AlertRuleId};
+use crate::ids::{AlertId, AlertRuleId, OperatorId};
 use crate::observed::agent::{IdentityEvidence, IdentityScope, MergeAuthor};
 use crate::observed::client::UpstreamId;
 use crate::observed::client::{
@@ -112,6 +112,12 @@ fn sample_events() -> Vec<BusEvent> {
             into: agent(2),
             by: MergeAuthor::Resolver,
         }),
+        BusEvent::Ingest(IngestEvent::AgentUnmerged {
+            agent: agent(1),
+            was_into: agent(2),
+            restored: vec![agent(3)],
+            by: OperatorId::from_ulid(1),
+        }),
         BusEvent::Detect(DetectEvent::SpanOriginated {
             span: span(1),
             agent: agent(1),
@@ -157,6 +163,11 @@ fn sample_events() -> Vec<BusEvent> {
             to: agent(2),
             channel: channel(1),
             co_access: NonEmpty::new(co_access()),
+        }),
+        BusEvent::Detect(DetectEvent::TransmissionDismissed {
+            transmission: transmission(2),
+            by: OperatorId::from_ulid(1),
+            at: at(9),
         }),
         BusEvent::Insight(InsightEvent::TransmissionClassified {
             cause: ClassificationCause::Confirmation,
@@ -212,6 +223,7 @@ fn subjects_name_their_variant() {
             Subject::ConversationDelta,
             Subject::AgentSeen,
             Subject::AgentMerged,
+            Subject::AgentUnmerged,
             Subject::SpanOriginated,
             Subject::SpanRelayed,
             Subject::AccessRecorded,
@@ -221,6 +233,7 @@ fn subjects_name_their_variant() {
             Subject::DeclaredChannelUnused,
             Subject::TransmissionConfirmed,
             Subject::TransmissionSuspected,
+            Subject::TransmissionDismissed,
             Subject::TransmissionClassified,
             Subject::TopicVersionReady,
             Subject::EdgeUpdated,

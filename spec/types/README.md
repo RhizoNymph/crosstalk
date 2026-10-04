@@ -15,12 +15,14 @@ cargo test  --manifest-path spec/Cargo.toml
 spec/types/
 ├── mod.rs                 crate root: the three tiers, events, interfaces
 ├── ids.rs                 typed ids: ULID entity ids, BLAKE3 content ids
-├── support.rs             NonEmpty, Timestamp, TimeWindow, ByteRange, Similarity, Share
+├── support.rs             NonEmpty, NonBlank, Timestamp, TimeWindow, ByteRange, Similarity, Share
 ├── observed/              facts from the wire
 │   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
 │   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
 │   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
-│   ├── agent.rs           Agent, IdentityEvidence, IdentityScope, AgentState, MergeRequest
+│   ├── agent.rs           Agent, IdentityEvidence, IdentityScope, AgentState, Merged, MergeRequest
+│   ├── agent/
+│   │   └── label.rs       AgentLabel, LabelLog, LabelView (display labels)
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
@@ -31,30 +33,30 @@ spec/types/
 │       ├── resource.rs    Resource, Locator, ResourcePattern
 │       ├── access.rs      Access, AccessOp, Extraction
 │       ├── evidence.rs    Evidence, CoAccess (checked)
-│       ├── transmission.rs Transmission, Route, DelegationDirection, TransmissionState, Confirmed
+│       ├── transmission.rs Transmission, Route, TransmissionState, DiscardReason, Dismissal, Confirmed
 │       └── channel/
-│           ├── mod.rs     Channel, ChannelOrigin
+│           ├── mod.rs     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed
 │           ├── detection.rs DeclaredDetection, TrafficDetection
 │           └── policy.rs  Policy, Decision, TrafficVerdict
 ├── aggregates/            recomputable summaries
 │   ├── edge.rs            EdgeKey (checked), TopicSlot, EdgeStats, TopologyFilter, TopologyGraph
 │   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
-│   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
+│   └── alert.rs           AlertRule, TopicWatch, ContentRule, AlertRuleDef, AlertDraft, TriageOutcome, Alert
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
-│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged
-│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
+│   ├── ingest.rs          L1/L3: ExchangeCaptured, ConversationDelta, AgentSeen, AgentMerged, AgentUnmerged
+│   ├── detect.rs          L4/L5: span, match, access, channel and transmission events (incl. TransmissionDismissed)
 │   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore, BlobStore
-│   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, set_label), AgentDirectory, Threader
 │   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
-│   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
-│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage
+│   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry (promote), Correlator, TransmissionReview
+│   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage, AlertRuleStore
 │   ├── l7_topology.rs     EdgeStore
-│   └── l8_surface.rs      Caller, QueryApi, OperatorActions, AlertSink
+│   └── l8_surface.rs      Caller, QueryApi, OperatorAction, OperatorActions, AlertSink
 └── tests/                 tests for the invariants checked at runtime
 ```
 
@@ -63,8 +65,9 @@ spec/types/
 - **Invalid states are unrepresentable where the type system allows it.**
   Examples: a message's role is its body variant, so a tool call can only
   appear in an assistant message. A confirmed transmission holds a
-  `NonEmpty<ContentMatch>`. A declared channel and a discovered channel have
-  different detection enums.
+  `NonEmpty<ContentMatch>`. A channel declared before traffic and a
+  discovered or promoted channel have different detection enums. Only a
+  watched-topic rule can be stale.
 - **Checked constructors for the rest.** When an invariant spans values
   (a content match's reader is not its origin agent; every match in a
   confirmed transmission has one sender), the type has private fields and a
@@ -106,7 +109,9 @@ Code Assist) and self-hosted vLLM or SGLang. See
 - **Only generation is captured.** Token counting, model listing, probes and
   side routes are forwarded and not captured.
 - **Merges are aliases.** Stored records keep their agent ids and readers
-  resolve them through `AgentDirectory`.
+  resolve them through `AgentDirectory`. An operator unmerge restores the
+  merge table exactly from the `Merged` record.
+- **Labels are display only.** An agent label is never identity evidence.
 
 ## Mapping from the lifecycle definition
 
@@ -118,7 +123,7 @@ some of its events are in-process here rather than on the bus:
 | --- | --- |
 | `Agent.unseen` | `AgentState::Registered` (declared in config); agents first seen in traffic start `Provisional` |
 | `Channel.undiscovered` | no record: a channel exists once declared or discovered |
-| `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` |
+| `Channel.declared` / `unused` | `DeclaredDetection::AwaitingTraffic` / `Unused` (under `DeclaredHistory::BeforeTraffic`) |
 | `Channel.observed` … `dormant` | `TrafficDetection` |
 | `ChannelPolicy` machine | `Policy` on `Channel`, with `Policy::on_traffic` |
 | `Alert.fired` / `deduplicated` | `AlertDraft` / `TriageOutcome::Deduplicated` |
