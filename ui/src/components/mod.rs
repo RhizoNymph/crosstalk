@@ -1,8 +1,26 @@
 //! Markup shared across pages. Keep page-specific markup in the page.
 
+pub mod badge;
+pub mod feedback;
+pub mod form;
+pub mod href;
+pub mod locator;
+pub mod nav;
+pub mod paging;
+pub mod table;
+
+pub use badge::{Badge, Tone, kind_badge, state_badge};
+pub use feedback::flash_banner;
+pub use form::state_inputs;
+pub use href::href;
+pub use locator::{locator_text, pattern_text};
+pub use nav::{Tab, filter_chip, tabs};
+pub use paging::{PageLinks, pagination};
+pub use table::data_table;
+
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::observed::client::{HarnessClaim, HarnessFamily};
-use crosstalk_spec::support::Timestamp;
+use crosstalk_spec::support::{Blake3, Timestamp};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
@@ -21,6 +39,16 @@ pub fn agent_name(agent: &AgentSummary) -> String {
 pub fn short_id(ulid: String) -> String {
     let start = ulid.len().saturating_sub(6);
     format!("…{}", &ulid[start..])
+}
+
+/// The first four bytes of a digest in hex, for display. Digests identify;
+/// they are never shown whole.
+pub fn abbrev_digest(digest: &Blake3) -> String {
+    let hex: String = digest.as_bytes()[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{hex}…")
 }
 
 pub fn family_name(family: &HarnessFamily) -> &'static str {
@@ -139,6 +167,13 @@ mod tests {
     #[test]
     fn short_id_keeps_the_tail() {
         assert_eq!(short_id("01J9ZQ3W8D0000000000ABCDEF".to_owned()), "…ABCDEF");
+    }
+
+    #[test]
+    fn digests_abbreviate_to_eight_hex_digits() {
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&[0xde, 0xad, 0x00, 0x0f]);
+        assert_eq!(abbrev_digest(&Blake3::from_bytes(bytes)), "dead000f…");
     }
 
     #[test]
