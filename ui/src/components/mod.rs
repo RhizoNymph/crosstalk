@@ -7,6 +7,7 @@ pub mod href;
 pub mod locator;
 pub mod nav;
 pub mod paging;
+pub mod sparkline;
 pub mod table;
 
 pub use badge::{Badge, Tone, kind_badge, state_badge};
@@ -14,7 +15,7 @@ pub use feedback::flash_banner;
 pub use form::state_inputs;
 pub use href::href;
 pub use locator::{locator_text, pattern_text};
-pub use nav::{Tab, filter_chip, tabs};
+pub use nav::{Tab, filter_chip, segmented, tabs};
 pub use paging::{PageLinks, pagination};
 pub use table::data_table;
 
@@ -90,6 +91,54 @@ pub fn format_time(at: Timestamp) -> String {
             || at.as_micros().to_string(),
             |ts| ts.strftime("%Y-%m-%d %H:%M:%S UTC").to_string(),
         )
+}
+
+/// UTC to the minute without the year, for dense lists.
+pub fn format_time_short(at: Timestamp) -> String {
+    i64::try_from(at.as_micros())
+        .ok()
+        .and_then(|micros| jiff::Timestamp::from_microsecond(micros).ok())
+        .map_or_else(
+            || at.as_micros().to_string(),
+            |ts| ts.strftime("%m-%d %H:%M").to_string(),
+        )
+}
+
+/// A byte count in binary units with one decimal above a kibibyte.
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+/// A share in `[0, 1]` as a percentage with one decimal ("< 0.1%" for tiny
+/// non-zero shares).
+pub fn format_share(share: f64) -> String {
+    if share > 0.0 && share < 0.001 {
+        return "< 0.1%".to_owned();
+    }
+    format!("{:.1}%", share * 100.0)
+}
+
+/// A duration as its two largest units: `850 ms`, `42 s`, `3 m 20 s`,
+/// `2 h 5 m`, `1 d 4 h`.
+pub fn format_duration(duration: std::time::Duration) -> String {
+    let secs = duration.as_secs();
+    match secs {
+        0 => format!("{} ms", duration.as_millis()),
+        1..60 => format!("{secs} s"),
+        60..3600 => format!("{} m {} s", secs / 60, secs % 60),
+        3600..86_400 => format!("{} h {} m", secs / 3600, secs % 3600 / 60),
+        _ => format!("{} d {} h", secs / 86_400, secs % 86_400 / 3600),
+    }
 }
 
 #[component]
@@ -174,6 +223,25 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&[0xde, 0xad, 0x00, 0x0f]);
         assert_eq!(abbrev_digest(&Blake3::from_bytes(bytes)), "dead000f…");
+    }
+
+    #[test]
+    fn formats_sizes_shares_and_durations() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 MiB");
+        assert_eq!(format_share(0.25), "25.0%");
+        assert_eq!(format_share(0.0004), "< 0.1%");
+        assert_eq!(format_share(0.0), "0.0%");
+        use std::time::Duration;
+        assert_eq!(format_duration(Duration::from_millis(850)), "850 ms");
+        assert_eq!(format_duration(Duration::from_secs(200)), "3 m 20 s");
+        assert_eq!(format_duration(Duration::from_secs(7500)), "2 h 5 m");
+        assert_eq!(format_duration(Duration::from_secs(100_800)), "1 d 4 h");
+        assert_eq!(
+            format_time_short(Timestamp::from_micros(1_790_985_600_000_000)),
+            "10-03 00:00"
+        );
     }
 
     #[test]

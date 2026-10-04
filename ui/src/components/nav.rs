@@ -51,3 +51,28 @@ pub async fn filter_chip(label: &str, href: String, active: bool) -> Result<impl
         </a>
     })
 }
+
+fn segment_classes(active: bool) -> &'static str {
+    if active {
+        "px-2 py-0.5 bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900"
+    } else {
+        "px-2 py-0.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+    }
+}
+
+/// A segmented control: mutually exclusive choices as links, the current
+/// one filled.
+#[component]
+pub async fn segmented(label: &str, items: Vec<Tab>) -> Result<impl View> {
+    Ok(view! {
+        <div class="inline-flex overflow-hidden rounded border border-zinc-300 text-xs dark:border-zinc-700" role="group" aria-label=(label)>
+            for item in items {
+                <a
+                    href=(item.href)
+                    class=(segment_classes(item.active))
+                    aria-current=(item.active.then_some("true"))
+                >(item.label)</a>
+            }
+        </div>
+    })
+}
