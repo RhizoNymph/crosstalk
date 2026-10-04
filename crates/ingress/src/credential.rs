@@ -3,21 +3,22 @@
 //! A raw credential is read from the request head as a [`RawCredential`], a
 //! borrow of the header (or query) text that cannot outlive the request and
 //! whose `Debug` prints a placeholder; it has no `Display`. It is hashed at
-//! once by the [`KeyedHasher`] (BLAKE3 keyed with the current
-//! [`DeploymentSecret`], and during a rotation overlap the previous one
-//! too), and only the digests leave. A digest depends only on the secret and
-//! the credential's own text, not on the header that carried it, the
-//! scheme, the node or the time
-//! (`ingress.credential.hash-depends-only-on-credential`).
+//! once by the spec's [`KeyedHasher`] (BLAKE3 keyed with the current
+//! [`DeploymentSecret`], and, for an exchange that starts inside a rotation
+//! overlap, the previous one too), and only the digests leave. A digest
+//! depends only on the secret and the credential's own text, not on the
+//! header that carried it, the scheme, the node or the time
+//! (`ingress.credential.hash-depends-only-on-credential`); the time decides
+//! only whether the previous version's digest is computed at all.
 //!
-//! The hasher and the secret live in [`crate::ids`], the module that is to
-//! be replaced by the spec's own (P0.7); they are re-exported here.
-//! [`SecretError`] names environment variables, never their values.
+//! [`load_secrets`] builds the hasher from [`SecretsConfig`]. [`SecretError`]
+//! names environment variables, never their values.
 
 use std::fmt;
 
-use crate::config::{SecretRef, SecretsConfig};
-pub use crate::ids::{DeploymentSecret, KeyedHasher, SameVersion, SecretFormat};
+use crosstalk_spec::ids::{DeploymentSecret, InvalidRotation, InvalidSecret, KeyedHasher};
+
+use crate::config::SecretsConfig;
 
 /// A raw credential, borrowed from the request head for exactly as long as
 /// it takes to hash it. Never stored, logged or published.
@@ -78,29 +79,38 @@ pub(crate) enum TokenShape {
 pub enum SecretError {
     #[error("environment variable {env} is not set")]
     Missing { env: String },
-    #[error("environment variable {env} {format}")]
-    Malformed { env: String, format: SecretFormat },
+    #[error("environment variable {env}: {format}")]
+    Malformed { env: String, format: InvalidSecret },
     #[error(transparent)]
-    SameVersion(#[from] SameVersion),
+    Rotation(#[from] InvalidRotation),
 }
 
 /// Load the secrets `config` names, reading each variable through `lookup`
-/// (`|name| std::env::var(name).ok()` in production).
+/// (`|name| std::env::var(name).ok()` in production). A previous secret
+/// must be an older version than the current one.
 pub fn load_secrets(
     config: &SecretsConfig,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<KeyedHasher, SecretError> {
-    let read = |secret: &SecretRef| -> Result<_, SecretError> {
-        let text = lookup(&secret.env).ok_or_else(|| SecretError::Missing {
-            env: secret.env.clone(),
+    let read = |version, env: &str| -> Result<DeploymentSecret, SecretError> {
+        let text = lookup(env).ok_or_else(|| SecretError::Missing {
+            env: env.to_owned(),
         })?;
-        let key = DeploymentSecret::from_hex(&text).map_err(|format| SecretError::Malformed {
-            env: secret.env.clone(),
+        DeploymentSecret::from_hex(version, &text).map_err(|format| SecretError::Malformed {
+            env: env.to_owned(),
             format,
-        })?;
-        Ok((secret.version, key))
+        })
     };
-    let current = read(&config.current)?;
-    let previous = config.previous.as_ref().map(read).transpose()?;
-    Ok(KeyedHasher::new(current, previous)?)
+    let current = read(config.current.version, &config.current.env)?;
+    match &config.previous {
+        None => Ok(KeyedHasher::new(current)),
+        Some(previous) => {
+            let secret = read(previous.version, &previous.env)?;
+            Ok(KeyedHasher::rotating(
+                current,
+                secret,
+                previous.overlap_ends,
+            )?)
+        }
+    }
 }

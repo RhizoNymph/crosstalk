@@ -6,7 +6,9 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crosstalk_spec::ids::SecretVersion;
+use crosstalk_spec::ids::{
+    DeploymentSecret, KeyedHasher, SecretVersion, SeededRandom, UlidGenerator,
+};
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
 use crosstalk_spec::observed::client::{RouteName, UpstreamId, UpstreamKind, Vendor};
 use crosstalk_spec::support::SystemClock;
@@ -19,11 +21,9 @@ use tokio::task::JoinHandle;
 use crate::adapter::AnthropicAdapter;
 use crate::capture::{CaptureSender, CaptureStats};
 use crate::config::{LimitsConfig, RouteConfig, UpstreamConfig};
-use crate::credential::{DeploymentSecret, KeyedHasher};
 use crate::decode::AdapterDecoder;
 use crate::exchange::StageEvent;
 use crate::identify::HeaderIdentifier;
-use crate::ids::ExchangeIds;
 use crate::proxy::{Proxy, ProxyParts, connector};
 use crate::routing::Routes;
 
@@ -35,8 +35,9 @@ pub const SECRET_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718
 pub const SECRET_VERSION: SecretVersion = SecretVersion(7);
 
 pub fn keys() -> KeyedHasher {
-    let secret = DeploymentSecret::from_hex(SECRET_HEX).expect("the test secret is hex");
-    KeyedHasher::new((SECRET_VERSION, secret), None).expect("one secret")
+    KeyedHasher::new(
+        DeploymentSecret::from_hex(SECRET_VERSION, SECRET_HEX).expect("the test secret is hex"),
+    )
 }
 
 pub fn identifier() -> HeaderIdentifier {
@@ -129,7 +130,8 @@ impl TestProxy {
                 + counts.decode_error
                 + counts.channel_full
                 + counts.channel_closed
-                + counts.response_too_large;
+                + counts.response_too_large
+                + counts.ids_exhausted;
             if total >= done {
                 return;
             }
@@ -152,7 +154,7 @@ pub async fn start(upstream_base: &str, options: Options) -> TestProxy {
         connector: connector::https(),
         capture: CaptureSender::new(sender),
         clock: Arc::new(SystemClock),
-        ids: ExchangeIds::seeded(1),
+        ids: UlidGenerator::new(Arc::new(SystemClock), SeededRandom::new(1)),
         limits: options.limits,
         observer: Some(observer),
     });

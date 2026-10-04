@@ -47,6 +47,8 @@ pub struct DeploymentSecret {
 
 /// Why text is not a deployment secret. Carries positions and lengths
 /// only, never the text, so reporting it reveals nothing of the secret.
+/// Both count within the text with its surrounding ASCII whitespace
+/// removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidSecret {
     /// Not 64 characters.
@@ -79,7 +81,11 @@ impl DeploymentSecret {
 
     /// The secret `text` spells: 64 hex digits, upper or lower case (a
     /// secret is configuration, not a wire value, so either case is read).
+    /// Surrounding ASCII whitespace is ignored, since an environment
+    /// variable or a mounted secret file often ends in a newline; an
+    /// error's length and index are those of the trimmed text.
     pub fn from_hex(version: SecretVersion, text: &str) -> Result<Self, InvalidSecret> {
+        let text = text.trim_ascii();
         let bytes = text.as_bytes();
         if bytes.len() != 2 * SECRET_LEN {
             return Err(InvalidSecret::Length {

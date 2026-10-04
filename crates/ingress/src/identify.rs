@@ -4,7 +4,9 @@
 //! [`HeaderIdentifier`] implements the spec's
 //! [`ClientIdentifier`]. It reads headers (and, for keys that ride in the
 //! query, `key=`) and nothing else: not the body, not other requests. The
-//! credential is hashed the moment it is read ([`crate::credential`]).
+//! credential is hashed the moment it is read ([`crate::credential`]), at
+//! the exchange's start time, which decides whether a rotation overlap is
+//! still open.
 //!
 //! The scheme rule (`ingress.credential.scheme-follows-documented-rule`):
 //!
@@ -20,14 +22,17 @@
 //! Claude Pro/Max traffic goes to api.anthropic.com, the same host as the
 //! API, so on a vendor API route the token's shape decides.
 
-use crosstalk_spec::ids::AccountHash;
+use std::sync::Arc;
+
+use crosstalk_spec::ids::{AccountHash, KeyedHasher};
 use crosstalk_spec::interfaces::l0_ingress::{ClientIdentifier, RequestHead};
 use crosstalk_spec::observed::client::{
     ClientContext, CredentialRef, CredentialScheme, HarnessClaim, HarnessFamily, HarnessIds,
     IngressMode, PreviousDigests, RequestClass, Upstream, UpstreamKind, Vendor,
 };
+use crosstalk_spec::support::Timestamp;
 
-use crate::credential::{KeyedHasher, RawCredential, TokenShape};
+use crate::credential::{RawCredential, TokenShape};
 
 /// Headers that carry credentials. Removed from the head the decoder sees,
 /// so the raw credential never leaves the hot path.
@@ -54,14 +59,18 @@ pub enum CredentialSource {
 }
 
 /// Reads identity from headers and hashes it with the deployment secrets.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Cheap to clone: clones share one hasher (the spec's hasher is not
+/// `Clone`, so the key exists once per load).
+#[derive(Debug, Clone)]
 pub struct HeaderIdentifier {
-    keys: KeyedHasher,
+    keys: Arc<KeyedHasher>,
 }
 
 impl HeaderIdentifier {
     pub fn new(keys: KeyedHasher) -> Self {
-        Self { keys }
+        Self {
+            keys: Arc::new(keys),
+        }
     }
 
     pub fn keys(&self) -> &KeyedHasher {
@@ -133,29 +142,41 @@ impl HeaderIdentifier {
             .filter(|value| !value.is_empty())
     }
 
-    /// Everything known about the caller, from the head alone.
+    /// Everything known about the caller, from the head alone, for an
+    /// exchange that started at `started_at`. Each value is hashed once per
+    /// loaded version; `previous_digests` is `Some` exactly when a rotation
+    /// overlap is open at `started_at`.
     pub fn context(
         &self,
         head: &RequestHead,
         ingress: IngressMode,
         upstream: Upstream,
+        started_at: Timestamp,
     ) -> ClientContext {
-        let raw = Self::raw_credential(head);
-        let account = Self::raw_account(head);
-        let credential = raw.map(|(source, raw)| CredentialRef {
-            scheme: Self::scheme(source, raw, &upstream.kind),
-            hash: self.keys.credential(raw.bytes()),
+        let credential = Self::raw_credential(head).map(|(source, raw)| {
+            (
+                Self::scheme(source, raw, &upstream.kind),
+                self.keys.credential(raw.bytes(), started_at),
+            )
         });
-        let previous_digests = self.keys.in_overlap().then(|| PreviousDigests {
-            credential: raw.and_then(|(_, raw)| self.keys.previous_credential(raw.bytes())),
-            account: account.and_then(|raw| self.keys.previous_account(raw.as_bytes())),
-        });
+        let account =
+            Self::raw_account(head).map(|raw| self.keys.account(raw.as_bytes(), started_at));
+        let previous_digests = self
+            .keys
+            .previous_version(started_at)
+            .map(|_| PreviousDigests {
+                credential: credential.and_then(|(_, digests)| digests.previous),
+                account: account.and_then(|digests| digests.previous),
+            });
         let (harness, ids, class) = self.harness(head);
         ClientContext {
             ingress,
             upstream,
-            credential,
-            account: account.map(|raw| self.keys.account(raw.as_bytes())),
+            credential: credential.map(|(scheme, digests)| CredentialRef {
+                scheme,
+                hash: digests.current,
+            }),
+            account: account.map(|digests| digests.current),
             previous_digests,
             harness,
             ids,
@@ -165,15 +186,20 @@ impl HeaderIdentifier {
 }
 
 impl ClientIdentifier for HeaderIdentifier {
-    fn credential(&self, head: &RequestHead, upstream: &Upstream) -> Option<CredentialRef> {
+    fn credential(
+        &self,
+        head: &RequestHead,
+        upstream: &Upstream,
+        started_at: Timestamp,
+    ) -> Option<CredentialRef> {
         Self::raw_credential(head).map(|(source, raw)| CredentialRef {
             scheme: Self::scheme(source, raw, &upstream.kind),
-            hash: self.keys.credential(raw.bytes()),
+            hash: self.keys.credential(raw.bytes(), started_at).current,
         })
     }
 
-    fn account(&self, head: &RequestHead) -> Option<AccountHash> {
-        Self::raw_account(head).map(|raw| self.keys.account(raw.as_bytes()))
+    fn account(&self, head: &RequestHead, started_at: Timestamp) -> Option<AccountHash> {
+        Self::raw_account(head).map(|raw| self.keys.account(raw.as_bytes(), started_at).current)
     }
 
     fn harness(&self, head: &RequestHead) -> (Option<HarnessClaim>, HarnessIds, RequestClass) {

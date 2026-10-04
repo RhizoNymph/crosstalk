@@ -181,6 +181,40 @@ fn secrets_read_from_hex() {
     assert!(!message.contains(&lower[..8]), "{message}");
 }
 
+/// Surrounding ASCII whitespace is ignored (an environment variable often
+/// ends in a newline), and a refusal counts within the trimmed text;
+/// whitespace inside the digits is still refused.
+#[test]
+fn secrets_read_from_hex_ignore_surrounding_whitespace() {
+    let lower = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    let raw = b"key";
+    for text in [
+        format!("{lower}\n"),
+        format!("{lower}\r\n"),
+        format!("  \t{lower} \n"),
+    ] {
+        let parsed = DeploymentSecret::from_hex(SecretVersion(2), &text)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            KeyedHasher::new(parsed).credential(raw, T).current,
+            CredentialHash::from_keyed_digest(SecretVersion(2), keyed(&key(0), raw))
+        );
+    }
+    assert_eq!(
+        DeploymentSecret::from_hex(SecretVersion(1), &format!(" {}\n", &lower[..62])).err(),
+        Some(InvalidSecret::Length { got: 62 })
+    );
+    let inner = format!("\n{} {}", &lower[..31], &lower[32..]);
+    assert_eq!(
+        DeploymentSecret::from_hex(SecretVersion(1), &inner).err(),
+        Some(InvalidSecret::NotHex { index: 31 })
+    );
+    assert_eq!(
+        DeploymentSecret::from_hex(SecretVersion(1), " \n").err(),
+        Some(InvalidSecret::Length { got: 0 })
+    );
+}
+
 /// `canonical.ids.secret-never-serialized`: no formatting of a secret, a
 /// hasher holding one, or a refusal to read one shows any of the key: not
 /// its hex in either case, nor its bytes as a list. (That neither

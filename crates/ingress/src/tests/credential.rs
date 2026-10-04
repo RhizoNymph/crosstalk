@@ -5,12 +5,13 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use crosstalk_spec::ids::SecretVersion;
+use crosstalk_spec::ids::{DeploymentSecret, InvalidRotation, KeyedHasher, SecretVersion};
 use crosstalk_spec::interfaces::l0_ingress::{ClientIdentifier, RequestHead};
 use crosstalk_spec::observed::client::{
     CredentialScheme, InferenceServer, IngressMode, RouteName, Upstream, UpstreamId, UpstreamKind,
     Vendor,
 };
+use crosstalk_spec::support::Timestamp;
 use crosstalk_testkit::upstream::{FakeUpstream, Script};
 use hyper::header::{HeaderName, HeaderValue};
 use proptest::prelude::*;
@@ -18,11 +19,14 @@ use proptest::prelude::*;
 use super::support::{
     Options, SECRET_HEX, SECRET_VERSION, anthropic_api, case, cases, identifier, keys, start,
 };
-use crate::config::{SecretRef, SecretsConfig};
-use crate::credential::{
-    DeploymentSecret, KeyedHasher, RawCredential, SameVersion, SecretError, load_secrets,
-};
+use crate::config::{PreviousSecretRef, SecretRef, SecretsConfig};
+use crate::credential::{RawCredential, SecretError, load_secrets};
 use crate::identify::HeaderIdentifier;
+
+/// An exchange's start time, inside every rotation overlap below.
+const AT: Timestamp = Timestamp::from_micros(1_790_000_000_000_000);
+/// When the test rotations' overlap ends: an hour after [`AT`].
+const ENDS: Timestamp = Timestamp::from_micros(1_790_003_600_000_000);
 
 fn upstream(kind: UpstreamKind) -> Upstream {
     Upstream {
@@ -241,7 +245,7 @@ fn raw_credential_and_secret_absent_from_logs_and_errors() {
 
     let raw = RawCredential::new("sk-ant-api03-SECRETAPIKEY0123456789").expect("non-empty");
     assert!(!format!("{raw:?}").contains("SECRET"));
-    let secret = DeploymentSecret::from_hex(SECRET_HEX).expect("hex");
+    let secret = DeploymentSecret::from_hex(SECRET_VERSION, SECRET_HEX).expect("hex");
     assert!(!format!("{secret:?}").contains("0001020304"));
     assert!(!format!("{:?}", keys()).contains("0001020304"));
     assert!(!format!("{:?}", identifier()).contains("0001020304"));
@@ -290,7 +294,7 @@ fn every_scheme_yields_credential_ref() {
     ];
     for kind in &kinds {
         for form in &forms {
-            let credential = identifier.credential(form, &upstream(kind.clone()));
+            let credential = identifier.credential(form, &upstream(kind.clone()), AT);
             assert!(
                 credential.is_some(),
                 "{form:?} on {kind:?} gave no credential"
@@ -298,7 +302,7 @@ fn every_scheme_yields_credential_ref() {
         }
     }
     assert_eq!(
-        identifier.credential(&head(&[], None), &upstream(anthropic_api())),
+        identifier.credential(&head(&[], None), &upstream(anthropic_api()), AT),
         None
     );
 }
@@ -324,13 +328,15 @@ fn present(form: usize, credential: &str, extra: &[(String, String)]) -> Request
 proptest! {
     /// For one secret version, the digest depends only on the credential:
     /// not on the header or parameter carrying it, the scheme, the upstream,
-    /// the rest of the request or the node computing it.
+    /// the rest of the request, the node computing it or the exchange's
+    /// start time.
     #[test]
     fn hash_stable_under_request_changes(
         credential in "[A-Za-z0-9_-]{1,40}",
         form in 0usize..5,
         extra in proptest::collection::vec(("x-[a-z]{1,8}", "[a-z0-9]{0,8}"), 0..5),
         kind in 0usize..4,
+        started in any::<u64>(),
     ) {
         let kinds = [
             anthropic_api(),
@@ -341,10 +347,14 @@ proptest! {
         let node_a = identifier();
         let node_b = HeaderIdentifier::new(keys());
         let reference = node_a
-            .credential(&present(0, &credential, &[]), &upstream(anthropic_api()))
+            .credential(&present(0, &credential, &[]), &upstream(anthropic_api()), AT)
             .map(|credential| credential.hash);
         let changed = node_b
-            .credential(&present(form, &credential, &extra), &upstream(kinds[kind].clone()))
+            .credential(
+                &present(form, &credential, &extra),
+                &upstream(kinds[kind].clone()),
+                Timestamp::from_micros(started),
+            )
             .map(|credential| credential.hash);
         prop_assert!(reference.is_some());
         prop_assert_eq!(reference, changed);
@@ -356,14 +366,10 @@ proptest! {
 /// recorded beside them, and differ.
 #[test]
 fn digests_use_current_secret_version() {
-    let current = DeploymentSecret::from_hex(SECRET_HEX).expect("hex");
-    let previous = DeploymentSecret::from_bytes([9; 32]);
+    let current = DeploymentSecret::from_hex(SecretVersion(8), SECRET_HEX).expect("hex");
+    let previous = DeploymentSecret::new(SecretVersion(7), [9; 32]);
     let rotating = HeaderIdentifier::new(
-        KeyedHasher::new(
-            (SecretVersion(8), current),
-            Some((SecretVersion(7), previous)),
-        )
-        .expect("two versions"),
+        KeyedHasher::rotating(current, previous, ENDS).expect("an older previous version"),
     );
     let request = head(
         &[
@@ -375,7 +381,7 @@ fn digests_use_current_secret_version() {
     let mode = IngressMode::ReverseProxy {
         route: RouteName("r".to_owned()),
     };
-    let context = rotating.context(&request, mode.clone(), upstream(anthropic_api()));
+    let context = rotating.context(&request, mode.clone(), upstream(anthropic_api()), AT);
     let credential = context.credential.expect("credential");
     let account = context.account.expect("account");
     assert_eq!(credential.hash.key(), SecretVersion(8));
@@ -386,19 +392,27 @@ fn digests_use_current_secret_version() {
     assert_eq!(old_credential.key(), SecretVersion(7));
     assert_eq!(old_account.key(), SecretVersion(7));
     assert_ne!(old_credential.digest(), credential.hash.digest());
-    let single = identifier().context(&request, mode, upstream(anthropic_api()));
+    let single = identifier().context(&request, mode, upstream(anthropic_api()), AT);
     assert_eq!(
         single.credential.map(|c| c.hash.key()),
         Some(SECRET_VERSION)
     );
     assert_eq!(single.previous_digests, None);
-    assert_eq!(
-        KeyedHasher::new(
-            (SecretVersion(1), DeploymentSecret::from_bytes([1; 32])),
-            Some((SecretVersion(1), DeploymentSecret::from_bytes([2; 32])))
-        ),
-        Err(SameVersion(SecretVersion(1)))
-    );
+    for (previous, current) in [(1, 1), (2, 1)] {
+        let refused = KeyedHasher::rotating(
+            DeploymentSecret::new(SecretVersion(current), [1; 32]),
+            DeploymentSecret::new(SecretVersion(previous), [2; 32]),
+            ENDS,
+        )
+        .err();
+        assert_eq!(
+            refused,
+            Some(InvalidRotation::NotOlder {
+                previous: SecretVersion(previous),
+                current: SecretVersion(current),
+            })
+        );
+    }
     // The digest is the plain keyed BLAKE3 of the raw value: the
     // semantics the spec's keyed hasher has (`canonical.ids.secret-digest-keyed`).
     let raw = b"sk-ant-oat01-abc";
@@ -411,11 +425,11 @@ fn digests_use_current_secret_version() {
         raw,
     );
     assert_eq!(
-        keys().credential(raw).digest().as_bytes(),
+        keys().credential(raw, AT).current.digest().as_bytes(),
         expected.as_bytes()
     );
     assert_ne!(
-        keys().credential(raw).digest().as_bytes(),
+        keys().credential(raw, AT).current.digest().as_bytes(),
         blake3::hash(raw).as_bytes()
     );
 }
@@ -432,7 +446,7 @@ fn scheme_rule_per_harness_fixture() {
             .as_ref()
             .map(|credential| credential.scheme);
         let got = identifier
-            .credential(&case.request.head(), &upstream(anthropic_api()))
+            .credential(&case.request.head(), &upstream(anthropic_api()), AT)
             .map(|credential| credential.scheme);
         assert_eq!(got, expected, "case {}", case.name);
     }
@@ -502,8 +516,109 @@ fn scheme_rule_per_harness_fixture() {
     ];
     for (kind, header, value, scheme) in table {
         let got = identifier
-            .credential(&head(&[(header, value)], None), &upstream(kind.clone()))
+            .credential(&head(&[(header, value)], None), &upstream(kind.clone()), AT)
             .map(|credential| credential.scheme);
         assert_eq!(got, Some(scheme), "{header}: {value} on {kind:?}");
     }
+}
+
+/// `ingress.credential.previous-digests-within-overlap`: a rotation loaded
+/// from configuration (its overlap end an RFC 3339 timestamp, each secret
+/// read from an environment variable that ends in a newline) hashes under
+/// the previous version too for an exchange that starts before the
+/// overlap's end, and from that instant on under the current version only.
+/// The current digests never change with the time.
+#[test]
+fn previous_digests_stop_at_overlap_end() {
+    let config: SecretsConfig = serde_json::from_str(
+        r#"{"current": {"version": 8, "env": "SECRET_NEW"},
+            "previous": {"version": 7, "env": "SECRET_OLD",
+                         "overlap_ends": "2025-09-21T13:46:40.000000Z"}}"#,
+    )
+    .expect("a rotation config");
+    let ends = config
+        .previous
+        .as_ref()
+        .map(|previous| previous.overlap_ends)
+        .expect("a previous secret");
+    assert_eq!(ends, Timestamp::from_micros(1_758_462_400_000_000));
+    let lookup = |name: &str| match name {
+        "SECRET_NEW" => Some(format!("{SECRET_HEX}\n")),
+        "SECRET_OLD" => Some(format!("{}\n", "ab".repeat(32))),
+        _ => None,
+    };
+    let identifier = HeaderIdentifier::new(load_secrets(&config, lookup).expect("loads"));
+    let request = head(
+        &[
+            ("authorization", "Bearer sk-ant-oat01-abc"),
+            ("chatgpt-account-id", "acct-1"),
+        ],
+        None,
+    );
+    let mode = IngressMode::ReverseProxy {
+        route: RouteName("r".to_owned()),
+    };
+    let at = |micros: u64| {
+        identifier.context(
+            &request,
+            mode.clone(),
+            upstream(anthropic_api()),
+            Timestamp::from_micros(micros),
+        )
+    };
+    let inside = at(ends.as_micros() - 1);
+    let previous = inside.previous_digests.expect("inside the overlap");
+    assert_eq!(
+        previous.credential.map(|digest| digest.key()),
+        Some(SecretVersion(7))
+    );
+    assert_eq!(
+        previous.account.map(|digest| digest.key()),
+        Some(SecretVersion(7))
+    );
+    for after in [ends.as_micros(), ends.as_micros() + 1, u64::MAX] {
+        let context = at(after);
+        assert_eq!(context.previous_digests, None, "at {after}");
+        assert_eq!(context.credential, inside.credential);
+        assert_eq!(context.account, inside.account);
+    }
+    assert_eq!(
+        inside.credential.map(|credential| credential.hash.key()),
+        Some(SecretVersion(8))
+    );
+    // The trait's derivations take the same time and return the current
+    // digests either side of the end.
+    for micros in [ends.as_micros() - 1, ends.as_micros()] {
+        let started_at = Timestamp::from_micros(micros);
+        assert_eq!(
+            identifier.credential(&request, &upstream(anthropic_api()), started_at),
+            inside.credential
+        );
+        assert_eq!(identifier.account(&request, started_at), inside.account);
+    }
+
+    // The previous version must be older than the current one.
+    let mut newer = config.clone();
+    if let Some(previous) = newer.previous.as_mut() {
+        previous.version = SecretVersion(9);
+    }
+    assert_eq!(
+        load_secrets(&newer, lookup).err(),
+        Some(SecretError::Rotation(InvalidRotation::NotOlder {
+            previous: SecretVersion(9),
+            current: SecretVersion(8),
+        }))
+    );
+    let mut missing = config;
+    missing.previous = Some(PreviousSecretRef {
+        version: SecretVersion(7),
+        env: "SECRET_GONE".to_owned(),
+        overlap_ends: ends,
+    });
+    assert_eq!(
+        load_secrets(&missing, lookup).err(),
+        Some(SecretError::Missing {
+            env: "SECRET_GONE".to_owned()
+        })
+    );
 }

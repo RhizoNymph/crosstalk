@@ -45,6 +45,7 @@ pub struct CaptureReport {
     pub channel_full: u64,
     pub channel_closed: u64,
     pub response_too_large: u64,
+    pub ids_exhausted: u64,
 }
 
 impl From<CaptureCounts> for CaptureReport {
@@ -56,6 +57,7 @@ impl From<CaptureCounts> for CaptureReport {
             channel_full: counts.channel_full,
             channel_closed: counts.channel_closed,
             response_too_large: counts.response_too_large,
+            ids_exhausted: counts.ids_exhausted,
         }
     }
 }

@@ -232,7 +232,8 @@ pub struct ClientContext {
     pub account: Option<AccountHash>,
     /// During a secret rotation overlap, the same credential and account
     /// hashed under the previous `SecretVersion`, so identity resolution can
-    /// link evidence across the change. `None` outside an overlap.
+    /// link evidence across the change. `None` unless an overlap is open
+    /// at the exchange's `started_at` (it ends at a configured instant).
     pub previous_digests: Option<PreviousDigests>,
     pub harness: Option<HarnessClaim>,
     pub ids: HarnessIds,

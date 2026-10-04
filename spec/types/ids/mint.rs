@@ -6,10 +6,17 @@
 //! simulation (a virtual clock and a seeded source) its ids are a function
 //! of the seed (`canonical.clock.injected`).
 //!
+//! **Time.** [`UlidGenerator::next_ulid`] stamps an id with the clock's
+//! reading; [`UlidGenerator::next_at`] with a time the caller passes, for
+//! an id that carries the time of what it names (ingress stamps an
+//! exchange id with the exchange's start). Both go through the same
+//! monotonic rule below.
+//!
 //! **Monotonic.** Every id a generator mints is greater than the one before
-//! it, whatever its clock reads (`canonical.ids.ulid-monotonic`). When the
-//! clock reads the same millisecond as the last id, or an earlier one (an
-//! NTP step back, a skewed node), the next id is the last plus one: the
+//! it, whatever its clock reads or the time it is given
+//! (`canonical.ids.ulid-monotonic`). When that time is in the same
+//! millisecond as the last id, or an earlier one (an NTP step back, a
+//! skewed node, an earlier exchange stamped later), the next id is the last plus one: the
 //! random part is incremented, never redrawn, and a carry out of it moves
 //! the id into the next millisecond. A later millisecond draws fresh
 //! randomness. So one generator never repeats an id, and two generators
@@ -29,7 +36,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
 
 use super::EntityId;
-use crate::support::Clock;
+use crate::support::{Clock, Timestamp};
 
 /// Random 64-bit words: where a [`UlidGenerator`] draws the random part of
 /// an id.
@@ -110,9 +117,21 @@ impl<R: RandomSource> UlidGenerator<R> {
         }
     }
 
-    /// The next ULID: greater than every one this generator minted before.
+    /// The next ULID: greater than every one this generator minted before,
+    /// stamped with the clock's reading.
     pub fn next_ulid(&mut self) -> Result<u128, UlidExhausted> {
-        let millis = (self.clock.now().as_micros() / 1000).min(MAX_ULID_MILLIS);
+        let now = self.clock.now();
+        self.next_at(now)
+    }
+
+    /// The next ULID stamped with `at` instead of the clock's reading: for
+    /// an id that carries the time of what it names (an exchange's id
+    /// carries the instant the exchange started). Monotonic like
+    /// [`UlidGenerator::next_ulid`], with which it shares the last id: when
+    /// `at` is in the last id's millisecond or an earlier one, the next id
+    /// is the last plus one, so its time can be later than `at`.
+    pub fn next_at(&mut self, at: Timestamp) -> Result<u128, UlidExhausted> {
+        let millis = (at.as_micros() / 1000).min(MAX_ULID_MILLIS);
         let id = match self.last {
             Some(last) if millis <= ulid_millis(last) => {
                 last.checked_add(1).ok_or(UlidExhausted)?
@@ -126,6 +145,12 @@ impl<R: RandomSource> UlidGenerator<R> {
     /// The next ULID as an entity id of type `I`.
     pub fn mint<I: EntityId>(&mut self) -> Result<I, UlidExhausted> {
         self.next_ulid().map(I::from_ulid)
+    }
+
+    /// The next ULID stamped with `at` ([`UlidGenerator::next_at`]) as an
+    /// entity id of type `I`.
+    pub fn mint_at<I: EntityId>(&mut self, at: Timestamp) -> Result<I, UlidExhausted> {
+        self.next_at(at).map(I::from_ulid)
     }
 
     /// 80 random bits: one whole draw and the top 16 bits of another.

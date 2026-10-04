@@ -28,6 +28,7 @@ use std::time::Duration;
 use crosstalk_ingress::capture::CaptureSender;
 use crosstalk_ingress::{BuildError, anthropic_proxy};
 use crosstalk_spec::events::Subject;
+use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus};
 use crosstalk_spec::support::Clock;
 use crosstalk_transport::blob::{FsBlobStore, OpenError};
@@ -37,7 +38,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::capture::{CaptureStage, EventIds, PipelineStats, PutRetry};
+use crate::capture::{CaptureStage, PipelineStats, PutRetry};
 use crate::config::{ConfigError, GatewayConfig};
 use crate::log::consumer::{self, LogStats};
 use crate::log::{ExchangeLog, LogError};
@@ -186,8 +187,8 @@ pub async fn start(
             let stage = CaptureStage::new(
                 blobs.clone(),
                 bus.clone(),
-                clock,
-                EventIds::random(),
+                Arc::clone(&clock),
+                UlidGenerator::new(clock, SeededRandom::from_entropy()),
                 Arc::clone(&pipeline),
                 PutRetry::from(config.pipeline),
             );

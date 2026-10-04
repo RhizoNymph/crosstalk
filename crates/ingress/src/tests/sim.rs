@@ -40,6 +40,7 @@ fn accounted(stats: &CaptureStats) -> u64 {
         + counts.channel_full
         + counts.channel_closed
         + counts.response_too_large
+        + counts.ids_exhausted
 }
 
 /// Wait (in simulated time) until `count` exchanges are accounted for.

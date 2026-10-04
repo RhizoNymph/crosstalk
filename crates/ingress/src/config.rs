@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crosstalk_spec::ids::SecretVersion;
 use crosstalk_spec::observed::client::{RouteName, UpstreamId, UpstreamKind};
+use crosstalk_spec::support::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Everything the L0 proxy is configured with.
@@ -71,19 +72,36 @@ pub struct UpstreamConfig {
 pub struct SecretsConfig {
     /// The version every new digest is keyed with.
     pub current: SecretRef,
-    /// During a rotation overlap, the version before it: the proxy also
-    /// computes digests under it (`ClientContext::previous_digests`).
+    /// During a rotation, the version before it, older than `current`: the
+    /// proxy also computes digests under it
+    /// (`ClientContext::previous_digests`) for exchanges that start before
+    /// its `overlap_ends`.
     #[serde(default)]
-    pub previous: Option<SecretRef>,
+    pub previous: Option<PreviousSecretRef>,
 }
 
 /// A secret by reference: its version and the environment variable that
-/// holds its 32 bytes as 64 hex digits.
+/// holds its 32 bytes as 64 hex digits (surrounding whitespace, such as a
+/// trailing newline, is ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SecretRef {
     pub version: SecretVersion,
     pub env: String,
+}
+
+/// The previous secret of a rotation, by reference, and when its overlap
+/// ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct PreviousSecretRef {
+    pub version: SecretVersion,
+    pub env: String,
+    /// The end of the overlap, exclusive: an exchange that starts before it
+    /// is also hashed under this version, one that starts at or after it is
+    /// not. RFC 3339 in UTC at microsecond precision, as every wire
+    /// timestamp (`2026-11-01T00:00:00.000000Z`).
+    pub overlap_ends: Timestamp,
 }
 
 /// Bounds on what capture may hold or wait for. None of them ever slows or

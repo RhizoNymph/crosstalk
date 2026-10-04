@@ -68,15 +68,20 @@ pub enum UncapturedReason {
     ChannelClosed,
     /// The response was larger than the response capture bound.
     ResponseTooLarge,
+    /// No exchange id was left to mint: the id generator's last id was the
+    /// largest ULID (`UlidExhausted`; only a clock past the year 10889 gets
+    /// there).
+    IdsExhausted,
 }
 
 impl UncapturedReason {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Unclassified,
         Self::DecodeError,
         Self::ChannelFull,
         Self::ChannelClosed,
         Self::ResponseTooLarge,
+        Self::IdsExhausted,
     ];
 
     /// The counter's label.
@@ -87,6 +92,7 @@ impl UncapturedReason {
             Self::ChannelFull => "channel_full",
             Self::ChannelClosed => "channel_closed",
             Self::ResponseTooLarge => "response_too_large",
+            Self::IdsExhausted => "ids_exhausted",
         }
     }
 
@@ -97,6 +103,7 @@ impl UncapturedReason {
             Self::ChannelFull => 2,
             Self::ChannelClosed => 3,
             Self::ResponseTooLarge => 4,
+            Self::IdsExhausted => 5,
         }
     }
 }
@@ -105,7 +112,7 @@ impl UncapturedReason {
 #[derive(Debug, Default)]
 pub struct CaptureStats {
     captured: AtomicU64,
-    uncaptured: [AtomicU64; 5],
+    uncaptured: [AtomicU64; 6],
 }
 
 /// A reading of [`CaptureStats`].
@@ -117,6 +124,7 @@ pub struct CaptureCounts {
     pub channel_full: u64,
     pub channel_closed: u64,
     pub response_too_large: u64,
+    pub ids_exhausted: u64,
 }
 
 impl CaptureCounts {
@@ -127,6 +135,7 @@ impl CaptureCounts {
             UncapturedReason::ChannelFull => self.channel_full,
             UncapturedReason::ChannelClosed => self.channel_closed,
             UncapturedReason::ResponseTooLarge => self.response_too_large,
+            UncapturedReason::IdsExhausted => self.ids_exhausted,
         }
     }
 }
@@ -155,6 +164,7 @@ impl CaptureStats {
             channel_full: read(UncapturedReason::ChannelFull),
             channel_closed: read(UncapturedReason::ChannelClosed),
             response_too_large: read(UncapturedReason::ResponseTooLarge),
+            ids_exhausted: read(UncapturedReason::IdsExhausted),
         }
     }
 }

@@ -7,9 +7,13 @@
 //!    ([`ProviderAdapter::classify`]). Anything but `Generation` is forwarded
 //!    and relayed as is, with no tee and no framer; a request no adapter
 //!    claims is also counted (`unclassified`).
-//! 3. **Generation:** identify the caller from the head (credential hashed
-//!    here and dropped), mint the exchange id, start its clock, spawn its
-//!    capture task, and forward at once with the body teed. The capture task
+//! 3. **Generation:** start the exchange's clock, mint its id stamped with
+//!    the start time (one ULID generator shared by every connection, behind
+//!    a `std::sync::Mutex` held only to mint), identify the caller from the
+//!    head at that time (credential hashed here and dropped), spawn its
+//!    capture task, and forward at once with the body teed. If no id is
+//!    left to mint (`UlidExhausted`), the request is forwarded uncaptured
+//!    and counted (`ids_exhausted`). The capture task
 //!    waits for the tee's copy, decodes it, waits for the response record,
 //!    and hands a `RawExchange` to the capture channel if both succeeded.
 //! 4. **Respond:** on the response head, build the framer from the head and
@@ -28,10 +32,10 @@ pub mod relay;
 mod server;
 mod tee;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bytes::Bytes;
-use crosstalk_spec::ids::ExchangeId;
+use crosstalk_spec::ids::{ExchangeId, SeededRandom, UlidExhausted, UlidGenerator};
 use crosstalk_spec::interfaces::l0_ingress::{ProviderAdapter, RawExchange, RequestHead};
 use crosstalk_spec::observed::client::{ClientContext, EndpointKind};
 use crosstalk_spec::observed::exchange::{ExchangeFailure, ExchangeMeta};
@@ -50,7 +54,6 @@ use crate::config::LimitsConfig;
 use crate::decode::{CaptureDecodeError, DecodeJob, RequestDecoder};
 use crate::exchange::{InFlight, ResponseRecord, StageClock, StageObserver};
 use crate::identify::{self, HeaderIdentifier};
-use crate::ids::ExchangeIds;
 use crate::routing::{Resolved, Routes};
 use body::{ProxyBody, UpstreamBody};
 use relay::Pending;
@@ -70,7 +73,10 @@ pub struct ProxyParts<A, D, C> {
     pub capture: CaptureSender,
     /// The wall clock exchange times are read from.
     pub clock: Arc<dyn Clock>,
-    pub ids: ExchangeIds,
+    /// Mints exchange ids, each stamped with its exchange's start:
+    /// `UlidGenerator::new(clock, SeededRandom::from_entropy())` in
+    /// production, a seeded source in tests and simulations.
+    pub ids: UlidGenerator<SeededRandom>,
     pub limits: LimitsConfig,
     /// Where stage changes are reported, if anywhere.
     pub observer: Option<StageObserver>,
@@ -85,9 +91,24 @@ struct Shared<A, D, C> {
     capture: CaptureSender,
     stats: Arc<CaptureStats>,
     clock: Arc<dyn Clock>,
-    ids: ExchangeIds,
+    /// Shared by every connection task; locked only to mint, never across
+    /// an await.
+    ids: Mutex<UlidGenerator<SeededRandom>>,
     limits: LimitsConfig,
     observer: Option<StageObserver>,
+}
+
+impl<A, D, C> Shared<A, D, C> {
+    /// The next exchange id, stamped with the exchange's start.
+    fn mint(&self, started_at: Timestamp) -> Result<ExchangeId, UlidExhausted> {
+        // A poisoned lock is still safe to use: the generator writes its
+        // last id only once an id is made, and minting cannot panic, so a
+        // panic elsewhere never leaves it half-updated.
+        self.ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .mint_at(started_at)
+    }
 }
 
 /// The L0 reverse proxy. Cheap to clone: clones share everything.
@@ -125,7 +146,7 @@ where
                 capture: parts.capture,
                 stats: Arc::new(CaptureStats::new()),
                 clock: parts.clock,
-                ids: parts.ids,
+                ids: Mutex::new(parts.ids),
                 limits: parts.limits,
                 observer: parts.observer,
             }),
@@ -203,11 +224,22 @@ where
     ) -> Response<ProxyBody<A::Framer>> {
         let shared = &self.shared;
         let clock = StageClock::start(shared.clock.as_ref());
-        let id = shared.ids.next(clock.started_at());
-        let client =
-            shared
-                .identifier
-                .context(&head, resolved.mode.clone(), resolved.upstream.clone());
+        let id = match shared.mint(clock.started_at()) {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::error!(error = %error, "no exchange id left to mint; forwarding uncaptured");
+                shared.stats.uncaptured(UncapturedReason::IdsExhausted);
+                let request =
+                    upstream_request(method, resolved.uri, headers, UpstreamBody::Plain(body));
+                return self.forward(request).await;
+            }
+        };
+        let client = shared.identifier.context(
+            &head,
+            resolved.mode.clone(),
+            resolved.upstream.clone(),
+            clock.started_at(),
+        );
         let decode_head = identify::without_credentials(&head);
         drop(head);
 

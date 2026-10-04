@@ -1,6 +1,6 @@
 //! The ULID generator (`crate::ids::mint`): monotonic per generator,
-//! whatever its clock reads, distinct across generators, and a function of
-//! its clock and seed.
+//! whatever its clock reads or the time it is given, distinct across
+//! generators, and a function of its clock and seed.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -98,6 +98,49 @@ fn a_full_random_part_carries_and_the_last_ulid_is_the_end() {
     assert_eq!(end.next_ulid(), Err(UlidExhausted));
 }
 
+/// `next_at` stamps the time it is given, not the clock's reading, and
+/// keeps the same monotonic rule: the same or an earlier millisecond than
+/// the last id (minted either way) increments it.
+#[test]
+fn next_at_stamps_the_given_time_and_stays_monotonic() {
+    let mut ids = generator(&[T + 50 * MS], SeededRandom::new(5));
+    let at = |micros: u64| Timestamp::from_micros(micros);
+    let first = ids.next_at(at(T)).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        ulid_millis(first),
+        T / MS,
+        "the given time, not the clock's"
+    );
+    let same = ids
+        .next_at(at(T + 999))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(same, first + 1, "same millisecond");
+    let earlier = ids
+        .next_at(at(T - 7 * MS))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(earlier, first + 2, "an earlier time");
+    let later = ids
+        .next_at(at(T + 2 * MS))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(ulid_millis(later), T / MS + 2, "a later millisecond");
+    assert_ne!(later & ((1 << 80) - 1), (first + 2) & ((1 << 80) - 1));
+    // The clock's reading (T + 50 ms) and a given time share one last id.
+    let clocked = next(&mut ids);
+    assert_eq!(ulid_millis(clocked), T / MS + 50);
+    let behind = ids
+        .next_at(at(T + 3 * MS))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(behind, clocked + 1, "a given time behind the clock's id");
+    let typed: AgentId = ids
+        .mint_at(at(T + 60 * MS))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(ulid_millis(typed.as_ulid()), T / MS + 60);
+
+    let mut end = generator(&[T], Constant(u64::MAX));
+    assert_eq!(end.next_at(at(u64::MAX)), Ok(u128::MAX));
+    assert_eq!(end.next_at(at(T)), Err(UlidExhausted));
+}
+
 /// The same clock and seed mint the same ids; another seed, others.
 #[test]
 fn minting_is_a_function_of_clock_and_seed() {
@@ -155,6 +198,31 @@ proptest! {
         let mut last = None;
         for _ in 0..script.len() + 8 {
             let id = ids.next_ulid().map_err(|error| TestCaseError::fail(error.to_string()))?;
+            if let Some(last) = last {
+                prop_assert!(id > last, "{id:#x} after {last:#x}");
+            }
+            last = Some(id);
+        }
+    }
+
+    /// `canonical.ids.ulid-monotonic`, for ids stamped with given times
+    /// that repeat and step back, interleaved with clock-stamped ones.
+    #[test]
+    fn ids_increase_whatever_time_they_are_given(
+        script in arb_script(),
+        given in arb_script(),
+        seed in any::<u64>(),
+        stamped in proptest::collection::vec(any::<bool>(), 1..96),
+    ) {
+        let mut ids = generator(&script, SeededRandom::new(seed));
+        let mut times = given.iter().copied().cycle();
+        let mut last = None;
+        for use_given in stamped {
+            let id = match (use_given, times.next()) {
+                (true, Some(micros)) => ids.next_at(Timestamp::from_micros(micros)),
+                _ => ids.next_ulid(),
+            }
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
             if let Some(last) = last {
                 prop_assert!(id > last, "{id:#x} after {last:#x}");
             }

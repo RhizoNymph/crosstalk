@@ -10,9 +10,9 @@
 //!    whole put set up to `blob_put_attempts` times (puts are idempotent).
 //!    When every attempt fails the exchange is counted `store_failed` and
 //!    nothing is published (`canonical.capture.blobs-before-event`).
-//! 3. **Publish** `ExchangeCaptured` in an [`Envelope`] stamped with a fresh
-//!    [`EventId`] and the injected clock's time, only after the store
-//!    returned `Ok`.
+//! 3. **Publish** `ExchangeCaptured` in an [`Envelope`] stamped with the
+//!    injected clock's time and a fresh [`EventId`] minted at that time by
+//!    the spec's [`UlidGenerator`], only after the store returned `Ok`.
 //!
 //! The stage ends when the channel closes: every sender (the proxy and its
 //! per-exchange capture tasks) has been dropped and every exchange already
@@ -23,42 +23,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crosstalk_canonical::{AnthropicMessages, StoreError};
-use crosstalk_ingress::ids::ExchangeIds;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
-use crosstalk_spec::ids::EventId;
+use crosstalk_spec::ids::{EventId, SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
 use crosstalk_spec::interfaces::l1_canonical::{NormalizedExchange, Normalizer};
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, EventBus};
 use crosstalk_spec::observed::exchange::ExchangeOutcome;
-use crosstalk_spec::support::{Clock, Timestamp};
+use crosstalk_spec::support::Clock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::config::PipelineConfig;
-
-/// Mints envelope ids. The ULID generator is ingress's (the stand-in for
-/// the spec's, roadmap P0.7); envelope ids and exchange ids share its
-/// semantics but come from separate generators.
-#[derive(Debug)]
-pub struct EventIds(ExchangeIds);
-
-impl EventIds {
-    /// A generator with a random base.
-    pub fn random() -> Self {
-        Self(ExchangeIds::random())
-    }
-
-    /// A generator with a fixed base, for tests and simulations.
-    pub fn seeded(seed: u64) -> Self {
-        Self(ExchangeIds::seeded(seed))
-    }
-
-    /// The next id, stamped with `at`.
-    pub fn next(&self, at: Timestamp) -> EventId {
-        EventId::from_ulid(self.0.next(at).as_ulid())
-    }
-}
 
 /// The capture stage's counters, shared with the health endpoint.
 #[derive(Debug, Default)]
@@ -83,7 +59,8 @@ pub struct PipelineCounts {
     pub store_failed: u64,
     /// Put attempts that failed and were retried.
     pub store_retries: u64,
-    /// Exchanges whose bodies were stored but whose event the bus refused.
+    /// Exchanges whose bodies were stored but whose event was not
+    /// published: the bus refused it, or no event id was left to mint.
     pub publish_failed: u64,
 }
 
@@ -137,7 +114,8 @@ pub struct CaptureStage<B, E> {
     blobs: B,
     bus: E,
     clock: Arc<dyn Clock>,
-    ids: EventIds,
+    /// Mints envelope ids; owned by the stage's one task.
+    ids: UlidGenerator<SeededRandom>,
     stats: Arc<PipelineStats>,
     retry: PutRetry,
 }
@@ -151,7 +129,7 @@ where
         blobs: B,
         bus: E,
         clock: Arc<dyn Clock>,
-        ids: EventIds,
+        ids: UlidGenerator<SeededRandom>,
         stats: Arc<PipelineStats>,
         retry: PutRetry,
     ) -> Self {
@@ -166,7 +144,7 @@ where
     }
 
     /// Handle every exchange `captured` yields until it closes.
-    pub async fn run(self, mut captured: mpsc::Receiver<RawExchange>) {
+    pub async fn run(mut self, mut captured: mpsc::Receiver<RawExchange>) {
         tracing::info!("capture stage started");
         while let Some(raw) = captured.recv().await {
             self.capture(&raw).await;
@@ -175,7 +153,7 @@ where
     }
 
     /// Normalize, store and publish one exchange.
-    pub async fn capture(&self, raw: &RawExchange) -> Captured {
+    pub async fn capture(&mut self, raw: &RawExchange) -> Captured {
         let exchange = raw.meta.id.ulid_text();
         let normalization = match AnthropicMessages.normalize(raw) {
             Ok(normalization) => normalization,
@@ -196,7 +174,14 @@ where
             return Captured::NotStored;
         }
         let at = self.clock.now();
-        let id = self.ids.next(at);
+        let id = match self.ids.mint_at::<EventId>(at) {
+            Ok(id) => id,
+            Err(error) => {
+                PipelineStats::bump(&self.stats.publish_failed);
+                tracing::error!(exchange = %exchange, error = %error, "no event id left to mint; ExchangeCaptured not published");
+                return Captured::NotPublished;
+            }
+        };
         let summary = Summary::of(&normalization);
         let envelope = Envelope {
             id,

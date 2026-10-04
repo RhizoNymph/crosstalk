@@ -13,7 +13,7 @@ use crosstalk_canonical::AnthropicMessages;
 use crosstalk_sim::{CheckFailed, DurationRange, Probability, SimCtx, StoreFaults, Timed};
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Subject};
-use crosstalk_spec::ids::{ExchangeId, MessageHash};
+use crosstalk_spec::ids::{ExchangeId, MessageHash, SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l1_canonical::Normalizer;
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, ConsumerGroup, EventBus, Subscription};
 use crosstalk_spec::observed::exchange::{Exchange, ExchangeOutcome};
@@ -23,7 +23,7 @@ use crosstalk_transport::{BusConfig, MpscBus};
 use tokio::sync::mpsc;
 
 use super::raw;
-use crate::capture::{CaptureStage, EventIds, PipelineStats, PutRetry};
+use crate::capture::{CaptureStage, PipelineStats, PutRetry};
 
 fn failed(what: &str, error: impl std::fmt::Debug) -> CheckFailed {
     CheckFailed::new(format!("{what}: {error:?}"))
@@ -102,7 +102,7 @@ pub async fn blobs_written_before_capture_published(ctx: SimCtx) -> Result<(), C
         blobs,
         bus.clone(),
         Arc::new(ctx.clock()),
-        EventIds::seeded(seed),
+        UlidGenerator::new(Arc::new(ctx.clock()), SeededRandom::new(seed)),
         Arc::clone(&stats),
         retry,
     );

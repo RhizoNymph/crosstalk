@@ -12,6 +12,7 @@ fn report() -> HealthReport {
             channel_full: 4,
             channel_closed: 5,
             response_too_large: 6,
+            ids_exhausted: 13,
         },
         pipeline: PipelineCounts {
             published: 3,
@@ -36,7 +37,7 @@ fn health_report_json_is_pinned() {
         text,
         concat!(
             r#"{"status":"ok","#,
-            r#""capture":{"captured":3,"unclassified":1,"decode_error":2,"channel_full":4,"channel_closed":5,"response_too_large":6},"#,
+            r#""capture":{"captured":3,"unclassified":1,"decode_error":2,"channel_full":4,"channel_closed":5,"response_too_large":6,"ids_exhausted":13},"#,
             r#""pipeline":{"published":3,"normalize_failed":7,"store_failed":8,"store_retries":9,"publish_failed":10},"#,
             r#""log":{"written":3,"duplicates":11,"write_failed":12}}"#
         )
@@ -82,6 +83,7 @@ fn metrics_are_prometheus_text_with_every_counter() {
         "crosstalk_capture_uncaptured_total{reason=\"channel_full\"} 4",
         "crosstalk_capture_uncaptured_total{reason=\"channel_closed\"} 5",
         "crosstalk_capture_uncaptured_total{reason=\"response_too_large\"} 6",
+        "crosstalk_capture_uncaptured_total{reason=\"ids_exhausted\"} 13",
         "crosstalk_pipeline_exchanges_total{outcome=\"published\"} 3",
         "crosstalk_pipeline_exchanges_total{outcome=\"normalize_failed\"} 7",
         "crosstalk_pipeline_exchanges_total{outcome=\"store_failed\"} 8",

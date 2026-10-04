@@ -112,10 +112,26 @@ pub trait UpstreamRouter {
 /// tokens on a subscription upstream (Anthropic `sk-ant-oat…`, ChatGPT and
 /// Google OAuth JWTs) are `OauthAccessToken`; Copilot's minted tokens are
 /// `ExchangedToken`; the key of a self-hosted server is `ServerKey`.
+///
+/// **Time.** Digests are keyed by a [`KeyedHasher`], whose rotation overlap
+/// ends at a configured instant, so the derivations take `started_at`, the
+/// exchange's start ([`ExchangeMeta::started_at`]), and test the overlap
+/// at that instant, never at a clock reading of their own. The digest
+/// returned is always under the current version; while a previous
+/// version's overlap is open at `started_at`, the same value's digest under
+/// it goes into the exchange's [`ClientContext::previous_digests`], and
+/// from the overlap's end on none is computed.
+///
+/// [`KeyedHasher`]: crate::ids::KeyedHasher
 pub trait ClientIdentifier {
-    fn credential(&self, head: &RequestHead, upstream: &Upstream) -> Option<CredentialRef>;
+    fn credential(
+        &self,
+        head: &RequestHead,
+        upstream: &Upstream,
+        started_at: Timestamp,
+    ) -> Option<CredentialRef>;
 
-    fn account(&self, head: &RequestHead) -> Option<AccountHash>;
+    fn account(&self, head: &RequestHead, started_at: Timestamp) -> Option<AccountHash>;
 
     fn harness(&self, head: &RequestHead) -> (Option<HarnessClaim>, HarnessIds, RequestClass);
 }

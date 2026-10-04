@@ -28,12 +28,12 @@ pub mod encoding;
 pub mod exchange;
 pub mod framer;
 pub mod identify;
-pub mod ids;
 pub mod proxy;
 pub mod routing;
 
 use std::sync::Arc;
 
+use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
 use crosstalk_spec::support::Clock;
 
 use adapter::AnthropicAdapter;
@@ -42,7 +42,6 @@ use config::IngressConfig;
 use credential::{SecretError, load_secrets};
 use decode::AdapterDecoder;
 use identify::HeaderIdentifier;
-use ids::ExchangeIds;
 use proxy::{Proxy, ProxyParts, connector};
 use routing::{ConfigError, Routes};
 
@@ -81,8 +80,8 @@ pub fn anthropic_proxy(
         adapter,
         connector: connector::https(),
         capture,
+        ids: UlidGenerator::new(Arc::clone(&clock), SeededRandom::from_entropy()),
         clock,
-        ids: ExchangeIds::random(),
         limits,
         observer: None,
     }))

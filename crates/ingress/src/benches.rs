@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l0_ingress::ContentEncoding;
 use crosstalk_spec::support::SystemClock;
 use crosstalk_testkit::corpus::CorpusRequest;
@@ -32,7 +33,6 @@ use crate::adapter::AnthropicAdapter;
 use crate::capture::CaptureSender;
 use crate::config::LimitsConfig;
 use crate::decode::AdapterDecoder;
-use crate::ids::ExchangeIds;
 use crate::proxy::{Proxy, ProxyParts};
 use crate::routing::Routes;
 use crate::tests::sim_support::{self, Feed, Manual, Read, SimConnector, SimReply, open};
@@ -77,7 +77,7 @@ fn proxy(
         connector,
         capture: CaptureSender::new(sender),
         clock: Arc::new(SystemClock),
-        ids: ExchangeIds::seeded(5),
+        ids: UlidGenerator::new(Arc::new(SystemClock), SeededRandom::new(5)),
         limits,
         observer: None,
     });

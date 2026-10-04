@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use crosstalk_sim::SimCtx;
+use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l0_ingress::{DecodedRequest, RawExchange};
 use crosstalk_testkit::corpus::CorpusRequest;
 use crosstalk_testkit::corpus::http::Headers;
@@ -43,7 +44,6 @@ use crate::capture::{CaptureSender, CaptureStats};
 use crate::config::LimitsConfig;
 use crate::decode::{AdapterDecoder, CaptureDecodeError, DecodeJob, RequestDecoder};
 use crate::exchange::StageEvent;
-use crate::ids::ExchangeIds;
 use crate::proxy::{Proxy, ProxyParts};
 use crate::routing::Routes;
 
@@ -530,7 +530,7 @@ where
         connector: connector.clone(),
         capture: CaptureSender::new(sender),
         clock: Arc::new(ctx.clock()),
-        ids: ExchangeIds::seeded(ctx.seed().get()),
+        ids: UlidGenerator::new(Arc::new(ctx.clock()), SeededRandom::new(ctx.seed().get())),
         limits: setup.limits,
         observer: Some(observer),
     });

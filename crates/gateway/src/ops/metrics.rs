@@ -39,6 +39,7 @@ pub fn render(report: &HealthReport) -> String {
                 Some(("reason", "response_too_large")),
                 capture.response_too_large,
             ),
+            (Some(("reason", "ids_exhausted")), capture.ids_exhausted),
         ],
     );
     let pipeline = &report.pipeline;
