@@ -146,7 +146,7 @@ pub fn values_of(rule: &RuleDef, version: TopicModelVersion) -> Values {
             name: rule.name.as_str().to_owned(),
             topics: Vec::new(),
             threshold: format!("{:.2}", threshold.get()),
-            text: text.clone(),
+            text: text.as_str().to_owned(),
             sinks,
         },
         RuleKind::Builtin(_) => Values::default(),
@@ -168,7 +168,7 @@ async fn submit(
     };
     let options = options(cx, &caller).await?;
     let (name, rule, sinks) = match kind {
-        RuleKindChoice::Semantic => return Err(parse_semantic(fields, &options.choices.sinks)),
+        RuleKindChoice::Semantic => parse_semantic(fields, &options.choices.sinks)?,
         RuleKindChoice::Watched => {
             require(&caller, Permission::Content)?;
             parse_watched(fields, &options.choices)?
@@ -380,7 +380,7 @@ mod tests {
     use super::*;
     use crate::components::href::tests::state;
     use crate::pages::alerts::rules::model::tests::watched;
-    use crate::testing::{get, post};
+    use crate::testing::{Session, get, post};
 
     #[test]
     fn editing_keeps_topics_only_on_the_same_version() {
@@ -402,7 +402,8 @@ mod tests {
         assert!(!reply.body.contains("No topics to pick from"));
         let reply = get(&format!("/alerts/rules/new?{q}&kind=semantic")).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("not supported yet"));
+        assert!(reply.body.contains("New semantic query rule"));
+        assert!(reply.body.contains("Describe what to look for"));
         let reply = get(&format!("/alerts/rules/new?{q}&kind=regex")).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
@@ -419,11 +420,54 @@ mod tests {
             reply.body
         );
         assert!(reply.body.contains("value=\"keys\""), "typed input is kept");
-        let reply = post(&url, "kind=semantic&name=keys&text=api+keys&threshold=0.7").await;
+        let reply = post(&url, "kind=semantic&name=keys&text=+&threshold=0.7").await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(reply.body.contains("cannot be saved from the UI yet"));
+        assert!(reply.body.contains("text: required"));
         let reply = post(&url, "kind=semantic&name=keys&text=api+keys&threshold=2").await;
         assert!(reply.body.contains("threshold: must lie between 0 and 1"));
+    }
+
+    /// The edit URL of the rule named `name` on the rules page.
+    fn edit_url_of(body: &str, name: &str) -> String {
+        let at = body.find(name).unwrap_or_else(|| panic!("{name} listed"));
+        let start = at + body[at..].find("/alerts/rules/").expect("edit link");
+        let end = start + body[start..].find('"').expect("link end");
+        body[start..end].replace("&amp;", "&")
+    }
+
+    #[tokio::test]
+    async fn semantic_rules_save_and_edit_end_to_end() {
+        let session = Session::new();
+        let q = state().to_query();
+        let reply = session
+            .post(
+                &format!("/alerts/rules/new?{q}"),
+                "kind=semantic&name=Keys+in+chat&text=api+keys+pasted+in+chat&threshold=0.72",
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        let back = reply.location.expect("location");
+        assert!(back.starts_with("/alerts/rules?"), "{back}");
+        let rules = session.get(&back).await;
+        assert_eq!(rules.status, StatusCode::OK);
+        assert!(rules.body.contains("Keys in chat"));
+        assert!(rules.body.contains("\u{201c}api keys pasted in chat\u{201d}"));
+        assert!(rules.body.contains("similarity ≥ 0.72 under fixture-minilm-16"));
+        // The edit form starts from the stored text and saves a new one.
+        let edit = edit_url_of(&rules.body, "Keys in chat");
+        let form = session.get(&edit).await;
+        assert_eq!(form.status, StatusCode::OK, "{}", form.body);
+        assert!(form.body.contains(">api keys pasted in chat</textarea>"));
+        let reply = session
+            .post(
+                &edit,
+                "kind=semantic&name=Keys+in+chat&text=tokens+in+a+paste&threshold=0.8",
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        let rules = session.get(&reply.location.expect("location")).await;
+        assert!(rules.body.contains("\u{201c}tokens in a paste\u{201d}"));
+        assert!(!rules.body.contains("api keys pasted in chat"));
     }
 
     #[tokio::test]

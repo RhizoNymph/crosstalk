@@ -157,7 +157,7 @@ impl RuleRow {
                 threshold,
                 ..
             }) => Detail::Semantic {
-                text: text.clone(),
+                text: text.as_str().to_owned(),
                 threshold: threshold.get(),
                 model: model.name.clone(),
             },

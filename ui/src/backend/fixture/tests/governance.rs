@@ -24,7 +24,8 @@ use crate::contract::channels::ChannelListFilter;
 use crate::contract::errors::{ConflictKind, QueryError};
 use crate::contract::graph::TransmissionSelector;
 use crate::contract::rules::{
-    BuiltinRule, OperatorRuleStatus, RuleKind, RuleName, RuleStatus, UserRule,
+    BuiltinRule, OperatorRuleStatus, QueryText, RuleDef, RuleKind, RuleName, RuleStatus, UserRule,
+    UserRuleSpec,
 };
 use crate::contract::scope::TopologyFilter;
 
@@ -459,13 +460,13 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
     );
 }
 
-fn watch(b: &FixtureBackend, version: u32, theme: super::super::text::Theme) -> UserRule {
+fn watch(b: &FixtureBackend, version: u32, theme: super::super::text::Theme) -> UserRuleSpec {
     let topic = b
         .world
         .topics
         .theme_topic(TopicModelVersion(2), theme)
         .expect("topic");
-    UserRule::WatchedTopic {
+    UserRuleSpec::WatchedTopic {
         version: TopicModelVersion(version),
         topics: NonEmpty::new(topic),
         remap_threshold: Similarity::new(0.8).expect("similarity"),
@@ -496,7 +497,7 @@ async fn rules_are_created_updated_and_disabled() {
     let rules = b.rules(&c).await.expect("rules");
     let def = rules.iter().find(|r| r.id == id).expect("rule");
     assert_eq!(def.status, RuleStatus::Enabled);
-    assert_eq!(def.rule, RuleKind::User(rule.clone()));
+    assert!(matches!(&def.rule, RuleKind::User(stored) if stored.spec() == rule));
     // Invalid definitions: an older topic version, an unknown sink.
     let old = watch(&b, 1, super::super::text::Theme::Incidents);
     let on_old = b
@@ -614,7 +615,72 @@ async fn rules_are_created_updated_and_disabled() {
         .find(|r| r.id == stale)
         .expect("rule");
     assert_eq!(def.status, RuleStatus::Enabled);
-    assert_eq!(def.rule, RuleKind::User(retarget));
+    assert!(matches!(&def.rule, RuleKind::User(stored) if stored.spec() == retarget));
+}
+
+#[tokio::test]
+async fn semantic_rules_are_embedded_from_their_text() {
+    let b = fresh();
+    let c = researcher();
+    let spec = |text: &str| UserRuleSpec::SemanticQuery {
+        text: QueryText::new(text).expect("text"),
+        threshold: Similarity::new(0.7).expect("similarity"),
+    };
+    let created = b
+        .act(
+            &c,
+            OperatorAction::CreateRule {
+                name: RuleName::new("Keys").expect("name"),
+                rule: spec("api keys pasted in chat"),
+                sinks: Vec::new(),
+            },
+        )
+        .await
+        .expect("create");
+    let ActionOutcome::RuleCreated(id) = created else {
+        panic!("{created:?}")
+    };
+    let stored = |rules: Vec<RuleDef>| {
+        rules
+            .into_iter()
+            .find(|r| r.id == id)
+            .map(|r| r.rule)
+            .expect("rule")
+    };
+    let RuleKind::User(UserRule::SemanticQuery {
+        text,
+        model,
+        embedding,
+        ..
+    }) = stored(b.rules(&c).await.expect("rules"))
+    else {
+        panic!("a semantic query")
+    };
+    assert_eq!(text.as_str(), "api keys pasted in chat");
+    assert_eq!(model, b.world.topics.model);
+    assert_eq!(*embedding.model(), model);
+    // Editing the text embeds it again.
+    b.act(
+        &c,
+        OperatorAction::UpdateRule {
+            id,
+            name: RuleName::new("Keys").expect("name"),
+            rule: spec("weekly meeting summary"),
+            sinks: Vec::new(),
+        },
+    )
+    .await
+    .expect("update");
+    let RuleKind::User(UserRule::SemanticQuery {
+        text: edited,
+        embedding: again,
+        ..
+    }) = stored(b.rules(&c).await.expect("rules"))
+    else {
+        panic!("a semantic query")
+    };
+    assert_eq!(edited.as_str(), "weekly meeting summary");
+    assert_ne!(again, embedding);
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ mod evidence;
 mod history;
 mod rules;
 mod states;
-mod topics;
+pub mod topics;
 mod traffic;
 
 use std::collections::HashMap;

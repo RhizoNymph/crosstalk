@@ -30,6 +30,56 @@ impl BuiltinRule {
     ];
 }
 
+/// The text of a semantic query rule: trimmed, non-empty, at most
+/// [`QueryText::MAX_CHARS`] characters.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryText(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidQueryText {
+    #[error("the query text is empty")]
+    Empty,
+    #[error("the query text is longer than {max} characters", max = QueryText::MAX_CHARS)]
+    TooLong,
+}
+
+impl QueryText {
+    pub const MAX_CHARS: usize = 1000;
+
+    pub fn new(raw: &str) -> Result<Self, InvalidQueryText> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidQueryText::Empty);
+        }
+        if trimmed.chars().count() > Self::MAX_CHARS {
+            return Err(InvalidQueryText::TooLong);
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// An operator rule as an operator submits it (`CreateRule`, `UpdateRule`).
+/// A semantic query is text: the gateway embeds it with its current model
+/// and stores the resulting [`UserRule`], so the UI never handles
+/// embeddings.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserRuleSpec {
+    WatchedTopic {
+        version: TopicModelVersion,
+        topics: NonEmpty<TopicId>,
+        remap_threshold: Similarity,
+    },
+    SemanticQuery {
+        text: QueryText,
+        threshold: Similarity,
+    },
+}
+
+/// An operator rule as stored.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserRule {
     WatchedTopic {
@@ -38,13 +88,37 @@ pub enum UserRule {
         remap_threshold: Similarity,
     },
     /// The text is kept so the rule can be shown and edited; the embedding
-    /// is of that text under `model`.
+    /// is of that text under `model`, computed by the gateway.
     SemanticQuery {
-        text: String,
+        text: QueryText,
         model: EmbeddingModel,
         embedding: Embedding,
         threshold: Similarity,
     },
+}
+
+impl UserRule {
+    /// What an operator would submit to get this rule again: the edit
+    /// form's starting point.
+    pub fn spec(&self) -> UserRuleSpec {
+        match self {
+            Self::WatchedTopic {
+                version,
+                topics,
+                remap_threshold,
+            } => UserRuleSpec::WatchedTopic {
+                version: *version,
+                topics: topics.clone(),
+                remap_threshold: *remap_threshold,
+            },
+            Self::SemanticQuery {
+                text, threshold, ..
+            } => UserRuleSpec::SemanticQuery {
+                text: text.clone(),
+                threshold: *threshold,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,4 +204,21 @@ pub struct SinkInfo {
     pub kind: SinkKind,
     pub name: String,
     pub last_delivery: Option<Result<Timestamp, SinkError>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_text_is_trimmed_and_bounded() {
+        assert_eq!(
+            QueryText::new("  api keys ").map(|t| t.as_str().to_owned()),
+            Ok("api keys".to_owned())
+        );
+        assert_eq!(QueryText::new(" \n "), Err(InvalidQueryText::Empty));
+        let long = "x".repeat(QueryText::MAX_CHARS + 1);
+        assert_eq!(QueryText::new(&long), Err(InvalidQueryText::TooLong));
+        assert!(QueryText::new(&"é".repeat(QueryText::MAX_CHARS)).is_ok());
+    }
 }

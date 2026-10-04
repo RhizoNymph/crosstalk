@@ -9,7 +9,7 @@ use crosstalk_spec::observed::agent::MergeRequest;
 use super::MergeId;
 use super::SinkId;
 use super::agents::AgentLabel;
-use super::rules::{OperatorRuleStatus, RuleName, UserRule};
+use super::rules::{OperatorRuleStatus, RuleName, UserRuleSpec};
 use super::verdict::Verdict;
 
 /// Replaces `crosstalk_spec::interfaces::l8_surface::OperatorAction`, adding
@@ -54,17 +54,19 @@ pub enum OperatorAction {
         verdict: Option<Verdict>,
         note: Option<String>,
     },
+    /// The surface embeds a semantic query's text and stores the rule.
     CreateRule {
         name: RuleName,
-        rule: UserRule,
+        rule: UserRuleSpec,
         sinks: Vec<SinkId>,
     },
-    /// Updating a stale rule re-targets it to the current version and
-    /// enables it.
+    /// Replaces an operator rule's definition, embedding a semantic query's
+    /// text again. Updating a stale rule re-targets it to the current
+    /// version and enables it.
     UpdateRule {
         id: AlertRuleId,
         name: RuleName,
-        rule: UserRule,
+        rule: UserRuleSpec,
         sinks: Vec<SinkId>,
     },
     SetRuleEnabled {

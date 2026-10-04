@@ -13,7 +13,7 @@ use crosstalk_spec::support::{Similarity, Timestamp};
 
 use crate::backend::fixture::clock::{DAY, Mint, ago};
 use crate::backend::fixture::rng::Rng;
-use crate::backend::fixture::text::Theme;
+use crate::backend::fixture::text::{self, Theme};
 use crate::contract::topics::{TopicRemap, TopicVersionInfo, TopicVersionRemap};
 
 use super::history::CONFIG_AT;
@@ -89,19 +89,60 @@ pub fn similarity(a: &Embedding, b: &Embedding) -> f32 {
     ((cos + 1.0) / 2.0).clamp(0.0, 1.0)
 }
 
-/// The sum of the theme vectors of `themes`, normalized.
-pub fn mix(model: &EmbeddingModel, seed: u64, themes: &[Theme]) -> Result<Embedding, GenError> {
+/// Every theme's vector, in `Theme::ALL` order.
+fn theme_vectors(seed: u64) -> Vec<Vec<f32>> {
     let mut rng = Rng::fork(seed, "theme-vectors");
-    let vectors: Vec<Vec<f32>> = Theme::ALL
+    Theme::ALL
         .iter()
         .map(|t| theme_vector(*t, &mut rng))
-        .collect();
+        .collect()
+}
+
+/// The sum of the theme vectors of `themes`, normalized.
+pub fn mix(model: &EmbeddingModel, seed: u64, themes: &[Theme]) -> Result<Embedding, GenError> {
+    let vectors = theme_vectors(seed);
     let mut sum = vec![0.0f32; usize::from(DIMENSION)];
     for theme in themes {
         if let Some(v) = vectors.get(theme.index()) {
             for (s, x) in sum.iter_mut().zip(v) {
                 *s += x;
             }
+        }
+    }
+    embedding(model, sum)
+}
+
+/// Weight of a word's hashed axis in [`embed`], so text that shares no
+/// word with any theme still has a direction.
+const HASHED_WEIGHT: f32 = 0.1;
+
+/// FNV-1a: a stable hash for a word's axis.
+fn word_hash(word: &str) -> u64 {
+    word.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The fixture's embedder for query text (semantic query rules): the theme
+/// vectors weighted by how many of the text's words are in each theme's
+/// vocabulary, plus a little of each word's hashed axis. Deterministic for
+/// a seed; fails only when `model` is not the fixture's model shape.
+pub fn embed(model: &EmbeddingModel, seed: u64, query: &str) -> Result<Embedding, GenError> {
+    let words = text::tokens(query);
+    let vectors = theme_vectors(seed);
+    let dimension = usize::from(DIMENSION);
+    let mut sum = vec![0.0f32; dimension];
+    for (theme, vector) in Theme::ALL.iter().zip(&vectors) {
+        let vocabulary = text::vocabulary(*theme);
+        let hits = words.iter().filter(|w| vocabulary.contains(*w)).count();
+        for (s, x) in sum.iter_mut().zip(vector) {
+            *s += hits as f32 * x;
+        }
+    }
+    for word in &words {
+        let axis = usize::try_from(word_hash(word) % u64::from(DIMENSION)).unwrap_or(0);
+        if let Some(slot) = sum.get_mut(axis) {
+            *slot += HASHED_WEIGHT;
         }
     }
     embedding(model, sum)
@@ -247,4 +288,29 @@ pub fn assign(
         out.push(assignment);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_text_embeds_near_its_themes() {
+        let model = model().expect("model");
+        let paste = embed(&model, 7, "credentials or scraped data posted to a paste site")
+            .expect("embed");
+        assert_eq!(*paste.model(), model);
+        let near = mix(&model, 7, &[Theme::Credentials, Theme::Scraping]).expect("mix");
+        let far = mix(&model, 7, &[Theme::Meetings]).expect("mix");
+        assert!(similarity(&paste, &near) > similarity(&paste, &far));
+        assert_eq!(
+            embed(&model, 7, "credentials").expect("embed"),
+            embed(&model, 7, "credentials").expect("embed"),
+            "deterministic"
+        );
+        assert!(
+            embed(&model, 7, "zzz qqq").is_ok(),
+            "unrelated text still embeds"
+        );
+    }
 }
