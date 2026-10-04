@@ -6,12 +6,24 @@
 //!   `PromptFingerprintResolver`, and `ChainResolver`, which runs the others
 //!   in order and merges their answers.
 //! - `Threader`: `PrefixThreader` (message-hash prefix match),
-//!   `ResponsesStateThreader` (`previous_response_id`), `CompactionThreader`
-//!   (summary heuristics).
+//!   `ResponsesStateThreader` (resolves `Continuation::Increment` exchanges,
+//!   from Codex's WebSocket turns, through the stored response chain),
+//!   `CompactionThreader` (harness compaction hints and summary heuristics).
+//! - `AgentDirectory`: the merge table. Every reader of stored agent ids
+//!   resolves them through it.
+//!
+//! Identity resolution uses the most specific evidence present
+//! (`IdentityEvidence::specificity`). Harness ids count only within their
+//! `IdentityScope`. Rotating credentials and prompt fingerprints are weak:
+//! they attach to an agent but never establish one alone.
+//!
+//! An increment exchange whose previous response the gateway never saw (it
+//! was sent around the proxy) is threaded as `Starts` holding only its
+//! increment, so its inputs are still scanned.
 
 use crate::events::ingest::ConversationDelta;
 use crate::ids::{AgentId, ConversationId};
-use crate::observed::agent::IdentityEvidence;
+use crate::observed::agent::{IdentityEvidence, MergeRequest};
 use crate::observed::exchange::{Exchange, ExchangeMeta};
 use crate::observed::message::Message;
 use crate::support::NonEmpty;
@@ -33,7 +45,16 @@ pub enum Resolution {
     },
 }
 
+pub trait AgentDirectory {
+    /// The agent `id` resolves to after merges: itself unless merged.
+    fn canonical(&self, id: AgentId) -> AgentId;
+}
+
 pub trait IdentityResolver {
+    /// Apply a merge. Repoints agents already merged into `from`, so no
+    /// merge chain is ever longer than one.
+    async fn merge(&mut self, request: MergeRequest) -> Result<(), ResolveError>;
+
     async fn resolve(
         &mut self,
         meta: &ExchangeMeta,
@@ -86,16 +107,10 @@ pub trait Threader {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     Store { reason: String },
+    UnknownAgent(AgentId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadError {
-    Store {
-        reason: String,
-    },
-    /// A Responses API exchange referenced a previous response the gateway
-    /// never saw (it was sent around the proxy).
-    UnknownPreviousResponse {
-        id: String,
-    },
+    Store { reason: String },
 }

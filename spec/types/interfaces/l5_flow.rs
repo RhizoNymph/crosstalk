@@ -13,7 +13,12 @@
 //! - `Correlator`: `WindowedCorrelator`, which buffers evidence that arrives
 //!   out of order. A content match can be processed before the access that
 //!   opens its transmission, because they come from different consumer
-//!   groups.
+//!   groups. A tool-result match whose call never yields an access opens a
+//!   `Direct(ToolResult)` transmission when its window closes.
+//!
+//! The correlator chooses routes in the precedence order documented on
+//! `Route`, using the `AgentDirectory` and agent parent links for
+//! `Delegation`.
 
 use crate::derived::flow::access::{Access, AccessKind, Extraction};
 use crate::derived::flow::channel::policy::{Policy, PolicyAuthor};
@@ -74,11 +79,24 @@ pub trait ChannelRegistry {
 /// transmissions and publishes the matching events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransmissionUpdate {
-    Open {
+    /// A cross access on a channel: wait for content evidence.
+    OpenChannel {
+        transmission: TransmissionId,
+        to: AgentId,
+        channel: ChannelId,
+        co_access: CoAccess,
+    },
+    /// Content evidence on a non-channel route: opens and confirms at once.
+    OpenConfirmed {
         transmission: TransmissionId,
         to: AgentId,
         route: Route,
-        co_access: Option<CoAccess>,
+        confirmed: Confirmed,
+    },
+    /// A later match from the same sender to the same reader exchange.
+    Extend {
+        transmission: TransmissionId,
+        content: ContentMatch,
     },
     Confirm {
         transmission: TransmissionId,

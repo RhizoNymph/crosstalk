@@ -3,6 +3,8 @@
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{AgentId, ExchangeId, SpanId};
 use crate::observed::message::ToolCallId;
+use std::num::NonZeroU32;
+
 use crate::support::{NonEmpty, Similarity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,13 +38,17 @@ pub enum Carrier {
     UserTurn,
     /// Put in the system prompt: configured, usually sanctioned.
     SystemPrompt,
-    /// The reader wrote it into its own tool call arguments: forwarding.
-    ToolArguments(ToolCallId),
+    /// The reader's own output (text or tool-call arguments) contains it,
+    /// although none of the reader's visible inputs did: the reader received
+    /// it through something the gateway does not see.
+    ReaderOutput,
 }
 
 /// An indexed span found in another agent's exchange.
 ///
-/// Built only through [`ContentMatch::new`], which rejects self-matches.
+/// Built only through [`ContentMatch::new`], which rejects self-matches and
+/// a matched length longer than the text read. `matched_bytes` is measured
+/// on the reader's side, in the bytes of `read_at`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContentMatch {
     origin: SpanId,
@@ -52,11 +58,14 @@ pub struct ContentMatch {
     read_at: SpanLocation,
     carrier: Carrier,
     kind: MatchKind,
-    matched_bytes: u32,
+    matched_bytes: NonZeroU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SelfMatch;
+pub enum InvalidMatch {
+    SelfMatch,
+    ExceedsReadRange,
+}
 
 impl ContentMatch {
     #[allow(clippy::too_many_arguments)]
@@ -68,10 +77,13 @@ impl ContentMatch {
         read_at: SpanLocation,
         carrier: Carrier,
         kind: MatchKind,
-        matched_bytes: u32,
-    ) -> Result<Self, SelfMatch> {
+        matched_bytes: NonZeroU32,
+    ) -> Result<Self, InvalidMatch> {
         if origin_agent == reader {
-            return Err(SelfMatch);
+            return Err(InvalidMatch::SelfMatch);
+        }
+        if matched_bytes > read_at.range.len() {
+            return Err(InvalidMatch::ExceedsReadRange);
         }
         Ok(Self {
             origin,
@@ -113,7 +125,7 @@ impl ContentMatch {
         &self.kind
     }
 
-    pub fn matched_bytes(&self) -> u32 {
+    pub fn matched_bytes(&self) -> NonZeroU32 {
         self.matched_bytes
     }
 }

@@ -5,16 +5,30 @@ use crate::aggregates::edge::EdgeKey;
 use crate::derived::flow::channel::policy::Policy;
 use crate::derived::flow::transmission::{Classification, Route};
 use crate::events::Subject;
+use std::num::NonZeroU64;
+
+use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{AgentId, ChannelId, TransmissionId};
+use crate::support::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InsightEvent {
+    /// Published once per transmission per topic-model version: on
+    /// confirmation under the current version, and again for every
+    /// transmission when a re-fit produces a new version.
     TransmissionClassified {
         transmission: TransmissionId,
         from: AgentId,
         to: AgentId,
         route: Route,
+        at: Timestamp,
+        matched_bytes: NonZeroU64,
         classification: Classification,
+    },
+    /// Every transmission has been classified under `version`; readers may
+    /// switch to it.
+    TopicVersionReady {
+        version: TopicModelVersion,
     },
     EdgeUpdated(EdgeKey),
     AlertOpened(Alert),
@@ -31,6 +45,7 @@ impl InsightEvent {
     pub fn subject(&self) -> Subject {
         match self {
             Self::TransmissionClassified { .. } => Subject::TransmissionClassified,
+            Self::TopicVersionReady { .. } => Subject::TopicVersionReady,
             Self::EdgeUpdated(_) => Subject::EdgeUpdated,
             Self::AlertOpened(_) => Subject::AlertOpened,
             Self::PolicyChanged { .. } => Subject::PolicyChanged,

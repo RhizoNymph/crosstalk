@@ -15,8 +15,8 @@
 use crate::aggregates::alert::{AlertDraft, AlertRuleKind, TriageOutcome};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::derived::flow::channel::policy::Policy;
-use crate::events::BusEvent;
-use crate::ids::{ChannelId, TransmissionId};
+use crate::events::Envelope;
+use crate::ids::{AlertRuleId, ChannelId, TransmissionId};
 use crate::support::{Similarity, TimeWindow};
 
 pub trait Embedder {
@@ -61,16 +61,27 @@ pub trait SearchIndex {
 /// What a rule may look up while evaluating, beyond the event itself.
 pub trait RuleContext {
     async fn channel_policy(&self, channel: ChannelId) -> Option<Policy>;
+
+    async fn transmission_embedding(&self, transmission: TransmissionId) -> Option<Embedding>;
 }
 
 pub trait AlertRuleEval {
     fn kind(&self) -> AlertRuleKind;
 
-    async fn evaluate(&self, event: &BusEvent, context: &impl RuleContext) -> Option<AlertDraft>;
+    /// A draft's `raised_at` is the envelope's time, so evaluation is
+    /// deterministic for the same envelope and context.
+    async fn evaluate(&self, envelope: &Envelope, context: &impl RuleContext)
+    -> Option<AlertDraft>;
 }
 
 pub trait AlertTriage {
     async fn triage(&mut self, draft: AlertDraft) -> Result<TriageOutcome, TriageError>;
+
+    /// Suppress the active alerts whose subject is `channel`.
+    async fn channel_sanctioned(&mut self, channel: ChannelId) -> Result<u32, TriageError>;
+
+    /// Suppress the active alerts raised by `rule`.
+    async fn rule_disabled(&mut self, rule: AlertRuleId) -> Result<u32, TriageError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

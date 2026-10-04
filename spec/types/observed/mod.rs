@@ -12,6 +12,7 @@
 //!   in the blob store.
 
 pub mod agent;
+pub mod client;
 pub mod conversation;
 pub mod exchange;
 pub mod message;

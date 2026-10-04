@@ -20,13 +20,18 @@ pub struct Conversation {
 pub enum ConversationOrigin {
     Root,
     /// Shares the first `shared_prefix` messages with `parent`, then
-    /// diverges.
+    /// diverges. The shared prefix always includes at least one assistant
+    /// message, so conversations that only share a system prompt and first
+    /// user turn are separate roots. A retry (a request that is a prefix of
+    /// the parent's history) forks with `shared_prefix` equal to the
+    /// request's length.
     Fork {
         parent: ConversationId,
         shared_prefix: u32,
     },
     /// The harness summarized `predecessor` and started over with the
-    /// summary.
+    /// summary. Messages the new conversation carries over from the
+    /// predecessor (same hash) are not new inputs.
     Compaction {
         predecessor: ConversationId,
     },

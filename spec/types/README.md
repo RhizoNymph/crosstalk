@@ -17,27 +17,28 @@ spec/types/
 ├── ids.rs                 typed ids: ULID entity ids, BLAKE3 content ids
 ├── support.rs             NonEmpty, Timestamp, TimeWindow, ByteRange, Similarity, Share
 ├── observed/              facts from the wire
-│   ├── message.rs         Message, MessageBody (role-shaped), parts, PartRef
-│   ├── exchange.rs        Exchange, ExchangeMeta, ExchangeOutcome, ExchangeStage
-│   ├── agent.rs           Agent, IdentityEvidence, AgentState
+│   ├── client.rs          IngressMode, Upstream, Dialect, CredentialRef, HarnessClaim, EndpointKind
+│   ├── message.rs         Message, MessageBody (role-shaped), parts, CanonicalJson, PartRef
+│   ├── exchange.rs        Exchange, WireProtocol, Transport, Continuation, ExchangeOutcome, ExchangeStage
+│   ├── agent.rs           Agent, IdentityEvidence, IdentityScope, AgentState, MergeRequest
 │   └── conversation.rs    Conversation, ConversationOrigin
 ├── derived/               inferences, each carrying its evidence
 │   ├── provenance/
-│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState
+│   │   ├── span.rs        Span, SpanLocation, Origin, SpanState, SpanEvent, OriginatedSpan
 │   │   ├── fingerprint.rs Fingerprint, WinnowParams, FingerprintHit
 │   │   └── matching.rs    ContentMatch, MatchKind, Codec, Carrier
 │   └── flow/
 │       ├── resource.rs    Resource, Locator, ResourcePattern
 │       ├── access.rs      Access, AccessOp, Extraction
-│       ├── evidence.rs    Evidence, CoAccess
-│       ├── transmission.rs Transmission, Route, TransmissionState, Confirmed
+│       ├── evidence.rs    Evidence, CoAccess (checked)
+│       ├── transmission.rs Transmission, Route, DelegationDirection, TransmissionState, Confirmed
 │       └── channel/
 │           ├── mod.rs     Channel, ChannelOrigin
 │           ├── detection.rs DeclaredDetection, TrafficDetection
 │           └── policy.rs  Policy, Decision, TrafficVerdict
 ├── aggregates/            recomputable summaries
-│   ├── edge.rs            EdgeKey, EdgeStats, TopologyGraph, Weighting
-│   ├── topic.rs           Embedding, Topic, TopicAssignment
+│   ├── edge.rs            EdgeKey (checked), TopicSlot, EdgeStats, TopologyFilter, TopologyGraph
+│   ├── topic.rs           Embedding (checked), EmbeddingModel, Topic, TopicAssignment
 │   └── alert.rs           AlertRule, AlertDraft, TriageOutcome, Alert, AlertState
 ├── events/                what crosses the bus
 │   ├── mod.rs             Envelope, BusEvent, Subject
@@ -45,15 +46,15 @@ spec/types/
 │   ├── detect.rs          L4/L5: span, match, access, channel and transmission events
 │   └── insight.rs         L6–L8: TransmissionClassified, EdgeUpdated, AlertOpened, PolicyChanged
 ├── interfaces/            one module per layer: traits and their errors
-│   ├── l0_ingress.rs      ProviderAdapter, ResponseFramer, RawExchange
-│   ├── l1_canonical.rs    Normalizer, NormalizedExchange
-│   ├── l2_transport.rs    EventBus, Subscription, BlobStore
-│   ├── l3_reconstruction.rs IdentityResolver, Threader
-│   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex
+│   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier, ProviderAdapter, ResponseFramer, WebSocketTap
+│   ├── l1_canonical.rs    Normalizer, NormalizedExchange, NormalizeWarning
+│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, DeadLetterStore, BlobStore
+│   ├── l3_reconstruction.rs IdentityResolver, AgentDirectory, Threader
+│   ├── l4_provenance.rs   Segmenter, Decoder, Fingerprinter, FingerprintIndex, SemanticMatcher
 │   ├── l5_flow.rs         ResourceExtractor, ChannelRegistry, Correlator
 │   ├── l6_analysis.rs     Embedder, TopicModel, SearchIndex, AlertRuleEval, AlertTriage
 │   ├── l7_topology.rs     EdgeStore
-│   └── l8_surface.rs      QueryApi, OperatorActions, AlertSink
+│   └── l8_surface.rs      Caller, QueryApi, OperatorActions, AlertSink
 └── tests/                 tests for the invariants checked at runtime
 ```
 
@@ -76,6 +77,33 @@ spec/types/
 - **No dependencies.** Error enums are plain; implementations derive
   `thiserror::Error`, and serde and sqlx derives, on their copies.
 
+## Harnesses, upstreams and credentials
+
+The model supports Claude Code, Codex, pi and oh-my-pi against vendor APIs,
+subscription backends (Claude Pro/Max, ChatGPT/Codex, GitHub Copilot, Gemini
+Code Assist) and self-hosted vLLM or SGLang. See
+`docs/research/harness-wire-protocols.md` for what each sends. In short:
+
+- **Wire protocol, upstream and dialect are separate axes.** Adapters and
+  normalizers are per `WireProtocol` and handle every `Dialect`; the dialect
+  follows from the configured `UpstreamKind`.
+- **Two ingress modes.** Reverse proxy (the harness's base URL points at a
+  route) and forward proxy (`HTTPS_PROXY` with TLS interception for
+  allowlisted hosts only), for upstreams a harness cannot redirect.
+- **Three transports.** HTTP, SSE, and WebSocket, where one connection
+  carries many exchanges and each turn sends only an increment
+  (`Continuation::Increment`).
+- **Credentials are hashed and classified.** API keys are stable, OAuth and
+  exchanged tokens rotate, server keys are shared. Only stable credentials
+  identify an agent on their own.
+- **Harness headers are claims.** Session and agent ids count as identity
+  evidence only within the credential or account they arrive with; the
+  harness name is never evidence.
+- **Only generation is captured.** Token counting, model listing, probes and
+  side routes are forwarded and not captured.
+- **Merges are aliases.** Stored records keep their agent ids and readers
+  resolve them through `AgentDirectory`.
+
 ## Mapping from the lifecycle definition
 
 `design/lifecycles/cascade.yaml` (next to the repository) simulates these
@@ -92,3 +120,7 @@ some of its events are in-process here rather than on the bus:
 | `Alert.fired` / `deduplicated` | `AlertDraft` / `TriageOutcome::Deduplicated` |
 | `ResponseCompleted`, `ExchangeFailed`, `ExchangeNormalized` | in-process on the proxy node (`RawExchange`, `NormalizedExchange`) |
 | `Transmission.fromAgent` field | `Confirmed::from()`, known only once confirmed |
+| `Channel` `confirm` from `observed` or `dormant` | only `Candidate` → `Active`; `Dormant` returns through `Candidate` on a cross access |
+| `Alert` dedup into an `open` alert | dedup into an active (open or acknowledged) alert |
+| `sanctioned_unused` on every unused declared channel | the `SanctionedUnused` rule checks the policy |
+| suppress all alerts on a sanctioned channel | suppress only alerts whose subject is the channel |

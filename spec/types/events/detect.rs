@@ -7,6 +7,8 @@ use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::RelaySource;
 use crate::events::Subject;
 use crate::ids::{AccessId, AgentId, ChannelId, SpanId, TransmissionId};
+use std::num::NonZeroU64;
+
 use crate::support::{NonEmpty, Timestamp};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +43,8 @@ pub enum DetectEvent {
         from: AgentId,
         to: AgentId,
         route: Route,
-        matched_bytes: u64,
+        at: Timestamp,
+        matched_bytes: NonZeroU64,
     },
     TransmissionSuspected {
         transmission: TransmissionId,

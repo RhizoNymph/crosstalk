@@ -4,41 +4,80 @@
 //! the proxy node's memory, and its position is an [`ExchangeStage`]. Once
 //! normalized it becomes an [`Exchange`] record: immutable, with the request
 //! and response referenced by message hash.
+//!
+//! On a WebSocket transport (Codex, pi and oh-my-pi's Codex mode) one
+//! connection carries many exchanges, one per `response.create` turn, and each
+//! turn sends only the input added since the previous response. Such an
+//! exchange's `request` holds only that increment, and its [`Continuation`]
+//! names the response it continues. Reconstruction resolves the full history.
 
-use crate::ids::{AgentId, ConversationId, ExchangeId, KeyHash, MessageHash};
+use crate::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
+use crate::observed::client::ClientContext;
 use crate::support::Timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Provider {
+pub enum WireProtocol {
     AnthropicMessages,
     OpenAiChat,
     OpenAiResponses,
     GeminiGenerate,
+    /// Google's Code Assist wrapping of generateContent
+    /// (`v1internal:streamGenerateContent`), used by Gemini CLI and
+    /// Antigravity subscriptions.
+    GeminiCodeAssist,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Transport {
+    /// One request, one complete response body.
+    Http,
+    /// One request, a server-sent-event stream.
+    Sse,
+    /// A long-lived connection carrying many turns.
+    WebSocket,
+}
+
+/// A WebSocket connection through the proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub u128);
+
+/// The id a provider assigned to a response (`resp_…`, `msg_…`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResponseId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelName(pub String);
 
-/// The value of an `x-agent-id` style header the harness may send.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AgentHeader(pub String);
-
-/// What the proxy knows about an exchange before reading any bodies.
+/// What the proxy knows about an exchange before its body is normalized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeMeta {
     pub id: ExchangeId,
-    pub provider: Provider,
+    pub protocol: WireProtocol,
+    pub transport: Transport,
+    /// Read from the request body by the adapter.
     pub model: ModelName,
-    pub key: KeyHash,
-    pub agent_header: Option<AgentHeader>,
+    pub client: ClientContext,
     pub started_at: Timestamp,
+}
+
+/// Whether `request` is the whole history or an increment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Continuation {
+    /// The request carries the full message history.
+    FullHistory,
+    /// The request carries only input added after `previous`
+    /// (`previous_response_id`).
+    Increment {
+        previous: ResponseId,
+        connection: Option<ConnectionId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchange {
     pub meta: ExchangeMeta,
-    /// The full message history sent, in order. Most of it repeats earlier
-    /// exchanges; threading finds the new part.
+    pub continuation: Continuation,
+    /// The messages sent, in order: the full history, or the increment.
     pub request: Vec<MessageHash>,
     pub outcome: ExchangeOutcome,
 }
@@ -47,6 +86,8 @@ pub struct Exchange {
 pub enum ExchangeOutcome {
     Completed {
         response: MessageHash,
+        response_id: Option<ResponseId>,
+        first_chunk_at: Timestamp,
         finished_at: Timestamp,
         stop: StopReason,
         usage: Option<TokenUsage>,
@@ -55,6 +96,7 @@ pub enum ExchangeOutcome {
     /// tool results that read-side detection needs.
     Failed {
         partial_response: Option<MessageHash>,
+        first_chunk_at: Option<Timestamp>,
         failed_at: Timestamp,
         failure: ExchangeFailure,
     },
@@ -67,6 +109,8 @@ pub enum StopReason {
     MaxTokens,
     StopSequence,
     Refusal,
+    /// The server aborted generation (SGLang `abort`).
+    Aborted,
     Other,
 }
 
@@ -75,12 +119,24 @@ pub struct TokenUsage {
     pub input: u32,
     pub output: u32,
     pub cache_read: u32,
+    pub reasoning: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExchangeFailure {
-    Upstream { status: u16 },
+    /// A non-2xx status before any content.
+    Upstream {
+        status: u16,
+    },
     UpstreamUnreachable,
+    /// The stream ended before its terminal frame.
+    StreamTruncated,
+    /// The stream contained bytes the framer could not parse.
+    MalformedStream {
+        offset: u64,
+    },
+    /// The upstream sent an error event inside a 2xx stream.
+    UpstreamErrorEvent,
     ClientDisconnected,
     Timeout,
 }
@@ -89,12 +145,13 @@ pub enum ExchangeFailure {
 ///
 /// `Forwarded` through `Failed` are proxy-side and in memory only.
 /// `Captured` onward are pipeline states recorded against the exchange id.
+/// A response whose first content and terminal frame arrive in one chunk
+/// passes through `Responding` within that chunk.
 ///
 /// ```text
-/// Forwarded ─first chunk─▶ Responding ─done─▶ Completed ─┐
-///     │                        │                        ├─▶ Captured ─▶ Normalized ─▶ Threaded
-///     └─upstream error─▶ Failed ◀─client disconnect─┘    │
-///                         └──────────────────────────────┘
+/// Forwarded ─first content─▶ Responding ─terminal frame─▶ Completed ─┐
+///     │                          │                                  ├─▶ Captured ─▶ Normalized ─▶ Threaded
+///     └──────── failure ─────────┴──────▶ Failed ───────────────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExchangeStage {

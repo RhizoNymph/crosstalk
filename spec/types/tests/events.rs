@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use crate::derived::flow::channel::policy::Policy;
@@ -10,19 +11,21 @@ use crate::events::ingest::{ConversationDelta, IngestEvent};
 use crate::events::insight::InsightEvent;
 use crate::events::{BusEvent, Subject};
 use crate::ids::ConversationId;
-use crate::observed::agent::{IdentityEvidence, MergeAuthor};
-use crate::observed::exchange::AgentHeader;
+use crate::observed::agent::{IdentityEvidence, IdentityScope, MergeAuthor};
+use crate::observed::client::UpstreamId;
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
-    access, agent, at, channel, content_match, exchange, message, span, transmission,
+    access, agent, at, channel, content_match, exchange, message, read_access, resource, span,
+    transmission, write_access,
 };
 
 fn co_access() -> CoAccess {
-    CoAccess {
-        write: access(1),
-        read: access(2),
-        lag: Duration::from_secs(1),
-    }
+    CoAccess::new(
+        &write_access(1, agent(1), resource(1), 1),
+        &read_access(2, agent(2), resource(1), 2),
+        Duration::from_secs(60),
+    )
+    .expect("valid co-access")
 }
 
 /// One event of every variant that can be built without an aggregate.
@@ -33,11 +36,15 @@ fn sample_events() -> Vec<BusEvent> {
             agent: agent(1),
             conversation: ConversationId::from_ulid(1),
             new_inputs: vec![message(1)],
+            new_system: None,
             output: None,
         })),
         BusEvent::Ingest(IngestEvent::AgentSeen {
             agent: agent(1),
-            evidence: IdentityEvidence::Header(AgentHeader("planner".into())),
+            evidence: IdentityEvidence::HarnessSession {
+                scope: IdentityScope::Upstream(UpstreamId("vllm".into())),
+                session: "planner".into(),
+            },
         }),
         BusEvent::Ingest(IngestEvent::AgentMerged {
             from: agent(1),
@@ -75,7 +82,8 @@ fn sample_events() -> Vec<BusEvent> {
             from: agent(1),
             to: agent(2),
             route: Route::Direct(DirectCarrier::UserTurn),
-            matched_bytes: 8,
+            at: at(8),
+            matched_bytes: NonZeroU64::new(8).expect("8 is not zero"),
         }),
         BusEvent::Detect(DetectEvent::TransmissionSuspected {
             transmission: transmission(2),
