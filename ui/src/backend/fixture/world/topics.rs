@@ -1,0 +1,250 @@
+//! The topic model: v0 (unfitted, every transmission an outlier), v1 (six
+//! broad topics) and v2 (one topic per theme). v1's "Engineering chatter"
+//! spans three v2 topics and maps to none of them, which is what leaves a
+//! watched-topic rule stale.
+
+use std::num::NonZeroU16;
+
+use crosstalk_spec::aggregates::topic::{
+    Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion,
+};
+use crosstalk_spec::ids::TopicId;
+use crosstalk_spec::support::{Similarity, Timestamp};
+
+use crate::backend::fixture::clock::{DAY, Mint, ago};
+use crate::backend::fixture::rng::Rng;
+use crate::backend::fixture::text::Theme;
+use crate::contract::topics::{TopicRemap, TopicVersionInfo, TopicVersionRemap};
+
+use super::history::CONFIG_AT;
+use super::{GenError, TopicModel};
+
+pub const V1_AT: Timestamp = ago(6 * DAY);
+pub const V2_AT: Timestamp = ago(2 * DAY);
+/// A topic maps to the next version's most similar topic only at or above
+/// this similarity.
+pub const REMAP_THRESHOLD: f32 = 0.8;
+const DIMENSION: u16 = 16;
+
+/// v1's topics, as groups of themes.
+const V1_GROUPS: &[(&str, &[Theme])] = &[
+    ("Deploys and incidents", &[Theme::Deploy, Theme::Incidents]),
+    ("Research notes", &[Theme::Research]),
+    ("Credentials", &[Theme::Credentials]),
+    ("Web automation", &[Theme::Scraping, Theme::Injection]),
+    ("Meetings", &[Theme::Meetings]),
+    (
+        "Engineering chatter",
+        &[Theme::CodeReview, Theme::DataPipeline, Theme::Support],
+    ),
+];
+
+/// The index of v1's topic that maps to nothing in v2.
+pub const V1_UNMAPPED: usize = 5;
+
+pub fn model() -> Result<EmbeddingModel, GenError> {
+    Ok(EmbeddingModel {
+        name: "fixture-minilm-16".to_owned(),
+        dimension: NonZeroU16::new(DIMENSION)
+            .ok_or_else(|| GenError::Missing("dimension".to_owned()))?,
+    })
+}
+
+/// The version the model had at `at`.
+pub fn version_at(at: Timestamp) -> TopicModelVersion {
+    if at >= V2_AT {
+        TopicModelVersion(2)
+    } else if at >= V1_AT {
+        TopicModelVersion(1)
+    } else {
+        TopicModelVersion(0)
+    }
+}
+
+/// A unit vector for `theme`: mostly its own axis, a little shared noise.
+fn theme_vector(theme: Theme, rng: &mut Rng) -> Vec<f32> {
+    let mut v = vec![0.0f32; usize::from(DIMENSION)];
+    if let Some(slot) = v.get_mut(theme.index()) {
+        *slot = 1.0;
+    }
+    for x in v.iter_mut().skip(Theme::ALL.len()) {
+        *x = (rng.gaussian() * 0.03) as f32;
+    }
+    v
+}
+
+pub fn embedding(model: &EmbeddingModel, mut values: Vec<f32>) -> Result<Embedding, GenError> {
+    let norm = values.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut values {
+            *v /= norm;
+        }
+    }
+    Embedding::new(model.clone(), values).map_err(|e| GenError::invalid("Embedding", e))
+}
+
+/// Cosine similarity of two unit vectors, mapped to `0..=1`.
+pub fn similarity(a: &Embedding, b: &Embedding) -> f32 {
+    let cos: f32 = a.values().iter().zip(b.values()).map(|(x, y)| x * y).sum();
+    ((cos + 1.0) / 2.0).clamp(0.0, 1.0)
+}
+
+/// The sum of the theme vectors of `themes`, normalized.
+pub fn mix(model: &EmbeddingModel, seed: u64, themes: &[Theme]) -> Result<Embedding, GenError> {
+    let mut rng = Rng::fork(seed, "theme-vectors");
+    let vectors: Vec<Vec<f32>> = Theme::ALL
+        .iter()
+        .map(|t| theme_vector(*t, &mut rng))
+        .collect();
+    let mut sum = vec![0.0f32; usize::from(DIMENSION)];
+    for theme in themes {
+        if let Some(v) = vectors.get(theme.index()) {
+            for (s, x) in sum.iter_mut().zip(v) {
+                *s += x;
+            }
+        }
+    }
+    embedding(model, sum)
+}
+
+fn terms(themes: &[Theme]) -> Vec<(String, f32)> {
+    let mut all: Vec<(String, f32)> = themes
+        .iter()
+        .flat_map(|t| t.terms().iter())
+        .map(|(term, weight)| ((*term).to_owned(), *weight / themes.len() as f32))
+        .collect();
+    all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    all.truncate(8);
+    all
+}
+
+pub fn build(seed: u64, mint: &mut Mint) -> Result<TopicModel, GenError> {
+    let model = model()?;
+    let mut topics = Vec::new();
+    let mut v1_theme = vec![None; Theme::ALL.len()];
+    for (label, themes) in V1_GROUPS {
+        let id = TopicId::from_ulid(mint.ulid(V1_AT));
+        for theme in *themes {
+            if let Some(slot) = v1_theme.get_mut(theme.index()) {
+                *slot = Some(id);
+            }
+        }
+        topics.push(Topic {
+            id,
+            version: TopicModelVersion(1),
+            label: (*label).to_owned(),
+            terms: terms(themes),
+            centroid: mix(&model, seed, themes)?,
+            fitted_at: V1_AT,
+        });
+    }
+    let mut v2_theme = vec![None; Theme::ALL.len()];
+    for theme in Theme::ALL {
+        let id = TopicId::from_ulid(mint.ulid(V2_AT));
+        if let Some(slot) = v2_theme.get_mut(theme.index()) {
+            *slot = Some(id);
+        }
+        topics.push(Topic {
+            id,
+            version: TopicModelVersion(2),
+            label: theme.label().to_owned(),
+            terms: terms(&[theme]),
+            centroid: mix(&model, seed, &[theme])?,
+            fitted_at: V2_AT,
+        });
+    }
+    let remaps = vec![
+        TopicVersionRemap {
+            from: TopicModelVersion(0),
+            to: TopicModelVersion(1),
+            remaps: Vec::new(),
+        },
+        remap(&topics, TopicModelVersion(1), TopicModelVersion(2))?,
+    ];
+    let count = |v: u32| u32::try_from(topics.iter().filter(|t| t.version.0 == v).count());
+    let versions = vec![
+        TopicVersionInfo {
+            version: TopicModelVersion(0),
+            fitted_at: CONFIG_AT,
+            embedding_model: model.clone(),
+            topics: 0,
+            pinned: false,
+        },
+        TopicVersionInfo {
+            version: TopicModelVersion(1),
+            fitted_at: V1_AT,
+            embedding_model: model.clone(),
+            topics: count(1).map_err(|e| GenError::invalid("topic count", e))?,
+            pinned: true,
+        },
+        TopicVersionInfo {
+            version: TopicModelVersion(2),
+            fitted_at: V2_AT,
+            embedding_model: model.clone(),
+            topics: count(2).map_err(|e| GenError::invalid("topic count", e))?,
+            pinned: false,
+        },
+    ];
+    Ok(TopicModel {
+        model,
+        versions,
+        topics,
+        remaps,
+        theme_topics: vec![vec![None; Theme::ALL.len()], v1_theme, v2_theme],
+    })
+}
+
+/// Each topic of `from` mapped to the most similar topic of `to`, if that
+/// reaches [`REMAP_THRESHOLD`].
+fn remap(
+    topics: &[Topic],
+    from: TopicModelVersion,
+    to: TopicModelVersion,
+) -> Result<TopicVersionRemap, GenError> {
+    let mut remaps = Vec::new();
+    for old in topics.iter().filter(|t| t.version == from) {
+        let best = topics
+            .iter()
+            .filter(|t| t.version == to)
+            .map(|t| (t.id, similarity(&old.centroid, &t.centroid)))
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        let to = match best {
+            Some((id, score)) if score >= REMAP_THRESHOLD => Some((
+                id,
+                Similarity::new(score).map_err(|e| GenError::invalid("Similarity", e))?,
+            )),
+            _ => None,
+        };
+        remaps.push(TopicRemap { from: old.id, to });
+    }
+    Ok(TopicVersionRemap { from, to, remaps })
+}
+
+/// The assignment of one confirmed transmission on `theme` under every
+/// version, indexed by version number.
+pub fn assign(
+    model: &TopicModel,
+    theme: Theme,
+    rng: &mut Rng,
+) -> Result<Vec<Assignment>, GenError> {
+    let mut out = Vec::with_capacity(model.versions.len());
+    for info in &model.versions {
+        let outlier_rate = match (info.version.0, theme) {
+            (0, _) => 1.0,
+            (1, _) => 0.07,
+            (_, Theme::Injection) => 0.1,
+            _ => 0.05,
+        };
+        let topic = model.theme_topic(info.version, theme);
+        let assignment = match topic {
+            Some(topic) if !rng.chance(outlier_rate) => Assignment::Topic {
+                topic,
+                confidence: Similarity::new((0.55 + 0.4 * rng.unit()) as f32)
+                    .map_err(|e| GenError::invalid("Similarity", e))?,
+            },
+            _ => Assignment::Outlier,
+        };
+        out.push(assignment);
+    }
+    Ok(out)
+}
