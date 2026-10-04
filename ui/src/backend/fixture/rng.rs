@@ -118,17 +118,6 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// A stable 64-bit hash of bytes (FNV-1a, then mixed), for deriving seeds
-/// from values. Unlike `std`'s hasher it is the same in every process.
-pub fn stable_hash(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        h ^= u64::from(*byte);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    mix(h)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,11 +158,5 @@ mod tests {
             assert_eq!(rng.weighted(&[0.0, 1.0, 0.0]), Some(1));
         }
         assert_eq!(rng.weighted(&[0.0, 0.0]), None);
-    }
-
-    #[test]
-    fn stable_hash_is_stable() {
-        assert_eq!(stable_hash(b"abc"), stable_hash(b"abc"));
-        assert_ne!(stable_hash(b"abc"), stable_hash(b"abd"));
     }
 }

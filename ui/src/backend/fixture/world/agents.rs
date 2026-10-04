@@ -199,13 +199,6 @@ impl Cast {
         keys.iter().map(|k| self.id(k)).collect()
     }
 
-    pub fn key_of(&self, id: AgentId) -> Option<&str> {
-        self.keys
-            .iter()
-            .find(|(_, v)| **v == id)
-            .map(|(k, _)| k.as_str())
-    }
-
     /// Whether `agent` can produce traffic at `at`.
     pub fn active_at(&self, agent: AgentId, at: Timestamp) -> bool {
         self.active_until

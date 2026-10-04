@@ -4,7 +4,7 @@
 //! time part is the entity's creation time, so ids sort by time like the
 //! gateway's.
 
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::Timestamp;
 
 use super::rng::Rng;
 
@@ -42,11 +42,6 @@ pub const fn minus(at: Timestamp, micros: u64) -> Timestamp {
     Timestamp::from_micros(at.as_micros().saturating_sub(micros))
 }
 
-/// The whole generated period, `[START, NOW)`.
-pub fn full_window() -> Option<TimeWindow> {
-    TimeWindow::new(START, NOW).ok()
-}
-
 /// Mints unique ULIDs: 48 bits of milliseconds, 56 random bits and a 24-bit
 /// counter, so two ids minted by one mint never collide.
 #[derive(Debug, Clone)]
@@ -71,12 +66,6 @@ impl Mint {
     }
 }
 
-/// The milliseconds part of a ULID, as a timestamp.
-pub fn ulid_time(raw: u128) -> Timestamp {
-    let ms = u64::try_from(raw >> 80).unwrap_or(u64::MAX);
-    Timestamp::from_micros(ms.saturating_mul(1000))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +83,7 @@ mod tests {
         let a = mint.ulid(at);
         let b = mint.ulid(at);
         assert_ne!(a, b);
-        assert_eq!(ulid_time(a), at);
+        let ms = u64::try_from(a >> 80).expect("48-bit milliseconds");
+        assert_eq!(Timestamp::from_micros(ms * 1000), at);
     }
 }

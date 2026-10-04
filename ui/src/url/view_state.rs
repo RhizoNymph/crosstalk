@@ -7,7 +7,7 @@
 //! canonical form, so any URL a user copies reproduces the view. Filter keys
 //! are omitted when empty, since an absent filter has a defined meaning.
 
-use crosstalk_spec::aggregates::edge::{RouteKind, Weighting};
+use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -203,12 +203,6 @@ impl ViewState {
             ..self.clone()
         }
     }
-
-    pub fn with_route_kinds(&self, route_kinds: Vec<RouteKind>) -> Self {
-        let mut next = self.clone();
-        next.scope.filter.route_kinds = route_kinds;
-        next
-    }
 }
 
 fn parse_time(text: &str, key: &'static str) -> Result<Timestamp, ViewStateError> {
@@ -268,6 +262,7 @@ pub fn encode_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crosstalk_spec::aggregates::edge::RouteKind;
 
     fn ts(text: &str) -> Timestamp {
         parse_time(text, "test").expect("valid time")

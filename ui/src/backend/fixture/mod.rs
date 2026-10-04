@@ -94,6 +94,7 @@ impl FixtureBackend {
         })
     }
 
+    #[cfg(test)]
     pub fn seed(&self) -> u64 {
         self.world.seed
     }
