@@ -59,6 +59,7 @@ fn exchange_record() -> Exchange {
                 },
                 credential: None,
                 account: None,
+                previous_digests: None,
                 harness: None,
                 ids: HarnessIds {
                     session: None,
