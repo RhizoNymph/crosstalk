@@ -248,7 +248,16 @@ dependencies = [
 name = "crosstalk-flow"
 version = "0.1.0"
 dependencies = [
+ "crosstalk-memory",
  "crosstalk-spec",
+ "crosstalk-store",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

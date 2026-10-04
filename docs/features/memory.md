@@ -291,10 +291,10 @@ caught (the harness returns `ModelMismatch::Failed`).
 | `crates/memory/src/flow/registry/table.rs` | Registry state and its declaration, policy, promotion and resource-use operations | (crate) `ChannelTable`, `StoredResource` |
 | `crates/memory/src/flow/registry/traffic.rs` | `ChannelTraffic` and `ChannelReads` on the table: placing resources, discovery, recorded transmissions, cross-agent traffic and listings | (crate) `ChannelKey`, `TransmissionKey` |
 | `crates/memory/src/flow/registry/store.rs` | Registry trait impls: `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | — |
-| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `ChannelStore`, `RegistryOp`, `traverse`, `transmissions`, `all_channels`, `channels_under` |
+| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `run_case` (one case on a caller-built subject, for stores that need an async, multi-threaded setup), `ChannelStore`, `RegistryOp`, `traverse`, `transmissions`, `all_channels`, `channels_under` |
 | `crates/memory/src/flow/registry/tests/mod.rs`, `tests/traffic.rs` | Registry reference tests; `traffic` covers discovery, resources on no channel, listings, merges hiding channels, the list order and a channel's transmissions | — |
 | `crates/memory/src/flow/verdicts/mod.rs` | The transmission and verdict store | `MemoryVerdicts` |
-| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness, and the transmission fixtures the registry harness shares | `check_transmission_verdicts`, `VerdictStore`, `VerdictOp`, `state`, `state_between`, `co_access_between`, `content_between` |
+| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness, and the transmission fixtures the registry harness shares | `check_transmission_verdicts`, `run_case`, `VerdictStore`, `VerdictOp`, `state`, `state_between`, `co_access_between`, `content_between` |
 | `crates/memory/src/flow/verdicts/tests.rs` | Verdict reference tests | — |
 
 ## Insight and surface stores (L6–L8)

@@ -13,8 +13,8 @@ before the promotion carry the old id and resolve at read time.
 
 [evidence]
 unit = "crosstalk_flow::tests::lookup_of_superseded_resource_is_known_on_superseder"
-integration = "crosstalk_flow::tests::pg_lookup_after_promotion"
+integration = "crosstalk_flow::store::tests::registry::pg_lookup_after_promotion"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

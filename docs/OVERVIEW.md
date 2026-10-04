@@ -485,6 +485,31 @@ Features Index:
       - scripts/test-db.sh
     depends_on: [workspace]
     doc: docs/features/store.md
+  flow_store:
+    description: >
+      The L5 stores on Postgres in crosstalk-flow (crates/flow/src/store,
+      roadmap P5) with the flow layer's migrations (schema flow).
+      PgChannelRegistry implements ChannelRegistry, ChannelTraffic,
+      ChannelReads and ChannelDirectory (lookups, declarations, policy
+      history, promotion and supersession, resources, accesses, discovery,
+      recorded channel traffic and the reads that tally it at query time);
+      PgTransmissionStore implements TransmissionStore and
+      TransmissionVerdicts. Every write is one SERIALIZABLE transaction under
+      the store harness's retry, so concurrent discoveries from one resource
+      commit one channel. Stores publish what they decide through a
+      transactional outbox relayed to an EventSink after commit (at least
+      once). The directory caches supersessions for the synchronous
+      canonical(); ShardKey keys correlator shards by canonical channel and
+      PgShardTicks keeps the shards' tick checkpoints. Model-tested against
+      crosstalk-memory's reference stores with the reference harnesses'
+      proptest strategies.
+    entry_points:
+      - crates/flow/src/store/mod.rs
+      - crates/flow/src/store/registry/mod.rs
+      - crates/flow/src/store/transmissions.rs
+      - crates/flow/migrations/0001_flow_store.sql
+    depends_on: [store, memory, channel_semantics]
+    doc: docs/features/flow_store.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst

@@ -17,10 +17,10 @@ it matches, as a first sighting would.
 
 [evidence]
 unit = "crosstalk_memory::flow::registry::tests::lookup_never_creates_a_channel"
-property = "crosstalk_flow::registry::tests::lookup_never_creates_agrees_with_reference_model"
-integration = "crosstalk_flow::registry::integration::pg_lookup_never_creates"
+property = "crosstalk_flow::store::tests::model::registry_agrees_with_reference_model"
+integration = "crosstalk_flow::store::tests::registry::pg_lookup_never_creates"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

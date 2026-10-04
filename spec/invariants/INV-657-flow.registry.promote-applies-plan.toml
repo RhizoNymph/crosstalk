@@ -13,8 +13,8 @@ resources the new pattern covers.
 
 [evidence]
 unit = "crosstalk_flow::tests::promote_applies_plan"
-integration = "crosstalk_flow::tests::pg_promote_applies_plan_in_one_transaction"
+integration = "crosstalk_flow::store::tests::registry::pg_promote_applies_plan_in_one_transaction"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

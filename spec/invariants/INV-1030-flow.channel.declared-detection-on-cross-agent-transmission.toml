@@ -17,8 +17,8 @@ which moved a declared channel to InUse(Observed) on an access.
 
 [evidence]
 unit = "crosstalk_memory::flow::registry::tests::traffic::a_declared_channel_is_in_use_from_its_first_cross_agent_transmission"
-property = "crosstalk_flow::channel::tests::declared_detection_transitions"
+property = "crosstalk_flow::store::tests::detection::declared_detection_transitions"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

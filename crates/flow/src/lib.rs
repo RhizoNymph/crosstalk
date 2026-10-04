@@ -10,5 +10,7 @@
 // code uses it.
 use crosstalk_spec as _;
 
+pub mod store;
+
 #[cfg(test)]
 mod tests {}

@@ -13,8 +13,8 @@ transaction makes the two commit together.
 
 [evidence]
 dst = "crosstalk_flow::tests::dst_verdict_set_once"
-integration = "crosstalk_flow::tests::pg_verdict_set_outbox"
+integration = "crosstalk_flow::store::tests::verdicts::pg_verdict_set_outbox"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

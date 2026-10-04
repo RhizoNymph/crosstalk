@@ -23,8 +23,8 @@ unit = [
     "crosstalk_memory::flow::registry::tests::traffic::discovered_by_first_cross_agent_transmission",
     "crosstalk_memory::flow::registry::tests::traffic::resources_join_only_declared_channels",
 ]
-integration = "crosstalk_flow::registry::integration::pg_discover_seeds_channel"
+integration = "crosstalk_flow::store::tests::registry::pg_discover_seeds_channel"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }
