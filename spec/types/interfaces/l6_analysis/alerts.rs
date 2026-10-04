@@ -89,9 +89,13 @@ pub trait AlertReads {
         id: AlertRuleId,
     ) -> impl Future<Output = Result<Option<AlertRuleDef>, AlertReadError>> + Send;
 
-    /// The rules [`AlertRuleFilter::matches`] keeps, newest id first (so
-    /// user rules before the built-in rules, whose ids are reserved below
-    /// every generated one). The cursor binds the filter.
+    /// The rules [`AlertRuleFilter::matches`] keeps, in the order
+    /// [`QueryApi::alert_rules`] lists them: built-in rules first, in
+    /// [`BuiltinRule::ALL`] order, then user rules newest first. The cursor
+    /// binds the filter.
+    ///
+    /// [`QueryApi::alert_rules`]: crate::interfaces::l8_surface::QueryApi::alert_rules
+    /// [`BuiltinRule::ALL`]: crate::aggregates::alert::BuiltinRule::ALL
     fn rules(
         &self,
         filter: &AlertRuleFilter,

@@ -489,7 +489,7 @@ async fn semantic_rule_text_too_long_is_an_embed_error() {
 }
 
 #[tokio::test]
-async fn rules_page_filters_by_status_newest_first() {
+async fn rules_page_filters_by_status_builtins_first() {
     let mut world = world();
     let v1 = version_one(&mut world).await;
     let user = world
@@ -520,11 +520,54 @@ async fn rules_page_filters_by_status_newest_first() {
     assert_eq!(
         ids,
         vec![
-            user,
-            BuiltinRule::SuspectedTransmission.id(),
-            BuiltinRule::UnsanctionedTraffic.id(),
-            BuiltinRule::UnreviewedTraffic.id(),
             BuiltinRule::NewChannel.id(),
+            BuiltinRule::UnreviewedTraffic.id(),
+            BuiltinRule::UnsanctionedTraffic.id(),
+            BuiltinRule::SuspectedTransmission.id(),
+            user,
         ]
     );
+}
+
+#[tokio::test]
+async fn rules_list_builtins_first_then_user_rules_newest_first() {
+    // analysis.alert-reads.rules-builtins-first: paged in twos, so pages
+    // cut inside the built-in rules and across the boundary to user rules.
+    let mut world = world();
+    let v1 = version_one(&mut world).await;
+    let mut users = Vec::new();
+    for (rule, time) in [("a", 20), ("b", 21), ("c", 22)] {
+        let id = world
+            .store
+            .create(name(rule), watch(v1, &[1]), vec![], operator(1), at(time))
+            .await
+            .unwrap();
+        users.push(id);
+    }
+    let every = AlertRuleFilter::default();
+    let mut request = PageRequest {
+        size: PageSize::new(2).unwrap(),
+        after: None,
+    };
+    let mut ids = Vec::new();
+    loop {
+        let (items, next) = world
+            .store
+            .rules(&every, &request)
+            .await
+            .unwrap()
+            .into_parts();
+        ids.extend(
+            items
+                .iter()
+                .map(crosstalk_spec::aggregates::alert::AlertRuleDef::id),
+        );
+        match next {
+            Some(cursor) => request.after = Some(cursor),
+            None => break,
+        }
+    }
+    let mut expected: Vec<AlertRuleId> = BuiltinRule::ALL.map(BuiltinRule::id).to_vec();
+    expected.extend(users.iter().rev().copied());
+    assert_eq!(ids, expected);
 }

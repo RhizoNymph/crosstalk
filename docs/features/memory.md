@@ -487,9 +487,10 @@ bugs in `model/mutants.rs`.
 - A triage draft for an unknown rule is `RuleInactive`.
 - Enqueuing a job that is not queued is a `Store` error; enqueuing any job
   under a used id is a no-op.
-- `AlertReads::rules` lists every rule newest id first, so user rules come
-  before the built-in rules (whose ids are reserved below every generated
-  one).
+- `AlertReads::rules` lists rules in `QueryApi::alert_rules`'s order:
+  built-in rules first, in `BuiltinRule::ALL` order, then user rules
+  newest id first (`analysis::alerts::rule_list_order`; a cursor resumes
+  after the last rule served in that order).
 - An agent `NodeFacts` has not seen is drawn provisional, top-level,
   unlabelled and without claims; a channel, discovered, observed,
   unreviewed and summarized by its id (the spec fixes these defaults;

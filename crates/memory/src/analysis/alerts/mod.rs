@@ -30,6 +30,7 @@
 pub mod rules;
 pub mod triage;
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -294,6 +295,19 @@ impl AlertsState {
     }
 }
 
+/// The order `AlertReads::rules` lists rules in, the order
+/// `QueryApi::alert_rules` documents: every built-in rule before every user
+/// rule, built-in rules in [`BuiltinRule::ALL`] order (their reserved ids
+/// ascend in that order), user rules newest id first.
+pub fn rule_list_order(a: AlertRuleId, b: AlertRuleId) -> Ordering {
+    match (BuiltinRule::from_id(a), BuiltinRule::from_id(b)) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => b.cmp(&a),
+    }
+}
+
 /// Why a change could not be stored. Each refusal changes nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CommitRefused {
@@ -314,7 +328,8 @@ where
         Ok(lock(&self.state).rules.get(id).cloned())
     }
 
-    /// Newest id first, so user rules before the built-in rules.
+    /// Built-in rules first, in `BuiltinRule::ALL` order, then user rules
+    /// newest first ([`rule_list_order`]).
     async fn rules(
         &self,
         filter: &AlertRuleFilter,
@@ -334,10 +349,12 @@ where
             .rules
             .iter()
             .filter(|rule| filter.matches(rule))
-            .filter(|rule| after.is_none_or(|after| rule.id() < after))
+            .filter(|rule| {
+                after.is_none_or(|after| rule_list_order(rule.id(), after) == Ordering::Greater)
+            })
             .cloned()
             .collect();
-        remaining.sort_by_key(|rule| std::cmp::Reverse(rule.id()));
+        remaining.sort_by(|a, b| rule_list_order(a.id(), b.id()));
         page_after(
             &mut state.rule_cursors,
             remaining,
