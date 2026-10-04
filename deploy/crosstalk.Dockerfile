@@ -24,14 +24,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release --bin crosstalk \
     && install -D target/release/crosstalk /out/crosstalk
 
-# The blob store's root, owned by the runtime user. A named volume mounted
-# here on first use copies this ownership, so the non-root process can write.
-RUN install -d -o 65532 -g 65532 /out/blobs
+# The data directory (blob store under blobs/, plus anything else the gateway
+# keeps on disk), owned by the runtime user. A named volume mounted here on
+# first use copies this ownership, so the non-root process can write.
+RUN install -d -o 65532 -g 65532 /out/data /out/data/blobs
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /out/crosstalk /usr/local/bin/crosstalk
-COPY --from=build --chown=65532:65532 /out/blobs /var/lib/crosstalk/blobs
+COPY --from=build --chown=65532:65532 /out/data /var/lib/crosstalk
 
 # 8080 proxy (agents), 8081 operator API, 9464 ops (metrics, health).
 EXPOSE 8080 8081 9464

@@ -106,7 +106,8 @@ services:
     environment: *crosstalk-env
     volumes:
       - ./config/crosstalk.json:/etc/crosstalk/crosstalk.json:ro
-      - blobs:/var/lib/crosstalk/blobs
+      # Blobs live in blobs/; the gateway may keep other files beside it.
+      - data:/var/lib/crosstalk
     ports:
       # Agents connect here: ANTHROPIC_BASE_URL=http://<host>:8080/anthropic
       - ${CROSSTALK_PROXY_BIND:-0.0.0.0}:${CROSSTALK_PROXY_PORT:-8080}:8080
@@ -270,7 +271,7 @@ services:
 
 volumes:
   pgdata:
-  blobs:
+  data:
   prometheus:
   grafana:
   loki:

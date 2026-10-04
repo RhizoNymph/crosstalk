@@ -59,7 +59,7 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | `api` | `{"listen": SocketAddr, "token": {"env": String}}` |
 | `ops` | `{"listen": SocketAddr}` |
 | `store` | `{"pool": crosstalk_store::config::PoolSettings}` |
-| `blobs` | `{"root": path}` for `FsBlobStore::open`; the image creates `/var/lib/crosstalk/blobs` owned by the runtime user. |
+| `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
 
 The bus is in-process for `--role all` and takes `BusConfig::default()`;
@@ -80,7 +80,7 @@ a `bus` key can be added when it needs tuning.
 3. At runtime:
    - Agents send requests to `:8080`, and the proxy forwards them upstream.
    - Capture feeds the in-process pipeline, which writes to Postgres and
-     the `blobs` volume.
+     the `data` volume (`/var/lib/crosstalk`).
    - The UI and operators read through `:8081`.
 4. Observability:
    - Prometheus scrapes node-exporter (over host networking, via
@@ -137,9 +137,12 @@ a `bus` key can be added when it needs tuning.
   `RUST_TOOLCHAIN` argument must change together with that file.
 - **`crosstalk` never starts against an unmigrated database.** Compose
   orders it after `migrate` has completed successfully.
-- **The blob volume is writable by uid 65532.** The image creates the
-  directory with that owner, and a fresh named volume copies the ownership.
-  A bind mount in its place must be chowned by hand.
+- **The data volume is writable by uid 65532.** The image creates
+  `/var/lib/crosstalk` and `/var/lib/crosstalk/blobs` with that owner, and
+  a fresh named volume copies the ownership. A bind mount in its place must
+  be chowned by hand. Anything the gateway writes to disk must stay under
+  `/var/lib/crosstalk`; the rest of the filesystem is lost when the
+  container is recreated.
 - **Log volume is bounded.** Docker's `json-file` driver keeps at most
   5 × 50 MB per container. Loki keeps 7 days. Prometheus keeps 15 days,
   capped at 10 GB.

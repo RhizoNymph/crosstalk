@@ -18,7 +18,7 @@ them and the contract the `crosstalk` binary implements for them.
 | Bus | In-process `MpscBus` | NATS JetStream adapter behind `EventBus` (P9) |
 | Structured state | Postgres 18 + pgvector + pg_trgm, one schema per layer | Read replica for `api`; hash-partitioned fingerprints |
 | Time series (D3) | Plain Postgres, no TimescaleDB | Native range partitions on time-bucketed tables |
-| Bodies | `FsBlobStore` on a named volume | S3-compatible store behind `BlobStore` |
+| Bodies | `FsBlobStore` on the `data` named volume (`/var/lib/crosstalk/blobs`) | S3-compatible store behind `BlobStore` |
 | Body retention | Kept (issue #38) | Per-message blobs are enough; raw bodies are not stored |
 | Embeddings | Any OpenAI-compatible endpoint (config `embeddings`) | Scaling compute is the provider's problem, not ours |
 | Topics / UMAP (D1) | Behind the L6 traits; batch, not streaming | A Python batch worker (umap-learn, HDBSCAN) if Rust options fall short |
@@ -38,8 +38,8 @@ the candidates for native range partitioning when retention arrives;
 dropping a partition is then the retention job. L7 already pre-aggregates
 into buckets, so continuous aggregates would add little.
 
-**Blobs** are content-addressed by BLAKE3 in `FsBlobStore`, on the `blobs`
-named volume. L1 (`crates/canonical/src/capture.rs`) stores each canonical
+**Blobs** are content-addressed by BLAKE3 in `FsBlobStore`, under
+`/var/lib/crosstalk/blobs` on the `data` named volume. L1 (`crates/canonical/src/capture.rs`) stores each canonical
 *message* as its own blob keyed by its hash, not each request body. Agent
 harnesses resend the whole conversation every turn, so this is what keeps
 storage linear: the repeated prefix of a conversation is the same set of
