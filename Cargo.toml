@@ -35,4 +35,5 @@ tokio = "=1.53.1"
 tower-service = "=0.3.3"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false }
+unicode-normalization = { version = "=0.1.25", default-features = false, features = ["std"] }
 zstd = { version = "=0.13.3", default-features = false }

@@ -317,7 +317,21 @@ dependencies = [
 name = "crosstalk-provenance"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "crosstalk-memory",
+ "crosstalk-sim",
  "crosstalk-spec",
+ "crosstalk-store",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
 ]
 
 [[package]]
