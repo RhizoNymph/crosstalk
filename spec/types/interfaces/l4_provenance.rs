@@ -70,31 +70,34 @@ pub trait Fingerprinter {
 
 pub trait FingerprintIndex {
     /// Only originated spans can be indexed.
-    async fn insert(
+    fn insert(
         &mut self,
         span: &OriginatedSpan,
         fingerprints: &[PositionedFingerprint],
-    ) -> Result<(), IndexError>;
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
-    async fn lookup(
+    fn lookup(
         &self,
         fingerprints: &[PositionedFingerprint],
-    ) -> Result<Vec<FingerprintHit>, IndexError>;
+    ) -> impl Future<Output = Result<Vec<FingerprintHit>, IndexError>> + Send;
 
     /// How many spans contain `fingerprint`. Fingerprints above the cutoff
     /// are boilerplate: not indexed, and ignored on lookup.
-    async fn frequency(&self, fingerprint: Fingerprint) -> Result<u64, IndexError>;
+    fn frequency(
+        &self,
+        fingerprint: Fingerprint,
+    ) -> impl Future<Output = Result<u64, IndexError>> + Send;
 
     /// Count every fingerprint of a scanned text toward `frequency`,
     /// whether or not it is indexed. Observations age out after retention.
-    async fn observe(
+    fn observe(
         &mut self,
         fingerprints: &[Fingerprint],
         at: Timestamp,
-    ) -> Result<(), IndexError>;
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
     /// Remove the fingerprints of expired spans.
-    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
+    fn evict(&mut self, spans: &[SpanId]) -> impl Future<Output = Result<(), IndexError>> + Send;
 }
 
 /// A candidate paraphrase: an originated span whose embedding is close to a
@@ -108,20 +111,20 @@ pub struct SemanticHit {
 
 pub trait SemanticMatcher {
     /// Only originated spans can be stored.
-    async fn insert(
+    fn insert(
         &mut self,
         span: &OriginatedSpan,
         embedding: Embedding,
-    ) -> Result<(), IndexError>;
+    ) -> impl Future<Output = Result<(), IndexError>> + Send;
 
-    async fn lookup(
+    fn lookup(
         &self,
         text: &str,
         threshold: Similarity,
-    ) -> Result<Vec<SemanticHit>, IndexError>;
+    ) -> impl Future<Output = Result<Vec<SemanticHit>, IndexError>> + Send;
 
     /// Remove expired spans.
-    async fn evict(&mut self, spans: &[SpanId]) -> Result<(), IndexError>;
+    fn evict(&mut self, spans: &[SpanId]) -> impl Future<Output = Result<(), IndexError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

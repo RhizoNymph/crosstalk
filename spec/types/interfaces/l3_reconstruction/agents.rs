@@ -27,25 +27,28 @@ pub trait AgentReads {
     /// never listed, whatever the filter. Each profile's claims are
     /// `ClaimStore::claims` of the agent and its `last_seen`
     /// `ActivityStore::last_seen`.
-    async fn list(
+    fn list(
         &self,
         filter: &AgentFilter,
         page: &PageRequest<AgentList>,
-    ) -> Result<Page<AgentProfile, AgentList>, AgentReadError>;
+    ) -> impl Future<Output = Result<Page<AgentProfile, AgentList>, AgentReadError>> + Send;
 
     /// The cluster of the canonical agent `id` resolves to, with
     /// `AgentLookup::Canonical` when `id` is that agent and
     /// `Redirected { from: id }` when `id` is merged. `None` for an unknown
     /// id.
-    async fn cluster(&self, id: AgentId) -> Result<Option<AgentCluster>, AgentReadError>;
+    fn cluster(
+        &self,
+        id: AgentId,
+    ) -> impl Future<Output = Result<Option<AgentCluster>, AgentReadError>> + Send;
 
     /// For each id in `ids` that names a stored agent, merged or not, the
     /// [`AgentName`] of the canonical agent it resolves to, keyed by the id
     /// asked for. Unknown ids are left out, not errors.
-    async fn names(
+    fn names(
         &self,
         ids: &IdBatch<AgentId>,
-    ) -> Result<BTreeMap<AgentId, AgentName>, AgentReadError>;
+    ) -> impl Future<Output = Result<BTreeMap<AgentId, AgentName>, AgentReadError>> + Send;
 }
 
 /// When each agent was last seen: the start of the latest exchange
@@ -60,11 +63,18 @@ pub trait AgentReads {
 pub trait ActivityStore {
     /// Record that an exchange attributed to `agent` started at `at`,
     /// keeping the latest time. Idempotent and order-independent.
-    async fn record(&mut self, agent: AgentId, at: Timestamp) -> Result<(), ResolveError>;
+    fn record(
+        &mut self,
+        agent: AgentId,
+        at: Timestamp,
+    ) -> impl Future<Output = Result<(), ResolveError>> + Send;
 
     /// The latest time recorded for `agent`'s canonical agent or any agent
     /// that resolves to it. `None` when none was ever recorded.
-    async fn last_seen(&self, agent: AgentId) -> Result<Option<Timestamp>, ResolveError>;
+    fn last_seen(
+        &self,
+        agent: AgentId,
+    ) -> impl Future<Output = Result<Option<Timestamp>, ResolveError>> + Send;
 }
 
 /// Why an agent read failed. Unknown ids are not errors: `cluster` returns

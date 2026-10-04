@@ -5,8 +5,7 @@ kind = "domain"
 property = "postcondition"
 requires = ["property"]
 rationale = """
-Originated means the agent wrote the text. If the text is fingerprint-
-matchable in the exchange's own inputs, the agent copied it, and indexing it
+Originated means the agent wrote the text. If the text is fingerprint-matchable in the exchange's own inputs, the agent copied it, and indexing it
 under this agent would make every downstream reader of it look like a
 receiver from this agent instead of from the true author. Decoded inputs
 count: an agent that decodes a base64 payload it was handed has relayed it,

@@ -124,18 +124,21 @@ pub trait EdgeStore {
     /// classification version has been activated and the bucket ends at or
     /// before the exposed watermark, and `VersionNotRetained` for a dropped
     /// version.
-    async fn apply(&mut self, contribution: &EdgeContribution) -> Result<EdgeKey, EdgeError>;
+    fn apply(
+        &mut self,
+        contribution: &EdgeContribution,
+    ) -> impl Future<Output = Result<EdgeKey, EdgeError>> + Send;
 
     /// Record `transmission`'s verdict at `revision` in the store's verdict
     /// copy (`CurrentVerdict::observe`), whether or not the transmission has
     /// been applied yet. Changes no bucket. Idempotent, and a revision not
     /// newer than the one held is `Stale` and changes nothing.
-    async fn judge(
+    fn judge(
         &mut self,
         transmission: TransmissionId,
         verdict: Option<Verdict>,
         revision: VerdictRevision,
-    ) -> Result<Observed, EdgeError>;
+    ) -> impl Future<Output = Result<Observed, EdgeError>> + Send;
 
     /// Switch queries to `version` once its buckets are complete: its
     /// `TopicVersionReady` has arrived and the store has processed (applied,
@@ -144,7 +147,10 @@ pub trait EdgeStore {
     /// under it with cause `Confirmation`, which follow the event, do not
     /// count. Ignores a version older than the active one. Drops nothing:
     /// see [`EdgeStore::drop_version`].
-    async fn activate(&mut self, version: TopicModelVersion) -> Result<(), EdgeError>;
+    fn activate(
+        &mut self,
+        version: TopicModelVersion,
+    ) -> impl Future<Output = Result<(), EdgeError>> + Send;
 
     /// Delete every bucket and stored contribution of `version`, on
     /// `TopicVersionDropped`. The version is marked dropped before any row
@@ -152,50 +158,56 @@ pub trait EdgeStore {
     /// `VersionNotRetained` rather than part of its buckets. Idempotent.
     /// Refuses the active version or a newer one with `VersionInUse` and
     /// deletes nothing.
-    async fn drop_version(&mut self, version: TopicModelVersion) -> Result<(), EdgeError>;
+    fn drop_version(
+        &mut self,
+        version: TopicModelVersion,
+    ) -> impl Future<Output = Result<(), EdgeError>> + Send;
 
     /// The exposed watermark. Persisted with the buckets, so it never moves
     /// back, restarts included. Starts at the epoch.
-    async fn watermark(&self) -> Result<Watermark, EdgeQueryError>;
+    fn watermark(&self) -> impl Future<Output = Result<Watermark, EdgeQueryError>> + Send;
 
     /// Recompute the watermark as `Watermark::settled(frontier, timing,
     /// bucket_width)` and expose it if it is later than the exposed one.
     /// Returns the new watermark when it advanced, after persisting it; the
     /// consumer then publishes `WatermarkAdvanced`. Never lowers the exposed
     /// watermark.
-    async fn advance_watermark(
+    fn advance_watermark(
         &mut self,
         frontier: PipelineFrontier,
-    ) -> Result<Option<Watermark>, EdgeError>;
+    ) -> impl Future<Output = Result<Option<Watermark>, EdgeError>> + Send;
 
     /// Count one access into its bucket (agent and channel as recorded,
     /// `op`, the bucket holding `at`) and return the bucket after the apply.
     /// Idempotent on `access`: a redelivered access changes nothing and
     /// returns the bucket as it is. A write: fails with `EdgeError`.
-    async fn apply_access(&mut self, access: &AccessContribution) -> Result<AccessEdge, EdgeError>;
+    fn apply_access(
+        &mut self,
+        access: &AccessContribution,
+    ) -> impl Future<Output = Result<AccessEdge, EdgeError>> + Send;
 
     /// The graph over canonical agents: edges resolved, summed, filtered and
     /// shared, and one node per endpoint and ancestor
     /// (`TopologyGraph::check_nodes` holds), with the watermark read before
     /// its buckets. Fails with `UnalignedWindow` for a window not on bucket
     /// boundaries.
-    async fn graph(
+    fn graph(
         &self,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologyGraph>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<TopologyGraph>, EdgeQueryError>> + Send;
 
     /// What `graph` counts for the same window and filter, without nodes,
     /// edges or shares: exactly [`EdgeTotals::of`] of `graph`'s value, with
     /// the watermark read before the buckets. Cheaper than `graph`: no node
     /// metadata is read and nothing is returned per edge. Fails like
     /// `graph`.
-    async fn totals(
+    fn totals(
         &self,
         window: TimeWindow,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<EdgeTotals>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<EdgeTotals>, EdgeQueryError>> + Send;
 
     /// The channel-centred graph: access buckets in `window` with agents and
     /// channels resolved, filtered by [`TopologyFilter::admits_access`] and
@@ -209,12 +221,12 @@ pub trait EdgeStore {
     /// errors).
     ///
     /// [`TopologyFilter::admits_access`]: crate::aggregates::filter::TopologyFilter::admits_access
-    async fn channel_topology(
+    fn channel_topology(
         &self,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<BipartiteGraph>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<BipartiteGraph>, EdgeQueryError>> + Send;
 
     /// The applied contributions behind one edge: those `graph` counts into
     /// the edge (`from`, `to`, `route`) for the same window and filter, one
@@ -224,13 +236,13 @@ pub trait EdgeStore {
     /// it; if that version's contributions are dropped mid-traversal, the
     /// next page fails with `Version(NotRetained)`. Each page carries the
     /// watermark read before it.
-    async fn transmissions(
+    fn transmissions(
         &self,
         edge: &EdgeSelector,
         window: TimeWindow,
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
-    ) -> Result<Watermarked<EdgeTransmissionPage>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<EdgeTransmissionPage>, EdgeQueryError>> + Send;
 
     /// The traffic of each listed agent's canonical agent in `window`,
     /// keyed by the id listed: for canonical agent `a`, the sums of the
@@ -244,11 +256,11 @@ pub trait EdgeStore {
     ///
     /// A `BTreeMap`, so the map has one order: ascending id, which is also
     /// ascending ULID text, the order its keys take when it is encoded.
-    async fn agent_traffic(
+    fn agent_traffic(
         &self,
         window: TimeWindow,
         agents: &[AgentId],
-    ) -> Result<Watermarked<BTreeMap<AgentId, AgentTraffic>>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<BTreeMap<AgentId, AgentTraffic>>, EdgeQueryError>> + Send;
 
     /// The width of every bucket in this store. Graph windows and series
     /// grids must be aligned to it.
@@ -260,13 +272,13 @@ pub trait EdgeStore {
     /// resolved topic version (grouped by topic, one series per topic of
     /// that version). Fails with `BucketWidthMismatch` when the grid was
     /// built for another width. The watermark is read before the buckets.
-    async fn series(
+    fn series(
         &self,
         grid: SeriesGrid,
         weighting: Weighting,
         grouping: SeriesGrouping,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologySeries>, EdgeQueryError>;
+    ) -> impl Future<Output = Result<Watermarked<TopologySeries>, EdgeQueryError>> + Send;
 }
 
 /// Where the topology consumer learns how far the pipeline has progressed.
@@ -295,7 +307,7 @@ pub trait EdgeStore {
 /// dead-letter tables, the shards' tick checkpoints and the proxy's
 /// in-flight registry), `ManualFrontier` (tests).
 pub trait FrontierSource {
-    async fn frontier(&self) -> Result<PipelineFrontier, EdgeError>;
+    fn frontier(&self) -> impl Future<Output = Result<PipelineFrontier, EdgeError>> + Send;
 }
 
 /// Why a write (`apply`, `judge`, `activate`, `drop_version`,

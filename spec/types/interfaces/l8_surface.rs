@@ -222,7 +222,7 @@ pub enum AlertStateKind {
 /// for a different request.
 pub trait QueryApi {
     /// The stream `export` returns.
-    type ExportRows: ExportStream;
+    type ExportRows: ExportStream + Send + 'static;
 
     /// View. The channel stored under `id` as a [`ChannelRow`], the head of
     /// the channel page: a superseded id answers with its own record and its
@@ -231,21 +231,21 @@ pub trait QueryApi {
     /// `None`), as for a `channels` row, and an unaligned window is refused
     /// as there. `None` for an unknown channel. The watermark is read from
     /// L7 before the registry and the buckets.
-    async fn channel(
+    fn channel(
         &self,
         caller: &Caller,
         id: ChannelId,
         window: Option<TimeWindow>,
-    ) -> Result<Option<Watermarked<ChannelRow>>, QueryError>;
+    ) -> impl Future<Output = Result<Option<Watermarked<ChannelRow>>, QueryError>> + Send;
 
     /// View. Every policy decision recorded for the channel, config and
     /// operator alike, oldest first; its last entry is the channel's current
     /// policy. `None` for an unknown channel.
-    async fn policy_history(
+    fn policy_history(
         &self,
         caller: &Caller,
         channel: ChannelId,
-    ) -> Result<Option<PolicyHistory>, QueryError>;
+    ) -> impl Future<Output = Result<Option<PolicyHistory>, QueryError>> + Send;
 
     /// View. A page of the channels `filter` matches
     /// ([`ChannelFilter::matches`]; superseded channels only when its origin
@@ -264,12 +264,12 @@ pub trait QueryApi {
     /// changes which channels are listed, and the cursor binds it with the
     /// rest of the filter. The watermark is read from L7 before the registry
     /// and the buckets, as for `channel_resources`.
-    async fn channels(
+    fn channels(
         &self,
         caller: &Caller,
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
-    ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError>> + Send;
 
     /// View. For each id of `ids` that the registry knows, keyed by that
     /// id, the name of the channel it resolves to through
@@ -279,11 +279,11 @@ pub trait QueryApi {
     /// channels, ordered by id as `agent_names` is. The batch is bounded as for `agent_names`: a request with
     /// more than [`IdBatch::MAX`] distinct ids is refused before the call
     /// as `InvalidInput(TooManyIds)` (`QueryError::from(TooManyIds)`).
-    async fn channel_names(
+    fn channel_names(
         &self,
         caller: &Caller,
         ids: &IdBatch<ChannelId>,
-    ) -> Result<BTreeMap<ChannelId, ChannelName>, QueryError>;
+    ) -> impl Future<Output = Result<BTreeMap<ChannelId, ChannelName>, QueryError>> + Send;
 
     /// View. What `PromoteChannel { channel, pattern, .. }` would do if the
     /// caller sent it now: the surface builds the declaration the action
@@ -303,12 +303,12 @@ pub trait QueryApi {
     /// locators, declared patterns through `channels`), so a reviewer
     /// without Govern can prepare a promotion for someone who has it. The
     /// action itself needs Govern.
-    async fn promotion_preview(
+    fn promotion_preview(
         &self,
         caller: &Caller,
         channel: ChannelId,
         pattern: &ResourcePattern,
-    ) -> Result<PromotionPreview, QueryError>;
+    ) -> impl Future<Output = Result<PromotionPreview, QueryError>> + Send;
 
     /// View. One row per canonical agent `filter` admits
     /// ([`AgentFilter::matches`]), newest agent first ([`AgentReads::list`]);
@@ -320,13 +320,13 @@ pub trait QueryApi {
     ///
     /// [`AgentReads::list`]: crate::interfaces::l3_reconstruction::agents::AgentReads::list
     /// [`EdgeStore::agent_traffic`]: crate::interfaces::l7_topology::EdgeStore::agent_traffic
-    async fn agents(
+    fn agents(
         &self,
         caller: &Caller,
         filter: &AgentFilter,
         window: TimeWindow,
         page: &PageRequest<AgentList>,
-    ) -> Result<Watermarked<Page<AgentRow, AgentList>>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<Page<AgentRow, AgentList>>, QueryError>> + Send;
 
     /// View. The detail of the canonical agent `id` resolves to
     /// ([`AgentReads::cluster`]): the agent, its aliases, children, merge
@@ -336,12 +336,12 @@ pub trait QueryApi {
     /// for an unknown id.
     ///
     /// [`AgentReads::cluster`]: crate::interfaces::l3_reconstruction::agents::AgentReads::cluster
-    async fn agent(
+    fn agent(
         &self,
         caller: &Caller,
         id: AgentId,
         window: TimeWindow,
-    ) -> Result<Option<Watermarked<AgentDetail>>, QueryError>;
+    ) -> impl Future<Output = Result<Option<Watermarked<AgentDetail>>, QueryError>> + Send;
 
     /// View. The name of each id of `ids` that names a stored agent: its
     /// canonical agent and that agent's current label, keyed by the id asked
@@ -355,44 +355,47 @@ pub trait QueryApi {
     /// change only with `Changed::Agent`, so names are not watermarked.
     ///
     /// [`AgentReads::names`]: crate::interfaces::l3_reconstruction::agents::AgentReads::names
-    async fn agent_names(
+    fn agent_names(
         &self,
         caller: &Caller,
         ids: &IdBatch<AgentId>,
-    ) -> Result<BTreeMap<AgentId, AgentName>, QueryError>;
+    ) -> impl Future<Output = Result<BTreeMap<AgentId, AgentName>, QueryError>> + Send;
 
     /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
     /// rules newest first. Every rule is listed: none is ever deleted.
     ///
     /// [`BuiltinRule::ALL`]: crate::aggregates::alert::BuiltinRule::ALL
-    async fn alert_rules(
+    fn alert_rules(
         &self,
         caller: &Caller,
         filter: &AlertRuleFilter,
         page: &PageRequest<AlertRuleList>,
-    ) -> Result<Page<AlertRuleDef, AlertRuleList>, QueryError>;
+    ) -> impl Future<Output = Result<Page<AlertRuleDef, AlertRuleList>, QueryError>> + Send;
 
     /// Govern. Every configured alert sink and how its last delivery went,
     /// for choosing a rule's sinks. Govern rather than View because a
     /// delivery error can name the sink's endpoint.
-    async fn sinks(&self, caller: &Caller) -> Result<Vec<SinkInfo>, QueryError>;
+    fn sinks(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<Vec<SinkInfo>, QueryError>> + Send;
 
     /// Operate. Dead letters of one consumer group, or of every group,
     /// newest envelope first.
-    async fn dead_letters(
+    fn dead_letters(
         &self,
         caller: &Caller,
         group: Option<&ConsumerGroup>,
         page: &PageRequest<DeadLetterList>,
-    ) -> Result<Page<DeadLetter, DeadLetterList>, QueryError>;
+    ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>, QueryError>> + Send;
 
     /// View. Newest alert first.
-    async fn alerts(
+    fn alerts(
         &self,
         caller: &Caller,
         filter: &AlertFilter,
         page: &PageRequest<AlertList>,
-    ) -> Result<Page<Alert, AlertList>, QueryError>;
+    ) -> impl Future<Output = Result<Page<Alert, AlertList>, QueryError>> + Send;
 
     /// View. One alert, for alert pages and audit links: the same value
     /// `alerts` lists under `id` (its subject as raised; see
@@ -400,22 +403,29 @@ pub trait QueryApi {
     /// unknown id.
     ///
     /// [`AlertSubject`]: crate::aggregates::alert::AlertSubject
-    async fn alert(&self, caller: &Caller, id: AlertId) -> Result<Option<Alert>, QueryError>;
+    fn alert(
+        &self,
+        caller: &Caller,
+        id: AlertId,
+    ) -> impl Future<Output = Result<Option<Alert>, QueryError>> + Send;
 
     /// View. L7's exposed watermark (`EdgeStore::watermark`).
-    async fn watermark(&self, caller: &Caller) -> Result<Watermark, QueryError>;
+    fn watermark(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<Watermark, QueryError>> + Send;
 
     /// View. Exactly [`EdgeStore::graph`], under the version the filter's
     /// selector resolves to.
     ///
     /// [`EdgeStore::graph`]: crate::interfaces::l7_topology::EdgeStore::graph
-    async fn topology(
+    fn topology(
         &self,
         caller: &Caller,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologyGraph>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<TopologyGraph>, QueryError>> + Send;
 
     /// View. The overview's counts ([`overview`]) without paging any list:
     /// the activity `topology` counts for the same window and filter
@@ -428,12 +438,12 @@ pub trait QueryApi {
     /// `Conflict(TopicsNotInVersion)`).
     ///
     /// [`EdgeStore::totals`]: crate::interfaces::l7_topology::EdgeStore::totals
-    async fn overview(
+    fn overview(
         &self,
         caller: &Caller,
         window: TimeWindow,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<OverviewCounts>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<OverviewCounts>, QueryError>> + Send;
 
     /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels as
     /// nodes, access edges (writes nobody read included) and the same
@@ -441,13 +451,13 @@ pub trait QueryApi {
     /// buckets. An unaligned window is `InvalidInput(UnalignedWindow)`.
     ///
     /// [`EdgeStore::channel_topology`]: crate::interfaces::l7_topology::EdgeStore::channel_topology
-    async fn channel_topology(
+    fn channel_topology(
         &self,
         caller: &Caller,
         window: TimeWindow,
         weighting: Weighting,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<BipartiteGraph>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<BipartiteGraph>, QueryError>> + Send;
 
     /// View. Exactly [`ChannelRegistry::resource_use`]: the resources of
     /// `channel`'s canonical channel accessed in `window`, newest first, with
@@ -458,26 +468,26 @@ pub trait QueryApi {
     /// is already counted.
     ///
     /// [`ChannelRegistry::resource_use`]: crate::interfaces::l5_flow::ChannelRegistry::resource_use
-    async fn channel_resources(
+    fn channel_resources(
         &self,
         caller: &Caller,
         channel: ChannelId,
         window: TimeWindow,
         page: &PageRequest<ResourceUseList>,
-    ) -> Result<Watermarked<ResourceUsePage>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<ResourceUsePage>, QueryError>> + Send;
 
     /// View. The transmissions `topology` counts into one of its edges for
     /// the same window and filter (`EdgeStore::transmissions`): ids, times,
     /// byte counts and topic ids, no content. Content is behind
     /// `transmission`, `transmission_evidence` and `search`.
-    async fn edge_transmissions(
+    fn edge_transmissions(
         &self,
         caller: &Caller,
         edge: &EdgeSelector,
         window: TimeWindow,
         filter: &TopologyFilter,
         page: &PageRequest<EdgeTransmissionList>,
-    ) -> Result<Watermarked<EdgeTransmissionPage>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<EdgeTransmissionPage>, QueryError>> + Send;
 
     /// View. One [`TransmissionSummary::of`] row per transmission of
     /// `selection` (a lasso or a search's hits), newest id first; ids of no
@@ -494,50 +504,53 @@ pub trait QueryApi {
     /// `InvalidInput(TooManyIds)`.
     ///
     /// [`TransmissionSummary::of`]: summary::TransmissionSummary::of
-    async fn transmissions_by_id(
+    fn transmissions_by_id(
         &self,
         caller: &Caller,
         selection: &TransmissionSelection,
         version: TopicVersionSelector,
         page: &PageRequest<TransmissionList>,
-    ) -> Result<TransmissionPage, QueryError>;
+    ) -> impl Future<Output = Result<TransmissionPage, QueryError>> + Send;
 
     /// View. Exactly [`EdgeStore::series`], under the version the filter's
     /// selector resolves to; a grid for another bucket width is
     /// `InvalidInput(BucketWidthMismatch)`, like an unaligned graph window.
     ///
     /// [`EdgeStore::series`]: crate::interfaces::l7_topology::EdgeStore::series
-    async fn series(
+    fn series(
         &self,
         caller: &Caller,
         grid: SeriesGrid,
         weighting: Weighting,
         grouping: SeriesGrouping,
         filter: &TopologyFilter,
-    ) -> Result<Watermarked<TopologySeries>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<TopologySeries>, QueryError>> + Send;
 
     /// View.
-    async fn topic_versions(&self, caller: &Caller) -> Result<TopicVersionHistory, QueryError>;
+    fn topic_versions(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<TopicVersionHistory, QueryError>> + Send;
 
     /// View. `None` is the active version. An unknown version is
     /// `NotFound`; a fitting one is `Conflict(TopicVersionFitting)`. A
     /// dropped version answers without a window with its frozen all-time
     /// sizes, and with a window `VersionNotRetained`. The watermark is read
     /// from L7 before the catalog.
-    async fn topic_sizes(
+    fn topic_sizes(
         &self,
         caller: &Caller,
         version: Option<TopicModelVersion>,
         window: Option<TimeWindow>,
-    ) -> Result<Watermarked<TopicSizes>, QueryError>;
+    ) -> impl Future<Output = Result<Watermarked<TopicSizes>, QueryError>> + Send;
 
     /// View. The lineage from `from` to its successor; `None` while it has
     /// none. An unknown version is `NotFound`.
-    async fn topic_lineage(
+    fn topic_lineage(
         &self,
         caller: &Caller,
         from: TopicModelVersion,
-    ) -> Result<Option<TopicLineage>, QueryError>;
+    ) -> impl Future<Output = Result<Option<TopicLineage>, QueryError>> + Send;
 
     /// Content. Embeds `request`'s text with the current embedding model
     /// for the semantic and hybrid modes, then runs [`SearchIndex::query`]: a
@@ -546,21 +559,21 @@ pub trait QueryApi {
     /// is `Conflict(EmbeddingModelChanged)`.
     ///
     /// [`SearchIndex::query`]: crate::interfaces::l6_analysis::SearchIndex::query
-    async fn search(
+    fn search(
         &self,
         caller: &Caller,
         request: &SearchRequest,
         window: Option<TimeWindow>,
         filter: &TopologyFilter,
         page: &PageRequest<SearchList>,
-    ) -> Result<SearchResults, QueryError>;
+    ) -> impl Future<Output = Result<SearchResults, QueryError>> + Send;
 
     /// Content. The stored record, ids as stored.
-    async fn transmission(
+    fn transmission(
         &self,
         caller: &Caller,
         id: TransmissionId,
-    ) -> Result<Option<Transmission>, QueryError>;
+    ) -> impl Future<Output = Result<Option<Transmission>, QueryError>> + Send;
 
     /// Content. The text behind a transmission
     /// ([`TransmissionEvidence::assemble`]): for each content match the
@@ -576,24 +589,24 @@ pub trait QueryApi {
     ///
     /// [`Excerpted::of`]: excerpt::Excerpted::of
     /// [`Excerpted::BodyDropped`]: excerpt::Excerpted::BodyDropped
-    async fn transmission_evidence(
+    fn transmission_evidence(
         &self,
         caller: &Caller,
         id: TransmissionId,
         window: ExcerptWindow,
-    ) -> Result<Option<TransmissionEvidence>, QueryError>;
+    ) -> impl Future<Output = Result<Option<TransmissionEvidence>, QueryError>> + Send;
 
     /// Content. A version's topics, newest id first, and the version they
     /// belong to. `Current` is the catalog's active version; a pinned one may
     /// be any version whose fit has returned (unlike a linked view, it need
     /// not have been activated): unknown is `NotFound`, still fitting is
     /// `Conflict(TopicVersionFitting)`.
-    async fn topics(
+    fn topics(
         &self,
         caller: &Caller,
         version: TopicVersionSelector,
         page: &PageRequest<TopicList>,
-    ) -> Result<TopicPage, QueryError>;
+    ) -> impl Future<Output = Result<TopicPage, QueryError>> + Send;
 
     /// Content. Validate and record a projection job, and return its id
     /// without waiting for the fit. Resolves the filter's version (errors as
@@ -604,70 +617,76 @@ pub trait QueryApi {
     /// a new job.
     ///
     /// [`ProjectionStore::MAX_PENDING`]: crate::interfaces::l6_analysis::ProjectionStore::MAX_PENDING
-    async fn fit_projection(
+    fn fit_projection(
         &self,
         caller: &Caller,
         window: TimeWindow,
         filter: &TopologyFilter,
         params: ProjectionParams,
-    ) -> Result<ProjectionId, QueryError>;
+    ) -> impl Future<Output = Result<ProjectionId, QueryError>> + Send;
 
     /// Content. A job's spec, requester and status. Unknown is `NotFound`.
-    async fn projection_status(
+    fn projection_status(
         &self,
         caller: &Caller,
         id: ProjectionId,
-    ) -> Result<ProjectionInfo, QueryError>;
+    ) -> impl Future<Output = Result<ProjectionInfo, QueryError>> + Send;
 
     /// Content. Every job, newest first.
-    async fn projections(
+    fn projections(
         &self,
         caller: &Caller,
         page: &PageRequest<ProjectionList>,
-    ) -> Result<Page<ProjectionInfo, ProjectionList>, QueryError>;
+    ) -> impl Future<Output = Result<Page<ProjectionInfo, ProjectionList>, QueryError>> + Send;
 
     /// Content. A ready projection: its job record and stored frame, the
     /// same on every call. Unknown is `NotFound`; queued or fitting is
     /// `Conflict(ProjectionNotReady)`; failed is `Conflict(ProjectionFailed)`;
     /// expired is `ProjectionNotRetained`.
-    async fn projection(&self, caller: &Caller, id: ProjectionId)
-    -> Result<Projection, QueryError>;
+    fn projection(
+        &self,
+        caller: &Caller,
+        id: ProjectionId,
+    ) -> impl Future<Output = Result<Projection, QueryError>> + Send;
 
     /// View. Every verdict record of the transmission, oldest first
     /// (`TransmissionVerdicts::log`); its last record is the current
     /// verdict. An empty log for a transmission never judged, `None` for an
     /// unknown one. Records hold ids, verdicts, times and operator notes, no
     /// message content.
-    async fn verdicts(
+    fn verdicts(
         &self,
         caller: &Caller,
         transmission: TransmissionId,
-    ) -> Result<Option<VerdictLog>, QueryError>;
+    ) -> impl Future<Output = Result<Option<VerdictLog>, QueryError>> + Send;
 
     /// View. Operator verdicts tallied against the detector's calls for the
     /// judgeable transmissions opened in `window`
     /// (`TransmissionVerdicts::quality`; see [`crate::aggregates::quality`]).
     /// Rows hold route kinds, match classes and counts only.
-    async fn detection_quality(
+    fn detection_quality(
         &self,
         caller: &Caller,
         window: TimeWindow,
-    ) -> Result<DetectionQuality, QueryError>;
+    ) -> impl Future<Output = Result<DetectionQuality, QueryError>> + Send;
 
     /// Audit. The audit entries `filter` matches, operator and config
     /// alike, newest first by time and id (`AuditLog::query`).
-    async fn audit(
+    fn audit(
         &self,
         caller: &Caller,
         filter: &AuditFilter,
         page: &PageRequest<AuditList>,
-    ) -> Result<Page<AuditEntry, AuditList>, QueryError>;
+    ) -> impl Future<Output = Result<Page<AuditEntry, AuditList>, QueryError>> + Send;
 
     /// View. Every operator the directory holds, by id: the ones config
     /// defines now, and every one it defined before, listed with no
     /// permissions, so past decisions and audit entries can still show a
     /// name (`OperatorDirectory::operators`).
-    async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>, QueryError>;
+    fn operators(
+        &self,
+        caller: &Caller,
+    ) -> impl Future<Output = Result<Vec<Operator>, QueryError>> + Send;
 
     /// View, or Content when `request` includes content or names a
     /// projection ([`ExportRequest::required_permission`]); without it,
@@ -684,11 +703,11 @@ pub trait QueryApi {
     /// trailer, `Complete` or recording why it failed. Every call is
     /// audited ([`export::record`]): `Started` is appended before the
     /// header is returned, and a failed append fails the call with `Store`.
-    async fn export(
+    fn export(
         &self,
         caller: &Caller,
         request: &ExportRequest,
-    ) -> Result<Export<Self::ExportRows>, QueryError>;
+    ) -> impl Future<Output = Result<Export<Self::ExportRows>, QueryError>> + Send;
 }
 
 pub trait OperatorActions {
@@ -705,9 +724,9 @@ pub trait OperatorActions {
     /// transaction as the action's effect, and a `Forbidden` or `Rejected`
     /// one with no effect. A `Store` error had no effect and leaves at most
     /// one entry, written when the audit log is still reachable.
-    async fn act(
+    fn act(
         &self,
         caller: &Caller,
         action: OperatorAction,
-    ) -> Result<ActionOutcome, ActionError>;
+    ) -> impl Future<Output = Result<ActionOutcome, ActionError>> + Send;
 }

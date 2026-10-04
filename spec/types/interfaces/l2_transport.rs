@@ -41,35 +41,35 @@ pub struct Delivery {
 }
 
 pub trait EventBus {
-    type Subscription: Subscription;
+    type Subscription: Subscription + Send + 'static;
 
-    async fn publish(&self, envelope: Envelope) -> Result<(), BusError>;
+    fn publish(&self, envelope: Envelope) -> impl Future<Output = Result<(), BusError>> + Send;
 
     /// Every subscription in a group must use the same subject set and retry
     /// policy; a different one is rejected with `GroupSubjectMismatch` or
     /// `GroupRetryMismatch`.
-    async fn subscribe(
+    fn subscribe(
         &self,
         subjects: &[Subject],
         group: ConsumerGroup,
         retry: RetryPolicy,
-    ) -> Result<Self::Subscription, BusError>;
+    ) -> impl Future<Output = Result<Self::Subscription, BusError>> + Send;
 }
 
 pub trait Subscription {
     /// `None` when the bus has shut down.
-    async fn next(&mut self) -> Option<Result<Delivery, BusError>>;
+    fn next(&mut self) -> impl Future<Output = Option<Result<Delivery, BusError>>> + Send;
 
-    async fn ack(&mut self, id: DeliveryId) -> Result<(), BusError>;
+    fn ack(&mut self, id: DeliveryId) -> impl Future<Output = Result<(), BusError>> + Send;
 
     /// `reason` is what the consumer reports; it becomes the dead letter's
     /// `last_error` if retries run out.
-    async fn nack(
+    fn nack(
         &mut self,
         id: DeliveryId,
         retry_after: Duration,
         reason: String,
-    ) -> Result<(), BusError>;
+    ) -> impl Future<Output = Result<(), BusError>> + Send;
 }
 
 /// How often a delivery is retried before it is dead-lettered, and how long
@@ -139,30 +139,37 @@ pub struct DeadLetter {
 }
 
 pub trait DeadLetterStore {
-    async fn put(&self, letter: DeadLetter) -> Result<(), BusError>;
+    fn put(&self, letter: DeadLetter) -> impl Future<Output = Result<(), BusError>> + Send;
 
     /// Redeliver a dead letter to its group and remove it from the store.
-    async fn replay(&self, group: &ConsumerGroup, id: EventId) -> Result<(), BusError>;
+    fn replay(
+        &self,
+        group: &ConsumerGroup,
+        id: EventId,
+    ) -> impl Future<Output = Result<(), BusError>> + Send;
 
     /// Stored dead letters, of one group or of all groups, newest envelope
     /// first (descending (`Envelope::id`, group)). A letter replayed during
     /// a traversal simply stops appearing; no other letter is skipped.
-    async fn list(
+    fn list(
         &self,
         group: Option<&ConsumerGroup>,
         page: &PageRequest<DeadLetterList>,
-    ) -> Result<Page<DeadLetter, DeadLetterList>, BusError>;
+    ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>, BusError>> + Send;
 }
 
 pub trait BlobStore {
     /// Idempotent: putting the same bytes twice returns the same hash.
-    async fn put(&self, bytes: &[u8]) -> Result<MessageHash, BlobError>;
+    fn put(&self, bytes: &[u8]) -> impl Future<Output = Result<MessageHash, BlobError>> + Send;
 
     /// `None` when no body is stored under `hash`. L1 stores every body
     /// before publishing `ExchangeCaptured`, so for a hash a span, match or
     /// access names, `None` means content retention dropped it; the
     /// evidence page shows that as `Excerpted::BodyDropped`.
-    async fn get(&self, hash: MessageHash) -> Result<Option<Vec<u8>>, BlobError>;
+    fn get(
+        &self,
+        hash: MessageHash,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, BlobError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

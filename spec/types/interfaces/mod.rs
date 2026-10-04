@@ -9,6 +9,12 @@
 //! cache) own it inside one task and receive work over channels. Traits take
 //! `&mut self` for that state rather than hiding it behind locks.
 //!
+//! Async methods are declared as `fn ...(...) -> impl Future<Output = T> +
+//! Send`, never as a bare `async fn`, so code generic over a trait can run
+//! its futures on a multi-threaded executor; implementations still write
+//! `async fn`. Associated streams and per-connection handles are
+//! `Send + 'static`. `tests/send.rs` checks both at compile time.
+//!
 //! | Layer | Module | Triggered by | Emits |
 //! |---|---|---|---|
 //! | L0 | [`l0_ingress`] | harness request, upstream chunks | `RawExchange` (in-process) |

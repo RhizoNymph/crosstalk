@@ -119,18 +119,19 @@ pub trait ClaimStore {
     /// reconstruct consumer for each `ExchangeCaptured` after the agent is
     /// resolved, so it is idempotent under redelivery. `agent` is the
     /// attributed agent, never rewritten by a later merge.
-    async fn record(
+    fn record(
         &mut self,
         agent: AgentId,
         claim: &HarnessClaim,
         at: Timestamp,
-    ) -> Result<(), ResolveError>;
+    ) -> impl Future<Output = Result<(), ResolveError>> + Send;
 
     /// The claims of `agent`'s canonical agent: the [`ClaimSet::union`] of
     /// the claims recorded for it and for every agent that currently
     /// resolves to it. Merges and unmerges change only which sets are
     /// unioned.
-    async fn claims(&self, agent: AgentId) -> Result<ClaimSet, ResolveError>;
+    fn claims(&self, agent: AgentId)
+    -> impl Future<Output = Result<ClaimSet, ResolveError>> + Send;
 }
 
 pub trait IdentityResolver {
@@ -147,11 +148,11 @@ pub trait IdentityResolver {
     /// [`MergeVeto`] separates (`Vetoed`). A `MergeAuthor::Operator` request
     /// between such clusters goes ahead and deletes every veto that
     /// separated them, in the same transaction.
-    async fn merge(
+    fn merge(
         &mut self,
         request: MergeRequest,
         at: Timestamp,
-    ) -> Result<MergeRecord, ResolveError>;
+    ) -> impl Future<Output = Result<MergeRecord, ResolveError>> + Send;
 
     /// Revert merge record `merge` exactly, as operator `by` at `at`: its
     /// source returns to its prior state, the agents it repointed and that
@@ -164,30 +165,30 @@ pub trait IdentityResolver {
     /// `UnknownMerge` for an id with no record, and `MergeAlreadyReverted`
     /// for a record already reverted, changing nothing and publishing
     /// nothing.
-    async fn unmerge(
+    fn unmerge(
         &mut self,
         merge: MergeId,
         by: OperatorId,
         at: Timestamp,
-    ) -> Result<Reversal, ResolveError>;
+    ) -> impl Future<Output = Result<Reversal, ResolveError>> + Send;
 
     /// Set or clear the label of `agent` ([`Agent::rename`]) and publish one
     /// `AgentRenamed` when it changed. `AgentMerged` for a merged agent,
     /// which keeps its label; the rename is not redirected to the canonical
     /// agent. Labels are never identity evidence: `resolve` does not read
     /// them.
-    async fn rename(
+    fn rename(
         &mut self,
         agent: AgentId,
         label: Option<AgentLabel>,
         by: OperatorId,
-    ) -> Result<Change, ResolveError>;
+    ) -> impl Future<Output = Result<Change, ResolveError>> + Send;
 
-    async fn resolve(
+    fn resolve(
         &mut self,
         meta: &ExchangeMeta,
         request: &[Message],
-    ) -> Result<Resolution, ResolveError>;
+    ) -> impl Future<Output = Result<Resolution, ResolveError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,11 +226,11 @@ impl ThreadOutcome {
 }
 
 pub trait Threader {
-    async fn thread(
+    fn thread(
         &mut self,
         exchange: &Exchange,
         agent: AgentId,
-    ) -> Result<ThreadOutcome, ThreadError>;
+    ) -> impl Future<Output = Result<ThreadOutcome, ThreadError>> + Send;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

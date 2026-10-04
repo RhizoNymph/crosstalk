@@ -168,8 +168,10 @@ Features Index:
       supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
-      bus events and per-layer interfaces (the types are also the JSON
-      wire format: wire_contract), with tests for the invariants
+      bus events and per-layer interfaces whose async methods return Send
+      futures and whose associated streams are Send + 'static, so they
+      can be hosted on tokio and used generically (the types are also the
+      JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
       in docs/research/harness-wire-protocols.md.
@@ -188,7 +190,8 @@ Features Index:
       quality; watermarked aggregates and retention; typed query and action
       errors with one From impl per store error; operator actions; the
       append-only audit log of actions, config changes and exports; and the
-      id-only SSE live feed fed by every store's Changed.
+      id-only SSE live feed fed by every store's Changed. Its traits'
+      futures are Send, so a UI or client may be generic over QueryApi.
     entry_points:
       - spec/types/interfaces/l8_surface.rs
       - spec/types/interfaces/l8_surface/permissions.rs
