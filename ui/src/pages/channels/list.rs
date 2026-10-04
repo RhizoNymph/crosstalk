@@ -13,7 +13,7 @@ use super::query::{DETECTIONS, ListQuery, ORIGINS, RawListQuery, Tab};
 use crate::app::{backend, caller};
 use crate::backend::Backend;
 use crate::components::badge::Badge;
-use crate::components::form::{LINK, SECTION_TITLE};
+use crate::components::form::{FACET, LINK};
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
 use crate::components::{
     PageLinks, Tab as TabLink, Tone, data_table, empty_state, error_panel, filter_chip,
@@ -178,20 +178,20 @@ async fn channels_get(cx: &Cx) -> Result<impl View> {
         tabs(items: tab_items)
         <div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
             <div class="flex flex-wrap items-center gap-1.5">
-                <span class=(SECTION_TITLE)>"Origin"</span>
+                <span class=(FACET)>"Origin"</span>
                 for (label, link, active) in origin_chips {
                     filter_chip(label: label, href: link, active: active)
                 }
             </div>
             <div class="flex flex-wrap items-center gap-1.5">
-                <span class=(SECTION_TITLE)>"Detection"</span>
+                <span class=(FACET)>"Detection"</span>
                 for (label, link, active) in detection_chips {
                     filter_chip(label: label, href: link, active: active)
                 }
             </div>
             if !review {
                 <div class="flex flex-wrap items-center gap-1.5">
-                    <span class=(SECTION_TITLE)>"Policy"</span>
+                    <span class=(FACET)>"Policy"</span>
                     for (label, link, active) in policy_chips {
                         filter_chip(label: label, href: link, active: active)
                     }

@@ -270,4 +270,48 @@ mod tests {
             Err("conflict: the channel is superseded".to_owned())
         );
     }
+
+    #[tokio::test]
+    async fn sections_render_their_rows() {
+        use topcoat::view::view;
+
+        use crate::testing::{cx, render};
+
+        let cx = &cx();
+        let rows = vec![ResourceRow {
+            locator: wiki(),
+            first_seen: "2026-10-03 00:00:00 UTC".into(),
+            writers: vec![AgentUse {
+                url: "/agents/A".into(),
+                name: "planner".into(),
+                count: 3,
+            }],
+            readers: Vec::new(),
+        }];
+        let html = render(view! { cx => resources_section(rows: Ok(rows)) }, cx).await;
+        assert!(html.contains("https://wiki.example.org/team/agents/notes"));
+        assert!(html.contains(">planner</a>"));
+        assert!(html.contains("none"), "no readers");
+
+        let history = vec![HistoryRow {
+            at: "t".into(),
+            by: "ada".into(),
+            what: "set policy to sanctioned".into(),
+            note: None,
+            outcome: Err("conflict: the channel is superseded".into()),
+        }];
+        let html = render(
+            view! { cx => history_section(rows: Ok(history), audit_url: "/audit".to_owned()) },
+            cx,
+        )
+        .await;
+        assert!(html.contains("rejected: conflict: the channel is superseded"));
+
+        let html = render(
+            view! { cx => alerts_section(rows: Err(QueryError::NotFound), inbox_url: "/alerts".to_owned()) },
+            cx,
+        )
+        .await;
+        assert!(html.contains("not found"));
+    }
 }

@@ -1,6 +1,7 @@
 //! Test helpers: a router over the fixture backend and request shortcuts.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use topcoat::context::{AppContext, Cx};
 use topcoat::router::request::Request;
 use topcoat::router::{Body, Router, RouterBuilderDiscoverExt, StatusCode, to_bytes};
 
@@ -9,6 +10,7 @@ use topcoat::asset::{
     RouterBuilderAssetExt,
 };
 use topcoat::runtime::RouterBuilderRuntimeExt;
+use topcoat::view::{View, ViewExt};
 
 use crate::backend::fixture::FixtureBackend;
 use crate::config::TrustedOperator;
@@ -64,6 +66,19 @@ fn assets() -> AssetConfig {
             .collect(),
     };
     AssetConfig::hosted_at("/assets", manifest)
+}
+
+/// A request context over the fixture backend, for rendering components.
+pub fn cx() -> Cx {
+    let mut app = AppContext::new();
+    app.insert(operator());
+    app.insert(FixtureBackend::new(7));
+    Cx::new(Arc::new(app))
+}
+
+/// Renders a component view to HTML.
+pub async fn render(view: impl View, cx: &Cx) -> String {
+    view.first().await.expect("view renders").render(cx)
 }
 
 async fn send(request: Request) -> Reply {

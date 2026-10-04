@@ -93,15 +93,14 @@ pub fn evidence_rows<'a>(
     evidence: impl Iterator<Item = &'a IdentityEvidence>,
     other: &[&IdentityEvidence],
 ) -> Vec<EvidenceRow> {
-    let mut rows: Vec<(u8, EvidenceRow)> = evidence
-        .map(|e| {
-            let mut row = evidence_row(e);
-            row.shared = other.contains(&e);
-            (e.specificity(), row)
+    let mut rows: Vec<EvidenceRow> = evidence
+        .map(|e| EvidenceRow {
+            shared: other.contains(&e),
+            ..evidence_row(e)
         })
         .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.into_iter().map(|(_, row)| row).collect()
+    rows.sort_by_key(|row| std::cmp::Reverse(row.specificity));
+    rows
 }
 
 /// Reasons two agents look like different agents: harness ids of the same

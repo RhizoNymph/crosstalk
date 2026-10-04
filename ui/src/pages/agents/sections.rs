@@ -346,4 +346,38 @@ mod tests {
         );
         assert_eq!(text, "established since 2026-10-03 00:00:00 UTC");
     }
+
+    #[tokio::test]
+    async fn merges_offer_unmerge_only_when_in_force_and_allowed() {
+        use topcoat::view::view;
+
+        use crate::testing::{cx, render};
+
+        let cx = &cx();
+        let row = |reverted: Option<String>| MergeRow {
+            id: "01J9ZQ3W8D0000000000000009".into(),
+            at: "t".into(),
+            from: ("/agents/a".into(), "…a".into()),
+            into: ("/agents/b".into(), "…b".into()),
+            by: "ada".into(),
+            repointed: 0,
+            reverted,
+        };
+        let rows = vec![row(None), row(Some("reverted by ada at t".into()))];
+        let again = rows.clone();
+        let html = render(
+            view! { cx => merges_section(rows: rows, unmerge_action: Some("/agents/b".to_owned()), error: None) },
+            cx,
+        )
+        .await;
+        assert_eq!(html.matches(">Unmerge</button>").count(), 1);
+        assert!(html.contains("value=\"01J9ZQ3W8D0000000000000009\""));
+        assert!(html.contains("reverted by ada at t"));
+        let html = render(
+            view! { cx => merges_section(rows: again, unmerge_action: None, error: None) },
+            cx,
+        )
+        .await;
+        assert!(!html.contains("Unmerge"), "no Govern, no button");
+    }
 }
