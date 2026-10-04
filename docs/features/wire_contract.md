@@ -43,9 +43,11 @@ travel, what decoding checks, its goldens) is a page under
 ## Non-scope
 
 - HTTP routing (paths, methods, which argument travels in the path, the
-  query string or the body) and status codes beyond "an undecodable
-  request is a 400 with its `QueryError`". The spec pins the JSON of each
-  argument and result, not the routes.
+  query string or the body), status codes, authentication headers, and
+  the HTTP side of the live feed, the projection frame and exports: the
+  [HTTP API](http_api.md) binds this contract to HTTP, with its own route
+  table, status goldens and the few wire types it adds (the `POST` read
+  bodies and the 401's `AuthError`).
 - NATS subjects and stream names: the bus's own feature fixes those; this
   feature fixes the JSON payload they carry.
 - Binary encodings: the projection frame's layout (`ProjectionFrame`), the
@@ -213,14 +215,17 @@ on the wire.
   `SeriesGrouping`, `AgentFilter`, `ResourcePattern`, `TopicModelVersion`,
   `ProjectionParams`, `UserRule`, `ChannelFilter`, `AlertRuleFilter`,
   `SearchRequest`, `AuditFilter`, `ConsumerGroup`,
-  `TransmissionSelection`, `ExcerptWindow`, `ExportRequest` and
-  `ActionRequest`. The
+  `TransmissionSelection`, `ExcerptWindow`, `ExportRequest`,
+  `ActionRequest`, and the [HTTP API](http_api.md)'s `POST` read bodies
+  (`GraphBody`, `OverviewBody`, `EdgeTransmissionsBody`,
+  `TransmissionsBody`, `SeriesBody`, `SearchBody`, `FitProjectionBody`). The
   gateway's HTTP layer decodes client input only through
   `decode_request::<T: WireRequest>`, so implementing the trait is the one
   decision that lets a client send a type. An axum extractor generic over
   `T: WireRequest` calls it on the body (or on the JSON of a query
   parameter) and rejects with `QueryError::from(DecodeError)`
-  (`ActionError::from` on an action route), a `400` with that JSON.
+  (`ActionError::from` on an action route), a `400` with that JSON
+  ([HTTP API](http_api.md#arguments) says where each argument travels).
 - **Responses and bus events** derive `Serialize` and `Deserialize`
   (the UI and other nodes decode them) and are never `WireRequest`.
 - **Authority** never comes from the client. `Caller` implements neither
@@ -366,6 +371,7 @@ under `spec/types/`; `l8/` is `interfaces/l8_surface/`, `agg/` is
 | [analysis.md](wire/analysis.md) | alert rules, topics, retention, projections (info JSON and frame bytes), search, insight events; finite floats | `rules`, `topics`, `projections`, `insight` |
 | [surface_actions.md](wire/surface_actions.md) | `ActionRequest` and `OperatorAction`, the audit log and `CallerSnapshot`, the live feed and its SSE framing, operators, sinks, list filters, overview | `surface_actions` |
 | [surface_reads.md](wire/surface_reads.md) | channel, transmission and evidence read models, excerpts, export requests, manifests, rows and JSONL lines | `surface_reads` |
+| [http_api.md](http_api.md) | the HTTP binding: the route table, the status of every error, the `POST` read bodies, the 401's `AuthError` | `http` |
 
 Coverage the goldens guarantee across the areas: every `BusEvent` variant
 has a golden inside a full envelope in its layer's area plus the
@@ -401,7 +407,7 @@ is in its golden.
 | `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
 | `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
-| `spec/types/tests/golden/<area>/` | 361 goldens: 360 `.json`, 1 `.jsonl` | — |
+| `spec/types/tests/golden/<area>/` | 372 goldens: 371 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`) | — |
 
 ## Invariants and constraints
 

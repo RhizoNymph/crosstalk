@@ -41,8 +41,10 @@ for agents, channels, transmissions and the overview are in
 
 - The pipeline that produces what is queried: ingest, detection, analysis
   and aggregation ([type_spec.md](type_spec.md)).
-- The UI itself, HTTP routing and framing, and session verification: a
-  verified session arrives as a `RequestIdentity`.
+- The UI itself, and session verification: a verified session arrives
+  as a `RequestIdentity`.
+- HTTP routing and framing, statuses and credentials: the
+  [HTTP API](http_api.md).
 - The JSON encoding of the surface's types and which of them a client may
   send: the [wire contract](wire_contract.md). The projection frame's
   binary layout is part of its type (`ProjectionFrame::encode` and
@@ -694,7 +696,7 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/interfaces/l8_surface.rs` | The query API and operator actions | `QueryApi` (every read, including the read models and `export`), `OperatorActions`, `AlertFilter`, `AlertStateKind`; re-exports the action, error, permission and sink types |
 | `spec/types/interfaces/l8_surface/permissions.rs` | Who is asking and what they may do | `Caller` (built only by the directory; never serialized), `CallerSnapshot` (checked: `of`, `new`; what an audit record keeps of its caller; wire data, never a request), `NoPermissions`, `Permission`, `PermissionSet` (wire form: an array in `Permission::ALL` order) |
 | `spec/types/interfaces/l8_surface/sinks.rs` | Alert delivery | `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError` |
-| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`; wire data, never a request), `ActionKind`, `ActionOutcome` (`subjects`), `SupersededChannels` |
+| `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`; wire data, never a request), `ActionKind` (`ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` returns), `ActionOutcome` (`subjects`), `SupersededChannels` |
 | `spec/types/interfaces/l8_surface/actions/request.rs` | The action a client sends | `ActionRequest` (a `WireRequest`; `into_action`, `of`, `kind`) |
 | `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `MalformedRequest`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode`, `TopicPage` |

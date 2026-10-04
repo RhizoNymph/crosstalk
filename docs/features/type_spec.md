@@ -20,7 +20,8 @@
 - Implementations of any trait.
 - Database schemas: implementation crates add sqlx. Binary encodings
   other than the projection frame's layout, which is part of the type
-  (`ProjectionFrame::encode` and `decode`; its HTTP framing is not), and
+  (`ProjectionFrame::encode` and `decode`; its HTTP framing is the
+  [HTTP API](http_api.md)'s), and
   the export digest's canonical row encoding ([export.md](export.md)).
 - Lifecycle simulation: `design/lifecycles/cascade.yaml`, outside the
   repository, models the same lifecycles for the stateviz simulator.

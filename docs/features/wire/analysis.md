@@ -93,8 +93,9 @@ job is `ready` fetches its frame bytes, decodes them with
 same bytes for the canvas) and joins the two with `Projection::new`, which
 refuses a frame whose header disagrees with the job (id, topic version,
 watermark, limit, counts). `a_projection_travels_as_info_json_and_frame_bytes`
-pins that round trip. The routes themselves are HTTP routing, outside
-this feature.
+pins that round trip. The routes (`GET /projections/{id}` and
+`GET /projections/{id}/frame`), the frame's ETag and caching, and the
+not-ready status are the [HTTP API](../http_api.md#projection)'s.
 
 ## Bus events
 

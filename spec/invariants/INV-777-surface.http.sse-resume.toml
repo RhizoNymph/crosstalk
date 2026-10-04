@@ -1,0 +1,29 @@
+[invariant]
+id = "surface.http.sse-resume"
+statement = "GET /live subscribes with sse::resume of the request: its Last-Event-ID header when present, else its cursor query parameter, else Fresh, each read by Resume::from_last_event_id, so text that is not a cursor resyncs instead of failing; the response is 200 text/event-stream with Cache-Control no-store, each item framed by event_frame and the stream's last event by end_frame, which has no id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A browser's EventSource resends the last id it saw as Last-Event-ID when
+it reconnects by itself, but a new EventSource (a reload, or after the
+stream ended with end) cannot set headers, so the cursor parameter carries
+the same text. On an automatic reconnect the header is the newer of the
+two, so it wins. Reading both as Last-Event-ID is read keeps one rule:
+an unreadable cursor is a resync, never a lost update or an error.
+Heartbeats arrive at least every LiveConfig::heartbeat
+(surface.live.heartbeat-interval) and carry ids, so the resume point
+stays recent; framing is surface.live.sse-frame-matches-item.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::sse::resume_prefers_last_event_id_then_the_cursor_parameter",
+    "crosstalk_spec::tests::wire::http::sse::an_item_is_one_event_of_three_fields",
+    "crosstalk_spec::tests::wire::http::sse::the_end_event_carries_the_reason_and_no_id",
+]
+integration = "crosstalk_api::integration::live_resumes_from_last_event_id_or_cursor"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

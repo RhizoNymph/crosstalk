@@ -169,7 +169,7 @@ pub(super) fn points() -> Vec<ProjectedPoint> {
     ]
 }
 
-fn projection() -> Projection {
+pub(super) fn projection() -> Projection {
     let points = points();
     let count = u32::try_from(points.len()).expect("small");
     let info = ProjectionInfo::new(

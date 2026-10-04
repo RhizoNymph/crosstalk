@@ -169,6 +169,67 @@ pub enum ActionKind {
     UnpinTopicVersion,
 }
 
+impl ActionKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 14] = [
+        Self::SetPolicy,
+        Self::MergeAgents,
+        Self::Unmerge,
+        Self::RenameAgent,
+        Self::PromoteChannel,
+        Self::Acknowledge,
+        Self::Resolve,
+        Self::SetVerdict,
+        Self::CreateRule,
+        Self::UpdateRule,
+        Self::SetRuleEnabled,
+        Self::ReplayDeadLetter,
+        Self::PinTopicVersion,
+        Self::UnpinTopicVersion,
+    ];
+
+    /// The position of the kind in [`ActionKind::ALL`]. Exhaustive, so a
+    /// new kind does not compile until it has a position; a test checks
+    /// `ALL` holds it there.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::SetPolicy => 0,
+            Self::MergeAgents => 1,
+            Self::Unmerge => 2,
+            Self::RenameAgent => 3,
+            Self::PromoteChannel => 4,
+            Self::Acknowledge => 5,
+            Self::Resolve => 6,
+            Self::SetVerdict => 7,
+            Self::CreateRule => 8,
+            Self::UpdateRule => 9,
+            Self::SetRuleEnabled => 10,
+            Self::ReplayDeadLetter => 11,
+            Self::PinTopicVersion => 12,
+            Self::UnpinTopicVersion => 13,
+        }
+    }
+
+    /// The permission an action of this kind needs; see
+    /// [`OperatorAction::required_permission`], which is this of its kind.
+    pub const fn required_permission(self) -> Permission {
+        match self {
+            Self::SetPolicy
+            | Self::MergeAgents
+            | Self::Unmerge
+            | Self::RenameAgent
+            | Self::PromoteChannel
+            | Self::CreateRule
+            | Self::UpdateRule
+            | Self::SetRuleEnabled
+            | Self::PinTopicVersion
+            | Self::UnpinTopicVersion => Permission::Govern,
+            Self::Acknowledge | Self::Resolve | Self::SetVerdict => Permission::Triage,
+            Self::ReplayDeadLetter => Permission::Operate,
+        }
+    }
+}
+
 impl OperatorAction {
     /// The merge of `from` into `into` the caller asks for, authored by the
     /// caller's operator. A request naming one agent twice is `SelfMerge`
@@ -211,23 +272,10 @@ impl OperatorAction {
     /// and reading the text to judge from is already gated by `transmission`
     /// and `search`. One permission per action keeps `OperatorRecord`'s
     /// `Forbidden` check exact.
+    /// The kind's permission ([`ActionKind::required_permission`]), so the
+    /// HTTP route of an action kind and the action agree.
     pub fn required_permission(&self) -> Permission {
-        match self {
-            Self::SetPolicy { .. }
-            | Self::MergeAgents(_)
-            | Self::Unmerge { .. }
-            | Self::RenameAgent { .. }
-            | Self::PromoteChannel { .. }
-            | Self::CreateRule { .. }
-            | Self::UpdateRule { .. }
-            | Self::SetRuleEnabled { .. }
-            | Self::PinTopicVersion { .. }
-            | Self::UnpinTopicVersion { .. } => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::SetVerdict { .. } => {
-                Permission::Triage
-            }
-            Self::ReplayDeadLetter { .. } => Permission::Operate,
-        }
+        self.kind().required_permission()
     }
 
     /// The entities the action names, as requested (not resolved through

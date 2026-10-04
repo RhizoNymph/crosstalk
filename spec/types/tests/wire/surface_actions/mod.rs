@@ -3,7 +3,7 @@
 //! permissions, alert sinks, the list filters and the overview. Goldens
 //! under `golden/surface_actions/<area>/`.
 
-mod actions;
+pub(super) mod actions;
 mod audit;
 mod lists;
 mod live;

@@ -130,6 +130,7 @@ pub mod errors;
 pub mod evidence;
 pub mod excerpt;
 pub mod export;
+pub mod http;
 pub mod lists;
 pub mod live;
 pub mod operators;
