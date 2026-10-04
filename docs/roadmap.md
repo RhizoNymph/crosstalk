@@ -88,7 +88,8 @@ flowchart LR
   P0d[P0.4 HTTP binding spec] --> P7_1
   P1[P1 workspace, CI, sim, testkit, store harness] --> P2_1 & P2_2 & P2_3 & P2_4 & P2_5
   P0a --> P2_1 & P2_3
-  P2_3[P2.3 memory reference stores] --> P2_6[P2.6 L8 surface service]
+  P2_3[P2.3 memory reference stores] --> P0f[P0.6 spec write traits] --> P2_6[P2.6 L8 surface service]
+  P0f --> P4_1 & P5 & P6_1
   P2_1[P2.1 bus] --> P3
   P2_2[P2.2 blob store] --> P3
   P2_4[P2.4 L0 proxy] --> P3
@@ -116,11 +117,12 @@ flowchart LR
 | P2.3 in-memory reference stores | P1, P0.1 | P2.1, P2.2, P2.4, P2.5 |
 | P2.4 L0 proxy (Anthropic, HTTP and SSE) | P1 | P2.1–P2.3, P2.5, P2.6 |
 | P2.5 L1 normalizer (Anthropic Messages) | P1 | P2.1–P2.4, P2.6 |
-| P2.6 L8 surface over spec traits | P0.1–P0.3, P2.3 | P2.1, P2.2, P2.4, P2.5, P3–P6 |
+| P0.6 spec write traits | P2.3 | P2.4, P2.5, P3 |
+| P2.6 L8 surface over spec traits | P0.1–P0.3, P0.6, P2.3 | P2.1, P2.2, P2.4, P2.5, P3–P6 |
 | P3 capture slice, **M1** | P2.1, P2.2, P2.4, P2.5 | P2.6, P4 |
-| P4.1 L3 identity and threading | P2.1, P2.3 | P4.2, P3 |
+| P4.1 L3 identity and threading | P2.1, P2.3, P0.6 | P4.2, P3 |
 | P4.2 L4 provenance | P2.1 | P4.1, P3 |
-| P5 L5 flow, **M2** | P4.1, P4.2, P2.3 | P2.6, P7.1 |
+| P5 L5 flow, **M2** | P4.1, P4.2, P2.3, P0.6 | P2.6, P7.1 |
 | P6.1 L7 topology | P5 events (spec), P2.3 | P6.2, P6.3 |
 | P6.2 L6 search and alerts | P5 | P6.1, P6.3 |
 | P6.3 L6 topics and projections | P5, open decision D1 | P6.1, P6.2 |
@@ -200,6 +202,21 @@ client are both checked against one definition.
 ### P0.5 Repository tooling
 - [ ] Move the invariant validator into the repository as `scripts/inv_check.py`.
 - [ ] Fix `rust-toolchain.toml` (`"miri "` has a trailing space).
+
+### P0.6 Spec write traits
+Building the in-memory reference stores (P2.3) showed that the spec's store traits are mostly read-and-decide. Nothing creates agents, discovered channels, resources, accesses or transmissions, and L6 and L7 have no write side for topic fits, assignments or edge activation. The user decided the write side becomes spec traits. Memory and Postgres stores then implement the same traits, and the model-based harnesses drive any store through the spec alone.
+
+**Deliverable:** per-layer write traits in `interfaces/l3`–`l8`, plus the missing reads and error variants:
+- channel get-by-id and listing;
+- a frame that doesn't match its job;
+- resolving an alert that isn't acknowledged.
+
+It also needs:
+- one convention for time arguments;
+- one owner for publishing `TopicVersionDropped`;
+- `crosstalk-memory` converted to implement the new traits, with its private seeding traits removed and its duplicated helpers unified.
+
+Depends on P2.3, and P2.6 and the P4–P6 Postgres stores depend on it.
 
 ---
 
