@@ -33,4 +33,6 @@ pub use service::Surface;
 pub use stores::{EvidenceRecords, RecordReadError, SurfaceStores};
 
 #[cfg(test)]
+mod dst;
+#[cfg(test)]
 mod tests;

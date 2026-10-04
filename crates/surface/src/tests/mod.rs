@@ -6,12 +6,15 @@
 //! - One module per area of invariants.
 
 mod actions;
+mod alerts;
 mod channels;
 mod content;
-mod fakes;
+mod export;
+pub(crate) mod fakes;
+mod live;
 mod permissions;
 mod reads;
-mod world;
+pub(crate) mod world;
 
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 use crosstalk_spec::paging::{PageRequest, PageSize};

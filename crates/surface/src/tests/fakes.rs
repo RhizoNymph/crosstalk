@@ -69,6 +69,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct RecordingBus {
     published: Arc<Mutex<Vec<Envelope>>>,
     refuse: Arc<Mutex<bool>>,
+    delay: Arc<Mutex<std::time::Duration>>,
 }
 
 impl RecordingBus {
@@ -78,6 +79,11 @@ impl RecordingBus {
 
     pub fn refuse_publishes(&self, refuse: bool) {
         *lock(&self.refuse) = refuse;
+    }
+
+    /// Hold every publish this long before it lands.
+    pub fn delay_publishes(&self, delay: std::time::Duration) {
+        *lock(&self.delay) = delay;
     }
 }
 
@@ -108,6 +114,10 @@ impl EventBus for RecordingBus {
     type Subscription = NoSubscription;
 
     async fn publish(&self, envelope: Envelope) -> Result<(), BusError> {
+        let delay = *lock(&self.delay);
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         if *lock(&self.refuse) {
             return Err(BusError::PublishRejected {
                 reason: "refused by the test".to_owned(),
