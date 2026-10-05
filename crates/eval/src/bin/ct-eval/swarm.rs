@@ -93,8 +93,10 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
     let mut text = render(&outcome.report);
     let resolved = &outcome.resolved;
     text.push_str(&format!(
-        "\ntruth rows {}: transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), unattributed reads {} (unjudged), key groups {}, dropped {}\n",
+        "\ntruth rows {}: sessions {} ({} exchanges), transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), unattributed reads {} (unjudged), key groups {}, dropped {}\n",
         resolved.rows,
+        resolved.sessions,
+        resolved.exchanges,
         resolved.transmissions,
         resolved.without_sender,
         resolved.self_reads,

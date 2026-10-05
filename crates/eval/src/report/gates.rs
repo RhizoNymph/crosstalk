@@ -13,9 +13,12 @@
 //! min = 0.9
 //! ```
 //!
-//! A gate checks one detector's runs (`detector = "live"`; unset means the
-//! reference matcher). `recall` and `precision` take a `min`; `violations` (negative controls a
-//! prediction fell under, optionally of one `reason`) takes a `max`. A gate
+//! A gate checks one detector's runs (`detector = "live"`, or
+//! `"gateway-export"` for `ct-eval swarm`; unset means the reference
+//! matcher). `recall` and `precision` take a `min`; `violations` (negative controls a
+//! prediction fell under, optionally of one `reason`) takes a `max`;
+//! `fp_per_1k` (the selected rows' false positives per 1,000 of the run's
+//! exchanges) takes a `max`, and is skipped in a run with no exchanges. A gate
 //! whose rows hold no data is skipped, not failed, so a small `--limit` run
 //! is not failed by rows it never reached. Thresholds are regression gates
 //! for the eval, not invariants of the gateway.
@@ -43,6 +46,13 @@ pub enum Check {
         #[serde(default)]
         reason: Option<NegativeReason>,
     },
+    /// False positives of the selected rows per 1,000 exchanges of the run
+    /// (`Totals::exchanges`, every dataset's): a ceiling on the background
+    /// rate.
+    #[serde(rename = "fp_per_1k")]
+    FpPer1k {
+        max: f64,
+    },
 }
 
 /// The detector a gate is tuned on. A gate checks only runs of its own
@@ -58,6 +68,10 @@ pub enum GateDetector {
     Pipeline,
     /// The gateway's live composition (`--detector live`).
     Live,
+    /// A live gateway's saved export, scored by `ct-eval swarm` (the
+    /// detector name its reports carry).
+    #[serde(rename = "gateway-export")]
+    GatewayExport,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -297,11 +311,29 @@ impl Gate {
                     GateStatus::Fail { value, bound }
                 }
             }
+            Check::FpPer1k { max } => {
+                fp_rate_at_most(counts.false_positive, score.totals.exchanges, *max)
+            }
         };
         GateOutcome {
             name: self.name.clone(),
             status,
         }
+    }
+}
+
+/// `selected` false positives per 1,000 of `exchanges`, against a
+/// ceiling; skipped with no exchanges.
+fn fp_rate_at_most(false_positives: u64, exchanges: u64, max: f64) -> GateStatus {
+    if exchanges == 0 {
+        return GateStatus::Skipped;
+    }
+    // Counts are far below 2^52: exact as f64.
+    let value = false_positives as f64 * 1000.0 / exchanges as f64;
+    if value <= max {
+        GateStatus::Pass { value }
+    } else {
+        GateStatus::Fail { value, bound: max }
     }
 }
 
