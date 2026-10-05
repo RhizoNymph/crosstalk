@@ -78,7 +78,11 @@ fn redact(text: &str) -> String {
     }
     let mut shown = parsed.to_string();
     // `Url` writes an empty path as `/`; keep the configured form.
-    if parsed.path() == "/" && !text.ends_with('/') && parsed.query().is_none() {
+    if parsed.path() == "/"
+        && !text.ends_with('/')
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+    {
         shown.pop();
     }
     shown
@@ -176,6 +180,22 @@ mod tests {
         ] {
             assert_eq!(redact(text), text);
         }
+    }
+
+    #[test]
+    fn a_fragment_is_kept_whole() {
+        assert_eq!(
+            redact("https://u:p@gateway.example#frag"),
+            "https://gateway.example/#frag"
+        );
+        assert_eq!(
+            redact("https://u:p@gateway.example/api#frag"),
+            "https://gateway.example/api#frag"
+        );
+        assert_eq!(
+            redact("https://gateway.example#frag"),
+            "https://gateway.example#frag"
+        );
     }
 
     #[test]
