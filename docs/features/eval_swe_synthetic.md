@@ -203,7 +203,7 @@ Splices (`--count 80`, seed 0; 59 editor views, 21 shell reads). There are
 | --- | --- | --- | --- |
 | exact | 14 / 14 | 0 / 6 | 14 / 20 |
 | whitespace | 15 / 15 | 0 / 5 | 15 / 20 |
-| json_string | 14 / 14 | out of reach, 0 / 6 | 14 / 14 |
+| json_string | 14 / 14 | 0 / 6 (in reach since 2026-10-05; 0 / 6 out of reach before) | 14 / 20 |
 | base64 | 16 / 16 | 0 / 4 | 16 / 20 |
 
 The reference finds every shell-read splice's content, but routes it
