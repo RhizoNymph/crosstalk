@@ -1,0 +1,32 @@
+[invariant]
+id = "flow.extract.result-pairs-with-history-call"
+statement = "The extraction step extracts a tool result among a ConversationDelta's new inputs with the call it answers (same call id) when that call is in an earlier output of the same conversation, or else in an assistant message among the new inputs of this delta (before the result) or of an earlier delta of the same conversation; a call found only in such history whose agent made a call with the same id, name and arguments in another conversation's output releases that call's held writes with the result's outcome, and one no output made yields reads only."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A request after a compaction, or the first request of a new conversation,
+carries earlier turns as history: an assistant tool call and its result in
+one request. Pairing only with calls the conversation made in an earlier
+output dropped every such result, so a read of a shared page was never
+recorded and its content match was routed Direct instead of through the
+channel (the eval's wiki dataset: 0 of 197 channel labels). A history call
+the agent never made in an observed output names no write the gateway saw,
+so it yields reads only; its writes happened in an exchange the gateway
+never captured. A write held from an output whose result arrives in a new
+conversation's request is released by matching the whole call, not its id
+alone, since some harnesses reuse ids such as call_0 across conversations.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_gateway::live::layers::extract::tests::a_result_pairs_with_its_call_in_the_same_request",
+    "crosstalk_gateway::live::layers::extract::tests::a_result_pairs_with_a_history_call_of_an_earlier_delta",
+    "crosstalk_gateway::live::layers::extract::tests::a_result_pairs_with_the_call_of_an_earlier_output",
+    "crosstalk_gateway::live::layers::extract::tests::a_held_write_is_released_by_its_result_in_another_conversation",
+    "crosstalk_gateway::live::layers::extract::tests::a_reused_call_id_does_not_release_another_calls_write",
+    "crosstalk_gateway::live::layers::extract::tests::a_result_without_a_call_is_dropped",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

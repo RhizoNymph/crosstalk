@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.extract.replayed-result-read-once"
+statement = "The extraction step extracts a tool result paired only with a history call into no read when the same agent was already delivered the same call (id, name and arguments) with the same result (outcome and text) in any conversation, so a transcript a new conversation replays yields no read the agent already made."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Pairing results with history calls (flow.extract.result-pairs-with-history-call)
+would otherwise read every tool result of a replayed transcript again, at
+the replaying exchange's time: a read the agent made long ago would pair
+with writes made since, and a channel transmission would open for content
+the agent already had. A result whose call came from an observed output is
+a first delivery by construction; the rule applies to history only. The
+same call with a different result (the page changed) is a new delivery.
+"""
+
+[evidence]
+unit = "crosstalk_gateway::live::layers::extract::tests::a_replayed_result_is_read_once"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

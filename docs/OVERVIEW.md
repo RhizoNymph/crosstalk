@@ -1088,10 +1088,13 @@ Features Index:
       the e2e smoke drives and eval builds against): Live::start(LiveConfig
       { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
       flow: FlowConfig (correlation_window_ms, evidence_window_ms,
-      suspected_ttl_ms, shards, tick_ms), provenance, ticking, seed,
+      suspected_ttl_ms, shards, tick_ms), provenance, extract:
+      ExtractConfig (the gateway config's extract section), ticking, seed,
       capture }) fills one consumer slot per layer (L3
       ReconstructConsumer; L4 Provenance then the extraction step feeding
-      L5 its Extracted inputs; L5 FlowConsumer on its own task; the
+      L5 its Extracted inputs, pairing a tool result with its call
+      wherever the request or the conversation's history carries it and
+      reading a replayed result once; L5 FlowConsumer on its own task; the
       gateway's minimal L6 classifier; L7 topology::consumer::handle; an
       evidence feeder; a surface relay), forwards the stores' outbox onto
       the bus, and builds the surface with InProcess::start_with over the
@@ -1503,9 +1506,10 @@ Features Index:
       ResourceExtractor over every known tool (Claude Code's file, fetch
       and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
       editor equivalents; HTTP tools such as http_request {method, url,
-      body?}, the method deciding the op; MCP tools mapped by typed JSON
-      configuration of tool name and argument paths to a resource and an
-      op). Every locator is canonical, so agents touching one thing meet
+      body?}, the method deciding the op; fetch tools configured by name,
+      fetch_tools, such as AgentDojo's get_webpage; MCP tools mapped by
+      typed JSON configuration of tool name and argument paths to a
+      resource and an op). Every locator is canonical, so agents touching one thing meet
       on one resource: lexical paths, relative paths against the stated
       or tracked working directory (Opaque without one), normalized URLs,
       folded MCP keys, MediaWiki pages as their canonical article URL
@@ -1516,7 +1520,8 @@ Features Index:
       Unknown), judged per tool in one place; reads need a delivered
       result. ConversationContext learns the persistent shell's directory
       and clones from shell calls. Builds the stored AccessOp with the
-      write's spans (originated plus self-relayed sources).
+      write's spans (originated, forwarded from an input, plus
+      self-relayed sources).
     entry_points:
       - crates/flow/src/extract/mod.rs
       - crates/flow/src/extract/context.rs

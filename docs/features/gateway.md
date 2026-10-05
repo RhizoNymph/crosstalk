@@ -98,6 +98,7 @@ against the config file's directory.
 | `pipeline` | no | `{"blob_put_attempts": 3, "blob_put_backoff_ms": 100}` |
 | `shutdown` | no | `{"drain_timeout_ms": 45000, "flush_timeout_ms": 10000}`; together under compose's 60 s grace period |
 | `flow` | no | crosstalk-flow's `FlowConfig`, each key defaulted: `{"correlation_window_ms": 600000, "evidence_window_ms": 120000, "suspected_ttl_ms": 1800000, "shards": 1, "tick_ms": 1000}`; checked at start (`LiveError::Flow`) |
+| `extract` | no | crosstalk-flow's `ExtractConfig` (L5's extractors), each key defaulted: `mcp_servers` (none), `http_tools` (`http_request`, `fetch`, `web_fetch`, `curl`), `fetch_tools` (none; names of tools whose `url` argument names the page they read, such as AgentDojo's `get_webpage`), `sites` (the built-in MediaWiki and GitHub rules); unknown keys, empty names and a name both an HTTP and a fetch tool are refused at parse |
 
 Checked values: environment variable names are non-empty without `=` or
 NUL (`EnvVarName`), URLs are `http(s)` with a host (`HttpUrl`), the model
@@ -438,6 +439,20 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
   start, naming the result part. A server tool's result in the same
   output is extracted at once. Access ids are derived from the exchange,
   the call and the access's place.
+  A result pairs with its call wherever the exchange's request or the
+  conversation's history carries it
+  (`flow.extract.result-pairs-with-history-call`, INV-1110): the step
+  takes a delta's new inputs in request order and keeps the tool calls of
+  assistant messages among them as the conversation's history calls, so a
+  request that carries a call and its result (after a compaction, or a
+  new conversation replaying its transcript) yields the read. A result
+  for a history call releases the held writes of the same call (id, name
+  and arguments) the agent made in another conversation's output; a
+  history call no observed output made yields reads only. A result the
+  agent was already delivered (same call and result content, any
+  conversation) is not read again (`flow.extract.replayed-result-read-once`,
+  INV-1111). The step runs under `LiveConfig::extract`, the gateway
+  config's `extract` section.
 - **L5.** `crosstalk_flow::consumer::FlowConsumer` over the shared
   registry (`MemoryChannels`), `MemoryVerdicts` and `MemoryAgents`, on its
   own task: commands first (a tick drains the queued extracted inputs,
@@ -479,7 +494,7 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
 | Item | What |
 | --- | --- |
 | `Live` | `start(LiveConfig)`, `pipeline() -> &Arc<LivePipeline>`, `surface() -> &Arc<Surface<LiveStores>>`, `stores() -> &LiveStores`, `layers() -> &LayerStores`, `context()`, `clock()`, `filled()`, `caller(RequestIdentity)`, `settle(Timestamp) -> Result<Settled, SettleError>`, `shutdown(Instant) -> LiveDrained` |
-| `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `ticking: Ticking`, `seed`, `capture` |
+| `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `extract: ExtractConfig`, `ticking: Ticking`, `seed`, `capture` |
 | `LiveConfig::new(LiveClock, FlowConfig, seed)` | the defaults: memory blobs, `Ticking::OnSettle`, trusted access, five-minute buckets (`DEFAULT_BUCKET`), the default provenance config; `DefaultsError` |
 | `LiveError` | `Flow`, `Blobs`, `Bus`, `Surface`, `Pipeline`, `Slot`, `Subscribe { slot, error }` |
 | `LiveClock` | `Read(Arc<dyn Clock>)`, `Manual(ManualClock)`; `reader`, `now`, `advance_to` |

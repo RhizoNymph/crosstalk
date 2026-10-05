@@ -37,7 +37,11 @@ so locator equality is resource identity.
   of known clones.
 - Write outcomes per known tool (`Delivered`, `Rejected`, `Unknown`), and
   reads kept only for a delivered result.
-- The spans a write carries, from L4's spans, and the stored `AccessOp`.
+- Fetch tools configured by name (`fetch_tools`): a tool whose `url`
+  argument names the page it reads, such as AgentDojo's `get_webpage`.
+- The spans a write carries, from L4's spans (originated, forwarded from
+  an input, and the writer's own relayed sources), and the stored
+  `AccessOp`.
 - The conversation context: the working directory stated in a system
   prompt, and what it learns from shell calls (the persistent shell's
   directory, clones and remotes).
@@ -72,7 +76,8 @@ flow consumer, per conversation, in order
                                                                        │
 extract_classified                                                     │
   catalog::identify(name, config) ─▶ KnownTool                         │
-     File | Fetch | Shell | Mcp (configured) | Http (configured names) │
+     Mcp (configured) | Http (configured names) | Fetch (configured    │
+     names, CONFIGURED_FETCH) | File | Fetch | Shell                   │
      none ─▶ Ok([])  (handles() is false)                              │
   result for another call id ─▶ treated as absent                      │
   Args::parse(arguments)          ─▶ ExtractError::Arguments           │
@@ -102,6 +107,19 @@ consumer, per access:
 `wget`, MCP URL resources, scanned URLs) or `http::tool_candidates` (HTTP
 tools): the URL is normalized, then the site rules (`sites::SitesConfig`)
 may name the wiki page or repository file the request reaches.
+
+### Write spans
+
+`spans::write_spans` picks, among L4's spans of the writer's exchange,
+the writer's spans located in the call's part:
+
+| Span state | Carried |
+| --- | --- |
+| originated (`Originated`, `Indexed`, `Propagated`, `Expired`) | the span |
+| `Relayed(Input(_))`: text forwarded from an input (a fetched document posted to a channel) | the span: forwarding counts as writing (`flow.access.write-spans-include-forwarded-input`, INV-1112). L4 indexes such a span as authored by the relaying agent, so a reader's match on it names the writer |
+| `Relayed(Span(s))`, `s` the writer's own span | `s` (`flow.access.write-spans-include-self-relay`, INV-961) |
+| `Relayed(Span(s))`, `s` another agent's (or unknown) | nothing: the match belongs to its originator |
+| `Common`, `Extracted` | nothing |
 
 ### Canonical identity
 
@@ -181,7 +199,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/mod.rs` | the composite extractor | `ToolExtractors` (`new`, `identify`, `extract_classified`, `ResourceExtractor`) |
 | `extract/op.rs` | outputs; re-exports the spec's `WriteOutcome` and `ExtractedOp` | `WriteOutcome` (`pairs`), `ExtractedOp`, `Classified` (`into_spec`), `Candidate` |
 | `extract/outcome.rs` | result judging, per known tool | `ContentRule`, `content_rule`, `write_outcome`, `read_delivered`, `result_text` |
-| `extract/catalog.rs` | known tools | `KnownTool`, `FileTool`, `FetchTool`, `ShellTool`, `HttpTool`, `McpTool`, `FILE_TOOLS`, `FETCH_TOOLS`, `SHELL_TOOLS`, `identify`, `mcp_name` |
+| `extract/catalog.rs` | known tools | `KnownTool`, `FileTool`, `FetchTool`, `ShellTool`, `HttpTool`, `McpTool`, `FILE_TOOLS`, `FETCH_TOOLS`, `CONFIGURED_FETCH`, `SHELL_TOOLS`, `identify`, `mcp_name` |
 | `extract/args.rs` | arguments | `Args`, `ArgPath` (JSON Pointer), `ArgError`, `InvalidArgPath` |
 | `extract/context.rs` | per-conversation context | `ConversationContext` (`from_system_prompt`, `scope`, `bind_repo`, `observe`), `stated_cwd` |
 | `extract/error.rs` | `From` into the spec's `ExtractError` | |
@@ -195,7 +213,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/bash/git.rs` | `git`, `gh` | |
 | `extract/bash/options.rs` | getopt-style splitting | `Options`, `OptSpec` |
 | `extract/mcp/mod.rs` | configured MCP tools | `candidates` |
-| `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_sites`, `rule`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError`, `DEFAULT_HTTP_TOOLS` |
+| `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_fetch_tools`, `with_sites`, `rule`, `http_tools`, `fetch_tools`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError` (`HttpAndFetch` among them), `DEFAULT_HTTP_TOOLS` |
 | `extract/resource/path.rs` | paths | `AbsolutePath`, `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
 | `extract/resource/url.rs` | URLs | `url_locator`, `url_text`, `scan_urls`, `UrlError` |
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
@@ -204,7 +222,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
 | `extract/sites/github.rs` | GitHub | `apply` |
 | `extract/spans.rs` | write spans, `AccessOp` | `write_spans`, `access_op`, `AccessOpError` |
-| `extract/fuzz.rs`, `extract/tests/`, `extract/resource/tests.rs` | tests; `tests/wiki.json` is the M2 wiki configuration fixture | |
+| `extract/fuzz.rs`, `extract/tests/`, `extract/resource/tests.rs` | tests (`tests/fetch_config.rs`: configured fetch tools); `tests/wiki.json` is the M2 wiki configuration fixture | |
 
 ## Configuration
 
@@ -245,6 +263,7 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
         { "op": "read", "resource": { "type": "url", "data": { "arg": "/url" } } } ] }] }
   ],
   "http_tools": ["http_request", "fetch", "web_fetch", "curl"],
+  "fetch_tools": ["get_webpage"],
   "sites": {
     "mediawiki": [
       { "hosts": ["*.wikipedia.org"], "article_path": "/wiki/", "script_path": "/w/",
@@ -261,6 +280,18 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   one server name the same `collection`, which is what makes a write and a
   read meet.
 - `http_tools`: default `http_request`, `fetch`, `web_fetch`, `curl`.
+- `fetch_tools`: default none. Names of tools whose `url` argument names
+  the page they read and whose result is the page (AgentDojo's
+  `get_webpage`): each is extracted as the built-in fetch tools are (a
+  `Structured` read of the normalized URL, site rules applied, kept only
+  with a delivered result; no `url` is `ExtractError::Arguments`). They
+  are identified after MCP and HTTP tools and before the built-in tables,
+  so a configured name shadows a built-in one. A name may not be both an
+  HTTP and a fetch tool (`ConfigError::HttpAndFetch`); empty names are
+  refused. The built-in fetch tools stay known whatever is configured
+  (`flow.extract.fetch-tools-configured`, INV-1113). The gateway reads
+  this configuration from its config's `extract` section
+  (`LiveConfig::extract`); the eval from `ct-eval run --extract-config`.
 - `sites`: default the Wikimedia projects (`/wiki/`, `/w/`, capital links,
   mobile hosts folded), Wiktionary (no capital links), Fandom
   (`script_path` `/`), and GitHub on. Giving `mediawiki` replaces the
@@ -280,6 +311,13 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   `flow.resource.url-normalization` (INV-268),
   `flow.resource.pattern-overlap-exact` (INV-660, property side): in
   `extract::resource::tests`.
+- `flow.access.write-spans-include-forwarded-input` (INV-1112):
+  `extract::tests::spans::write_spans_include_the_writers_forwarded_input`
+  and the property `extract::tests::write_spans_include_self_relayed_sources`
+  (whose expectation now carries input relays; INV-961's statement was
+  amended to match).
+- `flow.extract.fetch-tools-configured` (INV-1113):
+  `extract::tests::fetch_config`.
 - New (INV-X): `flow.extract.http-method-op`,
   `flow.resource.http-url-tool-independent`,
   `flow.resource.wiki-page-spelling-independent`,
