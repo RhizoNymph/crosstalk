@@ -330,6 +330,7 @@ failed and retried ones and nothing else.
  "read_tool":{…},"at_ms":…,"at_unix_ms":…}
 {"kind":"unattributed_read","world":…,"reader":…,"reader_key_group":…,"page":…,"version":…,"reader_session":…,"reader_turn":…,"reader_tool_use_id":…,
  "read_tool":{…},"content":{…},"at_ms":…,"at_unix_ms":…}   (written at the end of the run)
+{"kind":"session","world":…,"agent":…,"key_group":…,"session":…,"started_at_unix_ms":…}   (one per conversation, when it starts)
 {"kind":"agent_cluster","world":…,"key_group":2,"agents":["a004","a005"]}   (one per key group, singletons included, written once)
 ```
 
@@ -384,6 +385,10 @@ Meanings, and where each value comes from:
   when the wiki's answer to the PUT arrived at the writer: the wiki's API
   is unchanged and carries no timestamp, so this is the client's view of
   acceptance, at most one local round trip late.
+
+Every conversation also gets a `session` row when it starts, before its
+first request, so a scorer can map each session the gateway saw to its
+agent even when the conversation never touched the wiki.
 
 Classification (`truth::TruthBook`, owned by the collector, the one place
 that sees both sides). It keeps a map from (page, version) to the

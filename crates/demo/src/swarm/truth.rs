@@ -19,7 +19,9 @@
 //! detection of it unjudged instead of counting it as a false positive.
 //!
 //! [`Row`] is the file's JSON-lines schema: a `header` first, one
-//! `agent_cluster` per key group, then a row per read.
+//! `agent_cluster` per key group, then, in the order they happen, a
+//! `session` row when each conversation starts (so every session the
+//! gateway sees maps to its agent, wiki traffic or not) and a row per read.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -277,6 +279,16 @@ pub struct Unattributed {
     pub at_unix_ms: u64,
 }
 
+/// A conversation starting: its session id names one agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionRow {
+    pub world: String,
+    pub agent: String,
+    pub key_group: u32,
+    pub session: String,
+    pub started_at_unix_ms: u64,
+}
+
 /// The agents sharing one key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cluster {
@@ -296,6 +308,7 @@ pub enum Row {
     Miss(Miss),
     UnattributedRead(Unattributed),
     AgentCluster(Cluster),
+    Session(SessionRow),
 }
 
 impl Row {
@@ -339,6 +352,8 @@ pub struct Counts {
     pub misses: u64,
     /// Reads of a version whose write this run never reported.
     pub unattributed: u64,
+    /// Conversations started (one `session` row each).
+    pub sessions: u64,
 }
 
 type VersionKey = (PageSlug, u64);
@@ -442,6 +457,24 @@ impl TruthBook {
                 None
             }
         }
+    }
+
+    /// A conversation started; returns its `session` row.
+    pub fn start_session(
+        &mut self,
+        agent: String,
+        key_group: u32,
+        session: String,
+        started_at_unix_ms: u64,
+    ) -> Row {
+        self.counts.sessions += 1;
+        Row::Session(SessionRow {
+            world: self.world.clone(),
+            agent,
+            key_group,
+            session,
+            started_at_unix_ms,
+        })
     }
 
     /// A conversation ended: nothing more is read in it.

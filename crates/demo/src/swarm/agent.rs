@@ -164,6 +164,14 @@ pub async fn run(
     tracing::debug!(agent = %agent.name, "agent starting");
     while !*stop.borrow() {
         let mut conversation = Conversation::new(session_id(&mut rng), config.claude_code_shape);
+        let _ = events
+            .send(Event::ConversationStarted {
+                agent: agent.name.clone(),
+                key_group: agent.key_group,
+                session: conversation.session().to_owned(),
+                started_at_unix_ms: shared.clock.now().unix_ms,
+            })
+            .await;
         let prompts = config.turns.get().draw(&mut rng);
         let mut completed = true;
         while u64::from(conversation.prompts()) < prompts {

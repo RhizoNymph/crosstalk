@@ -64,6 +64,13 @@ pub enum Event {
     WikiRead(ReadRecord),
     /// A wiki call that failed outright.
     WikiError,
+    /// A conversation started, before its first request.
+    ConversationStarted {
+        agent: String,
+        key_group: u32,
+        session: String,
+        started_at_unix_ms: u64,
+    },
     ConversationEnded {
         session: String,
         completed: bool,
@@ -144,6 +151,8 @@ pub struct Report {
     /// Found reads of a version whose write this run never reported (written
     /// before the run, or by a writer cut off before reporting): no row.
     pub unattributed_reads: u64,
+    /// Conversations started, each a `session` truth row.
+    pub sessions: u64,
     /// The run's id; the ground truth's world is `swarm-<run>`.
     pub run: String,
 }
@@ -313,6 +322,15 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
                 }
             }
             Event::WikiError => wiki_errors += 1,
+            Event::ConversationStarted {
+                agent,
+                key_group,
+                session,
+                started_at_unix_ms,
+            } => {
+                let row = book.start_session(agent, key_group, session, started_at_unix_ms);
+                append(&mut truth, &[row]).await;
+            }
             Event::ConversationEnded { session, completed } => {
                 if completed {
                     completed_count += 1;
@@ -378,6 +396,7 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
         self_reads: counts.self_reads,
         rereads: counts.rereads,
         unattributed_reads: counts.unattributed,
+        sessions: counts.sessions,
         run: setup.info.run.clone(),
     }
 }

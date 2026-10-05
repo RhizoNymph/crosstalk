@@ -527,6 +527,7 @@ fn kind(row: &Row) -> &'static str {
         Row::Miss(_) => "miss",
         Row::UnattributedRead(_) => "unattributed_read",
         Row::AgentCluster(_) => "agent_cluster",
+        Row::Session(_) => "session",
     }
 }
 
@@ -778,6 +779,26 @@ fn rows_have_exactly_the_v2_keys() {
     let value = &encoded["value"];
     assert_eq!(value["kind"], "unattributed_read");
     assert_eq!(value["version"], 5);
+
+    // A conversation starting.
+    let session = book.start_session("agent-003".to_owned(), 1, "s-9".to_owned(), 1_010);
+    let encoded = encode(&session);
+    assert_eq!(
+        encoded["order"],
+        json!([
+            "kind",
+            "world",
+            "agent",
+            "key_group",
+            "session",
+            "started_at_unix_ms"
+        ])
+    );
+    assert_eq!(
+        encoded["value"],
+        json!({"kind": "session", "world": "swarm-01J0000000000000000000000A", "agent": "agent-003", "key_group": 1, "session": "s-9", "started_at_unix_ms": 1_010})
+    );
+    assert_eq!(book.counts().sessions, 1);
     assert_eq!(
         keys(&value["content"]),
         BTreeSet::from(["at", "blake3", "excerpt", "sha256"])
