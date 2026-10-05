@@ -12,6 +12,7 @@ use crate::aggregates::alert::RuleStatus;
 use crate::aggregates::edge::EdgeTotals;
 use crate::aggregates::node::CanonicalOriginKind;
 use crate::aggregates::topic::{Embedding, EmbeddingModel, Topic, TopicModelVersion};
+use crate::derived::flow::channel::confirmation::ListingKind;
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::ids::{SinkId, TopicId};
 use crate::interfaces::l8_surface::lists::{
@@ -50,6 +51,7 @@ fn every_channel_filter() -> Vec<(&'static str, ChannelFilter)> {
                 "channel_filter_with_superseded",
                 ChannelFilter {
                     origin,
+                    listings: vec![ListingKind::Confirmed, ListingKind::Declaration],
                     detections: vec![DetectionKind::Active, DetectionKind::Dormant],
                     policies: vec![PolicyKind::Unreviewed],
                     window: Some(window()),
@@ -59,6 +61,7 @@ fn every_channel_filter() -> Vec<(&'static str, ChannelFilter)> {
                 "channel_filter_superseded",
                 ChannelFilter {
                     origin,
+                    listings: Vec::new(),
                     detections: Vec::new(),
                     policies: Vec::new(),
                     window: None,
@@ -140,9 +143,17 @@ fn overview_counts_golden() {
         queues: QueueCounts {
             open_alerts: 41,
             unreviewed_channels: 3,
+            unconfirmed_channels: Some(2),
         },
     };
     assert_golden(AREA, "overview_counts", &counts);
+    // Under `UnconfirmedChannels::Exclude`: not counted, not "none".
+    let confirmed_only = QueueCounts {
+        open_alerts: 41,
+        unreviewed_channels: 2,
+        unconfirmed_channels: None,
+    };
+    assert_golden(AREA, "queue_counts_confirmed_only", &confirmed_only);
     assert_round_trips(&QueueCounts::default());
 }
 
@@ -256,4 +267,21 @@ fn reports_refuse_unknown_fields_and_other_delivery_forms() {
             "queues": {"open_alerts": 0, "unreviewed_channels": 0, "dead_letters": 0}}"#,
         "unknown field `dead_letters`",
     );
+}
+
+/// Every `ListingKind` a channel list filter can name, in declaration order.
+#[test]
+fn listing_kinds_golden() {
+    fn declared(kind: ListingKind) -> ListingKind {
+        match kind {
+            ListingKind::Confirmed | ListingKind::Unconfirmed | ListingKind::Declaration => kind,
+        }
+    }
+    let kinds = [
+        ListingKind::Confirmed,
+        ListingKind::Unconfirmed,
+        ListingKind::Declaration,
+    ]
+    .map(declared);
+    assert_golden(AREA, "listing_kinds", &kinds.to_vec());
 }

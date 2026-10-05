@@ -215,7 +215,9 @@ fn prop_alerts_match_filter_model() {
                 .first_seen(minute(0))
                 .build();
             let c2 = scene.ids.channel();
-            fixture.channel(c2, &resource, scene.a2, minute(0)).await;
+            fixture
+                .channel(&mut scene.ids, c2, &resource, scene.a2, scene.a3, minute(0))
+                .await;
             let admin = fixture.caller(Who::Admin).await;
             let subjects = [
                 AlertSubject::Channel(scene.c1),

@@ -21,6 +21,9 @@ use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::actions::{ActionOutcome, OperatorAction};
 use crate::interfaces::l8_surface::audit::{AuditEntry, AuditError, AuditFilter, AuditLog};
+use crate::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
+};
 use crate::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crate::interfaces::l8_surface::errors::{ActionError, QueryError};
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
@@ -42,8 +45,9 @@ use crate::interfaces::l8_surface::sinks::{AlertSink, SinkError, SinkInfo};
 use crate::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crate::interfaces::l8_surface::{AlertFilter, OperatorActions, Present, QueryApi};
 use crate::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, ProjectionList, ResourceUseList, SearchList, TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
+    DeadLetterList, EdgeTransmissionList, ProjectionList, ResourceUseList, SearchList, TopicList,
+    TransmissionList,
 };
 use crate::paging::{Page, PageRequest};
 use crate::support::{TimeWindow, Watermark};
@@ -76,6 +80,16 @@ impl QueryApi for Dummy {
         _filter: &ChannelFilter,
         _page: &PageRequest<ChannelList>,
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError> {
+        match *self {}
+    }
+    async fn channel_transmissions(
+        &self,
+        _caller: &Caller,
+        _channel: ChannelId,
+        _filter: &ChannelTransmissionFilter,
+        _version: TopicVersionSelector,
+        _page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<ChannelTransmissionPage, QueryError> {
         match *self {}
     }
     async fn channel_names(
@@ -354,6 +368,13 @@ fn query_api<T: QueryApi>(x: &T, never: &Dummy) {
     assert_send(x.channel(arg(never), arg(never), arg(never)));
     assert_send(x.policy_history(arg(never), arg(never)));
     assert_send(x.channels(arg(never), arg(never), arg(never)));
+    assert_send(x.channel_transmissions(
+        arg(never),
+        arg(never),
+        arg(never),
+        arg(never),
+        arg(never),
+    ));
     assert_send(x.channel_names(arg(never), arg(never)));
     assert_send(x.promotion_preview(arg(never), arg(never), arg(never)));
     assert_send(x.agents(arg(never), arg(never), arg(never), arg(never)));

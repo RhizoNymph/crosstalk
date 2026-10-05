@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.correlator.settles-on-the-injected-clock"
+statement = "The correlator closes evidence windows, expires suspicions and the flow consumer releases held writes only by input event times and the times of the ticks it is given, each read from the consumer's injected Clock, so evidence replayed with timestamps far in the past, ticked by the replay's clock, yields the same transmissions, channels and events as the same evidence live."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+The demo replays public datasets through the pipeline, and their exchanges
+carry timestamps years in the past. A window measured against wall time
+would close before any of the replayed evidence arrived: every channel
+transmission would be suspected and discarded at its opening, and every
+confirmation would come from the content-after-discard path, under a new
+id. Taking time only from inputs and injected ticks keeps replay and live
+traffic on one code path.
+"""
+
+[evidence]
+unit = "crosstalk_flow::consumer::tests::wiki::a_replayed_corpus_settles_on_the_replay_clock"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

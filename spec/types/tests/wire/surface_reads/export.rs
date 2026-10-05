@@ -18,7 +18,8 @@ use super::fixtures::{
 use crate::aggregates::edge::{EdgeSelector, RouteKind, TopologyFilter};
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::{
-    Fitted, PointRoute, ProjectedPoint, ProjectionLimit, ProjectionParams, ProjectionSpec,
+    Fitted, PointParts, PointRoute, ProjectedPoint, ProjectionLimit, ProjectionParams,
+    ProjectionSpec,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -436,7 +437,7 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
         }),
         ExportDatasetKind::Projection => ExportRow::Point(PointRow {
             index: 0,
-            point: ProjectedPoint {
+            point: ProjectedPoint::new(PointParts {
                 transmission: tx(),
                 from: planner(),
                 to: coder(),
@@ -445,7 +446,8 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
                 confirmed_at: confirmed_at(),
                 x: Finite::new(3.25).expect("finite"),
                 y: Finite::new(-1.5).expect("finite"),
-            },
+            })
+            .expect("a point between two agents"),
             content: None,
         }),
         ExportDatasetKind::Verdicts => ExportRow::Verdict(VerdictRow {

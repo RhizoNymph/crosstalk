@@ -60,7 +60,11 @@ channel route carries its channel, `{"type": "channel", "data": "<id>"}`,
 and the others nothing, `{"type": "direct"}`; a bare kind string
 (`"channel"`), a channel route without its channel and another route with
 one are decode errors. The channel is the canonical one when the sample
-was read.
+was read. A `ProjectedPoint` is checked: its JSON is its `PointParts`
+(the same fields as before), and `ProjectedPoint::new`, which decoding
+runs, refuses a point whose `from` is its `to`, a transmission within one
+agent no projection holds (`analysis.projection.point-cross-agent`); the
+frame refuses such a row too (`InvalidFrame::WithinOneAgent`).
 `TopicVersionHistory` is `{"versions": [..]}`: the active version's index
 is found again from the statuses.
 
@@ -132,7 +136,7 @@ decode errors there too.
 | `spec/types/aggregates/alert/mod.rs` | Alerts (`Alert`, `AlertState`, `AlertSubject`, `SuppressReason`, `AlertRevision`, …); re-exports every rule type, so `aggregates::alert::<Type>` paths are unchanged |
 | `spec/types/aggregates/alert/rules.rs` | Alert rules (`UserRule`, a request; `AlertRuleDef`, decoded through `builtin` or `load`), split out when `alert.rs` reached 1000 lines |
 | `spec/types/support.rs` | `Finite`, `NotFinite`, `QueryText` (a semantic rule's text, as `RuleQueryText`) |
-| `spec/types/aggregates/projection/mod.rs` | `ProjectionParams` (a request), `ProjectionSpec` (decoded pinned; stamped), `ProjectionInfo`, `ProjectedPoint` (`Finite` coordinates, a `PointRoute`), `FrameRetention` |
+| `spec/types/aggregates/projection/mod.rs` | `ProjectionParams` (a request), `ProjectionSpec` (decoded pinned; stamped), `ProjectionInfo`, `ProjectedPoint` (checked through `ProjectedPoint::new`; `PointParts` on the wire; `Finite` coordinates, a `PointRoute`), `FrameRetention` |
 | `spec/types/aggregates/retention.rs` | `RetentionPolicy`, decoded through `RetentionPolicy::new` |
 | `spec/types/tests/wire/analysis/` | `rules.rs`, `topics.rs`, `projections.rs`, `insight.rs` |
 | `spec/types/tests/golden/{rules,topics,projections,insight}/` | 13, 10, 10 and 11 goldens |
@@ -140,5 +144,6 @@ decode errors there too.
 ## Invariants
 
 `canonical.wire.finite-floats`, `analysis.rule.query-text-bounded`,
-`analysis.projection.point-channel-matches-route`; the general wire
+`analysis.projection.point-channel-matches-route`,
+`analysis.projection.point-cross-agent`; the general wire
 invariants take the area's goldens and rejections as evidence.

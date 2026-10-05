@@ -1,0 +1,26 @@
+[invariant]
+id = "topology.bipartite.listed-channels-only"
+statement = "The access edges of EdgeStore::channel_topology are exactly the access buckets in the window whose resource the registry holds on a canonical channel listed as a channel (Listing::Channel), that TopologyFilter::admits_access keeps, resolved to canonical agents and summed per agent, channel and operation, whether or not a transmission in the window used the channel, and a resource on no channel, a hidden channel and a declaration without cross-agent traffic have neither access edges nor a channel node."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Once a channel exists its writes nobody has read yet matter (a hijacked
+wiki keeps being written to), so they are drawn. Before it exists the
+resource is not a channel: drawing it would show communication that never
+happened. Buckets are kept by resource and resolved to the channel holding
+it at read time, so a channel discovered later shows the accesses that led
+to it, including the write of its first co-access, without rewriting a
+settled bucket.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::graph::writes_nobody_read_are_drawn",
+    "crosstalk_memory::topology::tests::graph::channel_topology_draws_listed_channels_only",
+]
+property = "crosstalk_topology::props::channel_topology_accesses_match_buckets"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

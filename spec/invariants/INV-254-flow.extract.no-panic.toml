@@ -15,4 +15,4 @@ forever.
 fuzz = "crosstalk_flow::extract::fuzz::extract_arbitrary_call"
 
 [evidence-review]
-fuzz = { agent = "false", human = "false" }
+fuzz = { agent = "true", human = "false" }

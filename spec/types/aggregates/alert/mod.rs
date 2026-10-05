@@ -96,6 +96,28 @@ impl AlertSubject {
             Self::Transmission(_) => self,
         }
     }
+
+    /// Whether readers show an alert about this subject: the alerts list,
+    /// the overview's open-alert count and the live feed leave out an alert
+    /// whose channel (resolved through `aliases`) is hidden
+    /// (`Listing::Hidden`: every transmission through it now resolves
+    /// within one agent) or whose transmission no longer crosses agents
+    /// (`Transmission::crossing` is `WithinOneAgent`). `hidden` and
+    /// `within_one_agent` answer those at the read. Read time only: the
+    /// stored alert keeps its state, and an unmerge shows it again. An agent
+    /// subject is always shown.
+    pub fn shown(
+        self,
+        aliases: impl Aliases,
+        hidden: impl Fn(ChannelId) -> bool,
+        within_one_agent: impl Fn(TransmissionId) -> bool,
+    ) -> bool {
+        match self.resolved(aliases) {
+            Self::Channel(channel) => !hidden(channel),
+            Self::Transmission(transmission) => !within_one_agent(transmission),
+            Self::Agent(_) => true,
+        }
+    }
 }
 
 /// A rule's output, before triage.

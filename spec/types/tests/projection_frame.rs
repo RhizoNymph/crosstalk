@@ -4,7 +4,7 @@ use crate::aggregates::projection::frame::{
     InvalidFrame, MAGIC, NO_CHANNEL, OUTLIER, ProjectionFrame, RESERVED_AT, Table,
 };
 use crate::aggregates::projection::{
-    InvalidProjectionLimit, PointRoute, ProjectedPoint, ProjectionLimit,
+    InvalidProjectionLimit, PointParts, PointRoute, ProjectedPoint, ProjectionLimit,
 };
 use crate::aggregates::topic::TopicModelVersion;
 use crate::ids::{ProjectionId, TopicId};
@@ -33,7 +33,7 @@ fn point(
     topic: Option<TopicId>,
 ) -> ProjectedPoint {
     let coordinate = f32::from(u16::try_from(n).unwrap_or(0));
-    ProjectedPoint {
+    ProjectedPoint::new(PointParts {
         transmission: transmission(n),
         from: agent(from),
         to: agent(to),
@@ -42,7 +42,8 @@ fn point(
         confirmed_at: at(u64::try_from(n).unwrap_or(0) * 10),
         x: Finite::new(coordinate).expect("a small integer is finite"),
         y: Finite::new(-coordinate / 2.0).expect("a small integer is finite"),
-    }
+    })
+    .expect("a point between two agents")
 }
 
 /// Three points: senders 1, 2, 1; readers 9, 9, 8; routes Direct, Channel
@@ -560,5 +561,20 @@ fn decode_checks_the_frame_invariants() {
             row: 0,
             index: 5
         }))
+    );
+}
+
+/// A frame whose row names one agent as both sender and reader is refused:
+/// no projection holds a transmission within one agent.
+#[test]
+fn a_frame_refuses_a_point_within_one_agent() {
+    let (header, mut tables, columns) = parts();
+    // Row 1's sender is agent 2; make its reader agent 2 too.
+    tables.readers = vec![agent(9), agent(2)];
+    let mut columns = columns;
+    columns.reader = vec![0, 1, 0];
+    assert_eq!(
+        ProjectionFrame::new(header, tables, columns),
+        Err(InvalidFrame::WithinOneAgent { row: 1 })
     );
 }

@@ -22,7 +22,8 @@
             "type": "pinned",
             "data": 2
           },
-          "false_detections": "exclude"
+          "false_detections": "exclude",
+          "unconfirmed_channels": "include"
         },
         "topic_version": 2,
         "params": {
@@ -64,7 +65,8 @@
             "type": "pinned",
             "data": 2
           },
-          "false_detections": "exclude"
+          "false_detections": "exclude",
+          "unconfirmed_channels": "include"
         },
         "topic_version": 2,
         "params": {

@@ -4,10 +4,19 @@ use std::num::NonZeroU32;
 
 use crate::aggregates::node::{AgentNode, CanonicalStateKind, GraphNode};
 use crate::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
+use crate::derived::flow::channel::confirmation::CrossTraffic;
+use crate::derived::flow::channel::detection::TrafficDetection;
+use crate::derived::flow::channel::policy::{Policy, PolicyAuthor};
+use crate::derived::flow::channel::{Channel, ChannelOrigin, Declaration, DeclaredHistory};
+use crate::derived::flow::resource::{Host, Locator, Resource, ResourcePattern};
 use crate::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{
-    AccessId, AgentId, ChannelId, ExchangeId, MessageHash, ResourceId, SpanId, TransmissionId,
+    AccessId, AgentId, ChannelId, ExchangeId, MessageHash, OperatorId, ResourceId, SpanId,
+    TransmissionId,
+};
+use crate::interfaces::l8_surface::channels::{
+    ChannelActivity, ChannelCounts, ChannelRow, ChannelStanding, SupersededInto,
 };
 use crate::observed::agent::ClaimSet;
 use crate::observed::message::{PartRef, ToolCallId};
@@ -137,4 +146,59 @@ pub fn agent_node(n: u128, transmissions_in: u64, transmissions_out: u64) -> Gra
         transmissions_in,
         transmissions_out,
     })
+}
+
+/// `channel`'s row as a store would build it, with `traffic` when it is in
+/// force: its seed resource (a URL), its supersession by a channel that
+/// operator 7 promoted at the supersession time, or in force, seen at 500
+/// when its detection has traffic and never active otherwise.
+pub fn channel_row(channel: Channel, traffic: CrossTraffic) -> ChannelRow {
+    let seed = channel.origin.seed().map(|seed| Resource {
+        id: seed.resource,
+        locator: Locator::Url {
+            scheme: "https".into(),
+            host: Host("wiki.example".into()),
+            path: "/seed".into(),
+            query: None,
+        },
+        first_seen: at(1),
+    });
+    let standing = match (channel.origin.supersession(), channel.origin.seed()) {
+        (Some(supersession), Some(from)) => {
+            let superseding = Channel {
+                id: supersession.by,
+                origin: ChannelOrigin::Declared {
+                    declaration: Declaration {
+                        pattern: ResourcePattern::Host(Host("wiki.example".into())),
+                        by: PolicyAuthor::Operator(OperatorId::from_ulid(7)),
+                        at: supersession.at,
+                    },
+                    history: DeclaredHistory::Promoted {
+                        from,
+                        detection: TrafficDetection::Active {
+                            since: at(1),
+                            last_transmission: transmission(1),
+                        },
+                    },
+                },
+                resources: Vec::new(),
+                policy: Policy::Unreviewed(None),
+            };
+            ChannelStanding::Superseded(
+                SupersededInto::of(supersession, &superseding).expect("a promoted superseder"),
+            )
+        }
+        _ if channel.origin.traffic().is_some() => ChannelStanding::InForce {
+            traffic,
+            activity: ChannelActivity::Seen {
+                last: at(500),
+                counts: ChannelCounts::default(),
+            },
+        },
+        _ => ChannelStanding::InForce {
+            traffic,
+            activity: ChannelActivity::Never,
+        },
+    };
+    ChannelRow::new(channel, seed, standing).expect("a consistent fixture row")
 }

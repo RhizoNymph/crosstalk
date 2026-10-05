@@ -15,6 +15,7 @@ use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::lists::{AgentFilter, ChannelFilter};
 use crosstalk_spec::paging::{ChannelList, PageRequest};
+use crosstalk_spec::support::Timestamp;
 use crosstalk_testkit::build::{ResourceBuilder, TransmissionBuilder};
 use crosstalk_testkit::ids::Ids;
 
@@ -31,8 +32,9 @@ crosstalk_sim::sim_test! {
         let fixture = Fixture::new().await;
         let caller = fixture.caller(Who::Viewer).await;
         let mut ids = Ids::seeded(7);
-        let writer = ids.agent();
+        let (writer, reader) = (ids.agent(), ids.agent());
         fixture.agent(writer, minute(0)).await;
+        fixture.agent(reader, minute(0)).await;
         let mut rng = ctx.rng();
         let initial = 3 + rng.below(NonZeroU64::MIN.saturating_add(6));
         let mut existing = BTreeSet::new();
@@ -42,11 +44,11 @@ crosstalk_sim::sim_test! {
                 .first_seen(minute(0))
                 .build();
             let channel = ids.channel();
-            fixture.channel(channel, &resource, writer, minute(0)).await;
+            fixture.channel(&mut ids, channel, &resource, writer, reader, minute(0)).await;
             existing.insert(channel);
         }
         let mut request: PageRequest<ChannelList> = page(1 + u16::try_from(rng.below(NonZeroU64::MIN.saturating_add(2))).unwrap_or(0));
-        let mut listed: Vec<ChannelId> = Vec::new();
+        let mut listed: Vec<(Timestamp, ChannelId)> = Vec::new();
         let mut extra = 0_u64;
         loop {
             let page = fixture
@@ -55,7 +57,7 @@ crosstalk_sim::sim_test! {
                 .await
                 .map_err(|error| failed("channels", error))?;
             let (rows, next) = page.value.into_parts();
-            listed.extend(rows.iter().map(|row| row.channel().id));
+            listed.extend(rows.iter().map(|row| (row.created_at(), row.channel().id)));
             // A write between pages.
             if rng.below(NonZeroU64::MIN.saturating_add(1)) == 0 {
                 extra += 1;
@@ -64,18 +66,19 @@ crosstalk_sim::sim_test! {
                     .first_seen(minute(1))
                     .build();
                 let channel = ids.channel();
-                fixture.channel(channel, &resource, writer, minute(1)).await;
+                fixture.channel(&mut ids, channel, &resource, writer, reader, minute(1)).await;
             }
             match next {
                 Some(next) => request.after = Some(next),
                 None => break,
             }
         }
-        let distinct: BTreeSet<ChannelId> = listed.iter().copied().collect();
+        let distinct: BTreeSet<ChannelId> = listed.iter().map(|(_, id)| *id).collect();
         check(&ctx, distinct.len() == listed.len(), || format!("repeated: {listed:?}"))?;
         check(&ctx, existing.is_subset(&distinct), || {
             format!("missing {:?}", existing.difference(&distinct).collect::<Vec<_>>())
         })?;
+        // Newest created first, ties by id descending.
         let mut sorted = listed.clone();
         sorted.sort_by(|a, b| b.cmp(a));
         check(&ctx, sorted == listed, || format!("out of order: {listed:?}"))

@@ -457,9 +457,11 @@ pub struct TopicSize {
 /// that version, counted over every transmission or only those confirmed in
 /// `window`.
 ///
-/// These count topic assignments, so a transmission between two agents that
-/// were later merged still counts here although graphs and series drop it as
-/// a self-edge.
+/// These count topic assignments of transmissions between different agents:
+/// one whose two agents have since merged into one counts nowhere
+/// (`Transmission::crossing`), here as in graphs and series, resolved at the
+/// read. A dropped version's all-time sizes are frozen at its drop, merges
+/// up to then applied, since its assignments are gone.
 ///
 /// Built only through [`TopicSizes::new`], which rejects a topic listed
 /// twice.

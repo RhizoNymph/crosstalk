@@ -45,7 +45,9 @@ pub trait TransmissionVerdicts {
     ) -> impl Future<Output = Result<VerdictLog, VerdictError>> + Send;
 
     /// [`DetectionQuality::tally`] over every stored transmission with its
-    /// current verdict, read in one snapshot.
+    /// current verdict, read in one snapshot, with agents resolved through
+    /// `AgentDirectory` at the read (a transmission whose agents have since
+    /// merged into one is not counted).
     fn quality(
         &self,
         window: TimeWindow,

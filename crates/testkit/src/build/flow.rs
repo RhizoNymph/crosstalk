@@ -260,8 +260,9 @@ enum Declared {
 
 /// Builds a [`Channel`].
 ///
-/// The default is a discovered channel seeded by a fresh resource and
-/// access, observed, unreviewed, with no resources beyond its seed. The
+/// The default is a discovered channel seeded by a fresh resource and the
+/// fresh cross-agent transmission that discovered it, opened at `T0`,
+/// active since then, unreviewed, with no resources beyond its seed. The
 /// traffic detection set with [`ChannelBuilder::detection`] applies to every
 /// origin that has traffic (discovered, promoted, superseded, declared and
 /// in use).
@@ -281,14 +282,16 @@ impl ChannelBuilder {
     pub fn new(ids: &mut Ids) -> Self {
         let seed = Seed {
             resource: ids.resource(),
-            first_access: ids.access(),
+            first_transmission: ids.transmission(),
+            opened_at: T0,
         };
         Self {
             id: ids.channel(),
             seed,
             origin: Origin::Discovered,
-            detection: TrafficDetection::Observed {
-                first_access: seed.first_access,
+            detection: TrafficDetection::Active {
+                since: seed.opened_at,
+                last_transmission: seed.first_transmission,
             },
             declared_by: PolicyAuthor::Config,
             declared_at: T0,

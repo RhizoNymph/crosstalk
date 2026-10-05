@@ -15,7 +15,7 @@ for agents, channels, transmissions and the overview are in
 - The queries' shared contract: paginated lists (channels, agents, alert
   rules, alerts, dead letters, the audit log, edge transmissions,
   transmission rows by id, search hits, a version's topics, projection
-  jobs, a channel's resources), the linked views sharing one
+  jobs, a channel's resources, a channel's cross-agent transmissions), the linked views sharing one
   `TopologyFilter` and one resolved topic-model version (topology, the
   channel-centred topology, series, search, edge drill-down, projection
   fits), the topic history, stored projections and their columnar frame,
@@ -299,8 +299,13 @@ resolved version, latest verdict) and keeps it when
 | `route_kinds` | `RouteKind::from(route)` is listed |
 | `topics` | its topic under the resolved version is listed; outliers and unclassified transmissions never match |
 | `false_detections` | `Include` (the default) always; `Exclude` unless the view's copy of the transmission's current verdict is `FalseDetection` |
+| `unconfirmed_channels` | always: a transmission view counts confirmed transmissions, whose channel they confirm; it decides only which channels count (the channel-centred view's accesses and channel nodes, the overview's channel queues) |
 
-Empty lists do not restrict and non-empty fields combine with AND. The
+Whatever the filter, `admits` never admits a subject whose sender and
+reader are one canonical agent: a transmission whose agents have since
+merged into one counts in no view (`topology.filter.cross-agent-only`,
+[channel_semantics.md](channel_semantics.md)). Empty lists do not
+restrict and non-empty fields combine with AND. The
 window is separate and always tested against `Confirmed::at`. For the graph
 and series the subject is each transmission counted into an edge, for
 search each hit, for a projection each sampled point (at fit time), and for
@@ -395,7 +400,9 @@ are ground-truth labels for measuring the detector.
 
 `DetectionQuality::tally` is the reference definition. It counts each
 transmission whose `opened_at` (every state has it and none changes it) is
-in the window and whose state is judgeable, once, in the `QualityRow` of
+in the window, whose state is judgeable and that still crosses agents
+under the read's aliases (`flow.quality.cross-agent-only`: one whose
+agents have since merged into one is no detector call to count), once, in the `QualityRow` of
 its `RouteKind` and `QualityMatch`, under `genuine`, `false_detection` or
 `unlabeled` (never judged or withdrawn) by its current verdict:
 
@@ -568,16 +575,20 @@ draws, so the UI needs no lookup per node (`aggregates/node.rs`):
   claimed. The counts are the transmissions of the response's edges into
   and out of the agent.
 - `GraphNode::Channel(ChannelNode { id, label, origin_kind, detection_kind,
-  policy_kind, locator_summary })`, in the channel-centred view only.
-  `origin_kind` is a `CanonicalOriginKind` (no superseded origin); `label`
-  is `None` until channels carry display labels.
+  confirmation, policy_kind, locator_summary })`, in the channel-centred
+  view only, for channels listed as channels. `origin_kind` is a
+  `CanonicalOriginKind` (no superseded origin); `confirmation` is
+  `Confirmed` when a transmission edge routes through it and its
+  listing's otherwise (an unconfirmed channel is drawn marked); `label` is
+  `None` until channels carry display labels.
 
 The facts come from `NodeFacts` (`l7_topology.rs`): a synchronous cache
 of L3's and L5's facts the edge store reads inside its own snapshot, like
 the directories. A node it has not seen yet is drawn with fixed defaults
-(an agent provisional, top-level, unlabelled and without claims; a channel
-discovered, observed, unreviewed and summarized by its id)
-(`topology.node-facts.unknown-defaults`).
+(an agent provisional, top-level, unlabelled and without claims; a channel,
+which only a transmission edge can then draw, discovered, active,
+unreviewed and confirmed and summarized by its id, with none of its
+accesses drawn) (`topology.node-facts.unknown-channel-defaults`).
 
 Which nodes appear: every edge endpoint (in the channel-centred view also
 every access channel and transmission route channel) and every canonical
@@ -589,16 +600,25 @@ at query time.
 ### Channel-centred view
 
 Splitting `Route::Channel` edges into A→C→B would show only writes someone
-read, and the early stage of a hijacked wiki is writes nobody has read yet.
-So accesses have their own aggregate (`aggregates/access.rs`): an
-`AccessEdge { agent, channel, op, bucket, accesses }`, bucketed like
-`EdgeKey` with no topic, maintained by L7 from `AccessRecorded`.
+read, and once a channel exists its writes nobody has read yet matter (a
+hijacked wiki keeps being written to). So accesses have their own
+aggregate (`aggregates/access.rs`): an `AccessEdge { agent, resource, op,
+bucket, accesses }`, bucketed like `EdgeKey` with no topic, maintained by
+L7 from `AccessRecorded` whether or not the resource is on a channel yet.
+A resource is not a channel until a cross-agent transmission goes through
+it ([channel_semantics.md](channel_semantics.md)), so a bucket's resource
+is resolved at the read to the canonical channel holding it now
+(`NodeFacts::channel_of`), and the accesses before discovery join that
+channel's buckets without rewriting one.
 `QueryApi::channel_topology(caller, window, weighting, filter)` returns a
 `Watermarked<BipartiteGraph { nodes, accesses, transmissions, topic_version }>`:
 
 - `accesses`: access buckets in the window, resolved to canonical agents and
-  channels, kept by `TopologyFilter::admits_access`, summed per (agent,
-  channel, op). Each share is its count over all access counts, normalized
+  to the canonical channel holding each resource, left out when that is no
+  channel or a channel not listed as one (a hidden channel, a declaration
+  without cross-agent traffic: `ChannelFacts::listing` is not
+  `Listing::Channel`), kept by `TopologyFilter::admits_access`, summed per
+  (agent, channel, op) (`topology.bipartite.listed-channels-only`). Each share is its count over all access counts, normalized
   apart from transmissions and independent of the weighting.
 - `transmissions`: exactly `topology`'s edges for the same window, weighting
   and filter.
@@ -613,7 +633,9 @@ by itself, since an access is an observed read or write, not a detection;
 it applies to the transmissions, so the store builds an access's
 `channel_topics` only from the transmissions it keeps, and under `Exclude`
 a topic carried to a channel only by false detections does not keep that
-channel's accesses.
+channel's accesses. `unconfirmed_channels` under `Exclude` drops the
+accesses (and so the node) of a channel whose cross-agent traffic is all
+unconfirmed (`topology.filter.access-admission-confirmation`).
 
 `QueryApi::channel_resources(caller, channel, window, page)` returns a
 `Watermarked` page of a channel's resources newest first
@@ -668,14 +690,22 @@ it.
 
 ### Read models
 
-Agent rows and details, channel rows and the promotion preview, batch
-names, transmission rows by id, the evidence behind a transmission, the
-overview's counts and one alert by id are reads on this contract: each
+Agent rows and details, channel rows and the promotion preview, a
+channel's cross-agent transmissions (`channel_transmissions`, the review
+list of an unconfirmed channel), batch names, transmission rows by id
+(never a transmission within one agent), the evidence behind a
+transmission, the overview's counts and one alert by id are reads on this
+contract: each
 takes a `Caller`, checks one permission, pages with `crate::paging` where
 it lists, resolves aliases at read time and is `Watermarked` where its data
 comes from settled buckets. They are described in
 [read_models.md](read_models.md), including how the overview's active
-channels agree with the channel and agent rows.
+channels agree with the channel and agent rows. What counts as a channel
+(listed, unconfirmed, a declaration, hidden after a merge) and as a
+transmission (between different agents only) is in
+[channel_semantics.md](channel_semantics.md); `alerts` leaves out the
+alerts about a hidden channel or a transmission within one agent
+(`AlertSubject::shown`), which `alert(id)` still returns.
 
 ### Export
 
@@ -823,6 +853,12 @@ transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
   time; nothing stored is rewritten. A confirmation of a transmission
   routed through a superseded channel advances the superseding channel's
   detection, never the superseded one's, which stays frozen.
+- A channel exists once a transmission between different agents goes
+  through it, and nothing between two ids of one merged agent is counted
+  or listed anywhere; the invariants are listed in
+  [channel_semantics.md](channel_semantics.md#invariants-and-constraints).
+  `channel_transmissions` needs View
+  (`surface.query.channel-transmissions-need-view`).
 - A verdict never changes a transmission's state. Only `Suspected`,
   `Discarded` and the confirmed states take one
   (`TransmissionState::judgeable`, `TransmissionVerdict::new`), and every

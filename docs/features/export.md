@@ -73,7 +73,7 @@ selection:
 | --- | --- | --- | --- |
 | `Transmissions(ExportScope)` | window over `Confirmed::at`, filter as `admits` | one per confirmed transmission (`TransmissionRow`: its `TransmissionSummary` and strongest match class) | topic label and the quoted text of each match (`MatchText`: the evidence's `MatchQuotes`, origin and read) |
 | `Edges(ExportScope)` | aligned window, filter as `topology` | one per resolved edge bucket (`EdgeRow`) | topic label |
-| `Accesses(ExportScope)` | aligned window, `admits_access` | one per resolved access bucket (`AccessRow`) | none |
+| `Accesses(ExportScope)` | aligned window, `admits_access` | one per resolved access bucket (`AccessRow`): its resource resolved to the channel holding it, kept only when that channel is listed as a channel, as `channel_topology` draws it | none |
 | `Topics(ExportScope)` | window and filter count transmissions; `topics` selects rows | one per topic of the version, zero counts included (`TopicRow`) | label and terms |
 | `Projection(ProjectionId)` | the projection's own spec | one per stored point, in frame order (`PointRow`) | topic label |
 | `Verdicts(TimeWindow)` | window over `Transmission::opened_at` | one per verdict record (`VerdictRow`) | none |
@@ -112,13 +112,23 @@ export: transmissions by (`Confirmed::at`, id); edges by (bucket start,
 sender, reader, route encoding, topic); accesses by (bucket start, agent,
 channel, write before read); topics by id; points by frame index; verdicts
 by (transmission, revision). Every agent and channel a row names is
-canonical; an edge row is an `EdgeSelector`, so never a self-edge; a
-transmission row keeps a transmission whose two agents have since merged,
-with equal ends. `verdict_rows(transmission, log)` builds one row per
-record with the transmission's route kind and detector call
-(`QualityMatch`, whose `Content` names its class and carrier kind; the
-digest encodes the carrier after the class), so the export reproduces
-`DetectionQuality::tally`.
+canonical; an edge row is an `EdgeSelector`, so never a self-edge; no
+row holds a transmission whose two agents have since merged into one under
+the export's resolution: a transmission row refuses it
+(`InvalidTransmissionRow::WithinOneAgent`,
+`surface.export.transmission-row-cross-agent`), a point never has equal
+ends (`analysis.projection.point-cross-agent`), and the edge, access and
+topic rows come from views whose filter drops it
+(`topology.filter.cross-agent-only`). An access row's channel is the
+channel holding its resource under that resolution, listed as a channel
+(`Listing::Channel`), as `channel_topology` draws it.
+`verdict_rows(transmission, log, aliases)` builds one row per record with
+the transmission's route kind and detector call (`QualityMatch`, whose
+`Content` names its class and carrier kind; the digest encodes the
+carrier after the class), and none
+for a transmission within one agent under the export's aliases, so the
+export reproduces `DetectionQuality::tally` under the same aliases
+(`flow.quality.cross-agent-only`).
 
 **Transmission rows are the surface's.** A `TransmissionRow` is the
 `TransmissionSummary` that `transmissions_by_id` lists for the
@@ -127,7 +137,8 @@ the same `TransmissionSummary::of` under the export's captured aliases,
 verdict copy and header version, plus `MatchClass::strongest` of its
 matches. `TransmissionRow::new` and `TransmissionRow::of` (checked) take
 only a confirmed summary (`Confirmed`, `Classified` or `Aggregated`), since
-the dataset is windowed and keyed by `Confirmed::at`; the row keeps the
+the dataset is windowed and keyed by `Confirmed::at`, whose delivery's
+sender is not its reader (`WithinOneAgent` otherwise); the row keeps the
 summary's `Delivery`. Its topic is a `TopicUnder` (`Topic`, `Outlier`, or
 `Unassigned` under the header's version), its state kind says whether it
 has been classified, and its verdict exists because every confirmed state
@@ -351,7 +362,10 @@ can end after it started, so it has its own record rather than a place in
 - A transmission row is the `TransmissionSummary` of a confirmed
   transmission under the export's captured resolution and header version,
   with the strongest match class; its content quotes are the evidence's,
-  cut with no context.
+  cut with no context. No row of any dataset holds a transmission whose
+  sender and reader resolve to one agent under that resolution
+  (`surface.export.transmission-row-cross-agent`,
+  `analysis.projection.point-cross-agent`, `flow.quality.cross-agent-only`).
 - Rows are of the header's dataset, carry content exactly when requested,
   are in strictly increasing key order and no more than planned; after one
   refusal every later row is refused.

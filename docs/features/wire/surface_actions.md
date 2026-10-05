@@ -109,10 +109,17 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
   "<timestamp>"}` or `{"type": "failed", "data": <SinkError>}`, never
   serde's `{"Ok": ..}` form of a `Result`.
 - Requests: `ChannelFilter` (its `OriginFilter` adjacently tagged:
-  `in_force`, `with_superseded`, `superseded`), `AlertRuleFilter`,
+  `in_force`, `with_superseded`, `superseded`; `listings` an array of
+  `ListingKind` strings, `"confirmed"`, `"unconfirmed"`, `"declaration"`,
+  empty for every listing: "confirmed only" is the list without
+  `unconfirmed`, `surface.channels.filter-listings`), `AlertRuleFilter`,
   `SearchRequest` (`text` is checked non-blank text). `AgentFilter` is
   re-exported from the agents area, which owns its goldens.
-- Responses: `TopicPage`, `OverviewCounts`.
+- Responses: `TopicPage`, `OverviewCounts`. Its `QueueCounts` carries
+  `unconfirmed_channels`: a count under `UnconfirmedChannels::Include`,
+  `null` under `Exclude`, so "left out" is not shown as "none".
+  Goldens: `lists/listing_kinds`, `lists/queue_counts_confirmed_only`
+  (the `null` form), and `lists/overview_counts` with a count.
 
 ## Non-scope
 
@@ -130,7 +137,7 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 | `spec/types/interfaces/l8_surface/permissions.rs` | `CallerSnapshot` (checked; `NoPermissions`), `PermissionSet` as an array in `Permission::ALL` order |
 | `spec/types/interfaces/l8_surface/live.rs` | `LiveItem::event_name`, `LiveEnd::EVENT_NAME`, `LiveCursor`'s text (no leading zeros) |
 | `spec/types/tests/wire/surface_actions/` | `actions.rs`, `audit.rs`, `live.rs`, `lists.rs`, `operators.rs` |
-| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 59 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody`, `ConfigChange`, `AuditSubject` and `UiEvent` |
+| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 61 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody`, `ConfigChange`, `AuditSubject` and `UiEvent` |
 
 ## Invariants
 
