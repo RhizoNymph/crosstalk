@@ -114,41 +114,28 @@ pub fn extents_by_span(
     by_span
 }
 
-/// The fingerprints among `hits` that are boilerplate by the spread rule
-/// (`provenance.match.cross-agent-spread`): at least `rule.agents()`
-/// distinct agents originated them within `rule.window()` of their
-/// earliest origination, so there is no clear first writer. A lookup
-/// returns every posting of each queried fingerprint, so the indexing
-/// times and agents of its live hit spans, and of their copies in other
-/// outputs (spans relayed from them), are its originations within
-/// retention. Copies a single first writer's text gets later, beyond the
-/// window, are a broadcast and stay matchable.
+/// The fingerprints among `hits` that are boilerplate for short runs by
+/// the spread rule (`provenance.match.cross-agent-spread`): at least
+/// `rule.agents()` distinct agents originated or copied them, at any time.
+/// A lookup returns every posting of each queried fingerprint, so the
+/// agents of its live hit spans, and of their copies in other outputs
+/// (spans relayed from them), are its originating agents within retention.
 pub fn spread_boilerplate(
     hits: &[FingerprintHit],
     live: &LiveSpans,
     rule: SpreadRule,
 ) -> BTreeSet<Fingerprint> {
-    let mut originations: BTreeMap<Fingerprint, Vec<(Timestamp, AgentId)>> = BTreeMap::new();
+    let mut agents: BTreeMap<Fingerprint, BTreeSet<AgentId>> = BTreeMap::new();
     for hit in hits {
-        originations
-            .entry(hit.fingerprint)
-            .or_default()
-            .extend(live.originations(hit.span));
+        agents.entry(hit.fingerprint).or_default().extend(
+            live.originations(hit.span)
+                .into_iter()
+                .map(|(_, agent)| agent),
+        );
     }
-    originations
+    agents
         .into_iter()
-        .filter(|(_, found)| {
-            let Some(earliest) = found.iter().map(|(at, _)| at.as_micros()).min() else {
-                return false;
-            };
-            let horizon = earliest.saturating_add(rule.window_micros());
-            let agents: BTreeSet<AgentId> = found
-                .iter()
-                .filter(|(at, _)| at.as_micros() <= horizon)
-                .map(|(_, agent)| *agent)
-                .collect();
-            agents.len() >= rule.agents()
-        })
+        .filter(|(_, agents)| agents.len() >= rule.agents())
         .map(|(fingerprint, _)| fingerprint)
         .collect()
 }
