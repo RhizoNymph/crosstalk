@@ -81,6 +81,113 @@ pub enum GateError {
         #[source]
         source: toml::de::Error,
     },
+    #[error("gates file {path} (from --gates) does not exist")]
+    Missing { path: String },
+}
+
+/// The environment variable naming a gates file, after `--gates`.
+pub const GATES_ENV: &str = "CT_EVAL_GATES";
+
+/// Where the bench image installs the gates file.
+pub const INSTALLED_GATES: &str = "/usr/local/share/crosstalk-eval/gates.toml";
+
+/// Which place a run's gates file came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatesFrom {
+    /// `--gates`.
+    Flag,
+    /// [`GATES_ENV`].
+    Env,
+    /// [`INSTALLED_GATES`].
+    Installed,
+    /// The crate's own `gates.toml`, present in a source checkout.
+    Crate,
+}
+
+/// A gates file found, and where from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatesLocation {
+    pub from: GatesFrom,
+    pub path: std::path::PathBuf,
+}
+
+/// The places a gates file is looked for, in order: `flag`, `env`,
+/// `installed`, `crate_file`. An explicit `flag` must exist; every other
+/// place is a default, skipped when missing, and with none found the run
+/// has no gates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateSearch {
+    pub flag: Option<std::path::PathBuf>,
+    pub env: Option<std::path::PathBuf>,
+    pub installed: std::path::PathBuf,
+    pub crate_file: std::path::PathBuf,
+}
+
+impl GateSearch {
+    /// The search for `flag`, the value of [`GATES_ENV`] (`env`; empty is
+    /// unset), [`INSTALLED_GATES`] and `crate_file`.
+    pub fn new(
+        flag: Option<std::path::PathBuf>,
+        env: Option<std::ffi::OsString>,
+        crate_file: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            flag,
+            env: env
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from),
+            installed: std::path::PathBuf::from(INSTALLED_GATES),
+            crate_file,
+        }
+    }
+
+    /// [`GateSearch::new`] with [`GATES_ENV`] read from the process
+    /// environment.
+    pub fn from_env(flag: Option<std::path::PathBuf>, crate_file: std::path::PathBuf) -> Self {
+        Self::new(flag, std::env::var_os(GATES_ENV), crate_file)
+    }
+
+    /// The first gates file found, or `None`; an explicit `flag` that does
+    /// not exist is [`GateError::Missing`].
+    pub fn locate(&self) -> Result<Option<GatesLocation>, GateError> {
+        if let Some(flag) = &self.flag {
+            if !flag.exists() {
+                return Err(GateError::Missing {
+                    path: flag.display().to_string(),
+                });
+            }
+            return Ok(Some(GatesLocation {
+                from: GatesFrom::Flag,
+                path: flag.clone(),
+            }));
+        }
+        let defaults = [
+            (GatesFrom::Env, self.env.as_ref()),
+            (GatesFrom::Installed, Some(&self.installed)),
+            (GatesFrom::Crate, Some(&self.crate_file)),
+        ];
+        for (from, path) in defaults {
+            let Some(path) = path else { continue };
+            if path.is_file() {
+                return Ok(Some(GatesLocation {
+                    from,
+                    path: path.clone(),
+                }));
+            }
+            tracing::debug!(from = ?from, path = %path.display(), "no gates file here");
+        }
+        Ok(None)
+    }
+
+    /// The gates of the first file found, and where it was; no gates when
+    /// none is.
+    pub fn load(&self) -> Result<(Gates, Option<GatesLocation>), GateError> {
+        match self.locate()? {
+            Some(location) => Ok((Gates::load(&location.path)?, Some(location))),
+            None => Ok((Gates::default(), None)),
+        }
+    }
 }
 
 impl Gates {

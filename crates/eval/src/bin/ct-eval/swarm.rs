@@ -11,12 +11,11 @@ use crosstalk_eval::datasets::swarm_truth::fetch::{FetchConfig, fetch as fetch_a
 use crosstalk_eval::datasets::swarm_truth::{
     Inputs, default_blobs, default_evidence, run as run_swarm, truth_file,
 };
-use crosstalk_eval::report::Gates;
 use crosstalk_eval::report::table::render;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use serde::Serialize;
 
-use super::crate_file;
+use super::load_gates;
 
 #[derive(Args)]
 pub struct SwarmArgs {
@@ -39,7 +38,9 @@ pub struct SwarmArgs {
     /// Write report.json, report.txt and diagnostics.json here.
     #[arg(long)]
     out: Option<PathBuf>,
-    /// Regression gates (default: the crate's `gates.toml`).
+    /// Regression gates (default: `CT_EVAL_GATES`, then
+    /// `/usr/local/share/crosstalk-eval/gates.toml`, then the crate's
+    /// `gates.toml`, then none).
     #[arg(long)]
     gates: Option<PathBuf>,
     /// How many misses and false positives to keep as examples.
@@ -78,12 +79,7 @@ struct Written<'a> {
 }
 
 pub fn run(args: SwarmArgs) -> Result<ExitCode> {
-    let gates_path = args.gates.unwrap_or_else(|| crate_file("gates.toml"));
-    let gates = if gates_path.exists() {
-        Gates::load(&gates_path)?
-    } else {
-        Gates::default()
-    };
+    let gates = load_gates(args.gates)?;
     let inputs = Inputs {
         blobs: args.blobs.unwrap_or_else(|| default_blobs(&args.exchanges)),
         evidence: args
