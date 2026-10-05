@@ -2088,6 +2088,21 @@ each run); ids are this run's (seed 0).
    (`RUST_LOG=crosstalk_flow::correlate=debug`), e.g. transmission
    `01KDVDNK3K…` (Jun24's first read) refreshed by `01KDVDP3JH…`, the
    first example above.
+
+   Live, release builds, seed 0, one at a time, integration 2adbed4
+   against this branch merged onto it (2026-10-05):
+
+   | run | 2adbed4 recall / precision | with reread controls |
+   | --- | --- | --- |
+   | wiki `--demo` | 0.670 (132/197) / 1.000 | 0.985 (132/134) / 1.000, 63 `reread` controls, 0 violations |
+   | wiki `--max-agents 100` | 0.950 (96/101) / 1.000 | 0.960 (96/100) / 1.000, 1 control, 0 violations |
+   | SALT `--limit 53` | 0.854 / 0.840 | unchanged |
+   | swarm-traces | 1.000 / 1.000 | unchanged |
+   | AgentDojo (`extract/agentdojo.json`) | 1.000 / 0.971 | unchanged |
+   | replay 20261005T184212Z (headline) | 1.000 / 1.000 | unchanged |
+   | replay 20261005T184633Z (boilerplate) | 1.000 / 0.893 | unchanged |
+
+   The wiki gate (channel recall 0.65) is left as it is.
 6. **τ² (sample): 209 misses, 23 of 50 sampled under 50 bytes.** Agent
    preambles such as "I'll proceed with canceling your reservation now."
    (49 bytes, reader `01JX0DG6QMVREVX8DB248DH5TQ`), none a repeat of an
