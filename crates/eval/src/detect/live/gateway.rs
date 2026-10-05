@@ -4,7 +4,8 @@
 //! [`super::LiveDetector`].
 //!
 //! ```text
-//! build      Live::start(LiveConfig::new(LiveClock::Manual(clock at start), FlowConfig, seed))
+//! build      Live::start(LiveConfig::new(LiveClock::Manual(clock at start), FlowConfig, seed)
+//!              with the backend's ExtractConfig)
 //!              Ticking::OnSettle: nothing time-driven runs between settles
 //! ingest     clock.set(at); live.pipeline().ingest(exchange, at)
 //! settle     live.settle(until)                         clock to until, stages ticked, drained to a fixpoint
@@ -19,6 +20,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crosstalk_flow::consumer::FlowConfig;
+use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_gateway::live::{Live, LiveClock, LiveConfig};
 use crosstalk_memory::flow::MemoryChannels;
 use crosstalk_memory::reconstruct::MemoryAgents;
@@ -45,9 +47,21 @@ const DRAIN: Duration = Duration::from_secs(5);
 /// `Live::settle`), but checked by `FlowSettings`.
 const TICK_MS: u64 = 1_000;
 
-/// Builds a fresh `Live` per world.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GatewayBackend;
+/// Builds a fresh `Live` per world, its extraction step under `extract`
+/// (default: `ExtractConfig::default()`).
+#[derive(Debug, Clone, Default)]
+pub struct GatewayBackend {
+    extract: ExtractConfig,
+}
+
+impl GatewayBackend {
+    /// This backend with L5's extractors configured by `extract`: a
+    /// dataset's MCP tools, HTTP tools and fetch tools (`fetch_tools`, such
+    /// as AgentDojo's `get_webpage`).
+    pub fn with_extract(self, extract: ExtractConfig) -> Self {
+        Self { extract }
+    }
+}
 
 /// One world's `Live`, with handles on what the eval reads.
 pub struct GatewayWorld {
@@ -82,7 +96,7 @@ impl LiveBackend for GatewayBackend {
         start: Timestamp,
     ) -> Result<GatewayWorld, BackendError> {
         let clock = ManualClock::at(start);
-        let config = LiveConfig::new(
+        let mut config = LiveConfig::new(
             LiveClock::Manual(clock.clone()),
             flow_config(settings.timing)?,
             settings.seed,
@@ -90,6 +104,7 @@ impl LiveBackend for GatewayBackend {
         .map_err(|error| BackendError::Build {
             reason: error.to_string(),
         })?;
+        config.extract = self.extract.clone();
         let live = Live::start(config)
             .await
             .map_err(|error| BackendError::Build {

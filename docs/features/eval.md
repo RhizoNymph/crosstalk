@@ -211,11 +211,17 @@ verdicts the truth implies (`score::quality`).
 
 `gateway_backend()` returns `GatewayBackend`, the `LiveBackend` over the
 gateway's merged `crosstalk_gateway::live::Live`; `ct-eval run --detector
-live` runs it. It is wiring only:
+live` runs it. `GatewayBackend::with_extract(ExtractConfig)` sets the
+extraction step's configuration (`LiveConfig::extract`; default the
+built-in extractors), which `ct-eval run --extract-config <file.json>`
+reads (`ExtractConfig`'s JSON: `mcp_servers`, `http_tools`,
+`fetch_tools`, `sites`). AgentDojo's page tool is configured there, not
+in the defaults: `{"fetch_tools": ["get_webpage"]}`. It is wiring only:
 
 ```text
 build      clock = ManualClock::at(start)
-           Live::start(LiveConfig::new(LiveClock::Manual(clock), flow_config(settings.timing), settings.seed))
+           Live::start(LiveConfig::new(LiveClock::Manual(clock), flow_config(settings.timing), settings.seed)
+                       with extract = the backend's ExtractConfig)
              memory blobs, Ticking::OnSettle, ProvenanceConfig::default() (k 32, w 16, cutoff 50)
 ingest     clock.set(at) (forward only); live.pipeline().ingest(exchange, at)
 settle     live.settle(until) -> Settled { at, passes }      logged at debug
@@ -1418,6 +1424,29 @@ Reading it:
 9. **Eval timing: the agreed 60 s correlation window cannot pair corpus-clock writes and reads (splice: 0 of 74 at 60 s, 68 of 74 at a day).** The corpus clock steps 1,000 s per call; a splice's read result arrives two calls after the write (write at `01KDX329G1D4DKD26Y0P5NM76Y`, 1767281600.001 s; read at `01KDX4ZAM0PEKGCBDS09EZTFP1`, 1767283600 s). With `--correlation-window 86400` splices reach 0.919, above the reference's 0.797 (L5 reads a shell `cat` as a file read; the reference misses all 15). The default stays as agreed; whether `LiveSettings::short` should widen is open.
 10. **Labels: two-string-level splices are in reach for L4.** At a day's window live finds 6 of 6 `OutOfReach` splice labels (a JSON-string file read through a shell): L4 decodes the writer's argument values before fingerprinting (INV-1057), so the reader side needs one level. `MatchNeed::two_string_levels` tiers by the reference's limit, not L4's.
 11. **Speed: live cost grows with request size.** SALT 9.5 min alone (15.5 min shared) against 44 s, open-swe 33 min against 33 s, AI Village 52 min against 3.7 min, τ² 29 min against 2.7 min (about 7 ms per exchange). Not profiled; long requests (SALT histories, SWE trajectories) dominate.
+
+### Follow-up (fix/l5-pairing)
+
+- Finding 1: the extraction step pairs a result with a call found
+  anywhere in the request or the conversation's history (INV-1110), and
+  releases a held write whose result arrives in another conversation's
+  request with the same call; replayed results are read once (INV-1111).
+  Not re-run here.
+- Finding 2, the `get_webpage` half: fetch tools are configurable by name
+  (`fetch_tools`, INV-1113); run AgentDojo with `--extract-config` naming
+  `get_webpage`. The `read_file` half (109 reads of resources nobody
+  wrote): not changed. The requested "open a Suspected transmission with
+  the read as evidence" is not representable in the spec:
+  `TransmissionState::Suspected` holds `NonEmpty<CoAccess>`, a `CoAccess`
+  needs a pairing write by another agent on the resource (INV-249,
+  INV-958), a transmission opens only through `OpenChannel` with a
+  co-access (INV-276) or `OpenConfirmed`, which INV-963 forbids here, and
+  with no co-access the resource has no channel to route through
+  (INV-853). It needs a spec decision (see `flow_correlator.md`, "Shared
+  upstream with no writer").
+- Forwarding counts as writing: a write carries the writer's
+  input-relayed spans (INV-1112), so "A forwards a document to B through
+  a channel" links once L4 indexes those spans as the relayer's.
 
 ### Gates
 

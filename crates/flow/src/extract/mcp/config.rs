@@ -22,8 +22,9 @@ use crate::extract::resource::KeyCanon;
 use crate::extract::sites::SitesConfig;
 
 /// The extractors' configuration: the MCP tool mapping, the HTTP tool
-/// names and the site rules. The default maps no MCP tool, has the default
-/// HTTP tools ([`DEFAULT_HTTP_TOOLS`]) and the built-in site rules
+/// names, the fetch tool names and the site rules. The default maps no MCP
+/// tool, has the default HTTP tools ([`DEFAULT_HTTP_TOOLS`]), no configured
+/// fetch tool (the built-in ones stay known) and the built-in site rules
 /// ([`SitesConfig::default`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawExtractConfig", into = "RawExtractConfig")]
@@ -32,6 +33,7 @@ pub struct ExtractConfig {
     /// (name or alias, tool) to (server index, tool index).
     index: HashMap<(String, String), (usize, usize)>,
     http_tools: Vec<String>,
+    fetch_tools: Vec<String>,
     sites: SitesConfig,
 }
 
@@ -41,6 +43,7 @@ impl Default for ExtractConfig {
             servers: Vec::new(),
             index: HashMap::new(),
             http_tools: default_http_tools(),
+            fetch_tools: Vec::new(),
             sites: SitesConfig::default(),
         }
     }
@@ -64,6 +67,8 @@ struct RawExtractConfig {
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default = "default_http_tools")]
     http_tools: Vec<String>,
+    #[serde(default)]
+    fetch_tools: Vec<String>,
     #[serde(default)]
     sites: SitesConfig,
 }
@@ -174,6 +179,8 @@ pub enum ConfigError {
     NoAccess { server: String, tool: String },
     #[error("a refusal marker of MCP tool `{tool}` of server `{server}` is empty")]
     EmptyMarker { server: String, tool: String },
+    #[error("tool `{0}` is configured both as an HTTP tool and as a fetch tool")]
+    HttpAndFetch(String),
 }
 
 impl ExtractConfig {
@@ -217,18 +224,39 @@ impl ExtractConfig {
             servers,
             index,
             http_tools: default_http_tools(),
+            fetch_tools: Vec::new(),
             sites: SitesConfig::default(),
         })
     }
 
     /// The same configuration with `names` as its HTTP tools. Refuses an
-    /// empty name.
+    /// empty name, or one that is also a configured fetch tool.
     pub fn with_http_tools(self, names: Vec<String>) -> Result<Self, ConfigError> {
         if names.iter().any(String::is_empty) {
             return Err(ConfigError::EmptyName);
         }
+        if let Some(both) = names.iter().find(|name| self.fetch_tools.contains(name)) {
+            return Err(ConfigError::HttpAndFetch(both.clone()));
+        }
         Ok(Self {
             http_tools: names,
+            ..self
+        })
+    }
+
+    /// The same configuration with `names` as its configured fetch tools:
+    /// tools whose `url` argument names the page they read and whose result
+    /// is the page (AgentDojo's `get_webpage`, say). Refuses an empty name,
+    /// or one that is also an HTTP tool.
+    pub fn with_fetch_tools(self, names: Vec<String>) -> Result<Self, ConfigError> {
+        if names.iter().any(String::is_empty) {
+            return Err(ConfigError::EmptyName);
+        }
+        if let Some(both) = names.iter().find(|name| self.http_tools.contains(name)) {
+            return Err(ConfigError::HttpAndFetch(both.clone()));
+        }
+        Ok(Self {
+            fetch_tools: names,
             ..self
         })
     }
@@ -237,6 +265,12 @@ impl ExtractConfig {
     /// carry `url` and `method`.
     pub fn http_tools(&self) -> &[String] {
         &self.http_tools
+    }
+
+    /// The configured fetch tools' names, besides the built-in ones
+    /// (`catalog::FETCH_TOOLS`): each reads the URL in its `url` argument.
+    pub fn fetch_tools(&self) -> &[String] {
+        &self.fetch_tools
     }
 
     /// The same configuration with `sites` as its site rules.
@@ -291,7 +325,8 @@ impl TryFrom<RawExtractConfig> for ExtractConfig {
 
     fn try_from(raw: RawExtractConfig) -> Result<Self, Self::Error> {
         Self::new(raw.mcp_servers)?
-            .with_http_tools(raw.http_tools)
+            .with_http_tools(raw.http_tools)?
+            .with_fetch_tools(raw.fetch_tools)
             .map(|config| config.with_sites(raw.sites))
     }
 }
@@ -301,6 +336,7 @@ impl From<ExtractConfig> for RawExtractConfig {
         Self {
             mcp_servers: config.servers,
             http_tools: config.http_tools,
+            fetch_tools: config.fetch_tools,
             sites: config.sites,
         }
     }

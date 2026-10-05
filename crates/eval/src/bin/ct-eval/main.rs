@@ -64,6 +64,7 @@ use crosstalk_eval::report::gates::{GATES_ENV, GateDetector, GateSearch, GatesFr
 use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
+use crosstalk_flow::extract::ExtractConfig;
 use tracing_subscriber::EnvFilter;
 
 mod swarm;
@@ -78,7 +79,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Convert, run the reference detector, score and report.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Dump the dataset's labels as JSONL.
     Truth(TruthArgs),
     /// Score the gateway's saved export against a demo swarm's ground truth.
@@ -268,6 +269,12 @@ struct RunArgs {
     /// seconds (default 60).
     #[arg(long)]
     suspected_ttl: Option<u64>,
+    /// `--detector live`: L5's extractor configuration, a JSON file in
+    /// `ExtractConfig`'s format (`mcp_servers`, `http_tools`,
+    /// `fetch_tools`, `sites`), e.g. `{"fetch_tools": ["get_webpage"]}`
+    /// for AgentDojo. Default: the built-in extractors.
+    #[arg(long)]
+    extract_config: Option<PathBuf>,
     #[command(flatten)]
     matcher: MatcherArgs,
 }
@@ -512,7 +519,17 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
                 secs(args.evidence_window),
                 secs(args.suspected_ttl),
             )?;
-            let mut detector = LiveDetector::new(gateway_backend(), settings)?;
+            let backend = match &args.extract_config {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    let config = ExtractConfig::from_json(&text)
+                        .with_context(|| format!("parsing {}", path.display()))?;
+                    gateway_backend().with_extract(config)
+                }
+                None => gateway_backend(),
+            };
+            let mut detector = LiveDetector::new(backend, settings)?;
             let summary = run(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
@@ -639,7 +656,7 @@ fn main() -> ExitCode {
         .init();
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Run(args) => run_command(args),
+        Command::Run(args) => run_command(*args),
         Command::Truth(args) => truth_command(args),
         Command::Swarm(args) => swarm::run(args),
         Command::SwarmFetch(args) => swarm::fetch(args),

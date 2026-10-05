@@ -266,3 +266,28 @@ fn the_flow_section_and_the_api_operator_default() {
         assert!(!parses(&changed), "accepted {pointer}");
     }
 }
+
+/// `extract` is optional, defaulted, strict and checked: L5's extractor
+/// configuration, such as the fetch tools a deployment's agents use.
+#[test]
+fn the_extract_section_defaults_and_configures_the_extractors() {
+    let config = GatewayConfig::from_json(DEPLOY).expect("parses");
+    assert_eq!(config.extract, ExtractConfig::default());
+    let mut with = value(DEPLOY);
+    with["extract"] = serde_json::json!({"fetch_tools": ["get_webpage"]});
+    let config = GatewayConfig::from_json(&with.to_string()).expect("parses");
+    assert_eq!(config.extract.fetch_tools(), ["get_webpage"]);
+    assert_eq!(
+        config.extract.http_tools(),
+        ExtractConfig::default().http_tools()
+    );
+    for bad in [
+        serde_json::json!({"surprise": 1}),
+        serde_json::json!({"fetch_tools": [""]}),
+        serde_json::json!({"fetch_tools": ["http_request"]}),
+    ] {
+        let mut changed = value(DEPLOY);
+        changed["extract"] = bad.clone();
+        assert!(!parses(&changed), "accepted {bad}");
+    }
+}

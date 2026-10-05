@@ -45,6 +45,7 @@ use std::time::Duration;
 
 use crosstalk_api::{Backbone, InProcess, InProcessError, InProcessOptions};
 use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSettings};
+use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_memory::support::Outbox;
 use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::events::Subject;
@@ -109,6 +110,9 @@ pub struct LiveConfig {
     pub flow: FlowConfig,
     /// L4's winnowing, decoding and index settings.
     pub provenance: ProvenanceConfig,
+    /// L5's extractors: the MCP tool mapping, the HTTP and fetch tool
+    /// names, the site rules.
+    pub extract: ExtractConfig,
     pub ticking: Ticking,
     /// Seeds every id generator (envelope, agent, conversation ids), so two
     /// runs over the same input mint the same ids.
@@ -207,6 +211,7 @@ impl Live {
             pipeline,
             flow,
             provenance,
+            extract,
             ticking,
             seed,
             capture,
@@ -248,7 +253,7 @@ impl Live {
             watermark: Arc::new(AtomicU64::new(0)),
         };
         let mut stages = Stages::default();
-        wiring::wire_all(&mut stages, &context, &provenance)?;
+        wiring::wire_all(&mut stages, &context, &provenance, &extract)?;
         stages.fill(Slot::SurfaceRelay, relay::SurfaceRelay::new(relay_events))?;
         for slot in stages.unfilled() {
             tracing::warn!(slot = slot.name(), "slot unfilled: its layer does not run");

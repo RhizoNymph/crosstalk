@@ -198,9 +198,10 @@ pub trait LiveWorld {
 }
 
 /// The real gateway's backend: a fresh `crosstalk_gateway::live::Live`
-/// per world.
+/// per world, with the default extractors
+/// ([`GatewayBackend::with_extract`] configures them).
 pub fn gateway_backend() -> GatewayBackend {
-    GatewayBackend
+    GatewayBackend::default()
 }
 
 /// `at + by`, saturating.
