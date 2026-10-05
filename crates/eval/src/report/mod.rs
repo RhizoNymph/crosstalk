@@ -34,16 +34,30 @@ pub struct Summary {
     pub recall: Option<f64>,
 }
 
+impl Summary {
+    pub fn of(counts: Counts) -> Self {
+        Self {
+            precision: counts.precision(),
+            recall: counts.recall(),
+            counts,
+        }
+    }
+}
+
 /// Everything a run produced, ready to write.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub dataset: DatasetId,
     pub detector: String,
     pub totals: Totals,
-    /// Every row but the out-of-reach ones.
+    /// Every row but the out-of-reach and forwarding ones.
     pub overall: Summary,
     /// Rows of out-of-reach labels: expected, but missed by design.
     pub out_of_reach: Summary,
+    /// Rows of forwarding labels (`Tier::Forwarding`): the sender relayed
+    /// its own tool output. Kept apart from `overall`, found only with L4's
+    /// forwarding on.
+    pub forwarding: Summary,
     /// Labels only access-only evidence lines up with, kept apart from
     /// `overall`: no content prediction found them.
     pub access_only: AccessOnly,
@@ -63,7 +77,7 @@ pub struct Report {
     pub background: Option<Background>,
 }
 
-/// Labels (out-of-reach ones aside) that only a suspected or discarded
+/// Labels (out-of-reach and forwarding ones aside) that only a suspected or discarded
 /// prediction aligned with: the detector saw the co-access but never
 /// matched content. They are missed in `overall`, never found; this is the
 /// recall the access pattern alone would have had on top of it.
@@ -92,7 +106,7 @@ impl AccessOnly {
 /// a transmission per exchange it read, and the shared texts it fell on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Background {
-    /// Every false positive, out-of-reach rows included.
+    /// Every false positive, out-of-reach and forwarding rows included.
     pub false_positives: u64,
     pub exchanges: u64,
     pub per_1k_exchanges: f64,
@@ -111,14 +125,16 @@ impl Report {
         let content = crate::score::Selector::default();
         let mut overall = Counts::default();
         let mut out_of_reach = Counts::default();
+        let mut forwarding = Counts::default();
         for row in score.rows.iter().filter(|row| content.matches(&row.key)) {
-            if row.key.tier == Some(Tier::OutOfReach) {
-                out_of_reach.add(&row.counts);
-            } else {
-                overall.add(&row.counts);
+            match row.key.tier {
+                Some(Tier::OutOfReach) => out_of_reach.add(&row.counts),
+                Some(Tier::Forwarding) => forwarding.add(&row.counts),
+                _ => overall.add(&row.counts),
             }
         }
-        let false_positives = overall.false_positive + out_of_reach.false_positive;
+        let false_positives =
+            overall.false_positive + out_of_reach.false_positive + forwarding.false_positive;
         let background =
             (score.totals.negative_controls > 0 && score.totals.exchanges > 0).then(|| {
                 Background {
@@ -141,16 +157,9 @@ impl Report {
             .collect();
         Self {
             access_only: AccessOnly::of(&overall),
-            overall: Summary {
-                precision: overall.precision(),
-                recall: overall.recall(),
-                counts: overall,
-            },
-            out_of_reach: Summary {
-                precision: out_of_reach.precision(),
-                recall: out_of_reach.recall(),
-                counts: out_of_reach,
-            },
+            overall: Summary::of(overall),
+            out_of_reach: Summary::of(out_of_reach),
+            forwarding: Summary::of(forwarding),
             dataset,
             detector: detector.to_owned(),
             totals: score.totals,
