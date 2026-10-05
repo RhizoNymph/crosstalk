@@ -86,9 +86,17 @@ trusted mode; otherwise the named operator with its configured
 permissions, or `Unauthenticated`. `Caller`'s fields are private and
 nothing outside the directory can build one, so tests build callers through
 a directory too. `QueryApi::operators` (View) returns the directory, former
-operators included.
+operators included. `QueryApi::me` returns the caller's own `Operator`:
+its id, its name from the directory, and the permissions the caller was
+authenticated with (`Caller::permissions`, never empty). It needs no
+permission, so any caller, one without View included, can learn who it is
+and what it may do. In trusted mode every request's caller is the trusted
+operator, so `me` answers with it and `PermissionSet::ALL` whatever the
+request carried. `NotFound` only if the directory does not hold the
+caller's operator, which cannot happen for a caller the directory built
+(INV-1077).
 
-Every query and action checks one `Permission` before reading or changing
+Every query but `me` and every action checks one `Permission` before reading or changing
 anything, and returns `Forbidden { missing }` without effect when the
 caller lacks it. View is structure: ids, counts, times, similarities, the
 topology (agent-centred and channel-centred, with node metadata and

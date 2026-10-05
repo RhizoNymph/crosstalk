@@ -155,7 +155,8 @@ Overview:
       retention); typed query and action errors, with one From impl per
       store error behind every query and every action; the operator
       directory with a
-      trusted single-user mode; operator actions with one permission each;
+      trusted single-user mode, and `me`, the caller's own operator, which
+      any caller may read; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
       and trailer manifest; alert sinks; and the HTTP binding of all of it:
@@ -287,8 +288,9 @@ Overview:
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
     completed, reading only data settled before the watermark; a
-    transmissions export's rows are the surface's transmission rows and
-    its quoted text the evidence page's. Every aggregate comes back with
+    transmissions export's rows are the surface's transmission rows (their
+    topics read from the catalog's assignments under the export's version,
+    as rows by id read them) and its quoted text the evidence page's. Every aggregate comes back with
     the watermark read before it; every linked view applies one
     TopologyFilter under one resolved (or pinned) topic-model version,
     with merged agents and superseded channels resolved at read time (a
@@ -504,7 +506,8 @@ Features Index:
       anything is read. Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
       reproduces it; transmission rows are the surface's transmission
-      summaries and their quoted text the evidence page's; content needs
+      summaries (topics as rows by id read them under the export's version)
+      and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
       is audited. In JSONL each line is a tagged header, row or trailer
       (ExportLine, read_jsonl), so any truncation reads as a missing

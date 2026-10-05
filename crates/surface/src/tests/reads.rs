@@ -257,6 +257,78 @@ async fn operators_query_returns_directory() {
     assert_eq!(ids.len(), super::world::Who::ALL.len());
 }
 
+/// INV-1077: every caller reads its own operator, whatever its
+/// permissions (an auditor without View too): the directory's id and name
+/// with the permissions it was authenticated with.
+#[tokio::test]
+async fn me_is_the_callers_own_operator_for_every_caller() {
+    let fixture = Fixture::new().await;
+    let Some(directory) = fixture.world.operators.directory() else {
+        panic!("no directory");
+    };
+    for who in Who::ALL {
+        let caller = fixture.caller(who).await;
+        let me = fixture.surface.me(&caller).await;
+        let Ok(me) = me else {
+            panic!("me as {who:?}: {me:?}");
+        };
+        let Some(listed) = directory.get(caller.operator()) else {
+            panic!("{who:?} is not in the directory");
+        };
+        assert_eq!(me.id, caller.operator(), "{who:?}");
+        assert_eq!(me.name, listed.name, "{who:?}");
+        assert_eq!(me.permissions, caller.permissions(), "{who:?}");
+        assert_eq!(&me, listed, "{who:?}");
+    }
+}
+
+/// INV-1077: in trusted mode every request's caller is the configured
+/// operator, so `me` answers with it and every permission, whatever the
+/// request carried.
+#[tokio::test]
+async fn me_in_trusted_mode_is_the_trusted_operator() {
+    use crosstalk_spec::ids::{ConfigHash, OperatorId};
+    use crosstalk_spec::interfaces::l8_surface::PermissionSet;
+    use crosstalk_spec::interfaces::l8_surface::operators::{
+        AccessConfig, OperatorName, OperatorStore, RequestIdentity, TrustedOperator,
+    };
+    use crosstalk_spec::support::Blake3;
+
+    let fixture = Fixture::new().await;
+    let Ok(name) = OperatorName::new("solo") else {
+        panic!("name");
+    };
+    let trusted = TrustedOperator {
+        id: OperatorId::from_ulid(9_999),
+        name: name.clone(),
+    };
+    let mut store = fixture.world.operators.clone();
+    let loaded = store
+        .load(
+            &AccessConfig::Trusted(trusted.clone()),
+            ConfigHash::from_digest(Blake3::of(b"trusted")),
+            minute(1),
+        )
+        .await;
+    assert!(loaded.is_ok(), "{loaded:?}");
+    for identity in [
+        RequestIdentity::Anonymous,
+        RequestIdentity::Verified(Who::Viewer.id()),
+    ] {
+        let caller = store.caller(identity).await;
+        let Ok(caller) = caller else {
+            panic!("caller for {identity:?}: {caller:?}");
+        };
+        let me = fixture.surface.me(&caller).await;
+        let Ok(me) = me else {
+            panic!("me for {identity:?}: {me:?}");
+        };
+        assert_eq!(me.id, trusted.id, "{identity:?}");
+        assert_eq!(me.name, name, "{identity:?}");
+        assert_eq!(me.permissions, PermissionSet::ALL, "{identity:?}");
+    }
+}
+
 /// INV-789: the present's bucket width is the edge store's.
 #[tokio::test]
 async fn present_reports_the_edge_store_bucket_width() {

@@ -11,7 +11,12 @@
 //!   that the filter admits (an unconfirmed one tested with the writer of
 //!   its first co-access as sender, no topic); each row is `TransmissionRow::of` under
 //!   the store's directory, the current verdict and the topic under the
-//!   header's version, so it equals the row `transmissions_by_id` lists.
+//!   header's version, read as `transmissions_by_id` reads it: the
+//!   catalog's stored assignment under that version
+//!   (`TopicCatalog::assignments`), else the stored classification, so it
+//!   equals the row `transmissions_by_id` lists under that version, a
+//!   re-fitted transmission included. The filter's topic test sees that
+//!   same topic.
 //!   Content columns are not served: a request with them is refused.
 //!   The verdicts dataset is read from it too: every judgeable transmission
 //!   (suspected, discarded, confirmed or later) whose `Transmission::opened_at`
@@ -25,18 +30,22 @@ use crosstalk_spec::aggregates::filter::{FilterSubject, TopologyFilter};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aliases::Aliases;
 use crosstalk_spec::aliases::Resolve;
-use crosstalk_spec::derived::flow::transmission::{Crossing, Transmission, TransmissionState};
+use crosstalk_spec::derived::flow::transmission::{Crossing, Transmission};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{TransmissionQuery, TransmissionStore};
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
+use crosstalk_spec::interfaces::l6_analysis::TopicCatalog;
 use crosstalk_spec::interfaces::l8_surface::export::rows::{TransmissionRow, verdict_rows};
 use crosstalk_spec::interfaces::l8_surface::export::{ExportPlanError, ExportRow, ExportStates};
 use crosstalk_spec::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+use super::source::catalog_error;
+use crate::query::content::read_topics_under;
 
 fn store(reason: impl Into<String>) -> ExportPlanError {
     ExportPlanError::Store {
@@ -94,40 +103,31 @@ impl TransmissionSource for NoTransmissions {
     }
 }
 
-/// The transmissions dataset from a transmission store and the
-/// directories that resolve its ids.
+/// The transmissions dataset from a transmission store, the directories
+/// that resolve its ids and the topic catalog its rows' topics are read
+/// from.
 #[derive(Debug, Clone)]
-pub struct StoredTransmissions<S, D> {
+pub struct StoredTransmissions<S, D, C> {
     store: S,
     directory: D,
+    catalog: C,
 }
 
-impl<S, D> StoredTransmissions<S, D> {
-    pub fn new(store: S, directory: D) -> Self {
-        Self { store, directory }
-    }
-}
-
-/// The topic `transmission` has under `version`, as `transmissions_by_id`
-/// reads it.
-fn topic_under(transmission: &Transmission, version: TopicModelVersion) -> TopicUnder {
-    match &transmission.state {
-        TransmissionState::Classified { classification, .. }
-        | TransmissionState::Aggregated { classification, .. }
-            if classification.version == version =>
-        {
-            classification
-                .topic
-                .map_or(TopicUnder::Outlier, TopicUnder::Topic)
+impl<S, D, C> StoredTransmissions<S, D, C> {
+    pub fn new(store: S, directory: D, catalog: C) -> Self {
+        Self {
+            store,
+            directory,
+            catalog,
         }
-        _ => TopicUnder::Unassigned,
     }
 }
 
-impl<S, D> StoredTransmissions<S, D>
+impl<S, D, C> StoredTransmissions<S, D, C>
 where
     S: TransmissionStore + TransmissionVerdicts + Send + Sync,
     D: AgentDirectory + ChannelDirectory + Send + Sync,
+    C: TopicCatalog + Send + Sync,
 {
     /// Every stored transmission in `states`.
     async fn in_states(&self, states: &ExportStates) -> Result<Vec<Transmission>, ExportPlanError> {
@@ -177,10 +177,11 @@ where
     }
 }
 
-impl<S, D> TransmissionSource for StoredTransmissions<S, D>
+impl<S, D, C> TransmissionSource for StoredTransmissions<S, D, C>
 where
     S: TransmissionStore + TransmissionVerdicts + Send + Sync,
     D: AgentDirectory + ChannelDirectory + Send + Sync,
+    C: TopicCatalog + Send + Sync,
 {
     async fn rows(
         &self,
@@ -203,13 +204,19 @@ where
             agents: move |id: AgentId| AgentDirectory::canonical(directory, id),
             channels: move |id: ChannelId| ChannelDirectory::canonical(directory, id),
         };
+        let crossing: Vec<Transmission> = self
+            .in_states(states)
+            .await?
+            .into_iter()
+            .filter(|transmission| transmission.crossing(aliases) != Crossing::WithinOneAgent)
+            .collect();
+        let topics = read_topics_under(&self.catalog, version, &crossing)
+            .await
+            .map_err(catalog_error)?;
         let mut rows = Vec::new();
-        for transmission in self.in_states(states).await? {
-            if transmission.crossing(aliases) == Crossing::WithinOneAgent {
-                continue;
-            }
+        for transmission in crossing {
             let verdict = self.verdict(&transmission).await?;
-            let topic = topic_under(&transmission, version);
+            let topic = topics.of(&transmission);
             let Ok(row) = TransmissionRow::of_in_scope(
                 &transmission,
                 aliases,

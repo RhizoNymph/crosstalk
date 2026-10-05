@@ -72,6 +72,7 @@ fn permission_name(permission: RoutePermission) -> String {
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
             .unwrap_or_else(|| panic!("{permission:?} is a string")),
+        RoutePermission::AnyCaller => "none: any caller".to_owned(),
         RoutePermission::ByExportRequest => "view, or content by the request".to_owned(),
     }
 }
@@ -144,6 +145,7 @@ fn every_route() -> Vec<Route> {
             | Route::DetectionQuality
             | Route::Audit
             | Route::Operators
+            | Route::Me
             | Route::Export
             | Route::Present
             | Route::Action(_)
@@ -222,11 +224,14 @@ fn query_api_methods() -> Vec<(String, String)> {
     methods
 }
 
-/// What a method's documentation says it needs: its first word, or View
-/// or Content by the request for `export`.
+/// What a method's documentation says it needs: its first word, View or
+/// Content by the request for `export`, or none for `Any caller`.
 fn documented(doc: &str) -> RoutePermission {
     if doc.starts_with("View, or Content when `request`") {
         return RoutePermission::ByExportRequest;
+    }
+    if doc.starts_with("Any caller.") {
+        return RoutePermission::AnyCaller;
     }
     let word = doc.split(['.', ',']).next().unwrap_or_default();
     let permission = Permission::ALL

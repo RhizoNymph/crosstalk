@@ -507,6 +507,10 @@ impl<H: RowHasher + Default + Send + 'static> QueryApi for HttpClient<H> {
         self.query(Route::Operators, |b| b).await
     }
 
+    async fn me(&self, _: &Caller) -> Result<Operator, QueryError> {
+        self.query(Route::Me, |b| b).await
+    }
+
     async fn present(&self, _: &Caller) -> Result<Present, QueryError> {
         self.query(Route::Present, |b| b).await
     }

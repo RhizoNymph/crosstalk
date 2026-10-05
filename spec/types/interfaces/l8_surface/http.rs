@@ -198,6 +198,8 @@ pub struct Success {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RoutePermission {
     Fixed(Permission),
+    /// `QueryApi::me`: no permission; any authenticated caller.
+    AnyCaller,
     /// `QueryApi::export`: View, or Content when the request includes
     /// content or names a projection (`ExportRequest::required_permission`).
     ByExportRequest,

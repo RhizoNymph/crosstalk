@@ -1,5 +1,5 @@
-//! Verdict logs, detection quality, the audit log and the operator
-//! directory.
+//! Verdict logs, detection quality, the audit log, the operator directory
+//! and the caller's own operator.
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
@@ -54,5 +54,27 @@ impl<S: SurfaceStores> Surface<S> {
     ) -> Result<Vec<Operator>, QueryError> {
         require(caller, Permission::View)?;
         Ok(self.stores.operators().operators().await?)
+    }
+
+    /// The caller's own operator: its name from the directory, the
+    /// permissions the caller was authenticated with. No permission is
+    /// checked: every caller may read itself.
+    pub(crate) async fn me_query(&self, caller: &Caller) -> Result<Operator, QueryError> {
+        let id = caller.operator();
+        let Some(listed) = self
+            .stores
+            .operators()
+            .operators()
+            .await?
+            .into_iter()
+            .find(|operator| operator.id == id)
+        else {
+            tracing::warn!(operator = ?id, "caller's operator missing from the directory");
+            return Err(QueryError::NotFound);
+        };
+        Ok(Operator {
+            permissions: caller.permissions(),
+            ..listed
+        })
     }
 }

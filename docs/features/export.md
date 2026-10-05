@@ -163,7 +163,10 @@ header's states, or whose state column does not match them
 (confirmed 0, classified 1, aggregated 2, awaiting content 3, suspected 4,
 discarded 5), its delivery and strongest class only when confirmed, and
 its state column, last, only when present. Its topic is a `TopicUnder` (`Topic`, `Outlier`, or
-`Unassigned` under the header's version), its state kind says whether it
+`Unassigned` under the header's version, read as `transmissions_by_id`
+reads it: the catalog's stored assignment under that version, else the
+stored classification, so a re-fitted transmission's export row equals its
+row by id (INV-1078)), its state kind says whether it
 has been classified, and its verdict exists because every confirmed state
 is judgeable. With content, `TransmissionContent::of(evidence,
 topic_label)` takes the transmission's `TransmissionEvidence` assembled

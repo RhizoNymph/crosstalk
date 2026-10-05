@@ -197,6 +197,7 @@ is listed there, and checks the call against the table.
 | `crates/client/src/export/download.rs` | The raw download | `ExportDownload` |
 | `crates/client/src/hasher.rs` | BLAKE3 under `ROW_DIGEST_CONTEXT` as a `RowHasher` | `Blake3RowHasher` |
 | `crates/client/src/tests/` | A stub HTTP server that speaks the binding (`stub.rs`); tests per area, built on the spec's wire goldens | — |
+| `crates/client/tests/me.rs` | `me` over HTTP against `serve_world`: each operator's token reads that operator, one without View too (INV-1077) | — |
 
 Dependencies, all already pinned in the workspace:
 

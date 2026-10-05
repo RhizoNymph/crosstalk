@@ -145,16 +145,16 @@ impl Fake {
         }
     }
 
-    /// The permission check, then the record; the configured failure, if
-    /// any.
+    /// The permission check (none for a route any caller may call), then
+    /// the record; the configured failure, if any.
     fn enter(
         &self,
         route: Route,
-        needs: Permission,
+        needs: Option<Permission>,
         caller: &Caller,
         args: Value,
     ) -> Result<(), QueryError> {
-        if !caller.has(needs) {
+        if let Some(needs) = needs.filter(|needs| !caller.has(*needs)) {
             return Err(QueryError::Forbidden { missing: needs });
         }
         lock(&self.calls).push(Call {
@@ -175,8 +175,9 @@ impl Fake {
         args: Value,
     ) -> Result<T, QueryError> {
         let needs = match route.permission() {
-            RoutePermission::Fixed(permission) => permission,
-            RoutePermission::ByExportRequest => Permission::Content,
+            RoutePermission::Fixed(permission) => Some(permission),
+            RoutePermission::AnyCaller => None,
+            RoutePermission::ByExportRequest => Some(Permission::Content),
         };
         self.enter(route, needs, caller, args)?;
         let method = Self::method(route);
@@ -223,7 +224,7 @@ impl LiveFeed for Fake {
     async fn subscribe(&self, caller: &Caller, resume: Resume) -> Result<FakeLive, QueryError> {
         self.enter(
             Route::Live,
-            Permission::View,
+            Some(Permission::View),
             caller,
             json!({ "resume": resume }),
         )?;
@@ -564,7 +565,7 @@ impl QueryApi for Fake {
     async fn projection(&self, c: &Caller, id: ProjectionId) -> Result<Projection, QueryError> {
         self.enter(
             Route::ProjectionFrame,
-            Permission::Content,
+            Some(Permission::Content),
             c,
             json!({"id": id}),
         )?;
@@ -600,13 +601,17 @@ impl QueryApi for Fake {
         self.answer(Route::Operators, c, json!({}))
     }
 
+    async fn me(&self, c: &Caller) -> Result<Operator, QueryError> {
+        self.answer(Route::Me, c, json!({}))
+    }
+
     async fn export(
         &self,
         c: &Caller,
         request: &ExportRequest,
     ) -> Result<Export<FakeRows>, QueryError> {
         let needs = request.required_permission();
-        self.enter(Route::Export, needs, c, json!({"body": request}))?;
+        self.enter(Route::Export, Some(needs), c, json!({"body": request}))?;
         let parts = lock(&self.export)
             .clone()
             .ok_or_else(|| QueryError::Store {
