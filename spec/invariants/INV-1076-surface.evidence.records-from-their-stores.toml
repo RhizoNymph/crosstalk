@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.evidence.records-from-their-stores"
+statement = "The in-process evidence records answer an access and a resource by id from the registry that recorded them (AccessStore::accesses, the stored resource) and a span as it was recorded through SpanIndex::record or copied from L4; a seeded world records every content match's origin span, written by the match's sender."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+The evidence page cut no excerpt for a seeded world: nothing wrote its
+spans, accesses or resources into the records the surface reads, so a
+transmission whose body retention dropped answered Store("span missing")
+instead of BodyDropped on that side (INV-698).
+"""
+
+[evidence]
+integration = [
+    "crosstalk_api::tests::in_process::settle_applies_every_event_published_before_it",
+    "crosstalk_world::history::every_origin_span_is_recorded_by_its_sender",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

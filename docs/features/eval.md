@@ -221,7 +221,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `Live::ingest(exchange, at)` | `live.pipeline().ingest(exchange, at)` |
 | `Live::stores() -> LiveStores` | `stores() -> &LiveStores` (`MemoryStores<LiveBlobs>`): `agents`, `channels` (`MemoryChannels`: `AccessStore`, `ChannelReads`, `resource_use`), `transmissions` (`MemoryVerdicts`) |
 | `TransmissionStore::list(TransmissionQuery { window, states, channel }, page)` (P0.10) | absent: `TransmissionStore` has `save` and `transmission(id)` only |
-| `SpanIndex::spans` on the live stores | absent: spans reach `MemoryEvidence` through `EvidenceRecords::span` one at a time, and the evidence feeder uses `NoSpans` |
+| `SpanIndex::spans` on the live stores | `MemoryEvidence` implements `SpanIndex` (`record`, batch `spans`) over the spans it keeps; the evidence feeder copies them in from L4 |
 | an L3 read of an exchange's agent and conversation | absent from the spec and the branch |
 | a fresh `Live` per world, built with `Live::start(LiveConfig)` | `Live::start` exists; the clock is the `surface.clock` (`ManualClock` in e2e), set through e2e's `options::in_process` |
 

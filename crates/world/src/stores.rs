@@ -11,6 +11,7 @@ use crosstalk_spec::interfaces::l2_transport::{BlobStore, DeadLetterStore};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::ActivityStore;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::AgentLifecycle;
 use crosstalk_spec::interfaces::l3_reconstruction::{ClaimStore, IdentityResolver};
+use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
 use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
@@ -34,6 +35,8 @@ use crosstalk_spec::interfaces::l8_surface::sinks::SinkRegistry;
 pub trait WorldStores {
     /// L3: agents, merges, claims and activity.
     type Agents: AgentLifecycle + IdentityResolver + ClaimStore + ActivityStore;
+    /// L4: the originated spans' records (each content match's origin).
+    type Spans: SpanIndex;
     /// L5: the channel registry and its traffic.
     type Channels: ChannelRegistry + ChannelTraffic;
     /// L5: transmissions and their verdict logs.
@@ -61,6 +64,7 @@ pub trait WorldStores {
     type Blobs: BlobStore;
 
     fn agents(&mut self) -> &mut Self::Agents;
+    fn spans(&mut self) -> &mut Self::Spans;
     fn channels(&mut self) -> &mut Self::Channels;
     fn transmissions(&mut self) -> &mut Self::Transmissions;
     fn catalog(&mut self) -> &mut Self::Catalog;

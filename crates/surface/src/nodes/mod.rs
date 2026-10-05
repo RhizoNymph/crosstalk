@@ -30,7 +30,8 @@
 //!
 //! [`NodeCache`] is what the wiring hands the edge store; [`NodeFeeder`]
 //! keeps it current, from the bus ([`NodeFeeder::consume`]) or from events
-//! a caller passes ([`NodeFeeder::apply`]).
+//! a caller passes ([`NodeFeeder::apply`], or [`NodeFeeder::apply_all`] for
+//! a backlog: each id re-read once, leaving what one by one would).
 
 mod feeder;
 pub mod summary;

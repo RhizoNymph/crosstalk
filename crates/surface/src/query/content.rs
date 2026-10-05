@@ -1,11 +1,14 @@
 //! Search, a stored transmission, and transmission rows by id.
 
+use std::collections::BTreeMap;
+
 use crosstalk_spec::aggregates::edge::TopologyFilter;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::transmission::{Crossing, Transmission, TransmissionState};
 use crosstalk_spec::derived::flow::verdict::Verdict;
-use crosstalk_spec::ids::TransmissionId;
+use crosstalk_spec::ids::{TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
 use crosstalk_spec::interfaces::l6_analysis::{
@@ -25,12 +28,9 @@ use crate::service::{Surface, page_of, require};
 use crate::stores::SurfaceStores;
 
 /// The topic of a classified transmission under `version`, read from its
-/// stored classification.
-///
-/// No spec read returns a transmission's assignment under an arbitrary
-/// version, so a transmission stored with a classification under another
-/// version (a re-fit classified it under a newer one, or the page's version
-/// is newer than its classification) reads as `Unassigned`.
+/// stored classification: what the transmission's own state says, which
+/// is its assignment under the version it was classified under and says
+/// nothing (`Unassigned`) about any other.
 pub(crate) fn topic_under(transmission: &Transmission, version: TopicModelVersion) -> TopicUnder {
     match &transmission.state {
         TransmissionState::Classified { classification, .. }
@@ -49,6 +49,40 @@ pub(crate) fn topic_under(transmission: &Transmission, version: TopicModelVersio
         | TransmissionState::Aggregated { .. }
         | TransmissionState::Discarded { .. } => TopicUnder::Unassigned,
     }
+}
+
+/// The topics of a page's transmissions under one version. A re-fit
+/// assigns transmissions under a newer version without reclassifying their
+/// stored state, so the catalog's stored assignments
+/// ([`TopicCatalog::assignments`]) are read first: the graph's topic slots,
+/// search and projection samples read the same assignments, and a row's
+/// topic agrees with every linked view under that version. A transmission
+/// the catalog holds no assignment for under the version reads as its
+/// stored classification says ([`topic_under`]).
+pub(crate) struct TopicsUnder {
+    version: TopicModelVersion,
+    assigned: BTreeMap<TransmissionId, Option<TopicId>>,
+}
+
+impl TopicsUnder {
+    /// `transmission`'s topic: its assignment's topic, `Outlier` for an
+    /// outlier assignment, otherwise what its stored classification says.
+    pub(crate) fn of(&self, transmission: &Transmission) -> TopicUnder {
+        match self.assigned.get(&transmission.id) {
+            Some(Some(topic)) => TopicUnder::Topic(*topic),
+            Some(None) => TopicUnder::Outlier,
+            None => topic_under(transmission, self.version),
+        }
+    }
+}
+
+/// Whether a row shows `transmission`'s topic: only a classified or
+/// aggregated one has a topic to show.
+fn classified(transmission: &Transmission) -> bool {
+    matches!(
+        transmission.state,
+        TransmissionState::Classified { .. } | TransmissionState::Aggregated { .. }
+    )
 }
 
 /// The digest `transmissions_by_id` cursors are bound to: the selection and
@@ -164,7 +198,7 @@ impl<S: SurfaceStores> Surface<S> {
         };
         let size = usize::from(page.size.get().get());
         let aliases = self.aliases();
-        let mut rows = Vec::with_capacity(size);
+        let mut listed = Vec::with_capacity(size);
         let mut more = false;
         for &id in selection.ids() {
             if after.is_some_and(|after| id.as_ulid() >= after) {
@@ -178,19 +212,27 @@ impl<S: SurfaceStores> Surface<S> {
                 // have since merged into one.
                 continue;
             }
-            if rows.len() == size {
+            if listed.len() == size {
                 more = true;
                 break;
             }
             let verdict = self.current_verdict(&transmission).await?;
-            let topic = topic_under(&transmission, version);
-            rows.extend(TransmissionSummary::listed(
-                &transmission,
-                aliases,
-                |_| verdict,
-                |_| topic,
-            ));
+            listed.push((transmission, verdict));
         }
+        let topics = self
+            .topics_under(version, listed.iter().map(|(transmission, _)| transmission))
+            .await?;
+        let rows: Vec<TransmissionSummary> = listed
+            .iter()
+            .filter_map(|(transmission, verdict)| {
+                TransmissionSummary::listed(
+                    transmission,
+                    aliases,
+                    |_| *verdict,
+                    |_| topics.of(transmission),
+                )
+            })
+            .collect();
         let next = match (more, rows.last()) {
             (true, Some(last)) => {
                 let resume = Resume {
@@ -211,6 +253,29 @@ impl<S: SurfaceStores> Surface<S> {
             topic_version: version,
             page: page_of(page.size, rows, next)?,
         })
+    }
+
+    /// The catalog's assignments under `version` of the classified and
+    /// aggregated ones among `transmissions`, read in batches of at most
+    /// [`IdBatch::MAX`] ids.
+    pub(crate) async fn topics_under<'a>(
+        &self,
+        version: TopicModelVersion,
+        transmissions: impl IntoIterator<Item = &'a Transmission>,
+    ) -> Result<TopicsUnder, QueryError> {
+        let ids: Vec<TransmissionId> = transmissions
+            .into_iter()
+            .filter(|transmission| classified(transmission))
+            .map(|transmission| transmission.id)
+            .collect();
+        let mut assigned = BTreeMap::new();
+        for chunk in ids.chunks(IdBatch::<TransmissionId>::MAX) {
+            let batch = IdBatch::new(chunk.iter().copied()).map_err(|_| QueryError::Store {
+                reason: "an id batch over its maximum".to_owned(),
+            })?;
+            assigned.extend(self.stores.topics().assignments(version, &batch).await?);
+        }
+        Ok(TopicsUnder { version, assigned })
     }
 
     /// The current verdict of a judgeable transmission; `None` otherwise.

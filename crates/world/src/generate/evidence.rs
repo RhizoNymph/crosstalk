@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crosstalk_spec::derived::provenance::matching::{Carrier, Codec, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::SpanLocation;
 use crosstalk_spec::ids::{AgentId, ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty, Similarity, Timestamp};
 
@@ -164,13 +165,21 @@ pub fn build(
     let read_hash = blobs.store(&read, at);
     blobs.record_span(
         span,
-        SpanLocation {
-            part: PartRef {
-                message: origin_hash,
-                index: origin.part,
+        IndexedSpan {
+            // The sender's exchange is not modelled: the span's own ULID,
+            // minted at its time and unique among the world's ids, names
+            // the exchange whose response holds it.
+            exchange: ExchangeId::from_ulid(span.as_ulid()),
+            author: from,
+            location: SpanLocation {
+                part: PartRef {
+                    message: origin_hash,
+                    index: origin.part,
+                },
+                range: origin_range,
             },
-            range: origin_range,
         },
+        at,
     );
     let content = ContentMatch::new(
         span,

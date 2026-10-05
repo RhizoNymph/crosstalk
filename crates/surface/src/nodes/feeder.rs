@@ -55,8 +55,8 @@ struct Refresh {
     channels: Vec<ChannelId>,
     /// A merge or an unmerge: every channel's listing may have changed.
     all_channels: bool,
-    /// A resource the event places on a channel.
-    placed: Option<(ResourceId, ChannelId)>,
+    /// The resources the events place on a channel, in event order.
+    placed: Vec<(ResourceId, ChannelId)>,
 }
 
 impl Refresh {
@@ -112,7 +112,7 @@ impl Refresh {
             BusEvent::Ingest(IngestEvent::ExchangeCaptured(_)) => {}
             BusEvent::Detect(DetectEvent::ChannelDiscovered { channel, seed }) => {
                 refresh.channels.push(*channel);
-                refresh.placed = Some((seed.resource, *channel));
+                refresh.placed.push((seed.resource, *channel));
             }
             BusEvent::Detect(DetectEvent::DeclaredChannelUnused { channel, .. }) => {
                 refresh.channels.push(*channel);
@@ -121,7 +121,7 @@ impl Refresh {
                 access,
                 channel: Some(channel),
             }) => {
-                refresh.placed = Some((access.resource, *channel));
+                refresh.placed.push((access.resource, *channel));
             }
             BusEvent::Detect(DetectEvent::ChannelPromoted {
                 channel,
@@ -137,6 +137,24 @@ impl Refresh {
             BusEvent::Detect(_) | BusEvent::Insight(_) => {}
         }
         refresh
+    }
+
+    /// What `self` and `later` ask for together: every placement in order,
+    /// each agent and channel once. Every refresh re-reads the stores, so
+    /// one re-read after both events leaves what two would.
+    fn absorb(&mut self, later: Self) {
+        self.placed.extend(later.placed);
+        for agent in later.agents {
+            if !self.agents.contains(&agent) {
+                self.agents.push(agent);
+            }
+        }
+        for channel in later.channels {
+            if !self.channels.contains(&channel) {
+                self.channels.push(channel);
+            }
+        }
+        self.all_channels |= later.all_channels;
     }
 }
 
@@ -190,12 +208,34 @@ where
 
     /// Re-read everything `event` names.
     pub async fn apply(&self, event: &BusEvent) -> Result<(), NodeFeedError> {
-        let refresh = Refresh::of(event);
-        if let Some((resource, channel)) = refresh.placed {
-            let canonical = ChannelDirectory::canonical(&self.channels, channel);
-            self.cache.write(|tables| {
-                tables.resources.insert(resource, canonical);
-            });
+        self.apply_all(std::iter::once(event)).await
+    }
+
+    /// Re-read everything `events` name, each agent and channel once: the
+    /// cache ends as applying them one by one would leave it, since every
+    /// refresh reads the stores as they are now. What a relay that finds a
+    /// backlog applies, so catching up costs one re-read per id rather
+    /// than one per event.
+    pub async fn apply_all<'a>(
+        &self,
+        events: impl IntoIterator<Item = &'a BusEvent>,
+    ) -> Result<(), NodeFeedError> {
+        let mut refresh = Refresh::default();
+        for event in events {
+            refresh.absorb(Refresh::of(event));
+        }
+        if !refresh.placed.is_empty() {
+            let placed: Vec<_> = refresh
+                .placed
+                .iter()
+                .map(|(resource, channel)| {
+                    (
+                        *resource,
+                        ChannelDirectory::canonical(&self.channels, *channel),
+                    )
+                })
+                .collect();
+            self.cache.write(|tables| tables.resources.extend(placed));
         }
         for agent in refresh.agents {
             self.refresh_agent(agent).await?;

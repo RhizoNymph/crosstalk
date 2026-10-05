@@ -91,6 +91,7 @@ fn options(clock: ManualClock) -> InProcessOptions {
         embedding_model: test_model("dev"),
         sinks: Vec::new(),
         projection_lease: Duration::from_secs(60),
+        projection_fitting: crate::ProjectionFitting::External,
     }
 }
 
@@ -268,3 +269,5 @@ async fn in_process_surface_reads_acts_and_announces() {
     assert_eq!(confirmation, Some(Confirmation::Unconfirmed));
     backend.shutdown().await;
 }
+
+mod in_process;

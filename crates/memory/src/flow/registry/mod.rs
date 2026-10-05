@@ -14,6 +14,7 @@ mod tests;
 
 use std::sync::{Arc, Mutex};
 
+use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::ids::{ChannelId, ResourceId};
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
@@ -58,6 +59,17 @@ impl<D> MemoryChannels<D> {
             agents,
             outbox,
         }
+    }
+
+    /// The resource stored under `id` as `ChannelTraffic::add_resource`
+    /// recorded it; `None` for an id never added. What the evidence page
+    /// reads a channel's seed resource from when no access names it.
+    pub fn resource(&self, id: ResourceId) -> Option<Resource> {
+        self.state
+            .read()
+            .resources
+            .get(&id)
+            .map(|stored| stored.resource.clone())
     }
 
     fn next_channel_id(&self) -> ChannelId {

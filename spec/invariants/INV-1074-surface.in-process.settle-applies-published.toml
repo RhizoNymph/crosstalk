@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.in-process.settle-applies-published"
+statement = "Once InProcess::settle returns Ok, the relay has applied every event queued for it before the call to the node facts and the live feed; a seeded world is returned by seed_world only after it settled, and a settle after the relay stopped is RelayStopped."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+The graphs' node facts follow the stores through an asynchronous relay. A
+world read right after seeding saw facts lagging thousands of events behind
+the stores: channels discovered during the seed were not yet known, so
+channel_topology drew no access edges for them (INV-860, INV-861).
+"""
+
+[evidence]
+integration = "crosstalk_api::tests::in_process::settle_applies_every_event_published_before_it"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

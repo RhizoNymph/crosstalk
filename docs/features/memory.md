@@ -223,6 +223,9 @@ discovered channel and an unmerge lists it again with nothing rewritten.
   first, its cursor bound to the canonical channel and the filter.
 - `AccessStore::accesses` reads a batch of recorded accesses with their
   stored resources in one snapshot, leaving out unknown ids.
+- `MemoryChannels::resource(id)` (inherent) reads a stored resource by id,
+  as `add_resource` recorded it: what the in-process evidence records read
+  a channel's seed resource from.
 
 **L5 transmissions (`flow::verdicts`).** `VerdictTable` holds
 transmissions and one `VerdictLog` each. `TransmissionStore::save`
@@ -343,7 +346,7 @@ caught (the harness returns `ModelMismatch::Failed`).
 ```text
             ┌──────────── InMemoryTopicCatalog ◀── TopicLifecycle: begin_fit / complete_fit / mark_ready / mark_active / assign (analyze)
             │   history, topics, lineage, assignments, frozen sizes; pin / unpin / enforce_retention (publishes TopicVersionDropped)
-            │        │ TopicVersions (history, version_of, topic_ids)        │ assignment(v, t), retains(v)
+            │        │ TopicVersions (history, version_of, topic_ids)        │ assignment(v, t), retains(v); TopicCatalog::assignments(v, ids)
             ▼        ▼                                                       ▼
  InMemoryEdgeStore ◀─ Env { catalog, directory, nodes }        InMemorySearchIndex ── InMemoryProjectionSource
    contributions, accesses, verdict copy,                        documents, verdict copy     (+ spec WatermarkRead)
@@ -377,6 +380,10 @@ caught (the harness returns `ModelMismatch::Failed`).
   unknown one and one presented with another request are all
   `InvalidCursor`. `page_after` cuts a page and issues the next cursor only
   when more items follow.
+- `TopicCatalog::assignments(version, ids)` reads the stored topic of
+  each transmission of a batch under a version (`None` for an outlier);
+  a transmission without one, and every id under an unknown, fitting or
+  dropped version, is absent (INV-1071).
 - **Topic versions.** The catalog keeps the `TopicVersionHistory` and
   rebuilds it through the spec's constructors on every change, so every
   stored history passes `TopicVersionHistory::new`. A fit's lineage from

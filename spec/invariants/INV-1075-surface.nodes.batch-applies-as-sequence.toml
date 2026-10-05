@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.nodes.batch-applies-as-sequence"
+statement = "NodeFeeder::apply_all over a sequence of events leaves the node cache describing the same agents, channels and resource placements as NodeFeeder::apply over each event in order, re-reading each named agent and channel once."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+The relay applies whatever backlog it finds at once, so catching up costs
+one re-read per id instead of one per event; that is only sound because
+every refresh reads the stores as they are now.
+"""
+
+[evidence]
+integration = "crosstalk_surface::tests::nodes::a_batch_of_events_leaves_the_cache_as_one_by_one"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

@@ -102,5 +102,6 @@ fn surface(clock: &LiveClock) -> Result<InProcessOptions, DefaultsError> {
         embedding_model: test_model("live"),
         sinks: Vec::new(),
         projection_lease: Duration::from_secs(60),
+        projection_fitting: crosstalk_api::ProjectionFitting::External,
     })
 }

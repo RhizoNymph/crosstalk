@@ -188,6 +188,16 @@ impl TopicCatalog for Dummy {
     ) -> Result<Page<Topic, TopicList>, CatalogError> {
         match *self {}
     }
+    async fn assignments(
+        &self,
+        _version: TopicModelVersion,
+        _ids: &crate::batch::IdBatch<crate::ids::TransmissionId>,
+    ) -> Result<
+        std::collections::BTreeMap<crate::ids::TransmissionId, Option<crate::ids::TopicId>>,
+        CatalogError,
+    > {
+        match *self {}
+    }
 }
 
 impl SearchIndex for Dummy {

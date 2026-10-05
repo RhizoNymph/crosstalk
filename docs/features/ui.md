@@ -192,10 +192,6 @@ browser ────────────────────────
 What the world backend leaves empty or answers differently from the
 fixture, all store or wiring gaps rather than UI code:
 
-- Transmission evidence: `InProcess`'s `MemoryEvidence` holds no spans,
-  accesses or resources, because the world seed writes only through the
-  spec's write traits (`docs/features/world.md`, gaps 2 and 3), so excerpts
-  and co-access details are missing.
 - Semantic rules and search embed with `InProcess`'s `FakeEmbedder`, not
   the world's `WorldEmbedder`, so semantic matches do not follow the
   world's themes; the alert store's built-in rules use their defaults.

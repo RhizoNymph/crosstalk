@@ -633,7 +633,14 @@ Features Index:
       the reference stores with a relay from their outbox to the node
       facts and the feed; InProcess::start_with takes a composer's own
       Backbone (bus, blob store, outbox, relay input), which gateway's
-      Live uses to feed the relay from the bus. The HTTP server (P7.1) is http_server.
+      Live uses to feed the relay from the bus. The relay applies each backlog
+      at once (NodeFeeder::apply_all) and InProcess::settle waits until it has
+      applied everything published before the call; MemoryEvidence reads
+      accesses and resources from the registry and keeps spans as recorded
+      (SpanIndex); an opt-in in-process projection fitter
+      (ProjectionFitting::Deterministic, FakeLayoutFitter) fits queued jobs.
+      Rows by id and a channel's transmissions read topics from
+      TopicCatalog::assignments under the page's version. The HTTP server (P7.1) is http_server.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
@@ -644,6 +651,7 @@ Features Index:
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
       - crates/api/src/in_process/mod.rs
+      - crates/api/src/in_process/fitting.rs
     depends_on: [query_surface, read_models, export, channel_semantics, memory, transport, sim, testkit, workspace]
     doc: docs/features/surface_service.md
   http_server:
@@ -1316,8 +1324,10 @@ Features Index:
       crosstalk-world (crates/api/tests/conformance.rs) and the same surface
       over HTTP through crosstalk-client (crates/client/tests/conformance.rs),
       the last two through crosstalk_api::world (feature world: seed_world,
-      serve_world) and the world binder over the store read traits. Next:
-      Postgres, and scenarios seeded through the write traits.
+      serve_world) and the world binder over the store read traits. The
+      real surface passes all 65 in process and over HTTP (SURFACE_FAILURES
+      is empty). Next: Postgres, and scenarios seeded through the write
+      traits.
     entry_points:
       - crates/conformance/src/lib.rs
       - crates/conformance/src/harness/mod.rs
@@ -1348,7 +1358,8 @@ Features Index:
       through the read traits, the channel semantics included (discovery
       at the first cross-agent transmission, the scratch entry on no
       channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
-      the gap list: fixture reads no store or spec trait answers.
+      the gap list: fixture reads no store or spec trait answers. Origin
+      spans are recorded through L4's SpanIndex (WorldStores::Spans).
     entry_points:
       - crates/world/src/lib.rs
       - crates/world/src/seed.rs

@@ -1,7 +1,8 @@
 //! A channel's transmissions (`QueryApi::channel_transmissions`): the
 //! registry's page of the cross-agent transmissions routed through the
 //! canonical channel, each as `ChannelTransmission::of` with its current
-//! verdict and its topic under the version the first page resolved.
+//! verdict and its topic under the version the first page resolved, as
+//! the catalog stores its assignment (`TopicCatalog::assignments`).
 //!
 //! ```text
 //! View ─▶ canonical = ChannelDirectory::canonical(channel)
@@ -29,7 +30,6 @@ use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crosstalk_spec::paging::{ChannelTransmissionList, PageRequest};
 
-use super::content::topic_under;
 use super::topics::{resolve_in, still_retained};
 use crate::cursor::RequestDigest;
 use crate::service::{Surface, page_of, require};
@@ -89,10 +89,11 @@ impl<S: SurfaceStores> Surface<S> {
             .await?;
         let (transmissions, next) = listed.into_parts();
         let aliases = self.aliases();
+        let topics = self.topics_under(version, &transmissions).await?;
         let mut rows = Vec::with_capacity(transmissions.len());
         for transmission in &transmissions {
             let verdict = self.current_verdict(transmission).await?;
-            let topic = topic_under(transmission, version);
+            let topic = topics.of(transmission);
             let row = ChannelTransmission::of(transmission, aliases, |_| verdict, |_| topic);
             rows.extend(row.filter(|row| filter.matches(row)));
         }

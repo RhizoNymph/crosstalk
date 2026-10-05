@@ -356,3 +356,68 @@ async fn node_facts_consume_the_bus() {
     assert!(cache.channel(scene.c1).is_some());
     consumer.abort();
 }
+
+/// INV-1075: applied together, a backlog of events (discoveries, a merge and its
+/// unmerge, a policy change) leaves the cache exactly as applying them one
+/// by one does: every refresh re-reads the stores as they are now.
+#[tokio::test]
+async fn a_batch_of_events_leaves_the_cache_as_one_by_one() {
+    use crate::nodes::{NodeCache, NodeFeeder};
+
+    let mut fixture = Fixture::new().await;
+    let mut scene = fixture.scene().await;
+    let (c2, declared) = more_channels(&fixture, &mut scene).await;
+    let admin = fixture.caller(Who::Admin).await;
+    let merge = match fixture
+        .surface
+        .request(
+            &admin,
+            ActionRequest::MergeAgents {
+                from: scene.a3,
+                into: scene.a1,
+            },
+        )
+        .await
+    {
+        Ok(crosstalk_spec::interfaces::l8_surface::ActionOutcome::Merged(merge)) => merge,
+        other => panic!("merge: {other:?}"),
+    };
+    for action in [
+        OperatorAction::Unmerge { merge },
+        OperatorAction::SetPolicy {
+            channel: scene.c1,
+            policy: PolicyKind::Unsanctioned,
+            note: None,
+        },
+    ] {
+        assert!(fixture.surface.act(&admin, action).await.is_ok());
+    }
+    let events = fixture.published();
+    assert!(events.len() > 3, "a backlog: {}", events.len());
+    let feeder = |cache: NodeCache| {
+        NodeFeeder::new(
+            cache,
+            fixture.world.agents.clone(),
+            fixture.world.channels.clone(),
+        )
+    };
+    let (one, batch) = (NodeCache::new(), NodeCache::new());
+    let by_one = feeder(one.clone());
+    for event in &events {
+        assert_eq!(by_one.apply(event).await, Ok(()));
+    }
+    assert_eq!(feeder(batch.clone()).apply_all(&events).await, Ok(()));
+    assert_eq!(one.len(), batch.len());
+    for agent in [scene.a1, scene.a2, scene.a3] {
+        assert_eq!(one.agent(agent), batch.agent(agent), "{agent:?}");
+    }
+    for channel in [scene.c1, c2, declared] {
+        assert_eq!(one.channel(channel), batch.channel(channel), "{channel:?}");
+    }
+    assert_eq!(batch.channel_of(scene.r1.id), Some(scene.c1));
+    assert_eq!(one.channel_of(scene.r1.id), batch.channel_of(scene.r1.id));
+    assert_eq!(
+        batch.channel(scene.c1).map(|facts| facts.policy),
+        Some(PolicyKind::Unsanctioned)
+    );
+}

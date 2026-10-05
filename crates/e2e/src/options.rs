@@ -112,5 +112,6 @@ pub fn in_process(clock: ManualClock) -> Result<InProcessOptions, OptionsError> 
         embedding_model: test_model("e2e"),
         sinks: Vec::new(),
         projection_lease: Duration::from_secs(60),
+        projection_fitting: crosstalk_api::ProjectionFitting::External,
     })
 }

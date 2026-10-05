@@ -19,6 +19,7 @@ use crosstalk_memory::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog};
 use crosstalk_memory::analysis::projection::{InMemoryProjectionStore, ProjectionConfig};
 use crosstalk_memory::analysis::search::InMemorySearchIndex;
 use crosstalk_memory::flow::{MemoryChannels, MemoryVerdicts};
+use crosstalk_memory::provenance::{IndexConfig, MemoryFingerprintIndex};
 use crosstalk_memory::reconstruct::MemoryAgents;
 use crosstalk_memory::support::{IdSequence, Outbox};
 use crosstalk_memory::surface::audit::InMemoryAuditLog;
@@ -64,6 +65,7 @@ pub type Edges = InMemoryEdgeStore<Env<InMemoryTopicCatalog, Directories, Static
 #[derive(Clone)]
 pub struct MemoryWorld {
     pub agents: MemoryAgents,
+    pub spans: MemoryFingerprintIndex,
     pub channels: MemoryChannels<MemoryAgents>,
     pub transmissions: MemoryVerdicts,
     pub catalog: InMemoryTopicCatalog,
@@ -149,6 +151,11 @@ impl MemoryWorld {
         let bus = MpscBus::start(BusConfig::default()).map_err(|e| format!("{e:?}"))?;
         Ok(Self {
             agents,
+            // Only its span records are written: no fingerprint is indexed.
+            spans: MemoryFingerprintIndex::new(IndexConfig::single_node(
+                u64::MAX,
+                Duration::from_secs(7 * 24 * 3600),
+            )),
             channels,
             transmissions,
             catalog,
@@ -168,6 +175,7 @@ impl MemoryWorld {
 
 impl WorldStores for MemoryWorld {
     type Agents = MemoryAgents;
+    type Spans = MemoryFingerprintIndex;
     type Channels = MemoryChannels<MemoryAgents>;
     type Transmissions = MemoryVerdicts;
     type Catalog = InMemoryTopicCatalog;
@@ -183,6 +191,9 @@ impl WorldStores for MemoryWorld {
 
     fn agents(&mut self) -> &mut Self::Agents {
         &mut self.agents
+    }
+    fn spans(&mut self) -> &mut Self::Spans {
+        &mut self.spans
     }
     fn channels(&mut self) -> &mut Self::Channels {
         &mut self.channels

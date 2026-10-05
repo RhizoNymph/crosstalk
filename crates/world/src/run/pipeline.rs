@@ -1,4 +1,5 @@
-//! L3 and L5 writes: agents and merges, resources, accesses and the
+//! L3, L4 and L5 writes: agents and merges, the originated spans content
+//! matches name, resources, accesses and the
 //! channels their cross-agent transmissions discover, transmissions and the
 //! traffic they record, policies, the promotion and verdicts.
 
@@ -8,6 +9,7 @@ use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRecorded};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::ActivityStore;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::AgentLifecycle;
 use crosstalk_spec::interfaces::l3_reconstruction::{ClaimStore, IdentityResolver};
+use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
@@ -93,6 +95,12 @@ impl<S: WorldStores> Runner<'_, S> {
                 };
                 self.audit(at, by, action, Ok(outcome(change))).await
             }
+            Op::Span(span) => self
+                .stores
+                .spans()
+                .record(&span)
+                .await
+                .map_err(|e| WorldError::store("SpanIndex::record", at, e)),
             Op::AddResource { resource, on } => {
                 let placed = self
                     .stores

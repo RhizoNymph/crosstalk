@@ -8,9 +8,10 @@
 //! `BlobStore::put` returns for its bytes and `Message::part_text` indexes
 //! the bytes the span and match locations were generated against.
 //!
-//! Span records ([`Blobs::span`]) have no store on today's spec: the seed
-//! keeps them only to know which bodies a dropped sender side names. See
-//! the gap list in `docs/features/world.md`.
+//! Span records ([`Blobs::span`], [`Blobs::spans`]) locate each content
+//! match's origin: the seed records them through L4's `SpanIndex` (what
+//! the evidence page reads a sender-side excerpt's location from) and uses
+//! them to know which bodies a dropped sender side names.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use std::sync::Arc;
 use crosstalk_spec::derived::provenance::matching::Carrier;
 use crosstalk_spec::derived::provenance::span::SpanLocation;
 use crosstalk_spec::ids::{MessageHash, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::observed::message::encoding;
 use crosstalk_spec::observed::message::{
     AssistantPart, MessageBody, SystemPart, Text, ToolCallId, ToolOutcome, ToolResult,
@@ -151,16 +153,34 @@ pub struct Encoded {
     pub bytes: Vec<u8>,
 }
 
+/// One originated span as L4 records it, and when its exchange was
+/// captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordedSpan {
+    pub indexed: IndexedSpan,
+    pub at: Timestamp,
+}
+
 /// Span records and encoded message bodies.
 #[derive(Debug, Clone, Default)]
 pub struct Blobs {
-    spans: HashMap<SpanId, SpanLocation>,
+    spans: HashMap<SpanId, RecordedSpan>,
     bodies: BTreeMap<MessageHash, Encoded>,
 }
 
 impl Blobs {
-    pub fn record_span(&mut self, span: SpanId, location: SpanLocation) {
-        self.spans.insert(span, location);
+    /// Record `span`, written by `indexed.author` in `indexed.exchange`,
+    /// captured at `at`.
+    pub fn record_span(&mut self, span: SpanId, indexed: IndexedSpan, at: Timestamp) {
+        self.spans.insert(span, RecordedSpan { indexed, at });
+    }
+
+    /// Every span record, by id.
+    pub fn spans(&self) -> BTreeMap<SpanId, RecordedSpan> {
+        self.spans
+            .iter()
+            .map(|(id, recorded)| (*id, *recorded))
+            .collect()
     }
 
     /// Store `body`, carried at `at`, and return its hash.
@@ -172,7 +192,9 @@ impl Blobs {
 
     /// The span's location, as L4 recorded it.
     pub fn span(&self, id: SpanId) -> Option<SpanLocation> {
-        self.spans.get(&id).copied()
+        self.spans
+            .get(&id)
+            .map(|recorded| recorded.indexed.location)
     }
 
     pub fn contains(&self, hash: MessageHash) -> bool {

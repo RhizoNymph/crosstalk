@@ -717,3 +717,71 @@ async fn sizes_leave_out_transmissions_within_one_agent() {
         vec![stats(2, 15)]
     );
 }
+
+/// INV-1071 (`analysis.catalog.assignments-as-stored`): the assignments of
+/// a batch under a version, each its stored topic (`None` for an outlier);
+/// a transmission the version holds none for is absent, and so is every id
+/// under an unknown, fitting or dropped version.
+#[tokio::test]
+async fn assignments_read_back_the_stored_topics_of_a_batch() {
+    let (mut catalog, _events) = new_catalog(2);
+    let ids = |ns: &[u64]| {
+        crosstalk_spec::batch::IdBatch::new(ns.iter().map(|n| transmission(*n))).unwrap()
+    };
+    let v1 = fit_active(&mut catalog, 10, &[(1, [1.0, 0.0, 0.0])]).await;
+    catalog
+        .assign(transmission(1), v1, assigned(Some(1), 100, 4))
+        .await
+        .unwrap();
+    catalog
+        .assign(transmission(2), v1, assigned(None, 120, 6))
+        .await
+        .unwrap();
+    let v2 = fit_ready(&mut catalog, 20, &[(2, [0.0, 1.0, 0.0])]).await;
+    catalog
+        .assign(transmission(1), v2, assigned(Some(2), 100, 4))
+        .await
+        .unwrap();
+
+    let read = catalog.assignments(v1, &ids(&[1, 2, 3])).await.unwrap();
+    assert_eq!(
+        read.into_iter().collect::<Vec<_>>(),
+        vec![
+            (transmission(1), Some(topic_id(1))),
+            (transmission(2), None)
+        ]
+    );
+    let read = catalog.assignments(v2, &ids(&[1, 2])).await.unwrap();
+    assert_eq!(
+        read.into_iter().collect::<Vec<_>>(),
+        vec![(transmission(1), Some(topic_id(2)))],
+        "a version holds only its own assignments"
+    );
+    assert!(
+        catalog
+            .assignments(TopicModelVersion(9), &ids(&[1]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let fitting = catalog.begin_fit(at(30)).await.unwrap();
+    assert!(
+        catalog
+            .assignments(fitting, &ids(&[1]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    catalog.fail_fit(fitting).await.unwrap();
+    // Two more activations under keep-last 2 drop v1 and its assignments.
+    catalog.mark_active(v2, at(40)).await.unwrap();
+    fit_active(&mut catalog, 50, &[(3, [0.0, 0.0, 1.0])]).await;
+    assert!(!catalog.retains(v1));
+    assert!(
+        catalog
+            .assignments(v1, &ids(&[1, 2]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

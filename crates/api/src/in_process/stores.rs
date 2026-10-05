@@ -1,5 +1,5 @@
 //! The reference stores as one [`SurfaceStores`], plus the evidence
-//! records no reference store holds.
+//! records the surface reads by id.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -16,13 +16,16 @@ use crosstalk_memory::surface::operators::InMemoryOperatorStore;
 use crosstalk_memory::surface::sinks::InMemorySinkRegistry;
 use crosstalk_memory::topology::env::Env;
 use crosstalk_memory::topology::store::InMemoryEdgeStore;
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
-use crosstalk_spec::derived::provenance::span::Span;
+use crosstalk_spec::derived::provenance::span::{OriginatedSpan, Span};
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, SpanId};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
+use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanIndexError};
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
+use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
 use crosstalk_surface::export::{SpecExportSource, StoredTransmissions};
 use crosstalk_surface::nodes::NodeCache;
 use crosstalk_surface::{EvidenceRecords, RecordReadError, SurfaceStores};
@@ -60,51 +63,97 @@ pub type Export = SpecExportSource<
     StoredTransmissions<MemoryVerdicts, Directory>,
 >;
 
-/// Spans, accesses and resources by id, which no reference store keeps:
-/// whoever seeds the world adds them here, so the evidence page can be read.
-#[derive(Debug, Clone, Default)]
+/// The evidence page's records by id: spans as L4 recorded them, and
+/// accesses and resources read from the registry that recorded them
+/// (`AccessStore::accesses`, `MemoryChannels::resource`).
+///
+/// Spans have no reference store the surface reads, so they are kept here:
+/// written through `SpanIndex::record` (a seeded world, as L4's provenance
+/// consumer records each originated span) or [`MemoryEvidence::insert_span`]
+/// (a composer copying them from its own provenance store). Clones share
+/// the records.
+#[derive(Debug, Clone)]
 pub struct MemoryEvidence {
-    records: Arc<Mutex<Records>>,
-}
-
-#[derive(Debug, Default)]
-struct Records {
-    spans: BTreeMap<SpanId, Span>,
-    accesses: BTreeMap<AccessId, Access>,
-    resources: BTreeMap<ResourceId, Resource>,
+    spans: Arc<Mutex<BTreeMap<SpanId, Span>>>,
+    registry: MemoryChannels<MemoryAgents>,
 }
 
 impl MemoryEvidence {
-    fn with<T>(&self, use_records: impl FnOnce(&mut Records) -> T) -> T {
+    /// No spans yet; accesses and resources read from `registry`.
+    pub fn new(registry: MemoryChannels<MemoryAgents>) -> Self {
+        Self {
+            spans: Arc::default(),
+            registry,
+        }
+    }
+
+    fn with_spans<T>(&self, use_spans: impl FnOnce(&mut BTreeMap<SpanId, Span>) -> T) -> T {
         // Every write inserts one whole record, so a poisoned lock still
-        // guards consistent maps.
-        use_records(&mut self.records.lock().unwrap_or_else(PoisonError::into_inner))
+        // guards a consistent map.
+        use_spans(&mut self.spans.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
+    /// Keep `span`; a span already kept keeps its first record.
     pub fn insert_span(&self, span: Span) {
-        self.with(|records| records.spans.insert(span.id, span));
-    }
-
-    pub fn insert_access(&self, access: Access) {
-        self.with(|records| records.accesses.insert(access.id, access));
-    }
-
-    pub fn insert_resource(&self, resource: Resource) {
-        self.with(|records| records.resources.insert(resource.id, resource));
+        self.with_spans(|spans| {
+            spans.entry(span.id).or_insert(span);
+        });
     }
 }
 
 impl EvidenceRecords for MemoryEvidence {
     async fn span(&self, id: SpanId) -> Result<Option<Span>, RecordReadError> {
-        Ok(self.with(|records| records.spans.get(&id).cloned()))
+        Ok(self.with_spans(|spans| spans.get(&id).cloned()))
     }
 
     async fn access(&self, id: AccessId) -> Result<Option<Access>, RecordReadError> {
-        Ok(self.with(|records| records.accesses.get(&id).cloned()))
+        let batch = IdBatch::new([id]).map_err(|error| RecordReadError::Store {
+            reason: format!("one id is a batch: {error:?}"),
+        })?;
+        let mut read =
+            self.registry
+                .accesses(&batch)
+                .await
+                .map_err(|error| RecordReadError::Store {
+                    reason: format!("reading the access: {error:?}"),
+                })?;
+        Ok(read.remove(&id).map(|(access, _)| access))
     }
 
     async fn resource(&self, id: ResourceId) -> Result<Option<Resource>, RecordReadError> {
-        Ok(self.with(|records| records.resources.get(&id).cloned()))
+        Ok(self.registry.resource(id))
+    }
+}
+
+/// `provenance.span-index.spans-as-recorded`: the first record of each
+/// span; unknown ids are left out.
+impl SpanIndex for MemoryEvidence {
+    async fn record(&mut self, span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        self.insert_span(span.span().clone());
+        Ok(())
+    }
+
+    async fn spans(
+        &self,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+        Ok(self.with_spans(|spans| {
+            ids.ids()
+                .iter()
+                .filter_map(|id| {
+                    spans.get(id).map(|span| {
+                        (
+                            *id,
+                            IndexedSpan {
+                                exchange: span.exchange,
+                                author: span.agent,
+                                location: span.location,
+                            },
+                        )
+                    })
+                })
+                .collect()
+        }))
     }
 }
 

@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.query.row-topic-from-catalog-assignment"
+statement = "The topic of a classified or aggregated transmission's row in QueryApi::transmissions_by_id and QueryApi::channel_transmissions under the page's version is the catalog's stored assignment under that version (TopicCatalog::assignments: Topic for a topic, Outlier for an outlier) and, when the catalog holds none, what the transmission's stored classification says under that version (Unassigned for a classification under another version)."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+The edge store's topic slots, search and projection samples read the
+catalog's assignments under the resolved version; rows that read only the
+stored classification showed a re-fitted transmission as Unassigned under
+the version a topic filter had just kept it under (INV-345, INV-400).
+"""
+
+[evidence]
+integration = "crosstalk_surface::tests::content::row_topics_are_the_catalogs_assignments_under_the_version"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

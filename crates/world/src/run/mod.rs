@@ -186,6 +186,7 @@ impl<'a, S: WorldStores> Runner<'a, S> {
             | Op::Merge { .. }
             | Op::Unmerge { .. }
             | Op::Rename { .. }
+            | Op::Span(_)
             | Op::Discover { .. }
             | Op::AddResource { .. }
             | Op::Access(_)

@@ -237,8 +237,9 @@ Then read through the UI, or through `crosstalk_e2e::read`.
   - the read highlight, checked next, is the matched run in B's tool
     result: it starts mid-sentence and spans the `Read` tool's
     line-number prefixes and the page's later lines.
-- Resolved by `Live`: the evidence feeder fills `MemoryEvidence` from
-  L4's span store and L5's `AccessStore`; the stores' outbox is forwarded
+- Resolved by `Live`: the evidence feeder fills `MemoryEvidence`'s spans
+  from L4's span store, and `MemoryEvidence` reads accesses and resources
+  from L5's registry; the stores' outbox is forwarded
   onto the bus; the gateway runs a minimal L6 classifier.
 - **Tool extraction** (resolved by the L5 port): the extractor catalog
   maps tool names and argument keys to locators and access kinds, a

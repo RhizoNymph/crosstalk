@@ -117,6 +117,20 @@ impl TopicCatalog for ForgetfulCatalog {
     ) -> Result<Page<Topic, TopicList>, CatalogError> {
         self.0.topics(version, page).await
     }
+
+    async fn assignments(
+        &self,
+        version: TopicModelVersion,
+        ids: &crosstalk_spec::batch::IdBatch<crosstalk_spec::ids::TransmissionId>,
+    ) -> Result<
+        std::collections::BTreeMap<
+            crosstalk_spec::ids::TransmissionId,
+            Option<crosstalk_spec::ids::TopicId>,
+        >,
+        CatalogError,
+    > {
+        self.0.assignments(version, ids).await
+    }
 }
 
 impl TopicLifecycle for ForgetfulCatalog {

@@ -8,6 +8,8 @@
 //!   World::new(seed, anchor)          config, clock, embedder
 //!   InProcess::start(options from the world's config)
 //!   World::seed(&mut Seeding(stores)) every write, in time order  → Scenario
+//!   InProcess::settle                 the node facts have applied every seeded event
+//!   InProcess::fit_projections        when options.projection_fitting asks for it
 //!   clock: config time while seeding ─▶ the anchor (Fixed) or the anchor plus real time (Live)
 //! serve_world(world, tokens)
 //!   HttpApi::new(surface, Auth::fixed(directory, StaticTokens(tokens)))
@@ -47,7 +49,8 @@ use tokio::task::JoinHandle;
 
 use crate::http::{Auth, BearerToken, HttpApi, HttpConfig, ServeError, StaticTokens, bind, serve};
 use crate::in_process::{
-    Alerts, Edges, InProcess, InProcessError, InProcessOptions, MemoryStores, Search,
+    Alerts, Edges, InProcess, InProcessError, InProcessOptions, MemoryEvidence, MemoryStores,
+    ProjectionFitting, Search,
 };
 
 /// The in-process surface's memory stores as the world's [`WorldStores`]:
@@ -57,6 +60,7 @@ pub struct Seeding(pub MemoryStores);
 
 impl WorldStores for Seeding {
     type Agents = MemoryAgents;
+    type Spans = MemoryEvidence;
     type Channels = MemoryChannels<MemoryAgents>;
     type Transmissions = MemoryVerdicts;
     type Catalog = InMemoryTopicCatalog;
@@ -72,6 +76,9 @@ impl WorldStores for Seeding {
 
     fn agents(&mut self) -> &mut Self::Agents {
         &mut self.0.agents
+    }
+    fn spans(&mut self) -> &mut Self::Spans {
+        &mut self.0.evidence
     }
     fn channels(&mut self) -> &mut Self::Channels {
         &mut self.0.channels
@@ -132,12 +139,18 @@ pub struct WorldOptions {
     /// Operators added to the world's own (the researcher and the on-call
     /// operator) in the surface's directory.
     pub operators: Vec<OperatorConfig>,
+    /// Whether projection jobs queued once the world is seeded are fitted
+    /// in this process. The seed's own jobs are written as planned either
+    /// way: the fitter starts after seeding, so it then also fits the
+    /// world's queued job.
+    pub projection_fitting: ProjectionFitting,
 }
 
 impl WorldOptions {
     /// The world of `seed` at `anchor` on a fixed clock: a feed buffer of
     /// 256 with a 15-second heartbeat and ten minutes' retention, the
-    /// default export limits, no extra operators.
+    /// default export limits, no extra operators, projection jobs left for
+    /// an external fitter.
     pub fn new(seed: u64, anchor: Timestamp) -> Result<Self, WorldServeError> {
         let live = LiveConfig::new(
             std::num::NonZeroU32::new(256).unwrap_or(std::num::NonZeroU32::MIN),
@@ -152,6 +165,7 @@ impl WorldOptions {
             live,
             export_limits: ExportLimits::default(),
             operators: Vec::new(),
+            projection_fitting: ProjectionFitting::External,
         })
     }
 }
@@ -267,10 +281,16 @@ pub async fn seed_world(options: WorldOptions) -> Result<SeededWorld, WorldServe
             })
             .collect(),
         projection_lease: Duration::from_secs(600),
+        // Started once seeded: the seed claims and settles its own jobs.
+        projection_fitting: ProjectionFitting::External,
     };
-    let in_process = InProcess::start(in_process_options).await?;
+    let mut in_process = InProcess::start(in_process_options).await?;
     let scenario = world.seed(&mut Seeding(in_process.stores.clone())).await?;
+    // The graphs' node facts follow the stores through the relay: a world
+    // is read only once the relay has applied everything the seed wrote.
+    in_process.settle().await?;
     clock.serve();
+    in_process.fit_projections(options.projection_fitting);
     tracing::info!(
         seed = options.seed,
         "world seeded into the in-process surface"

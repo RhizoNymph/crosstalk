@@ -8,6 +8,9 @@
 //!        ▲                                         └─▶ FeedHandle::append (Changed → live feed)
 //!        │ seed through the spec's write traits (`InProcess::stores`)
 //!   Surface<MemoryStores> ◀── QueryApi / OperatorActions / LiveFeed (`InProcess::surface`)
+//!   InProcess::settle: answered once the relay has applied everything queued before it
+//!   projection fitter (opt-in, `ProjectionFitting::Deterministic`): claims queued jobs,
+//!     samples them (InMemoryProjectionSource), lays them out (FakeLayoutFitter), stores the frames
 //!   operators: OperatorStore::load(options.access) at start; callers from `InProcess::caller`
 //! ```
 //!
@@ -23,6 +26,7 @@
 //! subscription, so the node facts and the live feed see every event on
 //! the bus, not only the stores' own.
 
+pub(crate) mod fitting;
 mod stores;
 
 use std::collections::BTreeSet;
@@ -31,9 +35,9 @@ use std::time::Duration;
 
 use crosstalk_memory::analysis::alerts::{AlertStoreConfig, InMemoryAlertStore};
 use crosstalk_memory::analysis::catalog::{CatalogConfig, InMemoryTopicCatalog, RetentionPolicy};
-use crosstalk_memory::analysis::fakes::FakeEmbedder;
+use crosstalk_memory::analysis::fakes::{FakeEmbedder, FakeLayoutFitter};
 use crosstalk_memory::analysis::projection::{InMemoryProjectionStore, ProjectionConfig};
-use crosstalk_memory::analysis::search::InMemorySearchIndex;
+use crosstalk_memory::analysis::search::{InMemoryProjectionSource, InMemorySearchIndex};
 use crosstalk_memory::flow::{MemoryChannels, MemoryVerdicts};
 use crosstalk_memory::reconstruct::MemoryAgents;
 use crosstalk_memory::support::{IdSequence, Outbox};
@@ -62,9 +66,11 @@ use crosstalk_surface::nodes::{NodeCache, NodeFeedError, NodeFeeder};
 use crosstalk_surface::{Surface, SurfaceConfig};
 use crosstalk_transport::blob::MemoryBlobStore;
 use crosstalk_transport::{BusConfig, MpscBus, StartError};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+pub use fitting::{FitRunError, ProjectionFitting};
 pub use stores::{Alerts, Directory, Edges, Export, MemoryEvidence, MemoryStores, Search};
 
 /// How the in-process surface and its stores are configured.
@@ -93,6 +99,9 @@ pub struct InProcessOptions {
     pub sinks: Vec<SinkConfig>,
     /// How long a claimed projection job is held.
     pub projection_lease: Duration,
+    /// Whether queued projection jobs are fitted in this process
+    /// ([`InProcess::fit_projections`] at start).
+    pub projection_fitting: ProjectionFitting,
 }
 
 /// Why the in-process surface could not start.
@@ -108,6 +117,10 @@ pub enum InProcessError {
     Nodes(NodeFeedError),
     #[error("the live feed stopped: {0}")]
     Feed(FeedClosed),
+    /// The relay has ended (shut down, or the live feed closed): nothing
+    /// published from now on reaches the node facts.
+    #[error("the relay has stopped")]
+    RelayStopped,
 }
 
 /// What the stores run over, supplied by whoever hosts them.
@@ -148,6 +161,12 @@ pub struct InProcess<B = MemoryBlobStore> {
     /// Keeps the graphs' node facts current; the relay feeds it.
     pub nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
     relay: JoinHandle<()>,
+    /// The in-process projection fitter, once started.
+    fitter: Option<JoinHandle<()>>,
+    /// Stamps the fitter's claims and frames.
+    clock: Arc<dyn Clock>,
+    /// Asks the relay to answer once it has applied everything queued.
+    settle: UnboundedSender<oneshot::Sender<()>>,
 }
 
 impl InProcess<MemoryBlobStore> {
@@ -248,6 +267,7 @@ where
             transmissions.clone(),
             directory.clone(),
         ));
+        let evidence = MemoryEvidence::new(channels.clone());
         let stores = MemoryStores {
             agents,
             channels,
@@ -264,7 +284,7 @@ where
             dead_letters: bus.dead_letters(),
             bus,
             blobs,
-            evidence: MemoryEvidence::default(),
+            evidence,
             export,
             nodes,
         };
@@ -284,7 +304,9 @@ where
             .await
             .map_err(InProcessError::Feed)?;
         feeder.rebuild().await.map_err(InProcessError::Nodes)?;
-        let relay = tokio::spawn(relay(published, feeder.clone(), feed.clone()));
+        let (settle, settles) = unbounded_channel();
+        let relay = tokio::spawn(relay(published, settles, feeder.clone(), feed.clone()));
+        let clock = Arc::clone(&options.clock);
         let surface = Arc::new(Surface::new(
             stores.clone(),
             options.clock,
@@ -293,12 +315,56 @@ where
             feed,
         ));
         tracing::info!(operators = changes.len(), "in-process surface started");
-        Ok(Self {
+        let mut started = Self {
             stores,
             surface,
             nodes: feeder,
             relay,
-        })
+            fitter: None,
+            clock,
+            settle,
+        };
+        started.fit_projections(options.projection_fitting);
+        Ok(started)
+    }
+
+    /// Start fitting queued projection jobs in this process as `fitting`
+    /// says (`External` starts nothing). A fitter already running keeps
+    /// running. Needs a tokio runtime.
+    pub fn fit_projections(&mut self, fitting: ProjectionFitting) {
+        let ProjectionFitting::Deterministic { poll } = fitting else {
+            return;
+        };
+        if self.fitter.is_some() {
+            return;
+        }
+        let fitter = fitting::Fitter {
+            jobs: self.stores.projections.clone(),
+            source: InMemoryProjectionSource::new(
+                self.stores.search.clone(),
+                self.stores.edges.clone(),
+            ),
+            fitter: FakeLayoutFitter,
+            clock: Arc::clone(&self.clock),
+        };
+        tracing::info!(
+            poll_ms = poll.as_millis(),
+            "in-process projection fitter started"
+        );
+        self.fitter = Some(fitter.spawn(poll));
+    }
+
+    /// Wait until the relay has applied every event queued for it before
+    /// this call: the node facts and the live feed then reflect every
+    /// write the stores made before it. Over a [`Backbone::standalone`]
+    /// that is every store write so far; over a bus subscription, what the
+    /// bus has delivered. A seeded world settles before it is read.
+    pub async fn settle(&self) -> Result<(), InProcessError> {
+        let (done, settled) = oneshot::channel();
+        self.settle
+            .send(done)
+            .map_err(|_| InProcessError::RelayStopped)?;
+        settled.await.map_err(|_| InProcessError::RelayStopped)
     }
 
     /// The caller of one request, from the loaded access config.
@@ -306,30 +372,56 @@ where
         self.stores.operators.caller(identity).await
     }
 
-    /// Stop the relay and the live feed; open streams end with
-    /// `ShuttingDown`.
+    /// Stop the relay, the projection fitter and the live feed; open
+    /// streams end with `ShuttingDown`.
     pub async fn shutdown(self) {
         self.relay.abort();
+        if let Some(fitter) = &self.fitter {
+            fitter.abort();
+        }
         self.surface.feed().shutdown().await;
     }
 }
 
 /// Hand every event the stores publish to the node facts and, for a
 /// `Changed`, to the live feed, in publish order.
+///
+/// Each wake takes every event already queued and applies them to the node
+/// facts together ([`NodeFeeder::apply_all`]: one re-read per id named), so
+/// a backlog, such as a seeded world's, costs one pass. A settle request is
+/// answered only when no event is queued (`biased`: events first), so
+/// everything queued before it has been applied.
 async fn relay(
     mut published: UnboundedReceiver<BusEvent>,
+    mut settles: UnboundedReceiver<oneshot::Sender<()>>,
     nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
     feed: FeedHandle,
 ) {
-    while let Some(event) = published.recv().await {
-        if let Err(error) = nodes.apply(&event).await {
-            tracing::warn!(error = %error, "node facts not refreshed");
-        }
-        if let BusEvent::Changed(changed) = event
-            && let Err(error) = feed.append(changed).await
-        {
-            tracing::warn!(error = %error, "live feed stopped; relay ends");
-            return;
+    loop {
+        tokio::select! {
+            biased;
+            next = published.recv() => {
+                let Some(first) = next else { return };
+                let mut batch = vec![first];
+                while let Ok(event) = published.try_recv() {
+                    batch.push(event);
+                }
+                if let Err(error) = nodes.apply_all(&batch).await {
+                    tracing::warn!(error = %error, events = batch.len(), "node facts not refreshed");
+                }
+                for event in batch {
+                    if let BusEvent::Changed(changed) = event
+                        && let Err(error) = feed.append(changed).await
+                    {
+                        tracing::warn!(error = %error, "live feed stopped; relay ends");
+                        return;
+                    }
+                }
+            }
+            Some(done) = settles.recv() => {
+                // The caller may have stopped waiting; nothing to undo.
+                let _ = done.send(());
+            }
         }
     }
 }
