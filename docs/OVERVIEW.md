@@ -75,11 +75,11 @@ Overview:
     L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
     SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
-    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint. The operator UI
-    (crosstalk-ui, ui/) runs on the spec's L8 traits, implemented by a
-    deterministic fixture backend until it is wired to the gateway (ui).
-    The
-    other crates are still empty. The phased implementation plan, with its
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint.
+    The operator UI (crosstalk-ui, ui/) runs on the spec's L8 traits,
+    implemented by a fixture backend by default, or by the in-process
+    surface seeded with the synthetic world (ui). The other crates are
+    still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -1074,18 +1074,24 @@ Features Index:
       promotion, agents with merges, alerts and rules, export (JSON Lines
       downloads), audit and pipeline, kept current by the SSE live feed.
       Reads and acts through the spec's L8 traits (QueryApi,
-      OperatorActions, LiveFeed) with a deterministic fixture
-      implementation; what the spec lacks is two documented gap traits
-      (ui/src/contract: bucket width and present, export formats) and a
-      temporary channel-semantics shim (ui/src/pending) to delete when the
-      gateway's port of the cross-agent channel spec lands. Built into
-      deploy/ui.Dockerfile with its Topcoat asset bundle.
+      OperatorActions, LiveFeed), the channel-semantics port's shapes
+      included, on one of three backends (backend::AppBackend): the
+      deterministic fixture (default; optionally replaying its last hours
+      for demos), the world backend (crosstalk_api::InProcess over the
+      memory stores, seeded with crosstalk-world), or the gateway's live
+      composition behind the `live` cargo feature (a stub until the
+      gateway provides it). What the spec lacks is two documented gap
+      traits (ui/src/contract: bucket width and present, export formats).
+      Built from the workspace root into deploy/ui.Dockerfile and
+      deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
     entry_points:
       - ui/src/main.rs
       - ui/src/app.rs
+      - ui/src/backend/mod.rs
+      - ui/src/backend/dispatch.rs
       - ui/src/backend/fixture/surface.rs
+      - ui/src/backend/world/mod.rs
       - ui/src/contract/mod.rs
-      - ui/src/pending/channel_semantics.rs
       - ui/src/pages/mod.rs
       - ui/src/pages/view.rs
       - ui/src/data/mod.rs
@@ -1093,12 +1099,10 @@ Features Index:
       - ui/src/pages/topology/mod.rs
       - ui/src/pages/explore/mod.rs
       - ui/src/pages/export/mod.rs
-      - ui/elements/src/ct-topology.ts
-      - ui/elements/src/ct-projection.ts
-      - ui/elements/src/ct-timebrush.ts
-      - ui/elements/src/ct-live.ts
+      - ui/elements/src/topology/element.ts
+      - ui/elements/src/live/element.ts
       - deploy/ui.Dockerfile
-    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy]
+    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service]
     doc: docs/features/ui.md
   eval:
     description: >
