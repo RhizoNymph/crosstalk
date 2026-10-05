@@ -11,7 +11,7 @@ are small, so retention never touches them.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::drop_keeps_topics_and_lineage"
+unit = "crosstalk_analysis::tests::drop_keeps_topics_and_lineage"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

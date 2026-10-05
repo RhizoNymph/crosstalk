@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.fingerprint.winnow-guarantee"
+statement = "Embedding the same run of at least k + w - 1 normalized characters in two texts makes their fingerprint sets share at least one fingerprint."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+This is winnowing's detection guarantee and the reason WinnowParams exists.
+It requires that window selection depend only on the window's contents
+(minimum hash with a deterministic tie-break), not on surrounding text, so
+the same run selects the same fingerprint wherever it appears.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::shared_run_of_k_plus_w_minus_1_shares_fingerprint"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

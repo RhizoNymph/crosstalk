@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.fork-prefix-bounds"
+statement = "A Forks outcome's shared_prefix is less than the number of the parent's non-system stored messages."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Equal to the request's length is a retry: the request is a prefix of the
+parent's history and the fork diverges only in its response. Equal to the
+parent's length means the parent's whole history is a prefix of the
+request, which extends the parent rather than forking it.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::fork_shared_prefix_within_bounds"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

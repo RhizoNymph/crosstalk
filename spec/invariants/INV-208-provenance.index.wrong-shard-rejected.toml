@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.index.wrong-shard-rejected"
+statement = "FingerprintIndex::insert and FingerprintIndex::lookup return IndexError::WrongShard for any fingerprint whose Fingerprint::shard this node does not own."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The consumer group is sharded by fingerprint so a match never needs to look
+on more than one shard. A misrouted lookup that returned an empty result
+would be indistinguishable from "no match" and lose detections silently; a
+misrouted insert would store postings no correctly routed lookup will ever
+read. The error must be raised before any entry of the batch is written.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::insert_on_wrong_shard_errors", "crosstalk_provenance::tests::lookup_on_wrong_shard_errors"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -4,13 +4,15 @@ statement = "An Acknowledge or Resolve that returns Applied publishes Changed::A
 kind = "coordination"
 requires = ["dst"]
 rationale = """
-Operator triage changes the alert store directly in the surface, so the
-surface is the store that must announce it; other operators' views of the
-alert update only through this notification.
+The surface acknowledges and resolves through L6's alert store
+(AlertActions), which owns the alert and so announces the change from the
+transaction that makes it, as it does for triage; the surface publishes
+nothing for it. Other operators' views of the alert update only through
+this notification.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::acknowledge_announces_alert_change"
+dst = "crosstalk_surface::dst::actions::acknowledge_announces_alert_change"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

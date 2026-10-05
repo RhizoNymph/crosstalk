@@ -18,6 +18,8 @@ type = [
 unit = [
     "crosstalk_spec::tests::excerpt::new_rejects_each_malformed_excerpt",
     "crosstalk_spec::tests::excerpt::window_is_bounded",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpts_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpt_windows_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

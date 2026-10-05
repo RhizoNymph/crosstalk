@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.blob.put-durable"
+statement = "Bytes whose put returned Ok remain retrievable by get after the blob store's process and its backend restart."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+L1 writes message bodies before publishing ExchangeCaptured so every
+consumer can read them. That ordering is only useful if put returns after the
+bytes are committed; an acknowledged put lost on restart leaves events
+pointing at missing messages.
+"""
+
+[evidence]
+integration = ["crosstalk_transport::integration::pg_blob_store_put_survives_restart", "crosstalk_transport::integration::object_store_blobs_put_survives_restart"]
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

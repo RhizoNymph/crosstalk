@@ -18,7 +18,8 @@ use crate::pages::common::form::{FormFields, invalid};
 use crate::url::route::decode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
-use crosstalk_spec::aggregates::filter::{FalseDetections, UnconfirmedChannels};
+use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 
 #[query_params]
 pub struct RawTopologyQuery {

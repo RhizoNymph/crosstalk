@@ -3,12 +3,8 @@
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 use topcoat::context::{Cx, app_context};
 
-use crate::backend::fixture::FixtureBackend;
+pub use crate::backend::AppBackend;
 use crate::config::Access;
-
-/// The backend pages read from. An enum over implementations once there is
-/// more than one.
-pub type AppBackend = FixtureBackend;
 
 pub fn backend(cx: &Cx) -> &AppBackend {
     app_context::<AppBackend>(cx)

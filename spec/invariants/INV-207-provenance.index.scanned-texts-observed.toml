@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.index.scanned-texts-observed"
+statement = "Processing a ConversationDelta passes to FingerprintIndex::observe the fingerprints of every span it extracts, of any origin, and of every input part it scans."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Frequency is only as good as what is observed. A path that fingerprints a
+text without observing it (Common or Relayed spans, tool results, a new
+system prompt) leaves its boilerplate below the cutoff, so it is indexed
+and matched as if it were novel.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::every_span_origin_is_observed", "crosstalk_provenance::tests::scanned_input_parts_are_observed"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

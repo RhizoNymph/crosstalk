@@ -1,0 +1,16 @@
+{
+  "group": "topology",
+  "envelope": {
+    "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+    "at": "2026-10-04T12:34:56.789012Z",
+    "event": {
+      "type": "changed",
+      "data": {
+        "type": "channel",
+        "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      }
+    }
+  },
+  "attempts": 5,
+  "last_error": "edge store unavailable: connection refused"
+}

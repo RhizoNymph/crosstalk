@@ -41,6 +41,7 @@ fn call(arguments: ToolArguments) -> AssistantPart {
         name: ToolName("fetch".into()),
         arguments,
         execution: ToolExecution::Client,
+        signature: None,
     })
 }
 
@@ -74,7 +75,10 @@ fn text_parts_are_their_text() {
 fn assistant_parts_index_text_reasoning_and_arguments() {
     let assistant = of(MessageBody::Assistant(vec![
         AssistantPart::Text(text("done")),
-        AssistantPart::Reasoning(Reasoning::Visible(text("thinking"))),
+        AssistantPart::Reasoning(Reasoning::Visible {
+            text: text("thinking"),
+            signature: Some("EqNrZpUTd52E==".to_owned()),
+        }),
         AssistantPart::Reasoning(Reasoning::Opaque {
             signature: "sig".into(),
         }),
@@ -130,4 +134,55 @@ fn an_index_past_the_parts_names_no_part() {
         tool.part_text(3),
         Err(NoPartText::NoSuchPart { index: 3, parts: 1 })
     );
+}
+
+/// Opaque provider material is never part text: a tool call's text is its
+/// arguments alone (not its id, even a Gemini id embedding a thought
+/// signature, nor its signature), a tool result's is its text contents
+/// (not its call id), visible reasoning's is its text (not its signature),
+/// and opaque reasoning has none.
+#[test]
+fn ids_signatures_and_opaque_reasoning_are_not_part_text() {
+    let id = "__thought__CiQB0e2Kb7Zg";
+    let call_signature = "CiQB0e2Kb7Zg+u1kQx/==";
+    let reasoning_signature = "EqNrZpUTd52EaHrg==";
+    let opaque = "EqNrZpUTd52EaHrg+/==";
+    let assistant = of(MessageBody::Assistant(vec![
+        AssistantPart::ToolCall(ToolCall {
+            id: ToolCallId(id.into()),
+            name: ToolName("read_file".into()),
+            arguments: ToolArguments::Json(CanonicalJson("{\"path\":\"/a\"}".into())),
+            execution: ToolExecution::Client,
+            signature: Some(call_signature.into()),
+        }),
+        AssistantPart::Reasoning(Reasoning::Visible {
+            text: text("thinking"),
+            signature: Some(reasoning_signature.into()),
+        }),
+        AssistantPart::Reasoning(Reasoning::Opaque {
+            signature: opaque.into(),
+        }),
+    ]));
+    assert_eq!(assistant.part_text(0).as_deref(), Ok("{\"path\":\"/a\"}"));
+    assert_eq!(assistant.part_text(1).as_deref(), Ok("thinking"));
+    assert_eq!(
+        assistant.part_text(2),
+        Err(NoPartText::NotText { index: 2 })
+    );
+    let tool = of(MessageBody::Tool(NonEmpty::new(ToolResult {
+        call_id: ToolCallId(id.into()),
+        content: vec![ToolResultContent::Text(text("contents"))],
+        outcome: ToolOutcome::Unknown,
+    })));
+    assert_eq!(tool.part_text(0).as_deref(), Ok("contents"));
+    for message in [&assistant, &tool] {
+        for index in 0..message.part_count() {
+            let index = u16::try_from(index).expect("few parts");
+            if let Ok(text) = message.part_text(index) {
+                for blob in [id, call_signature, reasoning_signature, opaque] {
+                    assert!(!text.contains(blob), "{blob:?} in part {index}: {text:?}");
+                }
+            }
+        }
+    }
 }

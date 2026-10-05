@@ -8,13 +8,15 @@ rationale = """
 The SQL aggregate and the reference tally must agree on window, state,
 strongest match and verdict, or precision and recall figures quietly
 disagree with what the transmission list shows. One snapshot keeps a
-verdict appended mid-query from being counted under two verdicts.
+verdict appended mid-query from being counted under two verdicts. The
+tally resolves agents at the read, so a transmission whose agents have
+since merged into one is not counted (flow.quality.cross-agent-only).
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_detection_quality_matches_tally"
-integration = "crosstalk::flow::tests::pg_detection_quality_matches_tally"
+property = "crosstalk_surface::tests::props::reads::prop_detection_quality_matches_tally"
+integration = "crosstalk_flow::tests::pg_detection_quality_matches_tally"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

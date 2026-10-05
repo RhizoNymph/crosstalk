@@ -1,0 +1,24 @@
+[invariant]
+id = "reconstruct.thread.system-change-continues"
+statement = "Changing only the System messages of a full-history exchange's request, wherever they sit (the top-level system prompt or a system turn inside the message list), leaves its outcome variant and conversation unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Claude Code's system prompt embeds the date, git status and tool list, so it
+changes within one conversation. If it took part in prefix matching, every
+such change would cut the conversation into a new root and re-scan its whole
+history. The change is reported once as the delta's new_system instead.
+
+Every System message is left out of prefix matching, not only the first:
+"non-system messages" in the threading invariants means messages of any
+role but System, wherever a System message sits. Claude Code's system turn
+inside `messages` carries reminders (working directory, date) of the same
+changing kind, so matching on it would cut conversations the same way.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::system_change_keeps_outcome_and_conversation"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

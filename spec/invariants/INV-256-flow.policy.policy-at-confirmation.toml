@@ -15,7 +15,7 @@ by the absorbed channel's stale one.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::policy_change_after_confirmation"
+dst = "crosstalk_flow::dst::policy_change_after_confirmation"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

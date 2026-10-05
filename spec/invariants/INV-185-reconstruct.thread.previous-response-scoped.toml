@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.previous-response-scoped"
+statement = "An Increment exchange's previous response matches only a response stored under the same upstream and IdentityScope as the exchange."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+previous_response_id is client-supplied. Matching it across upstreams or
+scopes would let a forged or leaked id attach one caller's turn to another
+caller's conversation, mixing their histories and attributing one agent's
+inputs to another's thread. A response outside the scope counts as unseen,
+so the exchange Starts.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::previous_response_matches_only_in_scope"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.transmission.suspect-once"
+statement = "The correlator emits exactly one Suspect update for an AwaitingContent transmission whose evidence window closes without a content match."
+kind = "coordination"
+requires = ["dst", "unit"]
+rationale = """
+`on_tick` is called repeatedly, and every tick after `window_closes_at`
+still sees the closed window. A Suspect per tick would publish
+TransmissionSuspected repeatedly and raise SuspectedTransmission once per
+tick; none would leave a covert channel unreported.
+"""
+
+[evidence]
+dst = "crosstalk_flow::consumer::tests::dst::window_close_suspects_once"
+unit = "crosstalk_flow::correlate::tests::channel::repeated_ticks_suspect_once"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

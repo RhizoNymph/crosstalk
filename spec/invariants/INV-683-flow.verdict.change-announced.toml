@@ -14,7 +14,7 @@ feed's notification, like every other store's Changed.
 """
 
 [evidence]
-dst = "crosstalk::flow::dst::verdict_changes_announced_after_commit"
+dst = "crosstalk_flow::dst::verdict_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

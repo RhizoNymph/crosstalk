@@ -1,0 +1,16 @@
+[invariant]
+id = "reconstruct.delta.single-envelope-per-exchange"
+statement = "Across any number of deliveries of an exchange's ExchangeCaptured, every ConversationDelta published for that exchange has the same envelope id."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Transport dedups on envelope id. If reconstruction republished a delta under
+a fresh envelope id on redelivery, L4 would index the same output twice and
+L5 would count the same read twice, inflating edge weights.
+"""
+
+[evidence]
+dst = "crosstalk_reconstruct::tests::dst::dst_one_delta_envelope_per_exchange"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

@@ -1,0 +1,28 @@
+[invariant]
+id = "canonical.normalize.dialect-independent"
+statement = "Rendering the same exchange in any two Dialects of one WireProtocol and normalizing each yields NormalizedExchanges that differ only in meta."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+The same model served by vLLM, SGLang, Copilot or the vendor speaks one
+protocol with different quirks: vLLM `reasoning`, SGLang
+`reasoning_content` (null when empty) and the reference format all mean
+one Reasoning part, a null field means the same as an absent one, SGLang's
+extra `sglext` chunks carry no content, and finish reasons differ (vLLM
+`stop` for a named tool choice where SGLang says `tool_calls`). If dialect
+leaked into messages, warnings or the outcome, one agent moving between
+servers would look like different content and break hashes and threading.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_canonical::tests::vllm_sglang_reference_reasoning_agree",
+  "crosstalk_canonical::tests::sglang_null_reasoning_is_absent",
+  "crosstalk_canonical::tests::sglext_chunks_ignored",
+]
+property = "crosstalk_canonical::tests::normalization_independent_of_dialect"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

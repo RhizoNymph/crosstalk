@@ -13,7 +13,7 @@ entries at or below the last replayed seq.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::resume_replays_then_goes_live_without_gap"
+dst = "crosstalk_surface::dst::live::resume_replays_then_goes_live_without_gap"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

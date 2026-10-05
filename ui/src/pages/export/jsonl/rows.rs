@@ -9,6 +9,7 @@ use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::quality::{MatchClass, QualityMatch};
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::derived::provenance::matching::CarrierKind;
 use crosstalk_spec::interfaces::l8_surface::excerpt::Excerpted;
 use crosstalk_spec::interfaces::l8_surface::export::rows::{
     AccessRow, EdgeRow, LabelContent, MatchText, PointRow, TopicRow, TransmissionRow, VerdictRow,
@@ -63,6 +64,15 @@ fn class(class: MatchClass) -> &'static str {
         MatchClass::Normalized => "normalized",
         MatchClass::Decoded => "decoded",
         MatchClass::Semantic => "semantic",
+    }
+}
+
+fn carrier(carrier: CarrierKind) -> &'static str {
+    match carrier {
+        CarrierKind::ToolResult => "tool_result",
+        CarrierKind::UserTurn => "user_turn",
+        CarrierKind::SystemPrompt => "system_prompt",
+        CarrierKind::ReaderOutput => "reader_output",
     }
 }
 
@@ -200,22 +210,25 @@ fn point(row: &PointRow) -> Value {
     let point = &row.point;
     json!({
         "index": row.index,
-        "transmission": id(point.transmission),
-        "from": id(point.from),
-        "to": id(point.to),
-        "route_kind": route_kind(point.route),
-        "topic": point.topic.map(id),
-        "confirmed_at": time(point.confirmed_at),
-        "x": point.x,
-        "y": point.y,
+        "transmission": id(point.transmission()),
+        "from": id(point.from()),
+        "to": id(point.to()),
+        "route_kind": route_kind(point.route().kind()),
+        "topic": point.topic().map(id),
+        "confirmed_at": time(point.confirmed_at()),
+        "x": point.x(),
+        "y": point.y(),
         "topic_label": label(row.content.as_ref()),
     })
 }
 
 fn verdict_row(row: &VerdictRow) -> Value {
     let call = match row.call {
-        QualityMatch::Content(match_class) => {
-            json!({ "kind": "content", "class": class(match_class) })
+        QualityMatch::Content {
+            class: match_class,
+            carrier: carrier_kind,
+        } => {
+            json!({ "kind": "content", "class": class(match_class), "carrier": carrier(carrier_kind) })
         }
         QualityMatch::Suspected => json!({ "kind": "suspected" }),
         QualityMatch::Discarded => json!({ "kind": "discarded" }),

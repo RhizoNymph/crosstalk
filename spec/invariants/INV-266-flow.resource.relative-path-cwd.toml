@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.resource.relative-path-cwd"
+statement = "A relative file path and its absolute form under the conversation's stated working directory normalize to the same ResourceId."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Harnesses state the working directory in their system prompts, and file
+tools are often called with relative paths. Resolving against it lets a
+relative write and an absolute read of one file meet on one resource.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::resource::tests::relative_path_resolves_against_stated_cwd"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

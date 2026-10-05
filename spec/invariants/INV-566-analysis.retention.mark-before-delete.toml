@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.retention.mark-before-delete"
-statement = "A version's topic assignments are deleted, and TopicVersionDropped for it is published, only after the catalog has marked it dropped."
+statement = "A version's topic assignments are deleted, and TopicVersionDropped for it is published by the catalog, only after the catalog has marked it dropped, all in the transaction that marks it."
 kind = "coordination"
 requires = ["dst"]
 rationale = """
@@ -10,7 +10,7 @@ the event that follows the mark.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::version_marked_dropped_before_any_deletion"
+dst = "crosstalk_analysis::tests::version_marked_dropped_before_any_deletion"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

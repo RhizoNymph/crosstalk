@@ -12,7 +12,7 @@ never made.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::set_verdict_rejects_unknown_and_unjudgeable"
+unit = "crosstalk_flow::tests::set_verdict_rejects_unknown_and_unjudgeable"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

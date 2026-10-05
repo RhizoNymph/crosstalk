@@ -10,8 +10,8 @@ unusual writes.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::apply_access_twice_counts_once"
-integration = "crosstalk::topology::tests::timescale_apply_access_idempotent"
+unit = "crosstalk_topology::tests::apply_access_twice_counts_once"
+integration = "crosstalk_topology::tests::timescale_apply_access_idempotent"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

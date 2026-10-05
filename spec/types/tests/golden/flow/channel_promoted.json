@@ -1,0 +1,53 @@
+{
+  "id": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+  "origin": {
+    "type": "declared",
+    "data": {
+      "declaration": {
+        "pattern": {
+          "type": "url_prefix",
+          "data": {
+            "host": "wiki.internal.example",
+            "path_prefix": "/projects/crosstalk"
+          }
+        },
+        "by": {
+          "type": "operator",
+          "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        },
+        "at": "2026-10-04T13:00:00.000000Z"
+      },
+      "history": {
+        "type": "promoted",
+        "data": {
+          "from": {
+            "resource": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6",
+            "first_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+            "opened_at": "2026-10-04T12:00:30.250000Z"
+          },
+          "detection": {
+            "type": "active",
+            "data": {
+              "since": "2026-10-04T12:00:30.250000Z",
+              "last_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+            }
+          }
+        }
+      }
+    }
+  },
+  "resources": [
+    "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+  ],
+  "policy": {
+    "type": "unsanctioned",
+    "data": {
+      "by": {
+        "type": "operator",
+        "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      },
+      "at": "2026-10-04T13:00:00.000000Z",
+      "note": "the planner briefs the coder through the wiki"
+    }
+  }
+}

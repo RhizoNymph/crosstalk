@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.embedder.one-per-input"
+statement = "A successful Embedder::embed call returns exactly one embedding per input text, in input order."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The analyzer embeds batches and pairs each output with the transmission
+whose text it came from by position. A dropped, extra or reordered vector
+would attach one transmission's embedding, and so its topic and search
+hits, to another. Inputs that cannot be embedded fail the whole call with
+EmbedError::TooLong { index } instead of being skipped.
+"""
+
+[evidence]
+unit = ["crosstalk_analysis::tests::local_embedder_returns_one_vector_per_text", "crosstalk_analysis::remote::tests::embedder::api_embedder_returns_one_vector_per_text"]
+property = "crosstalk_analysis::remote::tests::embedder::embed_preserves_count_and_order"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

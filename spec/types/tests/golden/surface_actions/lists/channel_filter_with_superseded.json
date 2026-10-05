@@ -1,0 +1,24 @@
+{
+  "origin": {
+    "type": "with_superseded",
+    "data": [
+      "promoted",
+      "discovered"
+    ]
+  },
+  "listings": [
+    "confirmed",
+    "declaration"
+  ],
+  "detections": [
+    "active",
+    "dormant"
+  ],
+  "policies": [
+    "unreviewed"
+  ],
+  "window": {
+    "start": "2026-10-04T00:00:00.000000Z",
+    "end": "2026-10-04T12:00:00.000000Z"
+  }
+}

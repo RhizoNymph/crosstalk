@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.support.time-window-non-empty"
+statement = "Every TimeWindow has a start strictly before its end."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Topology buckets, correlation windows and alert windows are TimeWindows. An
+empty or inverted window contains no instant, so an edge or transmission
+bucketed into one would silently vanish from every query. The fields are
+private and TimeWindow::new returns EmptyWindow unless start < end, so no
+empty window can be built.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::TimeWindow::new"
+unit = ["crosstalk_spec::tests::support::time_window_rejects_empty_and_inverted"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

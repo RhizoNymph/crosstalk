@@ -1,0 +1,53 @@
+[
+  {
+    "type": "harness_agent",
+    "data": {
+      "scope": {
+        "type": "credential",
+        "data": {
+          "key": 2,
+          "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+        }
+      },
+      "agent": "planner"
+    }
+  },
+  {
+    "type": "harness_session",
+    "data": {
+      "scope": {
+        "type": "account",
+        "data": {
+          "key": 2,
+          "digest": "9af211329b2fc82e5efe906062c730082819b23fe8394bc435e0b1bf0458eb54"
+        }
+      },
+      "session": "0199b0f2-6c1e-7d3a-8f42-5e9a1c7b3d20"
+    }
+  },
+  {
+    "type": "account",
+    "data": {
+      "key": 2,
+      "digest": "9af211329b2fc82e5efe906062c730082819b23fe8394bc435e0b1bf0458eb54"
+    }
+  },
+  {
+    "type": "stable_credential",
+    "data": {
+      "key": 2,
+      "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+    }
+  },
+  {
+    "type": "rotating_credential",
+    "data": {
+      "key": 2,
+      "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+    }
+  },
+  {
+    "type": "prompt_fingerprint",
+    "data": "cf07194ee232eb531e15f690000d19846dea69cf05504782658afcfacb9228a2"
+  }
+]

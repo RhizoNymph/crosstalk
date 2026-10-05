@@ -1,0 +1,8 @@
+{
+  "dataset": {
+    "type": "projection",
+    "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  },
+  "format": "jsonl",
+  "include_content": true
+}

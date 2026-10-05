@@ -16,7 +16,7 @@ agents it repointed back at it (`Agent::restore`).
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::merge_chains_are_flat"
+property = "crosstalk_reconstruct::tests::pg_agents::merge_chains_are_flat"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

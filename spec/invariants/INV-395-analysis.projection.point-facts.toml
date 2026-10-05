@@ -1,6 +1,6 @@
 [invariant]
 id = "analysis.projection.point-facts"
-statement = "Each ProjectedPoint of a stored projection carries AgentDirectory::canonical of its transmission's sender and reader when the sample was read, the RouteKind of its route, its topic under the spec's topic version, and its Confirmed::at."
+statement = "Each ProjectedPoint of a stored projection carries AgentDirectory::canonical of its transmission's sender and reader when the sample was read, the PointRoute of its route (its RouteKind and, for a channel route, ChannelDirectory::canonical of its channel when the sample was read), its topic under the spec's topic version, and its Confirmed::at."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
@@ -11,12 +11,18 @@ colour one agent's points in two colours; a topic from another version
 would colour by clusters the version's topic list does not show. The
 facts are frozen at sample time so that every read of the projection is
 identical; a client that needs current canonical agents resolves the
-frame's agent tables through the agent list.
+frame's agent tables through the agent list, and one that needs the
+channels in force resolves the channels table with channel_names. The
+channel lets the client colour points by channel without reading one
+transmission row per point.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::sampled_point_resolves_merged_agents"
-property = "crosstalk::analysis::tests::prop_projected_points_match_transmissions_at_sample_time"
+unit = [
+    "crosstalk_analysis::tests::sampled_point_resolves_merged_agents",
+    "crosstalk_analysis::tests::sampled_point_resolves_superseded_channels",
+]
+property = "crosstalk_analysis::tests::prop_projected_points_match_transmissions_at_sample_time"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

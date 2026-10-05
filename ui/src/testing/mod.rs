@@ -64,10 +64,15 @@ pub fn caller_of(operator: OperatorId, permissions: &[Permission]) -> Caller {
 }
 
 pub fn router() -> Router {
+    router_over(FixtureBackend::try_new(SEED).expect("fixture generates"))
+}
+
+/// The router over `backend`.
+pub fn router_over(backend: FixtureBackend) -> Router {
     Router::builder()
         .discover()
         .app_context(operator())
-        .app_context(FixtureBackend::try_new(SEED).expect("fixture generates"))
+        .app_context(crate::backend::AppBackend::from(backend))
         .assets(assets())
         .runtime()
         .build()
@@ -105,7 +110,9 @@ fn assets() -> AssetConfig {
 pub fn cx() -> Cx {
     let mut app = AppContext::new();
     app.insert(operator());
-    app.insert(FixtureBackend::try_new(SEED).expect("fixture generates"));
+    app.insert(crate::backend::AppBackend::from(
+        FixtureBackend::try_new(SEED).expect("fixture generates"),
+    ));
     Cx::new(Arc::new(app))
 }
 
@@ -159,6 +166,11 @@ impl Session {
 
 async fn send(request: Request) -> Reply {
     send_to(&router(), request).await
+}
+
+/// A GET through `router`.
+pub async fn get_from(router: &Router, uri: &str) -> Reply {
+    send_to(router, get_request(uri)).await
 }
 
 async fn send_to(router: &Router, request: Request) -> Reply {

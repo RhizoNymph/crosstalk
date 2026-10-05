@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.route.channel-requires-access"
+statement = "The correlator assigns a Channel route only to content that arrived in a tool result whose call yielded an access on that channel."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The Channel route is what puts a transmission under the channel's policy.
+Assigning it to content with no access on the channel would apply the wrong
+policy, or invent traffic on a channel nobody used.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlate::tests::props::channel_route_requires_access"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

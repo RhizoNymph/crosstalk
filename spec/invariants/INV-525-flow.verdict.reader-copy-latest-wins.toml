@@ -15,7 +15,7 @@ unit = [
     "crosstalk_spec::tests::verdicts::current_verdict_copy_is_order_insensitive",
     "crosstalk_spec::tests::verdicts::stale_events_leave_the_copy_unchanged",
 ]
-property = "crosstalk::flow::tests::prop_current_verdict_order_insensitive"
+property = "crosstalk_flow::tests::prop_current_verdict_order_insensitive"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

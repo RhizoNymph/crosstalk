@@ -1,0 +1,29 @@
+{
+  "id": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+  "origin": {
+    "type": "superseded",
+    "data": {
+      "seed": {
+        "resource": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+        "first_transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "opened_at": "2026-10-03T09:00:00.000000Z"
+      },
+      "detection": {
+        "type": "dormant",
+        "data": {
+          "since": "2026-10-03T21:00:00.000000Z",
+          "last_transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        }
+      },
+      "supersession": {
+        "by": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "at": "2026-10-04T13:00:00.000000Z"
+      }
+    }
+  },
+  "resources": [],
+  "policy": {
+    "type": "unreviewed",
+    "data": null
+  }
+}

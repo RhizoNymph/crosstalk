@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.normalize.dispatch-covers-dialects"
+statement = "The registered normalizer for each WireProtocol handles every Dialect that an upstream of that protocol can speak."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+There is one Normalizer per WireProtocol (an exhaustive match on the
+protocol), and dialects are quirks within it rather than separate
+normalizers. An exchange whose dialect its normalizer does not handle would
+go uncaptured. The test walks the protocol and dialect matrix from the wire
+protocol research: Copilot, vLLM and SGLang on Anthropic Messages, OpenAI
+Chat and Responses, and the reference dialect on every protocol.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::every_protocol_dialect_pair_is_handled"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -18,7 +18,7 @@ change and is allowed.
 """
 
 [evidence]
-property = "crosstalk::reconstruct::tests::agent_state_changes_follow_lifecycle"
+property = "crosstalk_reconstruct::tests::pg_agents::agent_state_changes_follow_lifecycle"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "provenance.semantic.retention-bound"
+statement = "The SemanticMatcher's store holds no data derived from a text once that text's retention period plus one eviction interval has elapsed."
+kind = "confidentiality"
+requires = ["dst", "integration"]
+rationale = """
+Fingerprints, observations and embeddings are derived from agent output and
+inputs and, for short or predictable text, can confirm what an agent wrote
+or read. Retention is the promise that the gateway stops being able to do
+that after the configured period, in every store that holds derived data:
+FingerprintIndex::evict and SemanticMatcher::evict for expired spans, and
+ageing out observations recorded by FingerprintIndex::observe. The
+deterministic simulation advances the clock past retention and checks every
+store for leftovers.
+"""
+
+[evidence]
+dst = "crosstalk_provenance::dst::derived_data_evicted_after_retention"
+integration = ["crosstalk_provenance::integration::pg_index_evicts_expired_spans", "crosstalk_provenance::integration::pg_observations_age_out", "crosstalk_provenance::integration::semantic_store_evicts_expired_spans"]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

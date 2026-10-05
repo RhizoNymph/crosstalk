@@ -20,8 +20,8 @@ unit = [
     "crosstalk_spec::tests::agents::merging_a_merged_agent_is_refused",
     "crosstalk_spec::tests::agent_reads::merging_a_merged_agent_of_another_cluster_names_it",
 ]
-integration = "crosstalk::reconstruct::tests::pg_merge_refuses_merged_agents"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_merge_refuses_merged_agents"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

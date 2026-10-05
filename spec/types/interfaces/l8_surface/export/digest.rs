@@ -31,11 +31,13 @@
 //! | `f32` | IEEE 754 bits as `u32` LE |
 //! | `TimeWindow` | start, then end |
 //! | `RouteKind` | `u8` as the projection frame's route code |
+//! | `PointRoute` | its kind's `u8` route code, then for a channel its id |
 //! | `Route` | see [`encode_route`] |
 //! | `AccessKind` | `u8`: write 0, read 1 |
 //! | `Verdict` | `u8`: genuine 0, false detection 1 |
 //! | `MatchClass` | `u8`: exact 0, normalized 1, decoded 2, semantic 3 |
-//! | `QualityMatch` | `u8`: content 0 then its class, suspected 1, discarded 2 |
+//! | `CarrierKind` | `u8`: tool result 0, user turn 1, system prompt 2, reader output 3 |
+//! | `QualityMatch` | `u8`: content 0 then its class and its carrier kind, suspected 1, discarded 2 |
 //! | `TransmissionStateKind` | `u8`: confirmed 0, classified 1, aggregated 2 (a row is never in another state) |
 //! | `TopicUnder` | `u8`: topic 0 then its id, outlier 1, unassigned 2 |
 //! | `MessageHash` | its 32 digest bytes |
@@ -43,12 +45,15 @@
 //!
 //! [`ExportDatasetKind::code`]: super::request::ExportDatasetKind::code
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::projection::frame::route_code;
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crate::derived::flow::verdict::Verdict;
+use crate::derived::provenance::matching::CarrierKind;
 use crate::interfaces::l8_surface::excerpt::Excerpted;
 use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crate::support::{Blake3, TimeWindow, Timestamp};
@@ -70,8 +75,10 @@ pub trait RowHasher {
     fn finalize(&self) -> Blake3;
 }
 
-/// The digest of an export's rows, as the trailer records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The digest of an export's rows, as the trailer records it. On the wire,
+/// its lower-case hex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ExportDigest(Blake3);
 
 impl ExportDigest {
@@ -231,7 +238,7 @@ fn topic(row: &TopicRow, out: &mut Vec<u8>) {
         len(content.terms.len(), out);
         for (term, weight) in &content.terms {
             string(term, out);
-            float(*weight, out);
+            float(weight.get(), out);
         }
     });
 }
@@ -239,14 +246,17 @@ fn topic(row: &TopicRow, out: &mut Vec<u8>) {
 fn point(row: &PointRow, out: &mut Vec<u8>) {
     let point = &row.point;
     out.extend_from_slice(&row.index.to_le_bytes());
-    id(point.transmission.as_ulid(), out);
-    id(point.from.as_ulid(), out);
-    id(point.to.as_ulid(), out);
-    out.push(route_code(point.route));
-    option(point.topic, out, |topic, out| id(topic.as_ulid(), out));
-    time(point.confirmed_at, out);
-    float(point.x, out);
-    float(point.y, out);
+    id(point.transmission().as_ulid(), out);
+    id(point.from().as_ulid(), out);
+    id(point.to().as_ulid(), out);
+    out.push(route_code(point.route().kind()));
+    if let Some(channel) = point.route().channel() {
+        id(channel.as_ulid(), out);
+    }
+    option(point.topic(), out, |topic, out| id(topic.as_ulid(), out));
+    time(point.confirmed_at(), out);
+    float(point.x().get(), out);
+    float(point.y().get(), out);
     option(row.content.as_ref(), out, label);
 }
 
@@ -254,9 +264,13 @@ fn verdict_row(row: &VerdictRow, out: &mut Vec<u8>) {
     id(row.transmission.as_ulid(), out);
     out.push(route_code(row.route_kind));
     match row.call {
-        QualityMatch::Content(match_class) => {
+        QualityMatch::Content {
+            class: match_class,
+            carrier,
+        } => {
             out.push(0);
             out.push(class(match_class));
+            out.push(carrier_code(carrier));
         }
         QualityMatch::Suspected => out.push(1),
         QualityMatch::Discarded => out.push(2),
@@ -280,6 +294,15 @@ fn class(class: MatchClass) -> u8 {
         MatchClass::Normalized => 1,
         MatchClass::Decoded => 2,
         MatchClass::Semantic => 3,
+    }
+}
+
+fn carrier_code(carrier: CarrierKind) -> u8 {
+    match carrier {
+        CarrierKind::ToolResult => 0,
+        CarrierKind::UserTurn => 1,
+        CarrierKind::SystemPrompt => 2,
+        CarrierKind::ReaderOutput => 3,
     }
 }
 

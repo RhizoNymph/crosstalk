@@ -1,11 +1,11 @@
 //! Audit subjects (the spec's `AuditSubject`) as URL text and as links:
 //! `ch.<ulid>` channel, `ag.` agent, `tx.` transmission, `ru.` rule, `al.`
 //! alert, `mg.` merge record, `op.` operator, `ex.` export, `pj.`
-//! projection, and `tv.<n>` topic-model version.
+//! projection, `sk.` alert sink, and `tv.<n>` topic-model version.
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{
-    AgentId, AlertId, AlertRuleId, ChannelId, ExportId, MergeId, OperatorId, ProjectionId,
+    AgentId, AlertId, AlertRuleId, ChannelId, ExportId, MergeId, OperatorId, ProjectionId, SinkId,
     TransmissionId,
 };
 use crosstalk_spec::interfaces::l8_surface::audit::AuditSubject;
@@ -27,13 +27,14 @@ pub fn subject_code(subject: AuditSubject) -> String {
         AuditSubject::Operator(id) => format!("op.{}", id.to_ulid()),
         AuditSubject::Export(id) => format!("ex.{}", id.to_ulid()),
         AuditSubject::Projection(id) => format!("pj.{}", id.to_ulid()),
+        AuditSubject::Sink(id) => format!("sk.{}", id.to_ulid()),
         AuditSubject::TopicVersion(version) => format!("tv.{}", version.0),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidSubject {
-    #[error("expected ch., ag., tx., ru., al., mg., op., ex., pj. or tv. before the id")]
+    #[error("expected ch., ag., tx., ru., al., mg., op., ex., pj., sk. or tv. before the id")]
     Kind,
     #[error(transparent)]
     Id(#[from] InvalidUlid),
@@ -53,6 +54,7 @@ pub fn parse_subject(text: &str) -> Result<AuditSubject, InvalidSubject> {
         "op" => AuditSubject::Operator(OperatorId::parse_ulid(id)?),
         "ex" => AuditSubject::Export(ExportId::parse_ulid(id)?),
         "pj" => AuditSubject::Projection(ProjectionId::parse_ulid(id)?),
+        "sk" => AuditSubject::Sink(SinkId::parse_ulid(id)?),
         "tv" => AuditSubject::TopicVersion(TopicModelVersion(
             id.parse::<u32>().map_err(|_| InvalidSubject::Version)?,
         )),
@@ -93,6 +95,7 @@ pub fn subject_link(
         AuditSubject::Merge(id) => (format!("merge {}", short(id.to_ulid())), None),
         AuditSubject::Operator(id) => (format!("operator {}", operators.name(id)), None),
         AuditSubject::Export(id) => (format!("export {}", short(id.to_ulid())), None),
+        AuditSubject::Sink(id) => (format!("alert sink {}", short(id.to_ulid())), None),
         AuditSubject::Projection(id) => (
             format!("projection {}", short(id.to_ulid())),
             Some(href("/explore", state, &[("p", &id.to_ulid())])),

@@ -1,0 +1,208 @@
+[
+  {
+    "type": "detect",
+    "data": {
+      "type": "span_originated",
+      "data": {
+        "span": "00000000000000000000000001",
+        "agent": "00000000000000000000000001"
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "span_relayed",
+      "data": {
+        "span": "00000000000000000000000002",
+        "source": {
+          "type": "span",
+          "data": "00000000000000000000000001"
+        }
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "content_matched",
+      "data": {
+        "origin": "00000000000000000000000001",
+        "origin_agent": "00000000000000000000000001",
+        "reader": "00000000000000000000000002",
+        "reader_exchange": "00000000000000000000000002",
+        "read_at": {
+          "part": {
+            "message": "0101010101010101010101010101010101010101010101010101010101010101",
+            "index": 0
+          },
+          "range": {
+            "start": 0,
+            "end": 64
+          }
+        },
+        "carrier": {
+          "type": "tool_result",
+          "data": "call_1"
+        },
+        "kind": {
+          "type": "exact"
+        },
+        "matched_bytes": 8
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "access_recorded",
+      "data": {
+        "access": {
+          "id": "00000000000000000000000001",
+          "agent": "00000000000000000000000001",
+          "exchange": "00000000000000000000000001",
+          "resource": "00000000000000000000000001",
+          "at": "1970-01-01T00:00:00.000001Z",
+          "via": "structured",
+          "op": {
+            "type": "write",
+            "data": {
+              "call": {
+                "message": "0202020202020202020202020202020202020202020202020202020202020202",
+                "index": 0
+              },
+              "spans": [],
+              "outcome": "delivered"
+            }
+          }
+        },
+        "channel": "00000000000000000000000001"
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "channel_discovered",
+      "data": {
+        "channel": "00000000000000000000000001",
+        "seed": {
+          "resource": "00000000000000000000000001",
+          "first_transmission": "00000000000000000000000001",
+          "opened_at": "1970-01-01T00:00:00.000001Z"
+        }
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "channel_cross_accessed",
+      "data": {
+        "channel": "00000000000000000000000001",
+        "co_access": {
+          "write": "00000000000000000000000001",
+          "writer": "00000000000000000000000001",
+          "read": "00000000000000000000000002",
+          "lag_micros": 1
+        },
+        "reader": "00000000000000000000000002"
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "declared_channel_unused",
+      "data": {
+        "channel": "00000000000000000000000002",
+        "since": "1970-01-01T00:00:00.000009Z"
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "channel_promoted",
+      "data": {
+        "channel": "00000000000000000000000001",
+        "declaration": {
+          "pattern": {
+            "type": "host",
+            "data": "wiki.example"
+          },
+          "by": {
+            "type": "operator",
+            "data": "00000000000000000000000001"
+          },
+          "at": "1970-01-01T00:00:00.000010Z"
+        },
+        "policy": {
+          "kind": "unsanctioned",
+          "decision": {
+            "by": {
+              "type": "operator",
+              "data": "00000000000000000000000001"
+            },
+            "at": "1970-01-01T00:00:00.000010Z",
+            "note": null
+          }
+        },
+        "superseded": [
+          "00000000000000000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "transmission_confirmed",
+      "data": {
+        "transmission": "00000000000000000000000001",
+        "from": "00000000000000000000000001",
+        "to": "00000000000000000000000002",
+        "route": {
+          "type": "direct",
+          "data": {
+            "type": "user_turn"
+          }
+        },
+        "at": "1970-01-01T00:00:00.000008Z",
+        "matched_bytes": 8
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "transmission_suspected",
+      "data": {
+        "transmission": "00000000000000000000000002",
+        "to": "00000000000000000000000002",
+        "channel": "00000000000000000000000001",
+        "co_access": [
+          {
+            "write": "00000000000000000000000001",
+            "writer": "00000000000000000000000001",
+            "read": "00000000000000000000000002",
+            "lag_micros": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "detect",
+    "data": {
+      "type": "verdict_set",
+      "data": {
+        "transmission": "00000000000000000000000002",
+        "verdict": "false_detection",
+        "revision": 1,
+        "by": "00000000000000000000000001",
+        "at": "1970-01-01T00:00:00.000009Z"
+      }
+    }
+  }
+]

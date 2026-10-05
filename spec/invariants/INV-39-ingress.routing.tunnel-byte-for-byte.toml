@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.routing.tunnel-byte-for-byte"
+statement = "A CONNECT to a host that is not intercepted is tunnelled with every byte relayed unchanged and in order in both directions until either side closes."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+In forward-proxy mode the harness sends all its traffic through the
+gateway: telemetry, OAuth refresh, WebFetch preflight, package downloads.
+Anything not intercepted must behave exactly like a plain TCP tunnel, or
+the gateway breaks tools that have nothing to do with inference.
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::routing::tunnel_relays_bytes_unchanged"
+integration = "crosstalk_ingress::tests::integration::connect_tunnel_to_non_allowlisted_host"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

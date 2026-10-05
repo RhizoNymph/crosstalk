@@ -18,6 +18,7 @@
 
 pub mod model;
 
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::runtime::{Event, Signal, signal};
@@ -84,7 +85,7 @@ fn claim_text(claim: &crosstalk_spec::observed::client::HarnessClaim) -> String 
 }
 
 /// The page's one binding that keeps the URL, the rows' `aria-pressed` and
-/// their scroll position in step with `sel` ([`SYNC_JS`]).
+/// their scroll position in step with `sel` (`SYNC_JS`).
 #[component]
 pub async fn selection_sync(sel: &Signal<String>) -> Result<impl View> {
     let sel = sel.clone();
@@ -353,13 +354,21 @@ async fn channel_row(item: ChannelItem, bar: String, pressed: &'static str) -> R
         Carried::Accesses { writes, reads } => format!("{writes} w · {reads} r"),
     };
     let policy = item.policy;
+    let unconfirmed = item.is_unconfirmed().then_some(Confirmation::Unconfirmed);
     Ok(view! {
         <li>
             <button type="button" class="ct-row" value=(code.clone()) data-list-item=(code) data-key=(key) title=(item.name.clone()) aria-pressed=(pressed)>
                 <span class="ct-row-main">
                     <span class="truncate font-mono text-[11px] font-medium">(item.name)</span>
-                    if let Some(policy) = policy {
-                        <span class="ct-row-meta"><span class=(format!("ct-row-badge {}", policy.tone().classes()))>(policy.label())</span></span>
+                    if policy.is_some() || unconfirmed.is_some() {
+                        <span class="ct-row-meta">
+                            if let Some(policy) = policy {
+                                <span class=(format!("ct-row-badge {}", policy.tone().classes()))>(policy.label())</span>
+                            }
+                            if let Some(unconfirmed) = unconfirmed {
+                                <span class=(format!("ct-row-badge {}", unconfirmed.tone().classes()))>(unconfirmed.label())</span>
+                            }
+                        </span>
                     }
                 </span>
                 <span class="ct-row-num"><span class="block">(volume)</span><span>(detail)</span></span>

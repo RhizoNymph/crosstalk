@@ -1,0 +1,13 @@
+{
+  "id": "01J9Z3Q6S7T8V9W0X1Y2Z3A4B5",
+  "shape": {
+    "type": "pattern",
+    "data": {
+      "type": "url_prefix",
+      "data": {
+        "host": "wiki.example.com",
+        "path_prefix": "/team"
+      }
+    }
+  }
+}

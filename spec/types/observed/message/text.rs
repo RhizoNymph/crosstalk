@@ -8,13 +8,22 @@
 //! | Part | Text |
 //! | --- | --- |
 //! | `Text` (any role) | the text |
-//! | `Reasoning::Visible` | the text |
-//! | `ToolCall` | its arguments: the canonical JSON, or the invalid text kept verbatim |
+//! | `Reasoning::Visible` | the text (not its signature) |
+//! | `ToolCall` | its arguments: the canonical JSON, or the invalid text kept verbatim (not its id or signature) |
 //! | `ToolResult`, `ServerToolResult` | its `Text` contents in order, joined with [`TOOL_RESULT_SEPARATOR`] |
 //! | `Reasoning::Opaque`, `Media`, `Unknown`, a tool result with no `Text` content | none |
 //!
 //! A part with no text holds no span and no match, so a location naming one
 //! is a fault in the stored records, as is a location past the last part.
+//!
+//! Opaque provider material is never part text: tool-call ids
+//! (`ToolCall::id`, `ToolResult::call_id`), reasoning and tool-call
+//! signatures, and `Reasoning::Opaque` payloads. They are long, provider-
+//! shaped strings (base64 signatures, Gemini ids that embed one after
+//! `__thought__`) that agents of one provider share in structure, and no
+//! agent wrote them; provenance segments, decodes and fingerprints part text
+//! only (`provenance.decode.part-text-input`), so they never become a span
+//! or a match.
 //!
 //! [`SpanLocation`]: crate::derived::provenance::span::SpanLocation
 
@@ -69,7 +78,8 @@ impl Message {
                 UserPart::Media(_) | UserPart::Unknown(_) => Err(not_text),
             },
             MessageBody::Assistant(parts) => match parts.get(at).ok_or(missing)? {
-                AssistantPart::Text(text) | AssistantPart::Reasoning(Reasoning::Visible(text)) => {
+                AssistantPart::Text(text)
+                | AssistantPart::Reasoning(Reasoning::Visible { text, .. }) => {
                     Ok(Cow::Borrowed(text.0.as_str()))
                 }
                 AssistantPart::ToolCall(call) => Ok(Cow::Borrowed(match &call.arguments {

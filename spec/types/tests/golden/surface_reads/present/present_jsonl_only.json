@@ -1,0 +1,10 @@
+{
+  "now": "2026-10-04T12:58:30.000000Z",
+  "bucket_width": 300000000,
+  "export_formats": [
+    "jsonl"
+  ],
+  "current_rule_version": 4,
+  "default_remap_threshold": 0.8,
+  "frame_retention_micros": 15552000000000
+}

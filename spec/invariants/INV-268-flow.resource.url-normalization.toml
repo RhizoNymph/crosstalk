@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.resource.url-normalization"
+statement = "Two URL locators that differ only in scheme or host case, an explicit default port, a fragment, or query parameter order normalize to the same ResourceId."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+The same page reached through different tools (a `web_fetch` of a URL and a
+`curl` of it inside a bash command) must be one resource. Otherwise a write
+through one tool and a read through the other never share a resource, no
+CoAccess forms, and the transmission is missed. Query parameters are sorted,
+not dropped, because they often select the resource (a page or thread id).
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::resource::tests::equivalent_urls_share_resource_id"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

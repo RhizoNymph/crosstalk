@@ -1,0 +1,25 @@
+[invariant]
+id = "canonical.ids.ulid-unique"
+statement = "No two entity ids of the same type minted by Crosstalk's ULID generators, on any node or at any time, are equal."
+kind = "coordination"
+requires = ["property", "dst"]
+rationale = """
+Entity ids are minted by whichever component creates the entity, on many
+nodes at once, and consumers dedupe on them under at-least-once delivery. A
+reused id would make a consumer drop a new entity as a redelivery of an old
+one. Each generator is monotonic within a millisecond (random part
+incremented, never redrawn) and draws fresh randomness otherwise, so
+collisions within a node are impossible and across nodes need an 80-bit
+random collision in the same millisecond. The property interleaves
+generators with their own seeds and scripted clocks that repeat and step
+back; the simulation runs concurrent generators on skewed node clocks that
+step back while they mint, drawing randomness from the run's seed.
+"""
+
+[evidence]
+property = "crosstalk_spec::tests::minting::minted_ids_are_distinct"
+dst = "crosstalk_sim::tests::ids::dst_concurrent_generators_never_collide"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

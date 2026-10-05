@@ -1,0 +1,28 @@
+[
+  {
+    "type": "agent",
+    "data": {
+      "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "label": "coder",
+      "state_kind": "provisional",
+      "parent": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+      "claims": {
+        "entries": []
+      },
+      "transmissions_in": 3,
+      "transmissions_out": 1
+    }
+  },
+  {
+    "type": "channel",
+    "data": {
+      "id": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+      "label": null,
+      "origin_kind": "discovered",
+      "detection_kind": "active",
+      "confirmation": "confirmed",
+      "policy_kind": "unreviewed",
+      "locator_summary": "https://wiki.example/team/plan (+2)"
+    }
+  }
+]

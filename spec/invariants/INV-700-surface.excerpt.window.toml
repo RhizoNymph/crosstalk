@@ -21,8 +21,8 @@ unit = [
     "crosstalk_spec::tests::excerpt::a_long_match_is_cut_on_a_boundary_with_no_context_after",
     "crosstalk_spec::tests::excerpt::a_match_exactly_at_the_bound_is_not_cut",
 ]
-property = "crosstalk::surface::props::excerpt_cut_matches_part"
+property = "crosstalk_surface::props::excerpt_cut_matches_part"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

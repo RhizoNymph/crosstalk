@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.query.undecodable-request-invalid-input"
+statement = "QueryError::from and ActionError::from map a DecodeError to InvalidInput(MalformedRequest) carrying its kind and reason unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Client input that does not decode as the route's request type is the
+client's to fix whatever the state, so it is InvalidInput, answered in the
+same typed error JSON as every other refusal rather than a bare 400. The
+kind tells syntax from shape, and the reason names the field, line and
+column. The request never reaches a store, and an action request that
+fails to decode never becomes an action, so it is not audited.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::requests::undecodable_requests_are_malformed_request_input_errors",
+    "crosstalk_spec::tests::wire::requests::decode_request_classifies_what_it_refuses",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,32 @@
+{
+  "request": {
+    "mode": "semantic",
+    "text": "rotate the deploy key"
+  },
+  "window": null,
+  "filter": {
+    "agents": [
+      "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+    ],
+    "channels": [
+      "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    ],
+    "route_kinds": [
+      "channel"
+    ],
+    "topics": [
+      "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    ],
+    "topic_version": {
+      "type": "pinned",
+      "data": 3
+    },
+    "false_detections": "include",
+    "unconfirmed_channels": "include"
+  },
+  "page": {
+    "size": 50,
+    "after": null
+  }
+}

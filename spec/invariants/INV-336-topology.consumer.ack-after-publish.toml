@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.consumer.ack-after-publish"
+statement = "The topology consumer acknowledges a TransmissionClassified delivery only after the EdgeUpdated for the key its apply returned has been published."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+If L7 crashed between persisting an apply and publishing EdgeUpdated, an
+early ack would lose the notification for good. Acking last means the
+delivery comes back; the repeated apply is a no-op (idempotent) but still
+returns the key, and EdgeUpdated is published then. Subscribers therefore
+see EdgeUpdated at least once for every bucket that changed.
+"""
+
+[evidence]
+dst = "crosstalk_topology::dst::crash_between_apply_and_publish_still_publishes"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

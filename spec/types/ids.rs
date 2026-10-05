@@ -8,8 +8,38 @@
 //!
 //! No id type converts into another, and none is a bare integer or string at
 //! a module boundary.
+//!
+//! On the wire ([`crate::wire`]) an entity id is its ULID text
+//! ([`AgentId::ulid_text`]), a content id its digest's lower-case hex, and a
+//! secret digest `{"key": <secret version>, "digest": "<hex>"}`. Decoding
+//! accepts only those canonical forms. Entity ids are [`WireRequest`]s: a
+//! client names entities by id.
+//!
+//! The primitives that make ids live beside them, so every layer mints and
+//! hashes the same way: [`mint`] (the ULID generator, over the spec's
+//! `Clock` and a [`RandomSource`]) and [`secret`] (the
+//! [`DeploymentSecret`] and the [`KeyedHasher`] that alone makes secret
+//! digests). A message's content id is made by
+//! [`crate::observed::message::encoding`].
+
+pub mod mint;
+pub mod secret;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+pub use mint::{RandomSource, SeededRandom, UlidExhausted, UlidGenerator};
+pub use secret::{DeploymentSecret, InvalidRotation, InvalidSecret, KeyedHasher, SecretDigests};
 
 use crate::support::Blake3;
+use crate::wire::{WireRequest, decode_text};
+
+/// A 128-bit entity id minted as a ULID ([`UlidGenerator::mint`]). Every
+/// entity id type and [`crate::observed::exchange::ConnectionId`] is one.
+pub trait EntityId: Copy {
+    fn from_ulid(raw: u128) -> Self;
+
+    fn as_ulid(self) -> u128;
+}
 
 macro_rules! entity_id {
     ($($(#[$doc:meta])* $name:ident;)*) => {$(
@@ -27,10 +57,40 @@ macro_rules! entity_id {
             }
 
             /// The id as ULID text: 26 upper-case characters of Crockford
-            /// base32, most significant first. The form ids take in URLs,
-            /// and the form an agent filter's text is matched against.
+            /// base32, most significant first. The form ids take in URLs and
+            /// JSON, and the form an agent filter's text is matched against.
             pub fn ulid_text(self) -> String {
                 ulid_text(self.0)
+            }
+
+            /// The id `text` names, accepting exactly the text
+            /// [`Self::ulid_text`] writes.
+            pub fn from_ulid_text(text: &str) -> Result<Self, InvalidUlidText> {
+                parse_ulid_text(text).map(Self)
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.ulid_text())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                decode_text(deserializer, "ULID text", |text| Self::from_ulid_text(&text))
+            }
+        }
+
+        impl WireRequest for $name {}
+
+        impl EntityId for $name {
+            fn from_ulid(raw: u128) -> Self {
+                Self(raw)
+            }
+
+            fn as_ulid(self) -> u128 {
+                self.0
             }
         }
     )*};
@@ -41,8 +101,9 @@ macro_rules! entity_id {
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// 128 bits as 26 base32 digits: the first carries the top 3 bits, each
-/// later one 5.
-fn ulid_text(raw: u128) -> String {
+/// later one 5. Crate-visible for 128-bit ids defined outside this module
+/// (`ConnectionId`).
+pub(crate) fn ulid_text(raw: u128) -> String {
     (0..26u32)
         .rev()
         .map(|digit| {
@@ -50,6 +111,39 @@ fn ulid_text(raw: u128) -> String {
             char::from(CROCKFORD[index as usize])
         })
         .collect()
+}
+
+/// Why text is not an entity id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidUlidText {
+    /// Not 26 bytes.
+    Length { got: usize },
+    /// The byte at `index` is not in Crockford's upper-case alphabet. Lower
+    /// case and the excluded letters (I, L, O, U) are refused, so every id
+    /// has one text.
+    Character { index: usize },
+    /// The first digit is above 7: the value needs more than 128 bits.
+    Overflow,
+}
+
+/// The inverse of [`ulid_text`].
+pub(crate) fn parse_ulid_text(text: &str) -> Result<u128, InvalidUlidText> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 26 {
+        return Err(InvalidUlidText::Length { got: bytes.len() });
+    }
+    let mut raw: u128 = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        let digit = CROCKFORD
+            .iter()
+            .position(|symbol| symbol == byte)
+            .ok_or(InvalidUlidText::Character { index })?;
+        if index == 0 && digit > 7 {
+            return Err(InvalidUlidText::Overflow);
+        }
+        raw = (raw << 5) | digit as u128;
+    }
+    Ok(raw)
 }
 
 macro_rules! content_id {
@@ -65,6 +159,18 @@ macro_rules! content_id {
 
             pub const fn digest(&self) -> &Blake3 {
                 &self.0
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.serialize(serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Blake3::deserialize(deserializer).map(Self)
             }
         }
     )*};
@@ -128,7 +234,8 @@ macro_rules! secret_digest {
         /// A BLAKE3 keyed with the deployment's secret, so a stored digest
         /// cannot be used to confirm a guessed value. It records which version
         /// of the secret computed it.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case", deny_unknown_fields)]
         pub struct $name {
             key: SecretVersion,
             digest: Blake3,
@@ -155,7 +262,8 @@ macro_rules! secret_digest {
 /// version becomes current while the previous one stays loaded for an overlap
 /// period, during which the proxy computes both digests so identity resolution
 /// can link evidence across the change. The secret itself is never logged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SecretVersion(pub u16);
 
 secret_digest! {

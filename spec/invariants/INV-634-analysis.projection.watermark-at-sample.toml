@@ -13,7 +13,7 @@ was settled in what the layout shows.
 """
 
 [evidence]
-integration = "crosstalk::analysis::integration::projection_watermark_is_sample_time_watermark"
+integration = "crosstalk_analysis::integration::projection_watermark_is_sample_time_watermark"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

@@ -11,7 +11,7 @@ from one that was already there or could not be taken.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::pin_and_unpin_outcomes"
+unit = "crosstalk_surface::tests::outcomes::pin_and_unpin_outcomes"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.thread.compaction-next-turn-extends"
+statement = "A full-history exchange whose non-system request messages are a compacted request's non-system messages, then that request's response, then new messages is threaded as Extends of the Compaction conversation that request created, with new_inputs equal to the new messages."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+This is the turn after a compaction, and the case the compaction history
+law exists for. Because the stored history keeps the carried-over messages
+in request order, the next request extends it, so the carried-over messages
+and the summary are not scanned a second time, and the request is not taken
+for another compaction because it still contains the summary.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::turn_after_compaction_extends_compaction"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

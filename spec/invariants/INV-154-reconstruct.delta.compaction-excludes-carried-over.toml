@@ -1,0 +1,21 @@
+[invariant]
+id = "reconstruct.delta.compaction-excludes-carried-over"
+statement = "A Compacts delta, the first delta of its Compaction conversation, has as new_inputs the request's non-system messages in request order without the carried-over ones, those whose hash is in the predecessor's stored history."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+A compacted request carries a summary plus messages kept from the
+predecessor. The kept messages were already scanned there; scanning them
+again would report every match in them a second time. The summary and
+anything new are still scanned, since a summary can relay another agent's
+text. Leaving the carried-over messages out of new_inputs does not leave
+them out of the conversation: they stay in its stored history, in request
+order (reconstruct.conversation.compaction-history).
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::compaction_new_inputs_exclude_carried_over"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

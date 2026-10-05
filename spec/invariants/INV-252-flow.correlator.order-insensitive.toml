@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.correlator.order-insensitive"
+statement = "For any set of accesses and content matches within one evidence window, every order of delivering them to the correlator yields the same transmission states once the window closes."
+kind = "coordination"
+requires = ["property", "dst"]
+rationale = """
+Accesses and content matches come from different consumer groups, so a
+match can be processed before the access that opens its transmission. The
+correlator must buffer early evidence instead of dropping it. Results that
+depend on arrival order would make detection nondeterministic under load.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlate::tests::props::evidence_order_permutations_agree"
+dst = "crosstalk_flow::consumer::tests::dst::match_before_access_confirms"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

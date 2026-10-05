@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.endpoint.generation-only-captured"
+statement = "Only requests an adapter classifies as EndpointKind::Generation produce a RawExchange."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+count_tokens, model lists, the HEAD /api/hello warm-up, health checks and
+telemetry carry no conversation. Capturing them would create exchanges
+with no messages for L1 to normalize and L3 to thread. They are still
+forwarded (ingress.passthrough.request-unchanged).
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::endpoint::non_generation_routes_not_captured"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

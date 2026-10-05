@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent.parent-acyclic"
+statement = "Following Agent.parent links from any agent never returns to that agent."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Parent ids are client-asserted, so a harness (or an impersonator) can send
+ids that point back at a descendant. A cycle would make every walk up the
+spawn tree, in the topology view and in sub-agent grouping, loop forever.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::consumer_props::parent_links_are_acyclic"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.match.indexed-before-read"
+statement = "Every ContentMatch's origin span was inserted into the FingerprintIndex before the reader's delta was first processed."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A match asserts the reader saw text an earlier agent wrote. Matching
+against a span indexed afterwards would make detections depend on
+processing order across shards and would differ between first delivery and
+redelivery. Reads processed before the origin span is indexed are not
+matched by provenance; out-of-order evidence is L5's concern.
+"""
+
+[evidence]
+dst = "crosstalk_provenance::dst::match_only_against_spans_indexed_before_read"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

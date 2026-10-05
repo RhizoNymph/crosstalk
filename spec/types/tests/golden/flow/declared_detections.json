@@ -1,0 +1,21 @@
+[
+  {
+    "type": "awaiting_traffic"
+  },
+  {
+    "type": "unused",
+    "data": {
+      "since": "2026-10-08T00:00:00.000000Z"
+    }
+  },
+  {
+    "type": "in_use",
+    "data": {
+      "type": "active",
+      "data": {
+        "since": "2026-10-04T12:00:30.250000Z",
+        "last_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+      }
+    }
+  }
+]

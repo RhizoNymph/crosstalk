@@ -5,6 +5,13 @@
  * selection value to light up), `data-collapse` (`"true"` draws sub-agents
  * as their parent). Output: `value` in the topology selection grammar
  * (`shared/selection.ts`), announced with `change`.
+ *
+ * With `data-live` (the feed URL), a `watermark` event refetches `data-src`
+ * and merges it into the drawn graph (`merge.ts`) rather than rebuilding:
+ * the sigma instance, camera, positions, selection and hover are kept.
+ * Edges whose traffic rose, and new nodes, pulse (`flash.ts`). The page's
+ * `[data-topology-stat]` elements (agents, edges, transmissions, watermark)
+ * are kept current from the same payload.
  */
 
 import { createEdgeCurveProgram } from '@sigma/edge-curve';
@@ -18,10 +25,11 @@ import {
 import type { Settings } from 'sigma/settings';
 import type { EdgeDisplayData, NodeDisplayData, PartialButFor } from 'sigma/types';
 import { type TopologyPayload, topologyPayload } from '../payloads/topology.ts';
-import { toCss, withAlpha } from '../shared/color.ts';
+import { mix, parseColor, toCss, withAlpha } from '../shared/color.ts';
 import { PayloadElement } from '../shared/element.ts';
 import { type LoadError, loadJson } from '../shared/fetch.ts';
 import { formatUtc } from '../shared/format.ts';
+import { LiveRefetch } from '../shared/live-refetch.ts';
 import type { Result } from '../shared/result.ts';
 import { ROUTE_KINDS } from '../shared/route.ts';
 import {
@@ -33,7 +41,9 @@ import type { Ulid } from '../shared/ulid.ts';
 import { releaseWebGL } from '../shared/webgl.ts';
 import { curvatures } from './curvature.ts';
 import { NodeDiamondProgram } from './diamond-program.ts';
+import { edgeCounts, type Flashes, prune, risenEdges, strength } from './flash.ts';
 import { layout } from './layout.ts';
+import { planMerge } from './merge.ts';
 import {
   buildModel,
   edgeSelection,
@@ -103,13 +113,16 @@ type EdgeAttributes = {
   zIndex: number;
 };
 
+/** The colour new traffic flashes towards. */
+const FLASH_COLOR = parseColor('#f59e0b') ?? ([245, 158, 11, 1] as const);
+
 /** Arrows that bend, for edges sharing a pair of nodes (see `curvature.ts`). */
 const EdgeCurvedArrowProgram = createEdgeCurveProgram<NodeAttributes, EdgeAttributes>({
   arrowHead: DEFAULT_EDGE_ARROW_HEAD_PROGRAM_OPTIONS,
 });
 
 export class TopologyElement extends PayloadElement<TopologyPayload> {
-  static observedAttributes = ['data-src', 'data-highlight', 'data-collapse'];
+  static observedAttributes = ['data-src', 'data-highlight', 'data-collapse', 'data-live'];
 
   #payload: TopologyPayload | null = null;
   #model: GraphModel | null = null;
@@ -120,6 +133,20 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
   #names = new Map<Ulid, string>();
   #highlight: Highlight | null = null;
   #hoveredNode: string | null = null;
+  #graph: Graph<NodeAttributes, EdgeAttributes> | null = null;
+  #counts = new Map<string, number>();
+  readonly #edgeFlashes: Flashes = new Map();
+  readonly #nodeFlashes: Flashes = new Map();
+  #frame: number | null = null;
+  #refetch: AbortController | null = null;
+  readonly #live = new LiveRefetch(() => void this.#liveTick());
+  /** Live merges done and edges flashed, for diagnostics. */
+  readonly liveStats = { merges: 0, flashedEdges: 0, addedNodes: 0 };
+
+  /** The camera's state (zoom ratio, pan), for diagnostics; `null` before drawing. */
+  get cameraState(): { x: number; y: number; ratio: number; angle: number } | null {
+    return this.#renderer?.getCamera().getState() ?? null;
+  }
   readonly #tooltip: HTMLDivElement;
   readonly #legend: HTMLDivElement;
   readonly #meta: HTMLDivElement;
@@ -150,8 +177,168 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     this.#draw();
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.#live.start(this.dataset.live ?? '');
+  }
+
+  override disconnectedCallback(): void {
+    this.#live.stop();
+    this.#refetch?.abort();
+    this.#refetch = null;
+    super.disconnectedCallback();
+  }
+
+  async #liveTick(): Promise<void> {
+    const src = this.dataset.src?.trim() ?? '';
+    if (src === '') return;
+    this.#refetch?.abort();
+    const controller = new AbortController();
+    this.#refetch = controller;
+    const result = await this.load(src, controller.signal);
+    if (this.#refetch !== controller) return;
+    this.#refetch = null;
+    if ((this.dataset.src?.trim() ?? '') !== src) return;
+    if (!result.ok) {
+      if (result.error.kind !== 'aborted') {
+        console.warn('ct-topology: live refetch failed', { error: result.error.kind });
+      }
+      return;
+    }
+    const payload = result.value;
+    if (this.emptyMessage(payload) !== null) return;
+    if (this.#renderer === null || this.#graph === null) {
+      this.hideStatus();
+      this.mount(payload);
+      return;
+    }
+    this.#merge(payload);
+  }
+
+  /** Merges a refetched payload into the drawn graph, keeping the renderer. */
+  #merge(payload: TopologyPayload): void {
+    const graph = this.#graph;
+    if (graph === null) return;
+    const model = buildModel(payload, this.dataset.collapse === 'true');
+    const drawnNodes = new Map(
+      graph.mapNodes((id, a) => [id, { x: a.x, y: a.y }] as [string, { x: number; y: number }]),
+    );
+    const plan = planMerge(drawnNodes, graph.edges(), model);
+    const counts = edgeCounts(model.edges);
+    const risen = risenEdges(this.#counts, counts);
+
+    for (const key of plan.removedEdges) {
+      if (graph.hasEdge(key)) graph.dropEdge(key);
+      this.#edges.delete(key);
+    }
+    for (const id of plan.removedNodes) {
+      if (graph.hasNode(id)) graph.dropNode(id);
+      this.#nodes.delete(id);
+      this.#names.delete(id as Ulid);
+      if (this.#hoveredNode === id) this.#hoveredNode = null;
+    }
+    for (const node of model.nodes) {
+      const at = plan.positions.get(node.id) ?? { x: 0, y: 0 };
+      this.#nodes.set(node.id, node);
+      this.#names.set(
+        node.id,
+        node.kind === 'agent' ? (node.members[0]?.name ?? node.label) : node.label,
+      );
+      const attributes = {
+        size: node.kind === 'channel' ? node.size * DIAMOND_SCALE : node.size,
+        label: shortLabel(node.label),
+        color: toCss(nodeColor(node, this.theme)),
+        type: node.kind === 'channel' ? ('diamond' as const) : ('circle' as const),
+      };
+      if (graph.hasNode(node.id)) graph.mergeNodeAttributes(node.id, attributes);
+      else graph.addNode(node.id, { ...attributes, x: at.x, y: at.y, zIndex: 1 });
+    }
+    const drawn = model.edges.filter((e) => graph.hasNode(e.source) && graph.hasNode(e.target));
+    const bends = curvatures(drawn);
+    for (const edge of drawn) {
+      this.#edges.set(edge.key, edge);
+      const curvature = bends.get(edge.key) ?? 0;
+      const attributes = {
+        size: edge.width,
+        color: toCss(edgeColor(edge, this.theme)),
+        type: curvature === 0 ? ('arrow' as const) : ('curved' as const),
+        curvature,
+      };
+      if (graph.hasEdge(edge.key)) graph.mergeEdgeAttributes(edge.key, attributes);
+      else
+        graph.addDirectedEdgeWithKey(edge.key, edge.source, edge.target, {
+          ...attributes,
+          zIndex: 0,
+        });
+    }
+
+    this.#payload = payload;
+    this.#model = model;
+    this.#counts = counts;
+    this.#highlight = highlightOf(model, this.#currentSelection());
+    this.#renderLegend();
+    this.#renderMeta(payload);
+
+    const now = performance.now();
+    for (const key of risen) if (graph.hasEdge(key)) this.#edgeFlashes.set(key, now);
+    for (const id of plan.addedNodes) this.#nodeFlashes.set(id, now);
+    this.liveStats.merges += 1;
+    this.liveStats.flashedEdges += risen.size;
+    this.liveStats.addedNodes += plan.addedNodes.size;
+    console.info('ct-topology: live merge', {
+      flashedEdges: risen.size,
+      addedNodes: plan.addedNodes.size,
+      removedNodes: plan.removedNodes.length,
+      removedEdges: plan.removedEdges.length,
+    });
+    this.#animate();
+  }
+
+  #animate(): void {
+    if (this.#frame !== null) return;
+    const step = (): void => {
+      this.#frame = null;
+      const renderer = this.#renderer;
+      if (renderer === null) return;
+      const now = performance.now();
+      const edges = prune(this.#edgeFlashes, now);
+      const nodes = prune(this.#nodeFlashes, now);
+      renderer.refresh();
+      if (edges || nodes) this.#frame = requestAnimationFrame(step);
+    };
+    this.#frame = requestAnimationFrame(step);
+  }
+
+  /** Header numbers on the page, from the payload. */
+  #publishStats(payload: TopologyPayload): void {
+    const values: Record<string, string> = {
+      watermark: `final up to ${formatUtc(payload.watermark)} UTC`,
+    };
+    if (payload.mode === 'agents') {
+      values.agents = String(payload.nodes.filter((n) => n.kind === 'agent').length);
+      values.edges = String(payload.edges.length);
+      values.transmissions = String(
+        payload.edges.reduce(
+          (sum, e) => sum + (e.kind === 'transmission' ? e.transmissions : 0),
+          0,
+        ),
+      );
+    }
+    for (const target of document.querySelectorAll<HTMLElement>('[data-topology-stat]')) {
+      const value = values[target.dataset.topologyStat ?? ''];
+      if (value !== undefined && target.textContent !== value) target.textContent = value;
+    }
+  }
+
+  #renderMeta(payload: TopologyPayload): void {
+    this.#meta.textContent = `${payload.mode === 'agents' ? 'agents' : 'channels'} · final up to ${formatUtc(payload.watermark)} UTC`;
+    if (this.dataset.live !== undefined) this.#publishStats(payload);
+  }
+
   protected unmount(): void {
     this.#kill();
+    this.#graph = null;
+    this.#counts = new Map();
     this.#payload = null;
     this.#model = null;
     this.#legend.replaceChildren();
@@ -164,6 +351,8 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
       this.#applySelection(this.#selectionFromAttribute());
     } else if (name === 'data-collapse' && this.#payload !== null) {
       this.#draw();
+    } else if (name === 'data-live') {
+      this.#live.start(this.dataset.live ?? '');
     }
   }
 
@@ -191,6 +380,10 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
   }
 
   #kill(): void {
+    if (this.#frame !== null) cancelAnimationFrame(this.#frame);
+    this.#frame = null;
+    this.#edgeFlashes.clear();
+    this.#nodeFlashes.clear();
     this.#resize?.disconnect();
     this.#resize = null;
     if (this.#renderer === null) return;
@@ -212,6 +405,7 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     this.#renderLegend();
 
     const graph = new Graph<NodeAttributes, EdgeAttributes>({ type: 'directed', multi: true });
+    this.#graph = graph;
     this.#nodes.clear();
     this.#edges.clear();
     this.#names.clear();
@@ -269,6 +463,7 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
       nodeReducer: (key, data) => this.#reduceNode(key, data),
       edgeReducer: (key, data) => this.#reduceEdge(key, data),
     };
+    this.#counts = edgeCounts(drawn);
     const renderer = new Sigma<NodeAttributes, EdgeAttributes>(graph, this.stage, settings);
     this.#renderer = renderer;
     // Sigma only watches the window; the stage also changes with the legend
@@ -303,7 +498,7 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     });
     renderer.on('leaveEdge', () => this.#hideTooltip());
 
-    this.#meta.textContent = `${payload.mode === 'agents' ? 'agents' : 'channels'} · final up to ${formatUtc(payload.watermark)} UTC`;
+    this.#renderMeta(payload);
   }
 
   /** The highlight source: the page's `data-highlight`, else our own value. */
@@ -325,6 +520,16 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     const node = this.#nodes.get(key);
     const color = node === undefined ? this.theme.faint : nodeColor(node, this.theme);
     const highlight = this.#highlight;
+    const flash = strength(this.#nodeFlashes, key, performance.now());
+    if (flash > 0) {
+      return {
+        ...data,
+        size: data.size * (1 + 0.9 * flash),
+        color: toCss(withAlpha(mix(color, FLASH_COLOR, 0.7 * flash), 1)),
+        zIndex: 3,
+        forceLabel: true,
+      };
+    }
     if (highlight === null || highlight.nodes.has(key as Ulid)) {
       return {
         ...data,
@@ -343,6 +548,15 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     const highlight = this.#highlight;
     const hovered = this.#hoveredNode;
     const touchesHover = hovered !== null && (edge.source === hovered || edge.target === hovered);
+    const flash = strength(this.#edgeFlashes, key, performance.now());
+    if (flash > 0) {
+      return {
+        ...data,
+        size: data.size * (1 + 1.5 * flash) + 2 * flash,
+        color: toCss(withAlpha(mix(color, FLASH_COLOR, 0.85 * flash), 1)),
+        zIndex: 3,
+      };
+    }
     if (highlight === null) return { ...data, color: toCss(color), zIndex: touchesHover ? 1 : 0 };
     if (highlight.edges.has(key)) return { ...data, color: toCss(color), zIndex: 2 };
     return { ...data, color: toCss(dimmedEdge(color, this.theme)), zIndex: 0 };

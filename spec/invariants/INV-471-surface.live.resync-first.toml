@@ -12,7 +12,7 @@ were omitted, the client would not know it had missed changes.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::unresumable_cursor_gets_resync_first"
+unit = "crosstalk_surface::tests::live::unresumable_cursor_gets_resync_first"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -18,9 +18,9 @@ shows in the promoted channel's view
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::alert_filter_cases"
-property = "crosstalk::surface::tests::prop_alerts_match_filter_model"
+unit = "crosstalk_surface::tests::reads::alert_filter_cases"
+property = "crosstalk_surface::tests::props::alerts::prop_alerts_match_filter_model"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

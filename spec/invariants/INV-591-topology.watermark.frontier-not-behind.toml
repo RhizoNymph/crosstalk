@@ -14,7 +14,7 @@ change.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::settled_watermark_never_behind_exposed"
+dst = "crosstalk_topology::dst::settled_watermark_never_behind_exposed"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

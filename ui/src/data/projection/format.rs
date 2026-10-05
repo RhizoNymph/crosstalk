@@ -148,13 +148,13 @@ impl PayloadPoints {
     pub fn new(projection: &Projection, channels: &HashMap<TransmissionId, ChannelId>) -> Self {
         let points: Vec<_> = projection.frame().points().collect();
         let channel_of = |point: &crosstalk_spec::aggregates::projection::ProjectedPoint| {
-            (point.route == RouteKind::Channel)
-                .then(|| channels.get(&point.transmission).copied())
+            (point.route().kind() == RouteKind::Channel)
+                .then(|| channels.get(&point.transmission()).copied())
                 .flatten()
         };
         let agents: Vec<AgentId> = points
             .iter()
-            .flat_map(|p| [p.from, p.to])
+            .flat_map(|p| [p.from(), p.to()])
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -166,18 +166,18 @@ impl PayloadPoints {
             .collect();
         let topics: Vec<TopicId> = points
             .iter()
-            .filter_map(|p| p.topic)
+            .filter_map(|p| p.topic())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let categories = points
             .iter()
             .map(|p| PointCategories {
-                sender: index_of(&agents, &p.from).unwrap_or(NONE),
-                reader: index_of(&agents, &p.to).unwrap_or(NONE),
-                route: p.route,
+                sender: index_of(&agents, &p.from()).unwrap_or(NONE),
+                reader: index_of(&agents, &p.to()).unwrap_or(NONE),
+                route: p.route().kind(),
                 channel: channel_of(p).and_then(|c| index_of(&channel_table, &c)),
-                topic: p.topic.and_then(|t| index_of(&topics, &t)),
+                topic: p.topic().and_then(|t| index_of(&topics, &t)),
             })
             .collect();
         Self {

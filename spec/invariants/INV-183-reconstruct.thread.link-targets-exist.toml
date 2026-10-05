@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.link-targets-exist"
+statement = "A Forks outcome's parent and a Compacts outcome's predecessor are conversations of the same canonical agent that were stored before the exchange was threaded."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Fork and compaction links are how the topology and search views follow a
+conversation across retries, branches and summaries. A link to a
+conversation that does not exist, or to the new conversation itself,
+breaks that chain and makes shared_prefix meaningless.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::fork_and_compaction_links_point_at_stored_conversations"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

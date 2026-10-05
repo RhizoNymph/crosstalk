@@ -11,7 +11,7 @@ that did not survive the round trip would change between fit and read.
 
 [evidence]
 unit = "crosstalk_spec::tests::projection_frame::decode_inverts_encode"
-property = "crosstalk::analysis::tests::prop_frame_decode_inverts_encode"
+property = "crosstalk_analysis::tests::prop_frame_decode_inverts_encode"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

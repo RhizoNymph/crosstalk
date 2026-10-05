@@ -1,0 +1,95 @@
+[invariant]
+id = "canonical.wire.checked-decode"
+statement = "Decoding JSON into a checked type runs its checked constructor, so JSON the constructor refuses is a decode error and never yields a value."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A checked type's invariants (a window that is not empty, a page size in
+1..=500, a non-empty list, a cursor token in the URL-safe alphabet, a page
+with a next cursor holding items) hold only if every value goes through its
+constructor. A derived Deserialize would build one from any JSON with the
+right fields, so checked types deserialize through a private raw mirror and
+TryFrom into the constructor (#[serde(try_from = ...)]), and decoding
+accepts exactly what the constructor accepts, including its normalization
+(NonBlank trims, IdBatch sorts and drops repeats).
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::support::TimeWindow",
+    "crosstalk_spec::wire::Rejected",
+]
+unit = [
+    "crosstalk_spec::tests::wire::support::time_windows_refuse_empty_and_unknown_shapes",
+    "crosstalk_spec::tests::wire::support::byte_ranges_refuse_empty",
+    "crosstalk_spec::tests::wire::support::similarities_and_shares_refuse_out_of_range",
+    "crosstalk_spec::tests::wire::support::non_empty_refuses_an_empty_array",
+    "crosstalk_spec::tests::wire::support::checked_text_refuses_what_its_constructor_refuses",
+    "crosstalk_spec::tests::wire::support::capped_lists_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::support::non_zero_numbers_refuse_zero",
+    "crosstalk_spec::tests::wire::paging::page_sizes_refuse_zero_and_above_max",
+    "crosstalk_spec::tests::wire::paging::cursors_refuse_tokens_the_constructor_refuses",
+    "crosstalk_spec::tests::wire::paging::pages_refuse_what_the_surface_never_serves",
+    "crosstalk_spec::tests::wire::paging::id_batches_normalize_and_refuse_too_many",
+    "crosstalk_spec::tests::wire::observed::identity::merge_requests_refuse_a_self_merge",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_self_merge_and_a_second_reversal",
+    "crosstalk_spec::tests::wire::observed::identity::merge_vetoes_refuse_a_self_pair_and_order_their_pair",
+    "crosstalk_spec::tests::wire::observed::identity::claim_sets_refuse_a_repeated_claim_and_order_their_entries",
+    "crosstalk_spec::tests::wire::observed::identity::agents_refuse_unknown_fields_variants_and_invalid_parts",
+    "crosstalk_spec::tests::wire::provenance::content_matches_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::provenance::provenance_enums_refuse_unknown_and_invalid_variants",
+    "crosstalk_spec::tests::wire::analysis::rules::stored_rules_refuse_ids_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_infos_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_version_histories_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::topics::topic_sizes_and_lineage_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::topics::topics_refuse_non_finite_weights_and_bad_embeddings",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_params_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_infos_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::projections::projection_specs_decode_pinned",
+    "crosstalk_spec::tests::wire::analysis::insight::insight_events_refuse_unknown_and_invalid_payloads",
+    "crosstalk_spec::tests::wire::surface_actions::audit::caller_snapshots_refuse_no_permissions_and_unknown_fields",
+    "crosstalk_spec::tests::wire::surface_actions::audit::operator_records_refuse_outcomes_their_caller_contradicts",
+    "crosstalk_spec::tests::wire::surface_actions::operators::operator_names_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::surface_actions::operators::permission_sets_decode_any_order_and_encode_canonically",
+    "crosstalk_spec::tests::wire::surface_actions::live::live_cursors_refuse_other_text",
+    "crosstalk_spec::tests::wire::surface_actions::actions::superseded_channels_decode_sorted_and_once",
+    "crosstalk_spec::tests::wire::surface_actions::lists::list_requests_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::agents::agent_clusters_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::agents::agent_filters_refuse_unknown_fields_and_merged_agents",
+    "crosstalk_spec::tests::wire::agents::agent_profiles_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::analysis::projections::projections_refuse_unknown_shapes_and_non_finite_points",
+    "crosstalk_spec::tests::wire::flow::channels::policy_histories_refuse_what_from_entries_refuses",
+    "crosstalk_spec::tests::wire::flow::channels::promotion_coverage_refuses_what_coverage_never_builds",
+    "crosstalk_spec::tests::wire::flow::transmissions::co_access_refuses_what_it_can_check_and_other_shapes",
+    "crosstalk_spec::tests::wire::flow::transmissions::confirmed_golden_rebuilds_its_sender_on_decode",
+    "crosstalk_spec::tests::wire::flow::transmissions::confirmed_refuses_mixed_matches",
+    "crosstalk_spec::tests::wire::flow::transmissions::transmissions_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::flow::verdicts::verdict_logs_refuse_repeats_and_revision_gaps",
+    "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_reversal_the_merge_cannot_have",
+    "crosstalk_spec::tests::wire::observed::ingest::ingest_envelopes_refuse_unknown_fields_and_variants",
+    "crosstalk_spec::tests::wire::surface_actions::operators::operators_refuse_unknown_fields_and_modes",
+    "crosstalk_spec::tests::wire::surface_reads::channels::channel_rows_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::channels::promotion_previews_refuse_conflicts_no_promotion_has",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::access_details_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpt_windows_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::excerpts_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::transmission_evidence_is_decoded_through_assemble",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_headers_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_requests_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_rows_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_trailers_refuse_what_no_sealer_builds",
+    "crosstalk_spec::tests::wire::surface_reads::transmissions::transmission_selections_are_decoded_through_their_constructor",
+    "crosstalk_spec::tests::wire::topology::access::bipartite_graphs_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::topology::access::resource_use_decodes_through_its_constructor",
+    "crosstalk_spec::tests::wire::topology::filter::edge_selectors_refuse_self_edges_and_unknown_fields",
+    "crosstalk_spec::tests::wire::topology::graph::edge_keys_refuse_self_edges_and_unknown_fields",
+    "crosstalk_spec::tests::wire::topology::graph::topology_graphs_refuse_what_check_refuses",
+    "crosstalk_spec::tests::wire::topology::quality::detection_quality_decodes_through_its_constructor",
+    "crosstalk_spec::tests::wire::topology::series::series_grids_refuse_what_their_constructor_refuses",
+    "crosstalk_spec::tests::wire::topology::series::topology_series_refuse_what_their_constructor_refuses",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

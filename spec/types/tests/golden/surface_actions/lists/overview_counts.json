@@ -1,0 +1,13 @@
+{
+  "activity": {
+    "topic_version": 4,
+    "transmissions": 5012,
+    "matched_bytes": 2310448,
+    "active_channels": 9
+  },
+  "queues": {
+    "open_alerts": 41,
+    "unreviewed_channels": 3,
+    "unconfirmed_channels": 2
+  }
+}

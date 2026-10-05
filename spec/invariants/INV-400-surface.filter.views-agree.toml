@@ -19,7 +19,7 @@ size cuts both results.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_filtered_views_equal_unfiltered_then_admits"
+property = "crosstalk_surface::tests::prop_filtered_views_equal_unfiltered_then_admits"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

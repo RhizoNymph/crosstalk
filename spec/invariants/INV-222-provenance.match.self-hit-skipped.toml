@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.match.self-hit-skipped"
+statement = "A lookup hit on a span owned by the reading agent does not fail processing of the delta."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Agents see their own output in every later request, so self-hits are the
+common case, not an error. Propagating InvalidMatch::SelfMatch as a failure
+would nack the delta and redeliver it forever. Filtering by agent before
+ContentMatch::new is the expected path; the constructor's check is the
+backstop.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::own_span_in_input_is_skipped"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

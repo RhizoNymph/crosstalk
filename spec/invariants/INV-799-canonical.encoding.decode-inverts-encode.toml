@@ -1,0 +1,31 @@
+[invariant]
+id = "canonical.encoding.decode-inverts-encode"
+statement = "Decoding bytes as a message body succeeds exactly when the bytes are the canonical encoding of the body it returns."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Layers other than L1 (threading, segmentation, the evidence page) decode
+stored bodies, and the blob store keys every body by the BLAKE3 of its
+bytes. If decode accepted another spelling of a body (whitespace, member
+order, an escape, a duplicate member, an optional field left out), bytes
+that are not any message's encoding would read as a message whose hash is
+not their key, and two byte strings would name one body. Decode therefore
+parses strictly, refuses text that is not the canonical text of its value,
+and finally re-encodes the body and refuses anything but the same bytes.
+The unit test covers each spelling and shape on fixed inputs; the property
+edits real encodings at random (members dropped, added or renamed, items
+dropped or repeated, strings replaced, text spaced) and checks that every
+accepted candidate re-encodes to itself.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::encoding::decode_refuses_bytes_encode_never_writes",
+    "crosstalk_spec::tests::encoding::tool_call_signature_is_omitted_when_absent",
+]
+property = "crosstalk_spec::tests::encoding::decode_accepts_only_what_encode_writes"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

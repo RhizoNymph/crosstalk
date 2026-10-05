@@ -11,9 +11,9 @@ look at them.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::subscribe_without_view_forbidden"
-integration = "crosstalk::surface::integration::sse_route_requires_view"
+unit = "crosstalk_surface::tests::permissions::subscribe_without_view_forbidden"
+integration = "crosstalk_surface::integration::sse_route_requires_view"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

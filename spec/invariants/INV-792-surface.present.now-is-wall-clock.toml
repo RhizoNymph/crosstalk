@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.present.now-is-wall-clock"
+statement = "QueryApi::present returns as now the gateway's wall clock at the moment it answered, never earlier than the watermark it exposes at that moment."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A default view is "the last 24 hours", ending at the present. The
+watermark trails the newest data by the settling delay, so a view ending
+at it would hide the most recent buckets, and a fixture's fixed instant
+would freeze a live gateway's views. A now earlier than the exposed
+watermark would make a default window end before data the gateway already
+calls final.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::reads::present_reports_the_wall_clock"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

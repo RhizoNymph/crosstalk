@@ -1,0 +1,27 @@
+[invariant]
+id = "surface.http.route-permission-matches-method"
+statement = "Every Route requires exactly the permission its method documents: a QueryApi method's (the first word of its documentation, or ExportRequest::required_permission for export), ActionKind::required_permission for an action (which OperatorAction::required_permission returns for every action of the kind), and View for the live feed."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+The permission a route shows (in the route table golden, to the client,
+to the docs) must be the one the method enforces, or a reviewer reading
+the table would believe content is gated where it is not. The test reads
+each QueryApi method's documentation from l8_surface.rs and compares its
+first word with the route's permission, so a method whose documented
+permission changes fails until its route does. Actions derive their
+permission from their kind, so the route of a kind and every action of
+that kind agree by construction. The integration test calls every route
+with a caller lacking the permission and expects 403 with nothing read.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::routes::query_routes_need_the_permission_their_method_documents",
+    "crosstalk_spec::tests::wire::http::routes::action_routes_need_the_action_permission",
+]
+integration = "crosstalk_api::integration::every_route_refuses_a_caller_without_its_permission"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

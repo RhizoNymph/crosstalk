@@ -1,0 +1,6 @@
+.git
+.claude
+.mcp.json
+**/target
+deploy
+**/node_modules

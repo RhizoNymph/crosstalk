@@ -14,7 +14,7 @@ width, and VersionNotRetained tells it the version it pinned is gone.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_series_matches_in_memory_edge_store"
+property = "crosstalk_surface::tests::props::topology::prop_series_matches_in_memory_edge_store"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

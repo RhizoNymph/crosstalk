@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.graph.query-latency"
+statement = "On TimescaleEdgeStore holding 10 million transmissions across 1,000 distinct (from, to, route) keys, graph over a 24-hour window returns within 250 ms at p99."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+The graph view re-queries on every EdgeUpdated, so query cost must scale
+with buckets times edges (times topic slots) in the window, not with
+transmissions. The bound fails if graph scans raw contributions instead of
+the continuous aggregates, if topic filtering forces a per-transmission
+scan, or if alias resolution makes a directory call per edge row rather
+than per distinct agent. The figures are a proposed initial threshold, to
+be revisited with real traffic.
+"""
+
+[evidence]
+bench = "crosstalk_topology::bench::graph_24h_window_10m_transmissions"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

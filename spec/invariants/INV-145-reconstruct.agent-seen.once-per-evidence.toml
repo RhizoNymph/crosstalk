@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-seen.once-per-evidence"
+statement = "AgentSeen is published exactly once for each pair of agent and identity evidence, when that evidence is first attributed to that agent, however many times the exchanges carrying it are delivered or repeated."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+AgentSeen announces new evidence, and consumers use it to build the agent
+registry view and identity alerts. Publishing it on every exchange floods
+the bus; publishing it on redelivery under a fresh envelope id defeats
+transport dedup. The dedup key is the entity pair, not the envelope, so it
+belongs to reconstruction.
+"""
+
+[evidence]
+dst = "crosstalk_reconstruct::tests::dst::dst_agent_seen_once_per_evidence"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

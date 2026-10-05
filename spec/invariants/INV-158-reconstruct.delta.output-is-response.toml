@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.delta.output-is-response"
+statement = "A delta's output is the exchange's response when it Completed and its partial_response when it Failed."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Write-side detection and span extraction read only the delta's output. A
+missing output loses the agent's originated spans, so its later appearance
+in another agent's input cannot be traced back; a partial response from a
+failed exchange may already have been delivered to the harness and acted on.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::delta_output_is_exchange_response"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

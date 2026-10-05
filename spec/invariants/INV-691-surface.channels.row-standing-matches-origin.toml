@@ -24,6 +24,7 @@ unit = [
     "crosstalk_spec::tests::channel_reads::row_standing_follows_the_channels_origin",
     "crosstalk_spec::tests::channel_reads::a_channel_with_traffic_is_never_listed_as_inactive",
     "crosstalk_spec::tests::channel_reads::superseded_into_names_the_promoting_operator",
+    "crosstalk_spec::tests::wire::surface_reads::channels::channel_rows_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

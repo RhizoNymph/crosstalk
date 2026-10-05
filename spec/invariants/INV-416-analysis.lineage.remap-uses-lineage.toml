@@ -12,8 +12,8 @@ it implies analysis.rule.watched-remap and analysis.rule.watched-stale.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::watched_rule_remap_reads_stored_lineage"
-property = "crosstalk::analysis::tests::remap_outcome_equals_lineage_remap"
+unit = "crosstalk_analysis::tests::watched_rule_remap_reads_stored_lineage"
+property = "crosstalk_analysis::tests::remap_outcome_equals_lineage_remap"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

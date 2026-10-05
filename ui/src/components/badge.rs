@@ -7,8 +7,10 @@ use crosstalk_spec::observed::agent::Strength;
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+
 use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 
 /// What a badge's colour says.

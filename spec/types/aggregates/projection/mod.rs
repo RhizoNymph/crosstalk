@@ -28,8 +28,9 @@
 //! that still admits it (bottom-k selection).
 //!
 //! **Points are frozen at fit time.** A stored point carries the canonical
-//! agents, route kind, topic (under the pinned version) and confirmation
-//! time as they were when the sample was read. Later merges, verdicts and
+//! agents, route kind and channel ([`PointRoute`]), topic (under the
+//! pinned version) and confirmation time as they were when the sample was
+//! read. Later merges, verdicts and
 //! re-fits do not change a stored projection; a client that needs current
 //! canonical agents resolves the frame's agent tables through the agent
 //! list, where a merged agent names its canonical one.
@@ -48,29 +49,56 @@
 //!
 //! **Retention.** A projection's [`ProjectionInfo`] (spec, requester and
 //! status) is kept for as long as the audit log. Its frame is kept for
-//! `projection.frame_retention_days` after it was fitted (default 180), then
-//! dropped, and the projection becomes `Expired`: reading it returns
+//! [`FrameRetention`] after it was fitted (config
+//! `projection.frame_retention_days`, default 180, reported by
+//! `QueryApi::present`), then dropped, and the projection becomes `Expired`: reading it returns
 //! `ProjectionNotRetained`, while its spec still says exactly what it was and
 //! can be fitted again with the same seed. The catalog keeps every
 //! version's topics (`TopicCatalog::topics`), so a frame's topic ids always
 //! resolve to labels.
 //!
+//! **On the wire.** [`ProjectionParams`] is a request (`fit_projection`);
+//! [`ProjectionInfo`], with its [`ProjectionSpec`] and
+//! [`ProjectionStatus`], is a response (`projection_status`,
+//! `projections`) and never a request, because the surface stamps its
+//! requester and times. A [`Projection`] has no JSON form: its frame is
+//! binary. `QueryApi::projection` is answered in two halves: the job record
+//! is the JSON `ProjectionInfo` that `projection_status` returns, and the
+//! frame is `application/octet-stream`, the bytes of
+//! [`ProjectionFrame::encode`]. The UI reads `projection_status` (JSON)
+//! and, once the status is `ready`, fetches the frame bytes, decodes them
+//! with [`ProjectionFrame::decode`] and joins the two with
+//! [`Projection::new`], which refuses a frame that does not belong to the
+//! job. An error on the frame request (`NotFound`,
+//! `Conflict(ProjectionNotReady)`, `Conflict(ProjectionFailed)`,
+//! `ProjectionNotRetained`) is a `QueryError` in JSON like any other. The
+//! UMAP minimum distance is held in thousandths, so no float of a spec is
+//! on the wire; a [`ProjectedPoint`]'s coordinates are
+//! [`Finite`].
+//!
 //! [`TopologyFilter`]: crate::aggregates::filter::TopologyFilter
 
 pub mod frame;
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::{RouteKind, TopicSlot};
 use crate::aggregates::filter::TopologyFilter;
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
-use crate::ids::{AgentId, OperatorId, ProjectionId, TopicId, TransmissionId};
-use crate::support::{TimeWindow, Timestamp, Watermark};
+use crate::derived::flow::transmission::Route;
+use crate::ids::{AgentId, ChannelId, OperatorId, ProjectionId, TopicId, TransmissionId};
+use crate::support::{Finite, TimeWindow, Timestamp, Watermark};
+use crate::wire::{Rejected, WireRequest};
 
 use frame::ProjectionFrame;
 
-/// The most points a projection may hold: `1..=ProjectionLimit::MAX`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The most points a projection may hold: `1..=ProjectionLimit::MAX`. On
+/// the wire, the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
 pub struct ProjectionLimit(NonZeroU32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,8 +107,22 @@ pub enum InvalidProjectionLimit {
     AboveMax { max: u32, got: u32 },
 }
 
+impl TryFrom<u32> for ProjectionLimit {
+    type Error = Rejected<InvalidProjectionLimit>;
+
+    fn try_from(limit: u32) -> Result<Self, Self::Error> {
+        Self::new(limit).map_err(|error| Rejected::new("projection limit", error))
+    }
+}
+
+impl From<ProjectionLimit> for u32 {
+    fn from(limit: ProjectionLimit) -> Self {
+        limit.0.get()
+    }
+}
+
 impl ProjectionLimit {
-    /// Bounds a fit to minutes and a frame to about 5 MB (48 bytes per point
+    /// Bounds a fit to minutes and a frame to about 5 MB (52 bytes per point
     /// plus its tables), which a browser canvas still renders interactively.
     pub const MAX: u32 = 100_000;
 
@@ -100,12 +142,64 @@ impl ProjectionLimit {
     }
 }
 
+/// How long a ready projection's frame is kept after its fit: config
+/// `projection.frame_retention_days` (default
+/// [`FrameRetention::DEFAULT_DAYS`]). Never zero. A frame fitted at `t` is
+/// readable at least until [`FrameRetention::expires_at`]`(t)` under the
+/// retention in force; then the store drops it and the job becomes
+/// `Expired`.
+///
+/// On the wire, whole microseconds in a `_micros` field
+/// (`"frame_retention_micros": 15552000000000`); `0` is a decode error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FrameRetention(NonZeroU64);
+
+impl FrameRetention {
+    pub const DEFAULT_DAYS: u16 = 180;
+    const MICROS_PER_DAY: u64 = 86_400_000_000;
+
+    pub const fn from_micros(micros: NonZeroU64) -> Self {
+        Self(micros)
+    }
+
+    /// `days` whole days.
+    pub const fn from_days(days: NonZeroU16) -> Self {
+        // At most 65,535 days: no overflow.
+        match NonZeroU64::new(days.get() as u64 * Self::MICROS_PER_DAY) {
+            Some(micros) => Self(micros),
+            None => Self(NonZeroU64::MIN),
+        }
+    }
+
+    pub const fn as_micros(self) -> NonZeroU64 {
+        self.0
+    }
+
+    pub fn as_duration(self) -> Duration {
+        Duration::from_micros(self.0.get())
+    }
+
+    /// When a frame fitted at `fitted_at` expires under this retention,
+    /// saturating at the latest timestamp.
+    pub fn expires_at(self, fitted_at: Timestamp) -> Timestamp {
+        Timestamp::from_micros(fitted_at.as_micros().saturating_add(self.0.get()))
+    }
+}
+
+impl Default for FrameRetention {
+    fn default() -> Self {
+        Self::from_days(NonZeroU16::new(Self::DEFAULT_DAYS).unwrap_or(NonZeroU16::MIN))
+    }
+}
+
 /// How to fit one projection. Every field is recorded with the projection.
 ///
 /// Built only through [`ProjectionParams::new`]. The minimum distance is
 /// held in thousandths, so a recorded spec reproduces exactly whatever it
 /// was serialized through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawProjectionParams")]
 pub struct ProjectionParams {
     limit: ProjectionLimit,
     neighbors: u16,
@@ -118,6 +212,28 @@ pub enum InvalidParams {
     Neighbors { min: u16, max: u16, got: u16 },
     MinDist { max_milli: u16, got_milli: u16 },
 }
+
+/// [`ProjectionParams`]'s fields, decoded without the checks.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawProjectionParams {
+    limit: ProjectionLimit,
+    neighbors: u16,
+    min_dist_milli: u16,
+    seed: u64,
+}
+
+impl TryFrom<RawProjectionParams> for ProjectionParams {
+    type Error = Rejected<InvalidParams>;
+
+    fn try_from(raw: RawProjectionParams) -> Result<Self, Self::Error> {
+        Self::new(raw.limit, raw.neighbors, raw.min_dist_milli, raw.seed)
+            .map_err(|error| Rejected::new("projection params", error))
+    }
+}
+
+/// A client picks every parameter of a fit, the seed included.
+impl WireRequest for ProjectionParams {}
 
 impl ProjectionParams {
     pub const MIN_NEIGHBORS: u16 = 2;
@@ -183,13 +299,43 @@ impl ProjectionParams {
 ///
 /// Built only through [`ProjectionSpec::new`], which pins the filter's
 /// selector to the resolved version, so a stored spec never says `Current`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Decoding goes through it too, so a decoded spec's filter is pinned. It is
+/// server-stamped (the version and model resolved when the request was
+/// accepted) and never a request (`wire/authority.rs`): a client asks with
+/// `ProjectionParams`, a window and a filter, and only the gateway writes a
+/// spec, so decoding one normalizes rather than refusing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", from = "RawProjectionSpec")]
 pub struct ProjectionSpec {
     window: TimeWindow,
     filter: TopologyFilter,
     topic_version: TopicModelVersion,
     params: ProjectionParams,
     embedding_model: EmbeddingModel,
+}
+
+/// [`ProjectionSpec`]'s fields, decoded before [`ProjectionSpec::new`] pins
+/// the filter.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawProjectionSpec {
+    window: TimeWindow,
+    filter: TopologyFilter,
+    topic_version: TopicModelVersion,
+    params: ProjectionParams,
+    embedding_model: EmbeddingModel,
+}
+
+impl From<RawProjectionSpec> for ProjectionSpec {
+    fn from(raw: RawProjectionSpec) -> Self {
+        Self::new(
+            raw.window,
+            raw.filter,
+            raw.topic_version,
+            raw.params,
+            raw.embedding_model,
+        )
+    }
 }
 
 impl ProjectionSpec {
@@ -236,7 +382,13 @@ impl ProjectionSpec {
 /// Why a fit failed. Only deterministic outcomes: fitting the same spec
 /// again before anything changes fails the same way. Store and worker
 /// failures are retried, never recorded here.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FitFailure {
     /// Fewer sampled points than UMAP needs (more than `neighbors`).
     TooFewPoints { needed: u32, got: u64 },
@@ -250,7 +402,8 @@ pub enum FitFailure {
 }
 
 /// A completed fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Fitted {
     /// When the fit started and read its sample.
     pub started_at: Timestamp,
@@ -264,7 +417,13 @@ pub struct Fitted {
     pub points: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ProjectionStatus {
     Queued,
     Fitting {
@@ -285,7 +444,9 @@ pub enum ProjectionStatus {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// On the wire, a string: `"fitting"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectionStatusKind {
     Queued,
     Fitting,
@@ -312,7 +473,8 @@ impl ProjectionStatus {
 /// and the transitions): its timestamps never go backwards (requested,
 /// started, fitted or failed, expired), a fit's watermark is no later than
 /// its start, and a fit holds exactly `min(matching, limit)` points.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawProjectionInfo")]
 pub struct ProjectionInfo {
     id: ProjectionId,
     spec: ProjectionSpec,
@@ -330,6 +492,33 @@ pub enum InvalidProjectionInfo {
         expected: u64,
         got: u32,
     },
+}
+
+/// [`ProjectionInfo`]'s fields, decoded without the checks. Decoding goes
+/// through [`ProjectionInfo::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawProjectionInfo {
+    id: ProjectionId,
+    spec: ProjectionSpec,
+    requested_by: OperatorId,
+    requested_at: Timestamp,
+    status: ProjectionStatus,
+}
+
+impl TryFrom<RawProjectionInfo> for ProjectionInfo {
+    type Error = Rejected<InvalidProjectionInfo>;
+
+    fn try_from(raw: RawProjectionInfo) -> Result<Self, Self::Error> {
+        Self::new(
+            raw.id,
+            raw.spec,
+            raw.requested_by,
+            raw.requested_at,
+            raw.status,
+        )
+        .map_err(|error| Rejected::new("projection info", error))
+    }
 }
 
 /// A transition the lifecycle does not allow, or one that would break a
@@ -508,27 +697,184 @@ impl ProjectionInfo {
     }
 }
 
-/// One point of a projection: a row of a [`ProjectionFrame`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A projected point's route as the frame stores it: its kind and, for a
+/// channel route, the channel. The channel is the canonical one when the
+/// sample was read (resolved through supersession then), so a point can be
+/// coloured and named by channel without reading its transmission; a
+/// client that needs the channel in force now resolves the frame's channel
+/// table in one `channel_names` batch, where a channel superseded since is
+/// named by the channel that superseded it. A delegation's direction and a
+/// direct route's carrier are not kept.
+///
+/// A channel route always names its channel, and no other route names
+/// one. On the wire, adjacently tagged: `{"type": "channel", "data":
+/// "<channel id>"}`, `{"type": "delegation"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PointRoute {
+    Channel(ChannelId),
+    Delegation,
+    Direct,
+    Unobserved,
+}
+
+impl PointRoute {
+    /// A stored route as a point keeps it. `route`'s channel must already
+    /// be resolved through supersession (`Route::resolved`).
+    pub fn of(route: &Route) -> Self {
+        match route {
+            Route::Channel(channel) => Self::Channel(*channel),
+            Route::Delegation(_) => Self::Delegation,
+            Route::Direct(_) => Self::Direct,
+            Route::Unobserved => Self::Unobserved,
+        }
+    }
+
+    /// The route from its kind and channel, as a frame's columns hold them:
+    /// `None` unless the channel is given exactly for a channel route.
+    pub fn from_parts(kind: RouteKind, channel: Option<ChannelId>) -> Option<Self> {
+        match (kind, channel) {
+            (RouteKind::Channel, Some(channel)) => Some(Self::Channel(channel)),
+            (RouteKind::Delegation, None) => Some(Self::Delegation),
+            (RouteKind::Direct, None) => Some(Self::Direct),
+            (RouteKind::Unobserved, None) => Some(Self::Unobserved),
+            (RouteKind::Channel, None)
+            | (RouteKind::Delegation | RouteKind::Direct | RouteKind::Unobserved, Some(_)) => None,
+        }
+    }
+
+    pub fn kind(self) -> RouteKind {
+        match self {
+            Self::Channel(_) => RouteKind::Channel,
+            Self::Delegation => RouteKind::Delegation,
+            Self::Direct => RouteKind::Direct,
+            Self::Unobserved => RouteKind::Unobserved,
+        }
+    }
+
+    /// The channel of a channel route; `None` for every other route.
+    pub fn channel(self) -> Option<ChannelId> {
+        match self {
+            Self::Channel(channel) => Some(channel),
+            Self::Delegation | Self::Direct | Self::Unobserved => None,
+        }
+    }
+}
+
+/// One point of a projection: a row of a [`ProjectionFrame`]. On the wire
+/// (an export's point rows) its [`PointParts`], with `x` and `y` JSON
+/// numbers, finite by type, so they always encode and a non-finite one is
+/// a decode error.
+///
+/// A projection holds transmissions between different agents only (the
+/// sample's filter admits no transmission whose sender and reader resolve to
+/// one agent, `topology.filter.cross-agent-only`), so a point's sender and
+/// reader are always two agents: built only through
+/// [`ProjectedPoint::new`], which refuses equal ones, and decoded through
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PointParts", into = "PointParts")]
 pub struct ProjectedPoint {
+    parts: PointParts,
+}
+
+/// A [`ProjectedPoint`]'s fields: its wire shape, and what
+/// [`ProjectedPoint::new`] checks.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct PointParts {
     pub transmission: TransmissionId,
     /// Canonical sender when the sample was read.
     pub from: AgentId,
-    /// Canonical reader when the sample was read. Equal to `from` when the
-    /// two agents had been merged by then; the topology graph drops such
-    /// transmissions.
+    /// Canonical reader when the sample was read; never `from`.
     pub to: AgentId,
-    pub route: RouteKind,
+    /// The route kind, and a channel route's canonical channel, when the
+    /// sample was read.
+    pub route: PointRoute,
     /// The topic under the spec's topic version; `None` for an outlier.
     pub topic: Option<TopicId>,
     /// `Confirmed::at`.
     pub confirmed_at: Timestamp,
-    pub x: f32,
-    pub y: f32,
+    pub x: Finite,
+    pub y: Finite,
+}
+
+/// A point whose sender is its reader: a transmission within one agent,
+/// which no projection holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointWithinOneAgent(pub AgentId);
+
+impl ProjectedPoint {
+    /// Refuses `parts` whose sender is its reader.
+    pub fn new(parts: PointParts) -> Result<Self, PointWithinOneAgent> {
+        if parts.from == parts.to {
+            return Err(PointWithinOneAgent(parts.to));
+        }
+        Ok(Self { parts })
+    }
+
+    pub fn parts(&self) -> &PointParts {
+        &self.parts
+    }
+
+    pub fn transmission(&self) -> TransmissionId {
+        self.parts.transmission
+    }
+
+    pub fn from(&self) -> AgentId {
+        self.parts.from
+    }
+
+    pub fn to(&self) -> AgentId {
+        self.parts.to
+    }
+
+    pub fn route(&self) -> PointRoute {
+        self.parts.route
+    }
+
+    pub fn topic(&self) -> Option<TopicId> {
+        self.parts.topic
+    }
+
+    pub fn confirmed_at(&self) -> Timestamp {
+        self.parts.confirmed_at
+    }
+
+    pub fn x(&self) -> Finite {
+        self.parts.x
+    }
+
+    pub fn y(&self) -> Finite {
+        self.parts.y
+    }
+}
+
+impl TryFrom<PointParts> for ProjectedPoint {
+    type Error = Rejected<PointWithinOneAgent>;
+
+    fn try_from(parts: PointParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("projected point", error))
+    }
+}
+
+impl From<ProjectedPoint> for PointParts {
+    fn from(point: ProjectedPoint) -> Self {
+        point.parts
+    }
 }
 
 /// A ready projection as `QueryApi::projection` returns it: its job record
 /// and its stored frame.
+///
+/// Not serialized: on the wire the record is the JSON [`ProjectionInfo`]
+/// and the frame its binary encoding, served separately (see the module
+/// docs), and a client rebuilds the pair with [`Projection::new`].
 ///
 /// Built only through [`Projection::new`]: the job is `Ready` and the
 /// frame's header agrees with it (id, topic version, watermark, sample size,
@@ -598,7 +944,7 @@ impl Projection {
     pub fn slot(&self, point: &ProjectedPoint) -> TopicSlot {
         TopicSlot {
             version: self.topic_version(),
-            topic: point.topic,
+            topic: point.topic(),
         }
     }
 }

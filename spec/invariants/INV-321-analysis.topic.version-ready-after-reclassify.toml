@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.topic.version-ready-after-reclassify"
+statement = "TopicVersionReady for a version is published only after TransmissionClassified has been published under that version for every confirmed transmission, including those confirmed while the re-fit ran."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Readers switch to a version on TopicVersionReady. Publishing it early would
+show transmissions with no topic, or with ids from the superseded fit.
+Transmissions confirmed during the re-fit are classified under the old
+current version on arrival and must also be classified under the new one
+before the version is announced.
+"""
+
+[evidence]
+dst = "crosstalk_analysis::tests::version_ready_only_after_full_reclassification"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

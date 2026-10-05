@@ -14,8 +14,8 @@ disabled status, which the remap leaves as it was
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::watched_rule_with_unmappable_topic_becomes_stale"
-property = "crosstalk::analysis::tests::stale_iff_some_topic_below_remap_threshold"
+unit = "crosstalk_analysis::tests::watched_rule_with_unmappable_topic_becomes_stale"
+property = "crosstalk_analysis::tests::stale_iff_some_topic_below_remap_threshold"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

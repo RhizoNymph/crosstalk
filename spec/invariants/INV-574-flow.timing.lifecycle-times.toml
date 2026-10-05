@@ -13,7 +13,7 @@ window exactly where CorrelationTiming says.
 """
 
 [evidence]
-unit = "crosstalk::flow::correlator::tests::windows_follow_correlation_timing"
+unit = "crosstalk_flow::correlate::tests::channel::windows_follow_correlation_timing"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

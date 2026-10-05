@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.dedup.at-most-once"
+statement = "Once the dedup wrapper has acked a delivery after consumer logic handled it, it never again passes an envelope with the same Envelope::id to consumer logic of the same consumer group."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+This is the generic envelope-level idempotency that every consumer gets from
+L2; entity-level idempotency stays with the consuming layer. It covers lost
+acks, publisher retries that republish the same envelope, and redelivery to a
+different consumer of the group. It therefore requires the handled-id record
+to be written before the ack, to survive consumer restarts, and to be shared
+by every consumer of the group across nodes. A crash after consumer logic
+succeeds but before the record is written can still hand the envelope over
+again, which is why entity-level idempotency is still required.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::dedup_hands_each_id_once_per_group"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

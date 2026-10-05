@@ -1,0 +1,18 @@
+[invariant]
+id = "canonical.normalize.response-is-assistant"
+statement = "The response or partial response message of every normalized exchange is an Assistant message."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+The outcome references the response by hash, so its role is not fixed by
+the type. Provenance treats the response as the agent's output and
+originates spans from it; a response normalized as any other role would
+either hide the agent's output or mark input as originated by it.
+"""
+
+[evidence]
+property = "crosstalk_canonical::tests::response_message_is_assistant"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

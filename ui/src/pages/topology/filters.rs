@@ -26,9 +26,8 @@ use crate::url::route::encode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
-use crosstalk_spec::aggregates::filter::{
-    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
-};
+use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
@@ -103,7 +102,7 @@ pub async fn load_choices(cx: &Cx, caller: &Caller, state: &ViewState) -> Filter
     {
         Ok(graph) => graph
             .value
-            .nodes
+            .nodes()
             .iter()
             .filter_map(|node| match node {
                 GraphNode::Agent(agent) => Some((agent.id, agent_node_name(agent))),

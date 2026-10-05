@@ -17,7 +17,7 @@ unit = [
     "crosstalk_spec::tests::export::export_entries_are_authored_by_the_caller_and_name_the_export",
     "crosstalk_spec::tests::export::projection_export_entries_name_the_projection",
 ]
-integration = "crosstalk::surface::export::tests::every_export_call_is_audited"
+integration = "crosstalk_surface::export::tests::every_export_call_is_audited"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

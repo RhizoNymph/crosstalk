@@ -15,6 +15,7 @@ type = "crosstalk_spec::interfaces::l8_surface::export::rows::TransmissionRow::n
 unit = [
     "crosstalk_spec::tests::export_stream::a_transmission_row_is_a_confirmed_summary",
     "crosstalk_spec::tests::export::transmission_rows_are_the_listed_summary_of_a_confirmed_transmission",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_rows_refuse_what_their_constructors_refuse",
 ]
 
 [evidence-review]

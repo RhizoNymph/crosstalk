@@ -78,6 +78,7 @@ fn discovered(id: u128, resources: &[u128]) -> Channel {
             seed: Seed {
                 resource: resource(id),
                 first_transmission: transmission(id),
+                opened_at: at(id as u64),
             },
             detection: TrafficDetection::Active {
                 since: at(id as u64),

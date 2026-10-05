@@ -1,0 +1,8 @@
+[
+  "base64",
+  "hex",
+  "url_encoding",
+  "unicode_normalization",
+  "json_string",
+  "yaml_string"
+]

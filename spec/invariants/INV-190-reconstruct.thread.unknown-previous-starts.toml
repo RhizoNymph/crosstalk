@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.unknown-previous-starts"
+statement = "An Increment exchange whose previous response is not stored is threaded as Starts with new_inputs equal to the messages of its increment."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The previous response may have been sent around the proxy, or before the
+gateway was deployed. Rejecting the exchange would leave its tool results
+unscanned; guessing a conversation would attach it to the wrong history.
+Starting a root with only the increment keeps read-side detection whole.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::threading::unknown_previous_response_starts_with_increment"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

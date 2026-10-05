@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.directory.merge-visible-after-return"
+statement = "Every AgentDirectory::canonical call that starts after IdentityResolver::merge returns reflects that merge."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+After a merge, attribution goes to the target. If a directory replica or
+cache kept serving the old mapping, exchanges and queries after the merge
+would still split the agent in two, and an operator who just merged two
+agents would see no effect.
+"""
+
+[evidence]
+dst = "crosstalk_reconstruct::tests::dst_merge_visible_to_later_canonical_calls"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

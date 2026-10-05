@@ -13,9 +13,9 @@ formatting message or blob values into error reasons.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_view_responses_contain_no_blob_bytes"
+property = "crosstalk_surface::tests::props::reads::prop_view_responses_contain_no_blob_bytes"
 lint = "lint:surface-error-reason-no-content"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 lint = { agent = "false", human = "false" }

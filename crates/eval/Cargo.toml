@@ -1,0 +1,35 @@
+[package]
+name = "crosstalk-eval"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Evaluation harness: public multi-agent datasets as labelled exchange corpora, a reference matcher, the gateway pipeline as a detector, and a scorer."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ct-eval"
+path = "src/bin/ct-eval/main.rs"
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+crosstalk-gateway = { path = "../gateway" }
+crosstalk-transport = { path = "../transport" }
+anyhow.workspace = true
+base64.workspace = true
+blake3.workspace = true
+clap.workspace = true
+flate2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
+
+[dev-dependencies]
+crosstalk-testkit = { path = "../testkit" }
+crosstalk-sim = { path = "../sim" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

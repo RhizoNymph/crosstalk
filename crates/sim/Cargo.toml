@@ -1,0 +1,16 @@
+[package]
+name = "crosstalk-sim"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Deterministic simulation for crosstalk: a virtual clock, a seeded RNG, fault injection for the bus, the store and upstreams, and the driver that replays a scenario from a seed."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+thiserror.workspace = true
+# `test-util` gives paused time; sim is only ever a dev-dependency of a layer.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+tracing.workspace = true

@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.audit.sink-endpoint-not-recorded"
+statement = "A config entry for an alert sink (ConfigChange::SetSink or RemoveSink) records the sink's id, and for SetSink its kind and name, never its endpoint, and decoding refuses a sink change carrying any other field."
+kind = "confidentiality"
+requires = ["type", "unit"]
+rationale = """
+A webhook URL or a Slack token can carry a credential, and the audit log
+is readable with Audit alone, which does not include Govern (QueryApi::sinks
+needs Govern because a delivery error can name the endpoint). Recording a
+change without its endpoint still tells an auditor that alerts now go
+somewhere else, and when.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::audit::ConfigChange"
+unit = "crosstalk_spec::tests::wire::surface_actions::audit::sink_and_retention_changes_decode_checked"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -21,8 +21,8 @@ use topcoat::router::{Router, RouterBuilderDiscoverExt};
 use topcoat::runtime::RouterBuilderRuntimeExt;
 use tracing_subscriber::EnvFilter;
 
-use crate::backend::fixture::FixtureBackend;
-use crate::config::{BackendConfig, Config};
+use crate::backend::Started;
+use crate::config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,9 +32,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
-    let backend = match config.backend {
-        BackendConfig::Fixture { seed } => FixtureBackend::try_live(seed)?,
-    };
+    // The service (a replay ticker, the in-process surface's relay and
+    // feed) runs for as long as the server does and is shut down after it.
+    let Started { backend, service } = backend::start(&config.backend).await?;
     let router = Router::builder()
         .discover()
         .app_context(config.access.clone())
@@ -45,6 +45,10 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     tracing::info!(listen = %config.listen, operator = config.access.name(), "serving");
-    topcoat::serve(listener, router).await?;
+    // Returns once Ctrl+C or SIGTERM has drained the server.
+    let served = topcoat::serve(listener, router).await;
+    service.shutdown().await;
+    tracing::info!("stopped");
+    served?;
     Ok(())
 }

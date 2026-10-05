@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::aggregates::alert::{Alert, AlertState, AlertSubject};
 use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{AccessSubject, FilterSubject, UnconfirmedChannels};
-use crate::aggregates::quality::MatchClass;
+use crate::aggregates::quality::{DetectionQuality, MatchClass, QualityMatch};
 use crate::aliases::NoAliases;
 use crate::derived::flow::channel::confirmation::{
     Confirmation, CrossTraffic, Listing, ListingKind,
@@ -23,20 +23,25 @@ use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::{
     Confirmed, Crossing, Route, Transmission, TransmissionState,
 };
-use crate::ids::{AccessId, AgentId, AlertId, AlertRuleId, ChannelId, OperatorId};
+use crate::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictLog};
+use crate::derived::provenance::matching::CarrierKind;
+use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, OperatorId};
+use crate::interfaces::l5_flow::channels::ChannelWithTraffic;
 use crate::interfaces::l8_surface::channel_traffic::{
     ChannelTransmission, ChannelTransmissionFilter,
 };
 use crate::interfaces::l8_surface::channels::{
     ChannelActivity, ChannelRow, ChannelStanding, InvalidChannelRow,
 };
-use crate::interfaces::l8_surface::export::rows::{InvalidTransmissionRow, TransmissionRow};
+use crate::interfaces::l8_surface::export::rows::{
+    InvalidTransmissionRow, TransmissionRow, verdict_rows,
+};
 use crate::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crate::interfaces::l8_surface::overview::QueueCounts;
 use crate::interfaces::l8_surface::summary::{
     Delivery, SummaryState, TopicUnder, TransmissionSummary,
 };
-use crate::support::NonEmpty;
+use crate::support::{NonEmpty, TimeWindow};
 use crate::tests::fixtures::{
     agent, at, channel, channel_row, content_match, read_access, resource, transmission,
     write_access,
@@ -52,11 +57,6 @@ fn merged(id: AgentId) -> AgentId {
 /// Merges only (no channel is superseded): agent 9 into agent 2.
 fn merges() -> fn(AgentId) -> AgentId {
     merged
-}
-
-/// Write access `n` is by agent `n`.
-fn writer(access: AccessId) -> Option<AgentId> {
-    Some(agent(access.as_ulid()))
 }
 
 fn co_access(writer_agent: u128, reader: u128) -> CoAccess {
@@ -115,6 +115,7 @@ fn discovered(id: u128) -> Channel {
             seed: Seed {
                 resource: resource(id),
                 first_transmission: transmission(id),
+                opened_at: at(1),
             },
             detection: TrafficDetection::Active {
                 since: at(1),
@@ -182,25 +183,23 @@ const CONFIRMED: CrossTraffic = CrossTraffic {
 #[test]
 fn a_confirmed_transmission_crosses_until_its_agents_merge() {
     let sent = confirmed(1, 9, 2);
-    assert_eq!(sent.crossing(NoAliases, writer), Crossing::Crosses);
-    assert_eq!(sent.crossing(merges(), writer), Crossing::WithinOneAgent);
+    assert_eq!(sent.crossing(NoAliases), Crossing::Crosses);
+    assert_eq!(sent.crossing(merges()), Crossing::WithinOneAgent);
 }
 
 #[test]
 fn a_suspected_transmission_crosses_while_any_writer_is_another_agent() {
     let alone = suspected(1, &[9], 2);
-    assert_eq!(alone.crossing(NoAliases, writer), Crossing::Crosses);
-    assert_eq!(alone.crossing(merges(), writer), Crossing::WithinOneAgent);
+    assert_eq!(alone.crossing(NoAliases), Crossing::Crosses);
+    assert_eq!(alone.crossing(merges()), Crossing::WithinOneAgent);
     let shared = suspected(2, &[9, 3], 2);
-    assert_eq!(shared.crossing(merges(), writer), Crossing::Crosses);
-    let unknown = |_: AccessId| None;
-    assert_eq!(alone.crossing(NoAliases, unknown), Crossing::WithinOneAgent);
+    assert_eq!(shared.crossing(merges()), Crossing::Crosses);
 }
 
 #[test]
 fn a_detected_transmission_names_no_sender() {
     let detected = on_channel(1, 2, TransmissionState::Detected);
-    assert_eq!(detected.crossing(NoAliases, writer), Crossing::Unknown);
+    assert_eq!(detected.crossing(NoAliases), Crossing::Unknown);
 }
 
 // Cross traffic and listings.
@@ -215,14 +214,14 @@ fn cross_traffic_counts_crossing_transmissions_by_confirmation() {
         on_channel(5, 2, TransmissionState::Detected),
     ];
     assert_eq!(
-        CrossTraffic::tally(&transmissions, NoAliases, writer),
+        CrossTraffic::tally(&transmissions, NoAliases),
         CrossTraffic {
             confirmed: 2,
             unconfirmed: 2,
         }
     );
     assert_eq!(
-        CrossTraffic::tally(&transmissions, merges(), writer),
+        CrossTraffic::tally(&transmissions, merges()),
         CrossTraffic {
             confirmed: 1,
             unconfirmed: 1,
@@ -274,16 +273,10 @@ fn listing_follows_origin_and_traffic() {
 #[test]
 fn a_merge_hides_a_discovered_channel_and_an_unmerge_lists_it_again() {
     let traffic = [suspected(1, &[9], 2)];
-    let hidden = channel_row(
-        discovered(1),
-        CrossTraffic::tally(&traffic, merges(), writer),
-    );
+    let hidden = channel_row(discovered(1), CrossTraffic::tally(&traffic, merges()));
     assert_eq!(hidden.listing(), Some(Listing::Hidden));
     assert!(!ChannelFilter::default().matches(&hidden));
-    let back = channel_row(
-        discovered(1),
-        CrossTraffic::tally(&traffic, NoAliases, writer),
-    );
+    let back = channel_row(discovered(1), CrossTraffic::tally(&traffic, NoAliases));
     assert_eq!(
         back.listing(),
         Some(Listing::Channel(Confirmation::Unconfirmed))
@@ -530,7 +523,7 @@ fn an_export_row_is_never_a_transmission_within_one_agent() {
 #[test]
 fn a_channels_transmissions_name_their_senders_and_skip_merged_ones() {
     let topic = |_| TopicUnder::Unassigned;
-    let row = ChannelTransmission::of(&suspected(1, &[9, 3], 2), merges(), writer, |_| None, topic)
+    let row = ChannelTransmission::of(&suspected(1, &[9, 3], 2), merges(), |_| None, topic)
         .expect("agent 3 is another agent");
     assert_eq!(
         row.senders().iter().copied().collect::<Vec<_>>(),
@@ -538,10 +531,10 @@ fn a_channels_transmissions_name_their_senders_and_skip_merged_ones() {
     );
     assert_eq!(row.confirmation(), Confirmation::Unconfirmed);
     assert_eq!(
-        ChannelTransmission::of(&suspected(1, &[9], 2), merges(), writer, |_| None, topic),
+        ChannelTransmission::of(&suspected(1, &[9], 2), merges(), |_| None, topic),
         None
     );
-    let sent = ChannelTransmission::of(&confirmed(2, 9, 3), merges(), writer, |_| None, topic)
+    let sent = ChannelTransmission::of(&confirmed(2, 9, 3), merges(), |_| None, topic)
         .expect("agents 2 and 3");
     assert_eq!(
         sent.senders().iter().copied().collect::<Vec<_>>(),
@@ -554,4 +547,178 @@ fn a_channels_transmissions_name_their_senders_and_skip_merged_ones() {
     assert!(review.matches(&row));
     assert!(!review.matches(&sent));
     assert!(ChannelTransmissionFilter::default().matches(&sent));
+}
+
+// Beyond the commit: when a channel came to exist, the registry's filter,
+// and the readers that leave transmissions within one agent out.
+
+#[test]
+fn created_at_is_the_declaration_time_or_the_first_cross_agent_transmission() {
+    let mut late = declared(2, DeclaredDetection::AwaitingTraffic);
+    if let ChannelOrigin::Declared { declaration, .. } = &mut late.origin {
+        declaration.at = at(7);
+    }
+    let mut in_use = declared(
+        5,
+        DeclaredDetection::InUse(TrafficDetection::Active {
+            since: at(40),
+            last_transmission: transmission(5),
+        }),
+    );
+    if let ChannelOrigin::Declared { declaration, .. } = &mut in_use.origin {
+        declaration.at = at(9);
+    }
+    let mut seeded_late = discovered(1);
+    if let ChannelOrigin::Discovered { seed, .. } = &mut seeded_late.origin {
+        seed.opened_at = at(30);
+    }
+    let cases = [
+        // Declared before traffic: the declaration's time, traffic or not.
+        (late, at(7)),
+        (in_use, at(9)),
+        // Discovered: when its first cross-agent transmission opened.
+        (seeded_late, at(30)),
+        // Promoted at 50 and superseded at 50: still the seed's time.
+        (promoted(3), at(1)),
+        (superseded(4), at(1)),
+    ];
+    for (channel, expected) in cases {
+        assert_eq!(channel.origin.created_at(), expected, "{channel:?}");
+        let traffic = if channel.origin.traffic().is_some() {
+            UNCONFIRMED
+        } else {
+            CrossTraffic::NONE
+        };
+        let row = channel_row(channel, traffic);
+        assert_eq!(row.created_at(), expected);
+        assert_eq!(row.created_at(), row.channel().origin.created_at());
+    }
+}
+
+#[test]
+fn the_registry_filter_keeps_what_the_row_filter_matches() {
+    let filters = [
+        ChannelFilter::default(),
+        ChannelFilter {
+            listings: vec![ListingKind::Confirmed, ListingKind::Declaration],
+            ..ChannelFilter::default()
+        },
+        ChannelFilter {
+            listings: vec![ListingKind::Unconfirmed],
+            ..ChannelFilter::default()
+        },
+        ChannelFilter {
+            origin: OriginFilter::WithSuperseded(Vec::new()),
+            ..ChannelFilter::default()
+        },
+        ChannelFilter {
+            origin: OriginFilter::Superseded,
+            ..ChannelFilter::default()
+        },
+    ];
+    let reads = [
+        (discovered(1), CONFIRMED),
+        (discovered(1), UNCONFIRMED),
+        (discovered(1), CrossTraffic::NONE),
+        (
+            declared(2, DeclaredDetection::AwaitingTraffic),
+            CrossTraffic::NONE,
+        ),
+        (promoted(3), CrossTraffic::NONE),
+        (superseded(4), CONFIRMED),
+    ];
+    for (channel, traffic) in reads {
+        let read = ChannelWithTraffic::new(channel.clone(), traffic);
+        let row = channel_row(channel, traffic);
+        assert_eq!(read.listing(), row.listing(), "{read:?}");
+        for filter in &filters {
+            assert_eq!(
+                filter.keeps(&read),
+                filter.matches(&row),
+                "{filter:?} {read:?}"
+            );
+        }
+    }
+    let superseded_read = ChannelWithTraffic::new(superseded(4), CONFIRMED);
+    assert_eq!(superseded_read.traffic(), None);
+    assert_eq!(superseded_read.listing(), None);
+    let in_force = ChannelWithTraffic::new(discovered(1), UNCONFIRMED);
+    assert_eq!(in_force.traffic(), Some(UNCONFIRMED));
+}
+
+#[test]
+fn transmissions_by_id_omits_transmissions_within_one_agent() {
+    let topic = |_| TopicUnder::Unassigned;
+    let merged_pair = confirmed(1, 9, 2);
+    assert_eq!(
+        TransmissionSummary::listed(&merged_pair, merges(), |_| None, topic),
+        None
+    );
+    assert_eq!(
+        TransmissionSummary::listed(&merged_pair, NoAliases, |_| None, topic),
+        Some(TransmissionSummary::of(
+            &merged_pair,
+            NoAliases,
+            |_| None,
+            topic
+        ))
+    );
+    let crossing = confirmed(2, 3, 2);
+    assert!(TransmissionSummary::listed(&crossing, merges(), |_| None, topic).is_some());
+    let detected = on_channel(3, 2, TransmissionState::Detected);
+    assert!(TransmissionSummary::listed(&detected, merges(), |_| None, topic).is_some());
+    let suspected_alone = suspected(4, &[9], 2);
+    assert_eq!(
+        TransmissionSummary::listed(&suspected_alone, merges(), |_| None, topic),
+        None
+    );
+}
+
+fn window() -> TimeWindow {
+    TimeWindow::new(at(0), at(1000)).expect("a window")
+}
+
+#[test]
+fn detection_quality_leaves_out_transmissions_within_one_agent() {
+    let merged_pair = confirmed(1, 9, 2);
+    let crossing = confirmed(2, 3, 2);
+    let judged = [
+        (&merged_pair, Some(Verdict::Genuine)),
+        (&crossing, Some(Verdict::FalseDetection)),
+    ];
+    let row = |genuine, false_detection| crate::aggregates::quality::QualityRow {
+        route_kind: RouteKind::Channel,
+        match_kind: QualityMatch::Content {
+            class: MatchClass::Exact,
+            carrier: CarrierKind::ToolResult,
+        },
+        genuine,
+        false_detection,
+        unlabeled: 0,
+    };
+    let after_merge = DetectionQuality::tally(window(), judged, merges());
+    assert_eq!(after_merge.rows(), &[row(0, 1)]);
+    // An unmerge (no aliases any more) counts the transmission again.
+    let after_unmerge = DetectionQuality::tally(window(), judged, NoAliases);
+    assert_eq!(after_unmerge.rows(), &[row(1, 1)]);
+}
+
+#[test]
+fn verdict_rows_leave_out_transmissions_within_one_agent() {
+    let merged_pair = confirmed(1, 9, 2);
+    let mut log = VerdictLog::new(merged_pair.id);
+    let record = TransmissionVerdict::new(
+        &merged_pair,
+        Some(Verdict::Genuine),
+        OperatorId::from_ulid(7),
+        at(10),
+        None,
+    )
+    .expect("a confirmed transmission takes a verdict");
+    log.record(record).expect("the same transmission");
+    assert_eq!(verdict_rows(&merged_pair, &log, merges()), Ok(Vec::new()));
+    assert_eq!(
+        verdict_rows(&merged_pair, &log, NoAliases).map(|rows| rows.len()),
+        Ok(1)
+    );
 }

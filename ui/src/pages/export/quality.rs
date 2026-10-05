@@ -12,16 +12,28 @@ use crate::components::{data_table, empty_state, error_panel, route_badge};
 use crate::error::UiError;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::quality::{MatchClass, QualityMatch, QualityRow};
+use crosstalk_spec::derived::provenance::matching::CarrierKind;
 
-/// The detector's call in words.
-pub fn match_kind_name(kind: QualityMatch) -> &'static str {
+/// The detector's call in words: the match class, and its carrier unless
+/// it is a tool result (the carrier that implies a channel).
+pub fn match_kind_name(kind: QualityMatch) -> String {
     match kind {
-        QualityMatch::Content(MatchClass::Exact) => "exact",
-        QualityMatch::Content(MatchClass::Normalized) => "normalized",
-        QualityMatch::Content(MatchClass::Decoded) => "decoded",
-        QualityMatch::Content(MatchClass::Semantic) => "semantic",
-        QualityMatch::Suspected => "suspected (access only)",
-        QualityMatch::Discarded => "discarded",
+        QualityMatch::Content { class, carrier } => {
+            let class = match class {
+                MatchClass::Exact => "exact",
+                MatchClass::Normalized => "normalized",
+                MatchClass::Decoded => "decoded",
+                MatchClass::Semantic => "semantic",
+            };
+            match carrier {
+                CarrierKind::ToolResult => class.to_owned(),
+                CarrierKind::UserTurn => format!("{class} (user turn)"),
+                CarrierKind::SystemPrompt => format!("{class} (system prompt)"),
+                CarrierKind::ReaderOutput => format!("{class} (reader output)"),
+            }
+        }
+        QualityMatch::Suspected => "suspected (access only)".to_owned(),
+        QualityMatch::Discarded => "discarded".to_owned(),
     }
 }
 
@@ -49,7 +61,7 @@ fn percent(precision: Option<f64>) -> String {
 }
 
 fn confirmed(row: &QualityRow) -> bool {
-    matches!(row.match_kind, QualityMatch::Content(_))
+    matches!(row.match_kind, QualityMatch::Content { .. })
 }
 
 /// One line per row, then the totals. Precision is shown for confirmed
@@ -59,7 +71,7 @@ pub fn quality_lines(rows: &[QualityRow]) -> Vec<QualityLine> {
         .iter()
         .map(|r| QualityLine {
             route: Some(r.route_kind),
-            match_kind: match_kind_name(r.match_kind).to_owned(),
+            match_kind: match_kind_name(r.match_kind),
             genuine: r.genuine,
             false_detection: r.false_detection,
             unlabeled: r.unlabeled,
@@ -150,14 +162,20 @@ mod tests {
         let rows = vec![
             row(
                 RouteKind::Channel,
-                QualityMatch::Content(MatchClass::Decoded),
+                QualityMatch::Content {
+                    class: MatchClass::Decoded,
+                    carrier: CarrierKind::ToolResult,
+                },
                 3,
                 1,
                 10,
             ),
             row(
                 RouteKind::Direct,
-                QualityMatch::Content(MatchClass::Exact),
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::ToolResult,
+                },
                 0,
                 0,
                 4,
@@ -178,7 +196,10 @@ mod tests {
         let rows = vec![
             row(
                 RouteKind::Channel,
-                QualityMatch::Content(MatchClass::Exact),
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::ToolResult,
+                },
                 1,
                 1,
                 0,

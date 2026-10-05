@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.span.char-boundaries"
+statement = "Every SpanDraft's range starts and ends on UTF-8 character boundaries of its part's text."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "fuzz"]
+rationale = """
+Ranges are byte offsets into UTF-8 text. A boundary inside a multi-byte
+character makes `&text[range]` panic in every downstream reader (matching,
+the query API, embeddings) and splits a character across two spans. Agent
+output routinely contains non-ASCII text, so the segmenter must snap cuts to
+character boundaries.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::segment_spans_on_char_boundaries"
+fuzz = "crosstalk_provenance::fuzz::segment_arbitrary_output"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+fuzz = { agent = "false", human = "false" }

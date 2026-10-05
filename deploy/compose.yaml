@@ -1,0 +1,292 @@
+# crosstalk on one machine: the gateway (every role in one process), Postgres,
+# the operator UI, and the infrastructure observability stack.
+#
+#   bash deploy/run.sh init   # writes deploy/.env with generated secrets
+#   bash deploy/run.sh up     # builds and starts everything
+#
+# The proxy is published on CROSSTALK_PROXY_BIND (default 0.0.0.0: agents on
+# other hosts point their base URL at it). Every other published port binds
+# CROSSTALK_BIND (default 127.0.0.1; set it to the host's tailnet IP or
+# 0.0.0.0 to reach the API, UI, Grafana, Prometheus, Alloy and Postgres from
+# other machines).
+# node-exporter is the exception that is not published: it listens on the
+# host network at 0.0.0.0:19100 so Prometheus can reach it. See
+# docs/infrastructure.md for the layout and docs/features/deploy.md for the
+# contract the crosstalk binary implements.
+
+name: crosstalk
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-crosstalk-env: &crosstalk-env
+  DATABASE_URL: postgres://crosstalk:${POSTGRES_PASSWORD:?run deploy/run.sh init}@postgres:5432/crosstalk
+  CROSSTALK_SECRET_V1: ${CROSSTALK_SECRET_V1:?run deploy/run.sh init}
+  CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
+  CROSSTALK_EMBEDDINGS_API_KEY: ${CROSSTALK_EMBEDDINGS_API_KEY:-}
+  RUST_LOG: ${CROSSTALK_LOG:-info}
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: crosstalk
+      POSTGRES_DB: crosstalk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run deploy/run.sh init}
+      POSTGRES_MONITOR_PASSWORD: ${POSTGRES_MONITOR_PASSWORD:?run deploy/run.sh init}
+    # Sized for one box running 100-200 agents; override in deploy/.env.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - track_io_timing=on
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-200}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-6GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-16MB}
+      # HNSW index builds (pgvector) are bounded by this.
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-1GB}
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - wal_compression=zstd
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - log_min_duration_statement=500ms
+      - -c
+      - log_lock_waits=on
+    shm_size: 1g
+    volumes:
+      # Postgres 18 images keep PGDATA under /var/lib/postgresql/18/.
+      - pgdata:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - ${CROSSTALK_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "crosstalk", "-d", "crosstalk"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Runs every layer's migrations, then exits; crosstalk waits for it.
+  migrate:
+    image: crosstalk:dev
+    build:
+      context: ..
+      dockerfile: deploy/crosstalk.Dockerfile
+    command: ["migrate", "--config", "/etc/crosstalk/crosstalk.json"]
+    restart: "no"
+    logging: *logging
+    environment: *crosstalk-env
+    volumes:
+      - ./config/crosstalk.json:/etc/crosstalk/crosstalk.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  crosstalk:
+    image: crosstalk:dev
+    build:
+      context: ..
+      dockerfile: deploy/crosstalk.Dockerfile
+    command: ["serve", "--role", "all", "--config", "/etc/crosstalk/crosstalk.json"]
+    restart: unless-stopped
+    logging: *logging
+    environment: *crosstalk-env
+    volumes:
+      - ./config/crosstalk.json:/etc/crosstalk/crosstalk.json:ro
+      # Blobs live in blobs/; the gateway may keep other files beside it.
+      - data:/var/lib/crosstalk
+    ports:
+      # Agents connect here: ANTHROPIC_BASE_URL=http://<host-ip>:<CROSSTALK_PROXY_PORT>/anthropic
+      # 8081 is the L8 API; the gateway binds it once the HTTP API (P7.1) exists.
+      - ${CROSSTALK_PROXY_BIND:-0.0.0.0}:${CROSSTALK_PROXY_PORT:-8080}:8080
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_API_PORT:-8081}:8081
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_OPS_PORT:-9464}:9464
+    # One socket per agent stream plus one upstream each, and the pool.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Lets in-flight streams finish after SIGTERM.
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crosstalk", "healthcheck", "--url", "http://127.0.0.1:9464/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  ui:
+    profiles: [ui]
+    image: crosstalk-ui:dev
+    build:
+      context: ..
+      dockerfile: deploy/ui.Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ./config/ui.json:/etc/crosstalk/ui.json:ro
+    ports:
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_UI_PORT:-3000}:3000
+    depends_on:
+      crosstalk:
+        condition: service_started
+
+  # ---- infrastructure observability -------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-10GB}
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus:/prometheus
+    ports:
+      - ${CROSSTALK_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run deploy/run.sh init}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/infrastructure.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    ports:
+      - ${CROSSTALK_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:3.7.8
+    restart: unless-stopped
+    logging: *logging
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki:/loki
+
+  # Ships every compose container's stdout/stderr to Loki.
+  alloy:
+    image: grafana/alloy:v1.20.0
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy:/var/lib/alloy/data
+    ports:
+      - ${CROSSTALK_BIND:-127.0.0.1}:${ALLOY_PORT:-12345}:12345
+    depends_on:
+      - loki
+
+  # Host metrics. Host networking so network and filesystem figures are the
+  # machine's, not a container's; Prometheus reaches it via host-gateway.
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+    logging: *logging
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      # Host networking puts this port on the host itself, where 9100/9101
+      # are commonly taken (node-exporter, MinIO). 19100 is the one place
+      # besides prometheus/prometheus.yml's node job; change both together.
+      - --web.listen-address=0.0.0.0:19100
+    # Read-only bind without rslave: rslave needs / to be a shared mount,
+    # which rootless and snap Docker do not provide. Filesystems mounted
+    # after the container starts are not seen until it restarts.
+    volumes:
+      - /:/host:ro
+
+  # Per-container metrics (labelled with the compose service).
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    restart: unless-stopped
+    logging: *logging
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      # The default disabled set minus `process`, so open fds, sockets and
+      # threads per container are exported.
+      - --disable_metrics=memory_numa,tcp,udp,advtcp,sched,hugetlb,referenced_memory,cpu_topology,resctrl,cpuset
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      # Docker's data root at the same path inside, so cAdvisor finds what
+      # `docker info` reports (snap Docker: /var/snap/docker/common/var-lib-docker).
+      - ${DOCKER_ROOT_DIR:-/var/lib/docker}:${DOCKER_ROOT_DIR:-/var/lib/docker}:ro
+      - /dev/disk/:/dev/disk:ro
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      DATA_SOURCE_URI: postgres:5432/crosstalk?sslmode=disable
+      DATA_SOURCE_USER: crosstalk_monitor
+      DATA_SOURCE_PASS: ${POSTGRES_MONITOR_PASSWORD:?run deploy/run.sh init}
+    command:
+      - --collector.stat_statements
+      - --collector.stat_statements.include_query
+      - --collector.stat_statements.query_length=200
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  data:
+  prometheus:
+  grafana:
+  loki:
+  alloy:

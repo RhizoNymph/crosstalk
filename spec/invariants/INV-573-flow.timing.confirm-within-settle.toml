@@ -14,7 +14,7 @@ watermark can still be confirmed.
 """
 
 [evidence]
-property = "crosstalk::flow::correlator::tests::confirmations_within_settle_bound"
+property = "crosstalk_flow::correlate::tests::props::confirmations_within_settle_bound"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

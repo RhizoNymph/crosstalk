@@ -1,0 +1,98 @@
+{
+  "items": [
+    {
+      "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "spec": {
+        "window": {
+          "start": "2026-10-04T10:00:00.000000Z",
+          "end": "2026-10-04T11:00:00.000000Z"
+        },
+        "filter": {
+          "agents": [],
+          "channels": [
+            "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+          ],
+          "route_kinds": [
+            "channel"
+          ],
+          "topics": [
+            "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+          ],
+          "topic_version": {
+            "type": "pinned",
+            "data": 2
+          },
+          "false_detections": "exclude",
+          "unconfirmed_channels": "include"
+        },
+        "topic_version": 2,
+        "params": {
+          "limit": 2000,
+          "neighbors": 15,
+          "min_dist_milli": 100,
+          "seed": 42
+        },
+        "embedding_model": {
+          "name": "nomic-embed-text-v1.5",
+          "dimension": 4
+        }
+      },
+      "requested_by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "requested_at": "2026-10-04T11:05:00.000000Z",
+      "status": {
+        "type": "queued"
+      }
+    },
+    {
+      "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "spec": {
+        "window": {
+          "start": "2026-10-04T10:00:00.000000Z",
+          "end": "2026-10-04T11:00:00.000000Z"
+        },
+        "filter": {
+          "agents": [],
+          "channels": [
+            "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+          ],
+          "route_kinds": [
+            "channel"
+          ],
+          "topics": [
+            "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+          ],
+          "topic_version": {
+            "type": "pinned",
+            "data": 2
+          },
+          "false_detections": "exclude",
+          "unconfirmed_channels": "include"
+        },
+        "topic_version": 2,
+        "params": {
+          "limit": 5000,
+          "neighbors": 15,
+          "min_dist_milli": 100,
+          "seed": 42
+        },
+        "embedding_model": {
+          "name": "nomic-embed-text-v1.5",
+          "dimension": 4
+        }
+      },
+      "requested_by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "requested_at": "2026-10-04T11:05:00.000000Z",
+      "status": {
+        "type": "ready",
+        "data": {
+          "started_at": "2026-10-04T11:06:00.000000Z",
+          "fitted_at": "2026-10-04T11:08:30.000000Z",
+          "watermark": "2026-10-04T11:00:00.000000Z",
+          "matching": 12000,
+          "points": 5000
+        }
+      }
+    }
+  ],
+  "next": null
+}

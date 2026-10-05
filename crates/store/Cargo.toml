@@ -1,0 +1,23 @@
+[package]
+name = "crosstalk-store"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Postgres infrastructure for crosstalk: the connection pool, per-layer schema migrations and the test database harness."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -14,8 +14,8 @@ change with it.
 
 [evidence]
 unit = "crosstalk_spec::tests::channel_reads::the_window_never_changes_which_channels_match"
-property = "crosstalk::surface::tests::prop_channel_window_changes_only_counts"
+property = "crosstalk_surface::tests::props::channels::prop_channel_window_changes_only_counts"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

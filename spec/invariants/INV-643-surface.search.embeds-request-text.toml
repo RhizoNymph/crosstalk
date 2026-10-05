@@ -12,7 +12,7 @@ an input error, not a store failure.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::search_modes_embed_only_when_needed"
+unit = "crosstalk_surface::tests::content::search_modes_embed_only_when_needed"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

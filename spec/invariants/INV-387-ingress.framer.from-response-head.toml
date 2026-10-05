@@ -1,0 +1,21 @@
+[invariant]
+id = "ingress.framer.from-response-head"
+statement = "The proxy builds each HTTP response's framer from the classifying adapter's WireProtocol and the response's status and Content-Type: an event-stream framer when the Content-Type is text/event-stream, and a single-body framer otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The framer must exist when the first response byte arrives, and since
+decoding runs off the hot path the WireRequest may not exist yet. Everything
+the framer needs is known by then: the protocol fixes the event schema, the
+Content-Type says whether the body is SSE or one document, and the status
+says whether that document is an error. An upstream can answer a stream
+request with a plain JSON error, so the response head is also the more
+accurate source (ingress.meta.transport-matches).
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::framer::framer_chosen_from_protocol_and_response_head"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

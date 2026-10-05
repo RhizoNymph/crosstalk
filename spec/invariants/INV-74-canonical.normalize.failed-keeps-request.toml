@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.normalize.failed-keeps-request"
+statement = "A RawExchange whose response failed and whose request body is valid normalizes successfully, with its full request, whatever its partial response bytes."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The request side of a failed exchange still carries the tool results the
+agent read, which read-side detection needs. A failure is exactly when the
+response body is least trustworthy (cut off mid-stream, an error payload, an
+error event inside a 2xx stream), so response-side parse problems degrade to
+partial_response = None; NormalizeError only covers an invalid request body.
+The property feeds arbitrary partial bodies to every normalizer.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::failed_exchange_keeps_request_with_bad_partial_body"
+property = "crosstalk_canonical::tests::failed_response_bytes_never_fail_normalization"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

@@ -13,7 +13,7 @@ check, which is how it is retargeted to the current version.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::rule_requests_need_current_version"
+unit = "crosstalk_analysis::tests::rule_requests_need_current_version"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

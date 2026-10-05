@@ -7,7 +7,8 @@
 //!
 //! Invariants:
 //! - A [`message::Message`] never changes after it is hashed. Its
-//!   [`crate::ids::MessageHash`] is the BLAKE3 of its canonical encoding.
+//!   [`crate::ids::MessageHash`] is the BLAKE3 of its canonical encoding
+//!   ([`message::encoding`]), which every layer that reads a body decodes.
 //! - An [`exchange::Exchange`] references messages by hash only; bodies live
 //!   in the blob store.
 

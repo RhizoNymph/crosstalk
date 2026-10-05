@@ -14,8 +14,8 @@ unmerge would split only one id off a cluster the operator meant to undo.
 
 [evidence]
 unit = "crosstalk_spec::tests::agents::merge_repoints_agents_already_merged_into_the_source"
-integration = "crosstalk::reconstruct::tests::pg_merge_records_prior_and_repointed"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_merge_records_prior_and_repointed"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

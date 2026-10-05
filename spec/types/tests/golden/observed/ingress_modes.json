@@ -1,0 +1,20 @@
+[
+  {
+    "type": "reverse_proxy",
+    "data": {
+      "route": "anthropic"
+    }
+  },
+  {
+    "type": "forward_proxy",
+    "data": {
+      "host": "chatgpt.com"
+    }
+  },
+  {
+    "type": "replay",
+    "data": {
+      "corpus": "agentdojo-v1.2"
+    }
+  }
+]

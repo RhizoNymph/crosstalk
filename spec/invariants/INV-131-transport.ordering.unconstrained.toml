@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.ordering.unconstrained"
+statement = "The simulated bus can deliver any two envelopes pending for the same consumer group in either order, whatever their subjects and publish order."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+L2 guarantees no delivery order, across subjects or within one. Redelivery,
+nack delays and several consumers per group break any order the production
+buses happen to preserve, so consumers must tolerate every order. Because
+MpscBus and JetStream usually deliver in publish order, consumers would come
+to depend on it by accident; the simulated bus used by every layer's
+deterministic simulation tests must therefore reach every order, so that such
+a dependency fails a test.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::sim_bus_reaches_every_pairwise_order"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

@@ -3,10 +3,12 @@
 //! semantic query's text (and refuses text too long to embed as
 //! `QueryTooLong`), so the UI never handles embeddings.
 
+use crosstalk_spec::aggregates::alert::RuleQueryText;
 use crosstalk_spec::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::TopicId;
-use crosstalk_spec::support::{InvalidText, NonBlank, NonEmpty};
+use crosstalk_spec::support::InvalidQueryText;
+use crosstalk_spec::support::{InvalidText, NonEmpty};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
@@ -127,14 +129,17 @@ pub fn parse_watched(
     Ok((name, rule, parse_sinks(fields, &choices.sinks)?))
 }
 
-/// A semantic query rule: its text, checked as [`NonBlank`], and the
+/// A semantic query rule: its text, checked as [`RuleQueryText`], and the
 /// similarity threshold. How long the text may be is the embedder's to say.
 pub fn parse_semantic(
     fields: &FormFields,
     sinks: &[SinkId],
 ) -> std::result::Result<(RuleName, UserRule, Vec<SinkId>), UiError> {
     let name = parse_name(fields)?;
-    let text = NonBlank::new(required(fields, "text")?).map_err(|_| invalid("text", "required"))?;
+    let text = RuleQueryText::new(required(fields, "text")?).map_err(|e| match e {
+        InvalidQueryText::Blank => invalid("text", "required"),
+        InvalidQueryText::TooLong { .. } => invalid("text", "at most 1000 characters"),
+    })?;
     let rule = UserRule::SemanticQuery {
         text,
         threshold: similarity(fields, "threshold")?,
@@ -390,11 +395,18 @@ mod tests {
             parse_semantic(&blank, &[]).err(),
             Some(invalid("text", "required"))
         );
-        // How long the text may be is the embedder's to say (`QueryTooLong`).
-        let long = "x".repeat(5000);
+        // The spec bounds the text (`RULE_QUERY_MAX_CHARS`); the form says so.
+        let long = "x".repeat(1001);
         let long_text =
             FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
-        assert!(parse_semantic(&long_text, &[]).is_ok());
+        assert_eq!(
+            parse_semantic(&long_text, &[]).err(),
+            Some(invalid("text", "at most 1000 characters"))
+        );
+        let longest = "x".repeat(1000);
+        let longest_text =
+            FormFields::from_pairs(&[("name", "n"), ("text", &longest), ("threshold", "0.7")]);
+        assert!(parse_semantic(&longest_text, &[]).is_ok());
         let sink = SinkId::from_ulid(9).to_ulid();
         let complete = FormFields::from_pairs(&[
             ("name", "Keys"),

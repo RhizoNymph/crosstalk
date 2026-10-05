@@ -48,7 +48,7 @@ async fn heaviest_edge() -> Selection {
         .expect("topology");
     let edge = graph
         .value
-        .edges
+        .edges()
         .iter()
         .max_by(|a, b| a.share.get().total_cmp(&b.share.get()))
         .expect("an edge");
@@ -173,6 +173,24 @@ async fn renders_graph_brush_filter_and_heaviest_edges() {
     );
     assert!(body.contains("wiki.example.org/wiki/Agent_Coordination"));
     assert!(body.contains("name=\"ft\""), "topics offered with Content");
+}
+
+#[tokio::test]
+async fn follows_the_feed_in_the_elements_not_by_re_rendering() {
+    let reply = get(&url("")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let body = &reply.body;
+    assert!(
+        !body.contains("data-live-watch"),
+        "no page re-render on events"
+    );
+    assert_eq!(body.matches("data-live=\"/data/live\"").count(), 2);
+    for stat in ["agents", "edges", "transmissions", "watermark"] {
+        assert!(
+            body.contains(&format!("data-topology-stat=\"{stat}\"")),
+            "{stat}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -425,4 +443,121 @@ async fn channels_mode_lists_the_channel_nodes() {
     let end = item.find("</li>").expect("item end");
     assert!(item[..end].contains(" r</span>"), "reads and writes shown");
     assert!(item[..end].contains(">unreviewed<"), "policy badge");
+}
+
+fn s3_handoff() -> String {
+    let id = crate::testing::channel_id(crate::backend::fixture::ChannelKey::S3Handoff);
+    format!("channel:{}", id.to_ulid())
+}
+
+/// The row of the list item `code`, up to its `</li>`.
+fn list_row<'a>(body: &'a str, code: &str) -> Option<&'a str> {
+    let at = body.find(&list_item(code))?;
+    let item = &body[at..];
+    Some(&item[..item.find("</li>")?])
+}
+
+fn state_path(
+    graph: GraphMode,
+    unconfirmed: crosstalk_spec::aggregates::filter::UnconfirmedChannels,
+) -> String {
+    let mut state = fixture_state();
+    state.graph = graph;
+    state.scope.filter.unconfirmed_channels = unconfirmed;
+    format!("/topology?{}", state.to_query())
+}
+
+/// Channels mode lists the S3 handoff (only suspected traffic) marked
+/// unconfirmed. Agents mode cannot: its edges are confirmed transmissions,
+/// so every channel behind one is confirmed, and the S3 handoff is in
+/// neither its graph nor its list.
+#[tokio::test]
+async fn an_unconfirmed_channel_is_marked_in_the_channels_list() {
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+
+    let s3 = s3_handoff();
+    let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
+    let reply = get(&state_path(
+        GraphMode::Channels,
+        UnconfirmedChannels::Include,
+    ))
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let row = list_row(&reply.body, &s3).expect("the S3 handoff is listed");
+    assert!(row.contains("agent-scratch/handoff"), "{row}");
+    assert!(row.contains(">unconfirmed<"), "marked: {row}");
+    assert!(
+        row.contains(" unconfirmed\""),
+        "the filter matches the marker: {row}"
+    );
+    let confirmed = list_row(&reply.body, &wiki).expect("the wiki is listed");
+    assert!(
+        !confirmed.contains("unconfirmed"),
+        "a confirmed channel is not marked: {confirmed}"
+    );
+    let agents = get(&state_path(GraphMode::Agents, UnconfirmedChannels::Include)).await;
+    assert_eq!(agents.status, StatusCode::OK, "{}", agents.body);
+    assert!(!agents.body.contains(&list_item(&s3)));
+    assert!(!agents.body.contains(">unconfirmed<"));
+}
+
+#[tokio::test]
+async fn confirmed_only_leaves_unconfirmed_channels_out_of_list_and_graph() {
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+    use crosstalk_spec::aggregates::node::GraphNode;
+
+    let s3 = s3_handoff();
+    let s3_id = crate::testing::channel_id(crate::backend::fixture::ChannelKey::S3Handoff);
+    let backend = FixtureBackend::try_new(7).expect("fixture generates");
+    for unconfirmed in [UnconfirmedChannels::Include, UnconfirmedChannels::Exclude] {
+        let mut state = fixture_state();
+        state.scope.filter.unconfirmed_channels = unconfirmed;
+        let filter = state.scope.topology_filter();
+        let agents = backend
+            .topology(
+                &everyone(),
+                state.scope.window,
+                Weighting::Transmissions,
+                &filter,
+            )
+            .await
+            .expect("topology")
+            .value;
+        let routed_through_s3 = agents
+            .edges()
+            .iter()
+            .any(|e| crate::pages::common::transmissions::route_channel(&e.route) == Some(s3_id));
+        let bipartite = backend
+            .channel_topology(
+                &everyone(),
+                state.scope.window,
+                Weighting::Transmissions,
+                &filter,
+            )
+            .await
+            .expect("channel topology")
+            .value;
+        let s3_node = bipartite
+            .nodes()
+            .iter()
+            .any(|n| matches!(n, GraphNode::Channel(c) if c.id == s3_id));
+        let kept = unconfirmed == UnconfirmedChannels::Include;
+        assert_eq!(s3_node, kept, "{unconfirmed:?}: the channel graph");
+        for (graph, drawn) in [
+            (GraphMode::Agents, routed_through_s3),
+            (GraphMode::Channels, s3_node),
+        ] {
+            let reply = get(&state_path(graph, unconfirmed)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let listed = reply.body.contains(&list_item(&s3));
+            assert_eq!(
+                listed, drawn,
+                "{graph:?} {unconfirmed:?}: list and graph agree"
+            );
+            if !kept {
+                assert!(!listed, "{graph:?}: confirmed only leaves it out");
+                assert!(!reply.body.contains(">unconfirmed<"), "{graph:?}");
+            }
+        }
+    }
 }

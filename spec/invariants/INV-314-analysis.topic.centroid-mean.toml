@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.topic.centroid-mean"
+statement = "Every Topic returned by TopicModel::fit has a centroid equal, within Embedding::NORM_TOLERANCE, to the normalized mean of the embeddings of the topic's members."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Watched-topic remapping compares centroids across versions. A centroid
+that is not the members' normalized mean (for example an unnormalized sum,
+or a UMAP-space point from another model) would make remap similarities
+meaningless and push rules into the wrong topics or needlessly Stale.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::remote::tests::topics::fit_centroid_is_normalized_member_mean"
+property = "crosstalk_analysis::remote::tests::topics::fit_centroids_match_member_means"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

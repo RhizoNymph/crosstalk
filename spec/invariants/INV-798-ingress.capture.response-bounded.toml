@@ -1,0 +1,24 @@
+[invariant]
+id = "ingress.capture.response-bounded"
+statement = "Capture keeps at most the configured response capture bound of response bytes for one exchange; a response that exceeds it reaches the client in full and unchanged, and its exchange is counted uncaptured as response_too_large instead of producing a RawExchange with a cut body."
+kind = "performance"
+requires = ["unit"]
+rationale = """
+Capture keeps a response's bytes until its stream ends, because the hand-off
+waits for the end (ingress.capture.handoff-at-stream-end) and the captured
+body must be every byte received
+(ingress.raw-exchange.response-body-as-received). Without a bound, one
+long or endless stream would grow proxy memory without limit. Cutting the
+captured body short at the bound, or marking it StreamTruncated, would
+record bytes or an ending the agent never saw, so past the bound the copy is
+let go and the loss counted, like the request tee
+(ingress.decode.tee-bounded). The relay buffers nothing itself: hyper reads
+the upstream only as fast as the client takes bytes, so a slow client slows
+the upstream read, not memory, and is never slowed by capture.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::capture::oversized_response_counted_and_relayed"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

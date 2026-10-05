@@ -31,11 +31,19 @@
 //! resolve ([`confirmation`](super::confirmation)): detection says when a
 //! channel carried traffic, confirmation what evidence backs it.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::TransmissionId;
 use crate::support::Timestamp;
 
 /// Detection for a channel declared before any traffic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DeclaredDetection {
     /// No cross-agent transmission yet, and the idle window has not closed.
     AwaitingTraffic,
@@ -50,7 +58,13 @@ pub enum DeclaredDetection {
 }
 
 /// Detection once a channel has cross-agent traffic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TrafficDetection {
     /// A cross-agent transmission was opened or confirmed through it within
     /// the idle window. `since` is when it last became active: its first
@@ -82,7 +96,8 @@ impl TrafficDetection {
 
 /// Which detection state a channel is in, without its data: what a graph
 /// node shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DetectionKind {
     AwaitingTraffic,
     Unused,

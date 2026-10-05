@@ -39,16 +39,20 @@
 
 pub mod filter;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::node::CanonicalStateKind;
 use crate::ids::{AgentId, MergeId};
 use crate::observed::agent::{
     ActiveAgentState, Agent, AgentLabel, AgentState, ClaimSet, MergeRecord, MergeVeto,
 };
 use crate::support::Timestamp;
+use crate::wire::Rejected;
 
 /// Confirmed transmissions into and out of a canonical agent in a window,
 /// counted as `topology`'s agent node counts them under the default filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentTraffic {
     pub transmissions_in: u64,
     pub transmissions_out: u64,
@@ -70,7 +74,8 @@ impl From<ActiveAgentState> for CanonicalStateKind {
 /// agent has no profile), the parent is never the agent or one of its
 /// aliases, the aliases are distinct, ascending and exclude the agent, and
 /// an agent that came from traffic has a last-seen time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "AgentProfileParts")]
 pub struct AgentProfile {
     id: AgentId,
     label: Option<AgentLabel>,
@@ -82,7 +87,8 @@ pub struct AgentProfile {
 }
 
 /// The fields of an [`AgentProfile`], before they are checked.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentProfileParts {
     pub id: AgentId,
     /// The canonical agent's own label (`Agent::label`).
@@ -116,6 +122,14 @@ pub enum InvalidProfile {
     /// A provisional or established agent was created by an exchange, so it
     /// has been seen.
     NeverSeen,
+}
+
+impl TryFrom<AgentProfileParts> for AgentProfile {
+    type Error = Rejected<InvalidProfile>;
+
+    fn try_from(parts: AgentProfileParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("agent profile", error))
+    }
 }
 
 impl AgentProfile {
@@ -201,14 +215,21 @@ impl AgentProfile {
 
 /// One row of `QueryApi::agents`: a canonical agent and its traffic in the
 /// query's window.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentRow {
     pub profile: AgentProfile,
     pub traffic: AgentTraffic,
 }
 
 /// How `QueryApi::agent` reached the agent it returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum AgentLookup {
     /// The id asked for is the canonical agent.
     Canonical,
@@ -223,7 +244,8 @@ pub enum AgentLookup {
 ///
 /// Built only through [`AgentCluster::new`]; see [`InvalidCluster`] for
 /// what it checks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "AgentClusterParts")]
 pub struct AgentCluster {
     profile: AgentProfile,
     agent: Agent,
@@ -236,7 +258,8 @@ pub struct AgentCluster {
 
 /// The fields of an [`AgentCluster`], before they are checked. Lists may
 /// come in any order; the cluster sorts them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentClusterParts {
     pub profile: AgentProfile,
     /// The canonical agent's record, evidence included.
@@ -274,6 +297,9 @@ pub enum InvalidCluster {
     /// A merge record that names nothing in the cluster.
     UnrelatedMerge(MergeId),
     DuplicateMerge(MergeId),
+    /// An alias whose merge (its `MergedInto::merge`) is not among the
+    /// records as an unreverted record with the alias as source.
+    AliasMergeMissing(AgentId),
     /// A veto with neither end in the cluster.
     UnrelatedVeto {
         a: AgentId,
@@ -284,6 +310,14 @@ pub enum InvalidCluster {
         a: AgentId,
         b: AgentId,
     },
+}
+
+impl TryFrom<AgentClusterParts> for AgentCluster {
+    type Error = Rejected<InvalidCluster>;
+
+    fn try_from(parts: AgentClusterParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("agent cluster", error))
+    }
 }
 
 impl AgentCluster {
@@ -347,6 +381,12 @@ impl AgentCluster {
         if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(InvalidCluster::DuplicateMerge(pair[0]));
         }
+        if let Some(alias) = aliases
+            .iter()
+            .find(|alias| merging_record(&merges, alias).is_none())
+        {
+            return Err(InvalidCluster::AliasMergeMissing(alias.id));
+        }
         if let Some(veto) = vetoes
             .iter()
             .find(|veto| !in_cluster(veto.a()) && !in_cluster(veto.b()))
@@ -404,6 +444,17 @@ impl AgentCluster {
         &self.merges
     }
 
+    /// The record that merged `alias` into this agent: when and by whom
+    /// (`MergeRecord::at`, `by`), and what reverting it would restore. Every
+    /// alias has one ([`InvalidCluster::AliasMergeMissing`]), so `None` only
+    /// for an id that is not an alias. This is where a merged agent's merge
+    /// time and author live: `MergedInto` names the record and does not
+    /// copy it.
+    pub fn merge_of(&self, alias: AgentId) -> Option<&MergeRecord> {
+        let alias = self.aliases.iter().find(|agent| agent.id == alias)?;
+        merging_record(&self.merges, alias)
+    }
+
     /// Oldest first.
     pub fn vetoes(&self) -> &[MergeVeto] {
         &self.vetoes
@@ -425,9 +476,23 @@ impl AgentCluster {
     }
 }
 
+/// The unreverted record in `merges` that merged `alias`: the one its
+/// `MergedInto::merge` names, with `alias` as its source. `None` when
+/// `alias` is not merged or its record is missing, reverted or about
+/// another agent.
+fn merging_record<'a>(merges: &'a [MergeRecord], alias: &Agent) -> Option<&'a MergeRecord> {
+    let AgentState::Merged(merged) = &alias.state else {
+        return None;
+    };
+    merges.iter().find(|record| {
+        record.id() == merged.merge && record.source() == alias.id && record.reverted().is_none()
+    })
+}
+
 /// `QueryApi::agent`'s answer: one canonical agent's cluster and its
 /// traffic in the query's window.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentDetail {
     pub cluster: AgentCluster,
     pub traffic: AgentTraffic,
@@ -436,7 +501,8 @@ pub struct AgentDetail {
 /// What an agent is called: the canonical agent an id resolves to, and that
 /// agent's current label. `QueryApi::agent_names` keys these by the id
 /// asked for, so an alias is named by its canonical agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AgentName {
     /// The canonical agent.
     pub id: AgentId,

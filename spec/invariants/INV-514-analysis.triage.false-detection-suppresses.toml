@@ -12,8 +12,8 @@ suppressed alerts keep their state.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::false_detection_suppresses_transmission_alerts"
-property = "crosstalk::analysis::tests::false_detection_suppresses_exactly"
+unit = "crosstalk_analysis::tests::false_detection_suppresses_transmission_alerts"
+property = "crosstalk_analysis::tests::false_detection_suppresses_exactly"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

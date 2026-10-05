@@ -14,8 +14,8 @@ effect without re-indexing.
 """
 
 [evidence]
-unit = "crosstalk::analysis::tests::search_filter_field_cases"
-integration = "crosstalk::analysis::tests::pg_hybrid_search_honours_filter"
+unit = "crosstalk_analysis::tests::search_filter_field_cases"
+integration = "crosstalk_analysis::tests::pg_hybrid_search_honours_filter"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

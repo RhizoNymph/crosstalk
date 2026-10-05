@@ -8,8 +8,8 @@ fn agents_mode_maps_nodes_and_edges() {
     let graph = fixtures::topology_graph();
     let payload = TopologyPayload::agents(&graph);
     assert_eq!(payload.mode, ModeCode::Agents);
-    assert_eq!(payload.nodes.len(), graph.value.nodes.len());
-    assert_eq!(payload.edges.len(), graph.value.edges.len());
+    assert_eq!(payload.nodes.len(), graph.value.nodes().len());
+    assert_eq!(payload.edges.len(), graph.value.edges().len());
 
     let NodePayload::Agent(planner) = &payload.nodes[0] else {
         panic!("agent node expected");
@@ -47,7 +47,7 @@ fn agents_mode_maps_nodes_and_edges() {
 fn transmission_edges_carry_route_codes() {
     let graph = fixtures::topology_graph();
     let payload = TopologyPayload::agents(&graph);
-    for (edge, source) in payload.edges.iter().zip(&graph.value.edges) {
+    for (edge, source) in payload.edges.iter().zip(graph.value.edges()) {
         let EdgePayload::Transmission(edge) = edge else {
             panic!("agents mode has transmission edges only");
         };

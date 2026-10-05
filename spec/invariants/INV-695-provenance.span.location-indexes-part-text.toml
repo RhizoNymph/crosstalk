@@ -12,7 +12,7 @@ stored records.
 """
 
 [evidence]
-property = "crosstalk::provenance::props::locations_index_part_text"
+property = "crosstalk_provenance::props::locations_index_part_text"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

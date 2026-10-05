@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.delta.redelivery-idempotent"
+statement = "Processing the same ConversationDelta more than once yields the same spans, index contents and ContentMatches as processing it once."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Delivery is at least once and consumers are idempotent on entity ids. Span
+ids must be derived deterministically from the delta (exchange, part,
+range) so a redelivery re-inserts the same postings and publishes the same
+matches, rather than doubling hits and matched bytes. Together with
+indexed-before-read, a redelivery must not match spans indexed between the
+first and second processing.
+"""
+
+[evidence]
+dst = "crosstalk_provenance::dst::redelivered_delta_is_idempotent"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

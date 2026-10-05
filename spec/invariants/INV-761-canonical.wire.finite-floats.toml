@@ -1,0 +1,35 @@
+[invariant]
+id = "canonical.wire.finite-floats"
+statement = "Every float a wire type holds is finite: Similarity, Share, Finite and Embedding refuse NaN and infinities at construction, and decoding refuses a JSON number that becomes infinite as an f32."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+JSON has no NaN or infinity: serde_json writes a non-finite float as null,
+which then fails to decode, so a non-finite value would turn a valid
+response or bus event into one no reader accepts. Decoding is the other
+half: JSON numbers are parsed as f64 and narrowed to f32, so a number too
+large for an f32 (1e39) decodes to infinity unless the type refuses it.
+Every float on the wire therefore sits behind a checked type: a similarity
+or threshold in 0..=1 (Similarity), a share in 0..=1 (Share), a unit-norm
+embedding (Embedding), and Finite for a float with no narrower range (a
+topic term's c-TF-IDF weight, in a topic and in an export's topic rows, and
+a projected coordinate). The UMAP minimum
+distance is held in thousandths, so a projection spec carries no float.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::support::Finite",
+    "crosstalk_spec::support::Similarity",
+    "crosstalk_spec::aggregates::topic::Embedding::new",
+]
+unit = [
+    "crosstalk_spec::tests::wire::support::similarities_and_shares_refuse_out_of_range",
+    "crosstalk_spec::tests::wire::analysis::topics::topics_refuse_non_finite_weights_and_bad_embeddings",
+    "crosstalk_spec::tests::wire::analysis::projections::projections_refuse_unknown_shapes_and_non_finite_points",
+    "crosstalk_spec::tests::wire::analysis::rules::user_rules_refuse_what_a_client_must_not_send",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

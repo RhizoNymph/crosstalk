@@ -65,6 +65,8 @@ pub mod detection;
 pub mod policy;
 pub mod promotion;
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::resource::ResourcePattern;
 use crate::ids::{ChannelId, ResourceId, TransmissionId};
 use crate::support::Timestamp;
@@ -72,7 +74,8 @@ use crate::support::Timestamp;
 use detection::{DeclaredDetection, DetectionKind, TrafficDetection};
 use policy::{Policy, PolicyAuthor};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Channel {
     pub id: ChannelId,
     pub origin: ChannelOrigin,
@@ -98,21 +101,33 @@ impl Channel {
 /// What a discovered channel was created from: the resource on no channel
 /// that its first cross-agent transmission went through, and that
 /// transmission (opened by a co-access between two different agents).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Seed {
     pub resource: ResourceId,
     pub first_transmission: TransmissionId,
+    /// When `first_transmission` opened (`Transmission::opened_at`): when
+    /// the channel came to exist. Not the transmission id's ULID time,
+    /// which is when the id was minted.
+    pub opened_at: Timestamp,
 }
 
 /// A pattern and who attached it, when.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Declaration {
     pub pattern: ResourcePattern,
     pub by: PolicyAuthor,
     pub at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ChannelOrigin {
     Declared {
         declaration: Declaration,
@@ -134,7 +149,8 @@ pub enum ChannelOrigin {
 
 /// Which promoted channel superseded a discovered one, and when: the
 /// promotion's declaration time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Supersession {
     pub by: ChannelId,
     pub at: Timestamp,
@@ -142,7 +158,13 @@ pub struct Supersession {
 
 /// How a declared channel came to be declared, with the detection that
 /// history allows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DeclaredHistory {
     /// Declared in config or by an operator before any traffic.
     BeforeTraffic(DeclaredDetection),
@@ -229,6 +251,25 @@ impl ChannelOrigin {
                 history: DeclaredHistory::BeforeTraffic(_),
                 ..
             } => None,
+        }
+    }
+
+    /// When the channel came to exist, what lists of channels sort by
+    /// (newest first): the declaration's time for a channel declared before
+    /// traffic, otherwise its seed's `opened_at`, the opening of the first
+    /// cross-agent transmission through it. A promotion keeps it (the
+    /// channel keeps its id and seed), and so does a supersession.
+    pub fn created_at(&self) -> Timestamp {
+        match self {
+            Self::Declared {
+                declaration,
+                history: DeclaredHistory::BeforeTraffic(_),
+            } => declaration.at,
+            Self::Declared {
+                history: DeclaredHistory::Promoted { from, .. },
+                ..
+            } => from.opened_at,
+            Self::Discovered { seed, .. } | Self::Superseded { seed, .. } => seed.opened_at,
         }
     }
 

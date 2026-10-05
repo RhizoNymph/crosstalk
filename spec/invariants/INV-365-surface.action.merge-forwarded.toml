@@ -13,7 +13,7 @@ one or misattribute it.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::merge_forwarded_with_caller_as_author"
+unit = "crosstalk_surface::tests::actions::merge_forwarded_with_caller_as_author"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

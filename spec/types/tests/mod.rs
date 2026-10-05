@@ -5,13 +5,16 @@
 
 mod fixtures;
 
+mod action_errors;
 mod agent_reads;
 mod agents;
 mod aggregates;
+mod alerts;
 mod audit;
 mod channel_reads;
 mod channels;
 mod confirmation;
+mod encoding;
 mod events;
 mod evidence;
 mod excerpt;
@@ -22,6 +25,7 @@ mod flow;
 mod graph;
 mod infrastructure;
 mod live;
+mod minting;
 mod observed;
 mod operators;
 mod overview;
@@ -36,6 +40,8 @@ mod quality;
 mod query_errors;
 mod retention;
 mod rules;
+mod secrets;
+mod send;
 mod series;
 mod summary;
 mod support;
@@ -44,3 +50,4 @@ mod topic_history;
 mod topic_version;
 mod verdicts;
 mod watermark;
+mod wire;

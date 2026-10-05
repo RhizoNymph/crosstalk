@@ -24,8 +24,8 @@ unit = [
     "crosstalk_spec::tests::channel_reads::the_preview_answers_as_promote_channel_would",
     "crosstalk_spec::tests::channel_reads::preview_maps_each_refusal_as_the_action_does",
 ]
-property = "crosstalk::surface::tests::prop_preview_then_promote_agree"
+property = "crosstalk_surface::tests::props::channels::prop_preview_then_promote_agree"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

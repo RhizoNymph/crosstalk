@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.passthrough.relay-unbuffered"
+statement = "The proxy relays each upstream response chunk, and each WebSocket frame in either direction, without waiting for any later chunk or frame."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Streaming harnesses render tokens as they arrive, and Claude Code expects
+unbuffered streaming. A proxy that buffers until a frame boundary, a whole
+response or a capture step preserves the bytes but breaks streaming.
+Framers and taps are side tees: they watch the bytes, they never gate them.
+"""
+
+[evidence]
+dst = ["crosstalk_ingress::tests::sim::chunks_relayed_before_next_upstream_read", "crosstalk_ingress::tests::sim::websocket_frames_relayed_before_next_read"]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.channel.dormant-by-timestamp"
+statement = "An Active channel moves to Dormant only if no transmission on it was confirmed with a timestamp inside its idle window."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Dormant means the channel stopped carrying communication. Content matches
+come from another consumer group and can be processed late, so the idle
+decision must follow confirmation timestamps rather than processing order,
+or a busy channel flaps between Active and Dormant under lag.
+"""
+
+[evidence]
+dst = "crosstalk_flow::dst::late_confirmation_prevents_dormant"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

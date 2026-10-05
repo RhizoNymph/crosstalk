@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.channel.unused-event-every-policy"
+statement = "Every transition of a declared channel to Unused publishes one DeclaredChannelUnused, whatever the channel's policy."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Flow reports the fact; L6 decides whether it raises SanctionedUnused by
+checking the policy. Filtering by policy in flow would hide unused
+unreviewed or unsanctioned declarations from any later rule.
+"""
+
+[evidence]
+unit = "crosstalk_flow::channel::tests::unused_published_for_every_policy"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

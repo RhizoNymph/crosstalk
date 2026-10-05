@@ -1,0 +1,35 @@
+[invariant]
+id = "canonical.ids.ulid-monotonic"
+statement = "Every ULID a generator mints is greater than every ULID it minted before, whatever its clock reads or the time it is given: next_ulid stamps the clock's reading, next_at a time the caller passes (an exchange's start), and either, given a time in or before the last id's millisecond, returns the last id plus one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Entity ids sort by creation within a node, and a generator's uniqueness
+rests on never going back: if a clock stepped back (NTP, a skewed node)
+let a generator reuse an earlier millisecond with fresh randomness, it
+could mint an id it had already minted. A reading at or before the last
+id's millisecond therefore takes the last id plus one, carrying into the
+next millisecond when the random part is full, and only a later
+millisecond draws fresh randomness. An id stamped with a given time (an
+exchange id carries the exchange's start, and exchanges started on
+concurrent connections reach the generator out of order) follows the same
+rule, sharing the last id with clock-stamped ones. The unit tests pin the
+increment, the carry and the end of the ULID space, for both; the
+properties run clocks and given times that repeat and step back.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_spec::tests::minting::same_or_earlier_millisecond_increments_the_last_id",
+  "crosstalk_spec::tests::minting::a_full_random_part_carries_and_the_last_ulid_is_the_end",
+  "crosstalk_spec::tests::minting::next_at_stamps_the_given_time_and_stays_monotonic",
+]
+property = [
+  "crosstalk_spec::tests::minting::ids_increase_whatever_the_clock_reads",
+  "crosstalk_spec::tests::minting::ids_increase_whatever_time_they_are_given",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

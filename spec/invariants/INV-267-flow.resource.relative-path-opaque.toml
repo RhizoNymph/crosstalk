@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.resource.relative-path-opaque"
+statement = "A relative file path in a conversation with no known working directory is keyed as Locator::Opaque on the tool and the path as written."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Guessing a working directory would merge unrelated files from different
+agents into one resource and fabricate co-accesses. Keying the path as
+written on the tool keeps the access recorded without claiming it is a
+specific file, so it never matches a declared PathPrefix pattern.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::resource::tests::relative_path_without_cwd_is_opaque"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

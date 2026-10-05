@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.resolve.session-resolves-to-main-agent"
+statement = "A harness session id resolves only to the agent in its IdentityScope that holds that session and no HarnessAgent evidence."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Claude Code and Codex sub-agents send their main agent's session id, and
+less specific evidence attaches to every agent it is seen with, so a
+session is held by the main agent and all its sub-agents. Matching a
+session against all of them would make every main-agent exchange (which
+carries no agent id) a Conflict with its own sub-agents.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::pg_props::session_id_resolves_to_main_agent_only"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

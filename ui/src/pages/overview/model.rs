@@ -136,7 +136,7 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
         .await
     {
         Ok(graph) => {
-            let mut heaviest: Vec<_> = graph.value.edges.iter().collect();
+            let mut heaviest: Vec<_> = graph.value.edges().iter().collect();
             heaviest.sort_by(|a, b| b.share.get().total_cmp(&a.share.get()));
             heaviest.truncate(HEAVIEST);
             let agents = agent_names(

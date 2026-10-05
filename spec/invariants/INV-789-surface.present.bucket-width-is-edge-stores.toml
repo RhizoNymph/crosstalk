@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.present.bucket-width-is-edge-stores"
+statement = "QueryApi::present's bucket_width equals EdgeStore::bucket_width, so a window aligned to it is never refused as InvalidInput(UnalignedWindow) and a SeriesGrid built with it is never refused as InvalidInput(BucketWidthMismatch)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Graph, channel, agent and series queries refuse windows off bucket
+boundaries and grids for another width, but only L7 knows the width. A
+client snaps its windows and time brush and builds its grids with the
+width present reports; any other width would turn every view into a
+refusal.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::reads::present_reports_the_edge_store_bucket_width"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

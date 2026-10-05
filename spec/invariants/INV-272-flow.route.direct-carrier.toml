@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.route.direct-carrier"
+statement = "The correlator assigns a Direct route only to content carried in a user turn, a system prompt, or a tool result whose call yielded no access, with the DirectCarrier naming that carrier."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Direct means something the gateway sees placed the text in the reader's
+context without a resource in between. A tool result whose call touched an
+extracted resource must take the Channel route so policy applies.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlate::tests::props::direct_route_carrier"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

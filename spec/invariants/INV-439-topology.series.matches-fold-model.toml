@@ -14,8 +14,8 @@ aggregates, so the integration test checks it against the fold too.
 """
 
 [evidence]
-property = "crosstalk::topology::props::series_matches_reference_fold"
-integration = "crosstalk::topology::integration::timescale_series_matches_reference_fold"
+property = "crosstalk_topology::props::series_matches_reference_fold"
+integration = "crosstalk_topology::integration::timescale_series_matches_reference_fold"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

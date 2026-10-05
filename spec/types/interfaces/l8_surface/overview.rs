@@ -35,6 +35,8 @@
 //!
 //! [`TopologyFilter`]: crate::aggregates::filter::TopologyFilter
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::alert::{Alert, AlertState};
 use crate::aggregates::edge::EdgeTotals;
 use crate::aggregates::filter::UnconfirmedChannels;
@@ -44,7 +46,8 @@ use crate::derived::flow::channel::policy::PolicyKind;
 use super::channels::ChannelRow;
 
 /// Everything the overview counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct OverviewCounts {
     /// Scoped by the window and filter; see [`EdgeTotals`].
     pub activity: EdgeTotals,
@@ -53,7 +56,8 @@ pub struct OverviewCounts {
 }
 
 /// What waits for an operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct QueueCounts {
     /// Shown alerts in state `Open`.
     pub open_alerts: u64,

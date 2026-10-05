@@ -12,7 +12,7 @@ document and the cosine similarity.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::search_scores_unchanged_by_concurrent_indexing"
+dst = "crosstalk_analysis::dst::search_scores_unchanged_by_concurrent_indexing"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

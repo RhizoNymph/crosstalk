@@ -9,8 +9,8 @@ use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{TopicVersionSelector, VersionUnavailable};
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
-    Fitted, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit, ProjectionParams,
-    ProjectionSpec, ProjectionStatus,
+    Fitted, PointParts, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -30,9 +30,12 @@ use crate::interfaces::l8_surface::export::{
     ExportScope, GatewayVersion, InvalidExportRecord, InvalidExportRequest, InvalidHeader,
     settled_window,
 };
+use crate::interfaces::l8_surface::export::{
+    ExportFormats, InvalidExportFormats, UnsupportedFormat,
+};
 use crate::interfaces::l8_surface::summary::{TopicUnder, TransmissionSummary};
 use crate::interfaces::l8_surface::{ConflictKind, InputError, Permission, QueryError};
-use crate::support::{TimeWindow, Watermark};
+use crate::support::{Finite, TimeWindow, Watermark};
 use crate::tests::fixtures::{agent, at, transmission};
 use crate::tests::operators::caller;
 use crate::tests::verdicts::{confirmed, every_state};
@@ -149,16 +152,17 @@ fn topic(n: u128) -> TopicId {
 }
 
 fn point(n: u128, topic: Option<TopicId>) -> ProjectedPoint {
-    ProjectedPoint {
+    ProjectedPoint::new(PointParts {
         transmission: transmission(n),
         from: agent(1),
         to: agent(2),
-        route: RouteKind::Unobserved,
+        route: PointRoute::Unobserved,
         topic,
         confirmed_at: at(100),
-        x: 0.25,
-        y: -2.0,
-    }
+        x: Finite::new(0.25).expect("finite"),
+        y: Finite::new(-2.0).expect("finite"),
+    })
+    .expect("a point between two agents")
 }
 
 pub(super) fn points() -> Vec<ProjectedPoint> {
@@ -169,7 +173,7 @@ pub(super) fn points() -> Vec<ProjectedPoint> {
     ]
 }
 
-fn projection() -> Projection {
+pub(super) fn projection() -> Projection {
     let points = points();
     let count = u32::try_from(points.len()).expect("small");
     let info = ProjectionInfo::new(
@@ -510,6 +514,53 @@ fn gateway_version_is_not_blank() {
     );
 }
 
+// ── Formats ────────────────────────────────────────────────────────────────
+
+#[test]
+fn offered_formats_are_non_empty_and_distinct_in_offer_order() {
+    assert_eq!(
+        ExportFormats::new(Vec::new()),
+        Err(InvalidExportFormats::Empty)
+    );
+    assert_eq!(
+        ExportFormats::new(vec![
+            ExportFormat::Parquet,
+            ExportFormat::Jsonl,
+            ExportFormat::Parquet
+        ]),
+        Err(InvalidExportFormats::Duplicate(ExportFormat::Parquet))
+    );
+    let both =
+        ExportFormats::new(vec![ExportFormat::Parquet, ExportFormat::Jsonl]).expect("distinct");
+    assert_eq!(
+        both.as_slice(),
+        &[ExportFormat::Parquet, ExportFormat::Jsonl]
+    );
+    assert_eq!(both.first(), ExportFormat::Parquet);
+}
+
+#[test]
+fn a_format_the_gateway_does_not_write_is_refused() {
+    let jsonl = ExportFormats::new(vec![ExportFormat::Jsonl]).expect("one format");
+    assert!(jsonl.offers(ExportFormat::Jsonl));
+    assert_eq!(jsonl.check(ExportFormat::Jsonl), Ok(()));
+    assert!(!jsonl.offers(ExportFormat::Parquet));
+    assert_eq!(
+        jsonl.check(ExportFormat::Parquet),
+        Err(UnsupportedFormat {
+            format: ExportFormat::Parquet
+        })
+    );
+    assert_eq!(
+        QueryError::from(UnsupportedFormat {
+            format: ExportFormat::Parquet
+        }),
+        QueryError::InvalidInput(InputError::UnsupportedFormat {
+            format: ExportFormat::Parquet
+        })
+    );
+}
+
 // ── Limits and plan errors ─────────────────────────────────────────────────
 
 #[test]
@@ -662,7 +713,7 @@ fn judged(state: TransmissionState) -> (Transmission, VerdictLog) {
 #[test]
 fn verdict_rows_follow_the_log_with_the_detector_call() {
     let (transmission, log) = judged(TransmissionState::Confirmed(confirmed()));
-    let rows = verdict_rows(&transmission, &log).expect("same transmission");
+    let rows = verdict_rows(&transmission, &log, NoAliases).expect("same transmission");
     let revision = |n| VerdictRevision::new(std::num::NonZeroU32::new(n).expect("non-zero"));
     let expected: Vec<ExportRow> = [
         (Some(Verdict::FalseDetection), 10, 1),
@@ -674,7 +725,10 @@ fn verdict_rows_follow_the_log_with_the_detector_call() {
         ExportRow::Verdict(VerdictRow {
             transmission: transmission.id,
             route_kind: RouteKind::Unobserved,
-            call: QualityMatch::Content(MatchClass::Exact),
+            call: QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: crate::derived::provenance::matching::CarrierKind::ToolResult,
+            },
             revision: revision(n),
             verdict,
             by: operator(),
@@ -690,7 +744,7 @@ fn verdict_rows_follow_the_log_with_the_detector_call() {
 fn verdict_rows_exist_only_for_judgeable_states() {
     for (state, judgeable) in every_state() {
         let (transmission, log) = judged(state);
-        let rows = verdict_rows(&transmission, &log).expect("same transmission");
+        let rows = verdict_rows(&transmission, &log, NoAliases).expect("same transmission");
         assert_eq!(rows.len(), if judgeable { 3 } else { 0 });
     }
 }
@@ -700,7 +754,7 @@ fn verdict_rows_refuse_another_transmissions_log() {
     let (transmission, _) = judged(TransmissionState::Confirmed(confirmed()));
     let other = VerdictLog::new(crate::tests::fixtures::transmission(5));
     assert_eq!(
-        verdict_rows(&transmission, &other),
+        verdict_rows(&transmission, &other, NoAliases),
         Err(VerdictRowsError::OtherTransmission)
     );
 }

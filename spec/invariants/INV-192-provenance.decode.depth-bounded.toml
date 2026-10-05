@@ -1,0 +1,22 @@
+[invariant]
+id = "provenance.decode.depth-bounded"
+statement = "The decode pipeline applies decoders to their own output at most the configured maximum depth times for any input, so no MatchKind::Decoded lists more codecs than that depth."
+kind = "domain"
+property = "invariant"
+requires = ["property", "fuzz"]
+rationale = """
+Decoders run on their own output, and input is untrusted: nested base64 or
+text that decodes to itself would otherwise recurse without end. Each codec
+expands its input by at most a constant factor (NFKC is the only one that
+grows text), so the depth bound also bounds the decoded bytes and the
+lookups per input. The fuzz target checks the pipeline never hangs or
+panics on arbitrary input.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::decode_depth_never_exceeds_max"
+fuzz = "crosstalk_provenance::fuzz::decode_pipeline_arbitrary_input"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+fuzz = { agent = "false", human = "false" }

@@ -12,7 +12,7 @@ longer than the event's delivery.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::catalog_follows_version_activated"
+dst = "crosstalk_analysis::tests::catalog_follows_version_activated"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

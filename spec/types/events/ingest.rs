@@ -1,11 +1,19 @@
 //! Events from capture (L1) and reconstruction (L3).
 
+use serde::{Deserialize, Serialize};
+
 use crate::events::Subject;
 use crate::ids::{AgentId, ConversationId, ExchangeId, MergeId, MessageHash, OperatorId};
 use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor};
 use crate::observed::exchange::Exchange;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum IngestEvent {
     /// A normalized exchange. Every message it references is already in the
     /// blob store when this is published.
@@ -59,7 +67,8 @@ impl IngestEvent {
 }
 
 /// The part of one exchange that is new to its conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ConversationDelta {
     pub exchange: ExchangeId,
     pub agent: AgentId,
@@ -70,8 +79,11 @@ pub struct ConversationDelta {
     /// a compaction's first exchange, its non-system messages whose hash is
     /// not in the predecessor's history, in request order.
     pub new_inputs: Vec<MessageHash>,
-    /// The system message, when it is new to the conversation (its first
-    /// exchange, or the harness changed it).
+    /// The request's first System message (its top-level system prompt
+    /// when it has one), when it is new to the conversation (its first
+    /// exchange, or the harness changed it). A later System message (a
+    /// system turn inside the history) is not carried here
+    /// (`reconstruct.delta.new-system-when-changed`).
     pub new_system: Option<MessageHash>,
     /// The response, or a failed exchange's partial response. Write-side
     /// detection and span extraction read this.

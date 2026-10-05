@@ -1,0 +1,19 @@
+{
+  "type": "verdict",
+  "data": {
+    "transmission": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+    "route_kind": "channel",
+    "call": {
+      "type": "content",
+      "data": {
+        "class": "exact",
+        "carrier": "tool_result"
+      }
+    },
+    "revision": 1,
+    "verdict": "genuine",
+    "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+    "at": "2026-10-04T11:03:12.000000Z",
+    "note": "confirmed with the planner"
+  }
+}

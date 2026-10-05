@@ -16,8 +16,8 @@ unit = [
     "crosstalk_spec::tests::agents::a_veto_keeps_whole_clusters_apart",
     "crosstalk_spec::tests::agents::veto_separates_clusters_in_either_order",
 ]
-integration = "crosstalk::reconstruct::tests::pg_veto_blocks_resolver_merge"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_veto_blocks_resolver_merge"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

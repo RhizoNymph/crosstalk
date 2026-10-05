@@ -28,16 +28,22 @@
 
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::aliases::Aliases;
-use crate::derived::flow::transmission::{Confirmed, Route, Transmission, TransmissionState};
+use crate::derived::flow::transmission::{
+    Confirmed, Crossing, Route, Transmission, TransmissionState,
+};
 use crate::derived::flow::verdict::Verdict;
 use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::paging::{Page, TransmissionList};
 use crate::support::Timestamp;
+use crate::wire::{Rejected, WireRequest};
 
 /// One transmission as a row: no message content.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionSummary {
     pub id: TransmissionId,
     /// The canonical reader: `AgentDirectory::canonical(Transmission::to)`.
@@ -52,7 +58,13 @@ pub struct TransmissionSummary {
 /// bytes and confirmation time exist from `Confirmed` on, the topic from
 /// `Classified` on, and a verdict only in the states that take one
 /// (`TransmissionState::judgeable`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SummaryState {
     Detected,
     AwaitingContent,
@@ -79,7 +91,8 @@ pub enum SummaryState {
 }
 
 /// What content evidence established.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Delivery {
     /// The canonical sender: `AgentDirectory::canonical(Confirmed::from())`.
     pub from: AgentId,
@@ -90,7 +103,13 @@ pub struct Delivery {
 }
 
 /// A classified transmission's topic under the page's version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TopicUnder {
     Topic(TopicId),
     /// The version's topic model marks it an outlier.
@@ -127,6 +146,21 @@ impl TransmissionStateKind {
 }
 
 impl TransmissionSummary {
+    /// The row `QueryApi::transmissions_by_id` lists for `transmission`:
+    /// [`TransmissionSummary::of`], or `None` when the transmission does
+    /// not cross agents under `aliases` ([`Crossing::WithinOneAgent`]: its
+    /// sender and reader have since merged into one agent), which no view
+    /// lists. A `Detected` one names no sender yet and is listed.
+    pub fn listed(
+        transmission: &Transmission,
+        aliases: impl Aliases + Copy,
+        verdict: impl FnOnce(TransmissionId) -> Option<Verdict>,
+        topic: impl FnOnce(TransmissionId) -> TopicUnder,
+    ) -> Option<Self> {
+        (transmission.crossing(aliases) != Crossing::WithinOneAgent)
+            .then(|| Self::of(transmission, aliases, verdict, topic))
+    }
+
     /// The row for `transmission`. `aliases` resolves the reader, the
     /// sender and the route's channel. `verdict` is the current verdict
     /// (`VerdictLog::current`), read only for a judgeable state; `topic` is
@@ -233,8 +267,10 @@ impl SummaryState {
 
 /// The ids of a selection to list: at least one, at most
 /// [`TransmissionSelection::MAX`] (the largest projection sample), each
-/// once, newest id first: the order rows are listed in.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// once, newest id first: the order rows are listed in. A request: an
+/// array of ids, decoded through [`TransmissionSelection::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "Vec<TransmissionId>", into = "Vec<TransmissionId>")]
 pub struct TransmissionSelection(Vec<TransmissionId>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +282,23 @@ pub enum InvalidSelection {
         got: usize,
     },
 }
+
+impl TryFrom<Vec<TransmissionId>> for TransmissionSelection {
+    type Error = Rejected<InvalidSelection>;
+
+    fn try_from(ids: Vec<TransmissionId>) -> Result<Self, Self::Error> {
+        Self::new(ids).map_err(|error| Rejected::new("transmission selection", error))
+    }
+}
+
+impl From<TransmissionSelection> for Vec<TransmissionId> {
+    fn from(selection: TransmissionSelection) -> Self {
+        selection.0
+    }
+}
+
+/// A client picks the transmissions to list.
+impl WireRequest for TransmissionSelection {}
 
 impl TransmissionSelection {
     /// `ProjectionLimit::MAX`: a lasso over a whole projection fits.
@@ -276,7 +329,8 @@ impl TransmissionSelection {
 /// One page of rows and the topic-model version their topics are under:
 /// the one the first page resolved, pinned by the cursor for every later
 /// page.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TransmissionPage {
     pub topic_version: TopicModelVersion,
     pub page: Page<TransmissionSummary, TransmissionList>,

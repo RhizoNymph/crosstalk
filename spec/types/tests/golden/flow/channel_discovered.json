@@ -1,0 +1,25 @@
+{
+  "id": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+  "origin": {
+    "type": "discovered",
+    "data": {
+      "seed": {
+        "resource": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6",
+        "first_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+        "opened_at": "2026-10-04T12:00:30.250000Z"
+      },
+      "detection": {
+        "type": "active",
+        "data": {
+          "since": "2026-10-04T12:00:30.250000Z",
+          "last_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7"
+        }
+      }
+    }
+  },
+  "resources": [],
+  "policy": {
+    "type": "unreviewed",
+    "data": null
+  }
+}

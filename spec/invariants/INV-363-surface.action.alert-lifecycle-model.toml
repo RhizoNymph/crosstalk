@@ -5,21 +5,23 @@ kind = "domain"
 property = "model-based"
 requires = ["property", "unit"]
 rationale = """
-The model is the operator half of the lifecycle in aggregates/alert.rs:
-Acknowledge moves Open to Acknowledged{by, at}; Resolve moves Open or
-Acknowledged to Resolved{by, at, note}; both return Applied. An
-Acknowledge on Acknowledged or a Resolve on Resolved is accepted, changes
-nothing and returns Unchanged; every other pair (Acknowledge on Resolved
-or Suppressed, Resolve on Suppressed) returns Conflict(AlertNotActive) and
-changes nothing. An unknown alert returns NotFound. Without this, a
+The model is the operator half of the lifecycle in aggregates/alert/mod.rs
+(AlertActions in L6): Acknowledge moves Open to Acknowledged{by, at};
+Resolve moves Acknowledged to Resolved{by, at, note}; both return Applied.
+An Acknowledge on Acknowledged is accepted, changes nothing and returns
+Unchanged. A Resolve on Open returns Conflict(AlertNotAcknowledged): the
+alert is acknowledged first. Every other pair (Acknowledge or Resolve on
+Resolved or Suppressed) returns Conflict(AlertNotActive) and changes
+nothing, as AlertState::is_active documents. An unknown alert returns
+NotFound. Without this, a
 suppressed alert could be reopened as acknowledged, or a resolve could
 overwrite who resolved it.
 """
 
 [evidence]
-property = "crosstalk::surface::tests::prop_alert_actions_match_lifecycle_model"
-unit = "crosstalk::surface::tests::alert_action_transition_table"
+property = "crosstalk_surface::tests::props::alerts::prop_alert_actions_match_lifecycle_model"
+unit = "crosstalk_surface::tests::alerts::alert_action_transition_table"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
-unit = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

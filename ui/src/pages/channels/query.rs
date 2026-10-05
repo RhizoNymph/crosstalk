@@ -18,7 +18,8 @@ use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::derived::flow::channel::confirmation::ListingKind;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::PolicyKind;
-use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
+use crosstalk_spec::interfaces::l8_surface::lists::OriginFilter;
 use crosstalk_spec::support::TimeWindow;
 use topcoat::router::query_params;
 

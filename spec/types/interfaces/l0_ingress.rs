@@ -31,6 +31,11 @@
 //!   example the Copilot inference host, which pi derives from the token and
 //!   cannot be redirected); every other host is tunnelled untouched.
 //!
+//! A third mode, `IngressMode::Replay`, marks recorded datasets entered
+//! through the pipeline's ingest, never through the proxy: no route the
+//! `UpstreamRouter` returns and no `RawExchange` the proxy hands off is a
+//! replay (`ingress.mode.never-replay`).
+//!
 //! The proxy never refreshes, mints, rewrites or strips credentials. OAuth
 //! refresh traffic goes to the vendor's auth host, which is never captured.
 //!
@@ -110,20 +115,38 @@ pub trait UpstreamRouter {
 /// The scheme comes from the header and the token's shape for the upstream
 /// kind: `x-api-key`, and Bearer keys on a vendor API, are `ApiKey`; Bearer
 /// tokens on a subscription upstream (Anthropic `sk-ant-oat…`, ChatGPT and
-/// Google OAuth JWTs) are `OAuthAccessToken`; Copilot's minted tokens are
+/// Google OAuth JWTs) are `OauthAccessToken`; Copilot's minted tokens are
 /// `ExchangedToken`; the key of a self-hosted server is `ServerKey`.
+///
+/// **Time.** Digests are keyed by a [`KeyedHasher`], whose rotation overlap
+/// ends at a configured instant, so the derivations take `started_at`, the
+/// exchange's start ([`ExchangeMeta::started_at`]), and test the overlap
+/// at that instant, never at a clock reading of their own. The digest
+/// returned is always under the current version; while a previous
+/// version's overlap is open at `started_at`, the same value's digest under
+/// it goes into the exchange's [`ClientContext::previous_digests`], and
+/// from the overlap's end on none is computed.
+///
+/// [`KeyedHasher`]: crate::ids::KeyedHasher
 pub trait ClientIdentifier {
-    fn credential(&self, head: &RequestHead, upstream: &Upstream) -> Option<CredentialRef>;
+    fn credential(
+        &self,
+        head: &RequestHead,
+        upstream: &Upstream,
+        started_at: Timestamp,
+    ) -> Option<CredentialRef>;
 
-    fn account(&self, head: &RequestHead) -> Option<AccountHash>;
+    fn account(&self, head: &RequestHead, started_at: Timestamp) -> Option<AccountHash>;
 
     fn harness(&self, head: &RequestHead) -> (Option<HarnessClaim>, HarnessIds, RequestClass);
 }
 
-/// What capture needs from a request body. Decoded off the hot path: the
-/// proxy forwards the request without it.
+/// What capture needs from the harness's request body: its protocol and
+/// dialect, model, whether it streams, and whether it is a full history or
+/// an increment. Decoded off the hot path: the proxy forwards the request
+/// without it. In-process only; not the JSON wire's `crate::wire::WireRequest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WireRequest {
+pub struct HarnessRequest {
     pub protocol: WireProtocol,
     pub dialect: Dialect,
     pub model: ModelName,
@@ -143,7 +166,7 @@ pub enum ContentEncoding {
 /// A request body that decoded, ready to attach to its exchange.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedRequest {
-    pub wire: WireRequest,
+    pub harness: HarnessRequest,
     /// Decoded request body (or, on a WebSocket, the turn's client frame).
     pub body: Vec<u8>,
     /// The encoding the body arrived in, before decoding.
@@ -156,7 +179,7 @@ pub struct DecodedRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawExchange {
     /// Assembled once the request has decoded: its model comes from
-    /// `request.wire`.
+    /// `request.harness`.
     pub meta: ExchangeMeta,
     pub request: DecodedRequest,
     pub response: RawResponse,
@@ -179,8 +202,8 @@ pub enum RawResponse {
 }
 
 pub trait ProviderAdapter {
-    type Framer: ResponseFramer;
-    type Tap: WebSocketTap;
+    type Framer: ResponseFramer + Send + 'static;
+    type Tap: WebSocketTap + Send + 'static;
 
     fn protocol(&self) -> WireProtocol;
 
@@ -198,7 +221,7 @@ pub trait ProviderAdapter {
         head: &RequestHead,
         body: &[u8],
         client: &ClientContext,
-    ) -> Result<WireRequest, DecodeError>;
+    ) -> Result<HarnessRequest, BodyDecodeError>;
 
     /// A fresh framer for one HTTP or SSE response, from its head and this
     /// adapter's protocol. It cannot depend on the decoded request, which may
@@ -297,15 +320,18 @@ pub trait WebSocketTap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnEvent {
     Started {
-        request: WireRequest,
+        request: HarnessRequest,
         frame: Vec<u8>,
     },
     Frame(FrameEvent),
     Ended(RawResponse),
 }
 
+/// Why a request body could not be decoded for capture. The exchange is
+/// still forwarded; it is counted as uncaptured. Unrelated to
+/// `crate::wire::DecodeError`, which is a client's JSON the surface refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodeError {
+pub enum BodyDecodeError {
     NotJson { offset: usize },
     MissingField(&'static str),
     UnsupportedVersion(String),

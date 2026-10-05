@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.tool-call.server-result-follows-call"
+statement = "Every ServerToolResult part's call id matches a ToolCall with ToolExecution::Server earlier in the same Assistant message."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+A server tool's result is what the provider fetched or ran on the agent's
+behalf, and flow detection pairs it with its call to learn the resource
+read. The types allow a ServerToolResult anywhere in an assistant message
+with any call id; a normalizer that misordered blocks or misread the id
+field would produce results that pair with nothing, or with a client call.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::anthropic_web_search_result_follows_its_call"
+property = "crosstalk_canonical::tests::server_results_pair_with_earlier_server_calls"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

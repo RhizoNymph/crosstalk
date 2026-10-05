@@ -1,0 +1,23 @@
+{
+  "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "at": "2026-10-04T12:00:00.000000Z",
+  "event": {
+    "type": "insight",
+    "data": {
+      "type": "alert_opened",
+      "data": {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "rule": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "subject": {
+          "type": "transmission",
+          "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        },
+        "raised_at": "2026-10-04T11:58:00.000000Z",
+        "occurrences": 1,
+        "state": {
+          "type": "open"
+        }
+      }
+    }
+  }
+}

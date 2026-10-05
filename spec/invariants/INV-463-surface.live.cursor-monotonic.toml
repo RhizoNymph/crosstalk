@@ -12,7 +12,7 @@ resync needlessly once it left retention.
 """
 
 [evidence]
-dst = "crosstalk::surface::dst::stream_cursors_monotonic_when_passing_over"
+dst = "crosstalk_surface::dst::live::stream_cursors_monotonic_when_passing_over"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

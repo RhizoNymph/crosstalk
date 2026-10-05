@@ -13,8 +13,8 @@ user rules alike.
 """
 
 [evidence]
-dst = "crosstalk::analysis::tests::dst_disable_no_late_alerts"
-integration = "crosstalk::analysis::tests::pg_disable_no_late_alerts"
+dst = "crosstalk_analysis::tests::dst_disable_no_late_alerts"
+integration = "crosstalk_analysis::tests::pg_disable_no_late_alerts"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

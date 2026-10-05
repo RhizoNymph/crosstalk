@@ -1,0 +1,30 @@
+[invariant]
+id = "analysis.projection.point-channel-matches-route"
+statement = "A projected point names a channel exactly when its route kind is Channel (PointRoute), and in a ProjectionFrame a point's channel index is NO_CHANNEL exactly when its route kind is not Channel, otherwise the index of its channel in the channels table."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The explore view colours and groups up to 100,000 points by channel from
+the frame alone, instead of reading transmission rows once per point. A
+channel on a delegation or direct point, or a channel-routed point with
+none, would draw a point in a channel it never used or drop it from the
+one it did. PointRoute makes the first unrepresentable, and the frame's
+constructor and decoder refuse the second.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::projection::PointRoute",
+    "crosstalk_spec::aggregates::projection::frame::ProjectionFrame::new",
+]
+unit = [
+    "crosstalk_spec::tests::projection_frame::a_point_route_names_a_channel_exactly_when_it_is_a_channel_route",
+    "crosstalk_spec::tests::projection_frame::new_rejects_a_channel_route_without_a_channel",
+    "crosstalk_spec::tests::projection_frame::new_rejects_a_channel_on_another_route",
+    "crosstalk_spec::tests::projection_frame::decode_checks_channels_against_route_kinds",
+    "crosstalk_spec::tests::wire::analysis::projections::point_routes_golden_with_every_variant",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

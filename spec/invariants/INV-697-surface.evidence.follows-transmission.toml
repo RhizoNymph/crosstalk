@@ -21,9 +21,12 @@ unit = [
     "crosstalk_spec::tests::evidence::no_matches_before_confirmation_and_one_list_per_state",
     "crosstalk_spec::tests::evidence::accesses_are_the_distinct_co_access_accesses_in_order_of_mention",
     "crosstalk_spec::tests::evidence::a_detected_transmission_lists_no_accesses",
+    "crosstalk_spec::tests::evidence::every_state_lists_both_accesses_of_each_co_access",
     "crosstalk_spec::tests::evidence::access_detail_rejects_another_resource",
     "crosstalk_spec::tests::evidence::a_detail_for_another_access_is_refused",
     "crosstalk_spec::tests::evidence::the_first_error_stops_assembly",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::transmission_evidence_is_decoded_through_assemble",
+    "crosstalk_spec::tests::wire::surface_reads::evidence::access_details_are_decoded_through_their_constructor",
 ]
 
 [evidence-review]

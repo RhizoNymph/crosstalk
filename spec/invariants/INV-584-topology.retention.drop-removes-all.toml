@@ -11,8 +11,8 @@ this is a delete or chunk drop by version.
 """
 
 [evidence]
-property = "crosstalk::topology::props::dropped_version_is_gone"
-integration = "crosstalk::topology::integration::timescale_drop_version_removes_buckets"
+property = "crosstalk_topology::props::dropped_version_is_gone"
+integration = "crosstalk_topology::integration::timescale_drop_version_removes_buckets"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.search.hit-exists"
+statement = "Every search hit references a confirmed transmission that exists in the store."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+The surface resolves each hit to the transmission's agents, route and
+content. A dangling id (left in the index after a transmission was removed
+or never committed) would fail that lookup or show an empty result. Only
+confirmed transmissions have content to index; suspected ones do not.
+"""
+
+[evidence]
+integration = "crosstalk_analysis::tests::search_hits_resolve_to_confirmed_transmissions"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

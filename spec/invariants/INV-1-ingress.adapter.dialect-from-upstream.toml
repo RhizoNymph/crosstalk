@@ -1,0 +1,19 @@
+[invariant]
+id = "ingress.adapter.dialect-from-upstream"
+statement = "The dialect in every WireRequest equals the dialect of the configured upstream it was routed to."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+vLLM, SGLang and Copilot differ from the reference in field names, tool
+call ids, finish reasons and extra stream chunks. The dialect comes from
+configuration (the route or intercepted host), not from sniffing bodies,
+so a body that happens to look like another dialect is still parsed as
+its upstream's.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::adapter::dialect_follows_configured_upstream"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

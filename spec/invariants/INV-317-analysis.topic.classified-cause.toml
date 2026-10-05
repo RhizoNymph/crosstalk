@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.topic.classified-cause"
+statement = "A TransmissionClassified carries cause Confirmation when published for a transmission's confirmation and cause Refit when published by a re-fit's re-classification."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "dst"]
+rationale = """
+Content rules rely on the cause to skip history. A re-classification
+mislabelled Confirmation would re-raise alerts on every re-fit; a
+confirmation mislabelled Refit would never be checked against watched
+topics or semantic queries. A transmission confirmed while a re-fit runs
+gets one of each: Confirmation under the current version and Refit under
+the new one.
+"""
+
+[evidence]
+unit = ["crosstalk_analysis::tests::confirmation_publishes_cause_confirmation", "crosstalk_analysis::tests::refit_publishes_cause_refit"]
+dst = "crosstalk_analysis::tests::confirmation_during_refit_gets_one_of_each_cause"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }

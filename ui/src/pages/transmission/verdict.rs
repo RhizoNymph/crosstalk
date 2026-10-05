@@ -207,7 +207,7 @@ pub async fn verdict_section(
 mod tests {
     use std::time::Duration;
 
-    use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+    use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
     use crosstalk_spec::derived::flow::evidence::CoAccess;
     use crosstalk_spec::derived::flow::transmission::{Route, Transmission, TransmissionState};
     use crosstalk_spec::derived::flow::verdict::TransmissionVerdict;
@@ -239,6 +239,7 @@ mod tests {
             AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             },
         );
         let read = access(2, 2, 20, AccessOp::Read { result: part });

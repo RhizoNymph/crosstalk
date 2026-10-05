@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.websocket.overlapping-create-truncates"
+statement = "A response.create that arrives on a tapped WebSocket while a turn is in flight ends that earlier turn Failed."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "dst"]
+rationale = """
+Turns on one connection are sequential, and server frames belong to the
+turn in flight. A new response.create means the client abandoned the
+earlier turn; leaving it open would attribute the new turn's server frames
+to it. The frame is still relayed (ingress.passthrough.websocket-frames-unchanged).
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::websocket::overlapping_create_truncates_previous_turn"
+dst = "crosstalk_ingress::tests::sim::websocket_overlapping_create_yields_two_exchanges"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }

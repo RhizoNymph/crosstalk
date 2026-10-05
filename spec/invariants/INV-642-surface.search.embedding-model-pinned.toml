@@ -11,7 +11,7 @@ records the model; the client restarts the search.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::search_page_after_model_change_conflicts"
+unit = "crosstalk_surface::tests::content::search_page_after_model_change_conflicts"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

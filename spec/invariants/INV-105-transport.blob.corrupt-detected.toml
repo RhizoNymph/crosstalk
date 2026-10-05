@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.blob.corrupt-detected"
+statement = "When the bytes stored under h do not hash to h, get(h) returns Err(BlobError::Corrupt(h)) and never those bytes."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+Content addressing is only trustworthy if reads verify it. Returning
+corrupted bytes would feed wrong text into fingerprinting and matching and
+produce false or missed transmissions with no trace. get rehashes on every
+read.
+"""
+
+[evidence]
+property = "crosstalk_transport::blob::tests::get_detects_corrupted_bytes"
+integration = "crosstalk_transport::integration::pg_blob_store_detects_corrupted_row"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.action.refusals-read-as-queries"
+statement = "For every RegistryError and VerdictError other than a cursor error, QueryError::from(ActionError::from(e)) equals QueryError::from(e); a CatalogError or PinError for a dropped version is Conflict(TopicVersionDropped) as an action error and VersionNotRetained as a query error; and a cursor error reported to an action is Store."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI decodes action and query errors with one decoder and shows a
+refusal the same way wherever it meets it, so a store refusal must not
+change its meaning between the two mappings. The two exceptions are cases
+an action cannot meet as a query does: pinning reads no dropped data, so
+a dropped version is a conflict with the request, and an action takes no
+cursor, so a cursor error behind one is a fault, not the client's.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::action_errors::a_registry_refusal_reads_the_same_from_a_query_and_an_action",
+    "crosstalk_spec::tests::action_errors::verdict_refusals_map_to_typed_action_errors",
+    "crosstalk_spec::tests::action_errors::catalog_refusals_of_a_pin_map_to_typed_action_errors",
+    "crosstalk_spec::tests::action_errors::history_refusals_of_a_pin_map_as_the_catalog_refusals_do",
+    "crosstalk_spec::tests::action_errors::registry_refusals_map_to_typed_action_errors",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,982 @@
+[
+  {
+    "calls": "QueryApi::channel",
+    "method": "GET",
+    "path": "/channels/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": true
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::policy_history",
+    "method": "GET",
+    "path": "/channels/{id}/policy-history",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::channels",
+    "method": "GET",
+    "path": "/channels",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::channel_names",
+    "method": "POST",
+    "path": "/query/channel-names",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::promotion_preview",
+    "method": "GET",
+    "path": "/channels/{id}/promotion-preview",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "pattern",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::channel_resources",
+    "method": "GET",
+    "path": "/channels/{id}/resources",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::channel_transmissions",
+    "method": "GET",
+    "path": "/channels/{id}/transmissions",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "version",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::agents",
+    "method": "GET",
+    "path": "/agents",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::agent",
+    "method": "GET",
+    "path": "/agents/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::agent_names",
+    "method": "POST",
+    "path": "/query/agent-names",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::alert_rules",
+    "method": "GET",
+    "path": "/alert-rules",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::alert_rule",
+    "method": "GET",
+    "path": "/alert-rules/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::sinks",
+    "method": "GET",
+    "path": "/sinks",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "QueryApi::dead_letters",
+    "method": "GET",
+    "path": "/dead-letters",
+    "args": [
+      {
+        "name": "group",
+        "place": "query",
+        "optional": true
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "operate"
+  },
+  {
+    "calls": "QueryApi::alerts",
+    "method": "GET",
+    "path": "/alerts",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::alert",
+    "method": "GET",
+    "path": "/alerts/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::watermark",
+    "method": "GET",
+    "path": "/watermark",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::topology",
+    "method": "POST",
+    "path": "/query/topology",
+    "args": [
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "weighting",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::overview",
+    "method": "POST",
+    "path": "/query/overview",
+    "args": [
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::channel_topology",
+    "method": "POST",
+    "path": "/query/channel-topology",
+    "args": [
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "weighting",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::edge_transmissions",
+    "method": "POST",
+    "path": "/query/edge-transmissions",
+    "args": [
+      {
+        "name": "edge",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::transmissions_by_id",
+    "method": "POST",
+    "path": "/query/transmissions",
+    "args": [
+      {
+        "name": "selection",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "version",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::series",
+    "method": "POST",
+    "path": "/query/series",
+    "args": [
+      {
+        "name": "grid",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "weighting",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "grouping",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::topic_versions",
+    "method": "GET",
+    "path": "/topic-versions",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::topic_sizes",
+    "method": "GET",
+    "path": "/topic-sizes",
+    "args": [
+      {
+        "name": "version",
+        "place": "query",
+        "optional": true
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": true
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::topic_lineage",
+    "method": "GET",
+    "path": "/topic-versions/{version}/lineage",
+    "args": [
+      {
+        "name": "version",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::search",
+    "method": "POST",
+    "path": "/query/search",
+    "args": [
+      {
+        "name": "request",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::transmission",
+    "method": "GET",
+    "path": "/transmissions/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::transmission_evidence",
+    "method": "GET",
+    "path": "/transmissions/{id}/evidence",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::topics",
+    "method": "GET",
+    "path": "/topics",
+    "args": [
+      {
+        "name": "version",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::fit_projection",
+    "method": "POST",
+    "path": "/projections",
+    "args": [
+      {
+        "name": "window",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "params",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 202,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::projection_status",
+    "method": "GET",
+    "path": "/projections/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::projections",
+    "method": "GET",
+    "path": "/projections",
+    "args": [
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::projection",
+    "method": "GET",
+    "path": "/projections/{id}/frame",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/octet-stream",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::verdicts",
+    "method": "GET",
+    "path": "/transmissions/{id}/verdicts",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::detection_quality",
+    "method": "GET",
+    "path": "/detection-quality",
+    "args": [
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::audit",
+    "method": "GET",
+    "path": "/audit",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "audit"
+  },
+  {
+    "calls": "QueryApi::operators",
+    "method": "GET",
+    "path": "/operators",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::export",
+    "method": "POST",
+    "path": "/exports",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/x-ndjson | application/vnd.apache.parquet",
+    "permission": "view, or content by the request"
+  },
+  {
+    "calls": "QueryApi::present",
+    "method": "GET",
+    "path": "/present",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "OperatorActions::act (set_policy)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (merge_agents)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (unmerge)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (rename_agent)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (promote_channel)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (acknowledge)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "triage"
+  },
+  {
+    "calls": "OperatorActions::act (resolve)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "triage"
+  },
+  {
+    "calls": "OperatorActions::act (set_verdict)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "triage"
+  },
+  {
+    "calls": "OperatorActions::act (create_rule)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (update_rule)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (set_rule_enabled)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (replay_dead_letter)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "operate"
+  },
+  {
+    "calls": "OperatorActions::act (pin_topic_version)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "OperatorActions::act (unpin_topic_version)",
+    "method": "POST",
+    "path": "/actions",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "govern"
+  },
+  {
+    "calls": "LiveFeed::subscribe",
+    "method": "GET",
+    "path": "/live",
+    "args": [
+      {
+        "name": "last-event-id",
+        "place": "header",
+        "optional": true
+      },
+      {
+        "name": "cursor",
+        "place": "query_text",
+        "optional": true
+      }
+    ],
+    "status": 200,
+    "content_type": "text/event-stream",
+    "permission": "view"
+  }
+]

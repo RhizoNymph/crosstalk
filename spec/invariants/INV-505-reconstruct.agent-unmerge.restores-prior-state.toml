@@ -16,8 +16,8 @@ unit = [
     "crosstalk_spec::tests::agents::revert_returns_the_source_to_its_prior_state",
     "crosstalk_spec::tests::agents::revert_refuses_unless_merged_by_that_record",
 ]
-integration = "crosstalk::reconstruct::tests::pg_unmerge_restores_prior_state"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_unmerge_restores_prior_state"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

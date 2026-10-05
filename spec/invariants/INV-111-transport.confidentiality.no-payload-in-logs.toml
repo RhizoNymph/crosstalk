@@ -1,0 +1,22 @@
+[invariant]
+id = "transport.confidentiality.no-payload-in-logs"
+statement = "Transport log records and error values identify envelopes and blobs by EventId, DeliveryId, Subject or MessageHash and never contain event payloads or blob bytes."
+kind = "confidentiality"
+requires = ["lint", "property"]
+rationale = """
+Envelopes and blobs carry prompts, completions and tool output. L2 handles
+all of them and logs every failure, so a Debug-formatted envelope or a
+decode error that quotes its input would copy that content into logs outside
+the stores' access controls. The lint rejects formatting Envelope, BusEvent
+or byte buffers into tracing fields or error strings in the transport crate;
+the property test checks that error reasons for generated payloads do not
+contain them.
+"""
+
+[evidence]
+lint = "lint:transport-no-payload-in-logs"
+property = "crosstalk_transport::tests::error_values_omit_payload_bytes"
+
+[evidence-review]
+lint = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

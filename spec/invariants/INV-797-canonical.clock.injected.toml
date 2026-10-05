@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.clock.injected"
+statement = "Implementation code reads wall-clock time only through a crosstalk_spec::support::Clock it was handed and elapsed time only through tokio::time::Instant, and nothing but SystemClock calls std::time::SystemTime::now, std::time::Instant::now or another clock source."
+kind = "coordination"
+requires = ["lint"]
+rationale = """
+Every dst invariant (windows closing, leases lapsing, retention, stage
+times, ULID minting under skewed clocks) depends on time the simulation
+controls. The simulation (crosstalk-sim) runs tokio with paused time and
+hands components a virtual Clock; a component that read SystemTime::now or
+std's Instant::now directly would see real time, so its behaviour would
+depend on the machine and no seed would replay it. tokio::time::Instant is
+allowed because paused time virtualizes it. The gateway wires SystemClock,
+the only reader of the operating system's clock.
+"""
+
+[evidence]
+lint = "lint:clock-injected"
+
+[evidence-review]
+lint = { agent = "false", human = "false" }

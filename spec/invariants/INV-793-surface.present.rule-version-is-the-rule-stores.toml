@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.present.rule-version-is-the-rule-stores"
+statement = "QueryApi::present's current_rule_version is the topic-model version AlertRuleStore::create and update check watched-topic rules against, so a CreateRule naming it and topics of it is not refused with Conflict(TopicVersionNotCurrent) unless the alerts consumer makes a newer version current in between."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Rules follow the version the alerts consumer last made current on
+TopicVersionReady, which can be newer than the active version (activation
+waits for L7's buckets) and lags the catalog by the consumer's delay, so
+neither topic_versions().active() nor the newest ready version is the
+right one to build a rule form from. Reporting the store's own version
+lets the form offer topics a create will accept.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::reads::present_reports_the_rule_store_version"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

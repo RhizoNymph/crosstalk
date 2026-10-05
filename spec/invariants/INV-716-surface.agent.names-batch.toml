@@ -14,7 +14,7 @@ channel_names (surface.query.names-batch-bounded).
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::agent_names_resolve_aliases_and_skip_unknown"
+unit = "crosstalk_surface::tests::reads::agent_names_resolve_aliases_and_skip_unknown"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

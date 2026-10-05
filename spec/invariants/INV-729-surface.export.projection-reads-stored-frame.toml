@@ -16,7 +16,7 @@ unit = [
     "crosstalk_spec::tests::export::projection_rows_are_the_stored_frame_in_order",
     "crosstalk_spec::tests::export::projection_rows_with_content_carry_topic_labels",
 ]
-integration = "crosstalk::surface::export::tests::projection_export_matches_stored_frame"
+integration = "crosstalk_surface::export::tests::projection_export_matches_stored_frame"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

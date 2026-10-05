@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.alert-reads.rules-builtins-first"
+statement = "A full traversal of AlertReads::rules lists every rule the filter keeps exactly once, built-in rules first in BuiltinRule::ALL order, then user rules newest id first: the order QueryApi::alert_rules documents, whatever the page size."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+QueryApi::alert_rules pages straight over this read, and the rules page
+shows the fixed built-in rules above the operator's own, newest first. A
+store that sorted by id alone would put user rules above the built-in ones
+(their reserved ids sit below every generated id), and a cursor that
+resumed by id comparison alone would skip or repeat rules at the boundary
+between the two groups.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::tests::rules_list_builtins_first_then_user_rules_newest_first"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

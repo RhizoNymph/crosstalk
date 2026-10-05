@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.rule.content-rules-confirmation-only"
+statement = "A WatchedTopic or SemanticQuery rule produces no draft for a TransmissionClassified event whose cause is Refit."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Every re-fit republishes TransmissionClassified for the whole history. If
+content rules evaluated those, each re-fit would re-raise alerts about old
+transmissions, and alerts already resolved or suppressed would reopen,
+because dedup only folds into active alerts.
+"""
+
+[evidence]
+unit = ["crosstalk_analysis::tests::watched_topic_ignores_refit_classification", "crosstalk_analysis::tests::semantic_rule_ignores_refit_classification"]
+property = "crosstalk_analysis::tests::content_rules_never_draft_on_refit"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

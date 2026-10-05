@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.match.origin-agent-is-span-agent"
+statement = "Every ContentMatch's origin_agent is the agent recorded on the span its origin field names."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+ContentMatch carries both the span id and its agent so downstream layers
+need not look the span up. If they disagree, transmissions and edges are
+credited to the wrong sender, and the self-match check in ContentMatch::new
+compares against the wrong agent.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::origin_agent_taken_from_span"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

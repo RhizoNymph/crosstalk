@@ -1,10 +1,16 @@
 //! The columnar frame a projection is stored and served as.
 //!
 //! A frame holds one row per point in sample order, as columns, with the
-//! values that repeat (senders, readers, route kinds, topics) interned into
-//! tables and referenced by `u32` index. Coordinates are packed `f32` pairs,
-//! ready to upload as a WebGL vertex buffer. At 100,000 points it is about
-//! 5 MB, against roughly 20 MB as JSON.
+//! values that repeat (senders, readers, route kinds, topics, channels)
+//! interned into tables and referenced by `u32` index. Coordinates are
+//! packed `f32` pairs, ready to upload as a WebGL vertex buffer. At 100,000
+//! points it is about 5 MB, against roughly 20 MB as JSON.
+//!
+//! **Channels.** A channel-routed point's channel index names its canonical
+//! channel when the sample was read ([`PointRoute`]); every other point's
+//! is [`NO_CHANNEL`]. So a client colours or groups points by channel from
+//! the frame alone, and names the channels with one `channel_names` batch
+//! over the channels table.
 //!
 //! **Canonical form.** Each table lists its entries in order of first use:
 //! reading an index column top to bottom, every index is either one already
@@ -14,11 +20,13 @@
 //! as bytes. [`ProjectionFrame::from_points`] interns points into this form;
 //! [`ProjectionFrame::new`] checks it.
 //!
-//! **Binary layout** (format 1). Little-endian throughout. Ids are their
+//! **Binary layout** (format 2). Little-endian throughout. Ids are their
 //! ULID as a `u128` value in little-endian byte order; timestamps are
-//! microseconds since the Unix epoch as `u64`.
+//! microseconds since the Unix epoch as `u64`. Format 1 had no channels
+//! table or channel column and a 64-byte header; a decoder of format 2
+//! refuses it.
 //!
-//! Header, 64 bytes:
+//! Header, 80 bytes:
 //!
 //! | Offset | Size | Field |
 //! | --- | --- | --- |
@@ -34,6 +42,8 @@
 //! | 44 | 4 | sample size (`ProjectionLimit`), `u32` |
 //! | 48 | 8 | watermark, `u64` microseconds |
 //! | 56 | 8 | matching (transmissions admitted before sampling), `u64` |
+//! | 64 | 4 | channels table length `C`, `u32` |
+//! | 68 | 12 | reserved, zero |
 //!
 //! Body, sections back to back in this order:
 //!
@@ -43,35 +53,42 @@
 //! | senders table | `u128` agent id | `S` |
 //! | readers table | `u128` agent id | `R` |
 //! | topics table | `u128` topic id | `T` |
+//! | channels table | `u128` channel id | `C` |
 //! | confirmed at | `u64` | `n` |
 //! | coordinates | `f32` x then `f32` y | `n` pairs |
 //! | sender index | `u32` | `n` |
 //! | reader index | `u32` | `n` |
 //! | route kind index | `u32` | `n` |
 //! | topic index | `u32`, [`OUTLIER`] for an outlier | `n` |
+//! | channel index | `u32`, [`NO_CHANNEL`] for a route that is not a channel | `n` |
 //! | route kinds table | `u8`: 0 channel, 1 delegation, 2 direct, 3 unobserved | `K` |
 //! | padding | zero bytes to a multiple of 8 | 0 to 7 |
 //!
 //! Every `u128` section starts at a multiple of 16, the `u64` section at a
 //! multiple of 16 and every `f32` and `u32` section at a multiple of 4, so a
 //! client can view each section in place as a typed array. The total length
-//! is `64 + 16 (S + R + T) + 48 n + K`, rounded up to a multiple of 8, and a
-//! decoder rejects any other length.
+//! is `80 + 16 (S + R + T + C) + 52 n + K`, rounded up to a multiple of 8,
+//! and a decoder rejects any other length, a non-zero reserved or padding
+//! byte, and a channel index that disagrees with its point's route kind.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use super::{InvalidProjectionLimit, ProjectedPoint, ProjectionLimit};
+use super::{InvalidProjectionLimit, PointParts, PointRoute, ProjectedPoint, ProjectionLimit};
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::topic::TopicModelVersion;
-use crate::ids::{AgentId, ProjectionId, TopicId, TransmissionId};
-use crate::support::{Timestamp, Watermark};
+use crate::ids::{AgentId, ChannelId, ProjectionId, TopicId, TransmissionId};
+use crate::support::{Finite, Timestamp, Watermark};
 
 pub const MAGIC: [u8; 4] = *b"XTPF";
-pub const FORMAT: u16 = 1;
-pub const HEADER_LEN: usize = 64;
+pub const FORMAT: u16 = 2;
+pub const HEADER_LEN: usize = 80;
+/// Where the header's reserved bytes start; they run to [`HEADER_LEN`].
+pub const RESERVED_AT: usize = 68;
 /// The topic index of an outlier point.
 pub const OUTLIER: u32 = u32::MAX;
+/// The channel index of a point whose route is not a channel.
+pub const NO_CHANNEL: u32 = u32::MAX;
 
 /// What a frame says about itself. The point count is the frame's length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +107,8 @@ pub struct FrameTables {
     pub readers: Vec<AgentId>,
     pub route_kinds: Vec<RouteKind>,
     pub topics: Vec<TopicId>,
+    /// The canonical channels of channel-routed points.
+    pub channels: Vec<ChannelId>,
 }
 
 /// One entry per point, in sample order.
@@ -103,6 +122,9 @@ pub struct FrameColumns {
     pub route: Vec<u32>,
     /// [`OUTLIER`] for an outlier.
     pub topic: Vec<u32>,
+    /// [`NO_CHANNEL`] exactly when the point's route kind is not
+    /// `Channel`.
+    pub channel: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,6 +136,7 @@ pub enum Column {
     Reader,
     Route,
     Topic,
+    Channel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,6 +145,7 @@ pub enum Table {
     Readers,
     RouteKinds,
     Topics,
+    Channels,
 }
 
 /// A frame that breaks one of [`ProjectionFrame`]'s invariants.
@@ -153,10 +177,20 @@ pub enum InvalidFrame {
     DuplicateEntry {
         table: Table,
     },
+    /// A channel-routed point without a channel, or another point with
+    /// one.
+    ChannelRouteMismatch {
+        row: usize,
+    },
     DuplicateTransmission {
         row: usize,
     },
     NonFinite {
+        row: usize,
+    },
+    /// A point whose sender is its reader: a transmission within one agent,
+    /// which no projection holds.
+    WithinOneAgent {
         row: usize,
     },
 }
@@ -166,9 +200,11 @@ pub enum InvalidFrame {
 /// Built only through [`ProjectionFrame::new`] (and [`from_points`] and
 /// [`decode`], which call it): every column has one entry per point; the
 /// point count is `min(matching, limit)`; every index is in range of its
-/// table (the topic index may also be [`OUTLIER`]); tables are distinct and
-/// in order of first use; no transmission appears twice; every coordinate
-/// is finite.
+/// table (the topic index may also be [`OUTLIER`], the channel index
+/// [`NO_CHANNEL`]); tables are distinct and in order of first use; a point
+/// has a channel exactly when its route kind is `Channel`; no transmission
+/// appears twice; every coordinate is finite; no point's sender is its
+/// reader.
 ///
 /// [`from_points`]: ProjectionFrame::from_points
 /// [`decode`]: ProjectionFrame::decode
@@ -200,6 +236,7 @@ impl ProjectionFrame {
             (Column::Reader, columns.reader.len()),
             (Column::Route, columns.route.len()),
             (Column::Topic, columns.topic.len()),
+            (Column::Channel, columns.channel.len()),
         ];
         if let Some(&(column, got)) = lengths.iter().find(|(_, len)| *len != count) {
             return Err(InvalidFrame::ColumnLength {
@@ -236,6 +273,23 @@ impl ProjectionFrame {
             &tables.topics,
             Some(OUTLIER),
         )?;
+        check_interned(
+            Column::Channel,
+            Table::Channels,
+            &columns.channel,
+            &tables.channels,
+            Some(NO_CHANNEL),
+        )?;
+        for (row, (&route, &channel)) in columns.route.iter().zip(&columns.channel).enumerate() {
+            // The route index is in range: checked above.
+            let is_channel = usize::try_from(route)
+                .ok()
+                .and_then(|index| tables.route_kinds.get(index))
+                == Some(&RouteKind::Channel);
+            if is_channel == (channel == NO_CHANNEL) {
+                return Err(InvalidFrame::ChannelRouteMismatch { row });
+            }
+        }
         let mut seen = HashSet::with_capacity(count);
         for (row, transmission) in columns.transmissions.iter().enumerate() {
             if !seen.insert(*transmission) {
@@ -248,6 +302,21 @@ impl ProjectionFrame {
             .position(|[x, y]| !(x.is_finite() && y.is_finite()))
         {
             return Err(InvalidFrame::NonFinite { row });
+        }
+        // Both indexes are in range: checked above.
+        let agent = |table: &[AgentId], index: u32| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|index| table.get(index))
+                .copied()
+        };
+        if let Some(row) = columns
+            .sender
+            .iter()
+            .zip(&columns.reader)
+            .position(|(&from, &to)| agent(&tables.senders, from) == agent(&tables.readers, to))
+        {
+            return Err(InvalidFrame::WithinOneAgent { row });
         }
         Ok(Self {
             header,
@@ -268,10 +337,12 @@ impl ProjectionFrame {
         let mut readers = Interner::default();
         let mut routes = Interner::default();
         let mut topics = Interner::default();
+        let mut channels = Interner::default();
         for point in points {
+            let point = point.parts();
             columns.transmissions.push(point.transmission);
             columns.confirmed_at.push(point.confirmed_at);
-            columns.xy.push([point.x, point.y]);
+            columns.xy.push([point.x.get(), point.y.get()]);
             columns
                 .sender
                 .push(senders.index(point.from, &mut tables.senders));
@@ -280,10 +351,14 @@ impl ProjectionFrame {
                 .push(readers.index(point.to, &mut tables.readers));
             columns
                 .route
-                .push(routes.index(point.route, &mut tables.route_kinds));
+                .push(routes.index(point.route.kind(), &mut tables.route_kinds));
             columns.topic.push(match point.topic {
                 Some(topic) => topics.index(topic, &mut tables.topics),
                 None => OUTLIER,
+            });
+            columns.channel.push(match point.route.channel() {
+                Some(channel) => channels.index(channel, &mut tables.channels),
+                None => NO_CHANNEL,
             });
         }
         Self::new(header, tables, columns)
@@ -317,17 +392,27 @@ impl ProjectionFrame {
             index => Some(*self.tables.topics.get(usize::try_from(index).ok()?)?),
         };
         let route_index = usize::try_from(*columns.route.get(row)?).ok()?;
+        let channel = match *columns.channel.get(row)? {
+            NO_CHANNEL => None,
+            index => Some(*self.tables.channels.get(usize::try_from(index).ok()?)?),
+        };
+        // A frame's channels agree with its route kinds
+        // (`InvalidFrame::ChannelRouteMismatch`).
+        let route = PointRoute::from_parts(*self.tables.route_kinds.get(route_index)?, channel)?;
+        // Every coordinate of a frame is finite (`InvalidFrame::NonFinite`).
         let [x, y] = *columns.xy.get(row)?;
-        Some(ProjectedPoint {
+        // No point's sender is its reader (`InvalidFrame::WithinOneAgent`).
+        ProjectedPoint::new(PointParts {
             transmission: *columns.transmissions.get(row)?,
             from: lookup(&self.tables.senders, &columns.sender)?,
             to: lookup(&self.tables.readers, &columns.reader)?,
-            route: *self.tables.route_kinds.get(route_index)?,
+            route,
             topic,
             confirmed_at: *columns.confirmed_at.get(row)?,
-            x,
-            y,
+            x: Finite::new(x).ok()?,
+            y: Finite::new(y).ok()?,
         })
+        .ok()
     }
 
     /// Every point, in sample order.
@@ -344,6 +429,7 @@ impl ProjectionFrame {
                 tables.senders.len(),
                 tables.readers.len(),
                 tables.topics.len(),
+                tables.channels.len(),
             ],
             tables.route_kinds.len(),
         )
@@ -370,6 +456,8 @@ impl ProjectionFrame {
         out.extend_from_slice(&header.limit.get().get().to_le_bytes());
         out.extend_from_slice(&header.watermark.0.as_micros().to_le_bytes());
         out.extend_from_slice(&header.matching.to_le_bytes());
+        out.extend_from_slice(&len_u32(tables.channels.len()).to_le_bytes());
+        out.resize(HEADER_LEN, 0);
         for id in &columns.transmissions {
             out.extend_from_slice(&id.as_ulid().to_le_bytes());
         }
@@ -377,6 +465,9 @@ impl ProjectionFrame {
             out.extend_from_slice(&id.as_ulid().to_le_bytes());
         }
         for id in &tables.topics {
+            out.extend_from_slice(&id.as_ulid().to_le_bytes());
+        }
+        for id in &tables.channels {
             out.extend_from_slice(&id.as_ulid().to_le_bytes());
         }
         for at in &columns.confirmed_at {
@@ -391,6 +482,7 @@ impl ProjectionFrame {
             &columns.reader,
             &columns.route,
             &columns.topic,
+            &columns.channel,
         ] {
             for index in column {
                 out.extend_from_slice(&index.to_le_bytes());
@@ -426,7 +518,11 @@ impl ProjectionFrame {
             .map_err(FrameDecodeError::Limit)?;
         let watermark = Watermark(Timestamp::from_micros(u64::from_le_bytes(input.array()?)));
         let matching = u64::from_le_bytes(input.array()?);
-        let expected = encoded_len(count, [senders, readers, topics], kinds)
+        let channels = input.len_u32()?;
+        if input.array::<{ HEADER_LEN - RESERVED_AT }>()? != [0; HEADER_LEN - RESERVED_AT] {
+            return Err(FrameDecodeError::NonZeroReserved);
+        }
+        let expected = encoded_len(count, [senders, readers, topics, channels], kinds)
             .ok_or(FrameDecodeError::TooLarge)?;
         if bytes.len() != expected {
             return Err(FrameDecodeError::WrongLength {
@@ -460,6 +556,10 @@ impl ProjectionFrame {
             .into_iter()
             .map(TopicId::from_ulid)
             .collect();
+        let channels = ids(&mut input, channels)?
+            .into_iter()
+            .map(ChannelId::from_ulid)
+            .collect();
         let confirmed_at = (0..count)
             .map(|_| Ok(Timestamp::from_micros(u64::from_le_bytes(input.array()?))))
             .collect::<Result<_, FrameDecodeError>>()?;
@@ -474,6 +574,7 @@ impl ProjectionFrame {
         let reader = indices(&mut input)?;
         let route = indices(&mut input)?;
         let topic = indices(&mut input)?;
+        let channel = indices(&mut input)?;
         let route_kinds = (0..kinds)
             .map(|_| {
                 let [byte] = input.array::<1>()?;
@@ -498,6 +599,7 @@ impl ProjectionFrame {
             readers,
             route_kinds,
             topics,
+            channels,
         };
         let columns = FrameColumns {
             transmissions,
@@ -507,6 +609,7 @@ impl ProjectionFrame {
             reader,
             route,
             topic,
+            channel,
         };
         Self::new(header, tables, columns).map_err(FrameDecodeError::Invalid)
     }
@@ -532,6 +635,8 @@ pub enum FrameDecodeError {
     UnknownRouteKind {
         byte: u8,
     },
+    /// A header byte after the channels table length is not zero.
+    NonZeroReserved,
     NonZeroPadding,
     /// Well-formed bytes holding a frame that breaks an invariant.
     Invalid(InvalidFrame),
@@ -558,13 +663,13 @@ fn kind_of_code(byte: u8) -> Option<RouteKind> {
 }
 
 /// `None` when the length overflows `usize`.
-fn encoded_len(count: usize, tables: [usize; 3], kinds: usize) -> Option<usize> {
+fn encoded_len(count: usize, tables: [usize; 4], kinds: usize) -> Option<usize> {
     let ids = tables
         .into_iter()
         .try_fold(0usize, |sum, len| sum.checked_add(len))?;
     HEADER_LEN
         .checked_add(ids.checked_mul(16)?)?
-        .checked_add(count.checked_mul(48)?)?
+        .checked_add(count.checked_mul(52)?)?
         .checked_add(kinds)?
         .checked_next_multiple_of(8)
 }

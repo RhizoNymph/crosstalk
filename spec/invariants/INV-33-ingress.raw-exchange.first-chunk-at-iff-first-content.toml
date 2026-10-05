@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.raw-exchange.first-chunk-at-iff-first-content"
+statement = "A RawExchange's first_chunk_at is Some exactly when FirstContent was reported for its exchange, and then holds the time it was reported."
+kind = "domain"
+property = "postcondition"
+requires = ["dst"]
+rationale = """
+ExchangeOutcome::Completed requires a first_chunk_at, so a completed
+exchange without one cannot be normalized, and a time recorded for an
+exchange that never produced content misstates time to first token.
+"""
+
+[evidence]
+dst = "crosstalk_ingress::tests::sim::first_chunk_at_set_on_first_content"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

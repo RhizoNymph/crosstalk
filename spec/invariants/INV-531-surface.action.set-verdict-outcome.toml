@@ -12,7 +12,7 @@ the author and time is surface.action.author-is-caller.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::set_verdict_maps_outcomes"
+unit = "crosstalk_surface::tests::outcomes::set_verdict_maps_outcomes"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

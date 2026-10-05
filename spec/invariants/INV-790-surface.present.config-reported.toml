@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.present.config-reported"
+statement = "QueryApi::present's default_remap_threshold is the threshold AlertRuleStore::create gives a watched-topic rule created without one, and its frame_retention_micros is the frame retention the projection store applies, so a ready projection fitted at t is readable at least until FrameRetention::expires_at(t)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A rule form shows the threshold a blank field will take, and the topic
+lineage view shows which links would carry a rule over; a hard-coded
+client default drifts from config. The explore panel says when a cited
+projection will expire instead of learning it from ProjectionNotRetained.
+Both are config, read where the store applies them, so the report and
+the behaviour cannot disagree.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_surface::tests::reads::present_reports_the_default_remap_threshold",
+    "crosstalk_surface::tests::reads::present_reports_the_frame_retention",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

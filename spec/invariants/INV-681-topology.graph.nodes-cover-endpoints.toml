@@ -1,6 +1,6 @@
 [invariant]
 id = "topology.graph.nodes-cover-endpoints"
-statement = "Every TopologyGraph returned by EdgeStore::graph passes TopologyGraph::check_nodes: one agent node per edge endpoint and per canonical ancestor of one, no other node and no channel node, every parent named by a node and never the agent itself, and each agent node's transmissions_in and transmissions_out equal to the transmissions of its edges."
+statement = "Every TopologyGraph, and so every one EdgeStore::graph returns, has nodes as TopologyGraph::new requires: one agent node per edge endpoint and per canonical ancestor of one, no other node and no channel node, every parent named by a node and never the agent itself, and each agent node's transmissions_in and transmissions_out equal to the transmissions of its edges."
 kind = "domain"
 property = "invariant"
 requires = ["unit", "property"]
@@ -22,7 +22,7 @@ unit = [
     "crosstalk_spec::tests::graph::nodes_beyond_endpoints_and_ancestors_are_rejected",
     "crosstalk_spec::tests::graph::node_counts_agree_with_edges",
 ]
-property = "crosstalk::topology::props::graph_nodes_pass_check"
+property = "crosstalk_topology::props::graph_nodes_pass_check"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

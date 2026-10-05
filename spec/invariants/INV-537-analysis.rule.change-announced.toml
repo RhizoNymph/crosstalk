@@ -10,7 +10,7 @@ notification the rules view would keep showing it as live until a reload.
 """
 
 [evidence]
-dst = "crosstalk::analysis::dst::rule_changes_announced_after_commit"
+dst = "crosstalk_analysis::dst::rule_changes_announced_after_commit"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

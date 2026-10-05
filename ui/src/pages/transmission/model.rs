@@ -132,6 +132,8 @@ pub fn codec_name(codec: Codec) -> &'static str {
         Codec::Hex => "hex",
         Codec::UrlEncoding => "url",
         Codec::UnicodeNormalization => "unicode normalization",
+        Codec::JsonString => "json string",
+        Codec::YamlString => "yaml string",
     }
 }
 

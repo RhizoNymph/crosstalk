@@ -1,0 +1,26 @@
+[invariant]
+id = "reconstruct.agent.parent-derivation"
+statement = "A new agent's parent is the agent holding the exchange's harness parent agent id in the same IdentityScope when the harness sends one, otherwise the main agent of its harness session (the agent in that scope holding the session and no HarnessAgent evidence) when it is a harness sub-agent, and none otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Parent links show which agent spawned which, so the topology can separate
+delegation inside one harness from communication between independent
+agents. Looking the parent id up in another scope would let any caller
+claim to be a child of another tenant's agent, since harness ids are
+client-asserted. Claude Code sends `x-claude-code-parent-agent-id` and Codex
+`x-codex-parent-thread-id`; a sub-agent without one hangs off its session's
+main agent.
+"""
+
+[evidence]
+unit = [
+  "crosstalk_reconstruct::tests::consumer::parent_from_harness_parent_id_in_scope",
+  "crosstalk_reconstruct::tests::consumer::parent_id_from_other_scope_is_ignored",
+  "crosstalk_reconstruct::tests::consumer::subagent_parent_is_session_main_agent",
+  "crosstalk_reconstruct::tests::consumer::main_agent_has_no_parent",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -16,9 +16,9 @@ them a value no View query shows.
 [evidence]
 type = "crosstalk_spec::interfaces::l8_surface::live::UiEvent"
 unit = ["crosstalk_spec::tests::live::only_projection_ready_needs_content", "crosstalk_spec::tests::live::viewer_sees_every_event_but_projection_ready"]
-dst = "crosstalk::surface::dst::stream_passes_over_events_caller_cannot_query"
+dst = "crosstalk_surface::dst::live::stream_passes_over_events_caller_cannot_query"
 
 [evidence-review]
 type = { agent = "true", human = "false" }
 unit = { agent = "true", human = "false" }
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

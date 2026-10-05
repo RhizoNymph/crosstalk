@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.discarded-final"
+statement = "The correlator emits no update for a transmission after discarding it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Discarded is final. Its correlator state has been released, so a match
+arriving afterwards cannot be checked against its window; reviving it would
+confirm on stale access evidence. Late content is handled by its own
+transmission, not by reopening this one.
+"""
+
+[evidence]
+dst = "crosstalk_flow::consumer::tests::dst::no_update_after_discard"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

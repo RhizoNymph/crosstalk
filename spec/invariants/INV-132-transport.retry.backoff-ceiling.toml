@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.retry.backoff-ceiling"
+statement = "A delivery that is nacked or whose ack timeout expires, with attempts remaining, becomes available for redelivery to its consumer group no later than the group's RetryPolicy::max_backoff after the nack or timeout."
+kind = "performance"
+requires = ["dst"]
+rationale = """
+Bounds how long a failed envelope waits, so a group catches up within a
+known time once its dependency recovers, and a nack with a huge retry_after
+cannot park an envelope indefinitely. Available means eligible: actual
+delivery also needs a connected consumer of the group.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::redelivery_available_within_max_backoff"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

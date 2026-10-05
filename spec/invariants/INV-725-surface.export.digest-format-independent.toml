@@ -22,7 +22,7 @@ unit = [
     "crosstalk_spec::tests::export_stream::route_encoding_distinguishes_every_route",
     "crosstalk_spec::tests::export_stream::label_content_is_part_of_the_digest",
 ]
-integration = "crosstalk::surface::export::tests::jsonl_and_parquet_exports_share_a_digest"
+integration = "crosstalk_surface::export::tests::jsonl_and_parquet_exports_share_a_digest"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -11,7 +11,7 @@ one role sees all structural views.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::channel_views_without_view_forbidden"
+unit = "crosstalk_surface::tests::permissions::channel_views_without_view_forbidden"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.embedder.matched-content-only"
+statement = "The text the analyzer passes to an Embedder for a transmission is drawn only from that transmission's matched content, never from other parts of either agent's exchanges."
+kind = "confidentiality"
+requires = ["unit", "property"]
+rationale = """
+The embedder may be an external API, so what it observes is what leaves
+the deployment. The matched content is the communication the gateway
+exists to analyze; the surrounding system prompts, user turns and other
+tool results are not, and widening the input would export them without
+the operator having agreed to it.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::tests::analyzer_embeds_matched_spans_only"
+property = "crosstalk_analysis::tests::embedded_text_is_substring_of_matched_content"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

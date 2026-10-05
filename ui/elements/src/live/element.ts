@@ -15,10 +15,13 @@
 
 import { lifecycleStep } from './lifecycle.ts';
 import { type RefreshOutcome, refreshRegions } from './refresh.ts';
+import { refreshDelay } from './throttle.ts';
 import { isLiveKind, LIVE_KINDS, parseNotice, parseWatch, watches } from './watch.ts';
 
 /** How long a burst of events is gathered before one refresh. */
 const SETTLE_MS = 250;
+/** The least time between two refreshes of the page. */
+const MIN_INTERVAL_MS = 4000;
 
 const STYLE = `
 :host { display: block; }
@@ -65,6 +68,7 @@ export class LiveElement extends HTMLElement {
   #source: EventSource | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #refresh: AbortController | null = null;
+  #lastRefreshAt: number | null = null;
   #value = '';
   readonly #lifecycle = (event: Event): void => {
     const persisted = event instanceof PageTransitionEvent && event.persisted;
@@ -175,10 +179,12 @@ export class LiveElement extends HTMLElement {
 
   #schedule(): void {
     if (this.#timer !== null) return;
+    const delay = refreshDelay(Date.now(), this.#lastRefreshAt, SETTLE_MS, MIN_INTERVAL_MS);
     this.#timer = setTimeout(() => {
       this.#timer = null;
+      this.#lastRefreshAt = Date.now();
       void this.#run();
-    }, SETTLE_MS);
+    }, delay);
   }
 
   async #run(): Promise<void> {

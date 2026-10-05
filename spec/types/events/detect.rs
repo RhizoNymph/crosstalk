@@ -1,5 +1,7 @@
 //! Events from provenance (L4) and flow detection (L5).
 
+use serde::{Deserialize, Serialize};
+
 use crate::derived::flow::access::Access;
 use crate::derived::flow::channel::policy::PolicyDecision;
 use crate::derived::flow::channel::{Declaration, Seed};
@@ -14,7 +16,13 @@ use std::num::NonZeroU64;
 
 use crate::support::{NonEmpty, Timestamp};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum DetectEvent {
     SpanOriginated {
         span: SpanId,
@@ -36,9 +44,9 @@ pub enum DetectEvent {
     },
     /// A channel no config declared, created by the first cross-agent
     /// transmission through a resource on no channel
-    /// (`ChannelRegistry::discover`), never by an access alone. Published
-    /// once per discovered channel, after the transaction commits. Raises
-    /// `NewChannel`.
+    /// (`ChannelTraffic::discover`), never by an access alone. Published by
+    /// the registry once per discovered channel, from the transaction that
+    /// creates it. Raises `NewChannel`.
     ChannelDiscovered {
         channel: ChannelId,
         seed: Seed,

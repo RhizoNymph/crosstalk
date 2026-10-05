@@ -1,11 +1,20 @@
 [package]
 name = "crosstalk-spec"
-version = "0.1.0"
-edition = "2024"
-publish = false
-description = "Type-checks the crosstalk type specification. Not part of the build."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The crosstalk type specification: the shared boundary crate every implementation crate depends on, and the JSON wire format."
 
 [lib]
 path = "types/mod.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

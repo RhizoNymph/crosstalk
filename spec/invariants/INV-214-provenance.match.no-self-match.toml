@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.match.no-self-match"
+statement = "No ContentMatch has the same agent as origin_agent and reader."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An agent reading its own earlier output is memory, not communication.
+ContentMatch's fields are private and ContentMatch::new returns
+Err(InvalidMatch::SelfMatch) when origin_agent equals reader, so a
+self-match cannot be constructed. The comparison is on attributed agent ids;
+resolving merged aliases happens downstream at read time.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::provenance::matching::ContentMatch::new"
+unit = "crosstalk_spec::tests::provenance::content_match_rejects_self_match"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

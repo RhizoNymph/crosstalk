@@ -1,0 +1,14 @@
+HTTP/1.1 429 Too Many Requests
+content-type: application/json
+retry-after: 17
+x-should-retry: true
+request-id: req_011CndcOdjVdU1IByw7FSFkK
+anthropic-organization-id: 00000000-0000-4000-8000-0000000000c1
+anthropic-ratelimit-requests-limit: 4000
+anthropic-ratelimit-requests-remaining: 3990
+anthropic-ratelimit-requests-reset: 2026-10-01T09:00:01Z
+anthropic-ratelimit-input-tokens-limit: 2000000
+anthropic-ratelimit-input-tokens-remaining: 0
+anthropic-ratelimit-input-tokens-reset: 2026-10-01T09:00:18Z
+
+{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your organization's rate limit of 2,000,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CndcOdjVdU1IByw7FSFkK"}

@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.support.byte-range-non-empty"
+statement = "Every ByteRange has a start strictly less than its end."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Spans and match locations are ByteRanges. An empty range locates no text,
+so a match on it would claim a transmission of zero bytes, and len() would
+have no honest non-zero value. The fields are private and ByteRange::new
+returns EmptyRange unless start < end.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::ByteRange::new"
+unit = "crosstalk_spec::tests::support::byte_range_rejects_empty_and_inverted"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

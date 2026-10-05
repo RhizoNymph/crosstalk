@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.delivery.no-message-content"
+statement = "An alert delivered to a webhook or Slack sink contains no message text or blob-store bytes, only the alert's ids, rule, subject, state and timestamps."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+Sinks are outside the gateway's permission model: anyone in the Slack
+channel or behind the webhook reads the payload. Delivering ids lets a
+permitted operator follow the link into the query API, where content
+permission is checked. AlertSink::deliver takes only an Alert, which holds
+no content, and sinks must not enrich it from the blob store.
+"""
+
+[evidence]
+unit = ["crosstalk_surface::tests::webhook_payload_has_no_content", "crosstalk_surface::tests::slack_payload_has_no_content"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

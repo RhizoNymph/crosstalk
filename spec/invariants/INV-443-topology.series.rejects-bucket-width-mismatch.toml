@@ -12,7 +12,7 @@ that do not line up with its buckets.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::series_rejects_grid_for_other_bucket_width"
+unit = "crosstalk_topology::tests::series_rejects_grid_for_other_bucket_width"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

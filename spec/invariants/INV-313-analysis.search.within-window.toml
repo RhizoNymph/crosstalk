@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.search.within-window"
+statement = "When a search is given a time window, every hit's transmission was confirmed at an instant the half-open window contains."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Operators scope investigations by time, and the topology view links into
+search with the edge's window. A hit outside the window would attribute
+communication to the wrong period. The bound is TimeWindow::contains,
+start inclusive and end exclusive, so adjacent windows never share a hit.
+"""
+
+[evidence]
+unit = "crosstalk_analysis::tests::search_window_boundaries_are_half_open"
+integration = "crosstalk_analysis::tests::pg_hybrid_search_respects_window"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

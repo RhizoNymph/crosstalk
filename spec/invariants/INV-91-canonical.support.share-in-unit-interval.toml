@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.support.share-in-unit-interval"
+statement = "Every Share value lies in 0.0..=1.0 and is never NaN."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Shares are topology edge weights and must sum to 1 over a graph. A NaN
+poisons the sum and every comparison, and a value above 1 or below 0 is not
+a fraction of a total. The field is private and Share::new returns None
+outside the closed interval, NaN included.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::Share::new"
+unit = "crosstalk_spec::tests::support::share_rejects_out_of_range_and_nan"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

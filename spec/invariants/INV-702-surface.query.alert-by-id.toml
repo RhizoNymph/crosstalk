@@ -11,9 +11,9 @@ subject or state.
 """
 
 [evidence]
-unit = "crosstalk::surface::tests::alert_by_id_matches_the_list"
-integration = "crosstalk::surface::integration::pg_alert_by_id"
+unit = "crosstalk_surface::tests::reads::alert_by_id_matches_the_list"
+integration = "crosstalk_surface::integration::pg_alert_by_id"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

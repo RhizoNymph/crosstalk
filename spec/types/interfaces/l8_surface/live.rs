@@ -7,9 +7,34 @@
 //!                                     fan-out, one bounded buffer per stream ▼
 //!                                stream task: drop events the caller may not receive
 //!                                                                            ▼
-//!                                       SSE: `id: <LiveCursor>`, `data: <UiEvent>`
+//!                  SSE: `event: <LiveItem type>`, `id: <LiveCursor>`, `data: <LiveItem JSON>`
 //! UI: on each UiEvent, re-query what it names through `QueryApi`
 //! ```
+//!
+//! **SSE framing.** Each [`LiveItem`] is one SSE event of three fields:
+//!
+//! ```text
+//! event: event
+//! id: 7-1042
+//! data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed","data":{"id":"01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"}}}}
+//!
+//! ```
+//!
+//! - `event` is the item's variant, the same snake_case name as its JSON
+//!   `type` ([`LiveItem::event_name`]): `event`, `resync` or `heartbeat`, so
+//!   an `EventSource` client can listen per kind.
+//! - `id` is the item's cursor as text ([`LiveCursor::encode`],
+//!   `<epoch>-<seq>`), the same string as the JSON's `cursor`. The browser
+//!   keeps the last one and sends it back as `Last-Event-ID` on reconnect,
+//!   which [`Resume::from_last_event_id`] reads. Heartbeats carry an id too,
+//!   so the last id always holds the newest cursor the stream has passed.
+//! - `data` is the whole item as JSON on one line (`serde_json::to_string`,
+//!   which never writes a newline), decoded by the client as a `LiveItem`.
+//!
+//! When the stream ends, the server sends one last event named
+//! [`LiveEnd::EVENT_NAME`] (`end`) whose `data` is the [`LiveEnd`] JSON
+//! (`"lagged"`), with no `id` field, so the client's `Last-Event-ID` stays
+//! the last cursor it received, and then closes the response.
 //!
 //! **Ids only.** A [`UiEvent`] says which entity changed and nothing about
 //! how; the UI re-queries it. So an event can never carry stale state or
@@ -74,14 +99,23 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::aggregates::topic::TopicModelVersion;
 use crate::events::changed::Changed;
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
 use crate::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crate::support::Watermark;
+use crate::wire::decode_text;
 
 /// One live event: an id to re-query, never the entity's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum UiEvent {
     AlertChanged {
         id: AlertId,
@@ -153,12 +187,14 @@ impl UiEvent {
 }
 
 /// One incarnation of the feed log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct FeedEpoch(pub u64);
 
 /// A position in the feed log: the SSE event id. `seq` 0 is before the
 /// first entry. Cursors of different epochs are not comparable, so this
-/// type has no ordering.
+/// type has no ordering. On the wire, its text ([`LiveCursor::encode`]), the
+/// same string the SSE event id carries: `"7-1042"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LiveCursor {
     pub epoch: FeedEpoch,
@@ -171,7 +207,8 @@ impl LiveCursor {
         format!("{}-{}", self.epoch.0, self.seq)
     }
 
-    /// Reads what [`LiveCursor::encode`] wrote. `None` for anything else.
+    /// Reads what [`LiveCursor::encode`] wrote. `None` for anything else,
+    /// a leading zero included, so a cursor's text is unique.
     pub fn decode(text: &str) -> Option<Self> {
         let (epoch, seq) = text.split_once('-')?;
         Some(Self {
@@ -181,15 +218,44 @@ impl LiveCursor {
     }
 }
 
+/// Text that is not a cursor [`LiveCursor::encode`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidLiveCursor;
+
+/// The cursor's text.
+impl Serialize for LiveCursor {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.encode())
+    }
+}
+
+/// A string [`LiveCursor::decode`] reads.
+impl<'de> Deserialize<'de> for LiveCursor {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        decode_text(deserializer, "live cursor", |text| {
+            Self::decode(&text).ok_or(InvalidLiveCursor)
+        })
+    }
+}
+
+/// A decimal number as `encode` writes it: digits only, and no leading
+/// zero, so each cursor has exactly one text.
 fn decimal(text: &str) -> Option<u64> {
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+    let canonical = text == "0" || !text.starts_with('0');
+    if text.is_empty() || !canonical || !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     text.parse().ok()
 }
 
 /// Where a subscription starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Resume {
     /// No `Last-Event-ID`: start with the next entry.
     Fresh,
@@ -231,7 +297,8 @@ pub enum ResumePlan {
     Resync(ResyncReason),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResyncReason {
     /// Entries after the cursor have left retention.
     Expired,
@@ -281,8 +348,16 @@ impl FeedWindow {
     }
 }
 
-/// One SSE event. Its cursor is the event id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One SSE event: its variant is the event name
+/// ([`LiveItem::event_name`]), its cursor the event id, and the whole item
+/// the event's data (see the module's SSE framing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum LiveItem {
     Event {
         cursor: LiveCursor,
@@ -301,6 +376,17 @@ pub enum LiveItem {
 }
 
 impl LiveItem {
+    /// The SSE `event` field of this item: its variant's snake_case name,
+    /// the same as its JSON `type`.
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Event { .. } => "event",
+            Self::Resync { .. } => "resync",
+            Self::Heartbeat { .. } => "heartbeat",
+        }
+    }
+
+    /// The item's cursor: its SSE `id`, as [`LiveCursor::encode`] writes it.
     pub fn cursor(&self) -> LiveCursor {
         match self {
             Self::Event { cursor, .. }
@@ -312,7 +398,8 @@ impl LiveItem {
 
 /// Why a stream ended. After any of these, the client reconnects with its
 /// last cursor (after re-authenticating, for `SessionEnded`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LiveEnd {
     /// The stream's buffer filled: the client read too slowly.
     Lagged,
@@ -320,6 +407,12 @@ pub enum LiveEnd {
     /// or removed its operator, so its permissions may be stale.
     SessionEnded,
     ShuttingDown,
+}
+
+impl LiveEnd {
+    /// The SSE `event` field of the stream's last event, whose `data` is
+    /// the `LiveEnd` and which has no `id`. No `LiveItem` has this name.
+    pub const EVENT_NAME: &'static str = "end";
 }
 
 /// Feed limits. Built only through [`LiveConfig::new`]: the heartbeat is
@@ -374,16 +467,20 @@ impl LiveConfig {
 }
 
 pub trait LiveFeed {
-    type Stream: LiveStream;
+    type Stream: LiveStream + Send + 'static;
 
     /// `Forbidden { missing: View }` if the caller lacks View. The stream
     /// starts as `FeedWindow::resume` plans for `resume`, and delivers every
     /// event `UiEvent::visible_to` the caller.
-    async fn subscribe(&self, caller: &Caller, resume: Resume) -> Result<Self::Stream, QueryError>;
+    fn subscribe(
+        &self,
+        caller: &Caller,
+        resume: Resume,
+    ) -> impl Future<Output = Result<Self::Stream, QueryError>> + Send;
 }
 
 pub trait LiveStream {
     /// The next item, or why the stream ended. After `Err` the stream is
     /// closed.
-    async fn next(&mut self) -> Result<LiveItem, LiveEnd>;
+    fn next(&mut self) -> impl Future<Output = Result<LiveItem, LiveEnd>> + Send;
 }

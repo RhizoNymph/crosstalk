@@ -1,13 +1,17 @@
 [invariant]
 id = "analysis.projection.frame-layout"
-statement = "ProjectionFrame::encode writes the 64-byte header and the body sections at the offsets and in the order documented in projection/frame.rs, little-endian, zero-padded to a multiple of 8 bytes, for a total of 64 + 16 (S + R + T) + 48 n + K bytes before padding."
+statement = "ProjectionFrame::encode writes format 2: the 80-byte header (the channels table length C at offset 64, then 12 zero bytes) and the body sections at the offsets and in the order documented in projection/frame.rs (the channels table after the topics table, the channel index column after the topic index column), little-endian, zero-padded to a multiple of 8 bytes, for a total of 80 + 16 (S + R + T + C) + 52 n + K bytes before padding."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 The browser reads the frame by offset into typed arrays, with no parser, so
 the layout is the contract between the server and the UI. Every section is
-aligned for its element type, which a typed-array view requires.
+aligned for its element type, which a typed-array view requires. Format 2
+added the channels table and channel column so points can be coloured by
+channel from the frame alone; the header grew to 80 bytes to hold C and
+keep every u128 section on a 16-byte boundary, and the format number
+changed so a format-1 reader refuses it rather than misreading it.
 """
 
 [evidence]

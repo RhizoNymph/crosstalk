@@ -33,13 +33,15 @@
 //! operator intent and is never hidden: without crossing traffic it is
 //! listed apart, as declared with no traffic yet, and counts as no channel.
 
+use serde::{Deserialize, Serialize};
+
 use crate::aliases::Aliases;
 use crate::derived::flow::channel::ChannelOrigin;
 use crate::derived::flow::transmission::{Crossing, Transmission};
-use crate::ids::{AccessId, AgentId};
 
 /// Whether a channel's cross-agent traffic holds a confirmed transmission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Confirmation {
     /// Every crossing transmission through it is unconfirmed: a co-access
     /// between two agents and no content match. Listed, counted and drawn,
@@ -55,7 +57,8 @@ pub enum Confirmation {
 /// channel it superseded, over all time, once merged agents resolve. Built
 /// by [`CrossTraffic::tally`]; a channel's [`Confirmation`] and
 /// [`Listing`] follow from it, so neither can disagree with the counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CrossTraffic {
     /// Crossing transmissions in `Confirmed`, `Classified` or `Aggregated`.
     pub confirmed: u64,
@@ -73,16 +76,15 @@ impl CrossTraffic {
 
     /// The reference count: of `transmissions` (every transmission whose
     /// stored route resolves to the channel), those whose
-    /// [`Transmission::crossing`] under `aliases` and `writer` is
-    /// `Crosses`, split by whether their state is confirmed.
+    /// [`Transmission::crossing`] under `aliases` is `Crosses`, split by
+    /// whether their state is confirmed.
     pub fn tally<'a>(
         transmissions: impl IntoIterator<Item = &'a Transmission>,
         aliases: impl Aliases + Copy,
-        writer: impl Fn(AccessId) -> Option<AgentId>,
     ) -> Self {
         let mut traffic = Self::NONE;
         for transmission in transmissions {
-            if transmission.crossing(aliases, &writer) != Crossing::Crosses {
+            if transmission.crossing(aliases) != Crossing::Crosses {
                 continue;
             }
             let slot = if transmission.state.confirmed().is_some() {
@@ -108,7 +110,8 @@ impl CrossTraffic {
 }
 
 /// Where a channel in force is listed, read from its origin and its
-/// [`CrossTraffic`] ([`Listing::of`]).
+/// [`CrossTraffic`] ([`Listing::of`]). Derived at the read, never stored
+/// or sent: a row carries its traffic and derives its listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Listing {
     /// Crossing traffic: a channel, listed, counted and drawn, marked by
@@ -125,7 +128,8 @@ pub enum Listing {
 
 /// Which listings a channel list keeps. `Hidden` is not one: no list shows
 /// a hidden channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ListingKind {
     Confirmed,
     Unconfirmed,

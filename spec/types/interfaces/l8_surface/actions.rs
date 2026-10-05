@@ -6,6 +6,18 @@
 //! until its kind, permission and subjects are decided. The audit log stores
 //! the action value itself ([`super::audit::OperatorRecord`]), so every
 //! action is audited the same way.
+//!
+//! A client never sends an [`OperatorAction`]: it sends an
+//! [`ActionRequest`], the same actions without anything the surface stamps,
+//! and the surface turns it into the action with the caller
+//! ([`ActionRequest::into_action`]):
+//!
+//! ```text
+//! HTTP body ─decode_request─▶ ActionRequest ─into_action(&caller)─┬─ Ok ──▶ OperatorAction ─▶ act(caller, action)
+//!                                                                └─ Err(SelfMerge) ─▶ InvalidInput(SelfMerge), not audited
+//! ```
+
+use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::{RuleName, UserRule};
 use crate::aggregates::topic::TopicModelVersion;
@@ -20,9 +32,25 @@ use crate::observed::agent::{AgentLabel, MergeAuthor, MergeRequest, SelfMerge};
 use super::audit::AuditSubject;
 use super::{Caller, Permission, PolicyKind};
 
+mod request;
+
+pub use request::ActionRequest;
+
 /// `OperatorAction` is `PartialEq` but not `Eq`: user rules hold
 /// similarity thresholds, which are floats.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// What the surface acts on and the audit log stores, so it serializes
+/// both ways (the audit log returns it), but it is never a request:
+/// `MergeAgents` holds a [`MergeRequest`] whose author the surface stamps
+/// from the caller ([`crate::wire::authority`]). A client sends the
+/// [`ActionRequest`] of the same variant instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OperatorAction {
     SetPolicy {
         channel: ChannelId,
@@ -141,6 +169,67 @@ pub enum ActionKind {
     UnpinTopicVersion,
 }
 
+impl ActionKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 14] = [
+        Self::SetPolicy,
+        Self::MergeAgents,
+        Self::Unmerge,
+        Self::RenameAgent,
+        Self::PromoteChannel,
+        Self::Acknowledge,
+        Self::Resolve,
+        Self::SetVerdict,
+        Self::CreateRule,
+        Self::UpdateRule,
+        Self::SetRuleEnabled,
+        Self::ReplayDeadLetter,
+        Self::PinTopicVersion,
+        Self::UnpinTopicVersion,
+    ];
+
+    /// The position of the kind in [`ActionKind::ALL`]. Exhaustive, so a
+    /// new kind does not compile until it has a position; a test checks
+    /// `ALL` holds it there.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::SetPolicy => 0,
+            Self::MergeAgents => 1,
+            Self::Unmerge => 2,
+            Self::RenameAgent => 3,
+            Self::PromoteChannel => 4,
+            Self::Acknowledge => 5,
+            Self::Resolve => 6,
+            Self::SetVerdict => 7,
+            Self::CreateRule => 8,
+            Self::UpdateRule => 9,
+            Self::SetRuleEnabled => 10,
+            Self::ReplayDeadLetter => 11,
+            Self::PinTopicVersion => 12,
+            Self::UnpinTopicVersion => 13,
+        }
+    }
+
+    /// The permission an action of this kind needs; see
+    /// [`OperatorAction::required_permission`], which is this of its kind.
+    pub const fn required_permission(self) -> Permission {
+        match self {
+            Self::SetPolicy
+            | Self::MergeAgents
+            | Self::Unmerge
+            | Self::RenameAgent
+            | Self::PromoteChannel
+            | Self::CreateRule
+            | Self::UpdateRule
+            | Self::SetRuleEnabled
+            | Self::PinTopicVersion
+            | Self::UnpinTopicVersion => Permission::Govern,
+            Self::Acknowledge | Self::Resolve | Self::SetVerdict => Permission::Triage,
+            Self::ReplayDeadLetter => Permission::Operate,
+        }
+    }
+}
+
 impl OperatorAction {
     /// The merge of `from` into `into` the caller asks for, authored by the
     /// caller's operator. A request naming one agent twice is `SelfMerge`
@@ -183,23 +272,10 @@ impl OperatorAction {
     /// and reading the text to judge from is already gated by `transmission`
     /// and `search`. One permission per action keeps `OperatorRecord`'s
     /// `Forbidden` check exact.
+    /// The kind's permission ([`ActionKind::required_permission`]), so the
+    /// HTTP route of an action kind and the action agree.
     pub fn required_permission(&self) -> Permission {
-        match self {
-            Self::SetPolicy { .. }
-            | Self::MergeAgents(_)
-            | Self::Unmerge { .. }
-            | Self::RenameAgent { .. }
-            | Self::PromoteChannel { .. }
-            | Self::CreateRule { .. }
-            | Self::UpdateRule { .. }
-            | Self::SetRuleEnabled { .. }
-            | Self::PinTopicVersion { .. }
-            | Self::UnpinTopicVersion { .. } => Permission::Govern,
-            Self::Acknowledge { .. } | Self::Resolve { .. } | Self::SetVerdict { .. } => {
-                Permission::Triage
-            }
-            Self::ReplayDeadLetter { .. } => Permission::Operate,
-        }
+        self.kind().required_permission()
     }
 
     /// The entities the action names, as requested (not resolved through
@@ -240,7 +316,13 @@ impl OperatorAction {
 /// What an accepted operator action did, including any ids it created or
 /// retired, so the UI can navigate to them and the audit log can find the
 /// action from any of them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ActionOutcome {
     /// The action changed state.
     Applied,
@@ -283,9 +365,23 @@ impl ActionOutcome {
 /// The channels one promotion superseded: sorted by id, each once, so two
 /// outcomes of the same promotion are equal however the registry listed
 /// them. Built only by [`SupersededChannels::new`], which sorts and
-/// deduplicates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+/// deduplicates. On the wire, an array of channel ids; decoding goes
+/// through [`SupersededChannels::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(from = "Vec<ChannelId>", into = "Vec<ChannelId>")]
 pub struct SupersededChannels(Vec<ChannelId>);
+
+impl From<Vec<ChannelId>> for SupersededChannels {
+    fn from(channels: Vec<ChannelId>) -> Self {
+        Self::new(channels)
+    }
+}
+
+impl From<SupersededChannels> for Vec<ChannelId> {
+    fn from(channels: SupersededChannels) -> Self {
+        channels.0
+    }
+}
 
 impl SupersededChannels {
     /// Sorts `channels` by id and drops repeats.

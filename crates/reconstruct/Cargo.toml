@@ -1,0 +1,29 @@
+[package]
+name = "crosstalk-reconstruct"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "L3 reconstruction for crosstalk: agent identity, merges and unmerges, harness claims and conversation threading."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+crosstalk-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+crosstalk-memory = { path = "../memory" }
+crosstalk-sim = { path = "../sim" }
+crosstalk-testkit = { path = "../testkit" }
+crosstalk-transport = { path = "../transport" }
+flate2.workspace = true
+parquet.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }

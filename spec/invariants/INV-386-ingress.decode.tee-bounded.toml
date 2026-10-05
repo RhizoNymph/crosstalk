@@ -1,0 +1,19 @@
+[invariant]
+id = "ingress.decode.tee-bounded"
+statement = "The request-body tee to the decoder holds at most a configured number of bytes for one exchange; a body that would exceed it is not decoded and its exchange is counted uncaptured, while the whole body is still forwarded."
+kind = "performance"
+requires = ["unit"]
+rationale = """
+decode_request needs the whole body, so the tee keeps a copy of it until the
+decode task has read it, independently of how fast the forward path sends
+it. Without a limit one oversized upload would hold its full size in proxy
+memory for the length of the request. Abandoning the copy instead of
+pausing the upload keeps ingress.forwarding.never-waits-on-decode; the limit
+on the decoded size is ingress.encoding.decoded-size-bounded.
+"""
+
+[evidence]
+unit = "crosstalk_ingress::tests::encoding::oversized_body_tee_abandons_capture"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

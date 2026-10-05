@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.topic.refit-new-version"
+statement = "TopicModel::fit succeeds only for a version strictly greater than the model's current version(), refusing any other with TopicError::VersionNotNewer, and after it succeeds version() is that version."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Versions identify which topic ids an assignment may reference. Reusing or
+going back to an earlier version number would let assignments from two
+different fits be read as one, and would break 'the highest version is the
+newest' ordering that the switch-over relies on. The catalog numbers
+versions (TopicLifecycle::begin_fit, which never reuses a failed fit's
+number), so fit takes the version rather than choosing one: a model that
+counted for itself would drift from the catalog after the first failed fit
+or restart.
+"""
+
+[evidence]
+unit = ["crosstalk_analysis::remote::tests::topics::fit_returns_version_above_current", "crosstalk_analysis::remote::tests::topics::first_fit_returns_version_above_unfitted"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

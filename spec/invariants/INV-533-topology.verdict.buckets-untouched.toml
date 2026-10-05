@@ -12,8 +12,8 @@ measuring it.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::judge_leaves_buckets"
-property = "crosstalk::topology::tests::prop_include_ignores_verdicts"
+unit = "crosstalk_topology::tests::judge_leaves_buckets"
+property = "crosstalk_topology::tests::prop_include_ignores_verdicts"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

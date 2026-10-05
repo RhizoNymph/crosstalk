@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.resolve.token-refresh-keeps-agent"
+statement = "Replacing only an exchange's rotating credential with a different one leaves the agent it resolves to unchanged when that agent holds the exchange's harness session or account evidence."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Claude Pro/Max and ChatGPT tokens are refreshed by the harness directly with
+the vendor's auth host, so the gateway sees a new credential hash mid-life.
+If session or account evidence did not carry the agent across the refresh,
+every refresh would create a new agent and split its edges. Scope
+precedence never scopes harness ids to a rotating credential, so the
+session and account evidence survive the refresh unchanged.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::pg_props::token_refresh_keeps_agent"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

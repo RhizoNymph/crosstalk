@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.delivery.envelope-unchanged"
+statement = "Every delivery of an envelope, first or redelivered, carries an Envelope equal to the one passed to publish, so its id, at and event are identical across all deliveries."
+kind = "coordination"
+requires = ["property", "integration"]
+rationale = """
+Deduplication keys on Envelope::id, so the id must be stable across
+redeliveries; the event body must be the published one bit for bit, or
+consumers on different attempts would act on different facts. For
+JetStreamBus this pins the bus wire codec as an exact round trip.
+"""
+
+[evidence]
+property = "crosstalk_transport::tests::delivered_envelope_equals_published"
+integration = "crosstalk_transport::integration::jetstream_envelope_round_trips_across_redelivery"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

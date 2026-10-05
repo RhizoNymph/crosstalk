@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.http.export-download"
+statement = "POST /exports answers a refused export with its QueryError status and JSON before any body byte, and an accepted one with 200, its format's content type, Content-Disposition attachment named crosstalk-<dataset>-<export id>.<jsonl or parquet>, and a body that is exactly the export's JSONL lines or Parquet file ending with its trailer, a failure after the header included; a response that cannot end with its trailer is aborted without its terminating chunk."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The status is sent with the headers, before the first row, so it cannot
+report a failure that happens later; the export's trailer does, in band,
+in both formats. A reader therefore trusts the trailer (verify_export),
+never the status. Aborting rather than ending cleanly when no trailer can
+be written makes the client's HTTP stack report the cut as well, and the
+body read so far has no trailer either way.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::http::export::the_content_type_is_the_format",
+    "crosstalk_spec::tests::wire::http::export::the_file_is_named_by_dataset_and_export_id",
+    "crosstalk_spec::tests::wire::http::export::errors_before_the_stream_are_statuses",
+]
+integration = "crosstalk_api::integration::export_streams_with_trailer_after_a_mid_stream_failure"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

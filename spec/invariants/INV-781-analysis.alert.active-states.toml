@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.alert.active-states"
+statement = "AlertState::is_active holds exactly for Open and Acknowledged, and AlertState::kind maps each state to its own AlertStateKind, the value AlertFilter::states matches."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Only an active alert is deduplicated into, suppressed, acknowledged or
+resolved, and the inbox's tabs and filter work on kinds. A client and the
+gateway deriving these separately could disagree about which alerts an
+operator can still act on; one definition beside the type, with no
+wildcard arm, keeps them together when a state is added.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::alerts::each_state_has_its_own_kind",
+    "crosstalk_spec::tests::alerts::only_open_and_acknowledged_alerts_are_active",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

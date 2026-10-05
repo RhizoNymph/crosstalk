@@ -1,0 +1,17 @@
+[invariant]
+id = "provenance.fingerprint.hashes-k-grams"
+statement = "Every fingerprint that Fingerprinter::fingerprints returns is the hash of exactly k consecutive characters of the normalized input, so texts sharing no run of k normalized characters share no fingerprint barring hash collisions."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+This is the noise floor: runs shorter than k never match, so short common
+phrases cannot produce content matches. The property test recomputes each
+returned fingerprint from the normalized k-gram at its offset.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::fingerprints_hash_normalized_k_grams"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

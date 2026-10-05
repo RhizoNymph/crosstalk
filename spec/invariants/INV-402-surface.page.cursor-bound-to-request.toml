@@ -13,7 +13,7 @@ the first page instead.
 """
 
 [evidence]
-unit = ["crosstalk::surface::tests::forged_cursor_rejected", "crosstalk::surface::tests::cursor_with_changed_filter_rejected"]
+unit = ["crosstalk_surface::tests::channels::forged_cursor_rejected", "crosstalk_surface::tests::channels::cursor_with_changed_filter_rejected"]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

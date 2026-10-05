@@ -12,7 +12,7 @@ activation waits for every re-fit classification.
 """
 
 [evidence]
-dst = "crosstalk::topology::dst::buckets_before_watermark_never_change"
+dst = "crosstalk_topology::dst::buckets_before_watermark_never_change"
 
 [evidence-review]
 dst = { agent = "false", human = "false" }

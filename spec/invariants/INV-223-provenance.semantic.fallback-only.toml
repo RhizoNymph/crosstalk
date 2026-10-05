@@ -1,0 +1,17 @@
+[invariant]
+id = "provenance.semantic.fallback-only"
+statement = "A ContentMatch has kind Semantic only if no fingerprint match against the same origin span was found in the same read range."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+MatchKind::Semantic means no fingerprint match. Emitting both for the same
+read double-counts the evidence, and labelling a fingerprint match as
+Semantic understates how certain it is.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::fingerprint_match_preempts_semantic"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

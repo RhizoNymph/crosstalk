@@ -13,7 +13,7 @@ rather than answered with empty sizes.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::sizes_of_fitting_version_rejected", "crosstalk::analysis::tests::sizes_of_unknown_version_rejected", "crosstalk::analysis::tests::windowed_sizes_of_dropped_version_rejected"]
+unit = ["crosstalk_analysis::tests::sizes_of_fitting_version_rejected", "crosstalk_analysis::tests::sizes_of_unknown_version_rejected", "crosstalk_analysis::tests::windowed_sizes_of_dropped_version_rejected"]
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

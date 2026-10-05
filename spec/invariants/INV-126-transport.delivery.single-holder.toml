@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.delivery.single-holder"
+statement = "Within one consumer group, at most one subscription holds a delivery of a given envelope at any instant, where a subscription holds a delivery from when next yields it until it is acked, nacked or its ack timeout expires."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Consumers in a group share work; two of them handling the same envelope at
+once would race on the same entity rows. A holder whose ack timeout expires
+loses the delivery even if it is still working, which is the at-least-once
+case the dedup wrapper and entity-level idempotency absorb. On JetStream the
+client treats a delivery as expired a safety margin before the server's ack
+wait, so the client never believes it holds a delivery the server has already
+handed to another consumer.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::one_holder_per_envelope_per_group"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

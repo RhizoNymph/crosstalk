@@ -6,7 +6,8 @@
 
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
-use crosstalk_spec::derived::flow::channel::confirmation::{CrossTraffic, Listing};
+use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;

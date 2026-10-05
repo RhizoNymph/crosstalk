@@ -1,0 +1,27 @@
+[
+  {
+    "type": "other_dataset",
+    "data": {
+      "expected": "accesses",
+      "got": "edges"
+    }
+  },
+  {
+    "type": "content_mismatch",
+    "data": {
+      "requested": false
+    }
+  },
+  {
+    "type": "out_of_order"
+  },
+  {
+    "type": "beyond_plan",
+    "data": {
+      "planned": 2
+    }
+  },
+  {
+    "type": "after_refusal"
+  }
+]

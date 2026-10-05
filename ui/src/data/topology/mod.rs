@@ -43,7 +43,9 @@
 //! which adds a resource count); `origin` is `declared` for a channel
 //! declared before traffic or promoted.
 
-use crosstalk_spec::aggregates::access::{BipartiteGraph, WeightedAccess};
+use crosstalk_spec::aggregates::access::BipartiteGraph as ChannelGraph;
+
+use crosstalk_spec::aggregates::access::WeightedAccess;
 use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, WeightedEdge, Weighting};
 use crosstalk_spec::aggregates::node::{
     AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
@@ -437,19 +439,21 @@ impl TopologyPayload {
         let value = &graph.value;
         Self {
             mode: ModeCode::Agents,
-            window: value.window.into(),
-            weighting: value.weighting.into(),
-            topic_version: value.topic_version.0,
+            window: value.window().into(),
+            weighting: value.weighting().into(),
+            topic_version: value.topic_version().0,
             watermark: format_time(graph.watermark.at()),
             // A topology graph has agent nodes only.
-            nodes: nodes(&value.nodes, &[], |c| c.locator_summary.as_str().to_owned()),
-            edges: value.edges.iter().map(transmission_edge).collect(),
+            nodes: nodes(value.nodes(), &[], |c| {
+                c.locator_summary.as_str().to_owned()
+            }),
+            edges: value.edges().iter().map(transmission_edge).collect(),
         }
     }
 
     /// Channels mode: agent and channel nodes (`names` names the channels),
     /// access edges, and the transmissions not routed through a channel.
-    pub fn channels(graph: &Watermarked<BipartiteGraph>, names: &ChannelNames) -> Self {
+    pub fn channels(graph: &Watermarked<ChannelGraph>, names: &ChannelNames) -> Self {
         let value = &graph.value;
         let edges = value
             .accesses()

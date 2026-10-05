@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.conversation.compaction-history"
+statement = "For a Compaction conversation, its stored history without system messages equals its first request's non-system messages in request order, carried-over messages included, followed by its first delta's output if present, then each later delta's new_inputs and then output if present, in threading order."
+kind = "domain"
+property = "inductive"
+requires = ["property"]
+rationale = """
+Carried-over messages are left out of new_inputs, but the harness keeps
+sending them: every later request starts with the whole compacted request.
+If the stored history held only what the deltas carry, the next request
+would not extend it, and would Fork or Start and re-scan everything. They
+stay where the request put them, not in front as a base, because a
+compacted request can interleave them with the summary and new messages;
+that is why reconstruct.conversation.history-is-delta-concatenation does
+not cover compactions. It follows that deltas alone do not rebuild this
+history: the carried-over messages come from the predecessor.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::thread_props::compaction_history_is_first_request_then_deltas"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

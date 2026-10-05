@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.websocket.close-fails-turn"
+statement = "When a tapped WebSocket connection closes with a turn in flight, that turn ends Failed."
+kind = "domain"
+property = "postcondition"
+requires = ["dst"]
+rationale = """
+A turn on a closed connection never gets its terminal event. It must still
+end, so it still yields its RawExchange (the request increment holds tool
+results detection needs), and the reason must say which side went away.
+"""
+
+[evidence]
+dst = "crosstalk_ingress::tests::sim::websocket_close_fails_in_flight_turn"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

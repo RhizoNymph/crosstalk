@@ -14,7 +14,7 @@ admitted hit once, in rank order.
 """
 
 [evidence]
-property = "crosstalk::analysis::tests::prop_filtered_search_is_filtered_ranking"
+property = "crosstalk_analysis::tests::prop_filtered_search_is_filtered_ranking"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

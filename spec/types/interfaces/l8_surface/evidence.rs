@@ -2,19 +2,31 @@
 //! both sides, and the accesses behind each co-access record
 //! (`QueryApi::transmission_evidence`, Content).
 //!
-//! **Assembly.** The surface reads the transmission, then for each of its
-//! content matches the origin span's location (L4's span records), and
-//! both bodies from the blob store, and for each access its co-access
-//! records name the access and its resource (L5's records). Verdicts are
-//! not part of the evidence; they are `QueryApi::verdicts` (View).
+//! **Assembly.** The surface reads the transmission, then the origin spans
+//! of its content matches through L4's [`SpanIndex::spans`] (the
+//! `ContentMatch` names only the span's id) and both bodies of each match
+//! from the blob store, and the accesses its co-access records name, each
+//! with its resource, through L5's [`AccessStore::accesses`]: one batch
+//! read each, split into batches of at most `IdBatch::MAX` ids. An id the
+//! batch answer lacks is `EvidenceError::Missing`. Verdicts are not part of
+//! the evidence; they are `QueryApi::verdicts` (View).
+//!
+//! **Every state.** Evidence exists for a transmission in every state
+//! (`surface.evidence.every-state`): a `Detected` transmission has nothing
+//! to show (no co-access and no content yet, so both lists are empty);
+//! `AwaitingContent`, `Suspected` and `Discarded` show both accesses of
+//! each co-access record they hold, with no matches; `Confirmed`,
+//! `Classified` and `Aggregated` show their content matches and the
+//! accesses of their co-access records, if any.
 //! [`TransmissionEvidence::assemble`] fixes what is listed from the
 //! transmission itself, so the evidence cannot hold a match or an access
 //! the transmission does not name, or miss one:
 //!
 //! - `matches`: one [`MatchEvidence`] per content match of the confirmed
 //!   transmission, in stored order; none before it is confirmed. `origin`
-//!   is cut around the origin span's location ([`Span::location`]), `read`
-//!   around the match's `read_at`, as the text arrived (before decoding).
+//!   is cut around the origin span's location as indexed
+//!   ([`IndexedSpan::location`]), `read` around the match's `read_at`, as
+//!   the text arrived (before decoding).
 //! - `accesses`: one [`AccessDetail`] per distinct access the state's
 //!   co-access records name ([`TransmissionState::co_accesses`]), in order
 //!   of first mention, each record's write before its read.
@@ -29,9 +41,13 @@
 //! ([`Excerpted::BodyDropped`]). Anything else that keeps the evidence from
 //! being read is an [`EvidenceError`], which becomes a `QueryError::Store`.
 //!
-//! [`Span::location`]: crate::derived::provenance::span::Span::location
+//! [`SpanIndex::spans`]: crate::interfaces::l4_provenance::SpanIndex::spans
+//! [`IndexedSpan::location`]: crate::interfaces::l4_provenance::IndexedSpan::location
+//! [`AccessStore::accesses`]: crate::interfaces::l5_flow::channels::AccessStore::accesses
 //! [`TransmissionState::co_accesses`]: crate::derived::flow::transmission::TransmissionState::co_accesses
 //! [`TransmissionSummary`]: super::summary::TransmissionSummary
+
+use serde::{Deserialize, Serialize};
 
 use crate::aliases::Aliases;
 use crate::derived::flow::access::Access;
@@ -40,11 +56,15 @@ use crate::derived::flow::transmission::Transmission;
 use crate::derived::provenance::matching::ContentMatch;
 use crate::ids::{AccessId, AgentId, ResourceId, SpanId};
 use crate::interfaces::l2_transport::BlobError;
+use crate::interfaces::l4_provenance::SpanIndexError;
+use crate::interfaces::l5_flow::channels::AccessReadError;
+use crate::wire::Rejected;
 
 use super::excerpt::{ExcerptError, Excerpted};
 
 /// The two excerpts of one content match, as the surface cuts them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MatchQuotes {
     /// Around the sender's originated span.
     pub origin: Excerpted,
@@ -54,7 +74,9 @@ pub struct MatchQuotes {
 
 /// One content match of the transmission with the sender's and the
 /// reader's text. Built only by [`TransmissionEvidence::assemble`].
-#[derive(Debug, Clone, PartialEq)]
+/// Decoding cannot rerun it, which reads the stored records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MatchEvidence {
     content_match: ContentMatch,
     quotes: MatchQuotes,
@@ -79,7 +101,8 @@ impl MatchEvidence {
 ///
 /// Built only through [`AccessDetail::new`], which checks that the resource
 /// is the access's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawAccessDetail")]
 pub struct AccessDetail {
     access: Access,
     resource: Resource,
@@ -97,6 +120,27 @@ pub enum InvalidEvidence {
     },
     /// The access looked up is not the one asked for.
     WrongAccess { asked: AccessId, got: AccessId },
+}
+
+/// [`AccessDetail`]'s fields, decoded without the check. Decoding goes
+/// through [`AccessDetail::new`], with the recorded `agent` as the
+/// resolution of the access's agent.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawAccessDetail {
+    access: Access,
+    resource: Resource,
+    agent: AgentId,
+}
+
+impl TryFrom<RawAccessDetail> for AccessDetail {
+    type Error = Rejected<InvalidEvidence>;
+
+    fn try_from(raw: RawAccessDetail) -> Result<Self, Self::Error> {
+        let agent = raw.agent;
+        Self::new(raw.access, raw.resource, move |_: AgentId| agent)
+            .map_err(|error| Rejected::new("access detail", error))
+    }
 }
 
 impl AccessDetail {
@@ -138,11 +182,91 @@ impl AccessDetail {
 
 /// Everything the evidence page shows about one transmission, besides its
 /// summary and verdicts. Built only by [`TransmissionEvidence::assemble`].
-#[derive(Debug, Clone, PartialEq)]
+///
+/// A response. Decoding reruns `assemble` over the decoded transmission,
+/// answering each match and access it asks for with the next decoded one,
+/// so decoded evidence lists exactly the matches and accesses its
+/// transmission names, in its order ([`InvalidTransmissionEvidence`]).
+/// What it cannot recheck is the stored records themselves: the quotes'
+/// text and each access's resource and canonical agent are as received.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawTransmissionEvidence")]
 pub struct TransmissionEvidence {
     transmission: Transmission,
     matches: Vec<MatchEvidence>,
     accesses: Vec<AccessDetail>,
+}
+
+/// Decoded evidence that is not what `assemble` makes of its transmission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidTransmissionEvidence {
+    /// The match at `index` is not the transmission's content match there.
+    OtherMatch { index: usize },
+    /// More or fewer matches than the transmission's content matches.
+    MatchCount { expected: usize, got: usize },
+    /// More or fewer accesses than the co-access records name.
+    AccessCount { got: usize },
+    /// An access out of the order of first mention.
+    Invalid(InvalidEvidence),
+}
+
+impl From<InvalidEvidence> for InvalidTransmissionEvidence {
+    fn from(error: InvalidEvidence) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+/// [`TransmissionEvidence`]'s fields, decoded without the checks. Decoding
+/// goes through [`TransmissionEvidence::assemble`].
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawTransmissionEvidence {
+    transmission: Transmission,
+    matches: Vec<MatchEvidence>,
+    accesses: Vec<AccessDetail>,
+}
+
+impl TryFrom<RawTransmissionEvidence> for TransmissionEvidence {
+    type Error = Rejected<InvalidTransmissionEvidence>;
+
+    fn try_from(raw: RawTransmissionEvidence) -> Result<Self, Self::Error> {
+        let reject = |error| Rejected::new("transmission evidence", error);
+        let expected = raw
+            .transmission
+            .state
+            .confirmed()
+            .map_or(0, |confirmed| confirmed.content().iter().count());
+        let got = raw.matches.len();
+        if got != expected {
+            return Err(reject(InvalidTransmissionEvidence::MatchCount {
+                expected,
+                got,
+            }));
+        }
+        let accesses_got = raw.accesses.len();
+        let mut matches = raw.matches.into_iter().enumerate();
+        let mut accesses = raw.accesses.into_iter();
+        let evidence = Self::assemble(
+            raw.transmission,
+            |content_match| match matches.next() {
+                Some((_, listed)) if listed.content_match == *content_match => Ok(listed.quotes),
+                Some((index, _)) => Err(InvalidTransmissionEvidence::OtherMatch { index }),
+                None => Err(InvalidTransmissionEvidence::MatchCount { expected, got }),
+            },
+            |_| {
+                accesses
+                    .next()
+                    .ok_or(InvalidTransmissionEvidence::AccessCount { got: accesses_got })
+            },
+        )
+        .map_err(reject)?;
+        if accesses.next().is_some() {
+            return Err(reject(InvalidTransmissionEvidence::AccessCount {
+                got: accesses_got,
+            }));
+        }
+        Ok(evidence)
+    }
 }
 
 impl TransmissionEvidence {
@@ -239,6 +363,22 @@ pub enum EvidenceError {
 impl From<BlobError> for EvidenceError {
     fn from(error: BlobError) -> Self {
         Self::Blob(error)
+    }
+}
+
+impl From<SpanIndexError> for EvidenceError {
+    fn from(error: SpanIndexError) -> Self {
+        match error {
+            SpanIndexError::Store { reason } => Self::Store { reason },
+        }
+    }
+}
+
+impl From<AccessReadError> for EvidenceError {
+    fn from(error: AccessReadError) -> Self {
+        match error {
+            AccessReadError::Store { reason } => Self::Store { reason },
+        }
     }
 }
 

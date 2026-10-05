@@ -1,0 +1,18 @@
+[invariant]
+id = "canonical.normalize.error-status-is-failed"
+statement = "A complete raw response with a non-2xx status normalizes to a Failed outcome whose failure is Upstream with that status."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+RawResponse::Complete only means the bytes finished arriving. A 4xx or 5xx
+body is an error payload, not an assistant message; treating it as Completed
+would invent an assistant message from the error text, which provenance
+would then index as the agent's output.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::error_status_normalizes_to_upstream_failure"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

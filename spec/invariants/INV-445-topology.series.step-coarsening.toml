@@ -11,7 +11,7 @@ union of k finer ones.
 """
 
 [evidence]
-property = "crosstalk::topology::props::series_coarser_step_sums_finer_points"
+property = "crosstalk_topology::props::series_coarser_step_sums_finer_points"
 
 [evidence-review]
 property = { agent = "false", human = "false" }

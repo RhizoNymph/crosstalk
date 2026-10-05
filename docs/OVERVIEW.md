@@ -8,10 +8,7 @@ Overview:
     showing up in another agent's input: in a tool result, a user turn or a
     system prompt. From that it classifies agent-to-agent communication,
     discovers the channels agents use (including ones nobody declared, such
-    as a public wiki agents start writing to; a resource becomes a channel
-    once a transmission between two different agents goes through it, and
-    a channel whose transmissions are all suspected is marked unconfirmed),
-    and records the content,
+    as a public wiki agents start writing to), and records the content,
     topology and location of the communication. The records power a
     topology view with edge weights and per-node metadata, a channel-centred
     view of who reads and writes each channel, search, topic modeling,
@@ -22,32 +19,105 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: design. The data model is specified in spec/types; the operator
-    UI (ui/) runs on the spec's L8 traits, implemented by a fixture backend
-    until the gateway exists.
+    Status: milestone M1 (capture) is reachable: the crosstalk binary
+    (crosstalk-gateway, roadmap P3) runs the capture slice in single-node
+    mode, so Claude Code pointed at it through ANTHROPIC_BASE_URL works
+    unchanged and every generation exchange is normalized, its bodies
+    stored, ExchangeCaptured published and the exchange persisted
+    (gateway). L2's in-process bus and blob store (transport) are
+    implemented. L3 (crosstalk-reconstruct) attributes and threads
+    exchanges: evidence derivation, the agent store on Postgres, the
+    threader over in-memory or Postgres conversations, and a bus consumer
+    of ExchangeCaptured not yet wired into the pipeline (reconstruct). L4
+    to L7 are not started. The L8 surface service
+    (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
+    the graphs' node facts, generic over the spec's store traits) is
+    implemented and runs in process over the reference stores through
+    crosstalk-api's InProcess (surface_service). The data
+    model is specified in spec/types (crate crosstalk-spec), and the spec
+    types are also the JSON wire format between the gateway, the operator
+    UI and other gateway nodes. The root Cargo.toml is a virtual workspace
+    of spec plus one library per implementation crate under crates/
+    (crosstalk-<dir>), with the dependency rule between them enforced by an
+    architecture test and every check run by scripts/check.sh (workspace).
+    crosstalk-store (Postgres pool, per-layer migrations, extensions, typed
+    errors, serializable retries, test databases) is implemented (store).
+    crosstalk-sim is filled in: the deterministic simulation kit the dst
+    invariants are tested with (sim). crosstalk-testkit holds the builders,
+    the synthetic Anthropic corpus and the fake upstream and client
+    (testkit). crosstalk-transport has the in-process bus (MpscBus) with
+    consumer groups, retries, dead letters and envelope dedup, and the
+    content-addressed blob store (FsBlobStore, MemoryBlobStore)
+    (transport). crosstalk-canonical has the Anthropic Messages
+    normalizer (L1): pure functions from a RawExchange to a
+    NormalizedExchange (media bytes included), with streaming reassembly,
+    and a step that stores the bodies through BlobStore (canonical).
+    crosstalk-ingress has the L0 reverse proxy for Anthropic
+    Messages over HTTP and SSE, handing each generation exchange to a
+    bounded capture channel as a RawExchange (ingress). The
+    primitives several layers share are in the spec (spec_primitives):
+    the canonical message encoding, its BLAKE3 hash and strict decoder,
+    exact-number canonical JSON, the keyed hasher and deployment secret,
+    and the ULID generator.
+    crosstalk-gateway
+    is the crosstalk binary of the deployment contract (serve --role,
+    migrate, healthcheck, inspect; JSON config; JSON logs; an ops listener
+    with /metrics, /healthz and /readyz): it wires the proxy to a capture
+    stage that normalizes with L1, stores bodies in FsBlobStore and
+    publishes ExchangeCaptured on MpscBus, and persists each captured
+    exchange through a bus consumer to an append-only exchange log, a P3
+    stopgap because the spec has no exchange store (gateway). That
+    composition is a library entry point, crosstalk_gateway::pipeline::
+    Pipeline (build over any blob store, bus and injected clock), and a
+    pre-normalized exchange enters it through Pipeline::ingest, the same
+    path the capture stage takes after L1 (P3.1), so the eval harness can
+    drive the real layers under simulated time. crosstalk-eval is that
+    harness (eval): it converts public multi-agent datasets (SALT-NLP
+    first) into labelled corpora of spec NormalizedExchanges, scores a
+    detector against the labels, and runs both a naive reference matcher
+    and Pipeline::ingest (unscored until detection consumers exist). crosstalk-analysis has
+    L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
+    SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
+    HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint.
+    The operator UI (crosstalk-ui, ui/) runs on the spec's L8 traits,
+    implemented by a fixture backend by default, or by the in-process
+    surface seeded with the synthetic world (ui). The other crates are
+    still empty. The phased implementation plan, with its
+    dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
+    spec: >
+      crosstalk-spec (spec/): the shared boundary crate. Types, per-layer
+      traits, invariants and wire goldens. Every implementation crate
+      depends on it, and layer crates reach each other only through it.
     ingest: >
-      L0 ingress (reverse and forward proxy, upstream routing, credential
+      Crates crosstalk-ingress, crosstalk-canonical and
+      crosstalk-reconstruct. L0 ingress (reverse and forward proxy, upstream routing, credential
       hashing, provider adapters, SSE framing and WebSocket taps), L1
       canonicalization (wire format and dialect to canonical Exchange and
       Message), L3 reconstruction (agent identity, the merge log with exact
       unmerge and vetoes, renames, harness claims seen per agent,
       conversation threading, WebSocket increment resolution).
     transport: >
-      L2: the event bus (in-process channels on one node, NATS JetStream
+      Crate crosstalk-transport. L2: the event bus (in-process channels on one node, NATS JetStream
       across nodes) and the content-addressed blob store. The only path
-      between components.
+      between components. The in-process bus is one tokio task owning
+      every consumer group, delivery and dead letter; envelopes cross it
+      as their wire JSON and are decoded strictly on delivery.
     detect: >
-      L4 provenance (span extraction, novelty classification, fingerprint
-      index, content matching) and L5 flow detection (resource extraction,
-      channel registry with discovery on the first cross-agent transmission
-      through a resource, promotion and supersession, write/read
-      correlation into transmissions, each channel's cross-agent traffic
-      read at query time with merges resolved (confirmed, unconfirmed, or
-      none: a declaration without traffic, or a hidden channel), and the
-      operator verdict log kept beside each transmission).
+      Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
+      index, content matching over part text only, strict decoding,
+      escape-folded normalization) and L5 flow detection (resource
+      extraction with write outcomes, channel registry with promotion and
+      supersession, in which a channel exists only once a transmission
+      between different agents goes through it, write/read correlation
+      into transmissions, in which rejected writes are recorded but never
+      paired and a match on a resource its sender never wrote stays
+      suspected, and the operator verdict log kept beside each
+      transmission).
     insight: >
+      Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
       sizes, lineage, pins and retention, paged search, stored projection
       jobs fitted in the background, built-in and user alert rules with
@@ -57,33 +127,85 @@ Overview:
       surface (the query API with cursor-paginated lists and linked views
       sharing one filter and one resolved topic-model version; read models
       for agents, channels and transmissions: canonical agent rows and
-      details that follow merges, channel rows carrying their cross-agent
-      traffic, listing and activity or their supersession, a channel's
-      cross-agent transmissions for review, a promotion preview computed by
-      the promotion's own
+      details that follow merges, channel rows carrying activity or their
+      supersession, a promotion preview computed by the promotion's own
       plan, batch names over one bounded id batch, transmission rows by id
       with a per-state shape, the evidence behind a transmission with
-      excerpts cut from stored bodies, the overview's counts and one alert
-      by id; typed query and action errors; the operator directory with a
+      excerpts cut from stored bodies, the overview's counts, one alert
+      and one alert rule by id; the present (the gateway's clock, L7's
+      bucket width, the export formats it writes, the topic version rules
+      are written against, the default remap threshold, the frame
+      retention); typed query and action errors, with one From impl per
+      store error behind every query and every action; the operator
+      directory with a
       trusted single-user mode; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
-      and trailer manifest; alert sinks).
+      and trailer manifest; alert sinks; and the HTTP binding of all of it:
+      one route per query, action kind and the live feed, a status for
+      every error, and the caller taken from a bearer token or session
+      cookie only). crosstalk-surface implements the L8 service over the
+      spec's store traits (surface_service).
+    serve: >
+      Crates crosstalk-api (the HTTP and SSE server for the L8 surface;
+      today InProcess, the surface over the reference stores in one
+      process),
+      crosstalk-client (the L8 traits over HTTP, for the UI) and
+      crosstalk-gateway (the crosstalk binary: config, wiring, process
+      roles, the ops listener, graceful shutdown; today the single-node
+      capture slice). The only crates allowed to depend on layer crates.
+    support: >
+      Crates crosstalk-store (Postgres through sqlx: the pool configured
+      from DATABASE_URL, one schema and one migrations table per layer,
+      the vector and pg_trgm extensions, classified errors, serializable
+      transaction retries, and a database-per-test harness gated on
+      TEST_DATABASE_URL), crosstalk-memory (in-memory reference stores and
+      the model-based harnesses the Postgres stores reuse; L3 to L8 done),
+      crosstalk-sim (deterministic simulation), crosstalk-testkit
+      (builders, recorded corpus, fake upstreams) and crosstalk-world (the
+      synthetic week the UI and the tests share, seeded through the write
+      traits). Layer crates may depend on store; memory, sim, testkit and
+      world are their dev-dependencies only.
+    eval: >
+      Crate crosstalk-eval (a composer, beside the gateway rather than in
+      it) and its ct-eval binary: dataset converters stream worlds of spec
+      NormalizedExchanges with ground-truth labels; a detector (the naive
+      reference matcher, or the gateway's own Pipeline::ingest, which is
+      unscored until L3 to L5 consume the bus) produces spec Transmissions;
+      the scorer aligns them with the labels and reports per dataset,
+      route, carrier, match class and tier against regression gates.
+    e2e: >
+      Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
+      scripted two-agent Claude Code scenario as wire traffic, captured
+      through L0 and L1, fed through Pipeline::ingest, and asserted through
+      the L8 surface; the scenario is reusable for demos.
+    deploy: >
+      deploy/ (outside the workspace): docker compose on one machine with
+      Postgres, a migrate step, the crosstalk binary as --role all, the UI,
+      and the infrastructure observability stack (Prometheus, Grafana, Loki,
+      Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
+      stored, how they run and how they scale is in docs/infrastructure.md.
+
     ui: >
-      The operator web UI (crosstalk-ui, Topcoat): server-rendered pages
-      plus custom elements for the topology graph and UMAP projection
-      (WebGL), the time brush (SVG) and the live-update listener, fed by
-      the UI's own /data/ routes. Reads, acts and subscribes only through
-      the spec's L8 traits (QueryApi, OperatorActions, LiveFeed), called on
-      one concrete backend type (a deterministic fixture implementing them
-      until the gateway exists), plus two documented gap traits for what
-      the spec does not expose yet (the bucket width and the present; the
-      export formats a backend writes). Callers come from the spec's
+      Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
+      web UI. Server-rendered pages plus custom elements for the topology
+      graph and UMAP projection (WebGL), the time brush (SVG) and the
+      live-update listener, fed by the UI's own /data/ routes. Reads, acts
+      and subscribes only through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), called on one concrete backend type (a
+      deterministic fixture implementing them until it is wired to
+      crosstalk-client), plus two documented gap traits for what the spec
+      does not expose to it yet (the bucket width and the present; the
+      export formats a backend writes) and a temporary channel-semantics
+      shim (ui/src/pending) standing in for the spec's cross-agent channel
+      types until the gateway's port lands. Callers come from the spec's
       operator directory in trusted mode; view windows are bucket-aligned
       and every linked view pins the URL's topic version.
-
   data_flow: >
-    Harness request (via its base URL, or via the gateway as HTTPS proxy) →
+    Each layer below runs in its own crate (crosstalk-<layer>); layer crates
+    exchange data only as spec bus events or through spec traits that
+    crosstalk-gateway hands them at wiring time, never by calling each
+    other's code. Harness request (via its base URL, or via the gateway as HTTPS proxy) →
     L0 routes it to its upstream, hashes the credential, forwards it
     unchanged without waiting for its body to decode, decodes the body
     concurrently off the hot path, and tees the response (or each WebSocket
@@ -92,34 +214,43 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on resources and their canonical channels, if any
-    (AccessRecorded), correlates cross-agent accesses and content matches
-    into transmissions (TransmissionConfirmed / Suspected), and discovers a
-    channel from a resource on no channel when the first transmission
-    between two different agents goes through it (ChannelDiscovered,
-    raising NewChannel) → L6 embeds and
-    classifies transmissions, records topic-model versions and their
+    calls into accesses on resources, on a canonical channel or on none
+    (AccessRecorded; a write once its result settles its outcome),
+    correlates cross-agent accesses and content matches
+    into transmissions (TransmissionConfirmed / Suspected), and discovers
+    a channel from a resource only when the first transmission between
+    two different agents goes through it (ChannelDiscovered, from the
+    registry; a resource only one agent touches is never a channel) → L6
+    embeds (an OpenAI-compatible endpoint) and classifies transmissions
+    (topic fits and projection layouts are computed by the Python topics
+    sidecar over HTTP; assignment to the current topics is local), records
+    topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
-    to L6, which then drops the versions its retention policy no longer
-    keeps (TopicVersionDropped; L7 deletes their buckets) → L8 serves
+    to L6, whose topic catalog then drops the versions its retention
+    policy no longer keeps and publishes TopicVersionDropped from that
+    transaction (L7 deletes their buckets) → L8 serves
     topology, the channel-centred graph, a channel's resources, series,
     topic history, search, projections, verdicts, detection quality,
     lists, alerts, and the read models: agent rows (L3's profiles joined
     with L7's traffic in the window) and details following merged ids;
-    channel rows (cross-agent traffic over all time from L5's
-    transmissions with merges resolved, from which each row's listing
-    follows: a confirmed or unconfirmed channel, a declaration without
-    traffic, or hidden; writers and readers from L5's resource use,
-    transmissions from the same graph the overview counts, over the channel
-    and every channel it superseded, in an optional window that never
-    changes which rows are listed); a channel's cross-agent transmissions; promotion previews (the registry's promotion plan run
+    channel rows (newest created first, each with its cross-agent traffic
+    tallied at the read and the listing that follows from it: a confirmed
+    or unconfirmed channel, a declaration without traffic, or hidden once
+    every transmission through it is within one merged agent; writers and
+    readers from L5's resource use, transmissions from the same graph the
+    overview counts, over the channel and every channel it superseded, in
+    an optional window that never changes which rows are listed); a
+    channel's cross-agent transmissions (the review list of an
+    unconfirmed channel); promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
-    channel names; transmission rows by id; the evidence page, which cuts
-    excerpts of both sides of each content match from the blob store's
-    bodies through the spans' and matches' locations (a body content
-    retention dropped is reported, not an error); and the overview's
+    channel names; transmission rows by id; the evidence page, which reads
+    span records (L4's SpanIndex::spans) and accesses with their resources
+    (L5's AccessStore::accesses) in batches, in every transmission state,
+    and cuts excerpts of both sides of each content match from the blob
+    store's bodies through the spans' and matches' locations (a body
+    content retention dropped is reported, not an error); and the overview's
     counts. Exports stream one dataset between a header naming the
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
@@ -130,12 +261,12 @@ Overview:
     TopologyFilter under one resolved (or pinned) topic-model version,
     with merged agents and superseded channels resolved at read time (a
     late confirmation on a superseded channel advances the superseding
-    channel's detection; a transmission whose two agents merged into one
-    counts nowhere, and a discovered channel left with no cross-agent
-    transmission is hidden until an unmerge; the filter's
-    unconfirmed_channels leaves out channels whose traffic is all
-    suspected); projection fits run as background jobs whose
-    stored frames read back exactly. Every store publishes an id-only
+    channel's detection); projection fits run as background jobs whose
+    stored frames read back exactly, each point carrying its route's
+    channel as it was when the sample was read. A client reads the present
+    first (clock, bucket width, export formats, rule version, remap
+    threshold, frame retention) to build valid requests; an export in a
+    format the gateway does not write is refused before anything is read. Every store publishes an id-only
     Changed after each committed change (agents, channels, verdicts,
     alerts, rules, topic versions, projection jobs, the watermark), which
     the live feed streams to the UI over SSE so it re-queries (resumable by
@@ -154,6 +285,25 @@ Overview:
     topic-version pins to L6. Every action call is recorded in the audit
     log with its outcome, and so is every change a config load makes and
     every export (refused, or started and then ended or abandoned).
+    Over HTTP each request is authenticated from its Authorization bearer
+    token or session cookie alone (401 without a caller), resolved to its
+    one route of the route table (404 without one), its path, query and
+    body decoded strictly as the route's types (400 MalformedRequest
+    otherwise), and answered with the method's JSON or the error's JSON
+    under the error's status; the live feed is GET /live (resumed from
+    Last-Event-ID or a cursor parameter), a projection frame is cached by
+    its digest until its retention ends, and an export streams with its
+    status sent before the first row and any later failure in its trailer.
+    Across process boundaries every value travels as the JSON of its spec
+    type (the wire contract): the UI's requests are decoded only as
+    WireRequest types (an action as an ActionRequest, which the surface
+    stamps with the Caller into an OperatorAction), with the Caller taken
+    from the verified session and never from the body, and authors and
+    acceptance times stamped by the surface; audit and export records keep
+    a CallerSnapshot of the caller, which never becomes a Caller again;
+    responses, errors, live-feed items and bus events between
+    nodes are decoded strictly, so a node that does not know a field or
+    variant refuses the delivery rather than dropping data.
     The operator UI renders L8's reads (QueryApi), with view state in the
     URL (a bucket-aligned window and a pinned topic version), sends every
     operator action through OperatorActions::act, downloads exports as
@@ -165,85 +315,88 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams, credentials, the merge log and harness
-      claims), derived inferences (including channels discovered by their
-      first cross-agent transmission, their confirmation and listing read
-      from that traffic, channel promotion with supersession, and operator
-      verdicts beside the detector's state),
+      claims), derived inferences (including channels that exist only
+      once agents communicate through them, channel promotion with
+      supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
-      bus events and per-layer interfaces, with tests for the invariants
+      bus events and per-layer interfaces whose async methods return Send
+      futures and whose associated streams are Send + 'static, so they
+      can be hosted on tokio and used generically. Every stateful store
+      has a spec write side (P0.6: agent lifecycle, channel traffic and
+      reads, transmissions, topic fits and assignments, search indexing,
+      alert rule upkeep, actions and reads, edge activation, the operator
+      store, the sink registry), so in-memory and Postgres stores
+      implement the same traits; a store publishes the events of the
+      decisions it takes from the transaction that makes them (the topic
+      catalog owns TopicVersionDropped, the channel registry
+      ChannelDiscovered), and every store method that
+      depends on the time takes it as an argument (the types are also the
+      JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
       in docs/research/harness-wire-protocols.md.
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
     doc: docs/features/type_spec.md
-  ui:
+  follow_mode:
+    status: design
     description: >
-      Operator web UI: an overview, topology (agents or bipartite with
-      channels) with an edge drawer, transmission evidence with verdicts,
-      search and UMAP exploration, topics (with version pins), channels
-      (active, unconfirmed, declared with no traffic yet, and the review
-      queue; a channel's suspected transmissions with verdicts; a shared
-      confirmed-only filter) with promotion, agents with merges, alerts and rules, export (JSON
-      Lines downloads), audit and pipeline, kept current by the SSE live
-      feed. Reads and acts through the spec's L8 traits (QueryApi,
-      OperatorActions, LiveFeed) with a deterministic fixture
-      implementation; what the spec lacks is two documented gap traits
-      (ui/src/contract: bucket width and present, export formats).
+      Keeping UI views live as a gateway produces data. A follow=<span>
+      page key resolves on every render to the window ending at the
+      present (rounded up to a bucket) and is pinned into today's citeable
+      from/to URLs for everything below the page; the provisional tail
+      after the watermark is marked. Pages refresh by a server re-render
+      that Topcoat merges into the DOM, triggered by a tracked signal that
+      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
+      elements keep their nodes and update in place (topology keeps node
+      positions and places new nodes with fixed-node ForceAtlas2; the time
+      brush stays anchored right). Includes the spec gap list (the present,
+      the bucket width, a coalesced traffic event, channel events for
+      traffic-driven listing changes, data revisions, projection
+      extensions), the fixture's controllable clock and deterministic
+      trickle, the testing strategy and a parallel implementation plan.
     entry_points:
-      - ui/src/main.rs
-      - ui/src/app.rs
-      - fixture/src/surface.rs
-      - ui/src/contract/mod.rs
-      - ui/src/pages/mod.rs
+      - ui/src/url/view_state.rs
       - ui/src/pages/view.rs
-      - ui/src/data/mod.rs
+      - ui/src/components/live.rs
       - ui/src/data/live.rs
-      - ui/src/pages/topology/mod.rs
-      - ui/src/pages/explore/mod.rs
-      - ui/src/pages/export/mod.rs
-      - ui/elements/src/ct-topology.ts
-      - ui/elements/src/ct-projection.ts
-      - ui/elements/src/ct-timebrush.ts
-      - ui/elements/src/ct-live.ts
-    depends_on: [query_surface, read_models, export, type_spec]
-    doc: docs/features/ui.md
-  conformance:
+      - ui/elements/src/live/element.ts
+      - ui/elements/src/shared/element.ts
+      - ui/elements/src/topology/element.ts
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/follow_mode.md
+  conversation_view:
+    status: design
     description: >
-      The L8 conformance suite (crosstalk-conformance): tests generic over
-      any implementation of the L8 traits, run against worlds a harness
-      provisions from scenarios (facts over typed roles: agents, resources,
-      channels, transmissions with their evidence, merges, promotions,
-      verdicts, topic history), each scenario checked fact by fact through
-      L8 before tests rely on it; assertions are relations the spec
-      defines and what the facts imply, citing spec/invariants ids. The
-      fixture runs it by binding named scenarios to its generated world;
-      the redesign seeds scenarios through the spec's write traits into the
-      memory stores and runs the gateway's surface.
-    entry_points:
-      - conformance/src/lib.rs
-      - conformance/src/harness/mod.rs
-      - conformance/src/scenario/mod.rs
-      - conformance/src/suite.rs
-      - fixture/src/conformance/mod.rs
-    depends_on: [query_surface, read_models, export, type_spec]
-    doc: docs/features/conformance.md
+      Operator page for one agent's conversation, turn by turn: inputs of
+      any role in request order and outputs, with provenance marks (text
+      other agents originated, output spans and who later read them,
+      relayed text, sub-agent delegations), harness claims, origin (fork,
+      compaction), compaction boundaries, WebSocket increments and replayed traffic
+      (labelled, filterable). Structure
+      with View, text with Content; turns paged by citeable index windows.
+      Waits on proposed L8 conversation reads
+      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+    entry_points: []
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/conversation_view.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
       operator directory (with a trusted single-user mode) and one
       permission per query and action; paginated lists; linked views
       sharing one TopologyFilter and one resolved topic-model version, with
-      merged agents and superseded channels resolved at read time (and
-      transmissions between ids of one merged agent counted nowhere); the
-      channel-centred graph of channels with cross-agent traffic and graph
-      nodes with their confirmation; promotion with supersession;
+      merged agents and superseded channels resolved at read time; the
+      channel-centred graph and graph nodes; promotion with supersession;
       stored projections and their columnar frame; verdicts and detection
-      quality; watermarked aggregates and retention; typed query and action
-      errors with one From impl per store error; operator actions; the
+      quality; watermarked aggregates and retention; the present (clock
+      and the config a request is built with) and one rule by id; typed
+      query and action errors with one From impl per store error, every
+      action's refusals included; operator actions; the
       append-only audit log of actions, config changes and exports; and the
-      id-only SSE live feed fed by every store's Changed.
+      id-only SSE live feed fed by every store's Changed. Its traits'
+      futures are Send, so a UI or client may be generic over QueryApi.
     entry_points:
       - spec/types/interfaces/l8_surface.rs
       - spec/types/interfaces/l8_surface/permissions.rs
@@ -252,6 +405,7 @@ Features Index:
       - spec/types/interfaces/l8_surface/query_errors.rs
       - spec/types/interfaces/l8_surface/audit.rs
       - spec/types/interfaces/l8_surface/live.rs
+      - spec/types/interfaces/l8_surface/present.rs
     depends_on: [type_spec]
     doc: docs/features/query_surface.md
   read_models:
@@ -259,26 +413,53 @@ Features Index:
       The rows and pages the UI shows on the query surface: canonical agent
       rows with claims, last seen and windowed traffic, and a detail with
       aliases, children, merges and vetoes that follows merged ids; channel
-      rows with their cross-agent traffic, listing (confirmed, unconfirmed,
-      declaration, hidden) and activity or their supersession, the channel
-      list filter with listings, a channel's cross-agent transmissions,
-      and the promotion preview computed by the promotion's own plan; agent
-      and channel names over one bounded IdBatch; transmission rows by id
-      with a per-state shape; the evidence behind a transmission with
+      rows with their cross-agent traffic, listing and activity or their
+      supersession, newest created first, the channel list filter (listings
+      included), a channel's cross-agent transmissions, and the promotion
+      preview computed by the promotion's own plan; agent and channel names
+      over one bounded IdBatch; transmission rows by id with a per-state
+      shape, never a transmission within one agent; the evidence behind a transmission with
       bounded excerpts; the overview's counts, which agree with the channel
-      and agent rows; and one alert by id.
+      and agent rows; and one alert by id. An agent's detail finds each
+      alias's merge record (when and by whom it was merged).
     entry_points:
       - spec/types/aggregates/agents/mod.rs
       - spec/types/interfaces/l8_surface/channels.rs
-      - spec/types/interfaces/l8_surface/channel_traffic.rs
-      - spec/types/derived/flow/channel/confirmation.rs
       - spec/types/batch.rs
       - spec/types/interfaces/l8_surface/summary.rs
       - spec/types/interfaces/l8_surface/evidence.rs
       - spec/types/interfaces/l8_surface/excerpt.rs
       - spec/types/interfaces/l8_surface/overview.rs
-    depends_on: [query_surface, type_spec]
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+    depends_on: [query_surface, type_spec, channel_semantics]
     doc: docs/features/read_models.md
+  channel_semantics:
+    description: >
+      What counts as a channel and as a transmission, applied by every
+      layer. A transmission exists only between different agents
+      (Transmission::crossing, with merges resolved at the read), so one
+      between two ids of a merged agent counts in no filter, graph, row,
+      count, projection, topic size, quality figure, export or alert. A
+      discovered channel exists only once such a transmission goes through
+      a resource on no channel (ChannelTraffic::discover, seeded by the
+      resource and that transmission; the registry publishes
+      ChannelDiscovered, which raises NewChannel); before that a resource
+      is only a resource. A channel's cross-agent traffic, confirmation
+      (Confirmed, or Unconfirmed while all its traffic is suspected) and
+      listing (a channel, a declaration without traffic, or hidden after a
+      merge, which an unmerge undoes) are read, never stored. Unconfirmed
+      channels are listed and drawn marked and can be filtered out
+      (ChannelFilter::listings, TopologyFilter::unconfirmed_channels).
+      Access buckets are kept by resource and resolved to the channel
+      holding it at read time. Channel lists are newest created first.
+    entry_points:
+      - spec/types/derived/flow/channel/confirmation.rs
+      - spec/types/derived/flow/transmission.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+      - crates/memory/src/flow/registry/traffic.rs
+    depends_on: [type_spec, query_surface]
+    doc: docs/features/channel_semantics.md
   export:
     description: >
       QueryApi::export: one dataset (transmissions, edge or access buckets,
@@ -286,15 +467,784 @@ Features Index:
       between a header (request, resolved topic version, watermark,
       embedding model, gateway version, planned rows) and a trailer (rows
       sent, a format-independent digest over a canonical row encoding,
-      Complete or the failure). Reads only data settled before the
+      Complete or the failure). A format the gateway does not write (outside
+      the present's export formats) is refused as UnsupportedFormat before
+      anything is read. Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
       reproduces it; transmission rows are the surface's transmission
       summaries and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
-      is audited.
+      is audited. In JSONL each line is a tagged header, row or trailer
+      (ExportLine, read_jsonl), so any truncation reads as a missing
+      trailer; Parquet keeps the header and trailer JSON in its footer.
     entry_points:
       - spec/types/interfaces/l8_surface/export/mod.rs
       - spec/types/interfaces/l8_surface/export/stream.rs
+      - spec/types/interfaces/l8_surface/export/framing.rs
     depends_on: [query_surface, read_models, type_spec]
     doc: docs/features/export.md
+  wire_contract:
+    description: >
+      The JSON wire format, which is the spec types themselves: snake_case
+      objects, adjacently tagged enums ({"type", "data"}) and all-unit
+      enums as strings, entity ids (and ConnectionId) as ULID text, digests
+      as lower-case hex, timestamps as RFC 3339 UTC at microsecond
+      precision, durations as whole microseconds in _micros fields, floats
+      only behind checked finite types, id-keyed maps as BTreeMaps in id
+      order; strict decoding (unknown fields and variants refused, three
+      documented leniencies that change no data); checked types decoded
+      only through their constructors; WireRequest and decode_request for
+      what a client may send (ActionRequest for actions, stamped with the
+      Caller into an OperatorAction), with Caller never serialized, audit
+      and export records keeping a CallerSnapshot, and server-stamped
+      records never requests; an undecodable request as
+      InvalidInput(MalformedRequest); the live feed's SSE framing; the
+      projection as ProjectionInfo JSON plus octet-stream frame bytes; an
+      export as JSONL lines; golden files pinning every shape of every
+      area (observed, provenance, flow, topology, agents, bus, analysis,
+      surface actions, surface reads, and the HTTP binding's route table
+      and status tables), rewritten with CROSSTALK_BLESS=1.
+      One page for the conventions and harness, one per area under
+      docs/features/wire/.
+    entry_points:
+      - spec/types/wire/mod.rs
+      - spec/types/wire/time.rs
+      - spec/types/wire/duration.rs
+      - spec/types/wire/authority.rs
+      - spec/types/interfaces/l8_surface/actions/request.rs
+      - spec/types/interfaces/l8_surface/export/framing.rs
+      - spec/types/tests/wire/harness.rs
+      - spec/types/tests/golden/
+    depends_on: [type_spec, query_surface, read_models, export]
+    doc: docs/features/wire_contract.md
+    area_docs:
+      - docs/features/wire/observed.md
+      - docs/features/wire/flow.md
+      - docs/features/wire/topology.md
+      - docs/features/wire/analysis.md
+      - docs/features/wire/surface_actions.md
+      - docs/features/wire/surface_reads.md
+  workspace:
+    description: >
+      The virtual Cargo workspace (members spec and crates/*, ui excluded,
+      edition 2024, unsafe forbidden, shared exact pins, one lock), one
+      empty library per implementation crate, the dependency rule (layer
+      crates never depend on each other or on the composers api, client,
+      eval or gateway, take transport only as a dev-dependency, take
+      memory, sim and testkit only as dev-dependencies, and never depend
+      on the tool crate demo) checked by an architecture test over cargo
+      metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
+      validator), and the invariant evidence path convention
+      (crosstalk_spec:: or crosstalk_<crate>::, checked by
+      scripts/inv_check.py together with the existence of reviewed spec
+      tests).
+    entry_points:
+      - Cargo.toml
+      - crates/gateway/tests/architecture.rs
+      - scripts/check.sh
+      - scripts/inv_check.py
+    depends_on: [type_spec]
+    doc: docs/features/workspace.md
+  http_api:
+    description: >
+      The HTTP binding of the L8 surface, as checked spec: the route table
+      (one Route per QueryApi method, per ActionKind on POST /actions, and
+      GET /live; method, path template, where each argument travels,
+      success status and content type, permission), reads as GET with JSON
+      query parameters except the ones whose filter, id batch, selection
+      or search text needs a body (POST /query/...), the client's
+      RequestBuilder and the server's resolve, PathParams and QueryParams,
+      the status of every QueryError, ActionError and AuthError, the
+      caller from a bearer token or the __Host-crosstalk-session cookie
+      only (401 AuthError otherwise), SSE resume and framing, projection
+      frame caching by digest, and export downloads whose trailer records
+      a failure after the status.
+    entry_points:
+      - spec/types/interfaces/l8_surface/http.rs
+      - spec/types/interfaces/l8_surface/http/routes.rs
+      - spec/types/interfaces/l8_surface/http/status.rs
+      - spec/types/interfaces/l8_surface/http/auth.rs
+    depends_on: [query_surface, read_models, export, wire_contract]
+    doc: docs/features/http_api.md
+  surface_service:
+    description: >
+      crosstalk-surface, L8 (P2.6). Surface<S: SurfaceStores>, generic over
+      the spec's L3 to L8 store traits (one associated type per store
+      group): every QueryApi method with its permission checked first,
+      watermark-first reads, paging and a keyed-MAC cursor for
+      transmission rows by id, typed errors through the spec's From
+      impls; OperatorActions::act (one store write stamped with the
+      caller and the accept time, then exactly one OperatorRecord whose
+      AuditOutcome inverts to the returned result) and Surface::request;
+      the live feed (a writer task owning the epoch's log, bounded
+      per-stream buffers that end lagging streams, resume and resync,
+      heartbeats, session ends, a bus consumer that appends before it
+      acks); export (refusals, plan, limits, header, sealed BLAKE3 rows,
+      trailer, Started/Ended/Abandoned audit) with SpecExportSource
+      planning rows from the spec's read traits; channel_transmissions
+      (a channel's crossing transmissions under a surface cursor wrapping
+      the registry's); cross-agent semantics at every read (listings from
+      each channel's traffic, hidden channels and transmissions within one
+      agent left out of lists, counts, alerts and rows by id); and
+      NodeCache, the spec's NodeFacts (listings and the channel holding
+      each resource included), kept by NodeFeeder from L3's and L5's events
+      and rebuilt from the stores on start. crosstalk-api's InProcess builds it over
+      the reference stores with a relay from their outbox to the node
+      facts and the feed. The HTTP server (P7.1) is not part of it.
+    entry_points:
+      - crates/surface/src/lib.rs
+      - crates/surface/src/service.rs
+      - crates/surface/src/stores.rs
+      - crates/surface/src/query/mod.rs
+      - crates/surface/src/actions/mod.rs
+      - crates/surface/src/live/mod.rs
+      - crates/surface/src/export/mod.rs
+      - crates/surface/src/nodes/mod.rs
+      - crates/api/src/in_process/mod.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, memory, transport, sim, testkit, workspace]
+    doc: docs/features/surface_service.md
+  store:
+    description: >
+      crosstalk-store, the Postgres infrastructure layer crates build on
+      (roadmap P1.5, decision D2: sqlx 0.9 with runtime-checked queries,
+      no TLS compiled in). StoreConfig reads DATABASE_URL from the
+      environment and pool sizing from structured config; Store::connect
+      opens a PgPool. Each layer owns a schema named after it and embeds
+      crates/<layer>/migrations with sqlx::migrate!; migrate() runs them in
+      that schema with its own "<layer>"._sqlx_migrations table, so layers
+      never collide on versions. ensure_extensions creates vector and
+      pg_trgm (TimescaleDB stays out pending D3). classify maps sqlx errors
+      to DbFailure (unique, foreign-key and check violations, retryable
+      serialization failures and deadlocks, connection loss, pool timeout)
+      for layers to map into spec errors; retry_serializable runs a
+      SERIALIZABLE transaction with bounded, backed-off retries. TestDb
+      creates a fresh database per test from TEST_DATABASE_URL and drops it
+      on close or drop; tests skip with a printed reason when the variable
+      is unset, and scripts/test-db.sh starts a disposable Postgres 18 with
+      pgvector.
+    entry_points:
+      - crates/store/src/lib.rs
+      - crates/store/src/migrate.rs
+      - crates/store/src/test_db.rs
+      - scripts/test-db.sh
+    depends_on: [workspace]
+    doc: docs/features/store.md
+  sim:
+    description: >
+      crosstalk-sim, the deterministic simulation kit for every dst
+      invariant (decision D4: tokio paused time plus an in-crate fault
+      layer, not turmoil). Sim::run drives an async scenario from one seed
+      on a current-thread runtime with paused time; every random choice
+      comes from a SplitMix64 stream forked from that seed; SimClock is the
+      spec's Clock on paused time, with steps and per-node skew; FaultPlan
+      describes the faults; FaultyBus wraps any spec EventBus with delay,
+      reorder, duplicate, drop-and-redeliver, crash on publish and crash
+      before ack, per subject; FaultyStore wraps any store call with
+      latency, failure before or after commit and crash after commit;
+      UpstreamFaultInjector picks a fault per upstream exchange; Node
+      supervises crashed nodes. The run's trace is hashed for determinism,
+      and a failure reports its seed and step (CROSSTALK_SIM_SEED reruns
+      it, CROSSTALK_SIM_SEEDS sweeps). The spec gained the Clock trait and
+      SystemClock it builds on; SimRng is the spec's RandomSource, so ULID
+      generators draw from the run's seed.
+    entry_points:
+      - crates/sim/src/lib.rs
+      - crates/sim/src/driver.rs
+      - crates/sim/src/bus.rs
+      - crates/sim/src/store.rs
+      - spec/types/support.rs
+    depends_on: [type_spec, workspace]
+    doc: docs/features/sim.md
+  testkit:
+    description: >
+      Test support (crosstalk-testkit, roadmap P1.4, a dev-dependency only):
+      deterministic seeded ids and a fixed epoch; builders for agents,
+      resources, accesses, channels, exchanges, normalized exchanges,
+      content matches, co-accesses, transmissions in every state, alerts,
+      rules, topic version histories and bus envelopes, each building
+      through the spec's checked constructors (message hashes are the
+      spec's real encoding hash); a synthetic Anthropic
+      Messages corpus (request.http, response.http, meta.json per case,
+      Claude Code's headers and body shape, streaming and not, tool use,
+      thinking, cache control, mid-stream and HTTP errors, non-generation
+      routes) with a loader that checks each case against its metadata; a
+      hyper fake upstream that replays cases with paced event streams and
+      stalls, disconnects, withholds or fails on command and records what
+      it received; and a hyper fake harness client that collects responses
+      chunk by chunk.
+    entry_points:
+      - crates/testkit/src/lib.rs
+      - crates/testkit/src/corpus/anthropic.rs
+      - crates/testkit/src/upstream/mod.rs
+      - crates/testkit/src/client.rs
+      - crates/testkit/corpus/README.md
+    depends_on: [type_spec, workspace]
+    doc: docs/features/testkit.md
+  transport:
+    description: >
+      crosstalk-transport, L2 (P2.1 and P2.2). The in-process bus
+      (MpscBus): consumer groups that each get every envelope and share it
+      among their subscriptions, at-least-once delivery with ack, nack, ack
+      timeouts and redelivery after a consumer crash, backoff from the
+      group's RetryPolicy, dead letters stored before release after the
+      retry budget, listed by cursor and replayed to one group, bounded
+      per-group capacity with waiting publishers, envelopes encoded as wire
+      JSON and decoded strictly (an undecodable payload is reported once
+      and terminated), a seeded shuffled delivery order for simulation,
+      structured config, and the Dedup wrapper over a per-group handled-id
+      record. Simulation tests on tokio's paused clock with a seeded fault
+      scenario. The content-addressed blob store: BlobStore on the
+      filesystem (FsBlobStore: bodies at <root>/<2 hex>/<62 hex> keyed by
+      BLAKE3, written atomically through a synced temporary file, rename
+      and directory sync, rehashed on every read with Corrupt on a
+      mismatch, every operation one spawn_blocking task) and in memory
+      (MemoryBlobStore, for tests and the simulation). Puts are idempotent
+      and safe to race; a missing body is None. No deletion hook: the spec
+      defines no content retention for bodies.
+    entry_points:
+      - crates/transport/src/lib.rs
+      - crates/transport/src/bus/mod.rs
+      - crates/transport/src/bus/actor.rs
+      - crates/transport/src/config.rs
+      - crates/transport/src/dedup.rs
+      - crates/transport/src/blob/mod.rs
+      - crates/transport/src/blob/fs/mod.rs
+      - crates/transport/src/blob/memory.rs
+    depends_on: [type_spec, wire_contract, workspace]
+    doc: docs/features/transport.md
+  memory:
+    description: >
+      crosstalk-memory, the in-memory reference implementation of every
+      stateful spec store (roadmap P2.3), each with a model-based proptest
+      harness that runs random operation sequences on a store under test
+      and on the reference and requires equal results, events and
+      observations; the harnesses drive every store through spec traits
+      only (write side included, P0.6), with what a store reads from other
+      layers' caches handed in as spec read traits, so the Postgres stores
+      reuse them with no crate-specific hooks. The pipeline half (L3 to
+      L5): MemoryAgents (AgentDirectory, the merge log with exact unmerges
+      and vetoes through IdentityResolver's merge, unmerge and rename, the
+      evidence lookup behind resolve, AgentLifecycle, ClaimStore,
+      ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
+      with cutoff, retention measured from the now each call is given, and
+      shards; SpanIndex, the span records read in batches), MemoryChannels
+      (ChannelRegistry, ChannelTraffic, ChannelReads, AccessStore and
+      ChannelDirectory: lookups that create nothing, resources on a channel
+      or on none, discovery by a cross-agent transmission, the recorded
+      state of every channel transmission and the cross-agent traffic,
+      listing and order read from it, declarations, policy history,
+      promotion by promotion::plan and its coverage, supersession, resource
+      use, accesses read back in batches) and MemoryVerdicts
+      (TransmissionStore and TransmissionVerdicts, its quality leaving out
+      transmissions within one merged agent); state sits behind a std
+      RwLock per store. The insight and surface half (L6 to L8): the topic
+      catalog (TopicCatalog and TopicLifecycle: fit lifecycle, lineage,
+      assignments, sizes of cross-agent assignments, pins and retention,
+      publishing its drops), exact
+      search and projection sampling (SearchIndex, SearchCorpus,
+      ProjectionSource), projection jobs with leases and frame retention,
+      the alert store (AlertRuleStore, AlertTriage, AlertRuleMaintenance,
+      AlertActions, AlertReads) in one transaction scope, the edge store
+      computed from stored contributions (activation, watermark, drops,
+      graph, totals, channel-centred graph drawing listed channels only
+      from access buckets kept by resource, drill-down, agent traffic,
+      series), the append-only audit log, the OperatorStore and the
+      SinkRegistry, and Fake* doubles of the computational traits. Every
+      store shares one id sequence, one mpsc outbox, one cursor book and
+      pager (crates/memory/src/support) and one harness runner
+      (model::run, HarnessConfig, ModelMismatch), with planted mutants and
+      broken stores proving each harness catches a bug.
+    entry_points:
+      - crates/memory/src/reconstruct/mod.rs
+      - crates/memory/src/provenance/mod.rs
+      - crates/memory/src/flow/mod.rs
+      - crates/memory/src/reconstruct/model.rs
+      - crates/memory/src/provenance/model.rs
+      - crates/memory/src/flow/registry/model.rs
+      - crates/memory/src/flow/verdicts/model.rs
+      - crates/memory/src/support/mod.rs
+      - crates/memory/src/analysis/mod.rs
+      - crates/memory/src/topology/mod.rs
+      - crates/memory/src/surface/mod.rs
+      - crates/memory/src/model/mod.rs
+    depends_on: [type_spec, query_surface, workspace]
+    doc: docs/features/memory.md
+  canonical:
+    description: >
+      crosstalk-canonical, L1 (P2.5). AnthropicMessages, the spec's
+      Normalizer for Anthropic Messages in every dialect, as pure
+      functions: the request body (system prompt as a string or blocks
+      first, a role "system" turn inside messages as a System message in
+      place, user turns split into maximal runs of one role so tool results
+      become Tool messages, tool calls with canonical JSON arguments,
+      thinking and redacted thinking, base64 media as their own blobs,
+      cache_control markers dropped, unknown blocks kept and warned) and
+      the response, whole or reassembled from SSE events (interleaved
+      deltas, pings, message_delta usage, partial input_json, an error
+      event mid-stream giving the partial response plus the failure), to
+      the canonical Exchange, its messages and warnings (unknown blocks,
+      orphan tool results in a full history) and the media bytes they
+      name. Bodies are hashed and provider JSON read with the spec's
+      encoding and exact-number JSON (spec_primitives); thinking keeps its
+      signature; token usage reports cache reads and cache writes as parts
+      of input; store() writes every body and media blob through
+      BlobStore. A refused body's top-level shape (keys, roles, content
+      kinds, never values) for the gateway's debug log. Goldens (the
+      spec's NormalizedExchange JSON) over the testkit corpus, properties
+      over generated requests and streams.
+    entry_points:
+      - crates/canonical/src/lib.rs
+      - crates/canonical/src/anthropic/mod.rs
+      - crates/canonical/src/capture.rs
+    depends_on: [type_spec, spec_primitives, testkit, transport, workspace]
+    doc: docs/features/canonical.md
+  ingress:
+    description: >
+      crosstalk-ingress, L0 (P2.4): a hyper 1 reverse proxy for Anthropic
+      Messages over HTTP and SSE. Structured routes map a path prefix (the
+      harness's base URL path) to an upstream by the head alone; no route
+      is a local 421. The credential and account are hashed at once with
+      the spec's KeyedHasher (the deployment secret from an environment
+      variable; the previous version too for exchanges that start before
+      the rotation overlap's configured end) and the scheme
+      follows the documented rule; harness claims are recorded as sent.
+      Only Generation is captured: the request is forwarded as soon as it
+      is routed, its body teed (bounded) and decoded concurrently (gzip and
+      zstd within a decoded-size bound) by a RequestDecoder; the response
+      is relayed frame by frame through a tee that feeds a framer chosen
+      from the response head (SSE, one JSON body, or an error document) and
+      keeps the bytes (bounded; past the bound the exchange is counted, not
+      captured with a cut body). Stages move only along the legal
+      transitions, the first failure cause wins, times come from one wall
+      reading plus monotonic time, and each exchange whose request decoded
+      is handed off once, after its stream ended, with try_send on the
+      caller's bounded channel; every loss is counted by reason. Hop-by-hop
+      headers are dropped; everything else is forwarded byte for byte.
+      Exchange ids come from the spec's UlidGenerator, shared by every
+      connection behind a std Mutex and stamped with each exchange's
+      start. Tests run over sockets
+      against testkit's fake upstream and harness, and as crosstalk-sim
+      simulations over in-memory pipes; two ignored timing tests hold the
+      latency budgets.
+    entry_points:
+      - crates/ingress/src/lib.rs
+      - crates/ingress/src/proxy/mod.rs
+      - crates/ingress/src/proxy/relay.rs
+      - crates/ingress/src/adapter/anthropic.rs
+      - crates/ingress/src/framer/mod.rs
+      - crates/ingress/src/config.rs
+    depends_on: [type_spec, workspace, sim, testkit]
+    doc: docs/features/ingress.md
+  spec_primitives:
+    description: >
+      Roadmap P0.7: what several layers must compute identically, moved
+      from crosstalk-canonical into the spec because layer crates cannot
+      depend on each other. The canonical encoding of a message body
+      (canonical JSON of its wire-convention shape, also MessageBody's
+      serde form), its BLAKE3 MessageHash, and a decoder that accepts
+      exactly the bytes encode writes; JSON with exact numbers and RFC 8785
+      text; MediaBlob (media bytes under their hash) and the
+      NormalizedExchange that now carries them, with serde and a check
+      applied on decode; the DeploymentSecret (never serialized, cloned or
+      shown) and the KeyedHasher that alone reads it, with rotation
+      overlaps; the ULID generator over the injected Clock and a
+      RandomSource, monotonic per generator (stamping the clock's reading
+      or a given time). TokenUsage gained cache_write
+      (checked: cache counts within input), Reasoning::Visible a hashed
+      signature, and later ToolCall one too (Gemini's thoughtSignature).
+    entry_points:
+      - spec/types/observed/message/encoding.rs
+      - spec/types/observed/message/json.rs
+      - spec/types/ids/secret.rs
+      - spec/types/ids/mint.rs
+      - spec/types/interfaces/l1_canonical.rs
+    depends_on: [type_spec, wire_contract, sim]
+    doc: docs/features/spec_primitives.md
+  eval_gaps:
+    description: >
+      Detection rules from evaluating on real agent datasets (INV-950..973):
+      ToolOutcome::Unknown for protocols without a failure flag; write
+      outcomes (AccessOp::Write carries WriteOutcome Delivered, Rejected or
+      Unknown, classified per known tool), with a writing call held until
+      its result arrives or CorrelationTiming::write_settles_at passes
+      (then Unknown), every write recorded and only Delivered and Unknown
+      writes paired (CoAccess::new refuses a rejected one); a write's spans
+      include the writer's own relayed spans, so a retry after a rejected
+      write confirms; a ToolResult match on a resource its sender never
+      wrote is a shared upstream source and keeps the transmission
+      Suspected; ToolCall::signature hashed and never part text; decoders
+      and the fingerprinter read part text only and decode strictly as
+      UTF-8, and string serialisation is undone by two codecs
+      (Codec::JsonString, Codec::YamlString, one level per chain). Batch
+      reads shared by evaluation, the evidence page, the conversation view
+      and the UI's world seed: SpanIndex::spans (span records with their
+      author as recorded) and AccessStore::accesses (accesses with their
+      resources), so evidence exists in every transmission state;
+      CarrierKind splits quality rows by carrier; IngressMode::Replay {
+      corpus: CorpusId } marks replayed datasets, which L3 keeps apart.
+    entry_points:
+      - spec/types/derived/flow/access.rs
+      - spec/types/derived/flow/evidence.rs
+      - spec/types/derived/flow/timing.rs
+      - spec/types/interfaces/l5_flow.rs
+      - spec/types/interfaces/l4_provenance.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/derived/provenance/matching.rs
+      - spec/types/observed/message.rs
+      - spec/types/observed/client.rs
+    depends_on: [type_spec, spec_primitives, wire_contract, read_models]
+    doc: docs/features/eval_gaps.md
+  gateway:
+    description: >
+      crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the
+      deployment contract (docs/features/deploy.md): serve --role
+      all|proxy|pipeline|api|analysis, migrate (extensions; no layer
+      migrations yet), healthcheck (a hyper GET for the distroless image)
+      and inspect (lists logged exchanges and decodes one with its bodies).
+      One JSON config refusing unknown fields (ingress's config unchanged,
+      api, ops, store, blobs, embeddings, and optional bus, pipeline and
+      shutdown tuning), secrets only by environment variable name. In role
+      all the L0 proxy hands each RawExchange over a bounded channel to a
+      capture stage that normalizes it with L1, stores every body and media
+      blob in FsBlobStore (retrying idempotent puts) and only then
+      publishes ExchangeCaptured on MpscBus; a bus consumer appends each
+      envelope, synced before its ack, to
+      <parent of blobs.root>/exchanges/exchange-log.jsonl (a P3 stopgap:
+      the spec has no exchange store). The ops listener serves /metrics
+      (Prometheus text; refusals as normalize_failed by fixed reason and
+      protocol codes), /healthz (counters) and /readyz (database when
+      configured, migrations, role tasks). SIGINT and SIGTERM stop
+      accepting, drain in-flight streams up to a deadline (cutting the
+      rest, which are still captured as client_disconnected), drain the
+      capture stage and the log's consumer group, and sync the log. Logs
+      are JSON lines on stdout filtered by RUST_LOG. Tested end to end over
+      sockets with testkit's fake upstream, harness and corpus (against
+      L1's goldens), with a simulation of the capture stage under blob
+      store faults (INV-48), and by hand with scripts/try-claude-code.sh.
+      The composition behind the proxy is the library entry point
+      pipeline::Pipeline (P3.1): Pipeline::build(Settings, Deps, clock)
+      over any spec BlobStore and EventBus subscribes and spawns the
+      role's stages (capture stage, exchange log), and
+      Pipeline::ingest(NormalizedExchange, at) stores the blobs (same
+      retry), mints the envelope id at at and publishes ExchangeCaptured;
+      the capture stage calls it after normalizing, so there is one path
+      after L1. Envelope ids reach the bus in strictly increasing order
+      under concurrent ingests. Every serve role builds one; the eval
+      harness (crosstalk-eval, a composer) builds one over simulated
+      stores and time.
+    entry_points:
+      - crates/gateway/src/main.rs
+      - crates/gateway/src/gateway.rs
+      - crates/gateway/src/pipeline/mod.rs
+      - crates/gateway/src/pipeline/ingest.rs
+      - crates/gateway/src/capture.rs
+      - crates/gateway/src/config/mod.rs
+      - crates/gateway/src/log/mod.rs
+      - crates/gateway/src/ops/mod.rs
+      - scripts/try-claude-code.sh
+    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
+    doc: docs/features/gateway.md
+  analysis:
+    description: >
+      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). So far its
+      remote module: SidecarTopicModel (TopicModel: fits the catalog's
+      version over documents at a given time through the sidecar, computes
+      centroids as normalized member means and derives topic ids from the
+      fit time, version and cluster; assigns locally to the nearest
+      centroid above a threshold), SidecarLayoutFitter (LayoutFitter, plus
+      transform onto an existing layout), OpenAiEmbedder (Embedder:
+      batched, ordered by index, normalized, dimension probed, key from an
+      env var and never disclosed), a shared hyper/rustls client with a
+      deadline per call, and typed errors in which only the sidecar's
+      deterministic refusals become TooFewSamples or a FitFailure.
+      Contract-tested against testkit's fake server and the sidecar's own
+      fixture files; ignored live tests run against the real sidecar.
+    entry_points:
+      - crates/analysis/src/remote/mod.rs
+      - crates/analysis/src/remote/sidecar/topics.rs
+      - crates/analysis/src/remote/sidecar/layout.rs
+      - crates/analysis/src/remote/embedder.rs
+    depends_on: [type_spec, topics_sidecar, testkit, workspace]
+    doc: docs/features/analysis.md
+  topics_sidecar:
+    description: >
+      The Python topics sidecar (sidecar/topics, roadmap D1/P6.3): a
+      FastAPI service on port 8090 with /healthz, /v1/topics/fit (UMAP
+      reduction, HDBSCAN clusters renumbered by size, c-TF-IDF terms and
+      labels), /v1/layout/fit and /v1/layout/transform (seeded UMAP to two
+      dimensions, fitted bases in an LRU cache). Contract v1: JSON in the
+      spec's wire conventions, embeddings and coordinates as exact
+      little-endian binary32 hex matrices, adjacently tagged errors mapped
+      to HTTP statuses. Same request bytes give the same response bytes
+      (SeedSequence-seeded UMAP, one thread for BLAS and Numba, a generic
+      Numba target; bit-identity per image and CPU architecture). Pinned
+      with uv; pytest with determinism and golden tests; image
+      deploy/topics.Dockerfile (python slim, non-root).
+    entry_points:
+      - sidecar/topics/src/crosstalk_topics/app.py
+      - sidecar/topics/src/crosstalk_topics/topics.py
+      - sidecar/topics/src/crosstalk_topics/layout.py
+      - sidecar/topics/pyproject.toml
+      - deploy/topics.Dockerfile
+    depends_on: [wire_contract]
+    doc: docs/features/topics_sidecar.md
+  reconstruct:
+    description: >
+      crosstalk-reconstruct, L3 (P4.1). Evidence derivers (credential by
+      stability, account, scoped harness ids, prompt fingerprint, their
+      chain) with the identity scope decided in one place
+      (evidence::scope, ready for per-corpus replay scoping); PgAgents,
+      every L3 agent store trait on Postgres (merge log with exact unmerges,
+      vetoes, renames, resolve, lifecycle, claims, activity, reads; an
+      outbox; an in-process directory cache), model-tested against
+      crosstalk-memory; ConversationThreader over MemoryConversations or
+      PgConversations (prefix chains, forks, compaction from summary
+      turns, WebSocket increment resolution scoped by upstream and identity
+      scope, system turns anywhere, every message kept in order under an
+      ordinal); and the reconstruct consumer (ExchangeCaptured in;
+      AgentSeen and ConversationDelta out under envelope ids derived from
+      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      interleaved re-runs as ignored fixture tests.
+    entry_points:
+      - crates/reconstruct/src/lib.rs
+      - crates/reconstruct/src/agents/mod.rs
+      - crates/reconstruct/src/thread/mod.rs
+      - crates/reconstruct/src/consumer/mod.rs
+      - crates/reconstruct/src/evidence/mod.rs
+    depends_on: [type_spec, store, memory, transport, sim, testkit]
+    doc: docs/features/reconstruct.md
+  deploy:
+    description: >
+      Single-machine deployment: images for the gateway and the UI, a docker
+      compose stack (Postgres 18 with pgvector, pg_trgm and
+      pg_stat_statements; a migrate step; crosstalk serve --role all; the
+      UI), generated secrets in deploy/.env, and infrastructure
+      observability (host, container, Postgres and log metrics, dashboards,
+      alert rules). Defines the contract the crosstalk binary implements:
+      serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
+      endpoints and the config file's top-level keys. Also notes for
+      running on a shared host (snap Docker, host port clashes, syncing a
+      checkout, a smoke test, inspecting the distroless gateway).
+    entry_points:
+      - deploy/compose.yaml
+      - deploy/run.sh
+      - deploy/crosstalk.Dockerfile
+      - deploy/config/crosstalk.json
+      - docs/infrastructure.md
+    depends_on: [workspace, store, ingress, transport]
+    doc: docs/features/deploy.md
+  demo:
+    description: >
+      crosstalk-demo (crates/demo, a tool crate no layer depends on), one
+      binary with four subcommands. upstream is a fake Anthropic upstream:
+      POST /v1/messages, streaming SSE or JSON, in the real wire format,
+      answered with text and tool_use deterministically from a seed and the
+      request body, with a configurable first-byte wait and stream pacing.
+      wiki is an in-memory HTTP page store with versions and authors, the
+      shared channel. swarm runs N agents through the crosstalk proxy. Each
+      keeps a growing conversation, resent whole every turn, with fake
+      x-api-keys per agent or group. The model's wiki_write and wiki_read
+      calls run against the wiki, and their results go back as tool_result,
+      so one agent's model output reaches another's input. swarm reports
+      throughput, p50/p95/p99 time to first byte and total time, and the
+      expected transmissions, optionally as a ground-truth JSONL file.
+      healthcheck serves the distroless image. deploy/compose.demo.yaml,
+      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
+      demo up|run|down|logs run the demo on the compose stack. It reuses
+      testkit's harness client and SSE parser and the spec's seeded random
+      source.
+    entry_points:
+      - crates/demo/src/main.rs
+      - crates/demo/src/upstream/mod.rs
+      - crates/demo/src/wiki/mod.rs
+      - crates/demo/src/swarm/mod.rs
+      - deploy/compose.demo.yaml
+      - deploy/run.sh
+    depends_on: [testkit, deploy, gateway, workspace]
+    doc: docs/features/demo.md
+  world:
+    description: >
+      crosstalk-world (crates/world, TestSupport): the UI fixture's
+      synthetic week ported onto the spec's write traits. World::new(seed,
+      at) gives the config a host builds its stores with (operators, sinks,
+      built-in rules, embedding model and embedder, catalog retention,
+      bucket width, correlator timing) and the world's clock;
+      World::seed(&mut stores) declares config's channels, generates the
+      cast, channels, topics and about 5,000 transmissions with their
+      accesses, matches and encoded bodies, assembles every write the
+      pipeline, surface and config would have made as timed steps, and
+      runs them in time order through the write traits (operator actions
+      audited), returning the Scenario handles (agents by fixture key,
+      ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
+      anchor and store implementation; ids are ULIDs minted at their
+      entity's time. Tests seed the memory stores and assert every scenario
+      through the read traits, the channel semantics included (discovery
+      at the first cross-agent transmission, the scratch entry on no
+      channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
+      the gap list: fixture reads no store or spec trait answers.
+    entry_points:
+      - crates/world/src/lib.rs
+      - crates/world/src/seed.rs
+      - crates/world/src/stores.rs
+      - crates/world/src/generate/mod.rs
+      - crates/world/src/assemble/mod.rs
+      - crates/world/src/run/mod.rs
+      - crates/world/tests/support/mod.rs
+    depends_on: [type_spec, memory, transport, workspace]
+    doc: docs/features/world.md
+  ui:
+    description: >
+      Operator web UI (crosstalk-ui, a workspace member): an overview,
+      topology (agents or bipartite with channels) with an edge drawer,
+      transmission evidence with verdicts, search and UMAP exploration,
+      topics (with version pins), channels (active, unconfirmed, declared
+      with no traffic yet, and the review queue; a channel's suspected
+      transmissions with verdicts; a shared confirmed-only filter) with
+      promotion, agents with merges, alerts and rules, export (JSON Lines
+      downloads), audit and pipeline, kept current by the SSE live feed.
+      Reads and acts through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), the channel-semantics port's shapes
+      included, on one of three backends (backend::AppBackend): the
+      deterministic fixture (default; optionally replaying its last hours
+      for demos), the world backend (crosstalk_api::InProcess over the
+      memory stores, seeded with crosstalk-world), or the gateway's live
+      composition behind the `live` cargo feature (a stub until the
+      gateway provides it). What the spec lacks is two documented gap
+      traits (ui/src/contract: bucket width and present, export formats).
+      Built from the workspace root into deploy/ui.Dockerfile and
+      deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
+    entry_points:
+      - ui/src/main.rs
+      - ui/src/app.rs
+      - ui/src/backend/mod.rs
+      - ui/src/backend/dispatch.rs
+      - ui/src/backend/fixture/surface.rs
+      - ui/src/backend/world/mod.rs
+      - ui/src/contract/mod.rs
+      - ui/src/pages/mod.rs
+      - ui/src/pages/view.rs
+      - ui/src/data/mod.rs
+      - ui/src/data/live.rs
+      - ui/src/pages/topology/mod.rs
+      - ui/src/pages/explore/mod.rs
+      - ui/src/pages/export/mod.rs
+      - ui/elements/src/topology/element.ts
+      - ui/elements/src/live/element.ts
+      - deploy/ui.Dockerfile
+    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service]
+    doc: docs/features/ui.md
+  eval:
+    description: >
+      crosstalk-eval and the ct-eval CLI (a composer): dataset converters
+      (SALT-NLP first) streaming worlds of checked spec
+      NormalizedExchanges on a deterministic virtual clock, with typed,
+      JSONL-serialisable ground truth (expected transmissions, negative
+      controls, agent clusters, with tiers); predictions converted from
+      spec Transmissions and ContentMatches; one documented alignment rule
+      and a scorer with TP/FP/FN by dataset, route, carrier, match class
+      and tier, negative-control violations and a DetectionQuality bridge;
+      a Detector seam with the naive reference matcher (escape-aware
+      normalization, decoding, opaque-blob exclusion) and the gateway
+      pipeline (Pipeline::ingest under the corpus clock or a sim clock,
+      reported as unscored until detection consumers exist); reports and
+      regression gates.
+    entry_points:
+      - crates/eval/src/lib.rs
+      - crates/eval/src/pipeline.rs
+      - crates/eval/src/gateway.rs
+      - crates/eval/src/score/align.rs
+      - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/bin/ct-eval/main.rs
+      - crates/eval/src/datasets/agentdojo/mod.rs
+      - crates/eval/src/datasets/tau2/mod.rs
+    depends_on: [type_spec, gateway, transport, sim, testkit]
+    doc: docs/features/eval.md
+  e2e_smoke:
+    description: >
+      crosstalk-e2e (a composer): the end-to-end smoke. A deterministic
+      wiki relay scenario as Claude Code HTTP traffic (agent A writes a
+      shared wiki page with a distinctive sentence through Write, agent B
+      reads it through Read and repeats it; two sessions, two API keys),
+      captured through L0's route table, identifier and adapter and L1's
+      normalizer into NormalizedExchanges, fed through Pipeline::ingest in
+      time order, and read back only through QueryApi (agents by session,
+      the A to B channel edge, the confirmed transmission, its evidence,
+      the discovered channel). The composition is shaped like
+      crosstalk_gateway::live::Live and is wired today from InProcess plus
+      a pipeline over its blob store and bus; the assertions needing L3 to
+      L7 are ignored until Live composes them. The scenario and readers are
+      a library, so a UI demo can feed the same traffic into a running
+      Live.
+    entry_points:
+      - crates/e2e/src/lib.rs
+      - crates/e2e/src/scenario/mod.rs
+      - crates/e2e/src/capture.rs
+      - crates/e2e/src/compose.rs
+      - crates/e2e/src/read.rs
+      - crates/e2e/tests/smoke/main.rs
+    depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
+    doc: docs/features/e2e_smoke.md
+  flow_extract:
+    description: >
+      crosstalk-flow's extract module, L5 (P5): the spec's
+      ResourceExtractor over every known tool (Claude Code's file, fetch
+      and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
+      editor equivalents; HTTP tools such as http_request {method, url,
+      body?}, the method deciding the op; MCP tools mapped by typed JSON
+      configuration of tool name and argument paths to a resource and an
+      op). Every locator is canonical, so agents touching one thing meet
+      on one resource: lexical paths, relative paths against the stated
+      or tracked working directory (Opaque without one), normalized URLs,
+      folded MCP keys, MediaWiki pages as their canonical article URL
+      whatever URL or API reaches them, GitHub files and files of known
+      clones as the repository's file. A conservative shell lexer and
+      interpreter reads redirections, file readers, tee, curl, wget, cd,
+      git and gh. Each write carries its outcome (Delivered, Rejected,
+      Unknown), judged per tool in one place; reads need a delivered
+      result. ConversationContext learns the persistent shell's directory
+      and clones from shell calls. Builds the stored AccessOp with the
+      write's spans (originated plus self-relayed sources).
+    entry_points:
+      - crates/flow/src/extract/mod.rs
+      - crates/flow/src/extract/context.rs
+      - crates/flow/src/extract/outcome.rs
+      - crates/flow/src/extract/mcp/config.rs
+      - crates/flow/src/extract/spans.rs
+    depends_on: [type_spec, channel_semantics, workspace]
+    doc: docs/features/flow_extract.md
+  flow_correlator:
+    description: >
+      The L5 correlator and flow consumer in crosstalk-flow (P5, the M2
+      path). WindowedCorrelator (the spec's Correlator, one per shard)
+      pairs a write and a later read of one resource by another agent into
+      a CoAccess, opens the channel transmission, and at the close of the
+      read's evidence window confirms it with every held tool-result match
+      a write of the sender explains (origin span among the write's
+      spans), else suspects it; late matches confirm a suspicion, later
+      ones extend, expiry discards, content after a discard opens a new
+      transmission; a match no sender write explains (shared upstream)
+      confirms nothing. Delegation (parent links read through AgentReads),
+      Direct and Unobserved matches open confirmed at their exchange's
+      window close. Every pairing rule lives in correlate/pairing.rs, ready
+      for the eval PR's WriteOutcome. Shards are keyed by medium (canonical
+      channel or resource); a medium's evidence moves on discovery,
+      ChannelDiscovered, ChannelPromoted and any access resolved to a
+      channel. The flow consumer (group flow) records accesses
+      (add_resource, record_access, AccessRecorded), holds writes until
+      their outcome or settle time, feeds the shards, and applies each
+      decision through discover, TransmissionStore::save and
+      record_transmission before publishing ChannelCrossAccessed,
+      TransmissionConfirmed and TransmissionSuspected, one ordered step
+      queue with retries. Time is only input event times and ticks of the
+      injected clock, so replayed corpora settle on the replay clock. Its
+      input from extraction is a local type until the spec has an event
+      for it.
+    entry_points:
+      - crates/flow/src/correlate/windowed.rs
+      - crates/flow/src/correlate/pairing.rs
+      - crates/flow/src/consumer/mod.rs
+      - crates/flow/src/consumer/shards.rs
+      - crates/flow/src/consumer/apply.rs
+    depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
+    doc: docs/features/flow_correlator.md
 ```

@@ -1,0 +1,20 @@
+[invariant]
+id = "ingress.framer.independent-of-request"
+statement = "Changing an HTTP exchange's request body, including to one that fails to decode or whose decode has not finished, leaves the FrameEvents and FrameError reported for the same response head and bytes unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+FrameEvents drive the exchange's stage and timestamps. If they depended on
+the decoded request, the framer would have to wait for the decoder (breaking
+ingress.forwarding.never-waits-on-decode) or guess, and the same response
+would complete on one exchange and fail on another depending on decoder
+timing. A request that fails to decode is still forwarded, and its response
+must be framed the same way.
+"""
+
+[evidence]
+property = "crosstalk_ingress::tests::framer::events_independent_of_request_body"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

@@ -21,7 +21,7 @@ VersionNotRetained, never smaller edges.
 """
 
 [evidence]
-integration = "crosstalk::topology::integration::timescale_graph_stats_never_decrease_across_refresh"
+integration = "crosstalk_topology::integration::timescale_graph_stats_never_decrease_across_refresh"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

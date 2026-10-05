@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.durability.publish-persisted"
+statement = "An envelope whose JetStreamBus::publish returned Ok is still delivered to every subscribed consumer group after the publishing process and the NATS server restart."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+publish returns only after JetStream's publish ack from a file-backed
+stream. L1 publishes ExchangeCaptured and then forgets the exchange; if Ok
+could precede persistence, a crash would lose an exchange the proxy already
+forwarded. MpscBus is not durable across process restart and makes no such
+claim.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::jetstream_publish_survives_restart"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

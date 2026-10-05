@@ -13,7 +13,7 @@ not cost data.
 """
 
 [evidence]
-unit = "crosstalk::topology::tests::drop_version_refuses_active_and_newer"
+unit = "crosstalk_topology::tests::drop_version_refuses_active_and_newer"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

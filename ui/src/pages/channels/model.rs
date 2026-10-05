@@ -2,7 +2,8 @@
 //! origin and detection in words, and its policy decisions.
 
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
-use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
@@ -158,8 +159,9 @@ pub(crate) mod tests {
     use crosstalk_spec::derived::flow::channel::{Channel, Declaration, Seed, Supersession};
     use crosstalk_spec::derived::flow::resource::{Host, Resource};
     use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::interfaces::l8_surface::channels::ChannelStanding;
     use crosstalk_spec::interfaces::l8_surface::channels::{
-        ChannelActivity, ChannelCounts, ChannelStanding, SupersededInto,
+        ChannelActivity, ChannelCounts, SupersededInto,
     };
     use crosstalk_spec::support::Timestamp;
 
@@ -178,6 +180,7 @@ pub(crate) mod tests {
         Seed {
             resource: ResourceId::from_ulid(id),
             first_transmission: TransmissionId::from_ulid(1),
+            opened_at: CREATED,
         }
     }
 
@@ -195,6 +198,9 @@ pub(crate) mod tests {
             first_seen: Timestamp::from_micros(1_790_900_000_000_000),
         }
     }
+
+    /// When every test channel's first cross-agent transmission opened.
+    const CREATED: Timestamp = Timestamp::from_micros(1_790_900_000_000_000);
 
     /// A discovered, active, unreviewed channel seeded by [`wiki`], with
     /// two writers, three readers and 14 transmissions in the window.

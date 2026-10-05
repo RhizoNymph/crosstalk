@@ -1,0 +1,26 @@
+[invariant]
+id = "provenance.span.originated-absent-from-inputs"
+statement = "A span classified Originated shares no below-cutoff fingerprint with any of the exchange's inputs, in raw or decoded form, or with another agent's indexed span."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Originated means the agent wrote the text. If the text is fingerprint-matchable in the exchange's own inputs, the agent copied it, and indexing it
+under this agent would make every downstream reader of it look like a
+receiver from this agent instead of from the true author. Decoded inputs
+count: an agent that decodes a base64 payload it was handed has relayed it,
+not written it. Text matching another agent's indexed span but no visible
+input was received through a channel the gateway cannot see; it is
+classified Relayed with RelaySource::Span naming that span (and also
+reported as a ReaderOutput match), never Originated. Fingerprints above the
+frequency cutoff are boilerplate and do not disqualify a span. Segmenter
+sees only the exchange's messages, so the index check happens when the
+draft is resolved against FingerprintIndex::lookup before classification is
+committed.
+"""
+
+[evidence]
+property = ["crosstalk_provenance::props::originated_span_not_fingerprint_matchable_in_inputs", "crosstalk_provenance::props::output_matching_other_agents_span_is_relayed"]
+
+[evidence-review]
+property = { agent = "false", human = "false" }

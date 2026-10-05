@@ -1,0 +1,32 @@
+[invariant]
+id = "surface.http.route-per-method"
+statement = "Every QueryApi method, every ActionKind and LiveFeed::subscribe has exactly one Route, every Route calls exactly one of them, and a client encoding any QueryApi call through RequestBuilder sends a request that resolve maps back to that call's Route with exactly the table's path parameters, query parameters and body."
+kind = "domain"
+property = "invariant"
+requires = ["type", "unit", "integration"]
+rationale = """
+The route table is the one definition the server and the client are both
+checked against. A method without a route is unreachable over HTTP; a
+route without a method, or with arguments the method does not take, is a
+client and server that disagree on the wire and fail only at run time.
+Route::spec and Route::index match every route with no wildcard, and the
+test client implements QueryApi over the table, so a new method or route
+does not compile until it has its row; the tests then check every
+recorded request against the table.
+"""
+
+[evidence]
+type = ["crosstalk_spec::interfaces::l8_surface::http::Route::spec", "crosstalk_spec::interfaces::l8_surface::http::Route::index"]
+unit = [
+    "crosstalk_spec::tests::wire::http::client::every_query_method_encodes_to_its_route",
+    "crosstalk_spec::tests::wire::http::client::every_query_route_is_called_by_one_method",
+    "crosstalk_spec::tests::wire::http::routes::every_source_has_exactly_one_route",
+    "crosstalk_spec::tests::wire::http::routes::every_route_is_listed_once_at_its_index",
+    "crosstalk_spec::tests::wire::http::routes::route_table_golden",
+]
+integration = "crosstalk_api::integration::every_route_is_served"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

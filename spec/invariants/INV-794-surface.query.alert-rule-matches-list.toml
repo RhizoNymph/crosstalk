@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.query.alert-rule-matches-list"
+statement = "QueryApi::alert_rule(id) returns exactly the AlertRuleDef that alert_rules lists under id in the same state, built-in or user, stale or not, and None only for an id no rule ever had."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Rule pages and alert and audit links name one rule. Paging the whole rule
+list to find it costs a traversal per link, and a separate read that could
+disagree with the list would show a rule differently on its page and in
+the list. Rules are never deleted and their ids never aliased, so a known
+id always answers.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::reads::alert_rule_is_the_listed_rule"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

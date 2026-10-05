@@ -13,8 +13,8 @@ duplicate.
 """
 
 [evidence]
-unit = ["crosstalk::analysis::tests::semantic_rule_drafts_at_threshold", "crosstalk::analysis::tests::semantic_rule_silent_without_embedding"]
-property = "crosstalk::analysis::tests::semantic_rule_drafts_iff_similarity_at_least_threshold"
+unit = ["crosstalk_analysis::tests::semantic_rule_drafts_at_threshold", "crosstalk_analysis::tests::semantic_rule_silent_without_embedding"]
+property = "crosstalk_analysis::tests::semantic_rule_drafts_iff_similarity_at_least_threshold"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

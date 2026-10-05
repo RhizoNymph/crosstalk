@@ -20,9 +20,9 @@ the difference.
 """
 
 [evidence]
-unit = "crosstalk::flow::tests::late_confirmation_on_a_superseded_channel_advances_its_superseder"
-integration = "crosstalk::flow::tests::pg_late_confirmation_after_promotion"
+unit = "crosstalk_flow::consumer::tests::rules::late_confirmation_on_a_superseded_channel_advances_its_superseder"
+integration = "crosstalk_flow::tests::pg_late_confirmation_after_promotion"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

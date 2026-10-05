@@ -32,7 +32,7 @@ pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, UiError> {
     let backend = backend(cx);
     let caller = caller(cx);
     let bucket = backend.bucket_width();
-    let end = align_up(backend.now(&caller).await?, bucket);
+    let end = align_up(backend.view_end(&caller).await?, bucket);
     let topic_version = default_version(backend, &caller).await?;
     let span = u64::try_from(DEFAULT_SPAN.as_micros()).unwrap_or(u64::MAX);
     let start = align_down(

@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.text.verbatim"
+statement = "Every Text part holds the provider's decoded string exactly, with no trimming, whitespace folding or Unicode normalization."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Provenance indexes spans by ByteRange into canonical text and fingerprints
+its bytes; decoders, not the normalizer, decide which transformations an
+agent might apply when relaying. Altering text here would make byte ranges
+point at text the agent never saw and could merge or split matches. JSON
+string escapes are decoded; nothing else changes.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::text_with_edge_whitespace_and_nfd_kept"
+property = "crosstalk_canonical::tests::text_parts_preserve_strings"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

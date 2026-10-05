@@ -55,6 +55,7 @@ fn seed(n: u128) -> Seed {
     Seed {
         resource: resource(n),
         first_transmission: transmission(n),
+        opened_at: at(1),
     }
 }
 

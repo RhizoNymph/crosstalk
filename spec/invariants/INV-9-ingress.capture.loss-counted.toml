@@ -1,0 +1,19 @@
+[invariant]
+id = "ingress.capture.loss-counted"
+statement = "Every request that no adapter classifies, or that is classified Generation but delivers no RawExchange to the capture channel, increments an uncaptured-requests counter labelled with the reason: unclassified, decode error, or capture channel full."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Every uncaptured generation is a blind spot where a transmission cannot be
+detected. Forwarding without capture is right for the client, but the
+operator has to see how much traffic the gateway is not watching and why,
+or a missing adapter or an upstream schema change silently erodes coverage.
+Non-generation endpoints are uncaptured by design and are not losses.
+"""
+
+[evidence]
+unit = ["crosstalk_ingress::tests::capture::unclassified_request_counted", "crosstalk_ingress::tests::capture::decode_error_counted", "crosstalk_ingress::tests::capture::channel_full_counted"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
