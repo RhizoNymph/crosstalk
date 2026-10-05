@@ -23,6 +23,7 @@ use crate::backend::AppBackend;
 use crate::config::HttpConfig;
 use crate::identity::Identity;
 use crate::pages::common::paging::first;
+use crate::testing::fixture_api::FixtureApi;
 use crate::testing::http::{HttpWorld, ONCALL_TOKEN, RESEARCHER_TOKEN, UNKNOWN_TOKEN};
 use crate::testing::proxy::Proxy;
 use crate::testing::{Reply, get_from, router_with, send_to};
@@ -288,7 +289,9 @@ fn assert_gateway_page(reply: &Reply, status: StatusCode, title: &str, url: &str
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refused_token_renders_the_token_refused_page() {
-    let world = HttpWorld::start().await;
+    // No world data is read: the fixture over HTTP starts in well under a
+    // second (`testing::fixture_api`).
+    let world = FixtureApi::start().await;
     let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     // The token is rotated on the server after the UI learned who it is.
     let router = world.router(UNKNOWN_TOKEN, access);
@@ -338,7 +341,9 @@ async fn a_refused_token_renders_the_token_refused_page() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_gateway_renders_the_unreachable_page() {
-    let world = HttpWorld::start().await;
+    // No world data is read: the fixture over HTTP starts in well under a
+    // second (`testing::fixture_api`).
+    let world = FixtureApi::start().await;
     let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     let router = world.router(RESEARCHER_TOKEN, access);
     let url = world.base.to_string();
@@ -438,7 +443,9 @@ async fn the_identity_follows_a_change_on_the_server() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lost_gateway_ends_data_live_as_unreachable() {
-    let world = HttpWorld::start().await;
+    // No world data is read: the fixture over HTTP starts in well under a
+    // second (`testing::fixture_api`).
+    let world = FixtureApi::start().await;
     let proxy = Proxy::start(world.addr()).await;
     let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     // Two quick reconnects, so the client gives up in well under a second.
