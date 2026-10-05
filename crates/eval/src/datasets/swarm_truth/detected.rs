@@ -2,8 +2,10 @@
 //! each exported transmission, as eval predictions.
 //!
 //! - **Export** (`POST /exports`, JSONL; spec `export::framing`): a header,
-//!   one `transmission` row per confirmed transmission (its
-//!   `TransmissionSummary`, strongest match class, optional content), and
+//!   one `transmission` row per exported transmission (its
+//!   `TransmissionSummary`, its state when the export's states are not the
+//!   default, the strongest match class of a confirmed one, optional
+//!   content), and
 //!   a trailer. It is read with the spec's `read_jsonl` and verified with
 //!   `verify_export` (the trailer completes it, the counts agree, the BLAKE3
 //!   row digest matches), so a cut-off export is refused. Its rows say
@@ -281,10 +283,10 @@ impl Directory for SwarmDirectory {
 }
 
 /// The predictions of the exported transmissions and of every suspected or
-/// discarded transmission the evidence holds, sorted. The transmissions
-/// export holds confirmed transmissions only (its rows need
-/// `Confirmed::at`), so access-only transmissions are scored from their
-/// evidence lines alone. An exported transmission without evidence, or
+/// discarded transmission the evidence holds, sorted. `ct-eval swarm-fetch`
+/// exports the confirmed and the discarded transmissions; an export in the
+/// default states holds confirmed ones only, and access-only transmissions
+/// outside the export are scored from their evidence lines alone. An exported transmission without evidence, or
 /// with an agent no exchange ties to a truth agent, is reported and yields
 /// none. The parts co-access records name are read from `bodies`.
 pub fn predictions<B: Bodies>(

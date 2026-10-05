@@ -1024,13 +1024,18 @@ rows, never finding a label, out of `overall`, counted in access-only
 recall. A part whose body the blobs lack leaves the co-access unlocated,
 reported as `unpredictable`.
 
-The transmissions export holds confirmed transmissions only (its rows need
-`Confirmed::at`), so suspected and discarded transmissions have no export
-row. Scoring takes every one whose evidence line is in `evidence.jsonl`,
-besides the exported ones. `swarm-fetch` still fetches evidence for
-exported rows only; listing unconfirmed transmissions needs
-`GET /channels` and `GET /channels/{id}/transmissions` with
-`{"confirmation":"unconfirmed"}`, which it does not do yet.
+`swarm-fetch` asks for the transmissions export in `states`
+`["confirmed", "classified", "aggregated", "discarded"]`
+(`fetch::FETCHED_STATES`, `fetch::export_request`; INV-1070), and fetches
+the evidence of every exported row, discarded ones included, so
+access-only scoring gets the live gateway's discarded traffic. A settled
+export never holds a suspected or awaiting-content transmission:
+unconfirmed traffic is `discarded` by then. Rows outside the default
+states carry their `state`, and only confirmed rows carry `strongest`.
+Scoring takes every exported transmission, and besides them every
+suspected or discarded one whose evidence line is in `evidence.jsonl`
+(an export in the default states has no unconfirmed row); a transmission
+both exported and in the evidence is predicted once.
 
 Reported, never silent: an exported transmission with no evidence
 (`missing_evidence`), a gateway agent no exchange ties to a truth agent
@@ -1044,7 +1049,8 @@ one gateway agent tied to two truth agents (`detected_agent_conflict`).
 swarm --ground-truth runs/1/truth.jsonl …        # crates/demo, through the gateway
 # 2. once the gateway's watermark has passed the run, save its side
 ct-eval swarm-fetch --api http://crosstalk:8081 --truth runs/1/truth.jsonl --out runs/1
-#    (POST /exports, then GET /transmissions/{id}/evidence per row;
+#    (POST /exports for confirmed and discarded transmissions,
+#     then GET /transmissions/{id}/evidence per row;
 #     --token-env VAR for a bearer token)
 # 3. score offline
 ct-eval swarm --truth runs/1/truth.jsonl \
