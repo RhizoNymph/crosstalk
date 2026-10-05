@@ -52,7 +52,7 @@ pub async fn start(config: &HttpConfig) -> Result<HttpStarted, IdentityError> {
     let access = identity::resolve(&client, config.operator).await?;
     let operator = access.caller().operator();
     tracing::info!(
-        url = %config.url,
+        url = %failure::public_url(&config.url),
         operator = %operator.to_ulid(),
         name = access.name(),
         permissions = ?access.caller().permissions(),

@@ -927,6 +927,7 @@ dependencies = [
  "topcoat",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

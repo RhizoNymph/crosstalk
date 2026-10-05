@@ -51,18 +51,37 @@ pub fn classify(error: &QueryError) -> Option<GatewayFailure> {
     }
 }
 
-/// `url` as an operator may see it: `http://host[:port][/prefix]`, without
-/// any `user:password@` the configured URL carried.
+/// `url` as an operator may see it: without the username and password a
+/// configured URL may carry, for any scheme. A URL without them is
+/// returned byte for byte. One that cannot be parsed is not shown at all,
+/// since its credentials could not be found.
 pub fn public_url(url: &BaseUrl) -> String {
-    let text = url.to_string();
-    let Some(rest) = text.strip_prefix("http://") else {
-        return text;
+    redact(&url.to_string())
+}
+
+/// What a URL that cannot be parsed shows instead.
+const UNPARSEABLE: &str = "(the gateway URL could not be shown)";
+
+/// [`public_url`] over text.
+fn redact(text: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(text) else {
+        return UNPARSEABLE.to_owned();
     };
-    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    format!("http://{host}{path}")
+    if parsed.username().is_empty() && parsed.password().is_none() {
+        return text.to_owned();
+    }
+    // Both setters fail only for a URL that cannot have credentials, which
+    // then has none to remove.
+    let cleared = parsed.set_username("").is_ok() && parsed.set_password(None).is_ok();
+    if !cleared {
+        return UNPARSEABLE.to_owned();
+    }
+    let mut shown = parsed.to_string();
+    // `Url` writes an empty path as `/`; keep the configured form.
+    if parsed.path() == "/" && !text.ends_with('/') && parsed.query().is_none() {
+        shown.pop();
+    }
+    shown
 }
 
 #[cfg(test)]
@@ -116,5 +135,51 @@ mod tests {
         assert_eq!(public_url(&url), "http://crosstalk:8081/api");
         let plain = BaseUrl::parse("http://crosstalk:8081").expect("url");
         assert_eq!(public_url(&plain), "http://crosstalk:8081");
+    }
+
+    #[test]
+    fn credentials_are_dropped_for_any_scheme() {
+        assert_eq!(
+            redact("https://user:pass@gateway.example:8443/api"),
+            "https://gateway.example:8443/api"
+        );
+        assert_eq!(
+            redact("https://user:pass@gateway.example"),
+            "https://gateway.example"
+        );
+    }
+
+    #[test]
+    fn a_user_without_a_password_is_dropped() {
+        assert_eq!(
+            redact("http://ops@crosstalk:8081/api"),
+            "http://crosstalk:8081/api"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_host_keeps_its_brackets_and_port() {
+        assert_eq!(
+            redact("http://ops:secret@[::1]:8081/api"),
+            "http://[::1]:8081/api"
+        );
+        assert_eq!(redact("http://[::1]:8081"), "http://[::1]:8081");
+    }
+
+    #[test]
+    fn a_url_without_credentials_is_byte_identical() {
+        for text in [
+            "http://crosstalk:8081",
+            "http://crosstalk:8081/api",
+            "http://CROSSTALK:8081/api/",
+            "http://[::1]:8081/a%20b",
+        ] {
+            assert_eq!(redact(text), text);
+        }
+    }
+
+    #[test]
+    fn an_unparseable_url_is_not_shown() {
+        assert_eq!(redact("http://user:pass@"), UNPARSEABLE);
     }
 }
