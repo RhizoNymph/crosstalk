@@ -25,7 +25,11 @@ Overview:
     unchanged and every generation exchange is normalized, its bodies
     stored, ExchangeCaptured published and the exchange persisted
     (gateway). L2's in-process bus and blob store (transport) are
-    implemented; L3 to L7 are not started. The L8 surface service
+    implemented. L3 (crosstalk-reconstruct) attributes and threads
+    exchanges: evidence derivation, the agent store on Postgres, the
+    threader over in-memory or Postgres conversations, and a bus consumer
+    of ExchangeCaptured not yet wired into the pipeline (reconstruct). L4
+    to L7 are not started. The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
     the graphs' node facts, generic over the spec's store traits) is
     implemented and runs in process over the reference stores through
@@ -919,6 +923,31 @@ Features Index:
       - deploy/topics.Dockerfile
     depends_on: [wire_contract]
     doc: docs/features/topics_sidecar.md
+  reconstruct:
+    description: >
+      crosstalk-reconstruct, L3 (P4.1). Evidence derivers (credential by
+      stability, account, scoped harness ids, prompt fingerprint, their
+      chain) with the identity scope decided in one place
+      (evidence::scope, ready for per-corpus replay scoping); PgAgents,
+      every L3 agent store trait on Postgres (merge log with exact unmerges,
+      vetoes, renames, resolve, lifecycle, claims, activity, reads; an
+      outbox; an in-process directory cache), model-tested against
+      crosstalk-memory; ConversationThreader over MemoryConversations or
+      PgConversations (prefix chains, forks, compaction from summary
+      turns, WebSocket increment resolution scoped by upstream and identity
+      scope, system turns anywhere, every message kept in order under an
+      ordinal); and the reconstruct consumer (ExchangeCaptured in;
+      AgentSeen and ConversationDelta out under envelope ids derived from
+      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      interleaved re-runs as ignored fixture tests.
+    entry_points:
+      - crates/reconstruct/src/lib.rs
+      - crates/reconstruct/src/agents/mod.rs
+      - crates/reconstruct/src/thread/mod.rs
+      - crates/reconstruct/src/consumer/mod.rs
+      - crates/reconstruct/src/evidence/mod.rs
+    depends_on: [type_spec, store, memory, transport, sim, testkit]
+    doc: docs/features/reconstruct.md
   deploy:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker

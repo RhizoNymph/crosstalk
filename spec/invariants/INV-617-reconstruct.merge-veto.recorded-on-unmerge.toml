@@ -14,8 +14,8 @@ unprotected.
 
 [evidence]
 unit = "crosstalk_spec::tests::agents::veto_of_a_reverted_merge_separates_its_source_and_target"
-integration = "crosstalk_reconstruct::tests::pg_unmerge_records_veto"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_unmerge_records_veto"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

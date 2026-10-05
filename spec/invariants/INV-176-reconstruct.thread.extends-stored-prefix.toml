@@ -13,7 +13,7 @@ history (see the increment model invariant).
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::extends_requires_stored_prefix"
+property = "crosstalk_reconstruct::tests::thread_props::extends_requires_stored_prefix"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

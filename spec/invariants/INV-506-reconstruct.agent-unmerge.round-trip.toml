@@ -17,8 +17,8 @@ unit = [
     "crosstalk_spec::tests::agents::reverting_the_latest_merge_restores_every_state",
     "crosstalk_spec::tests::agents::random_merges_and_reverts_keep_the_invariants",
 ]
-property = "crosstalk_reconstruct::tests::merge_unmerge_round_trip"
+property = "crosstalk_reconstruct::tests::pg_props::merge_unmerge_round_trip"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

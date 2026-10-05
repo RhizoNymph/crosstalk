@@ -13,7 +13,7 @@ a harness shares those.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::fork_or_start_by_shared_assistant_prefix"
+property = "crosstalk_reconstruct::tests::thread_props::fork_or_start_by_shared_assistant_prefix"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
