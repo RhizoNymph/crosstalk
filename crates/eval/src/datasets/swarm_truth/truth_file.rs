@@ -3,7 +3,7 @@
 
 use std::io::BufRead;
 
-use super::schema::{Delivery, Header, KeyGroup, Miss, TruthLine, VERSION};
+use super::schema::{Delivery, Header, KeyGroup, Miss, TruthLine, UnattributedRead, VERSION};
 
 /// What a delivery line says about the read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -22,6 +22,7 @@ pub enum Row {
         row: Box<Delivery>,
     },
     Miss(Miss),
+    Unattributed(UnattributedRead),
     Cluster(KeyGroup),
 }
 
@@ -114,6 +115,7 @@ pub fn read<R: BufRead>(input: R) -> Result<TruthFile, TruthFileError> {
                 row: Box::new(row),
             },
             TruthLine::Miss(row) => Row::Miss(row),
+            TruthLine::UnattributedRead(row) => Row::Unattributed(row),
             TruthLine::AgentCluster(row) => Row::Cluster(row),
         };
         let Some(head) = &header else {
@@ -122,6 +124,7 @@ pub fn read<R: BufRead>(input: R) -> Result<TruthFile, TruthFileError> {
         let world = match &row {
             Row::Delivery { row, .. } => &row.world,
             Row::Miss(row) => &row.world,
+            Row::Unattributed(row) => &row.world,
             Row::Cluster(row) => &row.world,
         };
         if *world != head.world {

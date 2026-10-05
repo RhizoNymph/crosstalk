@@ -6,13 +6,15 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::align::{aligns, specificity, violates};
+use super::align::{aligns, exempts, specificity, violates};
 use crate::corpus::{Coverage, World};
 use crosstalk_spec::ids::ExchangeId;
 
 use crate::keys::AgentKey;
 use crate::predict::Prediction;
-use crate::truth::{Expectation, ExpectedTransmission, NegativeControl, NegativeReason, Tier};
+use crate::truth::{
+    Exemption, Expectation, ExpectedTransmission, NegativeControl, NegativeReason, Tier,
+};
 
 /// What a prediction turned out to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -27,7 +29,8 @@ pub enum Outcome {
         violated: Option<NegativeReason>,
         tier: Tier,
     },
-    /// It aligns with no label and the world's truth is a sample.
+    /// It aligns with no label and the world's truth is a sample, or it
+    /// falls under an exemption.
     Unjudged,
 }
 
@@ -37,16 +40,19 @@ pub struct Judge<'w> {
     positives: Vec<&'w ExpectedTransmission>,
     by_reader: BTreeMap<(&'w AgentKey, ExchangeId), Vec<usize>>,
     negatives: Vec<&'w NegativeControl>,
+    exemptions: Vec<&'w Exemption>,
 }
 
 impl<'w> Judge<'w> {
     pub fn new(world: &'w World) -> Self {
         let mut positives = Vec::new();
         let mut negatives = Vec::new();
+        let mut exemptions = Vec::new();
         for expectation in world.truth() {
             match expectation {
                 Expectation::Transmission(expected) => positives.push(expected),
                 Expectation::NoTransmission(control) => negatives.push(control),
+                Expectation::Unjudged(exemption) => exemptions.push(exemption),
                 Expectation::AgentCluster(_) => {}
             }
         }
@@ -64,6 +70,7 @@ impl<'w> Judge<'w> {
             positives,
             by_reader,
             negatives,
+            exemptions,
         }
     }
 
@@ -75,9 +82,10 @@ impl<'w> Judge<'w> {
         &self.negatives
     }
 
-    /// The outcome of `prediction`: the first label it aligns with, else the
-    /// most specific negative control it violates, else what the world's
-    /// coverage makes of an unlabelled prediction.
+    /// The outcome of `prediction`: the first label it aligns with, else
+    /// unjudged when an exemption covers it, else the most specific
+    /// negative control it violates, else what the world's coverage makes
+    /// of an unlabelled prediction.
     pub fn judge(&self, prediction: &Prediction) -> (Outcome, Option<&'w NegativeControl>) {
         let candidates = self
             .by_reader
@@ -96,6 +104,13 @@ impl<'w> Judge<'w> {
                 },
                 None,
             );
+        }
+        if self
+            .exemptions
+            .iter()
+            .any(|exemption| exempts(prediction, exemption))
+        {
+            return (Outcome::Unjudged, None);
         }
         if let Some(control) = self
             .negatives

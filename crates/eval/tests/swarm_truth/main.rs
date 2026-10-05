@@ -74,6 +74,7 @@ fn a_v2_file_reads_every_kind_in_order() {
                 truth_file::DeliveryKind::Reread => "reread",
             },
             Row::Miss(_) => "miss",
+            Row::Unattributed(_) => "unattributed_read",
             Row::Cluster(_) => "agent_cluster",
         })
         .collect();
@@ -698,4 +699,132 @@ fn every_v2_kind_decodes_with_the_pinned_keys() {
     assert_eq!(keys(&miss), sorted(&miss_keys));
     let truth = read_rows(&[fixture::header(), self_read, reread, miss]).expect("decodes");
     assert_eq!(truth.rows.len(), 3);
+}
+
+// ---- unattributed reads ----
+
+/// The fixture's self-read and reread rows (they name both agents'
+/// sessions, which tie the gateway's agent ids to truth agents) and, about
+/// a002's first read of p1, at most that it was unattributed.
+fn unattributed_truth(with_row: bool) -> Vec<serde_json::Value> {
+    let all = fixture::truth_rows();
+    let mut rows = vec![fixture::header(), all[3].clone(), all[4].clone()];
+    if with_row {
+        rows.push(fixture::unattributed(
+            ("a002", "session-a002", 1, "toolu_r1"),
+            "p1",
+            P1,
+        ));
+    }
+    rows
+}
+
+fn judged(outcome: &SwarmOutcome) -> (u64, u64, u64) {
+    let sum = |pick: fn(&crosstalk_eval::score::Counts) -> u64| {
+        outcome
+            .report
+            .rows
+            .iter()
+            .map(|row| pick(&row.counts))
+            .sum::<u64>()
+    };
+    (
+        sum(|counts| counts.correct),
+        sum(|counts| counts.false_positive),
+        sum(|counts| counts.unjudged),
+    )
+}
+
+#[test]
+fn an_unattributed_read_decodes_with_the_pinned_keys() {
+    let row = fixture::unattributed(("a002", "session-a002", 1, "toolu_r1"), "p1", P1);
+    let mut keys: Vec<&str> = row
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    let mut pinned = [
+        "kind",
+        "world",
+        "reader",
+        "reader_key_group",
+        "page",
+        "version",
+        "reader_session",
+        "reader_turn",
+        "reader_tool_use_id",
+        "read_tool",
+        "content",
+        "at_ms",
+        "at_unix_ms",
+    ];
+    pinned.sort_unstable();
+    assert_eq!(keys, pinned);
+    let truth = read_rows(&[fixture::header(), row]).expect("decodes");
+    let Row::Unattributed(read) = &truth.rows[0].row else {
+        panic!("an unattributed read");
+    };
+    assert_eq!((read.reader.as_str(), read.version), ("a002", 5));
+    let mut extra = fixture::unattributed(("a002", "session-a002", 1, "toolu_r1"), "p1", P1);
+    extra["writer"] = json!("a001");
+    assert!(matches!(
+        read_rows(&[fixture::header(), extra]),
+        Err(TruthFileError::Decode { line: 2, .. })
+    ));
+}
+
+#[test]
+fn a_detection_on_an_unattributed_read_is_unjudged() {
+    let dir = fixture::dir("unattributed-row");
+    let written = fixture::write(&dir, &unattributed_truth(true));
+    let outcome = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+    assert_eq!(outcome.resolved.unattributed, 1);
+    assert!(outcome.diagnostics.is_empty());
+    // The found detection (a001 → a002 at the read) is unjudged; the
+    // self-read and reread detections violate their controls.
+    assert_eq!(judged(&outcome), (0, 2, 1));
+    assert!(
+        outcome
+            .report
+            .false_positives
+            .iter()
+            .all(|fp| fp.prediction.reader_exchange != written.a002[1].id)
+    );
+}
+
+#[test]
+fn the_same_detection_without_the_row_is_a_false_positive() {
+    let dir = fixture::dir("unattributed-none");
+    let written = fixture::write(&dir, &unattributed_truth(false));
+    let outcome = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+    assert_eq!(outcome.resolved.unattributed, 0);
+    assert_eq!(judged(&outcome), (0, 3, 0));
+    assert!(
+        outcome
+            .report
+            .false_positives
+            .iter()
+            .any(|fp| fp.prediction.reader_exchange == written.a002[1].id && fp.violated.is_none())
+    );
+}
+
+#[test]
+fn an_unattributed_read_with_the_wrong_hash_is_dropped() {
+    let dir = fixture::dir("unattributed-hash");
+    let mut rows = unattributed_truth(false);
+    rows.push(fixture::unattributed(
+        ("a002", "session-a002", 1, "toolu_r1"),
+        "p1",
+        "another body",
+    ));
+    let written = fixture::write(&dir, &rows);
+    let outcome = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+    let mismatches: Vec<_> = outcome.diagnostics.named("hash_mismatch").collect();
+    assert_eq!(mismatches.len(), 1);
+    assert_eq!(mismatches[0].row, Some(RowKind::UnattributedRead));
+    assert_eq!(mismatches[0].effect, Effect::Dropped);
+    assert_eq!(outcome.resolved.dropped, 1);
+    assert_eq!(judged(&outcome), (0, 3, 0));
 }

@@ -9,6 +9,7 @@
 //!                             read earlier in the same session
 //! {"kind":"miss",…}           a read that found no page
 //! {"kind":"agent_cluster",…}  the agents sharing one API key
+//! {"kind":"unattributed_read",…} a read whose write was never logged (at the end)
 //! ```
 //!
 //! Decoding is strict: an unknown `kind`, an unknown field or a missing
@@ -23,9 +24,9 @@
 //! - Names are opaque (`agent-NNN`, `<topic>-<n>` today); nothing parses
 //!   them. `run` is a ULID; `at_unix_ms` is `started_at_unix_ms + at_ms`;
 //!   `written_at_unix_ms` is when the `PUT`'s response reached the writer.
-//! - No row is written for a read whose write event never arrived (the
-//!   swarm counts these as `unattributed_reads`), a read whose follow-up
-//!   request was never sent, or a failed `PUT`.
+//! - A read whose write event never arrived is an `unattributed_read`
+//!   row: the reader side and the content, no writer. No row is written
+//!   for a read whose follow-up request was never sent, or a failed `PUT`.
 //! - `content.blake3` and `content.sha256` hash the page body's bytes,
 //!   which are exactly the tool result's content; `content.at` indexes the
 //!   wire `messages` array of the reader's request.
@@ -46,6 +47,7 @@ pub enum TruthLine {
     SelfRead(Delivery),
     Reread(Delivery),
     Miss(Miss),
+    UnattributedRead(UnattributedRead),
     AgentCluster(KeyGroup),
 }
 
@@ -106,6 +108,27 @@ pub struct Miss {
     pub reader_turn: u32,
     pub reader_tool_use_id: String,
     pub read_tool: ReadTool,
+    pub at_ms: u64,
+    pub at_unix_ms: u64,
+}
+
+/// A read of a page version whose write the swarm never logged: content
+/// from another agent, writer unknown. Written at the run's end, after
+/// every other row, in read order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct UnattributedRead {
+    pub world: String,
+    pub reader: String,
+    pub reader_key_group: u32,
+    pub page: String,
+    /// The version the wiki's response header reported.
+    pub version: u64,
+    pub reader_session: String,
+    pub reader_turn: u32,
+    pub reader_tool_use_id: String,
+    pub read_tool: ReadTool,
+    pub content: Content,
     pub at_ms: u64,
     pub at_unix_ms: u64,
 }

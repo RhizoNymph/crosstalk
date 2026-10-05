@@ -19,6 +19,7 @@ pub enum RowKind {
     SelfRead,
     Reread,
     Miss,
+    UnattributedRead,
     AgentCluster,
 }
 
