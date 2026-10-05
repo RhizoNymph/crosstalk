@@ -29,9 +29,9 @@
 //!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
-//! `--detector live` scores the gateway's live composition through
-//! `detect::live`; until `crosstalk_gateway::live::Live` is in the build it
-//! reports "live backend unavailable" and exits 1.
+//! `--detector live` scores the gateway's live composition
+//! (`crosstalk_gateway::live::Live`, a fresh one per world) through
+//! `detect::live`.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -58,8 +58,9 @@ use crosstalk_eval::detect::live::{LiveDetector, LiveSettings, gateway_backend};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
+use crosstalk_eval::predict::Prediction;
 use crosstalk_eval::reference::ReferenceConfig;
-use crosstalk_eval::report::gates::{GATES_ENV, GateSearch, GatesFrom};
+use crosstalk_eval::report::gates::{GATES_ENV, GateDetector, GateSearch, GatesFrom};
 use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
@@ -246,6 +247,10 @@ struct RunArgs {
     /// How many misses and false positives to keep as examples.
     #[arg(long, default_value_t = 50)]
     examples: usize,
+    /// Write every prediction here as JSONL (`{"world", "prediction"}`):
+    /// ids, agents, routes and locations, never text.
+    #[arg(long)]
+    predictions: Option<PathBuf>,
     /// Which detector to run.
     #[arg(long, value_enum, default_value_t = DetectorChoice::Reference)]
     detector: DetectorChoice,
@@ -263,9 +268,20 @@ enum DetectorChoice {
     /// The gateway pipeline (`Pipeline::ingest`); unscored until the
     /// detection layers consume the bus.
     Pipeline,
-    /// The gateway's live composition (L3–L7) through `LiveBackend`;
-    /// unavailable until `crosstalk_gateway::live::Live` is in the build.
+    /// The gateway's live composition (L3–L7, `crosstalk_gateway::live::Live`)
+    /// through `LiveBackend`.
     Live,
+}
+
+impl DetectorChoice {
+    /// The gates that apply to this detector's runs.
+    fn gated(self) -> GateDetector {
+        match self {
+            Self::Reference => GateDetector::Reference,
+            Self::Pipeline => GateDetector::Pipeline,
+            Self::Live => GateDetector::Live,
+        }
+    }
 }
 
 /// Reference matcher parameters (defaults: `ReferenceConfig::default`).
@@ -450,9 +466,19 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
     let gates = load_gates(args.gates.clone())?;
     let dataset = source.id();
     let mut unlabelled = Unlabelled::default();
-    let observe = |world: &World, predicted: &[_]| {
+    let mut dump = match &args.predictions {
+        Some(path) => Some(BufWriter::new(
+            File::create(path).with_context(|| format!("creating {}", path.display()))?,
+        )),
+        None => None,
+    };
+    let mut dumped: std::io::Result<()> = Ok(());
+    let observe = |world: &World, predicted: &[Prediction]| {
         if matches!(args.source.dataset, Dataset::AiVillage) {
             unlabelled.observe(world, predicted);
+        }
+        if let (Some(out), Ok(())) = (dump.as_mut(), &dumped) {
+            dumped = write_predictions(out, world, predicted);
         }
     };
     let (name, summary) = match args.detector {
@@ -469,12 +495,16 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Live => {
-            let backend = gateway_backend()?;
-            let mut detector = LiveDetector::new(backend, LiveSettings::short(args.seed)?)?;
-            let summary = run(&mut source, &mut detector, examples, |_, _| {});
+            let mut detector = LiveDetector::new(gateway_backend(), LiveSettings::short(args.seed)?)?;
+            let summary = run(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
     };
+    dumped.context("writing predictions")?;
+    if let Some(mut out) = dump {
+        out.flush().context("writing predictions")?;
+    }
+    let gates = gates.for_detector(args.detector.gated());
     let outcomes = gates.evaluate(&summary.score);
     let failures = summary.failures.iter().map(ToString::to_string).collect();
     let report = Report::new(
@@ -534,6 +564,21 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// One JSONL line per prediction of `world`.
+fn write_predictions(
+    out: &mut impl Write,
+    world: &World,
+    predicted: &[Prediction],
+) -> std::io::Result<()> {
+    let world = world.key().to_string();
+    for prediction in predicted {
+        let line = serde_json::json!({ "world": world, "prediction": prediction });
+        serde_json::to_writer(&mut *out, &line)?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 fn truth_command(args: TruthArgs) -> Result<ExitCode> {
