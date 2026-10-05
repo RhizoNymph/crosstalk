@@ -20,7 +20,7 @@ This is a hackathon-stage project. The design is fully specified; the implementa
 | Surface service (L8) | Working, in process, over reference stores. It covers queries, operator actions, the live feed and export. |
 | Detection (L3–L7: reconstruct, provenance, flow, topology) | Specified, with reference in-memory stores. The pipeline stages are being integrated and are **not yet wired end to end** on this branch. |
 | Evaluation (`crates/eval`, `ct-eval`) | Converts public multi-agent datasets (SALT-NLP first) into labelled corpora and scores detectors against them. Ships a naive reference matcher as the baseline the pipeline has to beat. |
-| Operator UI | On branch `feat/ui`, being merged into `staging`. The hackathon demo runs it on synthetic fixture data in a replay mode (branch `demo/ui-replay`). |
+| Operator UI (`ui/`) | Builds as part of the workspace. It runs on a synthetic fixture world, optionally in replay mode, or on the seeded world through the in-process surface service. It is not yet connected to live detection output. |
 | Deployment (`deploy/`) | Docker Compose stack with the gateway, Postgres, Grafana, Prometheus, Loki and Alloy. A demo swarm sends synthetic agent traffic through the proxy without spending real tokens. |
 
 The demo shows what an operator sees. Its data is scripted fixture data, not the output of live detection. The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadmap.md).
