@@ -69,7 +69,8 @@ fn short_config_decodes_and_refuses_bad_ranges() {
     let config: ProvenanceConfig = serde_json::from_str(
         r#"{"short_spans": {"min_chars": 20, "max_chars": 40},
             "reader_output": {"min_chars": 80},
-            "spread": {"agents": 5, "distinctive_chars": 90}}"#,
+            "spread": {"agents": 5, "distinctive_chars": 90,
+                       "distinctive_ratio": 3, "tokens_per_text": 100}}"#,
     )
     .expect("decodes");
     assert_eq!(
@@ -77,7 +78,10 @@ fn short_config_decodes_and_refuses_bad_ranges() {
         ShortSpans::new(20, 40).expect("range")
     );
     assert_eq!(config.reader_output(), ReaderOutputRules::new(80));
-    assert_eq!(config.spread(), SpreadRule::new(5, 90).expect("a rule"));
+    assert_eq!(
+        config.spread(),
+        SpreadRule::new(5, 90, 3, 100).expect("a rule")
+    );
     let defaults = ProvenanceConfig::default();
     assert_eq!(defaults.short_spans().min_chars(), 24);
     assert_eq!(defaults.short_spans().max_chars(), 46);
@@ -87,9 +91,15 @@ fn short_config_decodes_and_refuses_bad_ranges() {
     assert!(on.forwarding());
     assert_eq!(defaults.spread().agents(), 4);
     assert_eq!(defaults.spread().distinctive_chars(), 64);
+    assert_eq!(defaults.spread().rare_bound(5), 11);
+    assert_eq!(defaults.spread().tokens_per_text(), 512);
+    assert_eq!(
+        SpreadRule::new(4, 64, 0, 512),
+        Err(ConfigError::DistinctiveRatio)
+    );
     for agents in [0, 1] {
         assert_eq!(
-            SpreadRule::new(agents, 64),
+            SpreadRule::new(agents, 64, 2, 512),
             Err(ConfigError::SpreadAgents { agents })
         );
     }
@@ -157,4 +167,26 @@ proptest! {
         let runs = token_runs(&normalize(&read), spans);
         prop_assert!(runs.iter().any(|run| run.fingerprint == origin.fingerprint));
     }
+}
+
+/// Tokens: words of four characters or more and anything with a digit; a
+/// word cut by the window's edge is not a token of the window.
+#[test]
+fn tokens_are_long_words_and_anything_with_digits() {
+    use crate::fingerprint::token::{observed, whole_tokens_in};
+    let text = "rendezvous key 7f3a, node 12, at 03:00";
+    // rendezvous, 7f3a, node, 12, 03, 00 (key and at are too short).
+    assert_eq!(observed(text, 512).len(), 6);
+    assert_eq!(observed(text, 2).len(), 2, "the cap bounds a text's tokens");
+    // "dezvous" is cut on the left: only 7f3a and node are whole.
+    assert_eq!(whole_tokens_in(text, 4, 25).len(), 2);
+    assert_eq!(
+        whole_tokens_in(text, 4, 24).len(),
+        1,
+        "node is cut on the right"
+    );
+    assert_eq!(
+        whole_tokens_in(text, 15, 19),
+        observed("7f3a", 512).into_iter().collect::<Vec<_>>()
+    );
 }

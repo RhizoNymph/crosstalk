@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.match.skeleton-dropped"
-statement = "A candidate ContentMatch on an origin span, in one decode layer of a read, whose merged hit runs are each shorter than SpreadRule::distinctive_chars normalized characters and of which at least one hit fingerprint is boilerplate by provenance.match.cross-agent-spread, is dropped whole: no ContentMatch is made from it, whatever its other hits."
+statement = "A candidate ContentMatch on an origin span, in one decode layer of a read, whose merged hit runs are each shorter than SpreadRule::distinctive_chars normalized characters and of which at least one hit fingerprint is boilerplate by provenance.match.cross-agent-spread (held by at least SpreadRule::agents agents and not distinctive: no whole token it covers is rare world-wide), is dropped whole: no ContentMatch is made from it, whatever its other hits."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -18,6 +18,10 @@ So a match made only of short runs that holds a boilerplate run is a
 skeleton, and is dropped whole. A short copy of one distinctive phrase has
 no boilerplate run and is kept; a match with a run of 64 characters or more
 is a copy or a broadcast and is kept (provenance.match.cross-agent-spread).
+A short broadcast survives through distinctiveness: its rare token keeps
+its runs from being boilerplate. The tradeoff is the same as the spread
+rule's: a skeleton whose every run holds a token unique to the template
+(a header such as "ROUTINE-NOTES-v2") is not dropped.
 """
 
 [evidence]

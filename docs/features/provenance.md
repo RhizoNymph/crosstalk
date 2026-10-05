@@ -157,17 +157,30 @@ watermark.
      `SpreadRule`). For each hit fingerprint, the originating agents are
      the agents of its live postings' spans and of their copies in other
      outputs (spans relayed from them, `ProvenanceStore::relays`), at any
-     time within retention. The fingerprint is boilerplate for short runs
-     when at least `spread.agents` (4) distinct agents originated or
-     copied it. A candidate match on an origin span in a layer whose
-     merged hit runs are all shorter than `spread.distinctive_chars` (64)
-     normalized characters, and that holds a boilerplate hit, is a template
-     skeleton filled with other slot words (bench transmission
-     01M46CB4DFC573NNYA711QRNC2) and is dropped whole: dropping only the
-     boilerplate hits would leave the runs next to a slot word, shared by
-     fewer agents. A match with a contiguous run of 64 characters or more
-     is a copy or a broadcast and is kept whatever the spread. The index
-     cutoff counts texts, which a world of a few agents never reaches.
+     time within retention; its holders are those originations and
+     copies. A fingerprint held by at least `spread.agents` (4) distinct
+     agents is boilerplate for short runs unless it is distinctive: one of
+     the whole tokens its k-gram covers in the read (`fingerprint::token`:
+     a normalized alphanumeric run of 4 or more characters, or holding a
+     digit; a word cut by the window's edge does not count) is observed in
+     at most `spread.distinctive_ratio` (2) texts per holder plus one. A
+     short secret passed around carries such a token (a key, an id, a
+     time); template prose is made of words seen throughout the world. A
+     candidate match on an origin span in a layer whose merged hit runs are
+     all shorter than `spread.distinctive_chars` (64) normalized
+     characters, and that holds a boilerplate hit, is a template skeleton
+     filled with other slot words (bench transmission
+     01M46CB4DFC573NNYA711QRNC2) and is dropped whole. A match with a
+     contiguous run of 64 characters or more is kept whatever the spread.
+     **Tradeoff:** a template carrying a token seen nowhere else (a header
+     such as "ROUTINE-NOTES-v2"), or whose words occur only inside the
+     template, reads as distinctive and is matched like a broadcast; and
+     distinctiveness is relative to the world, so in a world with little
+     other text most words are rare. Every scanned text (each span, each
+     scanned input part) observes its distinct token hashes as one
+     observation of its own, at most `spread.tokens_per_text` (512) of
+     them, within the index's retention; a capped text undercounts, which
+     errs toward keeping matches.
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -357,7 +370,7 @@ and changes span states only through `SpanState::advance`.
 | `semantic_threshold` | 0.85 |
 | `short_spans.min_chars`, `short_spans.max_chars` | 24, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
 | `reader_output.min_chars` | 64 normalized characters |
-| `spread.agents`, `spread.distinctive_chars` | 4, 64: a fragment four agents originated or copied, at any time, is boilerplate for matches whose runs are all under 64 characters; such a match is dropped whole |
+| `spread.agents`, `spread.distinctive_chars`, `spread.distinctive_ratio`, `spread.tokens_per_text` | 4, 64, 2, 512: a fragment four agents originated or copied, at any time, with no token seen in at most 2 texts per holder plus one, is boilerplate for matches whose runs are all under 64 characters; such a match is dropped whole; each text observes at most 512 tokens |
 | `forwarding` | false: forwarded spans are not indexed (INV-1090) |
 
 Every value is checked: `k` at least 4, depth 1 to 8, a non-zero retention,
@@ -418,7 +431,8 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/lib.rs` | Crate doc, modules | — |
 | `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `SpreadRule`, `winnow_params`, `ConfigError` |
 | `src/text/{mod,normalize,mapped}.rs` | Normalization with source ranges; decoded text with byte maps | `normalize`, `trimmed_len`, `NormChar`, `MappedText`, `MappedBuilder`, `trim_range` |
-| `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short` |
+| `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short`, `hash::token` |
+| `src/fingerprint/token.rs` | Tokens for world-wide rarity: what a text observes, the whole tokens in a window | `observed`, `whole_tokens_in`, `MIN_TOKEN_CHARS` |
 | `src/fingerprint/short.rs` | The short-span exact path: a whole value's hash, a read's token runs | `whole`, `token_runs` |
 | `src/decode/{mod,base64,hex,url,unicode,escape}.rs` | Decoders and the pipeline | `Step`, `TextDecoder`, `DecodedText`, `DecodePipeline`, `Layer`, `AnyDecoder`, the six decoders |
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |

@@ -132,3 +132,12 @@ const SHORT_DOMAIN: u64 = 0x5348_4F52_545F_5350;
 pub fn short(window: u64) -> u64 {
     mix(window ^ SHORT_DOMAIN)
 }
+
+/// Mixed into the hash of a token (`fingerprint::token`), so a token's
+/// count never shares a key with a k-gram or a short-span hash.
+const TOKEN_DOMAIN: u64 = 0x544F_4B45_4E5F_5357;
+
+/// The hash a token is counted under, from its window hash ([`kgram`]).
+pub fn token(window: u64) -> u64 {
+    mix(window ^ TOKEN_DOMAIN)
+}

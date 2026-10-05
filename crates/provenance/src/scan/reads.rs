@@ -38,7 +38,7 @@ use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
 use crate::decode::Step;
-use crate::fingerprint::short;
+use crate::fingerprint::{short, token};
 use crate::segment::{PartKind, TextPart, text_parts, view};
 use crate::store::ProvenanceStore;
 use crate::text::normalize;
@@ -149,6 +149,55 @@ impl Scanner {
         })
     }
 
+    /// The fingerprints among `widespread` (held by enough agents, with
+    /// their holder counts) that are not distinctive: none of the whole
+    /// tokens their k-gram covers in `layer` is seen in at most
+    /// `SpreadRule::rare_bound(holders)` texts
+    /// (`provenance.match.cross-agent-spread`).
+    async fn not_distinctive<I, S, M, L>(
+        &self,
+        session: &mut Session<'_, I, S, M, L>,
+        layer: &str,
+        kgrams: &[crate::fingerprint::KGram],
+        widespread: BTreeMap<crosstalk_spec::derived::provenance::fingerprint::Fingerprint, usize>,
+    ) -> Result<
+        std::collections::BTreeSet<crosstalk_spec::derived::provenance::fingerprint::Fingerprint>,
+        ScanError,
+    >
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        let mut boilerplate = std::collections::BTreeSet::new();
+        for (fingerprint, holders) in widespread {
+            let bound = self.spread().rare_bound(holders);
+            let tokens: Vec<_> = kgrams
+                .iter()
+                .filter(|kgram| kgram.fingerprint == fingerprint)
+                .flat_map(|kgram| {
+                    token::whole_tokens_in(
+                        layer,
+                        usize::try_from(kgram.start).unwrap_or(usize::MAX),
+                        usize::try_from(kgram.end).unwrap_or(usize::MAX),
+                    )
+                })
+                .collect();
+            let mut distinctive = false;
+            for token in tokens {
+                if session.token_frequency(token).await? <= bound {
+                    distinctive = true;
+                    break;
+                }
+            }
+            if !distinctive {
+                boilerplate.insert(fingerprint);
+            }
+        }
+        Ok(boilerplate)
+    }
+
     async fn read_part<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
@@ -174,17 +223,19 @@ impl Scanner {
             ));
             let kgrams = self.owned(queries);
             let hits = session.lookup(&kgrams).await?;
+            // Skeleton matches (`provenance.match.skeleton-dropped`): a
+            // match with no distinctive run that holds a boilerplate run
+            // (`provenance.match.cross-agent-spread`) is dropped whole.
+            let widespread = spread_boilerplate(&hits, &session.live, self.spread());
+            let spread = self
+                .not_distinctive(session, layer.text.text(), &kgrams, widespread)
+                .await?;
             let reader = session.reader;
             let live = &session.live;
             let keep = |span| {
                 live.get(span)
                     .is_some_and(|record: &crate::store::SpanRecord| record.span.agent != reader)
             };
-            let by_span = extents_by_span(&hits, &kgrams, keep);
-            // Skeleton matches (`provenance.match.skeleton-dropped`): a
-            // match with no distinctive run that holds a boilerplate run
-            // (`provenance.match.cross-agent-spread`) is dropped whole.
-            let spread = spread_boilerplate(&hits, live, self.spread());
             let boilerplate = if spread.is_empty() {
                 BTreeMap::new()
             } else {
@@ -195,6 +246,7 @@ impl Scanner {
                     .collect();
                 extents_by_span(&template, &kgrams, keep)
             };
+            let by_span = extents_by_span(&hits, &kgrams, keep);
             for (span, extents) in by_span {
                 if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
                 {

@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.match.cross-agent-spread"
-statement = "A fingerprint or short-span hash that at least SpreadRule::agents distinct agents (4 by default) originated or copied, at any time within retention, counting indexed spans and the spans relayed from them, is boilerplate for short runs: it supports no ContentMatch of any carrier none of whose contiguous runs holds SpreadRule::distinctive_chars normalized characters (64 by default); a match with such a contiguous run is kept whatever the spread."
+statement = "A fingerprint or short-span hash is boilerplate for short runs when at least SpreadRule::agents distinct agents (4 by default) originated or copied it, at any time within retention, counting indexed spans and the spans relayed from them, and none of the whole tokens its k-gram covers in the read (normalized alphanumeric runs of 4 or more characters, or holding a digit) has been observed in at most SpreadRule::rare_bound(holders) texts (distinctive_ratio x holders + 1, ratio 2 by default; holders being its originations and copies). Boilerplate fingerprints support no ContentMatch of any carrier none of whose contiguous runs holds SpreadRule::distinctive_chars normalized characters (64 by default); a match with such a contiguous run is kept whatever the spread."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -9,20 +9,31 @@ The boilerplate cutoff counts texts (50 by default), and a world of a few
 agents never reaches it: on the node0 bench (20 agents) templated prompts,
 short shared phrase fragments and generator-wide page skeletons matched
 readers as deliveries. A template's pieces are written by many agents over
-minutes, so no time window catches them; the count is world-wide and
-timeless. Counting agents alone would also suppress a broadcast: when one
-agent sends a distinctive message through a channel the gateway cannot see
-and five others copy it, the copies count as originations (or copies of the
-first span) too. Length tells the two apart. A broadcast or a copy is one
-contiguous run of 64 characters or more and is kept whatever its spread
-(only the index's text cutoff applies to it); a template is short runs. A
-lookup returns every posting of a fingerprint, and the store lists the
-copies of each span (ProvenanceStore::relays), so the agents are counted
-from the postings' spans and their copies.
+minutes, so no time window catches them, and without an observed read an
+unobserved broadcast looks the same as a template: one earliest writer,
+later holders. What separates them is distinctiveness. A short secret
+passed around ("rendezvous key 7f3a, node 12, 03:00") holds a token seen
+almost nowhere but in the secret's own copies; template prose is made of
+words seen throughout the world. So a widespread short fragment is
+boilerplate only when none of its whole tokens is rare relative to its
+holders: a token in at most two texts per holder (the holder's writing and
+one read of it) plus one is distinctive. Long runs (64 characters or more)
+are kept whatever the spread: a broadcast or copy of that length is
+evidence on its own.
+
+The tradeoff: a template that carries a token seen nowhere else (a unique
+header such as "ROUTINE-NOTES-v2") reads as distinctive and is matched
+like a broadcast; so is a template whose words occur only inside the
+template itself. Distinctiveness is relative to the world, so a world with
+little other text makes most words rare. Token observations share the
+index's retention, and each text observes at most
+SpreadRule::tokens_per_text distinct tokens (512 by default); a capped
+text undercounts, which makes tokens look rarer and keeps matches rather
+than hiding them.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::match_quality::short_template_written_by_many_agents_is_not_matched", "crosstalk_provenance::tests::match_quality::short_template_fragments_from_unrelated_agents_give_no_match", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer", "crosstalk_provenance::tests::match_quality::long_run_inside_a_template_still_matches"]
+unit = ["crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer", "crosstalk_provenance::tests::match_quality::template_with_a_unique_header_token_is_matched", "crosstalk_provenance::tests::match_quality::short_template_written_by_many_agents_is_not_matched", "crosstalk_provenance::tests::match_quality::short_template_fragments_from_unrelated_agents_give_no_match", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer", "crosstalk_provenance::tests::match_quality::long_run_inside_a_template_still_matches", "crosstalk_provenance::tests::short::tokens_are_long_words_and_anything_with_digits"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

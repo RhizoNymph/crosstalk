@@ -1723,6 +1723,20 @@ plants single tokens), so the rule never fires there. The bench it targets
 (20 agents, template-generated wiki pages) has no local live replay;
 crosstalk-infra's demo `--scenario boilerplate` is its eval regression.
 
+**Distinctive broadcasts** (`fix/l4-distinctive-broadcasts`: a fragment
+held by four agents is boilerplate only when none of its tokens is rare
+world-wide, INV-1094 and INV-1150). Measured on 1e7c535 against 1e7c535
+plus the branch, live, release build: SALT `--limit 53` 0.765 / 0.842 on
+both (every table row identical, 17.4 min, 330 MB both), wiki
+`--max-agents 100` 0.950 / 1.000 on both, swarm-traces 1.000 / 1.000 on
+both. As before, these worlds have no fragment held by four agents. On the
+bench replay's blobs the skeleton example stays dropped: its run "notes on
+cache invalidation still say" (6 agents) has no rare token, its least
+frequent being "cache" and "invalidation" in 31 texts against about 10
+holding the run; the run " is fine; that is no longer true." is
+distinctive by this rule ("longer" occurs only inside that template), so
+the drop rests on the other run.
+
 ### Gates
 
 `gates.toml` gates the live detector (`detector = "live"`) a little below

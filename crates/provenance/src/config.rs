@@ -15,7 +15,8 @@
 //!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
 //!  "short_spans": {"min_chars": 24, "max_chars": 46},
 //!  "reader_output": {"min_chars": 64},
-//!  "spread": {"agents": 4, "distinctive_chars": 64},
+//!  "spread": {"agents": 4, "distinctive_chars": 64, "distinctive_ratio": 2,
+//!             "tokens_per_text": 512},
 //!  "forwarding": false}
 //! ```
 
@@ -67,6 +68,8 @@ pub enum ConfigError {
     EmptyLocatorKey,
     #[error("the spread rule needs at least 2 agents, got {agents}")]
     SpreadAgents { agents: u32 },
+    #[error("the spread rule's distinctive_ratio must be at least 1")]
+    DistinctiveRatio,
     #[error("short spans need {MIN_SHORT_CHARS} <= min_chars <= max_chars, got {min}..={max}")]
     ShortSpanRange { min: u16, max: u16 },
 }
@@ -176,33 +179,50 @@ impl Default for ReaderOutputRules {
 ///
 /// A fingerprint (or short-span hash) is boilerplate for short runs when at
 /// least `agents` distinct agents originated or copied it, at any time,
-/// world-wide (its live postings' spans and the spans relayed from them).
-/// A match none of whose contiguous runs reaches `distinctive_chars`
-/// normalized characters, and that holds at least one boilerplate run, is a
-/// template skeleton filled with different slot words, and is dropped
-/// whole. A match with a contiguous run of `distinctive_chars` or more is a
-/// copy or a broadcast and is kept whatever the spread; only the index's
-/// text cutoff applies to it. The index cutoff counts texts, which a world
-/// of a few agents never reaches.
+/// world-wide (its live postings' spans and the spans relayed from them),
+/// **and** it is not distinctive. It is distinctive when one of the whole
+/// tokens it covers (`fingerprint::token`) is (nearly) never seen outside
+/// the fragment's own occurrences: observed in at most
+/// `distinctive_ratio` texts per holder plus one, the holders being its
+/// originations and copies. A short secret broadcast to many agents (a
+/// key, an id) carries such a token; template prose is made of words seen
+/// everywhere. A match none of whose contiguous runs reaches
+/// `distinctive_chars` normalized characters, and that holds at least one
+/// boilerplate run, is a template skeleton filled with different slot
+/// words, and is dropped whole. A match with a contiguous run of
+/// `distinctive_chars` or more is kept whatever the spread. Each scanned
+/// text observes at most `tokens_per_text` distinct tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
     agents: NonZeroU32,
     distinctive_chars: u32,
+    distinctive_ratio: u32,
+    tokens_per_text: u32,
 }
 
 impl SpreadRule {
-    pub fn new(agents: u32, distinctive_chars: u32) -> Result<Self, ConfigError> {
+    pub fn new(
+        agents: u32,
+        distinctive_chars: u32,
+        distinctive_ratio: u32,
+        tokens_per_text: u32,
+    ) -> Result<Self, ConfigError> {
         let agents = NonZeroU32::new(agents)
             .filter(|agents| agents.get() >= 2)
             .ok_or(ConfigError::SpreadAgents { agents })?;
+        if distinctive_ratio == 0 {
+            return Err(ConfigError::DistinctiveRatio);
+        }
         Ok(Self {
             agents,
             distinctive_chars,
+            distinctive_ratio,
+            tokens_per_text,
         })
     }
 
-    /// How many distinct originating agents make a fragment boilerplate
-    /// for short runs.
+    /// How many distinct originating agents make a non-distinctive fragment
+    /// boilerplate for short runs.
     pub fn agents(&self) -> usize {
         usize::try_from(self.agents.get()).unwrap_or(usize::MAX)
     }
@@ -212,14 +232,33 @@ impl SpreadRule {
     pub fn distinctive_chars(&self) -> usize {
         usize::try_from(self.distinctive_chars).unwrap_or(usize::MAX)
     }
+
+    /// The most texts a token may be seen in, for a fragment with
+    /// `holders` originations and copies, and still be distinctive:
+    /// `distinctive_ratio * holders + 1`.
+    pub fn rare_bound(&self, holders: usize) -> u64 {
+        let holders = u64::try_from(holders).unwrap_or(u64::MAX);
+        u64::from(self.distinctive_ratio)
+            .saturating_mul(holders)
+            .saturating_add(1)
+    }
+
+    /// How many distinct tokens one scanned text observes at most.
+    pub fn tokens_per_text(&self) -> usize {
+        usize::try_from(self.tokens_per_text).unwrap_or(usize::MAX)
+    }
 }
 
 impl Default for SpreadRule {
-    /// 4 agents; runs of 64 characters are exempt.
+    /// 4 agents; runs of 64 characters are exempt; a token seen in at most
+    /// two texts per holder (its writing and one read of it) plus one is
+    /// distinctive; 512 tokens per text.
     fn default() -> Self {
         Self {
             agents: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
             distinctive_chars: 64,
+            distinctive_ratio: 2,
+            tokens_per_text: 512,
         }
     }
 }
@@ -718,6 +757,18 @@ struct RawSpread {
     agents: u32,
     #[serde(default = "default_distinctive")]
     distinctive_chars: u32,
+    #[serde(default = "default_ratio")]
+    distinctive_ratio: u32,
+    #[serde(default = "default_tokens")]
+    tokens_per_text: u32,
+}
+
+fn default_ratio() -> u32 {
+    2
+}
+
+fn default_tokens() -> u32 {
+    512
 }
 
 fn default_spread_agents() -> u32 {
@@ -733,6 +784,8 @@ impl Default for RawSpread {
         Self {
             agents: default_spread_agents(),
             distinctive_chars: default_distinctive(),
+            distinctive_ratio: default_ratio(),
+            tokens_per_text: default_tokens(),
         }
     }
 }
@@ -819,7 +872,12 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
         let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars);
-        let spread = SpreadRule::new(raw.spread.agents, raw.spread.distinctive_chars)?;
+        let spread = SpreadRule::new(
+            raw.spread.agents,
+            raw.spread.distinctive_chars,
+            raw.spread.distinctive_ratio,
+            raw.spread.tokens_per_text,
+        )?;
         Self::new(
             winnow,
             decode,
