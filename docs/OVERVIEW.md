@@ -1489,20 +1489,31 @@ Features Index:
       on one resource: lexical paths, relative paths against the stated
       or tracked working directory (Opaque without one), normalized URLs,
       folded MCP keys, MediaWiki pages as their canonical article URL
-      whatever URL or API reaches them, GitHub files and files of known
-      clones as the repository's file. A conservative shell lexer and
-      interpreter reads redirections, file readers, tee, curl, wget, cd,
-      git and gh. Each write carries its outcome (Delivered, Rejected,
-      Unknown), judged per tool in one place; reads need a delivered
-      result. ConversationContext learns the persistent shell's directory
-      and clones from shell calls. Builds the stored AccessOp with the
-      write's spans (originated plus self-relayed sources).
+      whatever URL or API reaches them, a forge repository as the spec's
+      canonical Locator::Repository from every remote, web, API and Pages
+      form, its files (forge URLs and files of known clones) as the
+      repository's file, GitHub/GitLab issues and pull/merge requests as
+      their canonical web URL. A conservative shell lexer and interpreter
+      reads redirections, file readers (cat, head, tail, sed -n), tee,
+      curl, wget, cd, git (clone, remote, show, push as an Unseen-payload
+      write, pull/fetch/clone as reads) and the gh/glab CLIs (issue and
+      PR/MR threads, api as the HttpTool contract); OpenHands'
+      execute_bash and str_replace_editor are known tools. Each write
+      carries its outcome (Delivered, Rejected, Unknown), judged in one
+      place per tool and, for git, curl/wget and gh/glab, from the
+      command's output; reads need a delivered result; a write's locators
+      never depend on its result. ConversationContext learns the
+      persistent shell's directory and clones from shell calls. Builds the
+      stored AccessOp with the write's spans (originated plus self-relayed
+      sources; none for an Unseen payload).
     entry_points:
       - crates/flow/src/extract/mod.rs
       - crates/flow/src/extract/context.rs
       - crates/flow/src/extract/outcome.rs
       - crates/flow/src/extract/mcp/config.rs
       - crates/flow/src/extract/spans.rs
+      - crates/flow/src/extract/bash/forge.rs
+      - crates/flow/src/extract/resource/repo.rs
     depends_on: [type_spec, channel_semantics, workspace]
     doc: docs/features/flow_extract.md
   flow_correlator:

@@ -107,7 +107,7 @@ pub fn opaque(tool: &str, key: &str) -> Locator {
 
 pub fn write(locator: Locator, outcome: WriteOutcome, via: Extraction) -> Classified {
     Classified {
-        op: ExtractedOp::Write(outcome),
+        op: ExtractedOp::write(outcome),
         locator,
         via,
     }

@@ -10,8 +10,8 @@ is pure and synchronous. The flow consumer (feat/flow-correlator) calls it
 and turns its output into stored `Access`es.
 
 The key property is **canonical resource identity**: two agents that touch
-one thing (a file, a URL, a wiki page, a file of a shared repository, an
-MCP resource) through different tools, working directories, clones or
+one thing (a file, a URL, a wiki page, a shared repository, a file of it,
+an issue or pull request, an MCP resource) through different tools, working directories, clones or
 spellings get one `Locator`, and so one `ResourceId`. The registry refuses
 a second resource with a stored locator (`TrafficError::DuplicateLocator`),
 so locator equality is resource identity.
@@ -20,23 +20,29 @@ so locator equality is resource identity.
 
 - Claude Code's tools: `Read`, `Write`, `Edit`, `MultiEdit`,
   `NotebookEdit`, `NotebookRead`, `WebFetch`, `Bash`; the same kind of
-  tools of OpenCode, pi, Gemini CLI, Codex and the Anthropic text editor
-  tool; the `web_fetch` server tool.
+  tools of OpenCode, pi, Gemini CLI, Codex, OpenHands (`execute_bash`,
+  `str_replace_editor`) and the Anthropic text editor tool; the
+  `web_fetch` server tool.
 - HTTP tools: `http_request {method, url, body?}` (the eval converter's
   shape) and the other configured names (`fetch`, `web_fetch`, `curl` by
   default), with the method deciding the op.
 - Shell commands: a conservative lexer and interpreter for redirections,
-  file readers (`cat`, `head`, `tail`, `tac`, `bat`), `tee`, `curl`,
-  `wget`, `cd`, `git clone`/`remote`/`config`/`show`, `gh repo clone`.
+  file readers (`cat`, `head`, `tail`, `tac`, `bat`, `sed -n 'X,Yp'`),
+  `tee`, `curl`, `wget`, `cd`, `git clone`/`remote`/`config`/`show`,
+  `git push`/`pull`/`fetch`, and the forge CLIs `gh` and `glab` (`repo
+  clone`, issue and pull/merge request `create`/`comment`/`note`/`edit`/
+  `update`/`review`/`view`/`list`, `api`).
 - MCP tools mapped by configuration: tool name and argument paths (JSON
   Pointers) to a resource (a keyed collection, a URL or a file) and an op,
   with server aliases and refusal markers. The M2 wiki server is a
   configuration, not code.
 - Canonicalization: lexical file paths, relative paths against the stated
-  working directory, URLs, MCP keys, MediaWiki pages, GitHub files, files
-  of known clones.
+  working directory, URLs, MCP keys, MediaWiki pages, repositories
+  (`Locator::Repository`) and their files, issues and pull/merge requests
+  on GitHub and `gitlab.com`, files of known clones.
 - Write outcomes per known tool (`Delivered`, `Rejected`, `Unknown`), and
-  reads kept only for a delivered result.
+  for a known shell command from its output; reads kept only for a
+  delivered result.
 - The spans a write carries, from L4's spans, and the stored `AccessOp`.
 - The conversation context: the working directory stated in a system
   prompt, and what it learns from shell calls (the persistent shell's
@@ -55,8 +61,17 @@ so locator equality is resource identity.
   resource); `Grep`/`Glob` results; `git diff`/`log -p` content.
 - MediaWiki namespace folding (`talk:` and `Talk:` stay apart), wiki
   writes other than `edit`, `delete`, `protect`, `undelete`, `move` and
-  `index.php` `submit`; forges other than GitHub; branch refs with slashes
-  in GitHub `blob` URLs.
+  `index.php` `submit`; forge URLs other than GitHub's and `gitlab.com`'s
+  (a self-hosted GitLab's or GitHub Enterprise's web URLs stay URLs; their
+  remotes and CLI commands are still repositories and threads); branch
+  refs with slashes in `blob` URLs; GitHub Pages user-site subdirectories,
+  read as project repositories.
+- `gh`/`glab` verbs other than the listed ones (`close`, `reopen`,
+  `merge`, `checkout`, `diff`, …); a `create`'s new number, which only the
+  result shows (writes are decided from the call,
+  `flow.extract.write-locators-from-call`); `gh` and `glab` `graphql`.
+- Exit statuses: a shell result's outcome is the wire's flag and, for the
+  known commands, their output's text.
 - Unicode normalization (NFC) of keys and titles.
 - Symlinks: path resolution is lexical (`flow.resource.path-normalization`).
 
@@ -81,20 +96,25 @@ extract_classified                                                     │
      fetch::candidates     url ─▶ url_locator ─▶ http::candidates (GET)│
      http::tool_candidates method ─▶ op; url ─▶ url_locator ─▶ site?   │
      bash::run             lex::Script::lex ─▶ commands::Shell::run    │
-                             redirects, cat/tee, net (curl/wget ─▶     │
+                             redirects, cat/tee/sed, net (curl/wget ─▶ │
                              HttpRequest ─▶ http::candidates),         │
-                             git/gh (clones bound in the shell state)  │
+                             git (clones bound in the shell state;     │
+                             push/pull/fetch/clone ─▶ RepoId::locator),│
+                             forge (gh/glab threads, api ─▶ HTTP)      │
+                           each shell access tagged with the command   │
+                           whose output judges it (CommandRule)        │
      mcp::candidates       ArgPath ─▶ KeyCanon | url | file locator    │
-  outcome::write_outcome(tool, result)     one place, per known tool   │
-  outcome::read_delivered(tool, result)                                │
   each candidate:                                                      │
-     Write ─▶ ExtractedOp::Write(outcome)                              │
-     Read  ─▶ ExtractedOp::Read if delivered, else dropped             │
+     outcome::judge(tool, candidate.rule, result)  one place           │
+     Write ─▶ ExtractedOp::Write { outcome, payload }                  │
+     Read  ─▶ ExtractedOp::Read if delivered (not Rejected), else      │
+              dropped                                                  │
   dedupe ─▶ Vec<Classified> ◀──────────────────────────────────────────┘
   ResourceExtractor::extract ─▶ Classified::into_spec ─▶ ExtractedAccess
 
-consumer, per access:
+consumer (gateway extract layer), per access:
   spans::write_spans(call part, writer, L4 spans, source agent)  ─▶ Vec<SpanId>
+    WritePayload::Unseen (git push) ─▶ no spans
   spans::access_op(op, call part, result part, spans)             ─▶ AccessOp
 ```
 
@@ -113,13 +133,50 @@ may name the wiki page or repository file the request reaches.
 | a file in a known clone | `File { host: Some(<repo id>), path: <path in repo> }` | `RepoBindings::locate`, longest root |
 | a URL | `Url { scheme, host, path, query }` | scheme/host lower case, IDNA, default port and fragment and user info dropped, dot segments resolved, percent-encoding normalized, query parameters sorted, empty query none |
 | a MediaWiki page | `Url` of the canonical article: `https://en.wikipedia.org/wiki/Dead_drop` | title: `_`/whitespace runs one space, trimmed, `#section` dropped, first letter upper-cased on capital-links sites; mobile host folded |
-| a GitHub file | `File { host: Some("github.com/<owner>/<repo>"), path }` | `blob`, `raw`, `raw.githubusercontent.com` and contents API URLs; the ref is dropped |
+| a forge repository | `Repository { host, owner, name }` | the spec's `Locator::repository`: host lower case without `www.`/port/trailing dot, owner (`/`-joined for nested groups) and name lower case, `.git` dropped. Reached by its remotes (https, `ssh://`, `git@host:o/n`, any case, `.git` or not) as `git clone`/`push`/`pull`/`fetch` operands or a clone's bound remote, and by `github.com/o/n`, `…/tree/<ref>`, `codeload.github.com/o/n/…`, `api.github.com/repos/o/n` and its other subpaths, Pages `o.github.io/n/…` (`o.github.io/` is `o/o.github.io`), `gitlab.com/<path…>/n`, `…/-/<other>`, `gitlab.com/api/v4/projects/<encoded path>`, `g.gitlab.io/p/…` |
+| a repository on the local filesystem | `File { host: None, path: <repo dir> }` | `/srv/shared/atlas.git` and `file:///srv/shared/atlas` are `/srv/shared/atlas` |
+| a forge file | `File { host: Some("<host>/<owner>/<repo>"), path }` | `blob`, `raw`, `raw.githubusercontent.com`, GitHub contents API, GitLab `/-/blob\|raw/<ref>/…` and `repository/files/<encoded>` URLs; the ref is dropped. The host is the repository's `host/owner/name` (`Locator::repository_file_host`) |
+| a GitHub issue or pull request | `Url` `https://<host>/<owner>/<name>/issues/<n>` | for both: they share one number space and one conversation (`/issues/<n>` redirects to `/pull/<n>`; the REST API comments on both at `/issues/<n>/comments`). Reached by `github.com/o/n/issues\|pull/<n>/…`, `api.github.com/repos/o/n/issues\|pulls/<n>/…`, `gh issue\|pr <verb> <n>\|#<n>\|<url>` |
+| a GitLab issue or merge request | `Url` `https://<host>/<owner>/<name>/-/issues/<n>`, `…/-/merge_requests/<n>` | web, API v4 (`projects/<p>/issues\|merge_requests/<n>/…`) and `glab issue\|mr <verb> <n>` |
+| a repository's issues or pull/merge requests as a whole | `Url` `https://<host>/<owner>/<name>/issues`, `/pulls` (GitHub), `/-/issues`, `/-/merge_requests` (GitLab) | `create` and `list`, and a thread command without a number; the web and API collection URLs |
 | an MCP resource | `Mcp { server, tool: <collection>, target }` | configured canonical server (aliases folded), the collection (not the tool) as `tool`, the key folded by `KeyCanon` |
 
 A repository id is `host/owner/name` in lower case, without scheme, user,
 port or `.git` (`https://github.com/A/B.git`, `git@github.com:a/b`,
 `ssh://git@github.com:22/a/b` are one), or the normalized absolute path of
 a local repository (`/srv/shared/atlas.git`, `file:///srv/shared/atlas`).
+`RepoId::locator` is the repository's own locator, `RepoId::file` a file
+in it, `ForgeRepo::thread`/`collection` its threads.
+
+**Canonical forms, for the eval converter.** Repository:
+`Locator::Repository { host: "github.com", owner: "agentvillage", name:
+"atlas" }` (wire: `{"type": "repository", "data": {"host": "github.com",
+"owner": "agentvillage", "name": "atlas"}}`). File in it: `File { host:
+"github.com/agentvillage/atlas", path: "/src/app.py" }`. Thread:
+`https://github.com/agentvillage/atlas/issues/13` (an issue or a pull
+request), `https://gitlab.com/village/ops/infra/-/merge_requests/3`.
+Collection: `https://github.com/agentvillage/atlas/issues` or `/pulls`.
+
+### Git and the forge CLIs
+
+| Command | Access | Locator | Payload | Judged by |
+| --- | --- | --- | --- | --- |
+| `git push [<remote>]` (not `-n`/`--dry-run`) | write | the remote operand if a URL or path, else the clone's bound repository | `Unseen`: no spans | `GitPush` |
+| `git pull`, `git fetch [<remote>]` (`--all`: the bound one) | read | as for push | | `GitTransfer` |
+| `git clone <remote>`, `gh repo clone`, `glab repo clone` | read (and the directory is bound) | the remote | | `GitTransfer` |
+| `gh issue\|pr`, `glab issue\|mr` `create` | write | the collection | the call's arguments (title, body) | `ForgeCli` |
+| … `comment`, `note`, `edit`, `update`, `review` | write | the thread of the number or URL operand, else the collection | the call's arguments | `ForgeCli` |
+| … `view` | read | the thread, else the collection | | `ForgeCli` |
+| … `list` | read | the collection | | `ForgeCli` |
+| `gh api <endpoint>`, `glab api <endpoint>` | the `HttpTool` contract: `-X`, else `POST` with `-f`/`-F`/`--input`, else `GET` | the canonical URL of `https://api.github.com/<endpoint>` (`--hostname h`: `https://h/api/v3/…`) or `https://gitlab.com/api/v4/<endpoint>`, through the site rules; `{owner}`/`{repo}` and `:fullpath`/`:id`/`:namespace`/`:group`/`:repo` filled from the bound repository; `graphql` none | the call's arguments | `ForgeCli` |
+
+The repository of a thread command is `-R`/`--repo` (`o/n`, `host/o/n`
+when the first segment has a dot, `group/sub/n`, or a URL), else the URL
+operand's, else the clone's bound repository; with none known there is no
+access. A write's locator is decided from the call alone: the gateway
+holds writes at the call and releases them in order with the result
+(`flow.extract.write-locators-from-call`), so `gh issue create` writes the
+collection even though its output prints the new issue's URL.
 
 ### Write outcomes
 
@@ -128,7 +185,18 @@ a local repository (`/srv/shared/atlas.git`, `file:///srv/shared/atlas`).
 1. no result: `Unknown` (the consumer extracts a write without one only
    once its settle window closed);
 2. `ToolOutcome::Error`: `Rejected`;
-3. otherwise the tool's content rule (`content_rule`): file tools read
+3. for an access a known shell command made, that command's output
+   (`CommandRule`), when it says something:
+
+   | Command | `Rejected` | `Delivered` | neither |
+   | --- | --- | --- | --- |
+   | `git push` | a line opening with `! [rejected]`, `! [remote rejected]`, `error:`, `fatal:`, `remote: Permission`, `remote: Invalid`, `Permission denied` | a ref update (`a..b  main -> main`, `+ a...b`, `* [new branch]`) or `Everything up-to-date` | `Unknown` |
+   | `git pull`/`fetch`/`clone` | a line opening with `fatal:` or `error:` | | the next step |
+   | `curl`, `wget` | the last HTTP status shown is 4xx/5xx (`HTTP/x 404` status lines from `-i`/`-I`/`-v`, wget's `awaiting response... 404` and `ERROR 404:`, the trailing code a `-w '%{http_code}'` printed), or `curl: (N)` | the last status shown is 2xx/3xx | the next step |
+   | `gh`, `glab` | a line opening with `gh: `, `glab: `, `GraphQL:`, `error:`, `ERROR:`, `HTTP 4`/`HTTP 5`, `could not`, `failed to`, `X `, or ending `(HTTP 4xx/5xx)` | a line opening with `https://` or `✓` | the next step |
+
+   The output is the whole call's (a script's commands share one result);
+4. otherwise the tool's content rule (`content_rule`): file tools read
    Claude Code's refusals (`<tool_use_error>`, "The user doesn't want to
    proceed with this tool use"); a configured MCP tool reads its refusal
    markers; fetch, shell and HTTP tools have none, and keep the wire's
@@ -167,7 +235,8 @@ arrived without an error, after it is extracted:
   `git remote add|set-url`, and the remote a lone `git remote -v`,
   `git remote get-url` or `git config --get remote.<n>.url` prints, each
   bound to the directory it ran in (`git -C` honoured);
-- the directory: for a tool whose shell persists (Claude Code `Bash`), the
+- the directory: for a tool whose shell persists (Claude Code `Bash`,
+  OpenHands `execute_bash`), the
   directory the last command left the shell in, unknown after a `cd` it
   cannot follow; Claude Code's "Shell cwd was reset to <dir>" wins.
 
@@ -179,8 +248,8 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | File | Role | Key exports |
 | --- | --- | --- |
 | `extract/mod.rs` | the composite extractor | `ToolExtractors` (`new`, `identify`, `extract_classified`, `ResourceExtractor`) |
-| `extract/op.rs` | outputs; re-exports the spec's `WriteOutcome` and `ExtractedOp` | `WriteOutcome` (`pairs`), `ExtractedOp`, `Classified` (`into_spec`), `Candidate` |
-| `extract/outcome.rs` | result judging, per known tool | `ContentRule`, `content_rule`, `write_outcome`, `read_delivered`, `result_text` |
+| `extract/op.rs` | outputs; re-exports the spec's `WriteOutcome`, `ExtractedOp` and `WritePayload` | `WriteOutcome` (`pairs`), `ExtractedOp`, `WritePayload`, `Classified` (`into_spec`), `Candidate` (`unseen`, `judged_by`) |
+| `extract/outcome.rs` | result judging, per known tool and known shell command | `ContentRule`, `content_rule`, `CommandRule` (`judge`), `judge`, `write_outcome`, `read_delivered`, `result_text` |
 | `extract/catalog.rs` | known tools | `KnownTool`, `FileTool`, `FetchTool`, `ShellTool`, `HttpTool`, `McpTool`, `FILE_TOOLS`, `FETCH_TOOLS`, `SHELL_TOOLS`, `identify`, `mcp_name` |
 | `extract/args.rs` | arguments | `Args`, `ArgPath` (JSON Pointer), `ArgError`, `InvalidArgPath` |
 | `extract/context.rs` | per-conversation context | `ConversationContext` (`from_system_prompt`, `scope`, `bind_repo`, `observe`), `stated_cwd` |
@@ -192,19 +261,24 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/bash/lex.rs` | shell lexer | `Script` (`lex`, `from_argv`), `Command`, `Word`, `Redirect`, `RedirectOp`, `LexError` |
 | `extract/bash/commands.rs` | shell interpreter | `Shell`, `ShellState`, `ShellRun` |
 | `extract/bash/net.rs` | `curl`, `wget` | |
-| `extract/bash/git.rs` | `git`, `gh` | |
+| `extract/bash/git.rs` | `git`: clones, remotes, `show`, `push`/`pull`/`fetch`/`clone` | |
+| `extract/bash/forge.rs` | `gh`, `glab`: `repo clone`, issue and pull/merge request commands, `api` | |
 | `extract/bash/options.rs` | getopt-style splitting | `Options`, `OptSpec` |
 | `extract/mcp/mod.rs` | configured MCP tools | `candidates` |
 | `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_sites`, `rule`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError`, `DEFAULT_HTTP_TOOLS` |
 | `extract/resource/path.rs` | paths | `AbsolutePath`, `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
 | `extract/resource/url.rs` | URLs | `url_locator`, `url_text`, `scan_urls`, `UrlError` |
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
-| `extract/resource/repo.rs` | repositories | `RepoId` (`parse`, `forge`, `file`), `RepoBindings` |
+| `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
-| `extract/sites/github.rs` | GitHub | `apply` |
+| `extract/sites/github.rs` | GitHub: repositories, files, threads, Pages | `apply` |
+| `extract/sites/gitlab.rs` | `gitlab.com`: projects, files, threads, Pages | `apply` |
 | `extract/spans.rs` | write spans, `AccessOp` | `write_spans`, `access_op`, `AccessOpError` |
-| `extract/fuzz.rs`, `extract/tests/`, `extract/resource/tests.rs` | tests; `tests/wiki.json` is the M2 wiki configuration fixture | |
+| `extract/fuzz.rs`, `extract/tests/`, `extract/resource/tests.rs` | tests; `tests/wiki.json` is the M2 wiki configuration fixture; `tests/forges.rs` repositories, git, the forge CLIs, shell outcomes, `sed` and OpenHands | |
+| `spec/types/derived/flow/resource.rs` | the spec's repository locator | `Locator::Repository`, `Locator::repository` (`InvalidRepository`), `Locator::repository_file_host` |
+| `spec/types/interfaces/l5_flow.rs` | where a write's content is | `ExtractedOp::Write { outcome, payload }`, `ExtractedOp::write`, `WritePayload` (`CallArguments`, `Unseen`) |
+| `crates/flow/src/correlate/tests/shared_web.rs` | shared public web content stays suspected | |
 
 ## Configuration
 
@@ -250,7 +324,8 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
       { "hosts": ["*.wikipedia.org"], "article_path": "/wiki/", "script_path": "/w/",
         "capital_links": true, "fold_mobile_host": true }
     ],
-    "github": true
+    "github": true,
+    "gitlab": true
   }
 }
 ```
@@ -266,6 +341,8 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   (`script_path` `/`), and GitHub on. Giving `mediawiki` replaces the
   built-in list. A host pattern is a lower-case host or `*.suffix`
   (the suffix and its subdomains); paths start and end with `/`.
+  `github` and `gitlab` (default on) switch the forge URL rules; the
+  `gh`/`glab` CLIs read a URL operand through them either way.
 
 ## Invariants and constraints
 
@@ -280,10 +357,23 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   `flow.resource.url-normalization` (INV-268),
   `flow.resource.pattern-overlap-exact` (INV-660, property side): in
   `extract::resource::tests`.
-- New (INV-X): `flow.extract.http-method-op`,
-  `flow.resource.http-url-tool-independent`,
-  `flow.resource.wiki-page-spelling-independent`,
-  `flow.resource.repo-file-clone-independent`.
+- `flow.extract.http-method-op` (INV-1047),
+  `flow.resource.http-url-tool-independent` (INV-1048),
+  `flow.resource.repo-file-clone-independent` (INV-1049),
+  `flow.resource.wiki-page-spelling-independent` (INV-1050).
+- Repositories and forges: `flow.resource.repository-canonical`
+  (INV-1080, the spec's constructor), `flow.resource.repository-forms-meet`
+  (INV-1081), `flow.extract.git-repository-ops` (INV-1082),
+  `flow.extract.forge-cli-threads` (INV-1083),
+  `flow.extract.write-locators-from-call` (INV-1084),
+  `flow.extract.shell-outcome-from-known-output` (INV-1085),
+  `flow.extract.sed-print-read` (INV-1086),
+  `flow.route.shared-public-content-stays-suspected` (INV-1087, the
+  correlator's), `flow.extract.openhands-tools` (INV-1088).
+- A write's locators and payloads are a function of the call alone; only
+  its outcome reads the result (INV-1084).
+- A write whose content is not in the call (`WritePayload::Unseen`)
+  carries no spans: a read of its resource is co-access evidence only.
 - Eval spec invariants tested here:
   `flow.extract.write-outcome-classified`
   (`extract::tests::write_outcome_follows_result`,

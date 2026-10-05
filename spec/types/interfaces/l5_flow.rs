@@ -212,18 +212,43 @@ pub struct ExtractedAccess {
     pub via: Extraction,
 }
 
-/// An extracted access's operation: a write carries its outcome, a read
-/// none.
+/// An extracted access's operation: a write carries its outcome and where
+/// its content is, a read neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractedOp {
-    Write(WriteOutcome),
+    Write {
+        outcome: WriteOutcome,
+        payload: WritePayload,
+    },
     Read,
 }
 
+/// Where a write's content is, which decides the spans its
+/// `AccessOp::Write` carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WritePayload {
+    /// In the call's arguments (a file tool's text, a request body, an
+    /// issue comment's body): the write carries the originated spans at
+    /// the call's part.
+    CallArguments,
+    /// Not in the call at all (`git push` sends commits made earlier): the
+    /// write carries no spans, so a read of the resource can only be
+    /// co-access evidence of it.
+    Unseen,
+}
+
 impl ExtractedOp {
+    /// A write whose content is in the call's arguments.
+    pub fn write(outcome: WriteOutcome) -> Self {
+        Self::Write {
+            outcome,
+            payload: WritePayload::CallArguments,
+        }
+    }
+
     pub fn kind(self) -> AccessKind {
         match self {
-            Self::Write(_) => AccessKind::Write,
+            Self::Write { .. } => AccessKind::Write,
             Self::Read => AccessKind::Read,
         }
     }

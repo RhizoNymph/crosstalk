@@ -11,6 +11,7 @@
 //! conversation knows.
 
 pub mod commands;
+mod forge;
 mod git;
 pub mod lex;
 mod net;

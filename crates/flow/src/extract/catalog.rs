@@ -2,7 +2,7 @@
 //!
 //! File, fetch and shell tools are the built-in tables below, covering
 //! Claude Code and the harnesses with the same kind of tools (OpenCode, pi,
-//! Gemini CLI, Codex, the Anthropic text editor tool). MCP tools come from
+//! Gemini CLI, Codex, OpenHands, the Anthropic text editor tool). MCP tools come from
 //! the configuration ([`ExtractConfig`]), named as Claude Code names them:
 //! `mcp__<server>__<tool>`. HTTP tools (`http_request {method, url,
 //! body?}`) are the configured names ([`ExtractConfig::http_tools`]); a
@@ -129,6 +129,8 @@ pub static SHELL_TOOLS: &[ShellTool] = &[
     shell("bash", "command", None, false),
     // Gemini CLI.
     shell("run_shell_command", "command", Some("directory"), false),
+    // OpenHands: one persistent bash session per conversation.
+    shell("execute_bash", "command", None, true),
     // Codex.
     shell("shell", "command", Some("workdir"), false),
     shell("exec_command", "cmd", Some("workdir"), false),

@@ -4,6 +4,7 @@
 
 mod bash;
 mod claude_code;
+mod forges;
 pub(crate) mod generate;
 mod http;
 mod mcp;
@@ -71,7 +72,7 @@ proptest! {
         if let Ok(accesses) = extract(&config, &context(), &call, result.as_ref()) {
             let expected = expected_outcome(&call, result.as_ref());
             for access in accesses {
-                if let ExtractedOp::Write(outcome) = access.op {
+                if let ExtractedOp::Write { outcome, .. } = access.op {
                     prop_assert_eq!(outcome, expected, "{:?} {:?}", call, result);
                 }
             }

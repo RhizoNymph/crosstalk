@@ -167,5 +167,6 @@ pub fn locator_key(locator: &Locator) -> String {
             target.as_deref().unwrap_or("")
         ),
         Locator::Opaque { tool, key } => format!("opaque://{}/{key}", tool.0),
+        Locator::Repository { host, owner, name } => format!("repo://{}/{owner}/{name}", host.0),
     }
 }

@@ -14,7 +14,8 @@ fn every_locator() -> Vec<Locator> {
             Locator::Url { .. }
             | Locator::File { .. }
             | Locator::Mcp { .. }
-            | Locator::Opaque { .. } => locator,
+            | Locator::Opaque { .. }
+            | Locator::Repository { .. } => locator,
         }
     }
     [
@@ -36,6 +37,11 @@ fn every_locator() -> Vec<Locator> {
         Locator::Opaque {
             tool: ToolName("kv_put".into()),
             key: "handoff/latest".into(),
+        },
+        Locator::Repository {
+            host: Host("github.com".into()),
+            owner: "agentvillage".into(),
+            name: "atlas".into(),
         },
     ]
     .into_iter()

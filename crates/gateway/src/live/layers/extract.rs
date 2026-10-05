@@ -15,7 +15,8 @@
 //!    result part.
 //! 3. Every tool call in `X`'s output is an [`Extracted::ToolCall`]; a
 //!    known tool's writes are [`Extracted::Write`]s held without an
-//!    outcome, carrying the spans [`write_spans`] finds at the call's part;
+//!    outcome, carrying the spans [`write_spans`] finds at the call's part
+//!    (none for a write whose content is not in the call, `git push`);
 //!    the call waits for its result. A server tool's result in the same
 //!    output is extracted at once.
 //!
@@ -32,7 +33,7 @@ use crosstalk_provenance::store::{MemoryProvenanceStore, ProvenanceStore};
 use crosstalk_spec::derived::provenance::span::{Origin, RelaySource, Span};
 use crosstalk_spec::events::ingest::ConversationDelta;
 use crosstalk_spec::ids::{AccessId, AgentId, ConversationId, ExchangeId, MessageHash, SpanId};
-use crosstalk_spec::interfaces::l5_flow::{ExtractedOp, ResourceExtractor};
+use crosstalk_spec::interfaces::l5_flow::{ExtractedOp, ResourceExtractor, WritePayload};
 use crosstalk_spec::observed::message::{
     AssistantPart, Message, MessageBody, PartRef, SystemPart, ToolCall, ToolExecution, ToolResult,
 };
@@ -195,8 +196,14 @@ impl Extraction {
         let written = write_spans(part, delta.agent, spans, |span| sources.get(&span).copied());
         let mut writes = Vec::new();
         for (index, access) in accesses.into_iter().enumerate() {
-            let ExtractedOp::Write(_) = access.op else {
+            let ExtractedOp::Write { payload, .. } = access.op else {
                 continue;
+            };
+            // A write whose content is not in the call (`git push`)
+            // carries no spans.
+            let spans = match payload {
+                WritePayload::CallArguments => written.clone(),
+                WritePayload::Unseen => Vec::new(),
             };
             let id = access_id(delta.exchange, &call.id.0, "write", index, at);
             writes.push((access.locator.clone(), id));
@@ -208,10 +215,7 @@ impl Extraction {
                     at,
                     locator: access.locator,
                     via: access.via,
-                    op: WriteCall {
-                        call: part,
-                        spans: written.clone(),
-                    },
+                    op: WriteCall { call: part, spans },
                 },
                 outcome: None,
             });
@@ -253,7 +257,7 @@ impl Extraction {
         let mut held = pending.writes.into_iter();
         for (index, access) in accesses.into_iter().enumerate() {
             match access.op {
-                ExtractedOp::Write(outcome) => match held.next() {
+                ExtractedOp::Write { outcome, .. } => match held.next() {
                     Some((_, id)) => out.push(Extracted::WriteResult {
                         access: id,
                         outcome,

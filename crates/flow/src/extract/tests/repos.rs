@@ -24,6 +24,14 @@ fn atlas(path: &str) -> Locator {
     repo_file("github.com/agentvillage/atlas", path)
 }
 
+fn atlas_repository() -> Locator {
+    Locator::Repository {
+        host: Host("github.com".to_owned()),
+        owner: "agentvillage".to_owned(),
+        name: "atlas".to_owned(),
+    }
+}
+
 /// One agent's conversation: each call extracted against the context as it
 /// was, then observed.
 struct Agent {
@@ -106,7 +114,12 @@ fn a_clone_counts_within_the_same_command() {
             "git clone https://github.com/agentvillage/atlas && cat atlas/README.md && echo done >> atlas/LOG",
             "# Atlas",
         ),
-        vec![read(atlas("/README.md"), Parsed), write(atlas("/LOG"), WriteOutcome::Delivered, Parsed)],
+        // The clone reads the repository itself (`Locator::Repository`).
+        vec![
+            read(atlas_repository(), Parsed),
+            read(atlas("/README.md"), Parsed),
+            write(atlas("/LOG"), WriteOutcome::Delivered, Parsed),
+        ],
     );
 }
 

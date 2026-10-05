@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.resource.repository-forms-meet"
+statement = "Every form of one forge repository the extractor reads (its https, ssh and scp-form remotes with or without `.git` in any case, as `git clone`, `git push` and `git pull` operands; its web, `tree`, API, `codeload` and Pages URLs) gives the same Locator::Repository, and its raw, blob and contents file URLs give Locator::File whose host is that repository's `host/owner/name`."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Agents reach a shared repository through different remotes, forge URLs and
+CLIs. A push by one agent and a pull, clone or API read by another must
+land on one resource or the co-access is never seen.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::forges::a_push_and_a_clone_meet_across_agents"
+property = "crosstalk_flow::extract::tests::forges::repository_forms_meet"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }
