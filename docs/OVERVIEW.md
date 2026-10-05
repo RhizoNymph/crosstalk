@@ -935,6 +935,8 @@ Features Index:
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
+      - crates/eval/src/datasets/agentdojo/mod.rs
+      - crates/eval/src/datasets/tau2/mod.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
   e2e_smoke:
