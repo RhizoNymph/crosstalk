@@ -671,9 +671,11 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 - **The transmissions export has no content columns in memory**, and
   carries confirmed, classified and aggregated transmissions only: the
   spec's `ExportDataset::Transmissions` is defined over confirmed rows
-  (`TransmissionRow::new` refuses any other state), so suspected,
-  awaiting and discarded transmissions are not exported; `verdicts` (by
-  `opened_at`) is still refused by `SpecExportSource`.
+  (`TransmissionRow::new` refuses any other state). Unconfirmed
+  transmissions reach an export only through the `verdicts` dataset (by
+  `opened_at`, INV-1062), and only once an operator has judged them: a
+  suspected or discarded transmission with no verdict, and an awaiting
+  one (which takes none), have no row anywhere in an export.
 - **No exchange store in the spec.** Nothing in `spec/types/interfaces`
   persists `Exchange`s or lists them; L8 reads exchanges only through
   L3 to L7's stores. The exchange log here is a stopgap. A spec trait

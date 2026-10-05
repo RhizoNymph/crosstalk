@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.export.verdicts-from-the-store"
+statement = "SpecExportSource with StoredTransmissions exports, for a Verdicts request, exactly verdict_rows of every judgeable stored transmission (suspected, discarded, confirmed, classified or aggregated) whose Transmission::opened_at lies in the settled window, read through TransmissionStore::list and TransmissionVerdicts::log: one row per verdict record, in (transmission, revision) order; a transmission with no verdict, one that takes none (detected, awaiting content), one opened outside the settled window, or one whose agents resolve to one has no row."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+The transmissions export holds confirmed rows only, so the verdicts dataset
+is the export that reaches unconfirmed transmissions: what eval and the node
+bench read operator judgements of suspected and discarded traffic from.
+Reading it from the same store listing as the transmissions export keeps
+the two exports and the surface's reads in agreement.
+"""
+
+[evidence]
+integration = "crosstalk_gateway::live::tests::the_verdicts_export_covers_unconfirmed_transmissions"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

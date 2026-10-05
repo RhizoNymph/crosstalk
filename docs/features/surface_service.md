@@ -254,7 +254,7 @@ every row up front (the count must be known first):
 | edges | `EdgeStore::graph` per bucket under one-topic filters; outliers as what no topic accounts for |
 | topics | `EdgeStore::totals` of the settled window under a one-topic filter (aligned windows only) |
 | transmissions | the source's `TransmissionSource`: refused as `Store` by default (`NoTransmissions`); with `StoredTransmissions` (crosstalk-api's in-process stores), every confirmed, classified or aggregated transmission from `TransmissionStore::list` whose `Confirmed::at` is in the settled window, crossing agents and admitted by the filter, as `TransmissionRow::of` (no content columns: a content request is refused) (INV-1060) |
-| verdicts | refused as `Store` |
+| verdicts | the same `TransmissionSource`: refused as `Store` by default; with `StoredTransmissions`, `verdict_rows` of every judgeable transmission (suspected, discarded, confirmed or later) whose `opened_at` is in the settled window, one row per verdict record, from `TransmissionStore::list` and `TransmissionVerdicts::log`; a transmission never judged has no row (INV-1062) |
 
 ### Node facts
 

@@ -12,7 +12,7 @@
 //! | edges | `EdgeStore::graph` of each bucket, once per topic of the version (one-topic filters), outliers as the rest |
 //! | topics | `EdgeStore::totals` of the settled window under a one-topic filter, per topic |
 //! | transmissions | the [`TransmissionSource`] given ([`StoredTransmissions`]: `TransmissionStore::list`, rows as `transmissions_by_id` lists them, no content columns); refused by default ([`NoTransmissions`]) |
-//! | verdicts | refused |
+//! | verdicts | the same [`TransmissionSource`]: [`StoredTransmissions`] gives `verdict_rows` of every judgeable transmission opened in the settled window; refused by default |
 //!
 //! Every row is read when the export is planned (the count must be known
 //! first anyway), so a store change while it streams changes nothing sent.
@@ -505,12 +505,10 @@ where
                     .await?;
                 (scoped_basis(version, filter, settled), rows)
             }
-            ExportDataset::Verdicts(_) => {
-                return Err(store(format!(
-                    "a {:?} export needs a store that lists the transmissions of a window, \
-                     which no spec read trait does",
-                    request.dataset().kind()
-                )));
+            ExportDataset::Verdicts(window) => {
+                let settled = settled_window(*window, watermark);
+                let rows = self.transmissions.verdict_rows(settled).await?;
+                (ExportBasis::Verdicts { settled }, rows)
             }
         };
         let count = u64::try_from(rows.len()).unwrap_or(u64::MAX);

@@ -447,3 +447,113 @@ async fn bodies_can_live_on_the_filesystem() {
     assert_eq!(read, Ok(Some(b"a body".to_vec())));
     live.shutdown(Instant::now() + PATIENCE).await;
 }
+
+/// INV-1062 (`surface.export.verdicts-from-the-store`): the verdicts export
+/// holds one row per verdict record of every judgeable transmission
+/// (suspected, discarded, confirmed or later) opened in the settled window,
+/// unconfirmed ones included, ordered by (transmission, revision); a
+/// transmission without a verdict, or opened outside the window, has none.
+#[tokio::test]
+async fn the_verdicts_export_covers_unconfirmed_transmissions() {
+    use crosstalk_spec::derived::flow::verdict::Verdict;
+    use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
+    use crosstalk_spec::interfaces::l8_surface::export::{
+        ExportDataset, ExportRequest, ExportRow, ExportStep, ExportStream,
+    };
+    use crosstalk_spec::support::TimeWindow;
+
+    let live = start().await;
+    let mut ids = Ids::seeded(21);
+    let (a, b) = (ids.agent(), ids.agent());
+    let at = |minutes: u64| Timestamp::from_micros(T0.as_micros() + minutes * MINUTE);
+    let build = |ids: &mut Ids,
+                 opened: Timestamp,
+                 state: fn(TransmissionBuilder) -> TransmissionBuilder| {
+        let channel = ids.channel();
+        match state(
+            TransmissionBuilder::new(ids)
+                .between(a, b)
+                .channel(channel)
+                .opened_at(opened),
+        )
+        .build()
+        {
+            Ok(transmission) => transmission,
+            Err(error) => panic!("fixture: {error:?}"),
+        }
+    };
+    let suspected = build(&mut ids, at(10), TransmissionBuilder::suspected);
+    let confirmed = build(&mut ids, at(20), TransmissionBuilder::confirmed);
+    let awaiting = build(&mut ids, at(30), TransmissionBuilder::awaiting_content);
+    let unjudged = build(&mut ids, at(40), TransmissionBuilder::discarded);
+    let outside = build(&mut ids, at(200), TransmissionBuilder::confirmed);
+    let mut store = live.stores().transmissions.clone();
+    for transmission in [&suspected, &confirmed, &awaiting, &unjudged, &outside] {
+        assert_eq!(store.save(transmission.clone()).await, Ok(()));
+    }
+    let operator = OperatorId::from_ulid(0x11FE);
+    for (id, verdict, minute) in [
+        (suspected.id, Some(Verdict::FalseDetection), 50),
+        (suspected.id, None, 51),
+        (confirmed.id, Some(Verdict::Genuine), 52),
+        (outside.id, Some(Verdict::Genuine), 210),
+    ] {
+        let set = store.set(id, verdict, operator, at(minute), None).await;
+        assert!(set.is_ok(), "{set:?}");
+    }
+    // An awaiting transmission takes no verdict.
+    assert!(
+        store
+            .set(awaiting.id, Some(Verdict::Genuine), operator, at(53), None)
+            .await
+            .is_err()
+    );
+
+    // Past the settle bound (120 s + 1800 s by default) of the window's end.
+    let settled = live.settle(at(180)).await;
+    assert!(settled.is_ok(), "{settled:?}");
+    let caller = match live.caller(RequestIdentity::Anonymous).await {
+        Ok(caller) => caller,
+        Err(error) => panic!("caller: {error:?}"),
+    };
+    let Ok(window) = TimeWindow::new(T0, at(60)) else {
+        panic!("window");
+    };
+    let Ok(request) =
+        ExportRequest::new(ExportDataset::Verdicts(window), ExportFormat::Jsonl, false)
+    else {
+        panic!("request");
+    };
+    let export = match live.surface().export(&caller, &request).await {
+        Ok(export) => export,
+        Err(error) => panic!("export: {error:?}"),
+    };
+    let mut rows = Vec::new();
+    let mut stream = export.rows;
+    let trailer = loop {
+        match stream.next().await {
+            ExportStep::Row(row, rest) => {
+                rows.push(row);
+                stream = rest;
+            }
+            ExportStep::End(trailer) => break trailer,
+        }
+    };
+    assert!(trailer.is_complete(), "{trailer:?}");
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|row| match row {
+            ExportRow::Verdict(row) => (row.transmission, row.revision.get().get(), row.verdict),
+            other => panic!("not a verdict row: {other:?}"),
+        })
+        .collect();
+    let mut expected = vec![
+        (suspected.id, 1, Some(Verdict::FalseDetection)),
+        (suspected.id, 2, None),
+        (confirmed.id, 1, Some(Verdict::Genuine)),
+    ];
+    expected.sort_by_key(|(id, revision, _)| (*id, *revision));
+    assert_eq!(seen, expected);
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
