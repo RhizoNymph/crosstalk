@@ -22,9 +22,10 @@
 //! matches its seed's locator; the pattern overlaps no other declared
 //! channel's pattern. A refused promotion changes nothing.
 //!
-//! Supersession is decided by seeds. A discovered channel is created by its
-//! seed resource, and lookups add later accesses of that resource to it, so
-//! its seed is what it stands for. Every other discovered channel whose
+//! Supersession is decided by seeds. A discovered channel is created by the
+//! first cross-agent transmission through its seed resource, and lookups
+//! add later accesses of that resource to it, so its seed is what it
+//! stands for. Every other discovered channel whose
 //! seed the pattern matches is superseded; already superseded channels are
 //! never superseded again (their superseding channel's pattern matches
 //! their seed, so the overlap check refuses a pattern that would).

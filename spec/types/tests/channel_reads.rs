@@ -7,6 +7,7 @@ use std::num::NonZeroU64;
 use crate::aggregates::access::{AgentAccesses, ResourceUse};
 use crate::aggregates::node::CanonicalOriginKind;
 use crate::batch::{IdBatch, TooManyIds};
+use crate::derived::flow::channel::confirmation::CrossTraffic;
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -29,7 +30,7 @@ use crate::interfaces::l8_surface::channels::{
 use crate::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crate::interfaces::l8_surface::{ActionError, ConflictKind, InputError, QueryError};
 use crate::support::{Capped, InvalidCapped, TimeWindow};
-use crate::tests::fixtures::{access, agent, at, channel, resource};
+use crate::tests::fixtures::{agent, at, channel, resource, transmission};
 
 fn url(path: &str) -> Locator {
     Locator::Url {
@@ -76,10 +77,12 @@ fn discovered(id: u128, resources: &[u128]) -> Channel {
         origin: ChannelOrigin::Discovered {
             seed: Seed {
                 resource: resource(id),
-                first_access: access(id),
+                first_transmission: transmission(id),
+                opened_at: at(id as u64),
             },
-            detection: TrafficDetection::Observed {
-                first_access: access(id),
+            detection: TrafficDetection::Active {
+                since: at(id as u64),
+                last_transmission: transmission(id),
             },
         },
         resources: resources.iter().map(|n| resource(*n)).collect(),
@@ -131,15 +134,60 @@ fn superseded(id: u128, by: u128) -> Channel {
     channel
 }
 
+/// One confirmed cross-agent transmission over all time.
+const CONFIRMED: CrossTraffic = CrossTraffic {
+    confirmed: 1,
+    unconfirmed: 0,
+};
+
 fn seen(writers: u64, readers: u64, transmissions: u64) -> ChannelStanding {
-    ChannelStanding::InForce(ChannelActivity::Seen {
-        last: at(500),
-        counts: ChannelCounts {
-            writers,
-            readers,
-            transmissions,
+    ChannelStanding::InForce {
+        traffic: CONFIRMED,
+        activity: ChannelActivity::Seen {
+            last: at(500),
+            counts: ChannelCounts {
+                writers,
+                readers,
+                transmissions,
+            },
         },
-    })
+    }
+}
+
+/// In force, never accessed, no cross-agent traffic.
+fn never() -> ChannelStanding {
+    ChannelStanding::InForce {
+        traffic: CrossTraffic::NONE,
+        activity: ChannelActivity::Never,
+    }
+}
+
+/// `channel`'s row as a store would build it: its seed resource, its own
+/// supersession (by a promoted channel), or in force with one confirmed
+/// cross-agent transmission when its detection has traffic and none
+/// otherwise.
+fn row(channel: Channel) -> ChannelRow {
+    let seed = channel.origin.seed().map(|seed| Resource {
+        id: seed.resource,
+        locator: url("/seed"),
+        first_seen: at(1),
+    });
+    let standing = match channel.origin.supersession() {
+        Some(supersession) => ChannelStanding::Superseded(
+            SupersededInto::of(supersession, &promoted_with_id(supersession.by))
+                .expect("superseded by a promoted channel"),
+        ),
+        None if channel.origin.traffic().is_some() => seen(1, 1, 1),
+        None => never(),
+    };
+    ChannelRow::new(channel, seed, standing).expect("a consistent fixture row")
+}
+
+/// A channel promoted by `operator()` at 100 under the id `id`.
+fn promoted_with_id(id: ChannelId) -> Channel {
+    let mut channel = promoted(1);
+    channel.id = id;
+    channel
 }
 
 fn supersession_of(channel: &Channel) -> Supersession {
@@ -188,12 +236,8 @@ fn rows_in_force_carry_activity_and_superseded_rows_carry_their_supersession() {
     assert_eq!(row.counts(), None);
     assert_eq!(row.last_activity(), None);
 
-    let quiet = ChannelRow::new(
-        declared_before_traffic(4, team_pattern()),
-        None,
-        ChannelStanding::InForce(ChannelActivity::Never),
-    )
-    .expect("a declared channel that never saw traffic");
+    let quiet = ChannelRow::new(declared_before_traffic(4, team_pattern()), None, never())
+        .expect("a declared channel that never saw traffic");
     assert_eq!(quiet.counts(), None);
     assert_eq!(quiet.last_activity(), None);
 }
@@ -211,7 +255,7 @@ fn rows_carry_exactly_the_channels_seed_resource() {
     let unseeded = ChannelRow::new(
         declared_before_traffic(4, team_pattern()),
         Some(stored(4, "/team/d")),
-        ChannelStanding::InForce(ChannelActivity::Never),
+        never(),
     );
     assert_eq!(unseeded, Err(InvalidChannelRow::SeedMismatch));
 }
@@ -251,19 +295,11 @@ fn row_standing_follows_the_channels_origin() {
 #[test]
 fn a_channel_with_traffic_is_never_listed_as_inactive() {
     assert_eq!(
-        ChannelRow::new(
-            discovered(3, &[]),
-            Some(stored(3, "/team/c")),
-            ChannelStanding::InForce(ChannelActivity::Never),
-        ),
+        ChannelRow::new(discovered(3, &[]), Some(stored(3, "/team/c")), never(),),
         Err(InvalidChannelRow::TrafficWithoutActivity)
     );
     assert_eq!(
-        ChannelRow::new(
-            promoted(1),
-            Some(stored(1, "/team/a")),
-            ChannelStanding::InForce(ChannelActivity::Never),
-        ),
+        ChannelRow::new(promoted(1), Some(stored(1, "/team/a")), never(),),
         Err(InvalidChannelRow::TrafficWithoutActivity)
     );
 }
@@ -341,10 +377,10 @@ fn counts_tally_distinct_agents_across_the_channels_resources() {
 #[test]
 fn the_default_filter_lists_every_channel_in_force_and_no_superseded_one() {
     let filter = ChannelFilter::default();
-    assert!(filter.matches(&discovered(3, &[])));
-    assert!(filter.matches(&promoted(1)));
-    assert!(filter.matches(&declared_before_traffic(4, team_pattern())));
-    assert!(!filter.matches(&superseded(2, 1)));
+    assert!(filter.matches(&row(discovered(3, &[]))));
+    assert!(filter.matches(&row(promoted(1))));
+    assert!(filter.matches(&row(declared_before_traffic(4, team_pattern()))));
+    assert!(!filter.matches(&row(superseded(2, 1))));
 }
 
 #[test]
@@ -370,27 +406,28 @@ fn origin_filter_selects_origins_in_force_and_superseded_channels_by_variant() {
 fn channel_filter_combines_origin_detection_and_policy() {
     let filter = ChannelFilter {
         origin: OriginFilter::WithSuperseded(Vec::new()),
-        detections: vec![DetectionKind::Observed],
+        listings: Vec::new(),
+        detections: vec![DetectionKind::Active],
         policies: vec![PolicyKind::Unreviewed],
         window: None,
     };
     // A superseded channel matches on its own frozen detection and policy.
-    assert!(filter.matches(&superseded(2, 1)));
-    assert!(filter.matches(&discovered(3, &[])));
+    assert!(filter.matches(&row(superseded(2, 1))));
+    assert!(filter.matches(&row(discovered(3, &[]))));
     // Each case fails exactly one field.
-    assert!(!filter.matches(&declared_before_traffic(4, team_pattern())));
+    assert!(!filter.matches(&row(declared_before_traffic(4, team_pattern()))));
     let mut sanctioned = discovered(3, &[]);
     sanctioned.policy = Policy::Sanctioned(Decision {
         by: PolicyAuthor::Config,
         at: at(1),
         note: None,
     });
-    assert!(!filter.matches(&sanctioned));
+    assert!(!filter.matches(&row(sanctioned)));
     let in_force_only = ChannelFilter {
         origin: OriginFilter::InForce(Vec::new()),
         ..filter.clone()
     };
-    assert!(!in_force_only.matches(&superseded(2, 1)));
+    assert!(!in_force_only.matches(&row(superseded(2, 1))));
 }
 
 #[test]
@@ -416,7 +453,10 @@ fn the_window_never_changes_which_channels_match() {
             ..all_time.clone()
         };
         for channel in &channels {
-            assert_eq!(all_time.matches(channel), windowed.matches(channel));
+            assert_eq!(
+                all_time.matches(&row(channel.clone())),
+                windowed.matches(&row(channel.clone()))
+            );
         }
     }
 }

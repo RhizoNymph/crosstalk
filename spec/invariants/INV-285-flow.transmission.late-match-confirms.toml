@@ -12,7 +12,7 @@ lost to consumer lag.
 """
 
 [evidence]
-unit = "crosstalk_flow::correlator::tests::late_match_confirms_suspected"
+unit = "crosstalk_flow::correlate::tests::channel::late_match_confirms_suspected"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

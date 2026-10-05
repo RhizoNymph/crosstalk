@@ -1,25 +1,35 @@
 //! Accesses as a graph: agents reading and writing channels.
 //!
 //! Splitting each `Route::Channel` edge A→B into A→C→B would show only
-//! writes somebody read. The early stage of a hijacked wiki is writes that
-//! nobody has read yet, so the channel-centred view draws accesses directly,
-//! from their own aggregate:
+//! writes somebody read. Once a channel exists, writes to it that nobody
+//! has read yet matter (a hijacked wiki keeps being written to), so the
+//! channel-centred view draws accesses directly, from their own aggregate:
 //!
 //! ```text
-//! AccessRecorded { access, channel } ─L7─▶ AccessEdge (agent, channel, op, bucket) += 1
+//! AccessRecorded { access, channel } ─L7─▶ AccessEdge (agent, resource, op, bucket) += 1
 //!
 //! channel_topology(window, weighting, filter) -> Watermarked<BipartiteGraph>
 //!   watermark:     EdgeStore::watermark, read before the buckets
-//!   accesses:      AccessEdge buckets in the window, agents and channels
-//!                  resolved, filtered (TopologyFilter::admits_access), summed
+//!   accesses:      AccessEdge buckets in the window, agents resolved, each
+//!                  resource resolved to the channel holding it now, kept
+//!                  when that channel is listed as a channel, filtered
+//!                  (TopologyFilter::admits_access), summed
 //!   transmissions: exactly topology(window, weighting, filter)'s edges
 //!   nodes:         agents and channels at every endpoint, agent ancestors
 //! ```
 //!
 //! Access buckets are kept like edge buckets: stored under the agent the
-//! access was attributed to and the channel it was recorded on, fixed-width
-//! and aligned to the edge store's `BucketWidth`, resolved through
-//! [`crate::aliases`] at read time. They have no topic dimension.
+//! access was attributed to and the resource it touched, fixed-width and
+//! aligned to the edge store's `BucketWidth`. They have no topic dimension.
+//! Everything else is resolved at read time: agents through
+//! [`crate::aliases`], and each resource to the channel the registry holds
+//! it on now (`ChannelRegistry::channels_of`, already canonical). A resource
+//! is on no channel until a channel is discovered from it or a declared
+//! pattern claims it, so its accesses before then are in no channel's
+//! graph; they join the channel's buckets at read time the moment it
+//! exists, without rewriting a bucket. Of the channels that resolves to,
+//! only those listed as channels (`Listing::Channel`: with cross-agent
+//! traffic, once merges resolve) are drawn.
 //!
 //! A channel's resources and who used them are listed per resource
 //! ([`ResourceUse`]), a page at a time.
@@ -35,20 +45,20 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::resource::Resource;
 use crate::derived::flow::transmission::Route;
-use crate::ids::{AgentId, ChannelId};
+use crate::ids::{AgentId, ChannelId, ResourceId};
 use crate::paging::{Page, ResourceUseList};
 use crate::support::{Share, TimeWindow};
 use crate::wire::Rejected;
 
 /// One bucket of the access table: how often `agent` read or wrote
-/// `channel` within `bucket`. A bucket exists only once an access has been
+/// `resource` within `bucket`. A bucket exists only once an access has been
 /// counted into it, so `accesses` is non-zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccessEdge {
     /// As attributed; resolved at read time.
     pub agent: AgentId,
-    /// As recorded; resolved at read time.
-    pub channel: ChannelId,
+    /// As accessed; resolved to the channel holding it at read time.
+    pub resource: ResourceId,
     pub op: AccessKind,
     pub bucket: TimeWindow,
     pub accesses: NonZeroU64,

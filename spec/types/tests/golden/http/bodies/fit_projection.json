@@ -21,7 +21,8 @@
       "type": "pinned",
       "data": 3
     },
-    "false_detections": "include"
+    "false_detections": "include",
+    "unconfirmed_channels": "include"
   },
   "params": {
     "limit": 5000,

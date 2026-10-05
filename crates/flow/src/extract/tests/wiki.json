@@ -1,0 +1,118 @@
+{
+  "mcp_servers": [
+    {
+      "server": "wiki",
+      "aliases": ["team-wiki", "wiki_local"],
+      "tools": [
+        {
+          "tool": "read_page",
+          "accesses": [
+            {
+              "op": "read",
+              "resource": {
+                "type": "keyed",
+                "data": {
+                  "collection": "page",
+                  "target": "/title",
+                  "canon": { "fold_case": true, "fold_separators": true, "path_like": true }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "tool": "write_page",
+          "accesses": [
+            {
+              "op": "write",
+              "resource": {
+                "type": "keyed",
+                "data": {
+                  "collection": "page",
+                  "target": "/title",
+                  "canon": { "fold_case": true, "fold_separators": true, "path_like": true }
+                }
+              }
+            }
+          ],
+          "refusal": [
+            { "type": "prefix", "data": "Error:" },
+            { "type": "contains", "data": "exceeds the maximum page length" }
+          ]
+        },
+        {
+          "tool": "edit_page",
+          "accesses": [
+            {
+              "op": "write",
+              "resource": {
+                "type": "keyed",
+                "data": {
+                  "collection": "page",
+                  "target": "/page/title",
+                  "canon": { "fold_case": true, "fold_separators": true, "path_like": true }
+                }
+              }
+            }
+          ],
+          "refusal": [{ "type": "prefix", "data": "Error:" }]
+        },
+        {
+          "tool": "list_pages",
+          "accesses": [
+            { "op": "read", "resource": { "type": "keyed", "data": { "collection": "page" } } }
+          ]
+        },
+        {
+          "tool": "move_page",
+          "accesses": [
+            {
+              "op": "write",
+              "resource": {
+                "type": "keyed",
+                "data": {
+                  "collection": "page",
+                  "target": "/from",
+                  "canon": { "fold_case": true, "fold_separators": true, "path_like": true }
+                }
+              }
+            },
+            {
+              "op": "write",
+              "resource": {
+                "type": "keyed",
+                "data": {
+                  "collection": "page",
+                  "target": "/to",
+                  "canon": { "fold_case": true, "fold_separators": true, "path_like": true }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "server": "fetch",
+      "tools": [
+        {
+          "tool": "fetch",
+          "accesses": [{ "op": "read", "resource": { "type": "url", "data": { "arg": "/url" } } }]
+        }
+      ]
+    },
+    {
+      "server": "filesystem",
+      "tools": [
+        {
+          "tool": "read_text_file",
+          "accesses": [{ "op": "read", "resource": { "type": "file", "data": { "arg": "/path" } } }]
+        },
+        {
+          "tool": "write_file",
+          "accesses": [{ "op": "write", "resource": { "type": "file", "data": { "arg": "/path" } } }]
+        }
+      ]
+    }
+  ]
+}

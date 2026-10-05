@@ -15,6 +15,7 @@ use crate::aggregates::node::{
 };
 use crate::aggregates::topic::TopicModelVersion;
 use crate::derived::flow::access::AccessKind;
+use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -30,7 +31,7 @@ use crate::observed::agent::{
 };
 use crate::observed::client::{HarnessClaim, HarnessFamily};
 use crate::support::{NonBlank, Share, TimeWindow, Timestamp};
-use crate::tests::fixtures::{access, agent, agent_node, at, channel, resource};
+use crate::tests::fixtures::{agent, agent_node, at, channel, resource, transmission};
 
 fn n(value: u64) -> NonZeroU64 {
     NonZeroU64::new(value).expect("fixture values are non-zero")
@@ -72,7 +73,8 @@ fn channel_node(id: u128) -> GraphNode {
         id: channel(id),
         label: None,
         origin_kind: CanonicalOriginKind::Discovered,
-        detection_kind: DetectionKind::Observed,
+        detection_kind: DetectionKind::Active,
+        confirmation: Confirmation::Confirmed,
         policy_kind: PolicyKind::Unreviewed,
         locator_summary: NonBlank::new("https://wiki.example/a").expect("not blank"),
     })
@@ -331,10 +333,12 @@ fn canonical_state_kind_excludes_merged_agents() {
 fn canonical_origin_kind_excludes_superseded_channels() {
     let seed = Seed {
         resource: resource(1),
-        first_access: access(1),
+        first_transmission: transmission(1),
+        opened_at: at(1),
     };
-    let detection = TrafficDetection::Observed {
-        first_access: access(1),
+    let detection = TrafficDetection::Active {
+        since: at(1),
+        last_transmission: transmission(1),
     };
     let declaration = Declaration {
         pattern: ResourcePattern::Host(Host("wiki.example".into())),

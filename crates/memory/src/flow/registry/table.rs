@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{AgentAccesses, ResourceUse};
 use crosstalk_spec::derived::flow::access::{Access, AccessKind};
-use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
+use crosstalk_spec::derived::flow::channel::detection::DeclaredDetection;
 use crosstalk_spec::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
 };
@@ -13,36 +13,41 @@ use crosstalk_spec::derived::flow::channel::promotion::{
     Promotion, PromotionCoverage, PromotionRefusal, Registered, coverage, plan,
 };
 use crosstalk_spec::derived::flow::channel::{
-    Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed,
+    Channel, ChannelOrigin, Declaration, DeclaredHistory,
 };
 use crosstalk_spec::derived::flow::resource::{Locator, Resource, ResourcePattern};
+use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, TransmissionId};
 use crosstalk_spec::interfaces::l5_flow::{ChannelLookup, Promoted, RegistryError};
-use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
-use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
+use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crosstalk_spec::interfaces::l5_flow::channels::{DetectionUpdate, TrafficError};
 
-/// A resource and the channel it is stored on.
+/// A resource and the channel it is stored on, `None` for none: a resource
+/// only, until a cross-agent transmission through it discovers a channel or
+/// a declared pattern claims it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredResource {
     pub(crate) resource: Resource,
-    pub(crate) channel: ChannelId,
+    pub(crate) channel: Option<ChannelId>,
 }
 
 /// Everything the registry stores.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ChannelTable {
     pub(crate) channels: BTreeMap<ChannelId, Channel>,
     pub(crate) histories: BTreeMap<ChannelId, PolicyHistory>,
     pub(crate) resources: BTreeMap<ResourceId, StoredResource>,
     pub(crate) accesses: BTreeMap<AccessId, Access>,
+    /// Every channel transmission as last recorded
+    /// (`ChannelTraffic::record_transmission`).
+    pub(crate) transmissions: BTreeMap<TransmissionId, Transmission>,
 }
 
-fn changed(channel: ChannelId) -> BusEvent {
+pub(crate) fn changed(channel: ChannelId) -> BusEvent {
     BusEvent::Changed(Changed::Channel(channel))
 }
 
@@ -52,7 +57,7 @@ impl ChannelTable {
         self.channels.get(&id).map_or(id, Channel::canonical)
     }
 
-    fn channel(&self, id: ChannelId) -> Result<&Channel, RegistryError> {
+    pub(crate) fn channel(&self, id: ChannelId) -> Result<&Channel, RegistryError> {
         self.channels
             .get(&id)
             .ok_or(RegistryError::UnknownChannel(id))
@@ -92,7 +97,7 @@ impl ChannelTable {
 
     /// The canonical channel `id` resolves to and every channel it
     /// superseded.
-    fn members(&self, canonical: ChannelId) -> Vec<ChannelId> {
+    pub(crate) fn members(&self, canonical: ChannelId) -> Vec<ChannelId> {
         self.channels
             .values()
             .filter(|channel| channel.canonical() == canonical)
@@ -103,15 +108,17 @@ impl ChannelTable {
     // ---- the trait's operations ----------------------------------------------
 
     /// `ChannelRegistry::lookup`: `Known` on the canonical channel of a
-    /// stored resource with that locator, else `Declared` for a declared
-    /// pattern matching it, else `New`.
+    /// stored resource with that locator on a channel, else (unstored, or
+    /// stored on no channel) `Declared` for a declared pattern matching it,
+    /// else `NoChannel`. Creates nothing.
     pub(crate) fn lookup(&self, locator: &Locator) -> ChannelLookup {
-        if let Some(stored) = self
+        if let Some(channel) = self
             .resources
             .values()
             .find(|stored| stored.resource.locator == *locator)
+            .and_then(|stored| stored.channel)
         {
-            return ChannelLookup::Known(self.canonical(stored.channel));
+            return ChannelLookup::Known(self.canonical(channel));
         }
         self.channels
             .values()
@@ -121,7 +128,7 @@ impl ChannelTable {
                     .pattern()
                     .is_some_and(|pattern| pattern.matches(locator))
             })
-            .map_or(ChannelLookup::New, |channel| {
+            .map_or(ChannelLookup::NoChannel, |channel| {
                 ChannelLookup::Declared(channel.id)
             })
     }
@@ -301,187 +308,10 @@ impl ChannelTable {
         }
         Ok((canonical, rows))
     }
-
-    // ---- `ChannelTraffic` ---------------------------------------------------------
-
-    /// The lookup of an unstored resource's locator; a stored resource is
-    /// refused.
-    fn new_resource_lookup(&self, resource: &Resource) -> Result<ChannelLookup, TrafficError> {
-        if self.resources.contains_key(&resource.id) {
-            return Err(TrafficError::DuplicateResource(resource.id));
-        }
-        Ok(self.lookup(&resource.locator))
-    }
-
-    pub(crate) fn discover(
-        &mut self,
-        id: ChannelId,
-        resource: Resource,
-        first_access: AccessId,
-    ) -> Result<Vec<BusEvent>, TrafficError> {
-        if self.channels.contains_key(&id) {
-            return Err(TrafficError::DuplicateChannel(id));
-        }
-        let lookup = self.new_resource_lookup(&resource)?;
-        if lookup != ChannelLookup::New {
-            return Err(TrafficError::NotNew(lookup));
-        }
-        let seed = Seed {
-            resource: resource.id,
-            first_access,
-        };
-        self.resources.insert(
-            resource.id,
-            StoredResource {
-                resource,
-                channel: id,
-            },
-        );
-        self.channels.insert(
-            id,
-            Channel {
-                id,
-                origin: ChannelOrigin::Discovered {
-                    seed,
-                    detection: TrafficDetection::Observed { first_access },
-                },
-                resources: Vec::new(),
-                policy: Policy::Unreviewed(None),
-            },
-        );
-        self.histories.insert(id, PolicyHistory::empty());
-        Ok(vec![changed(id)])
-    }
-
-    pub(crate) fn add_resource(
-        &mut self,
-        id: ChannelId,
-        resource: Resource,
-    ) -> Result<Vec<BusEvent>, TrafficError> {
-        let channel = self
-            .channels
-            .get(&id)
-            .ok_or(TrafficError::UnknownChannel(id))?;
-        if let Some(supersession) = channel.origin.supersession() {
-            return Err(TrafficError::Superseded {
-                channel: id,
-                by: supersession.by,
-            });
-        }
-        // A resource joins the channel its lookup names: a declared channel
-        // whose pattern matches it, or any channel for a locator nothing
-        // claims yet.
-        match self.new_resource_lookup(&resource)? {
-            ChannelLookup::New => {}
-            ChannelLookup::Declared(declared) if declared == id => {}
-            other @ (ChannelLookup::Known(_) | ChannelLookup::Declared(_)) => {
-                return Err(TrafficError::NotNew(other));
-            }
-        }
-        let resource_id = resource.id;
-        self.resources.insert(
-            resource_id,
-            StoredResource {
-                resource,
-                channel: id,
-            },
-        );
-        if let Some(channel) = self.channels.get_mut(&id) {
-            channel.resources.push(resource_id);
-        }
-        Ok(vec![changed(id)])
-    }
-
-    pub(crate) fn record_access(&mut self, access: Access) -> Result<(), TrafficError> {
-        if !self.resources.contains_key(&access.resource) {
-            return Err(TrafficError::UnknownResource(access.resource));
-        }
-        if self.accesses.contains_key(&access.id) {
-            return Err(TrafficError::DuplicateAccess(access.id));
-        }
-        self.accesses.insert(access.id, access);
-        Ok(())
-    }
-
-    pub(crate) fn set_detection(
-        &mut self,
-        id: ChannelId,
-        update: DetectionUpdate,
-    ) -> Result<(Change, Vec<BusEvent>), TrafficError> {
-        let channel = self
-            .channels
-            .get(&id)
-            .ok_or(TrafficError::UnknownChannel(id))?;
-        let origin = next_origin(&channel.origin, id, update)?;
-        if channel.origin == origin {
-            return Ok((Change::Unchanged, Vec::new()));
-        }
-        if let Some(channel) = self.channels.get_mut(&id) {
-            channel.origin = origin;
-        }
-        Ok((Change::Applied, vec![changed(id)]))
-    }
-
-    /// `ChannelReads::channels`, before paging: the channels `filter`
-    /// keeps, newest first, after `after`.
-    pub(crate) fn channels_matching(
-        &self,
-        filter: &ChannelFilter,
-        after: Option<ChannelId>,
-    ) -> Vec<Channel> {
-        self.channels
-            .values()
-            .rev()
-            .filter(|channel| after.is_none_or(|after| channel.id < after))
-            .filter(|channel| filter.matches(channel))
-            .cloned()
-            .collect()
-    }
-
-    pub(crate) fn confirm(
-        &mut self,
-        id: ChannelId,
-        transmission: TransmissionId,
-        at: Timestamp,
-    ) -> Result<(ChannelId, Vec<BusEvent>), TrafficError> {
-        if !self.channels.contains_key(&id) {
-            return Err(TrafficError::UnknownChannel(id));
-        }
-        let canonical = self.canonical(id);
-        let channel = self
-            .channels
-            .get(&canonical)
-            .ok_or(TrafficError::UnknownChannel(canonical))?;
-        let active = |current: Option<&TrafficDetection>| {
-            let since = match current {
-                Some(TrafficDetection::Active { since, .. }) => *since,
-                Some(
-                    TrafficDetection::Observed { .. }
-                    | TrafficDetection::Candidate { .. }
-                    | TrafficDetection::Dormant { .. },
-                )
-                | None => at,
-            };
-            TrafficDetection::Active {
-                since,
-                last_transmission: transmission,
-            }
-        };
-        let detection = active(channel.origin.traffic());
-        let origin = next_origin(
-            &channel.origin,
-            canonical,
-            DetectionUpdate::Traffic(detection),
-        )?;
-        if let Some(channel) = self.channels.get_mut(&canonical) {
-            channel.origin = origin;
-        }
-        Ok((canonical, vec![changed(canonical)]))
-    }
 }
 
 /// `origin` with its detection set by `update`.
-fn next_origin(
+pub(crate) fn next_origin(
     origin: &ChannelOrigin,
     id: ChannelId,
     update: DetectionUpdate,

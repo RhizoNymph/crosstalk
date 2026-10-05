@@ -18,7 +18,7 @@ use crate::ids::{OperatorId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
-    access, agent, at, content_match, read_access, resource, write_access, write_with_outcome,
+    agent, at, content_match, read_access, resource, transmission, write_access, write_with_outcome,
 };
 
 const WINDOW: Duration = Duration::from_secs(3600);
@@ -325,7 +325,8 @@ fn every_alert_rule_reports_its_kind() {
 fn seed() -> Seed {
     Seed {
         resource: resource(1),
-        first_access: access(1),
+        first_transmission: transmission(1),
+        opened_at: at(1),
     }
 }
 

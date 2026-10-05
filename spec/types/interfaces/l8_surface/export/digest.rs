@@ -246,17 +246,17 @@ fn topic(row: &TopicRow, out: &mut Vec<u8>) {
 fn point(row: &PointRow, out: &mut Vec<u8>) {
     let point = &row.point;
     out.extend_from_slice(&row.index.to_le_bytes());
-    id(point.transmission.as_ulid(), out);
-    id(point.from.as_ulid(), out);
-    id(point.to.as_ulid(), out);
-    out.push(route_code(point.route.kind()));
-    if let Some(channel) = point.route.channel() {
+    id(point.transmission().as_ulid(), out);
+    id(point.from().as_ulid(), out);
+    id(point.to().as_ulid(), out);
+    out.push(route_code(point.route().kind()));
+    if let Some(channel) = point.route().channel() {
         id(channel.as_ulid(), out);
     }
-    option(point.topic, out, |topic, out| id(topic.as_ulid(), out));
-    time(point.confirmed_at, out);
-    float(point.x.get(), out);
-    float(point.y.get(), out);
+    option(point.topic(), out, |topic, out| id(topic.as_ulid(), out));
+    time(point.confirmed_at(), out);
+    float(point.x().get(), out);
+    float(point.y().get(), out);
     option(row.content.as_ref(), out, label);
 }
 

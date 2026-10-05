@@ -24,6 +24,7 @@ use crate::aggregates::topic::TopicModelVersion;
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crate::aggregates::watermark::{Watermark, Watermarked};
 use crate::batch::IdBatch;
+use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::Transmission;
@@ -32,6 +33,9 @@ use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, Transmi
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
+use crate::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
+};
 use crate::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crate::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -56,9 +60,9 @@ use crate::interfaces::l8_surface::{
     AlertFilter, Caller, Permission, Present, QueryApi, QueryError, SinkInfo,
 };
 use crate::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
-    TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
+    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
+    SearchList, TopicList, TransmissionList,
 };
 use crate::support::{NonBlank, TimeWindow};
 
@@ -130,6 +134,22 @@ impl QueryApi for TableClient {
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError> {
         self.send(Route::Channels, |b| {
             b.query("filter", filter).query("page", page)
+        })
+    }
+
+    async fn channel_transmissions(
+        &self,
+        _: &Caller,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        version: TopicVersionSelector,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<ChannelTransmissionPage, QueryError> {
+        self.send(Route::ChannelTransmissions, |b| {
+            b.path("id", &channel)
+                .query("filter", filter)
+                .query("version", &version)
+                .query("page", page)
         })
     }
 
@@ -553,6 +573,15 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     let _ = ready(client.overview(c, w, &filter()));
     let _ = ready(client.channel_topology(c, w, Weighting::MatchedBytes, &filter()));
     let _ = ready(client.channel_resources(c, channel(), w, &page()));
+    let _ = ready(client.channel_transmissions(
+        c,
+        channel(),
+        &ChannelTransmissionFilter {
+            confirmation: Some(Confirmation::Unconfirmed),
+        },
+        TopicVersionSelector::Current,
+        &page(),
+    ));
     let _ = ready(client.edge_transmissions(c, &edge(), w, &filter(), &page()));
     let _ =
         ready(client.transmissions_by_id(c, &selection, TopicVersionSelector::Current, &page()));

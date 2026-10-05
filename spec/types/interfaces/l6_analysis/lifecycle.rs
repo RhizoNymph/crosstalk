@@ -21,7 +21,7 @@ use crate::aggregates::topic_history::TopicVersionHistory;
 use crate::aggregates::topic_history::{
     InvalidHistory, InvalidLineage, InvalidLineageEntry, InvalidVersionInfo, TopicLineage,
 };
-use crate::ids::{TopicId, TransmissionId};
+use crate::ids::{AgentId, TopicId, TransmissionId};
 use crate::support::{Change, Timestamp};
 
 #[cfg(doc)]
@@ -36,6 +36,12 @@ pub struct StoredAssignment {
     /// `Confirmed::at`, which a windowed `sizes` filters on.
     pub confirmed_at: Timestamp,
     pub matched_bytes: NonZeroU64,
+    /// The transmission's sender (`Confirmed::from`) and reader, as
+    /// recorded: `sizes` resolves them through `AgentDirectory` at the read
+    /// and leaves out a transmission whose two agents have since merged into
+    /// one.
+    pub from: AgentId,
+    pub to: AgentId,
 }
 
 /// What [`TopicLifecycle::mark_active`] did.

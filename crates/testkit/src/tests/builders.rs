@@ -155,7 +155,7 @@ fn channels_build_for_every_origin() {
         prefix: "/workspace/shared".to_owned(),
     };
     let discovered = ChannelBuilder::new(&mut ids).build();
-    assert_eq!(discovered.origin.detection_kind(), DetectionKind::Observed);
+    assert_eq!(discovered.origin.detection_kind(), DetectionKind::Active);
     assert_eq!(discovered.canonical(), discovered.id);
 
     let promoted = ChannelBuilder::new(&mut ids)
@@ -598,7 +598,12 @@ fn envelopes_wrap_every_built_event() {
     let agent = AgentBuilder::new(&mut ids).build();
     let content = ContentMatchBuilder::new(&mut ids).build().expect("match");
     let access = AccessBuilder::new(&mut ids).build();
-    let channel = ids.channel();
+    let channel = ChannelBuilder::new(&mut ids).build();
+    let seed = channel
+        .origin
+        .seed()
+        .expect("a discovered channel has a seed");
+    let channel = channel.id;
     let confirmed = TransmissionBuilder::new(&mut ids)
         .build()
         .expect("confirmed");
@@ -619,11 +624,11 @@ fn envelopes_wrap_every_built_event() {
         ),
         (event::content_matched(content), Subject::ContentMatched),
         (
-            event::access_recorded(access.clone(), channel),
+            event::access_recorded(access.clone(), Some(channel)),
             Subject::AccessRecorded,
         ),
         (
-            event::channel_discovered(channel, access.id),
+            event::channel_discovered(channel, seed),
             Subject::ChannelDiscovered,
         ),
         (

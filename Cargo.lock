@@ -429,7 +429,19 @@ dependencies = [
 name = "crosstalk-flow"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "crosstalk-memory",
+ "crosstalk-sim",
  "crosstalk-spec",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

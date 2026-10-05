@@ -188,10 +188,9 @@ impl<'a, S: WorldStores> Runner<'a, S> {
             | Op::Rename { .. }
             | Op::Discover { .. }
             | Op::AddResource { .. }
-            | Op::Access { .. }
+            | Op::Access(_)
             | Op::Detection { .. }
             | Op::Save(_)
-            | Op::Confirm { .. }
             | Op::Policy { .. }
             | Op::Promote { .. }
             | Op::ForbiddenPolicy { .. }

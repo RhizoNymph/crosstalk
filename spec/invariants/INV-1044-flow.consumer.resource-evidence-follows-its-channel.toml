@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.consumer.resource-evidence-follows-its-channel"
+statement = "Whenever the flow consumer learns that a resource it holds correlator evidence for is on a channel (an access whose resource resolves to a channel, or a ChannelDiscovered for the resource, published for any consumer's discovery), it moves that evidence to the channel's medium before it correlates the access or anything after it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A resource's evidence is keyed by the resource only while it is on no
+channel. Another consumer can discover the resource's channel, or a
+declared pattern can take the resource in, without this consumer opening
+a transmission on it; its next access then resolves to the channel and
+would be correlated in the channel's medium, apart from the writes and
+reads held for the resource, so they would never pair.
+"""
+
+[evidence]
+dst = "crosstalk_flow::consumer::tests::dst::concurrent_discovery_one_channel"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

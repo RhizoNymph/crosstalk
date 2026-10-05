@@ -16,4 +16,4 @@ write's outcome is Unknown (flow.extract.write-outcome-classified).
 property = "crosstalk_flow::extract::tests::no_read_without_result"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

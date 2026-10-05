@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.channels.rows-newest-created-first"
+statement = "ChannelRow::created_at is ChannelOrigin::created_at of its channel: the declaration's time for a channel declared before traffic, otherwise its seed's opened_at (the opening of the first cross-agent transmission through it, kept by a promotion and a supersession); and a full QueryApi::channels traversal lists its rows by created_at descending, ties by id descending."
+kind = "representation"
+requires = ["type", "unit", "integration"]
+rationale = """
+The UI needs one stable sort key for "newest channel first". A ULID's time
+is when an id was minted (the first access or a draft), not when the
+channel came to exist; an unconfirmed channel exists from the co-access
+that opened its first transmission, so that opening is its time, and a
+later confirmation does not move it in the list. Deriving it from the
+stored channel means a row cannot carry a time that disagrees with its
+channel.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::channels::ChannelRow::created_at"
+unit = [
+    "crosstalk_spec::tests::confirmation::created_at_is_the_declaration_time_or_the_first_cross_agent_transmission",
+]
+integration = "crosstalk_surface::integration::pg_channels_newest_created_first"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

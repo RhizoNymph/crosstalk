@@ -10,11 +10,12 @@ use super::super::harness::{assert_golden, assert_rejected, assert_request_golde
 use super::super::{ULID_A, ULID_B, id, ts};
 use super::{at, model, operator, topic, version};
 use crate::aggregates::edge::RouteKind;
+use crate::aggregates::filter::UnconfirmedChannels;
 use crate::aggregates::filter::{FalseDetections, TopicVersionSelector, TopologyFilter};
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
-    FitFailure, Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
-    ProjectionParams, ProjectionSpec, ProjectionStatus,
+    FitFailure, Fitted, PointParts, PointRoute, ProjectedPoint, Projection, ProjectionInfo,
+    ProjectionLimit, ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crate::ids::{AgentId, ChannelId, ProjectionId, TransmissionId};
 use crate::paging::{Page, PageSize, ProjectionList};
@@ -46,6 +47,7 @@ fn filter() -> TopologyFilter {
         topics: vec![topic(0)],
         topic_version: TopicVersionSelector::Current,
         false_detections: FalseDetections::Exclude,
+        unconfirmed_channels: UnconfirmedChannels::Include,
     }
 }
 
@@ -126,7 +128,7 @@ fn every_status() -> Vec<(&'static str, ProjectionInfo)> {
 }
 
 fn point(transmission: &str, topic_n: Option<usize>, x: f32, y: f32) -> ProjectedPoint {
-    ProjectedPoint {
+    ProjectedPoint::new(PointParts {
         transmission: id(TransmissionId::from_ulid_text, transmission),
         from: id(AgentId::from_ulid_text, ULID_A),
         to: id(AgentId::from_ulid_text, ULID_B),
@@ -135,7 +137,8 @@ fn point(transmission: &str, topic_n: Option<usize>, x: f32, y: f32) -> Projecte
         confirmed_at: at("10:42:17"),
         x: Finite::new(x).expect("finite"),
         y: Finite::new(y).expect("finite"),
-    }
+    })
+    .expect("a point between two agents")
 }
 
 fn points() -> Vec<ProjectedPoint> {

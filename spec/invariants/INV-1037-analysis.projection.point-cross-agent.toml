@@ -1,0 +1,27 @@
+[invariant]
+id = "analysis.projection.point-cross-agent"
+statement = "ProjectedPoint::new, and so decoding a ProjectedPoint, refuses a point whose sender is its reader, and ProjectionFrame::new refuses a row whose sender and reader table entries are equal (InvalidFrame::WithinOneAgent)."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A projection samples transmissions through the shared filter, which never
+admits one whose agents resolve to one agent
+(topology.filter.cross-agent-only). A point with equal ends would be a
+transmission no other view counts, coloured and counted only in the
+projection; making it unrepresentable keeps the frame, its export rows and
+every other view agreeing.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::projection::ProjectedPoint::new",
+    "crosstalk_spec::aggregates::projection::frame::ProjectionFrame::new",
+]
+unit = [
+    "crosstalk_spec::tests::projection::a_projected_point_is_never_within_one_agent",
+    "crosstalk_spec::tests::projection_frame::a_frame_refuses_a_point_within_one_agent",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

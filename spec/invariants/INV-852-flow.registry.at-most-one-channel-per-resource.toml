@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.registry.at-most-one-channel-per-resource"
+statement = "Each ResourceId is stored on at most one channel, and so resolves to at most one canonical channel, even when two discoveries from the same resource commit concurrently: one returns Discovery::Created, the other Discovery::Existing with that channel, and ChannelDiscovered is published once."
+kind = "coordination"
+requires = ["unit", "dst", "integration"]
+rationale = """
+Discovery is a check-then-act: two flow consumers that both find the
+resource on no channel would otherwise create two channels for it, putting
+later writers and readers on different channels so their co-accesses are
+never seen, and raising NewChannel twice. A promotion moves no stored
+resource: a superseded channel's resources stay under its id and resolve,
+in one step, to the channel that superseded it, so every reader still sees
+at most one channel per resource. A resource on no channel is allowed: it
+is a resource only.
+"""
+
+[evidence]
+unit = "crosstalk_memory::flow::registry::tests::traffic::a_second_discovery_finds_the_first_channel"
+dst = "crosstalk_flow::consumer::tests::dst::concurrent_discovery_one_channel"
+integration = "crosstalk_flow::registry::integration::pg_concurrent_discover"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }
