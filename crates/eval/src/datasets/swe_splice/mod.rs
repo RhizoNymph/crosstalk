@@ -13,10 +13,12 @@
 //!    extra call reading that path and its result in `B`'s harness format
 //!    ([`read`]): the file as the [`variant`] renders it, numbered like
 //!    `cat -n`.
-//! 4. **The clock.** `A`'s call `i` is at `compose(a0 + i, 1, 0)` and `B`'s
-//!    call `j` at `compose(b0 + j, 0, 0)`, with the offsets chosen so `B`'s
-//!    read call comes right after `A`'s writing call, and the reader
-//!    exchange (the call after the read) later still.
+//! 4. **The clock.** `A`'s call `i` is at `pace.at(a0 + i, 1, 0)` and
+//!    `B`'s call `j` at `pace.at(b0 + j, 0, 0)` (one paced step per call,
+//!    1 to 5 s by default, [`Pace`]), with the offsets chosen so `B`'s read
+//!    call comes right after `A`'s writing call, and the reader exchange
+//!    (the call after the read) one step later still: the read's result
+//!    arrives two steps (2 to 10 s) after the write.
 //!
 //! **Label.** `A → B`, Channel route through `Locator::File` of the
 //! shared absolute path, ToolResult carrier, at `B`'s first exchange
@@ -44,7 +46,7 @@ pub use read::ReadForm;
 pub use variant::Variant;
 pub use write::{FileWrite, WriteForm};
 
-use crate::corpus::clock::compose;
+use crate::corpus::clock::Pace;
 use crate::corpus::{SourceError, TraceSource, World};
 use crate::datasets::background::{BackgroundError, BackgroundWorld, Trajectory};
 use crate::datasets::chat::{ChatMessage, convert};
@@ -239,6 +241,11 @@ pub fn plan(pool: &[Pooled], number: usize, seed: u64) -> Result<Plan, SpliceErr
 
 /// The world of one planned splice.
 pub fn world(pool: &[Pooled], plan: &Plan) -> Result<World, SpliceError> {
+    world_paced(pool, plan, Pace::DEFAULT)
+}
+
+/// The world of one planned splice, calls `pace` apart.
+pub fn world_paced(pool: &[Pooled], plan: &Plan, pace: Pace) -> Result<World, SpliceError> {
     let sender = &pool[plan.sender];
     let reader = &pool[plan.reader];
     let form = ReadForm::of(&reader.record.messages);
@@ -281,8 +288,8 @@ pub fn world(pool: &[Pooled], plan: &Plan) -> Result<World, SpliceError> {
     };
     let a_file = sender.shard.relative.clone();
     let b_file = reader.shard.relative.clone();
-    let sender_calls = open_swe::calls(&sent, &a_file, sender.row, |i| compose(a0 + i, 1, 0))?;
-    let reader_calls = open_swe::calls(&read, &b_file, reader.row, |j| compose(b0 + j, 0, 0))?;
+    let sender_calls = open_swe::calls(&sent, &a_file, sender.row, |i| pace.at(a0 + i, 1, 0))?;
+    let reader_calls = open_swe::calls(&read, &b_file, reader.row, |j| pace.at(b0 + j, 0, 0))?;
 
     let hashed = convert(&read).map_err(|source| OpenSweError::Chat {
         file: b_file.clone(),
@@ -363,6 +370,7 @@ pub struct SpliceSource {
     splices: usize,
     seed: u64,
     pool_size: usize,
+    pace: Pace,
 }
 
 impl SpliceSource {
@@ -379,7 +387,14 @@ impl SpliceSource {
             splices,
             seed,
             pool_size: (splices * 3).max(16),
+            pace: Pace::DEFAULT,
         })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     /// Reads the pool: `pool_size` trajectories round-robin over the shards.
@@ -407,13 +422,14 @@ impl TraceSource for SpliceSource {
             Err(error) => (Vec::new(), Some(error)),
         };
         let seed = self.seed;
+        let pace = self.pace;
         let splices = if failure.is_some() { 0 } else { self.splices };
         failure
             .into_iter()
             .map(|error| Err(SourceError::from(error)))
             .chain((0..splices).map(move |number| {
                 plan(&pool, number, seed)
-                    .and_then(|plan| world(&pool, &plan))
+                    .and_then(|plan| world_paced(&pool, &plan, pace))
                     .map_err(SourceError::from)
             }))
     }

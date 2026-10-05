@@ -11,14 +11,17 @@
 //! `Synthetic`.
 //!
 //! **Clock.** Nothing has a time, so the virtual clock orders exchanges by
-//! episode-global event ids. Tool calls are matched to the agent's events in
-//! order. Within the episode (the clock's major component):
+//! episode-global event ids, one paced call step per event
+//! ([`Pace`](crate::corpus::clock::Pace), 1 to 5 s by default). Tool calls
+//! are matched to the agent's events in order. Episodes follow each other:
+//! each starts at the step after the previous one's last
+//! ([`episode_steps`]), and within it:
 //!
 //! - an exchange whose response makes a tool call happens just before that
-//!   call's event `e`: `(e + 1, 0)`;
-//! - any other exchange happens after every input it saw: `(floor, 1)`,
-//!   where `floor` is one past the latest event among the delivered peer
-//!   messages and tool results before it, and never before the agent's
+//!   call's event `e`: step `e + 1`, sub 0;
+//! - any other exchange happens after every input it saw: step `floor`,
+//!   sub 1, where `floor` is one past the latest event among the delivered
+//!   peer messages and tool results before it, and never before the agent's
 //!   previous exchange.
 //!
 //! So a sender's exchange (at its send event) always precedes the reader's
@@ -32,8 +35,31 @@ use crosstalk_spec::support::Timestamp;
 use super::SaltError;
 use super::messages::convert;
 use super::schema::{Delivery, Episode, RawMessage, Usage};
-use crate::corpus::clock::compose;
+use crate::corpus::clock::{ClockError, Pace};
 use crate::corpus::{Fidelity, HashedMessage};
+
+/// Where an episode's calls fall: the pace of a step and the step the
+/// episode starts at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpisodeClock {
+    pub pace: Pace,
+    pub start: u64,
+}
+
+/// The call steps an episode takes: every time within it is at most one
+/// past its last event (step `e + 1`), and one more step separates it from
+/// the next episode.
+pub fn episode_steps(episode: &Episode) -> u64 {
+    let events = episode.events.iter().map(|event| event.event_id);
+    let deliveries = episode
+        .channel_transcript
+        .iter()
+        .map(|delivery| delivery.event_id);
+    events
+        .chain(deliveries)
+        .max()
+        .map_or(2, |last| last.saturating_add(3))
+}
 
 /// A peer message as the harness delivers it: `[round=r/n][from=x][type=t]`,
 /// a blank line, then the content.
@@ -144,6 +170,7 @@ pub fn reconstruct(
     episode: &Episode,
     file: &str,
     scripted: bool,
+    clock_at: EpisodeClock,
 ) -> Result<AgentEpisode, SaltError> {
     let raw = episode
         .agents
@@ -215,13 +242,13 @@ pub fn reconstruct(
     let call_events: BTreeMap<(usize, usize), u64> = calls.into_iter().zip(events).collect();
     let delivered = delivered_turns(agent, &raw, start, &episode.channel_transcript);
     let turns = clock(
-        episode,
         &raw,
         start,
         &responses,
         &call_events,
         &delivered,
         usage,
+        clock_at,
     )?;
     Ok(AgentEpisode {
         agent: agent.to_owned(),
@@ -269,15 +296,18 @@ fn delivered_turns(
 }
 
 fn clock(
-    episode: &Episode,
     raw: &[RawMessage],
     start: usize,
     responses: &[usize],
     call_events: &BTreeMap<(usize, usize), u64>,
     delivered: &BTreeMap<usize, u64>,
     usage: Vec<Usage>,
+    clock_at: EpisodeClock,
 ) -> Result<Vec<Turn>, SaltError> {
-    let major = episode.episode_index;
+    let EpisodeClock {
+        pace,
+        start: episode_start,
+    } = clock_at;
     let mut call_event_by_id: BTreeMap<&str, u64> = BTreeMap::new();
     for ((at, call), event) in call_events {
         if let Some(tool_call) = raw[*at]
@@ -312,7 +342,10 @@ fn clock(
             Some(event) if event + 1 >= floor => (event + 1, 0),
             _ => (floor, 1),
         };
-        let mut time = compose(major, minor, sub).map_err(SaltError::Clock)?;
+        let step = episode_start
+            .checked_add(minor)
+            .ok_or(SaltError::Clock(ClockError::Major(minor)))?;
+        let mut time = pace.at(step, 0, sub).map_err(SaltError::Clock)?;
         if let Some(previous) = last
             && time <= previous
         {
