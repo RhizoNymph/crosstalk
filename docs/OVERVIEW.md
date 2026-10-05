@@ -1177,8 +1177,11 @@ Features Index:
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP first) streaming worlds of checked spec
-      NormalizedExchanges on a deterministic virtual clock, with typed,
+      (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
+      http_request reads and writes of public wiki pages) and swarm-traces (a
+      decode-chain corpus reported by chain, count and length only))
+      streaming worlds of checked
+      spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
       controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
@@ -1189,7 +1192,8 @@ Features Index:
       and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
       with the naive reference matcher (escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]), decoding,
-      opaque-blob exclusion), the gateway pipeline (Pipeline::ingest under
+      opaque-blob exclusion, an L4-style boilerplate cutoff on shingle
+      postings), the gateway pipeline (Pipeline::ingest under
       the corpus clock or a sim clock, reported as unscored), and
       LiveDetector over the LiveBackend seam (a fresh composition per
       world: ingest, settle, list transmissions, read spans, accesses,
@@ -1201,6 +1205,8 @@ Features Index:
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/datasets/wiki/mod.rs
+      - crates/eval/src/datasets/swarm/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
@@ -1297,6 +1303,30 @@ Features Index:
       - crates/flow/src/consumer/apply.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
+  eval_swe_synthetic:
+    description: >
+      Background and synthetic corpora for crosstalk-eval (ct-eval --dataset
+      open-swe | lmcache | swe-splice | cipher). Open-SWE-Traces and LMCache
+      trajectories (Parquet, read with the parquet crate; Open-SWE tool
+      results paired with calls by position, LMCache responses taken from
+      the next request) are mixed into background worlds with only
+      Boilerplate/SharedSource negative controls. Seeded splices plant one
+      Channel/File transmission from A's file write to B's harness-format
+      read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
+      deliver steganographic-evals payloads encoded: base64, hex, URL and
+      chains are in reach, while rotN, binary8 and substitution are
+      Tier::OutOfReach and reported as missed by design. Reports gain
+      out_of_reach and background (false positives per 1k exchanges, top
+      sources) summaries.
+    entry_points:
+      - crates/eval/src/datasets/background.rs
+      - crates/eval/src/datasets/open_swe/mod.rs
+      - crates/eval/src/datasets/lmcache/mod.rs
+      - crates/eval/src/datasets/swe_splice/mod.rs
+      - crates/eval/src/datasets/cipher/mod.rs
+      - crates/eval/src/score/sources.rs
+    depends_on: [eval, type_spec]
+    doc: docs/features/eval_swe_synthetic.md
   eval_ai_village:
     description: >
       The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval

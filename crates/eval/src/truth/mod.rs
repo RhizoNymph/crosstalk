@@ -91,6 +91,8 @@ pub enum InvalidLabel {
     Unbounded,
     #[error("an agent cluster needs at least two agents")]
     SmallCluster,
+    #[error("a label needs an undecodable codec exactly when its tier is out of reach")]
+    Reach,
 }
 
 fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
@@ -108,7 +110,8 @@ fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
 
 /// One transmission a detector should report. Built only through
 /// [`ExpectedTransmission::new`]: sender and reader differ and share a world,
-/// and the content text is as long as its location.
+/// the content text is as long as its location, and it needs an
+/// undecodable codec exactly when its tier is out of reach.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "TransmissionLabel", into = "TransmissionLabel")]
 pub struct ExpectedTransmission(TransmissionLabel);
@@ -122,6 +125,10 @@ impl ExpectedTransmission {
                 text,
                 location: label.content.at.len(),
             });
+        }
+        let undecodable = matches!(label.needs, MatchNeed::Undecodable { .. });
+        if undecodable != (label.tier == Tier::OutOfReach) {
+            return Err(InvalidLabel::Reach);
         }
         Ok(Self(label))
     }

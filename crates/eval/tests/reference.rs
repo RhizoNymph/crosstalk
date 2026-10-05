@@ -555,3 +555,115 @@ fn urls_and_paths_normalize() {
     assert_eq!(parse_url("ftp://x/y"), None);
     assert_eq!(normalize_path("/a//b/./c/../d"), "/a/b/d");
 }
+
+// --- boilerplate: text many agents originate independently ---
+
+const TEMPLATE: &str = "Describe the new page here and add your notes below";
+
+/// A sentence no other writer shares a 24-byte window with: every word
+/// carries the writer's own tag.
+fn unique_sentence(writer: usize) -> String {
+    let tag: String = [writer / 26 % 26, writer % 26]
+        .iter()
+        .map(|&d| char::from(b'a' + u8::try_from(d).unwrap_or(0)))
+        .collect();
+    (0..8)
+        .map(|word| format!("{tag}note{word}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A world where `originators` agents each say `TEMPLATE` plus a unique
+/// sentence, then a reader reads one tool result holding `copies` copies of
+/// `TEMPLATE` and the first originator's unique sentence.
+fn shared_template_world(originators: usize, copies: usize) -> (World, AgentKey, AgentKey) {
+    let mut builder = WorldBuilder::new(dataset(), WorldKey::new("w"));
+    let mut writers = Vec::new();
+    for at in 0..originators {
+        let agent = builder
+            .agent(&format!("writer{at:03}"), Driven::Model, "m")
+            .unwrap_or_else(|e| panic!("{e}"));
+        writers.push(agent);
+    }
+    let reader = builder
+        .agent("reader", Driven::Model, "m")
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (at, writer) in writers.iter().enumerate() {
+        let text = format!("{TEMPLATE}\n{}", unique_sentence(at));
+        let request = vec![system("You are a writer."), user("Write the page.")];
+        builder
+            .exchange(draft(writer, at as u64 + 1, request, says(&text)))
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut body = vec![TEMPLATE; copies].join("\n");
+    body.push('\n');
+    body.push_str(&unique_sentence(0));
+    let request = vec![
+        system("You are the reader."),
+        calls(
+            "read_1",
+            "http_request",
+            r#"{"method":"GET","url":"https://wiki.example/Hub"}"#,
+        ),
+        result("read_1", &body),
+    ];
+    builder
+        .exchange(draft(
+            &reader,
+            originators as u64 + 1,
+            request,
+            says("Read it."),
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let first = writers.swap_remove(0);
+    (
+        builder.finish(Coverage::Complete {
+            tier: Tier::Construction,
+        }),
+        first,
+        reader,
+    )
+}
+
+#[test]
+fn text_many_agents_originate_is_boilerplate() {
+    // Without a cutoff every copy matches every originator's span:
+    // 40 originators x 400 copies = 16,000 matches in one read.
+    let originators = 40;
+    let copies = 400;
+    let (world, first, reader) = shared_template_world(originators, copies);
+    let config = ReferenceConfig::default();
+    assert!(originators > config.max_postings);
+    let (output, predictions) = matched(&world);
+    assert!(
+        output.matches <= 2,
+        "boilerplate must not fan out: {} matches",
+        output.matches
+    );
+    // The one sentence only the first writer originated is still found.
+    assert_eq!(output.transmissions.len(), 1);
+    assert!(
+        predictions
+            .iter()
+            .all(|p| (&p.from, &p.to) == (&first, &reader))
+    );
+}
+
+#[test]
+fn text_a_few_agents_originate_still_matches_each() {
+    // At or under the cutoff, each originator's span is still a candidate.
+    let originators = ReferenceConfig::default().max_postings;
+    let (world, _, _) = shared_template_world(originators, 1);
+    let (output, _) = matched(&world);
+    assert_eq!(output.transmissions.len(), originators);
+}
+
+#[test]
+fn matches_grow_linearly_with_the_read_body() {
+    // A large read body of boilerplate costs no more matches than a small one.
+    let (small, _, _) = shared_template_world(40, 10);
+    let (large, _, _) = shared_template_world(40, 4_000);
+    let (small, _) = matched(&small);
+    let (large, _) = matched(&large);
+    assert_eq!(small.matches, large.matches);
+}
