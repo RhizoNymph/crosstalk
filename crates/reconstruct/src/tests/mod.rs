@@ -10,6 +10,7 @@ mod pg;
 mod pg_agents;
 mod pg_props;
 mod pg_threads;
+mod placement;
 mod rig;
 mod support;
 mod table;

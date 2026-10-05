@@ -10,9 +10,10 @@
 //! Roadmap: P2.6 (the in-process surface) and P7.1 (HTTP API server). A
 //! composition crate: it may depend on layer crates.
 
+pub mod http;
 pub mod in_process;
 
-pub use in_process::{InProcess, InProcessError, InProcessOptions, MemoryStores};
+pub use in_process::{Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores};
 
 #[cfg(test)]
 mod tests;

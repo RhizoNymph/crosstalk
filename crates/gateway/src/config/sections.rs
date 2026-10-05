@@ -5,6 +5,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crosstalk_spec::ids::OperatorId;
+use crosstalk_spec::interfaces::l8_surface::operators::OperatorName;
 use crosstalk_store::PoolSettings;
 use serde::Deserialize;
 
@@ -117,14 +119,48 @@ impl NonEmpty {
     }
 }
 
-/// The L8 HTTP binding (roadmap P7.1). Accepted and checked; not bound
-/// until the API exists.
+/// The L8 HTTP binding (roadmap P7.1), served on `listen` over the live
+/// process's surface by the `all` and `api` roles.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ApiConfig {
     pub listen: SocketAddr,
-    /// The operator bearer token's variable.
+    /// The operator bearer token's variable. A request carrying
+    /// `Authorization: Bearer <token>` is made as [`ApiConfig::operator`].
     pub token: EnvRef,
+    /// The one operator the token is mapped to. It holds every
+    /// permission. Defaults to an operator named `admin`.
+    #[serde(default)]
+    pub operator: ApiOperator,
+}
+
+/// The operator the API's bearer token signs in as: `{"name": "admin"}`.
+/// Its id is fixed ([`ApiOperator::ID`]), so renaming it keeps its audit
+/// history.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ApiOperator {
+    pub name: OperatorName,
+}
+
+impl ApiOperator {
+    /// The operator's id: the first ULID, in every deployment.
+    pub const ID: OperatorId = OperatorId::from_ulid(1);
+}
+
+impl Default for ApiOperator {
+    fn default() -> Self {
+        Self {
+            name: OperatorName::new("admin").unwrap_or_else(|_| unreachable_name()),
+        }
+    }
+}
+
+/// "admin" is a valid operator name (non-empty, short, no control
+/// characters), so this is never reached; it exists so the default needs
+/// no `expect`.
+fn unreachable_name() -> OperatorName {
+    unreachable!("\"admin\" is a valid operator name")
 }
 
 /// The ops listener: `GET /metrics`, `/healthz`, `/readyz`.

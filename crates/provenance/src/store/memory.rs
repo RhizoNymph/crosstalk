@@ -5,8 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crosstalk_spec::derived::provenance::span::{SpanEvent, SpanState};
+use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::derived::provenance::span::{Origin, OriginatedSpan, SpanEvent, SpanState};
 use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanIndexError};
 use crosstalk_spec::support::Timestamp;
 
 use super::{
@@ -64,6 +66,40 @@ fn advance(record: &mut SpanRecord, event: SpanEvent) -> Result<(), ProvenanceSt
         .map_err(ProvenanceStoreError::Transition)?;
     record.span.state = next;
     Ok(())
+}
+
+/// The spec's `SpanIndex` over the spans the scans committed: `commit_scan`
+/// already wrote every classified span, so `record` adds nothing (it is
+/// idempotent by construction), and `spans` reads back the originated ones
+/// (`Originated`, `Indexed`, `Propagated` or `Expired`) as recorded;
+/// relayed and common spans, and unknown ids, are absent.
+impl SpanIndex for MemoryProvenanceStore {
+    async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        Ok(())
+    }
+
+    async fn spans(
+        &self,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+        let tables = self.lock();
+        Ok(ids
+            .ids()
+            .iter()
+            .filter_map(|id| tables.spans.get(id))
+            .filter(|record| record.span.state.origin() == Some(Origin::Originated))
+            .map(|record| {
+                (
+                    record.span.id,
+                    IndexedSpan {
+                        exchange: record.span.exchange,
+                        author: record.span.agent,
+                        location: record.span.location,
+                    },
+                )
+            })
+            .collect())
+    }
 }
 
 impl ProvenanceStore for MemoryProvenanceStore {

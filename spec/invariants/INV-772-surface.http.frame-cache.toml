@@ -21,8 +21,8 @@ unit = [
     "crosstalk_spec::tests::wire::http::frame::a_matching_if_none_match_is_not_modified",
     "crosstalk_spec::tests::wire::http::frame::a_frame_not_ready_is_a_conflict_and_an_expired_one_gone",
 ]
-integration = "crosstalk_api::integration::frame_is_cached_and_revalidated"
+integration = "crosstalk_api::http::integration::frame::frame_is_cached_and_revalidated"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

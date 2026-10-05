@@ -1,0 +1,29 @@
+[invariant]
+id = "surface.http.client-error-status-agrees"
+statement = "The HTTP client takes a non-success response as the surface's error only when the body decodes as the route's error type (QueryError, or ActionError for an action) and ErrorStatus::status of that error is the status received, so every error of the status goldens decodes back to itself; a 401 is the AuthError of its body; an error body at another status is StatusMismatch and a response with no L8 body UnexpectedResponse, neither of which is ever returned as the surface's decision."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The status mapping (surface.http.status-mapping) is a function from
+errors to statuses; reading it in reverse is only sound when the body
+agrees with the status. A proxy's 404 page or a 502 is not NotFound or
+Store, and a body that disagrees with its status is a server bug or a
+tampered response, so the client refuses to present either as the
+surface's answer. Through the traits, which have no variant for a
+request without a caller or a failed exchange, those become Store with a
+reason naming the cause; the typed ClientError keeps them apart.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_client::tests::errors::every_query_error_status_decodes_to_its_error",
+    "crosstalk_client::tests::errors::every_action_error_status_decodes_to_its_error",
+    "crosstalk_client::tests::errors::an_error_at_another_status_is_a_mismatch",
+    "crosstalk_client::tests::errors::a_401_is_unauthenticated",
+    "crosstalk_client::tests::errors::a_status_without_an_l8_body_is_unexpected",
+    "crosstalk_client::tests::responses::a_success_must_be_the_routes_json",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -6,12 +6,13 @@
 //! | Key | Section |
 //! | --- | --- |
 //! | `ingress` | ingress's [`IngressConfig`], unchanged: the proxy's listen address, routes, secrets, limits and capture channel capacity |
-//! | `api` | [`ApiConfig`], optional; the L8 HTTP binding is not built yet, so it is checked and not bound |
+//! | `api` | [`ApiConfig`], optional: the L8 HTTP binding's listen address, bearer token variable and the operator the token signs in as |
 //! | `ops` | [`OpsConfig`]: `/metrics`, `/healthz`, `/readyz` |
 //! | `store` | [`StoreSection`], optional: Postgres pool sizing (the URL is `DATABASE_URL`) |
 //! | `blobs` | [`BlobsConfig`]: the blob store's root, whose parent is the data directory |
 //! | `embeddings` | [`EmbeddingsConfig`], optional; checked, unused until P6 |
 //! | `bus`, `pipeline`, `shutdown` | optional tuning: transport's [`BusConfig`], [`PipelineConfig`], [`ShutdownConfig`] |
+//! | `flow` | optional: L5's [`FlowConfig`] (`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `shards`, `tick_ms`), each key defaulted |
 //!
 //! A relative `blobs.root` is resolved against the directory of the config
 //! file it was read from ([`GatewayConfig::load`]).
@@ -20,14 +21,15 @@ mod sections;
 
 use std::path::{Path, PathBuf};
 
+pub use crosstalk_flow::consumer::FlowConfig;
 use crosstalk_ingress::config::IngressConfig;
 use crosstalk_transport::BusConfig;
 use serde::Deserialize;
 
 pub use sections::{
-    ApiConfig, BlobsConfig, EmbeddingsConfig, EmptyString, EnvRef, EnvVarName, HttpUrl,
-    InvalidEnvVarName, InvalidHttpUrl, NonEmpty, OpsConfig, PipelineConfig, ShutdownConfig,
-    StoreSection,
+    ApiConfig, ApiOperator, BlobsConfig, EmbeddingsConfig, EmptyString, EnvRef, EnvVarName,
+    HttpUrl, InvalidEnvVarName, InvalidHttpUrl, NonEmpty, OpsConfig, PipelineConfig,
+    ShutdownConfig, StoreSection,
 };
 
 /// Everything the gateway is configured with.
@@ -49,6 +51,8 @@ pub struct GatewayConfig {
     pub pipeline: PipelineConfig,
     #[serde(default)]
     pub shutdown: ShutdownConfig,
+    #[serde(default)]
+    pub flow: FlowConfig,
 }
 
 /// Why a config could not be read.

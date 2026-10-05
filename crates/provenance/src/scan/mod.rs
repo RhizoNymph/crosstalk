@@ -236,7 +236,8 @@ impl Scanner {
         let winnowing = Winnowing::new(config.winnow());
         let pipeline = DecodePipeline::new(config.decode());
         Self {
-            segmenter: NovelRunSegmenter::new(winnowing, pipeline),
+            segmenter: NovelRunSegmenter::new(winnowing, pipeline)
+                .with_locator_keys(config.locator_keys().clone()),
             settings: config.index().clone(),
             threshold: config.semantic_threshold(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),

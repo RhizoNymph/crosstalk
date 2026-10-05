@@ -22,8 +22,8 @@ unit = [
     "crosstalk_spec::tests::wire::http::sse::an_item_is_one_event_of_three_fields",
     "crosstalk_spec::tests::wire::http::sse::the_end_event_carries_the_reason_and_no_id",
 ]
-integration = "crosstalk_api::integration::live_resumes_from_last_event_id_or_cursor"
+integration = "crosstalk_api::http::integration::live::live_resumes_from_last_event_id_or_cursor"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

@@ -22,6 +22,7 @@
 pub mod hasher;
 pub mod source;
 pub mod stream;
+pub mod transmissions;
 
 use crosstalk_spec::ids::ExportId;
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
@@ -39,6 +40,7 @@ use crate::stores::SurfaceStores;
 pub use hasher::Blake3RowHasher;
 pub use source::SpecExportSource;
 pub use stream::SurfaceExport;
+pub use transmissions::{NoTransmissions, StoredTransmissions, TransmissionSource};
 
 /// The stream `export` returns over `S`'s export source.
 pub type ExportRowsOf<S> = SurfaceExport<

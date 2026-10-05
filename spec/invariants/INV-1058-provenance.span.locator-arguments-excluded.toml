@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.span.locator-arguments-excluded"
+statement = "A tool-call argument's string value directly under a configured locator key (by default file_path, path, notebook_path, url, uri) yields no originated span; a URL or path inside a content value still does."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+A locator names the resource a call acts on; it is not content the tool
+wrote. As an originated span it is matched whenever another agent names
+the same resource (a Read of the page a Write created), which reports a
+transmission of the path rather than of what was written. The resource
+link between those calls is L5's co-access, from the extracted locators.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::segment::locator_arguments_yield_no_span"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -16,7 +16,34 @@ use tokio::task::JoinHandle;
 /// The running flags of a set of named tasks.
 #[derive(Debug, Clone, Default)]
 pub struct Tasks {
-    flags: Vec<(&'static str, Arc<AtomicBool>)>,
+    flags: Vec<(&'static str, Flag)>,
+}
+
+/// How one entry knows whether it runs.
+#[derive(Clone)]
+enum Flag {
+    /// A task spawned here, marked stopped by its guard.
+    Spawned(Arc<AtomicBool>),
+    /// Something tracked elsewhere (a group of tasks), asked each time.
+    Probe(Arc<dyn Fn() -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for Flag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawned(flag) => write!(f, "Spawned({})", flag.load(Ordering::Acquire)),
+            Self::Probe(_) => f.write_str("Probe"),
+        }
+    }
+}
+
+impl Flag {
+    fn running(&self) -> bool {
+        match self {
+            Self::Spawned(flag) => flag.load(Ordering::Acquire),
+            Self::Probe(probe) => probe(),
+        }
+    }
 }
 
 /// Marks its task stopped when dropped.
@@ -41,18 +68,24 @@ impl Tasks {
     {
         let flag = Arc::new(AtomicBool::new(true));
         let guard = Running(Arc::clone(&flag));
-        self.flags.push((name, flag));
+        self.flags.push((name, Flag::Spawned(flag)));
         tokio::spawn(async move {
             let _guard = guard;
             task.await
         })
     }
 
+    /// Track `name` as running while `probe` says so: for a group of tasks
+    /// reported as one (`live`: every layer stage).
+    pub fn probe(&mut self, name: &'static str, probe: impl Fn() -> bool + Send + Sync + 'static) {
+        self.flags.push((name, Flag::Probe(Arc::new(probe))));
+    }
+
     /// Each task's name and whether it is still running, in spawn order.
     pub fn states(&self) -> Vec<(&'static str, bool)> {
         self.flags
             .iter()
-            .map(|(name, flag)| (*name, flag.load(Ordering::Acquire)))
+            .map(|(name, flag)| (*name, flag.running()))
             .collect()
     }
 }

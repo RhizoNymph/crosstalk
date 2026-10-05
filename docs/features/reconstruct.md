@@ -22,6 +22,10 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
   `ConversationStore` (`MemoryConversations`, `PgConversations`): prefix
   matching, forks and retries, compaction, WebSocket increment resolution,
   system turns anywhere in a request, rethreading idempotence.
+  `MemoryConversations` also implements the spec's `ExchangePlacements`
+  (an exchange's agent and conversation, as its recorded outcome placed
+  it; `reconstruct.placement.as-threaded`), which `Live` exposes for
+  eval. `PgConversations` does not yet.
 - The L3 bus consumer (`consumer`): `ExchangeCaptured` in; attribution,
   claims and activity, threading; `AgentSeen` and `ConversationDelta` out.
 

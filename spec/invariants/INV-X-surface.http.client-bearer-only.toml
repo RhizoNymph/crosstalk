@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.http.client-bearer-only"
+statement = "The HTTP client presents a credential only as one Authorization: Bearer header whose token the binding's CredentialHeaders reads back as that bearer token, never a cookie or any other field, marks the header value sensitive, and never prints the token in Debug."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+The UI's server holds operators' tokens; a token that leaks into a log,
+or travels where the surface does not read credentials
+(surface.api.caller-from-session), is a credential exposed for nothing.
+Building BearerToken through the binding's own credential reader means
+the surface never refuses a token the client accepted as malformed, and
+the redacted Debug and sensitive header extend
+surface.api.no-raw-credentials to the client.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_client::tests::auth::a_token_travels_as_the_bearer_credential",
+    "crosstalk_client::tests::auth::tokens_belong_to_one_client",
+    "crosstalk_client::tests::auth::tokens_are_b64token_text",
+    "crosstalk_client::tests::auth::the_secret_is_never_printed",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

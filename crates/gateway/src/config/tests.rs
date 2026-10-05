@@ -210,3 +210,59 @@ fn shutdown_defaults_fit_the_compose_grace_period() {
     let shutdown = ShutdownConfig::default();
     assert!(shutdown.drain_timeout() + shutdown.flush_timeout() < Duration::from_secs(60));
 }
+
+/// The checked-in deployment config (with the flow section and the API
+/// operator spelled out) parses, and its flow keys are the defaults.
+#[test]
+fn the_checked_in_deployment_config_spells_out_the_defaults() {
+    let text = include_str!("../../../../deploy/config/crosstalk.json");
+    let config = GatewayConfig::from_json(text).expect("deploy/config/crosstalk.json parses");
+    assert_eq!(config.flow, FlowConfig::default());
+    assert_eq!(
+        config.api.as_ref().map(|api| api.operator.name.as_str()),
+        Some("admin")
+    );
+}
+
+/// `flow` and `api.operator` are optional, defaulted, strict and checked
+/// at start.
+#[test]
+fn the_flow_section_and_the_api_operator_default() {
+    let config = GatewayConfig::from_json(DEPLOY).expect("parses");
+    assert_eq!(config.flow, FlowConfig::default());
+    assert_eq!(
+        config.api.map(|api| api.operator),
+        Some(ApiOperator::default())
+    );
+    let mut with = value(DEPLOY);
+    with["flow"] = serde_json::json!({"evidence_window_ms": 10000, "suspected_ttl_ms": 60000});
+    with["api"]["operator"] = serde_json::json!({"name": "Ops desk"});
+    let config = GatewayConfig::from_json(&with.to_string()).expect("parses");
+    assert_eq!(config.flow.evidence_window_ms, 10_000);
+    assert_eq!(config.flow.suspected_ttl_ms, 60_000);
+    assert_eq!(
+        config.flow.correlation_window_ms,
+        FlowConfig::default().correlation_window_ms
+    );
+    assert_eq!(
+        config.api.map(|api| api.operator.name.as_str().to_owned()),
+        Some("Ops desk".to_owned())
+    );
+    for (pointer, bad) in [
+        ("/flow", serde_json::json!({"surprise": 1})),
+        ("/api/operator", serde_json::json!({"name": ""})),
+        (
+            "/api/operator",
+            serde_json::json!({"name": "a", "role": "x"}),
+        ),
+    ] {
+        let mut changed = value(DEPLOY);
+        let (parent, key) = pointer.rsplit_once('/').expect("a pointer");
+        changed
+            .pointer_mut(if parent.is_empty() { "" } else { parent })
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("an object")
+            .insert(key.to_owned(), bad);
+        assert!(!parses(&changed), "accepted {pointer}");
+    }
+}

@@ -353,3 +353,102 @@ async fn quality_leaves_out_transmissions_within_one_agent() {
     directory.unmerge(AgentId::from_ulid(0x0A6E_0003));
     assert_eq!(store.quality(window).await, Ok(both));
 }
+
+/// `flow.transmission-store.list-matches-query`: `list` returns exactly the
+/// stored transmissions the query matches (window on `opened_at`, state
+/// kinds, channel resolved through the directory), newest id first, each
+/// once across pages, and refuses a cursor presented with another query.
+#[tokio::test]
+async fn list_returns_what_the_query_matches_newest_first() {
+    use std::collections::BTreeSet;
+
+    use crosstalk_spec::ids::ChannelId;
+    use crosstalk_spec::interfaces::l5_flow::transmissions::{
+        TransmissionQuery, TransmissionStoreError,
+    };
+    use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+    use crosstalk_spec::paging::{PageRequest, PageSize};
+
+    use crate::analysis::aliases::StaticDirectory;
+
+    let old = ChannelId::from_ulid(0x0C4A);
+    let new = ChannelId::from_ulid(0x0C4B);
+    let directory = StaticDirectory::new();
+    assert!(directory.supersede(old, new).is_ok());
+    let mut store =
+        MemoryVerdicts::with_directories(StaticDirectory::new(), directory, Outbox::none());
+    // n: id; state kind; route kind (0 is a channel route on `old`); opened.
+    let rows = [
+        (0, 3, 0, 100),
+        (1, 1, 0, 200),
+        (2, 3, 1, 300),
+        (3, 4, 0, 500),
+        (4, 3, 0, 900),
+    ];
+    for (n, kind, route_kind, opened) in rows {
+        let saved = store
+            .save(transmission(n, kind, &[0], route_kind, opened))
+            .await;
+        assert_eq!(saved, Ok(()));
+    }
+    let window = TimeWindow::new(at(100), at(600)).unwrap_or_else(|_| panic!("window"));
+    let query = TransmissionQuery {
+        window,
+        states: Some(BTreeSet::from([
+            TransmissionStateKind::Confirmed,
+            TransmissionStateKind::Classified,
+        ])),
+        // Asked for by the superseding channel: the routes name `old`.
+        channel: Some(new),
+    };
+    let size = PageSize::new(1).unwrap_or_else(|_| panic!("page size"));
+    let mut request = PageRequest { size, after: None };
+    let mut listed = Vec::new();
+    loop {
+        let page = store
+            .list(&query, &request)
+            .await
+            .unwrap_or_else(|error| panic!("list: {error:?}"));
+        let (items, next) = page.into_parts();
+        listed.extend(items.into_iter().map(|transmission| transmission.id));
+        match next {
+            Some(next) => request.after = Some(next),
+            None => break,
+        }
+    }
+    // 1 is awaiting content, 2 is not a channel route, 4 opened after the
+    // window.
+    assert_eq!(listed, vec![transmission_id(3), transmission_id(0)]);
+
+    let everything = TransmissionQuery {
+        window: TimeWindow::new(at(0), at(1_000)).unwrap_or_else(|_| panic!("window")),
+        states: None,
+        channel: None,
+    };
+    let first = store
+        .list(&query, &PageRequest { size, after: None })
+        .await
+        .unwrap_or_else(|error| panic!("list: {error:?}"));
+    let (_, next) = first.into_parts();
+    let stale = PageRequest { size, after: next };
+    assert_eq!(
+        store.list(&everything, &stale).await.map(|_| ()),
+        Err(TransmissionStoreError::InvalidCursor)
+    );
+    let all = store
+        .list(
+            &everything,
+            &PageRequest {
+                size: PageSize::new(10).unwrap_or_else(|_| panic!("page size")),
+                after: None,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("list: {error:?}"));
+    let ids: Vec<_> = all
+        .items()
+        .iter()
+        .map(|transmission| transmission.id)
+        .collect();
+    assert_eq!(ids, (0..5).rev().map(transmission_id).collect::<Vec<_>>());
+}

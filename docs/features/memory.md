@@ -233,7 +233,11 @@ state is not judgeable, appends through `VerdictLog::record`, and on
 stored transmission with its current verdict, agents resolved through the
 directory `MemoryVerdicts::with_agents` was given (none merged for
 `new`), so a transmission whose agents have since merged into one is not
-counted (`flow.quality.cross-agent-only`).
+counted (`flow.quality.cross-agent-only`). `list` returns the stored
+transmissions a `TransmissionQuery` matches, newest id first, channels
+resolved through the directory `MemoryVerdicts::with_directories` was
+given, the cursor bound to the query
+(`flow.transmission-store.list-matches-query`).
 
 ### The property harnesses
 

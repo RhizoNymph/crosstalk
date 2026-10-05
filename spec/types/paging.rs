@@ -16,7 +16,7 @@
 //! | stored projections | [`ProjectionList`] | `ProjectionId` |
 //! | search hits | [`SearchList`] | (score, `TransmissionId`) |
 //! | a channel's resources | [`ResourceUseList`] | `ResourceId` |
-//! | transmissions by id | [`TransmissionList`] | `TransmissionId` |
+//! | transmissions by id, and by query (`TransmissionStore::list`) | [`TransmissionList`] | `TransmissionId` |
 //! | a channel's transmissions | [`ChannelTransmissionList`] | (`Transmission::opened_at`, `TransmissionId`) |
 //!
 //! A search hit's score is a fixed function of the query, the embedding
@@ -93,7 +93,7 @@ list_marker! {
     SearchList;
     /// `QueryApi::channel_resources` and `ChannelRegistry::resource_use`.
     ResourceUseList;
-    /// `QueryApi::transmissions_by_id`.
+    /// `QueryApi::transmissions_by_id` and `TransmissionStore::list`.
     TransmissionList;
     /// `QueryApi::channel_transmissions`.
     ChannelTransmissionList;

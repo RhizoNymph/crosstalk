@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.span.tool-arguments-per-value"
+statement = "Originated spans in tool-call arguments are cut from the decoded string values, so their text equals what the tool wrote."
+kind = "domain"
+property = "invariant"
+requires = ["unit"]
+rationale = """
+A tool call's arguments are JSON: keys, quotes and structure the tool
+never stores. A span cut across them (a Write's file_path and content as
+one span) makes the origin excerpt show JSON, and fingerprints the path
+together with the page, so another agent's call naming the same path
+matches the writer's page span. Cutting per string value keeps each
+span's view equal to text the tool received; a value too short for one
+k-gram yields no span. Arguments that are not JSON are segmented whole.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::segment::tool_argument_spans_are_cut_per_string_value"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

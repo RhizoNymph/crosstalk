@@ -246,6 +246,22 @@ impl<D: Send + Sync> TransmissionStore for PgTransmissionStore<D> {
         let mut conn = self.pool.acquire().await.map_err(failed)?;
         stored(&mut conn, id, false).await.map_err(failed)
     }
+
+    // TODO(flow-store): list over `flow.transmissions` (opened_at window,
+    // state column, channel_id resolved through the supersession table),
+    // keyset-paged on id. Live and eval read the memory store today.
+    async fn list(
+        &self,
+        _query: &crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionQuery,
+        _page: &crosstalk_spec::paging::PageRequest<crosstalk_spec::paging::TransmissionList>,
+    ) -> Result<
+        crosstalk_spec::paging::Page<Transmission, crosstalk_spec::paging::TransmissionList>,
+        TransmissionStoreError,
+    > {
+        Err(TransmissionStoreError::Store {
+            reason: "TransmissionStore::list is not implemented on Postgres yet".to_owned(),
+        })
+    }
 }
 
 impl<D: AgentDirectory + Send + Sync> TransmissionVerdicts for PgTransmissionStore<D> {

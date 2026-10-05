@@ -56,6 +56,15 @@ pub enum IngestError {
     NotPublished(BusError),
 }
 
+/// Why an event was not published by [`Ingester::publish`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PublishError {
+    #[error("no event id left to mint at {at:?}")]
+    IdsExhausted { at: Timestamp },
+    #[error("the bus refused the event: {0:?}")]
+    NotPublished(BusError),
+}
+
 /// The ingest path over a blob store `B` and a bus `E`. Clones share the
 /// stores, the id generator and the counters.
 pub struct Ingester<B, E> {
@@ -182,6 +191,33 @@ where
                 inner.stats.bump(Counter::PublishFailed);
                 tracing::error!(exchange = %exchange_id, error = ?error, "ExchangeCaptured not published");
                 Err(IngestError::NotPublished(error))
+            }
+        }
+    }
+
+    /// Publish `event` in an envelope stamped `at`, minting its id under
+    /// the same lock as [`Ingester::ingest`], so every envelope this
+    /// pipeline publishes reaches the bus in id order. What the stages a
+    /// composer runs over this pipeline publish through (store outboxes,
+    /// layer consumers). Not counted in [`PipelineStats`], which counts
+    /// exchanges.
+    pub async fn publish(&self, event: BusEvent, at: Timestamp) -> Result<EventId, PublishError> {
+        let inner = &self.inner;
+        let subject = event.subject();
+        let mut ids = inner.ids.lock().await;
+        let id = ids
+            .mint_at::<EventId>(at)
+            .map_err(|_exhausted| PublishError::IdsExhausted { at })?;
+        let published = inner.bus.publish(Envelope { id, at, event }).await;
+        drop(ids);
+        match published {
+            Ok(()) => {
+                tracing::debug!(event = %id.ulid_text(), subject = ?subject, "event published");
+                Ok(id)
+            }
+            Err(error) => {
+                tracing::warn!(subject = ?subject, error = ?error, "event not published");
+                Err(PublishError::NotPublished(error))
             }
         }
     }

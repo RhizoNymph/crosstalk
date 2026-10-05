@@ -94,7 +94,7 @@ pub mod agents;
 pub mod lifecycle;
 
 use crate::events::ingest::ConversationDelta;
-use crate::ids::{AgentId, ConversationId, MergeId, OperatorId};
+use crate::ids::{AgentId, ConversationId, ExchangeId, MergeId, OperatorId};
 #[cfg(doc)]
 use crate::observed::agent::Agent;
 use crate::observed::agent::{
@@ -280,6 +280,40 @@ impl ThreadOutcome {
             | Self::Compacts { delta, .. } => delta,
         }
     }
+}
+
+/// Where L3 put one exchange: the agent it was attributed to and the
+/// conversation it was threaded into, as the threading call recorded them
+/// (the agent as attributed then, not resolved through later merges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    pub agent: AgentId,
+    pub conversation: ConversationId,
+}
+
+impl Placement {
+    /// The placement a threading call's outcome records.
+    pub fn of(outcome: &ThreadOutcome) -> Self {
+        let delta = outcome.delta();
+        Self {
+            agent: delta.agent,
+            conversation: delta.conversation,
+        }
+    }
+}
+
+/// Threading outcomes read back by exchange: what eval scores L3's
+/// identity and threading against, and what a reader uses to place an
+/// exchange id it holds.
+pub trait ExchangePlacements {
+    /// `exchange`'s placement (`reconstruct.placement.as-threaded`): the
+    /// agent and conversation of its recorded threading outcome
+    /// ([`Placement::of`]). `None` for an exchange never threaded: unknown,
+    /// carrying no identity evidence, or left for review.
+    fn placement(
+        &self,
+        exchange: ExchangeId,
+    ) -> impl Future<Output = Result<Option<Placement>, ThreadError>> + Send;
 }
 
 pub trait Threader {

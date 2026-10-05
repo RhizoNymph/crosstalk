@@ -522,11 +522,12 @@ impl From<AlertReadError> for QueryError {
 }
 
 /// For `QueryApi::transmission` and the reads that start from stored
-/// transmissions (`TransmissionStore::transmission`).
+/// transmissions (`TransmissionStore::transmission`, `TransmissionStore::list`).
 impl From<TransmissionStoreError> for QueryError {
     fn from(error: TransmissionStoreError) -> Self {
         match error {
             TransmissionStoreError::Store { reason } => Self::Store { reason },
+            TransmissionStoreError::InvalidCursor => Self::InvalidCursor,
         }
     }
 }

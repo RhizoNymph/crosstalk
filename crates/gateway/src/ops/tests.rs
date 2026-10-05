@@ -47,6 +47,15 @@ fn report() -> HealthReport {
             duplicates: 11,
             write_failed: 12,
         },
+        live: Some(LiveReport {
+            stages: [
+                ("l3-reconstruct".to_owned(), 4),
+                ("l7-topology".to_owned(), 2),
+            ]
+            .into_iter()
+            .collect(),
+            watermark_micros: 1_790_845_200_000_000,
+        }),
     }
 }
 
@@ -60,7 +69,8 @@ fn health_report_json_is_pinned() {
             r#"{"status":"ok","#,
             r#""capture":{"captured":3,"unclassified":1,"decode_error":2,"channel_full":4,"channel_closed":5,"response_too_large":6,"ids_exhausted":13},"#,
             r#""pipeline":{"published":3,"normalize_failed":7,"store_failed":8,"store_retries":9,"publish_failed":10},"#,
-            r#""log":{"written":3,"duplicates":11,"write_failed":12}}"#
+            r#""log":{"written":3,"duplicates":11,"write_failed":12},"#,
+            r#""live":{"stages":{"l3-reconstruct":4,"l7-topology":2},"watermark_micros":1790845200000000}}"#
         )
     );
     let decoded: HealthReport = serde_json::from_str(&text).expect("decodes");
@@ -76,7 +86,7 @@ fn health_report_json_is_pinned() {
 #[test]
 fn health_report_decoding_is_strict() {
     let mut value = serde_json::to_value(report()).expect("encodes");
-    for pointer in ["", "/capture", "/pipeline", "/log"] {
+    for pointer in ["", "/capture", "/pipeline", "/log", "/live"] {
         let mut changed = value.clone();
         changed
             .pointer_mut(pointer)
@@ -197,6 +207,7 @@ fn readiness_needs_every_task_running_and_no_drain() {
             capture: None,
             pipeline: Arc::new(PipelineStats::new()),
             log: Arc::new(LogStats::new()),
+            live: None,
             tasks,
             store: StoreProbe::not_configured(),
         };

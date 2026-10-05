@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crosstalk_api::InProcessOptions;
+use crosstalk_flow::consumer::FlowConfig;
 use crosstalk_memory::analysis::catalog::RetentionPolicy;
 use crosstalk_memory::model::build::test_model;
 use crosstalk_memory::support::ManualClock;
@@ -31,8 +32,13 @@ pub const BUCKET: Duration = Duration::from_secs(5 * 60);
 /// seed's default).
 pub const CORRELATION_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How long a channel transmission waits for its content.
-pub const EVIDENCE_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// How long a channel transmission waits for its content: three seconds,
+/// so B's read (at 123.0 s) has its window closed by the clock's time once
+/// the scenario is fed (126.9 s, B's last exchange's end). The correlator
+/// confirms a channel transmission only when its window closes, and the
+/// harness's clock stops at the scenario's end. B's own output (its
+/// exchange starts at the read) is inside the window.
+pub const EVIDENCE_WINDOW: Duration = Duration::from_secs(3);
 
 /// How long a transmission stays suspected.
 pub const SUSPECTED_TTL: Duration = Duration::from_secs(2 * 24 * 60 * 60);
@@ -48,6 +54,21 @@ pub struct OptionsError(pub &'static str);
 pub fn timing() -> Result<CorrelationTiming, OptionsError> {
     CorrelationTiming::new(CORRELATION_WINDOW, EVIDENCE_WINDOW, SUSPECTED_TTL)
         .map_err(|_| OptionsError("correlation timing"))
+}
+
+/// L5's configuration with the scenario's timing: one shard, ticking every
+/// 50 ms of elapsed time so the polling smoke sees windows close.
+pub fn flow() -> Result<FlowConfig, OptionsError> {
+    let ms = |window: Duration| {
+        u64::try_from(window.as_millis()).map_err(|_| OptionsError("flow timing"))
+    };
+    Ok(FlowConfig {
+        correlation_window_ms: ms(CORRELATION_WINDOW)?,
+        evidence_window_ms: ms(EVIDENCE_WINDOW)?,
+        suspected_ttl_ms: ms(SUSPECTED_TTL)?,
+        shards: 1,
+        tick_ms: 50,
+    })
 }
 
 /// The in-process surface's options over `clock`.

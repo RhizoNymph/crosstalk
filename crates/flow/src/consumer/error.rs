@@ -54,6 +54,7 @@ impl StepError {
             | Self::Publish(PublishError::Bus(BusError::Disconnected)) => false,
             Self::Traffic(_)
             | Self::Registry(_)
+            | Self::Transmissions(TransmissionStoreError::InvalidCursor)
             | Self::Publish(_)
             | Self::MissingTransmission(_) => true,
         }
