@@ -35,7 +35,9 @@ pub fn status_of(error: &UiError) -> ErrorStatus {
                 | ConflictKind::ProjectionNotReady { .. }
                 | ConflictKind::ProjectionFailed { .. },
             ) => ErrorStatus::BadRequest,
-            QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
+            QueryError::Store { .. } | QueryError::Unavailable { .. } | QueryError::Conflict(_) => {
+                ErrorStatus::Internal
+            }
         },
     }
 }
@@ -93,6 +95,13 @@ mod tests {
             (
                 UiError::Query(QueryError::Store {
                     reason: "down".to_owned(),
+                }),
+                ErrorStatus::Internal,
+            ),
+            (
+                UiError::Query(QueryError::Unavailable {
+                    kind: crosstalk_spec::interfaces::l8_surface::UnavailableKind::Timeout,
+                    reason: "no response within 50 ms".to_owned(),
                 }),
                 ErrorStatus::Internal,
             ),

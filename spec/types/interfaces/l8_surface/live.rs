@@ -407,12 +407,34 @@ pub enum LiveEnd {
     /// or removed its operator, so its permissions may be stale.
     SessionEnded,
     ShuttingDown,
+    /// Client-only: the connection was cut and the client ran out of
+    /// reconnect attempts without reaching a surface that served the feed.
+    /// The surface did not end the stream. A surface never ends a stream
+    /// with it and a server never sends it ([`LiveEnd::served`]), as
+    /// `QueryError::Unavailable`.
+    Unreachable,
 }
 
 impl LiveEnd {
     /// The SSE `event` field of the stream's last event, whose `data` is
     /// the `LiveEnd` and which has no `id`. No `LiveItem` has this name.
     pub const EVENT_NAME: &'static str = "end";
+
+    /// What a server sends for this end: the end itself, except that a
+    /// client-only `Unreachable` (a server relaying a client's stream lost
+    /// its upstream) is `ShuttingDown`, which the client also answers by
+    /// reconnecting. Never `Unreachable`.
+    pub fn served(self) -> Self {
+        match self {
+            Self::Unreachable => Self::ShuttingDown,
+            Self::Lagged | Self::SessionEnded | Self::ShuttingDown => self,
+        }
+    }
+
+    /// Whether only a client ends a stream this way ([`LiveEnd::served`]).
+    pub fn is_client_only(self) -> bool {
+        matches!(self, Self::Unreachable)
+    }
 }
 
 /// Feed limits. Built only through [`LiveConfig::new`]: the heartbeat is

@@ -6,6 +6,13 @@
     }
   },
   {
+    "type": "unavailable",
+    "data": {
+      "kind": "transport",
+      "reason": "sending the request: connection refused"
+    }
+  },
+  {
     "type": "not_found"
   },
   {

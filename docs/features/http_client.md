@@ -75,8 +75,15 @@ QueryApi::channels(caller, filter, page)                      caller ignored: th
             └─ any other status ─▶ error::decode_error
                   401 ─▶ AuthError ─▶ ClientError::Unauthenticated
                   else ─▶ E with E.status() == status ─▶ ClientError::Api(E)
+                          E client-only (Unavailable) ─▶ UnexpectedResponse: a server never answers it
                           E at another status ─▶ StatusMismatch;  no L8 body ─▶ UnexpectedResponse
-  ─▶ QueryError::from(ClientError): Api(e) ─▶ e; Encode ─▶ InvalidInput(MalformedRequest); else ─▶ Store { reason }
+  ─▶ QueryError::from(ClientError): Api(e) ─▶ e; Encode ─▶ InvalidInput(MalformedRequest);
+       Unauthenticated ─▶ Unavailable { kind: Unauthenticated, reason: "no caller: …" }
+       Transport(Send) ─▶ Unavailable { kind: Transport, reason: "sending the request: …" }
+       Transport(Body) ─▶ Unavailable { kind: Body, reason: "reading the body: …" }
+       Transport(Timeout) ─▶ Unavailable { kind: Timeout, reason: "no response within … ms" }
+       else (Build, TooLarge, StatusMismatch, UnexpectedResponse) ─▶ Store { reason }
+       (the reason is always the ClientError's Display text; ClientError::unavailable gives the kind)
 ```
 
 `form::encode` writes the query string as the WHATWG form serializer
@@ -117,12 +124,12 @@ subscribe(resume) ─▶ GET /live, Accept: text/event-stream, Last-Event-ID: <c
   ─▶ HttpLiveStream { resume point, connection (ChunkReader + SseParser), attempts }
 next():
   event ─▶ live::frame: name == item.event_name() and id == cursor text ─▶ Ok(item), resume point = its cursor
-          end (no id, LiveEnd data) ─▶ Err(end), closed for good
+          end (no id, LiveEnd data) ─▶ Err(end), closed for good; an `unreachable` end ─▶ cut
           anything else ─▶ cut
   cut (body error, end of body, idle_timeout of silence, misframed event)
   ─▶ reconnect: attempt n waits ReconnectPolicy::delay(n), sends Last-Event-ID: <resume point>
        200 ─▶ carry on      401 / 403 ─▶ Err(SessionEnded)      other ─▶ try again
-       attempts exhausted ─▶ Err(ShuttingDown)
+       attempts exhausted ─▶ Err(Unreachable)   (client-only: the surface did not end it)
 ```
 
 `SseParser` reads an event stream the way the WHATWG standard does:
@@ -184,7 +191,7 @@ is listed there, and checks the call against the table.
 | `crates/client/src/lib.rs` | Crate docs, module tree, re-exports | — |
 | `crates/client/src/client.rs` | `HttpClient` (pool, token, hasher type), `send` (one encoded call as a hyper request), `exchange` and `call` (a whole-body route), `Exchanged`, content-type checks | `HttpClient` |
 | `crates/client/src/config.rs` | Checked configuration | `BaseUrl`, `InvalidBaseUrl`, `BearerToken`, `InvalidToken`, `ClientConfig`, `ReconnectPolicy`, `InvalidConfig` |
-| `crates/client/src/error.rs` | The reverse status mapping (`decode_error`) and the conversions into `QueryError` and `ActionError` | `ClientError`, `TransportError`, `ApiError` |
+| `crates/client/src/error.rs` | The reverse status mapping (`decode_error`) and the conversions into `QueryError` and `ActionError` | `ClientError` (`unavailable() -> Option<UnavailableKind>`), `TransportError`, `ApiError` (`is_client_only`) |
 | `crates/client/src/form.rs` | The query string's form encoding | — |
 | `crates/client/src/body.rs` | Whole bodies with a limit; chunks with an idle timeout; JSONL lines | — |
 | `crates/client/src/query.rs` | `impl QueryApi`, one table-driven call per method | — |
@@ -228,8 +235,9 @@ The dev-dependencies add `hyper`'s `server` feature, `http-body-util`'s
 - **`surface.http.client-live-resumes`.** The stream delivers only
   correctly framed items, and reconnects from the last cursor it
   delivered. It ends only with the end event's reason, with
-  `SessionEnded` on a refused reconnect, or with `ShuttingDown` once its
-  attempts run out.
+  `SessionEnded` on a refused reconnect, or with the client-only
+  `Unreachable` once its attempts run out. An `end` event carrying
+  `unreachable`, which a server never sends, is a cut.
 - **`surface.http.client-export-verified`.** An export ends `Complete`
   only when the rows yielded verify against the header and the surface's
   trailer.
@@ -241,10 +249,19 @@ The dev-dependencies add `hyper`'s `server` feature, `http-body-util`'s
   credential (`surface.api.caller-from-session`). A server rendering for
   several operators makes one client per session, with
   `HttpClient::with_token`, over one shared pool.
-- **Errors the traits cannot express.** These become `Store { reason }`:
-  a `401`, a transport failure or timeout, a response the binding does
-  not describe, and a status mismatch. The inherent `call` path and
-  `download_export` return the typed `ClientError`.
+- **`surface.http.client-unavailable-typed`.** A call that never reached
+  a surface that answered is the client-only `Unavailable { kind, reason }`
+  through the traits: a `401` `Unauthenticated`, a failed connect or send
+  `Transport`, a failed body read `Body`, no response in time `Timeout`.
+  The reason is the `ClientError`'s text, so it keeps the prefixes
+  `no caller: `, `sending the request: `, `reading the body: ` and
+  `no response within ` that readers matched on before. A response the
+  binding does not describe, a status mismatch, a body over the limit and
+  a request that could not be built stay `Store { reason }`. A body
+  holding `Unavailable` is refused as `UnexpectedResponse`, since a server
+  never answers one. The inherent `call` path and `download_export`
+  return the typed `ClientError`, and `ClientError::unavailable` gives
+  the kind.
 - **No mixing of threads and async.** The only shared state is the frame
   cache, a `std::sync::Mutex` that is never held across an await. The
   test stub records requests over an `mpsc` channel.

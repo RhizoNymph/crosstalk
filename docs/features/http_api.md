@@ -234,6 +234,7 @@ An `ActionError` gets the status of `QueryError::from` of it.
 | `InvalidInput(_)`, any other input error | 422 | Read, but invalid whatever the state. This includes `UnsupportedFormat`, an export format outside `Present::export_formats`. |
 | `Conflict(ProjectionQueueFull)` | 429 | Capacity: retry later, unchanged. |
 | `Store` | 503 | A store or the bus failed; retrying may succeed. |
+| `Unavailable { kind, reason }` (client-only) | never answered | Only a client produces it. Its status is 503, so a client relaying it can branch on it, but a server answers `served()` of every error: `Unavailable` goes out as `Store` with the same reason, at 503. It is not in the status goldens, and the client refuses an `unavailable` body as `UnexpectedResponse`. |
 
 These start from the UI's two mappings, `ui/src/data/errors.rs` for reads
 and `ui/src/pages/common/action.rs` for actions, and settle where they
@@ -245,6 +246,11 @@ differed:
 - `ProjectionNotRetained` and `VersionNotRetained` are 410 rather than 404
   and 409.
 - `Store` is 503 rather than 500 or 502.
+- The client-only `Unavailable` keeps the trait total but is excluded
+  from what a server answers: `respond::error` writes the error's
+  `served()` form (`respond::Answered`), and logs at error level if it
+  was ever handed one. `crosstalk_api::http::integration::errors::a_client_only_error_is_never_answered`
+  shows every kind goes out as `Store` at 503.
 
 ### Authentication
 
@@ -324,7 +330,9 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 
 ```
 
-The last event is written by `end_frame`. It has no `id`:
+The last event is written by `end_frame`, from the end's `served()`
+form, so the client-only `unreachable` is never sent (an `Unreachable`
+goes out as `shutting_down`). It has no `id`:
 
 ```text
 event: end
@@ -407,7 +415,7 @@ footer does not open. HTTP trailers are not used.
 | `spec/types/interfaces/l8_surface/http/bodies.rs` | The `POST` read bodies (`WireRequest`s) | `GraphBody`, `OverviewBody`, `EdgeTransmissionsBody`, `TransmissionsBody`, `SeriesBody`, `SearchBody`, `FitProjectionBody` |
 | `spec/types/interfaces/l8_surface/http/status.rs` | The status of every error | `Status`, `ErrorStatus`, `conflict_status`, `input_status` |
 | `spec/types/interfaces/l8_surface/http/auth.rs` | Credentials, verification, the caller or the 401 | `SESSION_COOKIE`, `REALM`, `Field`, `CredentialHeaders`, `Credential`, `Secret`, `MalformedCredential`, `Verification`, `authenticate`, `AuthError`, `AuthFailure` |
-| `spec/types/interfaces/l8_surface/http/sse.rs` | `GET /live` | `EVENT_STREAM`, `LAST_EVENT_ID`, `CURSOR_PARAM`, `HEADERS`, `resume`, `event_frame`, `end_frame`, `Unencodable` |
+| `spec/types/interfaces/l8_surface/http/sse.rs` | `GET /live` | `EVENT_STREAM`, `LAST_EVENT_ID`, `CURSOR_PARAM`, `HEADERS`, `resume`, `event_frame`, `end_frame` (writes `LiveEnd::served`), `Unencodable` |
 | `spec/types/interfaces/l8_surface/http/frame.rs` | `GET /projections/{id}/frame` | `OCTET_STREAM`, `MAX_AGE_LIMIT`, `FrameCache` (`of`, `etag`, `cache_control`, `not_modified`) |
 | `spec/types/interfaces/l8_surface/http/export.rs` | `POST /exports` | `JSONL`, `PARQUET`, `content_type`, `extension`, `dataset_name`, `file_name`, `content_disposition` |
 | `spec/types/interfaces/l8_surface/actions.rs` | `ActionKind::ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` now returns | — |
@@ -425,7 +433,13 @@ footer does not open. HTTP trailers are not used.
   name (`surface.http.routes-unambiguous`).
 - The status mapping is total, exhaustive over every conflict and input
   error, pinned by goldens, and the same for an action error as for its
-  query error (`surface.http.status-mapping`).
+  query error (`surface.http.status-mapping`). The goldens list what a
+  server answers, so they leave out the client-only `Unavailable`.
+- A server never answers `QueryError::Unavailable`,
+  `ActionError::Unavailable` or the end `LiveEnd::Unreachable`: it
+  answers their `served()` form (`Store` with the same reason and 503,
+  `shutting_down`), and the client refuses a body or end carrying one
+  (`surface.http.client-unavailable-typed`).
 - An undecodable request is a 400 `MalformedRequest`. It reaches nothing
   and is not audited (`surface.http.undecodable-request-bad-request`,
   extending `surface.query.undecodable-request-invalid-input`).

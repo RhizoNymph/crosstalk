@@ -599,7 +599,10 @@ Features Index:
       query parameters except the ones whose filter, id batch, selection
       or search text needs a body (POST /query/...), the client's
       RequestBuilder and the server's resolve, PathParams and QueryParams,
-      the status of every QueryError, ActionError and AuthError, the
+      the status of every QueryError, ActionError and AuthError (the
+      client-only Unavailable, with its UnavailableKind, and
+      LiveEnd::Unreachable are never served: a server answers their
+      served() form, Store and ShuttingDown), the
       caller from a bearer token or the __Host-crosstalk-session cookie
       only (401 AuthError otherwise), SSE resume and framing, projection
       frame caching by digest, and export downloads whose trailer records
@@ -669,7 +672,8 @@ Features Index:
       the spec's readers and decode_request; id batches, selections,
       excerpt windows and action requests go through their checked
       constructors, with 422 for a refusal. Errors are answered with
-      their status and wire JSON. GET /live is SSE resumed from
+      their status and wire JSON, in their served() form (never a
+      client-only Unavailable). GET /live is SSE resumed from
       Last-Event-ID or cursor, the projection frame is cached by its
       BLAKE3 ETag, and POST /exports streams JSONL with the trailer last.
       Every other response is no-store. HttpApi::new(surface, Auth,
@@ -689,9 +693,13 @@ Features Index:
       parameters form-encoded compact JSON, bodies the wire goldens) and
       carries one Authorization: Bearer token; an error response is
       decoded as the route's error and accepted only at the status the
-      binding gives it (401 is AuthError); the live feed is parsed as SSE,
+      binding gives it (401 is AuthError); a call that never reached a
+      surface (401, transport, cut body, timeout) is the client-only
+      Unavailable { kind, reason } through the traits, the reason keeping
+      its old text; the live feed is parsed as SSE,
       checked frame by frame and reconnected with Last-Event-ID from the
-      last cursor delivered; a JSONL export is checked row by row with the
+      last cursor delivered, ending with the client-only Unreachable when
+      the attempts run out; a JSONL export is checked row by row with the
       binding's ExportSealer and ends Complete only when the surface's
       trailer verifies (download_export passes either format on as bytes);
       a projection frame is checked against its BLAKE3 ETag and revalidated

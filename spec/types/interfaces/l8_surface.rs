@@ -209,7 +209,7 @@ use overview::OverviewCounts;
 use summary::{TransmissionPage, TransmissionSelection};
 
 pub use actions::{ActionKind, ActionOutcome, ActionRequest, OperatorAction};
-pub use errors::{ActionError, ConflictKind, InputError, QueryError};
+pub use errors::{ActionError, ConflictKind, InputError, QueryError, UnavailableKind};
 pub use permissions::{Caller, CallerSnapshot, Permission, PermissionSet};
 pub use present::Present;
 pub use sinks::{AlertSink, SinkError, SinkInfo, SinkKind};

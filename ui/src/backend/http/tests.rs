@@ -12,7 +12,7 @@ use crosstalk_spec::ids::AlertId;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::{
     AlertFilter, AlertStateKind, OperatorAction, OperatorActions, Permission, PermissionSet,
-    QueryApi, QueryError,
+    QueryApi, QueryError, UnavailableKind,
 };
 use futures_core::Stream;
 use topcoat::router::request::Request;
@@ -129,10 +129,14 @@ async fn startup_learns_the_tokens_operator_and_permissions_from_the_server() {
         world.access(RESEARCHER_TOKEN, stranger()).await,
         Err(IdentityError::NotListed(_))
     ));
-    // A token the server does not know: the 401 is a store failure.
+    // A token the server does not know: the 401 is the client-only
+    // `Unavailable` of kind `Unauthenticated`.
     assert!(matches!(
         world.access(UNKNOWN_TOKEN, researcher()).await,
-        Err(IdentityError::Read(QueryError::Store { .. }))
+        Err(IdentityError::Read(QueryError::Unavailable {
+            kind: UnavailableKind::Unauthenticated,
+            ..
+        }))
     ));
     world.stop().await;
 }
