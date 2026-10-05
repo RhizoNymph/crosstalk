@@ -22,4 +22,5 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
+crosstalk-flow = { path = "../flow" }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

@@ -1130,7 +1130,8 @@ Features Index:
       normalizer into NormalizedExchanges, fed through Pipeline::ingest in
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
-      the discovered channel). The composition is shaped like
+      and the channel the cross-agent transmission created, dated by its
+      opening, listed and confirmed). The composition is shaped like
       crosstalk_gateway::live::Live and is wired today from InProcess plus
       a pipeline over its blob store and bus; the assertions needing L3 to
       L7 are ignored until Live composes them. The scenario and readers are
