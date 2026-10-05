@@ -196,7 +196,11 @@ Overview:
       resources are read back through the spec's read traits (SpanIndex,
       AccessStore, ChannelReads); the scorer aligns them with the labels
       and reports per dataset, route, carrier, match or access class and
-      tier against regression gates.
+      tier against regression gates. Out-of-reach and forwarding labels
+      (SALT deliveries pasting the sender's own tool output) are reported
+      apart from overall; ct-eval run --detector live --forwarding on|off
+      sets L4's ProvenanceConfig::forwarding, and gates select by detector
+      and forwarding setting.
       The swarm benchmark (ct-eval swarm) instead scores the live gateway:
       it joins the demo swarm's ground truth to the gateway's exchange log
       and blobs, and scores a saved L8 transmissions export and its evidence,
