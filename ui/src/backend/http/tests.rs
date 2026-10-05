@@ -199,9 +199,9 @@ async fn a_live_event_reaches_data_live_over_http() {
         "event: alert\ndata: {{\"id\":\"{}\"}}\nid: ",
         alert.to_ulid()
     );
-    // The world was settled before serving (`HttpWorld::start`), but
-    // another write may still land first: skip any frame that is not ours,
-    // under one generous deadline rather than a frame count.
+    // The world is settled before it is served (`seed_world`), but another
+    // write may still land first: skip any frame that is not ours, under
+    // one generous deadline rather than a frame count.
     let mut skipped = 0_usize;
     let found = tokio::time::timeout(LIVE_DEADLINE, async {
         loop {
