@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.span-index.author-as-recorded"
+statement = "The author of every IndexedSpan SpanIndex::spans returns is the Span::agent of the span recorded under that id, never resolved through AgentDirectory, so merging, unmerging or renaming agents after the record leaves every author SpanIndex::spans returns unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Records keep the ids they were stored with, and readers resolve agent ids
+through AgentDirectory at read time, as every other stored agent id is. An
+author resolved at write time would be wrong after an unmerge (the span
+would stay credited to the agent its writer was merged into), and an author
+resolved at read time inside the index would make the index depend on L3.
+The conversation view and the evidence page resolve the author themselves.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::span_authors_ignore_merges"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

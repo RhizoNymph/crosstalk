@@ -9,10 +9,12 @@
 //! - [`topology`]: topology and series as the edge store answers them, and
 //!   the version every topic in a response belongs to.
 //! - [`channels`]: channel rows, names, the promotion preview and windows.
+//! - [`listing`]: rows by id leave out transmissions within one agent.
 
 mod actions;
 mod alerts;
 mod channels;
+mod listing;
 mod reads;
 mod topology;
 

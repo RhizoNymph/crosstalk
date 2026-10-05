@@ -372,6 +372,8 @@ async fn search_filter_field_cases() {
                     topic: topic.map(topic_id),
                     confirmed_at: ts(10),
                     matched_bytes: non_zero(1),
+                    from: agent(1),
+                    to: agent(2),
                 },
             )
             .await
@@ -498,6 +500,8 @@ async fn search_pages_keep_version_across_activation() {
                     topic: Some(topic_id(1)),
                     confirmed_at: ts(10),
                     matched_bytes: non_zero(1),
+                    from: agent(1),
+                    to: agent(2),
                 },
             )
             .await

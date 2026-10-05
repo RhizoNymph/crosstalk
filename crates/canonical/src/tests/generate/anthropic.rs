@@ -317,6 +317,16 @@ pub enum GenTurn {
     User(Vec<GenUserBlock>),
     UserText(String),
     Assistant(Vec<GenBlock>),
+    /// A `system` turn inside `messages` (Claude Code sends one), its
+    /// content a string or blocks like the top-level `system`.
+    System(GenSystemContent),
+}
+
+/// A system prompt's content: a string or an array of blocks.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenSystemContent {
+    Str(String),
+    Blocks(Vec<GenSystemBlock>),
 }
 
 pub fn arb_turn() -> impl Strategy<Value = GenTurn> {
@@ -324,6 +334,7 @@ pub fn arb_turn() -> impl Strategy<Value = GenTurn> {
         3 => proptest::collection::vec(arb_user_block(), 0..6).prop_map(GenTurn::User),
         1 => arb_text().prop_map(GenTurn::UserText),
         3 => arb_blocks().prop_map(GenTurn::Assistant),
+        1 => arb_system_content().prop_map(GenTurn::System),
     ]
 }
 
@@ -339,6 +350,7 @@ impl GenTurn {
                 "assistant",
                 GenJson::Array(blocks.iter().map(|block| block.echoed(style)).collect()),
             ),
+            Self::System(content) => ("system", content.render(style)),
         };
         obj(vec![("role", s(role)), ("content", content)])
     }
@@ -358,20 +370,55 @@ pub enum GenSystemBlock {
     Unknown { kind: String, payload: GenJson },
 }
 
+fn arb_system_blocks() -> impl Strategy<Value = Vec<GenSystemBlock>> {
+    proptest::collection::vec(
+        prop_oneof![
+            3 => arb_text().prop_map(GenSystemBlock::Text),
+            1 => (arb_unknown_kind(), arb_json())
+                .prop_map(|(kind, payload)| GenSystemBlock::Unknown { kind, payload }),
+        ],
+        0..4,
+    )
+}
+
 pub fn arb_system() -> impl Strategy<Value = GenSystem> {
     prop_oneof![
         Just(GenSystem::Absent),
         arb_text().prop_map(GenSystem::Str),
-        proptest::collection::vec(
-            prop_oneof![
-                3 => arb_text().prop_map(GenSystemBlock::Text),
-                1 => (arb_unknown_kind(), arb_json())
-                    .prop_map(|(kind, payload)| GenSystemBlock::Unknown { kind, payload }),
-            ],
-            0..4
-        )
-        .prop_map(GenSystem::Blocks),
+        arb_system_blocks().prop_map(GenSystem::Blocks),
     ]
+}
+
+pub fn arb_system_content() -> impl Strategy<Value = GenSystemContent> {
+    prop_oneof![
+        arb_text().prop_map(GenSystemContent::Str),
+        arb_system_blocks().prop_map(GenSystemContent::Blocks),
+    ]
+}
+
+impl GenSystemContent {
+    pub fn render(&self, style: &mut Style) -> GenJson {
+        match self {
+            Self::Str(text) => s(text),
+            Self::Blocks(blocks) => render_system_blocks(blocks, style),
+        }
+    }
+}
+
+/// A system prompt's blocks, each with a cache marker or not.
+fn render_system_blocks(blocks: &[GenSystemBlock], style: &mut Style) -> GenJson {
+    GenJson::Array(
+        blocks
+            .iter()
+            .map(|block| match block {
+                GenSystemBlock::Text(text) => with_marker(text_block(text), style),
+                GenSystemBlock::Unknown { kind, payload } => with_marker(
+                    obj(vec![("type", s(kind)), ("payload", payload.clone())]),
+                    style,
+                ),
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -400,17 +447,7 @@ impl GenRequest {
             GenSystem::Absent => {}
             GenSystem::Str(text) => members.push(("system", s(text))),
             GenSystem::Blocks(blocks) => {
-                let rendered = blocks
-                    .iter()
-                    .map(|block| match block {
-                        GenSystemBlock::Text(text) => with_marker(text_block(text), style),
-                        GenSystemBlock::Unknown { kind, payload } => with_marker(
-                            obj(vec![("type", s(kind)), ("payload", payload.clone())]),
-                            style,
-                        ),
-                    })
-                    .collect();
-                members.push(("system", GenJson::Array(rendered)));
+                members.push(("system", render_system_blocks(blocks, style)));
             }
         }
         obj(members).render(style)

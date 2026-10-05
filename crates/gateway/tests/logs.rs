@@ -1,6 +1,7 @@
-//! The gateway's logs, at debug level over a full capture: one JSON object
-//! per line with a top-level `level`, and never the deployment secret, a
-//! credential or a message body. Its own test binary, because it installs
+//! The gateway's logs, at debug level over a full capture and a refused
+//! exchange: one JSON object per line with a top-level `level`, the refused
+//! request's shape, and never the deployment secret, a credential or a
+//! message body. Its own test binary, because it installs
 //! the global subscriber.
 
 #[allow(dead_code)]
@@ -52,6 +53,9 @@ fn strings(value: &Value, min: usize, into: &mut Vec<String>) {
     }
 }
 
+/// The content of a refused request, which no log line may hold.
+const REFUSED: &str = "REFUSED-BODY-MARKER-REFUSED-BODY-MARKER";
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logs_are_json_lines_without_secrets_credentials_or_bodies() {
     let sink = Captured::default();
@@ -80,6 +84,22 @@ async fn logs_are_json_lines_without_secrets_credentials_or_bodies() {
             strings(&message["body"]["data"], 16, &mut texts);
         }
     }
+    // A refused request: its top-level shape is logged at debug level, its
+    // content never.
+    let refused = support::case("text_turn");
+    upstream
+        .reply_next(Reply::from_case(&refused))
+        .await
+        .expect("scripted");
+    let mut request = refused
+        .request_with_credential(credential)
+        .expect("a valid header");
+    let mut body = request.json().expect("JSON");
+    body["messages"] = serde_json::json!([{"role": "developer", "content": REFUSED}]);
+    request.body = serde_json::to_vec(&body).expect("encodes").into();
+    let _ = gateway.client().send(&request).await.expect("answered");
+    gateway.settle(4).await;
+    assert_eq!(gateway.running.health().pipeline.normalize_failed, 1);
     gateway.running.shutdown().await;
 
     let bytes = sink.0.lock().expect("not poisoned").clone();
@@ -95,6 +115,19 @@ async fn logs_are_json_lines_without_secrets_credentials_or_bodies() {
         "the deployment secret was logged"
     );
     assert!(!text.contains("LEAKCHECK"), "a credential was logged");
+    assert!(!text.contains(REFUSED), "a refused body was logged");
+    let shapes: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|object| object["message"] == "refused request shape")
+        .collect();
+    assert_eq!(shapes.len(), 1, "one shape for the one refusal");
+    assert_eq!(shapes[0]["level"], "DEBUG");
+    let shape = shapes[0]["request_shape"].as_str().expect("a shape field");
+    assert!(
+        shape.contains("messages=[developer:string]"),
+        "the shape names the role and content kind: {shape}"
+    );
     assert!(!texts.is_empty());
     for body_text in &texts {
         assert!(

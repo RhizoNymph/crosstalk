@@ -23,5 +23,15 @@
     "encoding": "{\"data\":[{\"call_id\":\"toolu_01\",\"content\":[{\"data\":\"     1\\t# Plan\\n\",\"type\":\"text\"}],\"outcome\":\"success\"},{\"call_id\":\"call_0123456789abcdef01234567\",\"content\":[],\"outcome\":\"error\"}],\"type\":\"tool\"}",
     "hash": "7a5d1ce41773113128b8d585e98037eb8713dbee6bafb87723e4e5a1ec826f9a",
     "name": "tool_results"
+  },
+  {
+    "encoding": "{\"data\":[{\"data\":{\"arguments\":{\"data\":\"{\\\"path\\\":\\\"/b\\\"}\",\"type\":\"json\"},\"execution\":\"client\",\"id\":\"__thought__CiQB0e2Kb7=\",\"name\":\"read_file\",\"signature\":\"CiQB0e2Kb7Zg+u1kQx/==\"},\"type\":\"tool_call\"}],\"type\":\"assistant\"}",
+    "hash": "9e834917806d8ffc26c15190ec1074fad6e5d3bce4109a796fa5c4acda122e91",
+    "name": "assistant_signed_tool_call"
+  },
+  {
+    "encoding": "{\"data\":[{\"call_id\":\"call_unflagged\",\"content\":[{\"data\":\"sent\",\"type\":\"text\"}],\"outcome\":\"unknown\"}],\"type\":\"tool\"}",
+    "hash": "bae2d80000b57c20bc8ff0618d66b6b3e0c6b25981e5cdd9f814d73cfbde8dc8",
+    "name": "tool_result_unknown_outcome"
   }
 ]

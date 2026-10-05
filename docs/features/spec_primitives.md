@@ -24,7 +24,10 @@ so that L3, L4 and L8 can decode stored bodies and L0 can hash credentials.
 - `ids::mint`: `UlidGenerator`, `RandomSource`, `SeededRandom`, and the
   `EntityId` trait it mints through.
 - The spec gaps the normalizer found: `TokenUsage::cache_write`, and a
-  signature on `Reasoning::Visible`.
+  signature on `Reasoning::Visible`. Later, from dataset evaluation
+  ([eval_gaps](eval_gaps.md)): a signature on `ToolCall` (Gemini's
+  `thoughtSignature`) under the same rule, and `ToolOutcome::Unknown` for
+  protocols without a failure flag.
 
 ## Non-scope
 
@@ -75,8 +78,8 @@ shape, which follows the wire contract's conventions and is also
 | `Reasoning::Opaque` | `{"type": "reasoning", "data": {"type": "opaque", "data": {"signature": ".."}}}` |
 | `Media` | `{"type": "media", "data": {"blob": "<hex>", "kind": "image" \| "audio" \| "document"}}` |
 | `Unknown` | `{"type": "unknown", "data": {"kind": "..", "raw": "<canonical JSON text>"}}` |
-| `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": ".."}, "execution": "client" \| "server", "id": "..", "name": ".."}}` |
-| `ToolResult` | `{"call_id": "..", "content": [{"type": "text" \| "media" \| "unknown", "data": ..}], "outcome": "success" \| "error"}` |
+| `ToolCall` | `{"type": "tool_call", "data": {"arguments": {"type": "json" \| "invalid", "data": ".."}, "execution": "client" \| "server", "id": "..", "name": "..", "signature": "<signature>"}}`, `signature` omitted when absent |
+| `ToolResult` | `{"call_id": "..", "content": [{"type": "text" \| "media" \| "unknown", "data": ..}], "outcome": "success" \| "error" \| "unknown"}` |
 
 Canonical JSON inside a body travels as a string, so its exact numbers
 survive. The pinned vectors are `spec/types/tests/golden/encoding/vectors.json`.
@@ -151,6 +154,22 @@ operating system.
   changed: harnesses echo it byte for byte. An empty or missing signature
   is `None`. Shown by `crosstalk_canonical::tests::thinking_signatures_echo_like_their_responses`
   and the echo property, whose generated echoes carry the signature.
+- **The tool-call signature is hashed too.** `ToolCall { .., signature:
+  Option<String> }` holds Gemini's `thoughtSignature` on a function call
+  verbatim (`canonical.tool-call.signature-verbatim`), by the same rule
+  and for the same reason as the thinking signature: in the encoding (so
+  echoes, which carry it byte for byte, hash like their responses), an
+  empty or missing one `None`, and never part text. Anthropic and OpenAI
+  calls carry none. An absent signature is omitted from the encoding, not
+  written as `null`, so adding the field changed no existing tool call's
+  bytes or hash; the canonical decoder refuses an explicit
+  `"signature": null`, because `encode` never writes it.
+- **Opaque material is never part text.** Tool-call ids, reasoning and
+  tool-call signatures and `Reasoning::Opaque` payloads are in the
+  encoding but never in `Message::part_text`
+  (`canonical.part-text.defined`), normalizers never fold them into text
+  (`canonical.opaque.outside-part-text`), and provenance decodes and
+  fingerprints part text only (`provenance.decode.part-text-input`).
 - **Media bytes ride in `NormalizedExchange`.** It gained `media:
   Vec<MediaBlob>` (ascending hash order, exactly the blobs its `Media`
   parts name), so `Normalizer::normalize` returns everything L1 stores and
@@ -178,7 +197,7 @@ operating system.
 | `spec/types/observed/message/json/number.rs` | Exact decimals and their canonical spelling | `Number` (`as_u64`, `canonical`), `MAX_EXPONENT_DIGITS` |
 | `spec/types/observed/message/json/parse.rs` | The strict parser | `JsonError` |
 | `spec/types/observed/message/json/write.rs` | The canonical writer (UTF-16 member order, escapes) | — |
-| `spec/types/observed/message.rs` | `Message` (`new`, decoded under its hash), `Reasoning`, `Media`, `MediaBlob` | `MessageHashMismatch`, `InvalidMediaBlob` |
+| `spec/types/observed/message.rs` | `Message` (`new`, decoded under its hash), `Reasoning`, `ToolCall` (its `signature`), `ToolOutcome` (with `Unknown`), `Media`, `MediaBlob` | `MessageHashMismatch`, `InvalidMediaBlob` |
 | `spec/types/observed/exchange.rs` | `TokenUsage` (checked) | `TokenCounts`, `InvalidTokenUsage` |
 | `spec/types/interfaces/l1_canonical.rs` | `NormalizedExchange` with media, serde and `check` | `InvalidNormalizedExchange` |
 | `spec/types/ids/secret.rs` | The deployment secret and the keyed hasher | `DeploymentSecret`, `KeyedHasher`, `SecretDigests`, `InvalidSecret`, `InvalidRotation`, `SECRET_LEN` |
@@ -211,6 +230,10 @@ operating system.
   (`canonical.ids.ulid-monotonic`, `canonical.ids.ulid-unique`).
 - `TokenUsage`'s parts never exceed their wholes
   (`canonical.usage.cache-within-input`).
+- Signatures (visible reasoning's and a tool call's) are kept verbatim,
+  hashed, and never part text (`canonical.reasoning.signature-verbatim`,
+  `canonical.tool-call.signature-verbatim`,
+  `canonical.opaque.outside-part-text`).
 - A decoded `NormalizedExchange` passes `check`
   (`canonical.normalized.decode-checked`).
 - Everything here is pure or takes its clock and randomness as arguments;

@@ -134,6 +134,10 @@ pub enum SourceError {
     Splice(#[from] crate::datasets::swe_splice::SpliceError),
     #[error(transparent)]
     Cipher(#[from] crate::datasets::cipher::CipherError),
+    #[error(transparent)]
+    AgentDojo(#[from] crate::datasets::agentdojo::AgentDojoError),
+    #[error(transparent)]
+    Tau2(#[from] crate::datasets::tau2::Tau2Error),
 }
 
 /// A dataset as a stream of worlds.

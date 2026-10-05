@@ -1,10 +1,13 @@
 //! The in-memory channel registry: `ChannelRegistry`, `ChannelTraffic`,
 //! `ChannelReads` and `ChannelDirectory` over one table of channels, policy
-//! histories, resources and accesses.
+//! histories, resources (on a channel or on none), accesses and the
+//! recorded state of every channel transmission, from which each channel's
+//! cross-agent traffic is tallied at the read.
 
 pub mod model;
 mod store;
 mod table;
+mod traffic;
 
 #[cfg(test)]
 mod tests;
@@ -12,6 +15,7 @@ mod tests;
 use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::ids::{ChannelId, ResourceId};
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 use crate::support::{CursorBook, IdSequence, Outbox, State};
@@ -24,8 +28,12 @@ use table::ChannelTable;
 struct Cursors {
     /// `resource_use`: bound to the canonical channel and window's JSON.
     resources: CursorBook<String, ResourceId>,
-    /// `ChannelReads::channels`: bound to the filter.
-    channels: CursorBook<ChannelFilter, ChannelId>,
+    /// `ChannelReads::channels`: bound to the filter, resuming after a
+    /// (`created_at`, id) key.
+    channels: CursorBook<ChannelFilter, traffic::ChannelKey>,
+    /// `ChannelReads::transmissions`: bound to the canonical channel and
+    /// the filter, resuming after an (`opened_at`, id) key.
+    transmissions: CursorBook<(ChannelId, ChannelTransmissionFilter), traffic::TransmissionKey>,
 }
 
 /// The in-memory L5 registry. Agents in `resource_use` are resolved through

@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.delta.new-system-when-changed"
-statement = "A delta's new_system is the request's system message when the delta is its conversation's first or that system message differs from the previous exchange's in the conversation, and None otherwise."
+statement = "A delta's new_system is the request's first System message when the delta is its conversation's first or that message differs from the first System message of the previous exchange in the conversation, and None otherwise."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]
@@ -9,10 +9,19 @@ System prompts are a carrier for relayed content, so L4 must scan each one
 once. Publishing the system message on every exchange re-scans the same
 text; omitting it after the harness changes it misses content injected into
 the new prompt.
+
+A request can hold more than one System message: the top-level system
+prompt and a system turn inside the message list (Claude Code sends both).
+new_system names one hash, the request's first System message: the
+top-level prompt when there is one. A later System message is, like the
+first, left out of prefix matching and of new_inputs
+(reconstruct.thread.system-change-continues), so no delta field carries it
+while new_system holds a single hash; widening it to every System message
+new to the conversation is open for L3 (P4.1).
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::new_system_only_when_first_or_changed"
+property = "crosstalk_reconstruct::tests::thread_props::new_system_only_when_first_or_changed"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

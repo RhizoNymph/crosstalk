@@ -12,7 +12,7 @@ first keeps a merged parent recognized.
 """
 
 [evidence]
-unit = "crosstalk_flow::correlator::tests::delegation_requires_parent_link"
+unit = "crosstalk_flow::correlate::tests::routes::delegation_requires_parent_link"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

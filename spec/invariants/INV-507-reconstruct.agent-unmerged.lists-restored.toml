@@ -13,7 +13,7 @@ differ from m.target when a later merge moved the target.
 """
 
 [evidence]
-unit = "crosstalk_reconstruct::tests::agent_unmerged_lists_restored_agents"
+unit = "crosstalk_reconstruct::tests::table::agent_unmerged_lists_restored_agents"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

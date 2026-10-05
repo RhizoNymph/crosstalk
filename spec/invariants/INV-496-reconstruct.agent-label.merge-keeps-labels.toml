@@ -12,7 +12,7 @@ resolver to them.
 """
 
 [evidence]
-unit = "crosstalk_reconstruct::tests::merge_and_unmerge_keep_labels"
+unit = "crosstalk_reconstruct::tests::table::merge_and_unmerge_keep_labels"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

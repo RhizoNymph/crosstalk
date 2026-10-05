@@ -185,6 +185,7 @@ fn assistant_parts(index: usize, message: &ChatMessage) -> Vec<AssistantPart> {
             name: ToolName(call.function.name.clone()),
             arguments: arguments(call.arguments()),
             execution: ToolExecution::Client,
+            signature: None,
         }));
     }
     parts

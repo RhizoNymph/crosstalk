@@ -199,6 +199,7 @@ pub fn world(pair: &Pair) -> Result<World, CipherError> {
                     name: ToolName("read_mailbox".into()),
                     arguments: arguments(r#"{"mailbox": "inbox"}"#),
                     execution: ToolExecution::Client,
+                    signature: None,
                 },
             )]));
             let result = HashedMessage::new(MessageBody::Tool(NonEmpty::new(ToolResult {

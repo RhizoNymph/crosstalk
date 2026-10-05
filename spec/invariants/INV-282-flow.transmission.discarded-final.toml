@@ -11,7 +11,7 @@ transmission, not by reopening this one.
 """
 
 [evidence]
-dst = "crosstalk_flow::dst::no_update_after_discard"
+dst = "crosstalk_flow::consumer::tests::dst::no_update_after_discard"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

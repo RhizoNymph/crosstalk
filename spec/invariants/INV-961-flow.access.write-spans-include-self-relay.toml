@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.access.write-spans-include-self-relay"
+statement = "The spans of an Access's AccessOp::Write are exactly the originated spans inside its call's arguments, plus, for every span inside them that provenance classified Relayed(RelaySource::Span(s)) where s is a span of the writing agent, the span s."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+An agent whose write was rejected usually retries with the same text. The
+retry's text is in its own context (the earlier call), so provenance
+classifies it Relayed(RelaySource::Span(s)) against the first attempt's
+span s, not Originated, and a write carrying only originated spans would
+carry nothing: the reader's match on s would link only to the rejected
+write, which never pairs, and the delivered retry would be invisible.
+Counting the writer's own relayed spans as written by the retry lets a
+match on s link to both writes; the rejected one is then left out by its
+outcome. Spans relayed from another agent's output stay out: the writer is
+passing that agent's text on, and the match belongs to its originator. No
+new attribution concept is needed.
+"""
+
+[evidence]
+property = "crosstalk_flow::tests::write_spans_include_self_relayed_sources"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

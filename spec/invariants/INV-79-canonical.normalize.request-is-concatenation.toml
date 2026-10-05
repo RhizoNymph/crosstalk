@@ -1,6 +1,6 @@
 [invariant]
 id = "canonical.normalize.request-is-concatenation"
-statement = "A normalized request, after its leading System message if any, is the in-order concatenation of each provider message normalized on its own."
+statement = "A normalized request, after the System message its top-level system prompt field becomes if it has one, is the in-order concatenation of each provider message normalized on its own."
 kind = "domain"
 property = "inductive"
 requires = ["property"]
@@ -10,7 +10,9 @@ order, which threading needs to find the new suffix and provenance needs to
 know what an agent saw before it wrote. Context independence: a provider
 message normalizes the same wherever it sits in a history, so the hash of a
 turn does not change as the conversation grows. The base case is one
-provider message; the composition law is concatenation.
+provider message; the composition law is concatenation. A system turn
+inside the message list is a provider message like any other: it is not
+the leading System message, even when it comes first.
 """
 
 [evidence]

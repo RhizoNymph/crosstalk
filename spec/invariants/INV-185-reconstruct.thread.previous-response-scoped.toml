@@ -13,7 +13,7 @@ so the exchange Starts.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::previous_response_matches_only_in_scope"
+property = "crosstalk_reconstruct::tests::thread_props::previous_response_matches_only_in_scope"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

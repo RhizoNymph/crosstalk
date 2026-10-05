@@ -1,3 +1,4 @@
+pub mod agentdojo;
 pub mod background;
 pub mod chat;
 pub mod cipher;
@@ -6,4 +7,6 @@ pub mod open_swe;
 pub mod parquet_rows;
 pub mod rng;
 pub mod salt;
+pub mod swarm_truth;
 pub mod swe_splice;
+pub mod tau2;

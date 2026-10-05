@@ -25,6 +25,7 @@ use crate::aggregates::node::{
     AgentNode, CanonicalOriginKind, CanonicalStateKind, ChannelNode, GraphNode,
 };
 use crate::aggregates::topic::TopicModelVersion;
+use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::derived::flow::channel::policy::PolicyKind;
 use crate::derived::flow::transmission::{DirectCarrier, Route};
@@ -193,6 +194,7 @@ fn wiki_node() -> GraphNode {
         label: None,
         origin_kind: CanonicalOriginKind::Discovered,
         detection_kind: DetectionKind::Active,
+        confirmation: Confirmation::Confirmed,
         policy_kind: PolicyKind::Unreviewed,
         locator_summary: NonBlank::new("https://wiki.example/team/plan (+2)").expect("not blank"),
     })

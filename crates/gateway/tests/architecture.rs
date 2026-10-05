@@ -13,8 +13,8 @@
 //!    dependencies.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client` and `eval` (the evaluation harness, `crates/eval`) compose
-//! layer crates.
+//! `client`, `eval` (the evaluation harness, `crates/eval`) and `e2e` (the
+//! end-to-end smoke harness, `crates/e2e`) compose layer crates.
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -71,14 +71,16 @@ impl Layer {
 enum Composer {
     Api,
     Client,
+    E2e,
     Eval,
     Gateway,
 }
 
 impl Composer {
-    const ALL: [Composer; 4] = [
+    const ALL: [Composer; 5] = [
         Composer::Api,
         Composer::Client,
+        Composer::E2e,
         Composer::Eval,
         Composer::Gateway,
     ];
@@ -87,6 +89,7 @@ impl Composer {
         match self {
             Composer::Api => "api",
             Composer::Client => "client",
+            Composer::E2e => "e2e",
             Composer::Eval => "eval",
             Composer::Gateway => "gateway",
         }
@@ -541,6 +544,7 @@ fn roles_classify_by_package_name() {
         Role::Composer(Composer::Gateway)
     );
     assert_eq!(Role::of("crosstalk-eval"), Role::Composer(Composer::Eval));
+    assert_eq!(Role::of("crosstalk-e2e"), Role::Composer(Composer::E2e));
     assert_eq!(
         Role::of("crosstalk-testkit"),
         Role::TestSupport(TestSupport::Testkit)
@@ -564,6 +568,22 @@ fn eval_composes_gateway_and_layers() {
                 check(&edge(layer.dir(), "eval", kind)),
                 Some(Violation::LayerOnComposer {
                     edge: edge(layer.dir(), "eval", kind)
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn e2e_composes_gateway_and_layers_and_no_layer_uses_it() {
+    for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+        assert_eq!(check(&edge("e2e", "gateway", kind)), None);
+        for layer in Layer::ALL {
+            assert_eq!(check(&edge("e2e", layer.dir(), kind)), None);
+            assert_eq!(
+                check(&edge(layer.dir(), "e2e", kind)),
+                Some(Violation::LayerOnComposer {
+                    edge: edge(layer.dir(), "e2e", kind)
                 })
             );
         }

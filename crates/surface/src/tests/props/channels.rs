@@ -21,7 +21,9 @@ use crosstalk_spec::interfaces::l8_surface::{
 use crosstalk_spec::paging::{ChannelList, PageRequest, ResourceUseList};
 use crosstalk_spec::support::Timestamp;
 use crosstalk_testkit::build::ResourceBuilder;
+use crosstalk_testkit::build::provenance::LAG;
 use crosstalk_testkit::ids::Ids;
+use crosstalk_testkit::time::after;
 use proptest::collection::vec;
 use proptest::sample::select;
 
@@ -76,7 +78,14 @@ async fn build(fixture: &Fixture, plan: &Plan) -> Built {
             .build();
         let channel = ids.channel();
         fixture
-            .channel(channel, &resource, agents[0], minute(0))
+            .channel(
+                &mut ids,
+                channel,
+                &resource,
+                agents[0],
+                agents[1],
+                minute(0),
+            )
             .await;
         channels.push(channel);
         resources.insert(channel, resource);
@@ -93,7 +102,7 @@ async fn build(fixture: &Fixture, plan: &Plan) -> Built {
         let stamp = Timestamp::from_micros(minute(*at).as_micros() + u64::from(*agent) + 1);
         let access = access(resource, agents[usize::from(*agent)], kind, stamp);
         if recorded.insert(access.id) {
-            fixture.record(&access, channel).await;
+            fixture.record(&access).await;
         }
     }
     Built {
@@ -183,7 +192,8 @@ fn prop_channel_rows_agree_with_resources() {
                 .map(|(_, agent, _, at)| {
                     Timestamp::from_micros(minute(*at).as_micros() + u64::from(*agent) + 1)
                 })
-                .chain(std::iter::once(minute(0)))
+                // The read of the co-access that discovered the channel.
+                .chain(std::iter::once(after(minute(0), LAG)))
                 .max();
             equal(
                 &format!("last activity of {channel:?}"),
@@ -211,7 +221,7 @@ async fn all_channels(fixture: &Fixture) -> Result<Vec<Channel>, String> {
             .await
             .map_err(|error| format!("{error:?}"))?;
         let (items, next) = page.into_parts();
-        channels.extend(items);
+        channels.extend(items.into_iter().map(|read| read.into_parts().0));
         match next {
             Some(next) => request.after = Some(next),
             None => return Ok(channels),

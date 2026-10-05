@@ -3,7 +3,9 @@
 //! [`check_transmission_verdicts`] generates random sequences of
 //! [`VerdictOp`]s: transmissions put (and moved through every state, by
 //! every route kind and match class), verdicts set, repeated and
-//! withdrawn, logs read and quality tallied over random windows. It runs
+//! withdrawn, logs read and quality tallied over random windows (some sent
+//! by an agent the directory merged into the reader, which quality leaves
+//! out). It runs
 //! each on the store under test and on [`MemoryVerdicts`] and, after every
 //! step, requires equal results, equal published events (the store under
 //! test must announce at least the reference's `Changed` notifications),
@@ -17,7 +19,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::evidence::CoAccess;
 use crosstalk_spec::derived::flow::transmission::{
     Classification, Confirmed, DelegationDirection, DirectCarrier, Route, Transmission,
@@ -38,8 +40,9 @@ use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty, Similarity, TimeWindo
 use proptest::prelude::*;
 
 use super::MemoryVerdicts;
-use crate::flow::registry::model::compare_events;
+use crate::flow::registry::model::{access_agent, compare_events, directory};
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
+use crate::reconstruct::MemoryAgents;
 use crate::support::{Outbox, drain};
 
 /// Every spec trait a transmission store implements.
@@ -83,6 +86,7 @@ fn access(id: u128, agent: AgentId, write: bool, at: u64) -> Access {
             AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             }
         } else {
             AccessOp::Read { result: part }
@@ -92,14 +96,25 @@ fn access(id: u128, agent: AgentId, write: bool, at: u64) -> Access {
 
 /// A co-access: the sender wrote, the reader read 5µs later.
 pub fn co_access() -> Option<CoAccess> {
-    let write = access(0xACC1, sender(), true, 10);
-    let read = access(0xACC2, reader(), false, 15);
+    co_access_between(sender(), reader())
+}
+
+/// A co-access: `sender` wrote, `reader` read 5µs later.
+pub fn co_access_between(sender: AgentId, reader: AgentId) -> Option<CoAccess> {
+    let write = access(0xACC1, sender, true, 10);
+    let read = access(0xACC2, reader, false, 15);
     CoAccess::new(&write, &read, Duration::from_secs(60)).ok()
 }
 
 /// A content match of class `class` (0 exact, 1 normalized, 2 decoded,
 /// 3 semantic).
 pub fn content(class: u8) -> Option<ContentMatch> {
+    content_between(class, sender(), reader())
+}
+
+/// A content match of class `class` from `sender`'s span into `reader`'s
+/// input.
+pub fn content_between(class: u8, sender: AgentId, reader: AgentId) -> Option<ContentMatch> {
     let kind = match class % 4 {
         0 => MatchKind::Exact,
         1 => MatchKind::Normalized,
@@ -108,8 +123,8 @@ pub fn content(class: u8) -> Option<ContentMatch> {
     };
     ContentMatch::new(
         SpanId::from_ulid(0x5DA0),
-        sender(),
-        reader(),
+        sender,
+        reader,
         ExchangeId::from_ulid(0xE1),
         SpanLocation {
             part: PartRef {
@@ -125,11 +140,14 @@ pub fn content(class: u8) -> Option<ContentMatch> {
     .ok()
 }
 
-fn confirmed(classes: &[u8]) -> Option<Confirmed> {
-    let matches: Vec<ContentMatch> = classes.iter().filter_map(|c| content(*c)).collect();
+fn confirmed(classes: &[u8], sender: AgentId, reader: AgentId) -> Option<Confirmed> {
+    let matches: Vec<ContentMatch> = classes
+        .iter()
+        .filter_map(|c| content_between(*c, sender, reader))
+        .collect();
     Confirmed::new(
         NonEmpty::from_vec(matches)?,
-        co_access().into_iter().collect(),
+        co_access_between(sender, reader).into_iter().collect(),
         Timestamp::from_micros(20),
     )
     .ok()
@@ -138,7 +156,19 @@ fn confirmed(classes: &[u8]) -> Option<Confirmed> {
 /// The transmission state `n`: every variant, confirmed ones with matches
 /// of the classes in `classes`.
 pub fn state(n: u8, classes: &[u8]) -> Option<TransmissionState> {
-    let co_access = co_access()?;
+    state_between(n, classes, sender(), reader())
+}
+
+/// The transmission state `n` of a transmission from `sender` to `reader`:
+/// every variant, confirmed ones with matches of the classes in `classes`.
+pub fn state_between(
+    n: u8,
+    classes: &[u8],
+    sender: AgentId,
+    reader: AgentId,
+) -> Option<TransmissionState> {
+    let co_access = co_access_between(sender, reader)?;
+    let confirmed = |classes: &[u8]| confirmed(classes, sender, reader);
     let classification = || Classification {
         version: TopicModelVersion(1),
         topic: None,
@@ -189,6 +219,9 @@ pub enum VerdictOp {
         classes: Vec<u8>,
         route: u8,
         opened_at: u64,
+        /// Sent by agent 3, which the directory merged into the reader:
+        /// a transmission within one agent at the read.
+        merged: bool,
     },
     Set {
         transmission: u8,
@@ -209,9 +242,9 @@ pub enum VerdictOp {
 /// One generated operation; `transmission` 5 is an unknown id.
 pub fn verdict_op() -> impl Strategy<Value = VerdictOp> {
     prop_oneof![
-        3 => (0u8..TRANSMISSIONS, 0u8..7, proptest::collection::vec(0u8..4, 1..3), 0u8..4, 0u64..60)
-            .prop_map(|(transmission, state, classes, route, opened_at)| VerdictOp::Put {
-                transmission, state, classes, route, opened_at,
+        3 => (0u8..TRANSMISSIONS, 0u8..7, proptest::collection::vec(0u8..4, 1..3), 0u8..4, 0u64..60, proptest::bool::weighted(0.3))
+            .prop_map(|(transmission, state, classes, route, opened_at, merged)| VerdictOp::Put {
+                transmission, state, classes, route, opened_at, merged,
             }),
         5 => (0u8..=TRANSMISSIONS, proptest::option::of(any::<bool>()), 0u8..2, 0u64..100, any::<bool>())
             .prop_map(|(transmission, verdict, operator, at, note)| VerdictOp::Set {
@@ -235,7 +268,9 @@ fn id(n: u8) -> TransmissionId {
     }
 }
 
-/// Run the harness: the store `make` builds from its outbox must agree with
+/// Run the harness: the store `make` builds from the agent directory it
+/// must resolve agents through (a [`MemoryAgents`] in which agent 3 is
+/// merged into agent 2, the reader) and its outbox must agree with
 /// [`MemoryVerdicts`]. A failure is a [`ModelMismatch`] with the shrunk
 /// sequence.
 pub fn check_transmission_verdicts<S, F>(
@@ -244,22 +279,26 @@ pub fn check_transmission_verdicts<S, F>(
 ) -> Result<(), ModelMismatch>
 where
     S: VerdictStore,
-    F: Fn(Outbox) -> S,
+    F: Fn(MemoryAgents, Outbox) -> S,
 {
     run(config, verdict_ops(config.max_ops), |runtime, ops| {
-        let (sut_outbox, sut_events) = Outbox::channel();
-        let sut = make(sut_outbox);
-        runtime.block_on(run_case(sut, sut_events, ops))
+        runtime.block_on(async {
+            let agents = directory().await?;
+            let (sut_outbox, sut_events) = Outbox::channel();
+            let sut = make(agents.clone(), sut_outbox);
+            run_case(sut, sut_events, agents, ops).await
+        })
     })
 }
 
 async fn run_case<S: VerdictStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
+    agents: MemoryAgents,
     ops: &[VerdictOp],
 ) -> Result<(), Divergence> {
     let (model_outbox, mut model_events) = Outbox::channel();
-    let mut model = MemoryVerdicts::new(model_outbox);
+    let mut model = MemoryVerdicts::with_agents(agents, model_outbox);
     let all_time = TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(1_000))
         .map_err(|_| Divergence::new(0, "window"))?;
     for (step, op) in ops.iter().enumerate() {
@@ -270,9 +309,11 @@ async fn run_case<S: VerdictStore>(
                 classes,
                 route: r,
                 opened_at,
+                merged,
             } => {
-                let state =
-                    state(*n, classes).ok_or_else(|| Divergence::new(step, "state fixture"))?;
+                let from = if *merged { access_agent(3) } else { sender() };
+                let state = state_between(*n, classes, from, reader())
+                    .ok_or_else(|| Divergence::new(step, "state fixture"))?;
                 let stored = Transmission {
                     id: transmission_id(*transmission),
                     to: reader(),

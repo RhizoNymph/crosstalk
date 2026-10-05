@@ -53,6 +53,20 @@
 //! credentials and prompt fingerprints are weak: they attach to an agent but
 //! never establish one alone.
 //!
+//! **Replayed corpora.** An exchange whose `ClientContext::ingress` is
+//! `IngressMode::Replay { corpus }` comes from a recorded dataset, whose
+//! credentials, accounts and harness ids are the dataset's (often one
+//! shared test key for every trajectory). Its evidence is evidence only
+//! within its corpus: the consumer never attributes a replayed exchange
+//! to, and never merges a replayed agent with, a live agent or an agent of
+//! another corpus, and never attributes a live exchange to a replayed
+//! agent (`reconstruct.identity.replay-within-corpus`). The evidence values
+//! are the ones `EvidenceDeriver` derives for any exchange, and `resolve`
+//! takes no population, so the consumer keeps the populations apart around
+//! it (P4.1 chooses how: a store per population, or a population key on the
+//! stored evidence); a population argument on `resolve` and
+//! `attach_evidence` is the spec change to make if that proves awkward.
+//!
 //! An increment exchange whose previous response the gateway never saw (it
 //! was sent around the proxy) is threaded as `Starts` holding only its
 //! increment, so its inputs are still scanned. A `previous_response_id`

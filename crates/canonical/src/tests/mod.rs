@@ -51,6 +51,17 @@ fn top_level_system_prompt_becomes_first_message() {
     units::request::top_level_system_prompt_becomes_first_message();
 }
 
+/// `canonical.normalize.system-prompt-first`, for a `system` turn.
+#[test]
+fn system_turn_stays_in_place() {
+    units::request::system_turn_stays_in_place();
+}
+
+#[test]
+fn request_shape_holds_no_content() {
+    units::request::request_shape_holds_no_content();
+}
+
 /// `canonical.normalize.split-mixed-roles`.
 #[test]
 fn anthropic_user_turn_with_tool_results_splits() {

@@ -2,27 +2,31 @@
 //! detection state and policy, the promotion and what it superseded, the
 //! policy histories, and resources on one channel each.
 //!
-//! The channel-semantics scenarios (a channel exists only once two agents
-//! communicated through it; listings computed from cross-agent traffic,
-//! merges hiding a channel) are seeded as facts here; the tests that
-//! assert their listing or confirmation outcomes wait for that port of the
-//! spec (INV-850..869 on integration/impl).
+//! The channel-semantics scenarios: a channel exists only once two agents
+//! communicated through it (the scratch entry stays a resource), listings
+//! computed from cross-agent traffic (the S3 handoff listed unconfirmed),
+//! and a merge hiding a channel (the self-notes file).
 
 mod support;
 
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::DeclaredHistory;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor, PolicyKind};
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::ids::ChannelId;
-use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
+use crosstalk_spec::interfaces::l5_flow::channels::{ChannelReads, ChannelWithTraffic};
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, ChannelLookup, ChannelRegistry};
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
+use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_world::ChannelKey;
 use crosstalk_world::config::OPERATOR_RESEARCHER;
+use crosstalk_world::generate::drafts::lone_locator;
 
 use support::{read, run, shared};
 
@@ -39,6 +43,7 @@ fn stored(key: ChannelKey) -> Result<crosstalk_spec::derived::flow::channel::Cha
     let channel = id(key)?;
     run(shared().stores.channels.channel(channel))
         .map_err(|e| format!("{e:?}"))?
+        .map(|read| read.into_parts().0)
         .ok_or_else(|| format!("stored channel {key:?}"))
 }
 
@@ -76,14 +81,11 @@ fn every_channel_has_its_detection_and_policy() -> Result {
         (K::McpMemory, D::Active, P::Unreviewed),
         (K::SharedFile, D::Active, P::Sanctioned),
         (K::Gist, D::Dormant, P::Unreviewed),
-        // Today's spec: a co-access without content is a candidate. The
-        // channel-semantics port makes it active and unconfirmed.
-        (K::S3Handoff, D::Candidate, P::Unreviewed),
+        // Suspected cross-agent traffic: active, and listed unconfirmed.
+        (K::S3Handoff, D::Active, P::Unreviewed),
         (K::SelfNotes, D::Dormant, P::Unreviewed),
         // Frozen at its supersession.
         (K::OldTeamNotes, D::Active, P::Unreviewed),
-        // Today's spec discovers a channel at a resource's first access.
-        (K::Scratch, D::Observed, P::Unreviewed),
     ];
     for (key, detection, policy) in expected {
         let channel = stored(key)?;
@@ -221,6 +223,8 @@ fn policy_histories_follow_the_researchers_decisions() -> Result {
 }
 
 #[test]
+#[ignore = "contradicts the channel semantics: a discovered channel holds exactly its seed \
+            (flow.traffic.resources-placed-by-lookup); see the_hijacked_wiki_is_discovered_from_its_one_page"]
 fn the_hijacked_wiki_is_discovered_and_holds_its_three_pages() -> Result {
     let seeded = shared();
     let wiki = stored(ChannelKey::HijackedWiki)?;
@@ -281,10 +285,9 @@ fn every_resource_is_on_one_channel() -> Result {
     Ok(())
 }
 
-// --- What waits for the channel-semantics port (INV-850..869) ---
+// --- Channel semantics ---
 
 #[test]
-#[ignore = "waits for the channel-semantics port"]
 fn the_scratch_entry_one_agent_uses_is_no_channel() -> Result {
     let seeded = shared();
     let listed = run(read::channels(seeded, ChannelFilter::default()))?;
@@ -297,7 +300,6 @@ fn the_scratch_entry_one_agent_uses_is_no_channel() -> Result {
 }
 
 #[test]
-#[ignore = "waits for the channel-semantics port"]
 fn the_unconfirmed_s3_handoff_is_active() -> Result {
     let s3 = stored(ChannelKey::S3Handoff)?;
     assert_eq!(
@@ -309,7 +311,6 @@ fn the_unconfirmed_s3_handoff_is_active() -> Result {
 }
 
 #[test]
-#[ignore = "waits for the channel-semantics port"]
 fn the_channel_hidden_by_a_merge_is_not_listed() -> Result {
     let seeded = shared();
     let listed = run(read::channels(seeded, ChannelFilter::default()))?;
@@ -322,12 +323,150 @@ fn the_channel_hidden_by_a_merge_is_not_listed() -> Result {
 }
 
 #[test]
-#[ignore = "waits for the channel-semantics port"]
 fn discovered_channels_are_seeded_by_a_cross_agent_transmission() -> Result {
     // The port replaces `Seed::first_access` with `first_transmission` and
     // creates a discovered channel at its first cross-agent transmission:
     // the scratch entry, with none, then has no channel at all.
     let scratch = stored(ChannelKey::Scratch);
     assert!(scratch.is_err(), "no channel for the scratch entry");
+    Ok(())
+}
+
+// --- Added with the channel-semantics port ---
+
+fn read_channel(key: ChannelKey) -> Result<ChannelWithTraffic> {
+    let channel = id(key)?;
+    run(shared().stores.channels.channel(channel))
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("stored channel {key:?}"))
+}
+
+fn page<L>(size: u16) -> Result<PageRequest<L>> {
+    Ok(PageRequest {
+        size: PageSize::new(size).map_err(|e| format!("{e:?}"))?,
+        after: None,
+    })
+}
+
+#[test]
+fn the_hijacked_wiki_is_discovered_from_its_one_page() -> Result {
+    let seeded = shared();
+    let wiki = stored(ChannelKey::HijackedWiki)?;
+    let ChannelOrigin::Discovered { seed, detection } = &wiki.origin else {
+        return Err("discovered".to_owned());
+    };
+    assert!(matches!(detection, TrafficDetection::Active { .. }));
+    assert!(
+        wiki.resources.is_empty(),
+        "a discovered channel holds its seed"
+    );
+    let window = seeded
+        .world
+        .anchor()
+        .all_time()
+        .map_err(|e| format!("{e:?}"))?;
+    let uses = run(seeded
+        .stores
+        .channels
+        .resource_use(wiki.id, window, &page(500)?))
+    .map_err(|e| format!("{e:?}"))?;
+    let [only] = uses.page.items() else {
+        return Err(format!("one page, not {}", uses.page.items().len()));
+    };
+    assert_eq!(only.resource().id, seed.resource);
+    assert!(!only.writers().is_empty());
+    assert!(!only.readers().is_empty());
+    Ok(())
+}
+
+#[test]
+fn the_scratch_entry_is_a_resource_on_no_channel() -> Result {
+    let seeded = shared();
+    let lookup =
+        run(seeded.stores.channels.lookup(&lone_locator())).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(lookup, ChannelLookup::NoChannel);
+    let lone = seeded.scenario.lone_resource().ok_or("the lone resource")?;
+    let channels = run(read::channels(seeded, ChannelFilter::default()))?;
+    assert!(channels.iter().all(
+        |c| !c.resources.contains(&lone) && c.origin.seed().is_none_or(|s| s.resource != lone)
+    ));
+    Ok(())
+}
+
+#[test]
+fn listings_follow_cross_agent_traffic() -> Result {
+    use ChannelKey as K;
+    let confirmed = Some(Listing::Channel(Confirmation::Confirmed));
+    let expected = [
+        (K::InternalWiki, confirmed),
+        (K::Monorepo, confirmed),
+        (K::IssueTracker, confirmed),
+        (K::DesignDocs, Some(Listing::Declaration)),
+        (K::ReleaseBucket, Some(Listing::Declaration)),
+        (K::TeamNotes, confirmed),
+        (K::HijackedWiki, confirmed),
+        (K::WikiTalk, confirmed),
+        (K::Pastebin, confirmed),
+        (K::McpMemory, confirmed),
+        (K::SharedFile, confirmed),
+        (K::Gist, confirmed),
+        (
+            K::S3Handoff,
+            Some(Listing::Channel(Confirmation::Unconfirmed)),
+        ),
+        (K::SelfNotes, Some(Listing::Hidden)),
+        // Superseded: listed only by its supersession.
+        (K::OldTeamNotes, None),
+    ];
+    for (key, listing) in expected {
+        assert_eq!(read_channel(key)?.listing(), listing, "{key:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_s3_handoffs_transmissions_are_its_review_list() -> Result {
+    let s3 = id(ChannelKey::S3Handoff)?;
+    let channels = &shared().stores.channels;
+    let list = |confirmation| {
+        run(channels.transmissions(s3, &ChannelTransmissionFilter { confirmation }, &page(500)?))
+            .map_err(|e| format!("{e:?}"))
+    };
+    let unconfirmed = list(Some(Confirmation::Unconfirmed))?;
+    assert!(!unconfirmed.items().is_empty());
+    assert!(list(Some(Confirmation::Confirmed))?.items().is_empty());
+    Ok(())
+}
+
+#[test]
+fn discovered_channels_are_created_when_their_first_transmission_opened() -> Result {
+    let seeded = shared();
+    for key in ChannelKey::ALL {
+        let channel = stored(key)?;
+        let Some(seed) = channel.origin.seed() else {
+            continue;
+        };
+        assert_eq!(channel.origin.created_at(), seed.opened_at, "{key:?}");
+        let first = run(seeded
+            .stores
+            .transmissions
+            .transmission(seed.first_transmission))
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("the first transmission of {key:?}"))?;
+        assert_eq!(first.opened_at, seed.opened_at, "{key:?}");
+        assert_eq!(
+            first.route,
+            crosstalk_spec::derived::flow::transmission::Route::Channel(channel.id),
+            "{key:?}"
+        );
+        // Opened by a write by another agent, as the ids stood then.
+        let writers: Vec<_> = first
+            .state
+            .co_accesses()
+            .iter()
+            .map(|c| c.writer())
+            .collect();
+        assert!(writers.iter().any(|w| *w != first.to), "{key:?}");
+    }
     Ok(())
 }

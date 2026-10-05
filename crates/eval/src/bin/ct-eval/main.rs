@@ -3,7 +3,18 @@
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
+//! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
+//! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
 //! ```
+//!
+//! `swarm` scores the gateway's saved export against a demo swarm's ground
+//! truth (see `datasets::swarm_truth`); `swarm-fetch` saves that export and
+//! its evidence from the L8 API.
+//!
+//! `--dataset` is `salt`, `agentdojo`, `tau2`, `open-swe`, `lmcache`,
+//! `swe-splice` or `cipher`. For AgentDojo, `--include
+//! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
+//! exactly, and `run` also prints how the injections arrived.
 //!
 //! `--dataset open-swe | lmcache` mixes `--agents-per-world` independent
 //! trajectories per world from `--limit` shards (`--count` rows or sessions
@@ -23,11 +34,13 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
 use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::cipher::{self, CipherSource};
 use crosstalk_eval::datasets::lmcache::LmcacheSource;
 use crosstalk_eval::datasets::open_swe::{self, Mixing, OpenSweSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::datasets::swe_splice::{self, SpliceSource};
+use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
@@ -36,6 +49,8 @@ use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
 use tracing_subscriber::EnvFilter;
+
+mod swarm;
 
 #[derive(Parser)]
 #[command(name = "ct-eval", about = "crosstalk evaluation harness")]
@@ -50,11 +65,17 @@ enum Command {
     Run(RunArgs),
     /// Dump the dataset's labels as JSONL.
     Truth(TruthArgs),
+    /// Score the gateway's saved export against a demo swarm's ground truth.
+    Swarm(swarm::SwarmArgs),
+    /// Save the gateway's transmissions export and their evidence.
+    SwarmFetch(swarm::FetchArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    Agentdojo,
+    Tau2,
     OpenSwe,
     Lmcache,
     SweSplice,
@@ -65,6 +86,8 @@ impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::Agentdojo => "agentdojo",
+            Self::Tau2 => "tau2",
             Self::OpenSwe => "open_swe",
             Self::Lmcache => "lmcache",
             Self::SweSplice => "swe_splice",
@@ -74,18 +97,22 @@ impl Dataset {
 }
 
 /// Any dataset's source.
-enum Source {
+enum AnySource {
     Salt(SaltSource),
+    AgentDojo(AgentDojoSource),
+    Tau2(Tau2Source),
     OpenSwe(OpenSweSource),
     Lmcache(LmcacheSource),
     Splice(SpliceSource),
     Cipher(CipherSource),
 }
 
-impl TraceSource for Source {
+impl TraceSource for AnySource {
     fn id(&self) -> DatasetId {
         match self {
             Self::Salt(source) => source.id(),
+            Self::AgentDojo(source) => source.id(),
+            Self::Tau2(source) => source.id(),
             Self::OpenSwe(source) => source.id(),
             Self::Lmcache(source) => source.id(),
             Self::Splice(source) => source.id(),
@@ -96,6 +123,8 @@ impl TraceSource for Source {
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
         let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
             Self::Salt(source) => Box::new(source.worlds()),
+            Self::AgentDojo(source) => Box::new(source.worlds()),
+            Self::Tau2(source) => Box::new(source.worlds()),
             Self::OpenSwe(source) => Box::new(source.worlds()),
             Self::Lmcache(source) => Box::new(source.worlds()),
             Self::Splice(source) => Box::new(source.worlds()),
@@ -204,7 +233,7 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<Source> {
+fn open_source(args: &SourceArgs) -> Result<AnySource> {
     let root = match &args.root {
         Some(root) => root.clone(),
         None => {
@@ -230,33 +259,51 @@ fn open_source(args: &SourceArgs) -> Result<Source> {
         agents_per_world: args.agents_per_world,
         per_shard: args.count,
     };
-    Ok(match args.dataset {
-        Dataset::Salt => Source::Salt(SaltSource::open(&root, &selection).with_context(opening)?),
-        Dataset::OpenSwe => {
-            Source::OpenSwe(OpenSweSource::open(&root, &selection, mixing).with_context(opening)?)
-        }
-        Dataset::Lmcache => {
-            Source::Lmcache(LmcacheSource::open(&root, &selection, mixing).with_context(opening)?)
-        }
-        Dataset::SweSplice => Source::Splice(
-            SpliceSource::open(
-                &root,
-                &selection,
-                args.count.unwrap_or(swe_splice::SPLICES),
-                args.corpus_seed,
-            )
-            .with_context(opening)?,
-        ),
-        Dataset::Cipher => Source::Cipher(
-            CipherSource::open(
-                &root,
-                &selection,
-                args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
-                args.corpus_seed,
-            )
-            .with_context(opening)?,
-        ),
-    })
+    match args.dataset {
+        Dataset::Salt => SaltSource::open(&root, &selection)
+            .map(AnySource::Salt)
+            .with_context(|| format!("opening SALT at {}", root.display())),
+        Dataset::Agentdojo => AgentDojoSource::open(
+            &root,
+            &agentdojo::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::AgentDojo)
+        .with_context(|| format!("opening AgentDojo at {}", root.display())),
+        Dataset::Tau2 => Tau2Source::open(
+            &root,
+            &tau2::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::Tau2)
+        .with_context(|| format!("opening τ²-bench at {}", root.display())),
+        Dataset::OpenSwe => OpenSweSource::open(&root, &selection, mixing)
+            .map(AnySource::OpenSwe)
+            .with_context(opening),
+        Dataset::Lmcache => LmcacheSource::open(&root, &selection, mixing)
+            .map(AnySource::Lmcache)
+            .with_context(opening),
+        Dataset::SweSplice => SpliceSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(swe_splice::SPLICES),
+            args.corpus_seed,
+        )
+        .map(AnySource::Splice)
+        .with_context(opening),
+        Dataset::Cipher => CipherSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
+            args.corpus_seed,
+        )
+        .map(AnySource::Cipher)
+        .with_context(opening),
+    }
 }
 
 fn run_command(args: RunArgs) -> Result<ExitCode> {
@@ -295,7 +342,11 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         failures,
         summary.unscored,
     );
-    let table = render(&report);
+    let mut table = render(&report);
+    if let AnySource::AgentDojo(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -347,6 +398,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run_command(args),
         Command::Truth(args) => truth_command(args),
+        Command::Swarm(args) => swarm::run(args),
+        Command::SwarmFetch(args) => swarm::fetch(args),
     };
     match result {
         Ok(code) => code,

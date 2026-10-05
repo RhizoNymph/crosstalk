@@ -22,7 +22,8 @@
         "data": {
           "from": {
             "resource": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6",
-            "first_access": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+            "first_transmission": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+            "opened_at": "2026-10-04T12:00:30.250000Z"
           },
           "detection": {
             "type": "active",

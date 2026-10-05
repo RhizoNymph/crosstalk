@@ -4,8 +4,9 @@
 //! | Module | Methods |
 //! | --- | --- |
 //! | [`channels`], [`channel_rows`] | `channel`, `policy_history`, `channels`, `channel_names`, `promotion_preview`, `channel_resources` |
+//! | [`channel_traffic`] | `channel_transmissions` |
 //! | [`agents`] | `agents`, `agent`, `agent_names` |
-//! | [`alerts`] | `alert_rules`, `alert_rule`, `sinks`, `dead_letters`, `alerts`, `alert` |
+//! | [`alerts`] | `alert_rules`, `alert_rule`, `sinks`, `dead_letters`, `alerts` (shown only), `alert` |
 //! | [`topology`] | `watermark`, `present`, `topology`, `overview`, `channel_topology`, `edge_transmissions`, `series` |
 //! | [`topics`] | `topic_versions`, `topic_sizes`, `topic_lineage`, `topics` |
 //! | [`content`] | `search`, `transmission`, `transmissions_by_id` |
@@ -18,6 +19,7 @@ mod admin;
 mod agents;
 mod alerts;
 mod channel_rows;
+mod channel_traffic;
 mod channels;
 pub(crate) mod content;
 mod evidence;
@@ -49,6 +51,9 @@ use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
+};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -62,9 +67,9 @@ use crosstalk_spec::interfaces::l8_surface::sinks::SinkInfo;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Present, QueryApi, QueryError};
 use crosstalk_spec::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
-    TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
+    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
+    SearchList, TopicList, TransmissionList,
 };
 use crosstalk_spec::support::TimeWindow;
 
@@ -99,6 +104,18 @@ impl<S: SurfaceStores> QueryApi for Surface<S> {
         page: &PageRequest<ChannelList>,
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError> {
         self.channels_query(caller, filter, page).await
+    }
+
+    async fn channel_transmissions(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        version: TopicVersionSelector,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<ChannelTransmissionPage, QueryError> {
+        self.channel_transmissions_query(caller, channel, filter, version, page)
+            .await
     }
 
     async fn channel_names(

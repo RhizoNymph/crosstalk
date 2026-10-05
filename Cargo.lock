@@ -439,19 +439,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "crosstalk-e2e"
+version = "0.1.0"
+dependencies = [
+ "crosstalk-api",
+ "crosstalk-canonical",
+ "crosstalk-gateway",
+ "crosstalk-ingress",
+ "crosstalk-memory",
+ "crosstalk-spec",
+ "crosstalk-surface",
+ "crosstalk-transport",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "crosstalk-eval"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "clap",
+ "crosstalk-flow",
  "crosstalk-gateway",
  "crosstalk-sim",
  "crosstalk-spec",
  "crosstalk-testkit",
  "crosstalk-transport",
  "flate2",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "parquet",
  "serde",
  "serde_json",
@@ -466,7 +488,19 @@ dependencies = [
 name = "crosstalk-flow"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "crosstalk-memory",
+ "crosstalk-sim",
  "crosstalk-spec",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -542,7 +576,21 @@ dependencies = [
 name = "crosstalk-reconstruct"
 version = "0.1.0"
 dependencies = [
+ "crosstalk-memory",
+ "crosstalk-sim",
  "crosstalk-spec",
+ "crosstalk-store",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "flate2",
+ "parquet",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -3,6 +3,12 @@ root = "~/Data/ai/agents"
 [datasets.salt]
 path = "salt-nlp"
 
+[datasets.agentdojo]
+path = "agentdojo"
+
+[datasets.tau2]
+path = "tau2-bench/data/tau2/results/final"
+
 [datasets.open_swe]
 path = "open-swe-traces"
 

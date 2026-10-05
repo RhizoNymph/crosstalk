@@ -11,7 +11,7 @@ stored history, and the conversation would hold only one of them.
 """
 
 [evidence]
-dst = "crosstalk_reconstruct::tests::dst_concurrent_threading_is_serializable"
+dst = "crosstalk_reconstruct::tests::dst::dst_concurrent_threading_is_serializable"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

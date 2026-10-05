@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.query.channel-transmissions-need-view"
+statement = "QueryApi::channel_transmissions returns Forbidden with missing View, reading nothing, when the caller lacks View."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+A channel's transmissions name agents and channels, which only View
+shows. The rows carry no message content, so Content is not needed; the
+text behind each is on its evidence page, which needs Content.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::listing::channel_transmissions_need_view"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
