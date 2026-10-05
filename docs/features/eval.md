@@ -578,12 +578,22 @@ groups are kept but not labelled, see below), and Parquet exports.
 | `evidence.jsonl` | `GET /transmissions/{id}/evidence?window={"context":0}` | one spec `TransmissionEvidence` per line, for the exported transmissions |
 
 Truth v2 lines: `header` (version, world, run, seed, agent and key counts,
-`claude_code_shape`, start time, gateway and wiki URLs), then
+`claude_code_shape`, start time, gateway and wiki URLs; `run` is a ULID), then
 `agent_cluster` (one per key group), then `transmission`, `self_read` and
 `reread` (writer and reader with key group, session, turn and tool use id,
 `route: {kind: channel, url}`, `carrier: tool_result`, the read tool,
 `content: {blake3, sha256, excerpt, at: {message, block, tool_use_id}}` and
 times) and `miss` (the reader side only).
+
+- Writer == reader is always `self_read`, even on a repeat read; `reread`
+  is cross-agent only: a version the reader already read earlier in the
+  same session.
+- No row is written for a read whose write event never arrived (the
+  swarm's `unattributed_reads`), a read whose follow-up request was never
+  sent (no exchange carries it), or a failed `PUT`.
+- `at_unix_ms` is `started_at_unix_ms + at_ms`; `written_at_unix_ms` is
+  when the `PUT`'s response reached the writer. Agent and page names
+  (`agent-NNN`, `<topic>-<n>`) are opaque.
 
 ### Join rules (`resolve.rs`)
 
@@ -620,7 +630,10 @@ times) and `miss` (the reader side only).
 | `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
 | `agent_cluster` | no label: a key group is agents sharing one API key, while an `AgentCluster` is keys that are one agent. Reported as `key_group_not_a_cluster` and kept on `Resolved::key_groups` |
 
-Coverage is `Complete { Construction }`: the swarm logs every read.
+Coverage is `Complete { Construction }`: the swarm logs every read it
+can attribute. A gateway that correctly finds one of the swarm's
+`unattributed_reads` is therefore charged a false positive; compare the
+run's false positives with that count.
 
 ### Detections (`detected.rs`)
 
