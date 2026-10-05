@@ -12,8 +12,8 @@
 //! ```
 //!
 //! Reads, actions and the live feed are the surface's own (`QueryApi`,
-//! `OperatorActions`, `LiveFeed`); the UI's contract gaps (`Present`,
-//! `ExportFormats`) come from the world's config.
+//! `OperatorActions`, `LiveFeed`), the present included: the surface
+//! stamps it from the serving clock and the world's config.
 //!
 //! The `InProcess` value owns the relay task and the live feed; `start`
 //! returns it beside the backend so the server can shut it down
@@ -27,19 +27,14 @@ use std::time::Duration;
 
 use crosstalk_api::{InProcess, InProcessError, InProcessOptions, MemoryStores};
 use crosstalk_memory::surface::sinks::SinkConfig;
-use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::interfaces::l8_surface::export::{
     ExportFormat, ExportFormats as SpecExportFormats, ExportLimits, GatewayVersion,
 };
 use crosstalk_spec::interfaces::l8_surface::live::LiveConfig;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_surface::{Surface, SurfaceConfig};
 use crosstalk_world::clock::{MINUTE, minus};
 use crosstalk_world::{Anchor, UI_ANCHOR, World, WorldClock, WorldError};
-
-use crate::contract::formats::ExportFormats;
-use crate::contract::present::Present;
 
 use stores::Seeding;
 
@@ -103,18 +98,16 @@ impl Clock for ServeClock {
     }
 }
 
-/// The world's surface, its clock and its bucket width.
+/// The world's surface and its clock.
 pub struct WorldBackend {
     surface: Arc<WorldSurface>,
     clock: Arc<ServeClock>,
-    bucket_width: BucketWidth,
 }
 
 impl std::fmt::Debug for WorldBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorldBackend")
             .field("clock", &self.clock)
-            .field("bucket_width", &self.bucket_width)
             .finish_non_exhaustive()
     }
 }
@@ -166,7 +159,6 @@ impl WorldBackend {
                 .collect(),
             projection_lease: Duration::from_secs(600),
         };
-        let bucket_width = config.bucket_width;
         let in_process = InProcess::start(options).await?;
         world.seed(&mut Seeding(in_process.stores.clone())).await?;
         clock.serve();
@@ -175,7 +167,6 @@ impl WorldBackend {
             Self {
                 surface: Arc::clone(&in_process.surface),
                 clock,
-                bucket_width,
             },
             in_process,
         ))
@@ -184,28 +175,5 @@ impl WorldBackend {
     /// The surface every spec read and action goes to.
     pub fn surface(&self) -> &WorldSurface {
         &self.surface
-    }
-}
-
-impl Present for WorldBackend {
-    /// The world's bucket width, which its edge store is configured with.
-    fn bucket_width(&self) -> BucketWidth {
-        self.bucket_width
-    }
-
-    /// The anchor plus the time since seeding finished.
-    async fn now(&self, caller: &Caller) -> Result<Timestamp, QueryError> {
-        if !caller.has(Permission::View) {
-            return Err(QueryError::Forbidden {
-                missing: Permission::View,
-            });
-        }
-        Ok(self.clock.now())
-    }
-}
-
-impl ExportFormats for WorldBackend {
-    fn export_formats(&self) -> &'static [ExportFormat] {
-        FORMATS
     }
 }

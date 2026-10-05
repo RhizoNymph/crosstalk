@@ -8,7 +8,6 @@ mod app;
 mod backend;
 mod components;
 mod config;
-mod contract;
 mod data;
 mod error;
 mod pages;

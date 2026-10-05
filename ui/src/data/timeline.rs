@@ -49,8 +49,7 @@ use super::errors::query_error;
 use super::query::{buckets, view_state};
 use super::require;
 use super::topology::WindowPayload;
-use crate::app::{backend, caller};
-use crate::contract::present::Present;
+use crate::app::{backend, caller, present};
 use crate::url::view_state::format_time;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
@@ -169,7 +168,8 @@ async fn timeline_data(cx: &Cx) -> topcoat::Result<Json<TimelinePayload>> {
     let state = view_state(cx).await?;
     let n = buckets(cx)?;
     let backend = backend(cx);
-    let grid = timeline_grid(state.scope.window, backend.bucket_width(), n)
+    let present = present(cx).await.map_err(|e| query_error(e.clone()))?;
+    let grid = timeline_grid(state.scope.window, present.bucket_width, n)
         .map_err(|e| bad_request(e.to_string()))?;
     let filter = state.scope.topology_filter();
     let total = SeriesGrouping::Total;

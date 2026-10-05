@@ -40,7 +40,6 @@ use std::num::NonZeroU64;
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::interfaces::l8_surface::export::ExportFormats;
 use crosstalk_spec::interfaces::l8_surface::present::Present;
-use crosstalk_spec::support::Similarity;
 
 use crate::backend::Result;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -205,18 +204,16 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// `present`: the clock, the bucket width and export formats the contract
-/// gaps report, the active topic version (what `CreateRule` and
-/// `UpdateRule` check), the rule form's default remap threshold and the
-/// projection frame retention.
+/// `present`: the clock, the bucket width, the formats the fixture writes,
+/// the active topic version (what `CreateRule` and `UpdateRule` check),
+/// the rule config's default remap threshold (what `CreateRule` fills a
+/// missing threshold with) and the projection frame retention.
 pub fn present(ctx: &Ctx) -> Result<Present> {
     let fail = |what: &str| QueryError::Store {
         reason: format!("fixture present: {what}"),
     };
     let export_formats =
         ExportFormats::new(super::export::FORMATS.to_vec()).map_err(|_| fail("export formats"))?;
-    let default_remap_threshold =
-        Similarity::new(DEFAULT_REMAP_THRESHOLD).map_err(|_| fail("remap threshold"))?;
     let retention =
         NonZeroU64::new(projection::FRAME_RETENTION).ok_or_else(|| fail("retention"))?;
     Ok(Present {
@@ -224,14 +221,10 @@ pub fn present(ctx: &Ctx) -> Result<Present> {
         bucket_width: super::clock::BUCKET,
         export_formats,
         current_rule_version: ctx.state.active_version(),
-        default_remap_threshold,
+        default_remap_threshold: ctx.world.rule_config.default_remap_threshold,
         frame_retention_micros: FrameRetention::from_micros(retention),
     })
 }
-
-/// The remap threshold of a watched-topic rule created without one; the
-/// rule form's default (`pages::alerts::rules::form::DEFAULT_REMAP`).
-const DEFAULT_REMAP_THRESHOLD: f32 = 0.8;
 
 /// A stable order for routes, which have no `Ord`.
 pub fn route_key(route: &Route) -> (u8, u128, String) {

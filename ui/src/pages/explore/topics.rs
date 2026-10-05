@@ -11,7 +11,7 @@ use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::view::{View, component, view};
 
-use crate::app::backend;
+use crate::app::{backend, present};
 use crate::components::form::LINK;
 use crate::components::sparkline::sparkline;
 use crate::components::{error_panel, href};
@@ -82,11 +82,15 @@ pub async fn load_topics(
     state: &ViewState,
 ) -> std::result::Result<Vec<TopicRow>, UiError> {
     let backend = backend(cx);
+    let bucket = present(cx)
+        .await
+        .map_err(|e| UiError::from(e.clone()))?
+        .bucket_width;
     let version = state.scope.topic_version;
     let sizes = backend
         .topic_sizes(caller, Some(version), Some(state.scope.window))
         .await?;
-    let trends = topic_trends(backend, caller, state.scope.window, version).await?;
+    let trends = topic_trends(backend, caller, state.scope.window, bucket, version).await?;
     let labels: Vec<(TopicId, String)> =
         all_topics(backend, caller, TopicVersionSelector::Pinned(version))
             .await?

@@ -328,6 +328,8 @@ failed and retried ones and nothing else.
 {"kind":"reread",    <transmission's fields; this reader already read this same page version earlier in the same session>}
 {"kind":"miss","world":…,"reader":…,"reader_key_group":…,"page":…,"reader_session":…,"reader_turn":…,"reader_tool_use_id":…,
  "read_tool":{…},"at_ms":…,"at_unix_ms":…}
+{"kind":"unattributed_read","world":…,"reader":…,"reader_key_group":…,"page":…,"version":…,"reader_session":…,"reader_turn":…,"reader_tool_use_id":…,
+ "read_tool":{…},"content":{…},"at_ms":…,"at_unix_ms":…}   (written at the end of the run)
 {"kind":"agent_cluster","world":…,"key_group":2,"agents":["a004","a005"]}   (one per key group, singletons included, written once)
 ```
 
@@ -400,7 +402,10 @@ A read whose write has not been reported yet (the writer's event can trail
 the reader's) waits in the book and is classified, in order, when the write
 arrives. A read whose write never arrives (a version from before this run,
 since the wiki outlives swarm runs, or a writer aborted after the wiki
-accepted its PUT) gets no row and is counted in `unattributed_reads`.
+accepted its PUT) is written when the run ends as an `unattributed_read`
+row (after every other row, in read order) and counted in
+`unattributed_reads`. It carries the read's content, so a scorer can leave
+a detection of it unjudged rather than count it as a false positive.
 Writes that fail produce no row. A read whose follow-up request is never
 sent (the run stopped) is not reported at all.
 

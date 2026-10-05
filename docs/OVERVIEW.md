@@ -209,13 +209,14 @@ Overview:
       graph and UMAP projection (WebGL), the time brush (SVG) and the
       live-update listener, fed by the UI's own /data/ routes. Reads, acts
       and subscribes only through the spec's L8 traits (QueryApi,
-      OperatorActions, LiveFeed), called on one concrete backend type (a
-      deterministic fixture implementing them until it is wired to
-      crosstalk-client), plus two documented gap traits for what the spec
-      does not expose to it yet (the bucket width and the present; the
-      export formats a backend writes) and a temporary channel-semantics
-      shim (ui/src/pending) standing in for the spec's cross-agent channel
-      types until the gateway's port lands. Callers come from the spec's
+      OperatorActions, LiveFeed), called on one concrete backend type, an
+      enum over the deterministic fixture, the world (crosstalk-api's
+      InProcess surface seeded by crosstalk-world) and, later,
+      crosstalk-client's HTTP backend as one more arm. The clock, bucket
+      width, export formats and rule defaults are QueryApi::present, read
+      once per request; the one backend question outside the spec is
+      where a default view ends (AppBackend::view_end: the present's now,
+      unless the fixture replays up to a fixed end). Callers come from the spec's
       operator directory in trusted mode; view windows are bucket-aligned
       and every linked view pins the URL's topic version.
   data_flow: >
@@ -1175,6 +1176,30 @@ Features Index:
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]
     doc: docs/features/demo.md
+  conformance:
+    description: >
+      crosstalk-conformance (crates/conformance, TestSupport): the L8
+      conformance suite, tests generic over any implementation of the L8
+      traits (QueryApi, OperatorActions, LiveFeed, export). A harness
+      provisions worlds from scenarios (facts over typed roles: agents,
+      resources, channels, transmissions with their evidence, merges,
+      promotions, policies, verdicts, topic history, dead letters), the
+      suite checks every fact of a scenario through L8 before relying on
+      it, and assertions are relations the spec defines and what the facts
+      imply, citing spec/invariants ids, never totals of one world.
+      suite!(harness) instantiates every test; the UI fixture runs it
+      (ui/src/backend/fixture/conformance, binding the named scenarios to
+      its generated week). Next: a harness over crosstalk-surface and the
+      memory stores seeded by crosstalk-world, then scenarios seeded
+      through the write traits.
+    entry_points:
+      - crates/conformance/src/lib.rs
+      - crates/conformance/src/harness/mod.rs
+      - crates/conformance/src/scenario/mod.rs
+      - crates/conformance/src/suite.rs
+      - ui/src/backend/fixture/conformance/mod.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, type_spec]
+    doc: docs/features/conformance.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's
@@ -1222,8 +1247,10 @@ Features Index:
       for demos), the world backend (crosstalk_api::InProcess over the
       memory stores, seeded with crosstalk-world), or the gateway's live
       composition behind the `live` cargo feature (a stub until the
-      gateway provides it). What the spec lacks is two documented gap
-      traits (ui/src/contract: bucket width and present, export formats).
+      gateway provides it). The UI declares no traits of its own: the
+      clock, bucket width, export formats and rule version come from
+      QueryApi::present (app::present, once per request), and where a
+      default view ends from AppBackend::view_end.
       Built from the workspace root into deploy/ui.Dockerfile and
       deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
     entry_points:
@@ -1233,7 +1260,6 @@ Features Index:
       - ui/src/backend/dispatch.rs
       - ui/src/backend/fixture/surface.rs
       - ui/src/backend/world/mod.rs
-      - ui/src/contract/mod.rs
       - ui/src/pages/mod.rs
       - ui/src/pages/view.rs
       - ui/src/data/mod.rs

@@ -21,7 +21,7 @@ use super::form::{
     Choices, RuleKindChoice, TopicOption, Values, parse_semantic, parse_watched, rule_form,
 };
 use super::model::{semantic_query, staleness, status_label, status_tone, watched_topics};
-use crate::app::{backend, caller, can};
+use crate::app::{backend, caller, can, present};
 use crate::components::form::LINK;
 use crate::components::{Tone, error_panel, href, page_header, state_badge};
 use crate::error::UiError;
@@ -29,8 +29,7 @@ use crate::pages::common::action::{Failure, done, perform, require, settled, sta
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
-use crate::pages::common::rules::rule;
-use crate::pages::common::topics::{all_topics, default_version};
+use crate::pages::common::topics::all_topics;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -38,6 +37,7 @@ use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::support::Similarity;
 
 path_param!(rule_ulid);
 
@@ -50,8 +50,9 @@ struct NewQuery {
 
 /// A new rule's starting values. `?topic=<id>` (the explore page's "Watch"
 /// links) picks that topic when the form offers it.
-fn new_values(cx: &Cx, kind: RuleKindChoice, offered: &[TopicId]) -> Values {
-    let mut values = Values::defaults(kind);
+fn new_values(cx: &Cx, kind: RuleKindChoice, options: &Options) -> Values {
+    let offered = &options.choices.topics;
+    let mut values = Values::defaults(kind, options.remap);
     let topic = query_params::<NewQuery>(cx)
         .ok()
         .and_then(|q| q.topic.as_deref())
@@ -71,24 +72,24 @@ pub enum Target {
     Existing(AlertRuleId),
 }
 
-/// The topic version to pick topics from: the history's active one.
-async fn current_version(
-    cx: &Cx,
-    caller: &Caller,
-) -> std::result::Result<TopicModelVersion, UiError> {
-    Ok(default_version(backend(cx), caller).await?)
-}
-
-/// The topics and sinks a form may pick. Topics need `Content`: their
-/// labels come from message text.
+/// The topics and sinks a form may pick, and the remap threshold a new
+/// watched-topic rule starts at. Topics need `Content`: their labels come
+/// from message text.
 struct Options {
     choices: Choices,
     topics: Vec<TopicOption>,
     sinks: Vec<(String, String)>,
+    /// The present's default (`Present::default_remap_threshold`): what a
+    /// rule created without a threshold takes.
+    remap: Similarity,
 }
 
+/// The form's options, from the request's present: topics of its rule
+/// version (`Present::current_rule_version`, the one `CreateRule` and
+/// `UpdateRule` check) and its default remap threshold.
 async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiError> {
-    let version = current_version(cx, caller).await?;
+    let present = present(cx).await.map_err(|e| UiError::from(e.clone()))?;
+    let version = present.current_rule_version;
     let sinks = backend(cx).sinks(caller).await?;
     let topics = if can(caller, Permission::Content) {
         all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version))
@@ -114,6 +115,7 @@ async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiErr
             .into_iter()
             .map(|s| (s.id.to_ulid(), s.name))
             .collect(),
+        remap: present.default_remap_threshold,
     })
 }
 
@@ -123,7 +125,8 @@ async fn existing(
     caller: &Caller,
     id: AlertRuleId,
 ) -> std::result::Result<AlertRuleDef, UiError> {
-    let found = rule(backend(cx), caller, id)
+    let found = backend(cx)
+        .alert_rule(caller, id)
         .await?
         .ok_or(UiError::Query(QueryError::NotFound))?;
     if matches!(found.rule(), AlertRule::Builtin(_)) {
@@ -298,7 +301,7 @@ async fn editor(
             },
             *kind,
             href(&format!("{PATH}/new"), state, &[]),
-            new_values(cx, *kind, &options.choices.topics),
+            new_values(cx, *kind, &options),
             None,
         ),
         Target::Existing(id) => {

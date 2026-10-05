@@ -6,8 +6,7 @@
 //! pins it ([`TopicVersionSelector::Pinned`]): a cited view means the same
 //! thing after a re-fit. [`Scope::topology_filter`] is the one place the
 //! [`TopologyFilter`] is built from the URL's filter keys, so the version a
-//! filter pins is always the scope's. It is the channel-semantics stand-in
-//! (`crate::pending`): the spec's filter plus `unconfirmed_channels`.
+//! filter pins is always the scope's, `unconfirmed_channels` included.
 
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};

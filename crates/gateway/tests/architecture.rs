@@ -8,7 +8,7 @@
 //!    `client` or `gateway`, under any dependency kind, with one exception:
 //!    it may use `transport` as a dev-dependency (an in-process bus for its
 //!    tests);
-//! 2. `memory`, `sim`, `testkit` and `world` are only ever
+//! 2. `conformance`, `memory`, `sim`, `testkit` and `world` are only ever
 //!    dev-dependencies of a layer crate, never normal or build
 //!    dependencies;
 //! 3. a layer crate never depends on a tool crate (`demo`: the load
@@ -109,6 +109,7 @@ impl Composer {
 /// Test-only support crates: dev-dependencies of layer crates, never more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TestSupport {
+    Conformance,
     Memory,
     Sim,
     Testkit,
@@ -116,7 +117,8 @@ enum TestSupport {
 }
 
 impl TestSupport {
-    const ALL: [TestSupport; 4] = [
+    const ALL: [TestSupport; 5] = [
+        TestSupport::Conformance,
         TestSupport::Memory,
         TestSupport::Sim,
         TestSupport::Testkit,
@@ -125,6 +127,7 @@ impl TestSupport {
 
     fn dir(self) -> &'static str {
         match self {
+            TestSupport::Conformance => "conformance",
             TestSupport::Memory => "memory",
             TestSupport::Sim => "sim",
             TestSupport::Testkit => "testkit",
@@ -207,7 +210,7 @@ enum Violation {
     LayerOnLayer { edge: Edge },
     /// A layer crate depends on `api`, `client` or `gateway`.
     LayerOnComposer { edge: Edge },
-    /// `memory`, `sim`, `testkit` or `world` is a non-dev dependency of a
+    /// `conformance`, `memory`, `sim`, `testkit` or `world` is a non-dev dependency of a
     /// layer crate.
     TestSupportNotDev { edge: Edge },
     /// A layer crate depends on a tool crate.
@@ -622,6 +625,10 @@ fn roles_classify_by_package_name() {
     assert_eq!(
         Role::of("crosstalk-world"),
         Role::TestSupport(TestSupport::World)
+    );
+    assert_eq!(
+        Role::of("crosstalk-conformance"),
+        Role::TestSupport(TestSupport::Conformance)
     );
     assert_eq!(Role::of("crosstalk-store"), Role::Open);
     assert_eq!(Role::of("crosstalk-spec"), Role::Open);

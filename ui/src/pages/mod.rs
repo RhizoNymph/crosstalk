@@ -10,6 +10,8 @@ pub mod export;
 pub mod overview;
 pub mod pipeline;
 #[cfg(test)]
+mod present_tests;
+#[cfg(test)]
 mod replay_tests;
 pub mod topics;
 pub mod topology;

@@ -11,8 +11,7 @@ use topcoat::router::request::uri;
 
 use topcoat::router::content::Form;
 
-use crate::app::{backend, caller};
-use crate::contract::present::Present;
+use crate::app::{backend, caller, present};
 use crate::data::query::parse_strict;
 use crate::error::UiError;
 use crate::pages::common::form::invalid;
@@ -26,13 +25,15 @@ use crosstalk_spec::interfaces::l8_surface::QueryError;
 const DEFAULT_SPAN: Duration = Duration::from_secs(24 * 3600);
 
 /// What a view state without a window or version defaults to: the last 24
-/// hours before the backend's `now` (on bucket boundaries), and the topic
-/// history's active version. Shared by pages and data routes.
+/// hours before the backend's view end (its present's `now`, on bucket
+/// boundaries), and the topic history's active version. Shared by pages
+/// and data routes; the present is the request's one read.
 pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, UiError> {
     let backend = backend(cx);
     let caller = caller(cx);
-    let bucket = backend.bucket_width();
-    let end = align_up(backend.view_end(&caller).await?, bucket);
+    let present = present(cx).await.map_err(|e| UiError::Query(e.clone()))?;
+    let bucket = present.bucket_width;
+    let end = align_up(backend.view_end(present), bucket);
     let topic_version = default_version(backend, &caller).await?;
     let span = u64::try_from(DEFAULT_SPAN.as_micros()).unwrap_or(u64::MAX);
     let start = align_down(

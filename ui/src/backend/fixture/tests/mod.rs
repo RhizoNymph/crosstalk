@@ -21,6 +21,7 @@ mod series;
 mod topics;
 mod transmissions;
 mod triage;
+mod view_end;
 mod world;
 
 use std::num::NonZeroU32;

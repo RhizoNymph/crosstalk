@@ -422,7 +422,7 @@ async fn promote_supersedes_covered_channels_and_graphs_follow() {
             .iter()
             .filter(|a| a.subject == AlertSubject::Channel(talk)
                 || a.subject == AlertSubject::Channel(wiki))
-            .all(|a| !crate::backend::alert_state::is_active(&a.state))
+            .all(|a| !a.state.is_active())
     );
     drop(state);
     // Refusals.

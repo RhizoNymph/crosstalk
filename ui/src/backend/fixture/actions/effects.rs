@@ -5,11 +5,10 @@ use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject, Suppres
 use crosstalk_spec::ids::{AlertRuleId, ChannelId, TransmissionId};
 use crosstalk_spec::support::Timestamp;
 
-use crate::backend::alert_state;
 use crate::backend::fixture::store::State;
 
 pub fn is_active(alert: &Alert) -> bool {
-    alert_state::is_active(&alert.state)
+    alert.state.is_active()
 }
 
 /// `AlertTriage::channel_sanctioned`: suppresses the active alerts whose

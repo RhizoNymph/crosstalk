@@ -16,7 +16,6 @@ use crosstalk_spec::interfaces::l8_surface::lists::AlertRuleFilter;
 use crosstalk_spec::paging::{AlertList, AlertRuleList, Page, PageRequest};
 
 use crate::backend::Result;
-use crate::backend::alert_state;
 
 use super::Ctx;
 use super::page::{self, Key};
@@ -64,9 +63,7 @@ pub fn alerts(
         .state
         .alerts
         .iter()
-        .filter(|a| {
-            filter.states.is_empty() || filter.states.contains(&alert_state::kind(&a.state))
-        })
+        .filter(|a| filter.states.is_empty() || filter.states.contains(&a.state.kind()))
         .filter(|a| channel.is_none_or(|c| about_channel(ctx, a, c)))
         .filter(|a| shown(ctx, a))
         .map(|a| (newest_id(a.id), a.clone()))
