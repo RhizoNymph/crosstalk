@@ -69,9 +69,9 @@ be a layer depending on the gateway, which the rule refuses.
 - **The page** is `/srv/team-wiki/runbooks/ledger-rollback.md`, an absolute
   path on a shared mount.
 - **Why `Write`/`Read` on a file, and not a URL or an MCP tool.**
-  - The spec names the extractors but maps no tool name to a locator or an
-    `AccessKind`.
-  - A file write followed by a file read is the least ambiguous pair.
+  - A file write followed by a file read is the least ambiguous pair:
+    L5's extractor catalog maps Claude Code's `Write` and `Read` on
+    `file_path` to a write and a read on the path's file locator.
   - An `Mcp` locator includes the tool name, so an MCP `write_page` and
     `read_page` on one page would be two resources and could never
     co-access.
@@ -102,9 +102,28 @@ be a layer depending on the gateway, which the rule refuses.
   - The write access comes from `a1-write`. The read access comes from the
     `Read` call once its result is back (`b2-repeat`), on the same
     `Locator::File`.
-  - The channel is discovered at the first access, A's write (INV-240). It
-    becomes a candidate at the cross access and active at the
-    confirmation.
+  - The merged extractor (`crates/flow/src/extract/catalog.rs`) maps
+    Claude Code's `Write` and `Read` on `file_path` to write and read
+    accesses. A local harness's files carry no host, and the page lies
+    outside A's repository working directory (INV-1049 does not apply),
+    so both calls give one `Locator::File` and one resource. Tested today
+    against the extractor itself (`tests/smoke/extract.rs`): A's `Write`
+    is a `Write(Delivered)` access and B's `Read` a read, on the same
+    locator.
+  - A's write alone creates no channel: the resource is on no channel
+    and the access records none (INV-850, INV-853).
+  - The channel is created by the first cross-agent transmission on the
+    page: the channel transmission B's read opens with A's write. It is
+    seeded by that resource, that transmission and its opening time, and
+    is `Active` since that opening with it as `last_transmission`
+    (INV-851, INV-1031). `ChannelRow::created_at` is that opening
+    (INV-1035).
+  - It is listed as a channel, `Listing::Channel(Unconfirmed)` while the
+    transmission awaits content and `Listing::Channel(Confirmed)` once
+    the content match confirms it (INV-857).
+  - The scenario's fixed, past timestamps are safe to replay: the
+    correlator settles only on event times and the injected clock's
+    ticks (INV-1046).
   - The read is about 2 minutes after the write, inside any correlation
     window. The match is in the result of the call that produced the read
     access, so the route is `Channel` (INV-269).
@@ -155,8 +174,9 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 | `crates/e2e/src/options.rs` | The composition's config: 5-minute buckets, the world seed's correlator timing, and trusted access. | `in_process`, `timing`, `BUCKET`, `OptionsError` |
 | `crates/e2e/src/read.rs` | Surface readers. | `window`, `agents`, `Agents`, `AgentRead`, `edges`, `channel_edge`, `edge_transmissions`, `summaries`, `evidence`, `channels`, `ReadError` |
 | `crates/e2e/tests/smoke/scenario.rs` | Determinism, time order, and the L0 identity. Also checks the history replay L3 threads by, the `Write` arguments carrying the sentence, and the read result and B's answer carrying it. | |
+| `crates/e2e/tests/smoke/extract.rs` | The scenario's `Write` and `Read` calls, with their results, through L5's `ToolExtractors` (crosstalk-flow, a dev-dependency) under the context the system prompt states: one delivered write and one read on the page's file locator. | |
 | `crates/e2e/tests/smoke/pipeline.rs` | Every body is stored, and every exchange is published in order, stamped at its end. | |
-| `crates/e2e/tests/smoke/surface.rs` | The surface answers today. Plus ignored tests: two agents (L3), the A→B channel edge, the confirmed transmission, the evidence match, and the discovered, active channel. | |
+| `crates/e2e/tests/smoke/surface.rs` | The surface answers today. Plus ignored tests: two agents (L3), the A→B channel edge, the confirmed transmission, the evidence match, and the channel created by the cross-agent transmission, listed and confirmed. | |
 | `crates/gateway/tests/architecture.rs` | `Composer::E2e`, and `e2e_composes_gateway_and_layers_and_no_layer_uses_it`. | |
 
 ## Switching to `Live`
@@ -221,16 +241,7 @@ Then read through the UI, or through `crosstalk_e2e::read`.
     `Live`.
 - **Edges need L6.** L7 consumes `TransmissionClassified`, so `Live`
   needs the L6 classifier consumer as well as the L7 edge consumer.
-- **The spec doesn't define tool extraction.**
-  - It names the extractors but maps no tool name or argument key to a
-    locator and `AccessKind`.
-  - `Locator::File`'s `host` has no rule. If it were set per client, two
-    agents on one shared mount would never share a resource.
-  - The eval's converter uses generic `edit_page`/`read_page` tools with a
-    `url` argument, which needs a write-or-read rule for unknown URL
-    tools.
-- **Discovery happens earlier than "first cross-agent transmission".**
-  - Per INV-240, a channel is discovered at its first access (A's write).
-    It is a candidate at the first cross access and active at the
-    confirmation.
-  - The smoke asserts the spec.
+- **Tool extraction** (resolved by the L5 port): the extractor catalog
+  maps tool names and argument keys to locators and access kinds, a
+  local harness's file locators carry no host, and HTTP tools decide
+  write or read by method (INV-1047, INV-1048).

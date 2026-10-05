@@ -372,6 +372,7 @@ version = "0.1.0"
 dependencies = [
  "crosstalk-api",
  "crosstalk-canonical",
+ "crosstalk-flow",
  "crosstalk-gateway",
  "crosstalk-ingress",
  "crosstalk-memory",

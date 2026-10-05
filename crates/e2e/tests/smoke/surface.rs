@@ -18,6 +18,7 @@ use crosstalk_e2e::scenario::{Scenario, WIKI_PAGE};
 use crosstalk_e2e::{Composition, compose, feed, options};
 use crosstalk_spec::aggregates::edge::WeightedEdge;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::Route;
@@ -246,43 +247,73 @@ async fn the_evidence_has_the_content_match_in_the_read_result() -> Result<(), F
     Ok(())
 }
 
+/// Cross-agent channel semantics (INV-850 to INV-869, INV-1030 to
+/// INV-1038): A's write alone makes no channel (INV-853); the channel is
+/// created by the first cross-agent transmission on the page, seeded by it
+/// and dated by its opening (INV-851, INV-1035); it is listed as a channel,
+/// active since that opening, and confirmed once the transmission is
+/// (INV-857, INV-1031).
 #[tokio::test]
-#[ignore = "waits for L5 (channel registry and correlator) and L7 in Live"]
-async fn the_channel_is_listed_discovered_and_active() -> Result<(), Failure> {
+#[ignore = "waits for L3, L4, L6 and L7 in Live (L5 is merged), so the transmission is confirmed and on an edge"]
+async fn the_channel_is_created_by_the_cross_agent_transmission_and_confirmed()
+-> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
     let (_, channel, id) = the_transmission(&scenario, &composition, window).await?;
+    let summaries =
+        read::summaries(composition.surface.as_ref(), &composition.caller, vec![id]).await?;
+    let [summary] = summaries.as_slice() else {
+        return Err(unexpected(format!("{} rows for one id", summaries.len())));
+    };
+    let opened_at = summary.opened_at;
+
     let rows = read::channels(composition.surface.as_ref(), &composition.caller).await?;
     let [row] = rows.as_slice() else {
         return Err(unexpected(format!("{} channels, expected 1", rows.len())));
     };
     assert_eq!(row.channel().id, channel);
-    let seed = row.seed().ok_or_else(|| unexpected("no seed resource"))?;
+    let resource = row.seed().ok_or_else(|| unexpected("no seed resource"))?;
     assert!(
-        matches!(&seed.locator, Locator::File { path, .. } if path == WIKI_PAGE),
+        matches!(&resource.locator, Locator::File { path, .. } if path == WIKI_PAGE),
         "seeded by {:?}",
-        seed.locator
+        resource.locator
     );
-    // Discovered at its first access, A's write (INV-240), before B read.
-    let read_at = scenario
-        .exchanges
-        .iter()
-        .find(|exchange| exchange.label == "b2-repeat")
-        .map(|exchange| exchange.started_at)
-        .ok_or_else(|| unexpected("no b2-repeat"))?;
-    assert!(seed.first_seen >= scenario.start && seed.first_seen < read_at);
-    let ChannelOrigin::Discovered { detection, .. } = &row.channel().origin else {
+
+    // Created by the first cross-agent transmission, at its opening.
+    let ChannelOrigin::Discovered { seed, detection } = &row.channel().origin else {
         return Err(unexpected(format!(
             "not a discovered channel: {:?}",
             row.channel().origin
         )));
     };
-    assert!(
-        matches!(
-            detection,
-            TrafficDetection::Active { last_transmission, .. } if *last_transmission == id
-        ),
-        "detection {detection:?}"
+    assert_eq!(seed.first_transmission, id);
+    assert_eq!(seed.resource, resource.id);
+    assert_eq!(seed.opened_at, opened_at);
+    assert_eq!(row.created_at(), opened_at);
+    // Not before B touched the page: A's accesses alone made no channel.
+    let label_time = |label: &str| {
+        scenario
+            .exchanges
+            .iter()
+            .find(|exchange| exchange.label == label)
+            .ok_or_else(|| unexpected(format!("no {label}")))
+    };
+    assert!(row.created_at() > label_time("a2-ack")?.ended_at);
+    assert!(row.created_at() >= label_time("b1-read")?.started_at);
+    assert!(row.created_at() <= label_time("b2-repeat")?.ended_at);
+
+    // Listed as a channel, active since that opening, and confirmed.
+    assert_eq!(
+        *detection,
+        TrafficDetection::Active {
+            since: opened_at,
+            last_transmission: id,
+        }
     );
+    assert_eq!(
+        row.listing(),
+        Some(Listing::Channel(Confirmation::Confirmed))
+    );
+    assert_eq!(row.confirmation(), Some(Confirmation::Confirmed));
     let counts = row
         .counts()
         .ok_or_else(|| unexpected("no activity counts"))?;
