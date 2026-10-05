@@ -332,6 +332,8 @@ relay and ends every stream with `ShuttingDown`.
 | `crates/surface/src/props.rs` | The excerpt property | — |
 | `crates/api/src/in_process/mod.rs` | The in-process surface | `InProcess`, `InProcessOptions`, `InProcessError` |
 | `crates/api/src/in_process/stores.rs` | The memory stores as `SurfaceStores` | `MemoryStores`, `MemoryEvidence`, `Directory` |
+| `crates/api/src/world.rs` | Feature `world`: the in-process surface seeded with `crosstalk-world` (`seed_world`, the memory stores as `WorldStores`: `Seeding`), and served over HTTP on a loopback port with static bearer tokens (`serve_world`), for tests and tools; see [conformance](conformance.md) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `SeededWorld`, `HttpWorld`, `Seeding` |
+| `crates/api/tests/conformance.rs` | The L8 conformance suite against the in-process surface (`--features world`) | `InProcessHarness` |
 
 ## Invariants and constraints
 

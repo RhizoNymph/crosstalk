@@ -1300,18 +1300,25 @@ Features Index:
       suite checks every fact of a scenario through L8 before relying on
       it, and assertions are relations the spec defines and what the facts
       imply, citing spec/invariants ids, never totals of one world.
-      suite!(harness) instantiates every test; the UI fixture runs it
-      (ui/src/backend/fixture/conformance, binding the named scenarios to
-      its generated week). Next: a harness over crosstalk-surface and the
-      memory stores seeded by crosstalk-world, then scenarios seeded
-      through the write traits.
+      suite!(harness) instantiates every test; a harness lists what its
+      implementation is known to fail, and a listed test that passes fails.
+      It runs against the UI fixture (ui/src/backend/fixture/conformance),
+      the in-process crosstalk-surface over memory stores seeded by
+      crosstalk-world (crates/api/tests/conformance.rs) and the same surface
+      over HTTP through crosstalk-client (crates/client/tests/conformance.rs),
+      the last two through crosstalk_api::world (feature world: seed_world,
+      serve_world) and the world binder over the store read traits. Next:
+      Postgres, and scenarios seeded through the write traits.
     entry_points:
       - crates/conformance/src/lib.rs
       - crates/conformance/src/harness/mod.rs
       - crates/conformance/src/scenario/mod.rs
       - crates/conformance/src/suite.rs
       - ui/src/backend/fixture/conformance/mod.rs
-    depends_on: [query_surface, read_models, export, channel_semantics, type_spec]
+      - crates/api/src/world.rs
+      - crates/api/tests/conformance.rs
+      - crates/client/tests/conformance.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, type_spec, world, http_api, surface_service]
     doc: docs/features/conformance.md
   world:
     description: >
