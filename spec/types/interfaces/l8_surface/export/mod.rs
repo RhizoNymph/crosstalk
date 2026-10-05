@@ -13,10 +13,13 @@
 //! wire: header ─▶ row ─▶ row ─▶ … ─▶ trailer { rows, digest, Complete | Failed(why) }
 //! ```
 //!
-//! **Datasets.** Transmissions, edge buckets, access buckets and topics take
-//! an [`ExportScope`]: the window and the shared `TopologyFilter`, applied
-//! as the linked views apply it, under one topic version resolved when the
-//! export starts and pinned for all of it. A projection export reads the
+//! **Datasets.** Edge buckets, access buckets and topics take an
+//! [`ExportScope`]: the window and the shared `TopologyFilter`, applied as
+//! the linked views apply it, under one topic version resolved when the
+//! export starts and pinned for all of it. Transmissions take a
+//! [`TransmissionScope`]: the same window and filter, and the
+//! [`ExportStates`] the export holds (confirmed ones by default; an
+//! explicit set may add suspected, awaiting-content and discarded ones). A projection export reads the
 //! stored frame. A verdicts export takes a window over
 //! `Transmission::opened_at`, as `detection_quality` does. The rows of each
 //! are in [`rows`].
@@ -86,7 +89,8 @@ pub use manifest::{
 pub use record::{ExportEvent, ExportRecord, InvalidExportRecord};
 pub use request::{
     ExportDataset, ExportDatasetKind, ExportFormat, ExportFormats, ExportLimits, ExportRequest,
-    ExportScope, InvalidExportFormats, InvalidExportRequest, UnsupportedFormat,
+    ExportScope, ExportStates, InvalidExportFormats, InvalidExportRequest, InvalidExportStates,
+    TransmissionScope, UnsupportedFormat,
 };
 pub use rows::{ExportRow, RowKey};
 pub use seal::{ExportSealer, Incomplete, RowRefused, verify_export};

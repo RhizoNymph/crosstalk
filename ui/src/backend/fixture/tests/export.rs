@@ -83,7 +83,7 @@ async fn a_transmissions_export_verifies_and_its_rows_are_the_surfaces() {
     let (header, rows, trailer) = run(
         b,
         &c,
-        &request(ExportDataset::Transmissions(scope(&day)), false),
+        &request(ExportDataset::Transmissions(scope(&day).into()), false),
     )
     .await;
     verified(&header, &rows, &trailer);
@@ -113,7 +113,7 @@ async fn a_transmissions_export_verifies_and_its_rows_are_the_surfaces() {
         let ExportRow::Transmission(row) = row else {
             panic!("transmission rows only");
         };
-        assert!(settled.contains(row.delivery().confirmed_at));
+        assert!(settled.contains(row.at()));
         assert!(row.content().is_none());
         ids.push(row.summary().id);
     }
@@ -179,7 +179,7 @@ async fn every_dataset_verifies() {
             .expect("fit"),
     };
     let datasets = [
-        ExportDataset::Transmissions(scope(&week)),
+        ExportDataset::Transmissions(scope(&week).into()),
         ExportDataset::Edges(scope(&day())),
         ExportDataset::Accesses(scope(&day())),
         ExportDataset::Topics(scope(&week)),
@@ -233,7 +233,7 @@ async fn content_quotes_mark_bodies_retention_dropped() {
     let (header, rows, trailer) = run(
         b,
         &c,
-        &request(ExportDataset::Transmissions(scope(&week())), true),
+        &request(ExportDataset::Transmissions(scope(&week()).into()), true),
     )
     .await;
     verified(&header, &rows, &trailer);
@@ -275,7 +275,7 @@ async fn a_window_after_the_watermark_settles_nothing() {
     let (header, rows, trailer) = run(
         b,
         &c,
-        &request(ExportDataset::Transmissions(scoped(late)), false),
+        &request(ExportDataset::Transmissions(scoped(late).into()), false),
     )
     .await;
     verified(&header, &rows, &trailer);
@@ -296,7 +296,7 @@ async fn a_window_after_the_watermark_settles_nothing() {
 async fn content_and_projections_need_the_content_permission() {
     let b = fresh();
     let viewer = caller(&[Permission::View]);
-    let content = request(ExportDataset::Transmissions(scope(&day())), true);
+    let content = request(ExportDataset::Transmissions(scope(&day()).into()), true);
     let projection = request(ExportDataset::Projection(ProjectionId::from_ulid(1)), false);
     for request in [&content, &projection] {
         assert_eq!(
@@ -323,7 +323,7 @@ async fn refusals_before_anything_is_sent() {
     let c = researcher();
     let day = day();
     assert!(matches!(
-        b.export(&c, &request(ExportDataset::Transmissions(scope(&day)), false))
+        b.export(&c, &request(ExportDataset::Transmissions(scope(&day).into()), false))
             .await
             .err(),
         Some(QueryError::Conflict(ConflictKind::ExportTooLarge { limit: 1, rows })) if rows > 1
@@ -365,10 +365,13 @@ async fn refusals_before_anything_is_sent() {
         b.export(
             &c,
             &request(
-                ExportDataset::Transmissions(ExportScope {
-                    window: day.window,
-                    filter: pinned,
-                }),
+                ExportDataset::Transmissions(
+                    (ExportScope {
+                        window: day.window,
+                        filter: pinned,
+                    })
+                    .into()
+                ),
                 false
             )
         )
@@ -417,7 +420,7 @@ async fn every_export_is_audited() {
 
     // A refusal is one entry, exactly what `export` returned.
     let viewer = caller(&[Permission::View]);
-    let refused = request(ExportDataset::Transmissions(scope(&day())), true);
+    let refused = request(ExportDataset::Transmissions(scope(&day()).into()), true);
     let error = b.export(&viewer, &refused).await.expect_err("refused");
     assert!(matches!(
         events(&b).await.last(),
@@ -428,7 +431,7 @@ async fn every_export_is_audited() {
     let export = b
         .export(
             &c,
-            &request(ExportDataset::Transmissions(scope(&day())), false),
+            &request(ExportDataset::Transmissions(scope(&day()).into()), false),
         )
         .await
         .expect("export");

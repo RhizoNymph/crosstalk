@@ -525,10 +525,13 @@ fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission]) {
     let window = TimeWindow::new(T0, after(T0, Duration::from_secs(86_400))).expect("a window");
     let filter = TopologyFilter::default();
     let request = ExportRequest::new(
-        ExportDataset::Transmissions(ExportScope {
-            window,
-            filter: filter.clone(),
-        }),
+        ExportDataset::Transmissions(
+            ExportScope {
+                window,
+                filter: filter.clone(),
+            }
+            .into(),
+        ),
         ExportFormat::Jsonl,
         false,
     )
@@ -548,7 +551,7 @@ fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission]) {
             .expect("a row")
         })
         .collect();
-    rows.sort_by_key(|row| (row.delivery().confirmed_at, row.summary().id));
+    rows.sort_by_key(|row| (row.at(), row.summary().id));
     let header = ExportHeader::new(ExportHeaderParts {
         id: ids.id(),
         request,

@@ -119,8 +119,11 @@ pub enum TopicUnder {
     Unassigned,
 }
 
-/// Which state a transmission is in, without its data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Which state a transmission is in, without its data. On the wire, its
+/// name in snake_case (`"awaiting_content"`): the same text as the `type`
+/// tag of the matching [`SummaryState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransmissionStateKind {
     Detected,
     AwaitingContent,

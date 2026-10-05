@@ -157,7 +157,7 @@ fn tx_rows(n: u128) -> Vec<ExportRow> {
 }
 
 fn tx_header(rows: u64) -> ExportHeader {
-    header(ExportDataset::Transmissions(scope()), false, rows)
+    header(ExportDataset::Transmissions(scope().into()), false, rows)
 }
 
 fn seal(header: &ExportHeader, rows: &[ExportRow]) -> ExportTrailer {
@@ -288,8 +288,11 @@ fn a_transmission_row_is_a_confirmed_summary() {
     let ExportRow::Transmission(row) = tx_row(1, 100, false) else {
         panic!("a transmission row");
     };
-    assert_eq!(row.delivery().confirmed_at, at(100));
-    assert_eq!(row.summary().state.delivery(), Some(row.delivery()));
+    assert_eq!(
+        row.delivery().map(|delivery| delivery.confirmed_at),
+        Some(at(100))
+    );
+    assert_eq!(row.summary().state.delivery(), row.delivery());
 }
 
 #[test]
@@ -379,7 +382,7 @@ fn equal_rows_give_equal_digests_whatever_the_format() {
     let rows = tx_rows(3);
     let jsonl = seal(&tx_header(3), &rows);
     let parquet_request = ExportRequest::new(
-        ExportDataset::Transmissions(scope()),
+        ExportDataset::Transmissions(scope().into()),
         ExportFormat::Parquet,
         false,
     )
@@ -410,7 +413,7 @@ fn sealer_refuses_content_the_request_did_not_ask_for_and_its_absence() {
         plain.push(&tx_row(1, 100, true)),
         Err(RowRefused::ContentMismatch { requested: false })
     );
-    let with_content = header(ExportDataset::Transmissions(scope()), true, 1);
+    let with_content = header(ExportDataset::Transmissions(scope().into()), true, 1);
     let mut sealer = ExportSealer::new(&with_content, hasher());
     assert_eq!(
         sealer.push(&tx_row(1, 100, false)),
@@ -724,7 +727,7 @@ fn verify_rejects_another_exports_trailer() {
     let header = tx_header(1);
     let mut other_parts = parts(
         ExportRequest::new(
-            ExportDataset::Transmissions(scope()),
+            ExportDataset::Transmissions(scope().into()),
             ExportFormat::Jsonl,
             false,
         )

@@ -224,6 +224,9 @@ pub fn export_failure(failure: &ExportFailure) -> String {
                 RowRefused::ContentMismatch { requested: false } => {
                     "it has content columns the request did not include"
                 }
+                RowRefused::StateNotInScope { .. } => {
+                    "its transmission state is not one the export asked for"
+                }
                 RowRefused::OutOfOrder => "it is out of order or repeated",
                 RowRefused::BeyondPlan { .. } => "it is beyond the planned rows",
                 RowRefused::AfterRefusal => "an earlier row was refused",

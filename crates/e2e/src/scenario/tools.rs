@@ -87,3 +87,12 @@ pub fn page_as_read() -> String {
         .map(|(index, line)| format!("{:>6}\t{line}\n", index + 1))
         .collect()
 }
+
+/// The page as B reads it in the silent scenario: a placeholder someone put
+/// in place of A's text, numbered as `Read` numbers it.
+pub fn withheld_as_read() -> String {
+    format!(
+        "{:>6}\t# Ledger service rollback\n{:>6}\t\n{:>6}\t(This page is under review; its contents were withdrawn pending sign-off.)\n",
+        1, 2, 3
+    )
+}

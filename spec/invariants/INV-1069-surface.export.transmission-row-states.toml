@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.export.transmission-row-states"
+statement = "A transmission row is confirmed (a delivery and a strongest class) or, only with its state column, unconfirmed (awaiting content, suspected or discarded; no delivery, strongest class or content); its state column, when present, names its summary's state; detected is never a row. ExportStates is a non-empty set without detected and without repeats; a request with include_content and an unconfirmed state is refused; the sealer accepts a transmission row only in the header's states and with its state column exactly when those states are not the default."
+kind = "representation"
+requires = ["unit"]
+rationale = """
+Unconfirmed rows have no sender, confirmation time, match class or quoted
+text, so those columns are absent rather than invented, and a reader tells
+the two kinds apart by the state column, which an explicit export always
+writes. Checking rows against the header's states keeps an export's rows
+exactly the states its request asked for.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::surface_reads::export_states::states_and_rows_refuse_what_their_constructors_refuse",
+    "crosstalk_spec::tests::wire::surface_reads::export_states::the_sealer_checks_rows_against_the_header_states",
+    "crosstalk_spec::tests::wire::surface_reads::export_states::explicit_states_golden",
+    "crosstalk_spec::tests::wire::surface_reads::export_states::rows_are_timed_by_confirmation_or_opening",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
