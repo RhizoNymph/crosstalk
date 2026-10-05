@@ -333,11 +333,16 @@ impl Scorer {
         for prediction in predictions {
             let (outcome, control) = judge.judge(prediction);
             let tier = match outcome {
-                Outcome::Correct { expectation, tier } => {
-                    if prediction.class.is_content() {
-                        found[expectation] = true;
+                Outcome::Correct { tier, .. } => {
+                    // Every label it aligns with is found (or suspected),
+                    // not only the first, which decides its row.
+                    let marks = if prediction.class.is_content() {
+                        &mut found
                     } else {
-                        suspected[expectation] = true;
+                        &mut suspected
+                    };
+                    for at in judge.aligned(prediction) {
+                        marks[at] = true;
                     }
                     Some(tier)
                 }

@@ -82,6 +82,20 @@ impl<'w> Judge<'w> {
         &self.negatives
     }
 
+    /// Every label `prediction` aligns with, by index into
+    /// [`Judge::positives`]. One prediction can find several labels: a
+    /// match whose read range covers two adjacent labelled texts of one
+    /// sender aligns with both.
+    pub fn aligned<'p>(&'p self, prediction: &'p Prediction) -> impl Iterator<Item = usize> + 'p {
+        self.by_reader
+            .get(&(&prediction.to, prediction.reader_exchange))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .filter(move |&at| aligns(prediction, self.positives[at]))
+    }
+
     /// The outcome of `prediction`: the first label it aligns with, else
     /// unjudged when an exemption covers it, else the most specific
     /// negative control it violates, else what the world's coverage makes
