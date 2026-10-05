@@ -17,18 +17,90 @@ pub mod agent;
 pub mod config;
 pub mod conversation;
 pub mod stats;
+pub mod tools;
+pub mod truth;
 
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crosstalk_spec::ids::{SeededRandom, UlidExhausted, UlidGenerator};
+use crosstalk_spec::support::{Clock, SystemClock, Timestamp};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::http::UrlError;
-use agent::{Agent, Shared};
+use crate::knobs::Rng;
+use agent::{Agent, Shared, agent_name};
 use config::SwarmConfig;
 use stats::{CollectorSetup, Report, collect};
+use truth::RunInfo;
+
+/// The run's time: one wall-clock reading at the start plus monotonic
+/// elapsed time, so every stamp of the run is ordered like the events and
+/// `unix_ms == started_at_unix_ms + at_ms` holds exactly.
+#[derive(Debug, Clone, Copy)]
+pub struct RunClock {
+    start: Instant,
+    start_unix_ms: u64,
+}
+
+/// A moment of the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    /// Since the run started.
+    pub at_ms: u64,
+    pub unix_ms: u64,
+}
+
+impl RunClock {
+    /// Starts now, reading the wall clock once from `clock`.
+    pub fn start(clock: &dyn Clock) -> Self {
+        Self {
+            start: Instant::now(),
+            start_unix_ms: clock.now().as_micros() / 1000,
+        }
+    }
+
+    pub fn started_at_unix_ms(&self) -> u64 {
+        self.start_unix_ms
+    }
+
+    pub fn now(&self) -> Stamp {
+        let at_ms = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Stamp {
+            at_ms,
+            unix_ms: self.start_unix_ms.saturating_add(at_ms),
+        }
+    }
+}
+
+/// Crockford's base32 alphabet, as ULIDs are written.
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// A ULID as its 26 characters.
+pub fn ulid_text(raw: u128) -> String {
+    (0..26u32)
+        .rev()
+        .map(|digit| char::from(CROCKFORD[((raw >> (5 * digit)) & 0x1f) as usize]))
+        .collect()
+}
+
+/// The run's id: a ULID from the spec's generator, stamped with the run's
+/// start and with its random part drawn from the seed and that start. The
+/// run's other choices are all seeded, so the id stays a function of what
+/// the header records (`seed`, `started_at_unix_ms`), while two runs with
+/// the same seed differ by their start time and two runs started in the
+/// same millisecond differ by their seed.
+pub fn run_id(seed: u64, started_at_unix_ms: u64) -> Result<String, UlidExhausted> {
+    let random = Rng::derive(seed, &[b"run", &started_at_unix_ms.to_le_bytes()]).next_u64();
+    let mut ids = UlidGenerator::new(Arc::new(SystemClock), SeededRandom::new(random));
+    let raw = ids.next_at(Timestamp::from_micros(
+        started_at_unix_ms.saturating_mul(1000),
+    ))?;
+    Ok(ulid_text(raw))
+}
 
 /// How long to wait for the gateway's and the wiki's names to resolve.
 const RESOLVE_PATIENCE: Duration = Duration::from_secs(60);
@@ -42,6 +114,8 @@ pub enum SwarmError {
     Wiki(UrlError),
     #[error("the collector task failed: {0}")]
     Collector(#[from] tokio::task::JoinError),
+    #[error("minting the run id: {0}")]
+    RunId(UlidExhausted),
 }
 
 /// Runs the swarm for `config.duration` (or until `shutdown`) and returns
@@ -62,7 +136,10 @@ pub async fn run(
         .map_err(SwarmError::Wiki)?;
     let agents = config.agents.get();
     let keys = agents.div_ceil(config.agents_per_key.get());
+    let clock = RunClock::start(&SystemClock);
+    let run = run_id(config.seed, clock.started_at_unix_ms()).map_err(SwarmError::RunId)?;
     tracing::info!(
+        run = %run,
         gateway = %config.gateway,
         gateway_addr = %gateway_addr,
         wiki = %config.wiki,
@@ -84,13 +161,23 @@ pub async fn run(
         gateway: config.gateway.client(gateway_addr, config.idle_timeout),
         wiki: config.wiki.client(wiki_addr, config.idle_timeout),
         config: config.clone(),
+        clock,
     });
     let (events, inbox) = mpsc::channel(4096);
     let collector = tokio::spawn(collect(
         CollectorSetup {
-            agents,
-            keys,
-            seed: config.seed,
+            info: RunInfo {
+                run,
+                seed: config.seed,
+                agents,
+                keys,
+                agents_per_key: config.agents_per_key.get(),
+                claude_code_shape: config.claude_code_shape,
+                started_at_unix_ms: clock.started_at_unix_ms(),
+                gateway_url: config.gateway.url(),
+                wiki_url: config.wiki.url(),
+            },
+            agent_names: (0..agents).map(agent_name).collect(),
             ground_truth: config.ground_truth.clone(),
             progress_every: Duration::from_secs(10),
         },

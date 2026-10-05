@@ -7,6 +7,9 @@
 //! ([`Conversation::receive`]), and tool results only for the calls of the
 //! answer before them, each exactly once ([`Conversation::resolve`]; a
 //! [`ToolResult`] can only be made from its [`ToolCall`]).
+//!
+//! It also counts the generation requests sent for it
+//! ([`Conversation::claim_turn`]): the turn ordinals of the ground truth.
 
 use serde_json::{Value, json};
 
@@ -112,6 +115,39 @@ pub struct Conversation {
     messages: Vec<Message>,
     prompts: u32,
     phase: Phase,
+    /// Generation requests sent so far, failed and retried ones included.
+    sent: u32,
+}
+
+/// Where a tool result sits in a request body: `messages[message]
+/// .content[block]`, indices into the array exactly as serialised.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultLocation {
+    pub message: usize,
+    pub block: usize,
+    /// The result's text, as the body carries it.
+    pub content: String,
+}
+
+/// The first `tool_result` block answering `tool_use_id` in `body`'s
+/// `messages`, read from the body value itself (the one serialised and
+/// sent), so a `role: "system"` turn or any other entry counts as it is.
+pub fn locate_result(body: &Value, tool_use_id: &str) -> Option<ResultLocation> {
+    let messages = body.get("messages")?.as_array()?;
+    messages.iter().enumerate().find_map(|(message, entry)| {
+        let blocks = entry.get("content")?.as_array()?;
+        blocks.iter().enumerate().find_map(|(block, value)| {
+            let is_result = value.get("type").and_then(Value::as_str) == Some("tool_result")
+                && value.get("tool_use_id").and_then(Value::as_str) == Some(tool_use_id);
+            is_result.then(|| {
+                Some(ResultLocation {
+                    message,
+                    block,
+                    content: value.get("content")?.as_str()?.to_owned(),
+                })
+            })?
+        })
+    })
 }
 
 impl Conversation {
@@ -122,7 +158,22 @@ impl Conversation {
             messages: Vec::new(),
             prompts: 0,
             phase: Phase::Idle,
+            sent: 0,
         }
+    }
+
+    /// The turn ordinal of a request about to be sent: 0 for the first
+    /// generation request of this conversation, counting every request sent
+    /// before it, failed and retried ones included.
+    pub fn claim_turn(&mut self) -> u32 {
+        let turn = self.sent;
+        self.sent = self.sent.saturating_add(1);
+        turn
+    }
+
+    /// Generation requests sent so far.
+    pub fn turns_sent(&self) -> u32 {
+        self.sent
     }
 
     /// The session id sent as `x-claude-code-session-id`.

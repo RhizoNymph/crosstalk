@@ -3,9 +3,16 @@
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
+//! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
+//! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
+//! ct-eval run   --dataset ai-village [--mode window|claude-code] [--from DAY] [--to DAY] [--limit N] …
 //! ```
 //!
-//! `--dataset` is `salt`, `agentdojo` or `tau2`. For AgentDojo, `--include
+//! `swarm` scores the gateway's saved export against a demo swarm's ground
+//! truth (see `datasets::swarm_truth`); `swarm-fetch` saves that export and
+//! its evidence from the L8 API.
+//!
+//! `--dataset` is `salt`, `agentdojo`, `tau2` or `ai-village`. For AgentDojo, `--include
 //! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
 //! exactly, and `run` also prints how the injections arrived.
 //!
@@ -22,6 +29,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
 use crosstalk_eval::corpus::{SourceError, TraceSource, World};
 use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
+use crosstalk_eval::datasets::ai_village::report::Unlabelled;
+use crosstalk_eval::datasets::ai_village::time::Day;
+use crosstalk_eval::datasets::ai_village::{self as ai_village, AiVillageSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::gateway::PipelineDetector;
@@ -32,6 +42,8 @@ use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
 use tracing_subscriber::EnvFilter;
+
+mod swarm;
 
 #[derive(Parser)]
 #[command(name = "ct-eval", about = "crosstalk evaluation harness")]
@@ -46,6 +58,10 @@ enum Command {
     Run(RunArgs),
     /// Dump the dataset's labels as JSONL.
     Truth(TruthArgs),
+    /// Score the gateway's saved export against a demo swarm's ground truth.
+    Swarm(swarm::SwarmArgs),
+    /// Save the gateway's transmissions export and their evidence.
+    SwarmFetch(swarm::FetchArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -53,6 +69,7 @@ enum Dataset {
     Salt,
     Agentdojo,
     Tau2,
+    AiVillage,
 }
 
 impl Dataset {
@@ -61,8 +78,19 @@ impl Dataset {
             Self::Salt => "salt",
             Self::Agentdojo => "agentdojo",
             Self::Tau2 => "tau2",
+            Self::AiVillage => ai_village::DATASET,
         }
     }
+}
+
+/// Which part of AI Village to convert.
+#[derive(Clone, Copy, ValueEnum)]
+enum VillageMode {
+    /// Every agent over `--from`..=`--to`, one world per village day.
+    Window,
+    /// The Claude Code agent's stream, one world per context (`--limit`
+    /// caps the contexts).
+    ClaudeCode,
 }
 
 /// Any dataset's source.
@@ -70,6 +98,7 @@ enum AnySource {
     Salt(SaltSource),
     AgentDojo(AgentDojoSource),
     Tau2(Tau2Source),
+    AiVillage(Box<AiVillageSource>),
 }
 
 impl TraceSource for AnySource {
@@ -78,6 +107,7 @@ impl TraceSource for AnySource {
             Self::Salt(source) => source.id(),
             Self::AgentDojo(source) => source.id(),
             Self::Tau2(source) => source.id(),
+            Self::AiVillage(source) => source.id(),
         }
     }
 
@@ -86,6 +116,7 @@ impl TraceSource for AnySource {
             Self::Salt(source) => Box::new(source.worlds()),
             Self::AgentDojo(source) => Box::new(source.worlds()),
             Self::Tau2(source) => Box::new(source.worlds()),
+            Self::AiVillage(source) => Box::new(source.worlds()),
         };
         worlds
     }
@@ -107,6 +138,15 @@ struct SourceArgs {
     /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// AI Village: which part to convert.
+    #[arg(long, value_enum, default_value_t = VillageMode::Window)]
+    mode: VillageMode,
+    /// AI Village window: the first village day (YYYY-MM-DD).
+    #[arg(long, default_value = ai_village::DEFAULT_FROM)]
+    from: String,
+    /// AI Village window: the last village day, included.
+    #[arg(long, default_value = ai_village::DEFAULT_TO)]
+    to: String,
 }
 
 #[derive(Args)]
@@ -223,6 +263,18 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         )
         .map(AnySource::Tau2)
         .with_context(|| format!("opening τ²-bench at {}", root.display())),
+        Dataset::AiVillage => {
+            let mode = match args.mode {
+                VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
+                VillageMode::Window => ai_village::Mode::Window {
+                    from: Day::parse(&args.from)?,
+                    to: Day::parse(&args.to)?,
+                },
+            };
+            AiVillageSource::open(&root, mode)
+                .map(|source| AnySource::AiVillage(Box::new(source)))
+                .with_context(|| format!("opening AI Village at {}", root.display()))
+        }
     }
 }
 
@@ -238,17 +290,23 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         Gates::default()
     };
     let dataset = source.id();
+    let mut unlabelled = Unlabelled::default();
+    let observe = |world: &World, predicted: &[_]| {
+        if matches!(args.source.dataset, Dataset::AiVillage) {
+            unlabelled.observe(world, predicted);
+        }
+    };
     let (name, summary) = match args.detector {
         DetectorChoice::Reference => {
             let mut detector = ReferenceDetector {
                 config: args.matcher.config(),
             };
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, args.examples, observe);
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, args.examples, observe);
             (detector.name().to_owned(), summary)
         }
     };
@@ -268,11 +326,27 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         table.push_str(&source.tally().to_string());
     }
     print!("{table}");
+    let village = match &source {
+        AnySource::AiVillage(source) => Some(serde_json::json!({
+            "stats": source.stats(),
+            "unlabelled_predictions": unlabelled,
+        })),
+        AnySource::Salt(_) | AnySource::AgentDojo(_) | AnySource::Tau2(_) => None,
+    };
+    if let Some(village) = &village {
+        println!("{}", serde_json::to_string_pretty(village)?);
+    }
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
         let json = serde_json::to_string_pretty(&report)?;
         fs::write(out.join("report.json"), json + "\n")?;
         fs::write(out.join("report.txt"), &table)?;
+        if let Some(village) = &village {
+            fs::write(
+                out.join("ai-village.json"),
+                serde_json::to_string_pretty(village)? + "\n",
+            )?;
+        }
     }
     Ok(if report.gates_failed() {
         ExitCode::from(2)
@@ -318,6 +392,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run_command(args),
         Command::Truth(args) => truth_command(args),
+        Command::Swarm(args) => swarm::run(args),
+        Command::SwarmFetch(args) => swarm::fetch(args),
     };
     match result {
         Ok(code) => code,

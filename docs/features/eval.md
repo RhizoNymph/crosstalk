@@ -33,6 +33,9 @@ dev-dependencies.
   `gates.toml`.
 - **The SALT converter.**
 - **The AgentDojo and τ²-bench converters** (see their sections below).
+- **The demo swarm benchmark** (`ct-eval swarm`): the live gateway scored
+  on the demo swarm's traffic against the swarm's own ground truth (see
+  its section below).
 
 ## Non-scope
 
@@ -549,3 +552,150 @@ under `shared_source` controls.
   words, which therefore originate nothing new.
 - **False positives.** Coincidental phrasing shared between one side's
   turns and the other side's tool output or policy.
+
+## Swarm benchmark
+
+`src/datasets/swarm_truth/` scores the **live gateway** on traffic from the
+demo swarm (`crates/demo`, `swarm --ground-truth PATH`). Unlike the dataset
+converters, the exchanges are the gateway's own captures with their real
+ids; the eval only labels them and scores what the gateway exported. The
+dataset id is `demo-swarm`; one run is one world (`header.world`).
+
+**Scope.** Reading truth v2, joining it to the gateway's exchange log and
+blobs, scoring a saved transmissions export with its evidence, a typed
+join-diagnostics table, and fetching the export over the L8 API.
+**Non-scope.** Driving the swarm or the gateway, identity scoring (key
+groups are kept but not labelled, see below), and Parquet exports.
+
+### Inputs
+
+| File | Written by | Format |
+| --- | --- | --- |
+| `truth.jsonl` | `swarm --ground-truth` | truth v2: one object per line tagged by `kind` (`schema.rs`, strict: only `version` 2, no unknown kinds or fields) |
+| `<data dir>/exchanges/exchange-log.jsonl` | the gateway's exchange-log consumer | one spec `Envelope` per line, each `ingest`/`exchange_captured` with one `Exchange` (meta, request hashes, outcome); a torn last line is ignored |
+| `<data dir>/blobs/` | the gateway's `FsBlobStore` | each message body's canonical encoding under its `MessageHash`; read through `FsBlobStore` and decoded with the spec's strict decoder |
+| `export.jsonl` | `POST /exports` | spec JSONL export framing (header, `transmission` rows, trailer); read with `read_jsonl` and checked with `verify_export` and the BLAKE3 row digest (`ROW_DIGEST_CONTEXT`), so a cut-off export is refused |
+| `evidence.jsonl` | `GET /transmissions/{id}/evidence?window={"context":0}` | one spec `TransmissionEvidence` per line, for the exported transmissions |
+
+Truth v2 lines: `header` (version, world, run, seed, agent and key counts,
+`claude_code_shape`, start time, gateway and wiki URLs), then
+`agent_cluster` (one per key group), then `transmission`, `self_read` and
+`reread` (writer and reader with key group, session, turn and tool use id,
+`route: {kind: channel, url}`, `carrier: tool_result`, the read tool,
+`content: {blake3, sha256, excerpt, at: {message, block, tool_use_id}}` and
+times) and `miss` (the reader side only).
+
+### Join rules (`resolve.rs`)
+
+- **Agents.** `AgentKey { world: header.world, name }`. A session id
+  belongs to the agent the truth rows name for it (a session claimed by
+  two agents is reported, `session_conflict`); an exchange belongs to its
+  session's agent.
+- **Turns.** The log's exchanges are grouped by `meta.client.ids.session`
+  (from `x-claude-code-session-id`) and ordered by (`started_at`, id). The
+  position in that order is the session's generation-request ordinal, the
+  truth's `turn`: only generation requests are captured, failed ones
+  included.
+- **Reader.** The exchange at `reader_turn`, checked by a tool result part
+  for `content.at.tool_use_id` whose text BLAKE3-hashes to
+  `content.blake3`. If that exchange lacks the tool result, the session's
+  first exchange holding it is used and the row is reported
+  (`turn_mismatch`, kept). A tool result whose bytes hash otherwise drops
+  the row (`hash_mismatch`). No exchange holding it drops the row
+  (`turn_out_of_range` or `tool_use_missing`), as does an unknown session.
+- **Writer.** The exchange at `writer_turn`, checked by its response's
+  `PUT` tool call `writer_tool_use_id` whose arguments' `body` hashes to
+  `content.blake3`; the same fallback. A writer that does not join leaves
+  the label with no sender exchange (`kept_without_sender`).
+- **Location.** The whole text of the reader's tool result part (the
+  `Tool` message's hash, the result's index, `0..len`). `content.at`'s wire
+  indices are not used: the canonical request splits and reorders the wire
+  array.
+
+| Row | Becomes |
+| --- | --- |
+| `transmission` | `ExpectedTransmission`: Channel route with `Locator::Url` of the canonical URL (L5's `url_locator`), `ToolResult` carrier, `Construction` tier, `needs` `Normalized` when the page holds a character JSON escapes (the writer's `PUT` carries it escaped) and `Exact` otherwise |
+| `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read (the one control whose sender and reader are one agent: it catches a detector that splits one agent in two) |
+| `reread` | `NegativeControl` `Reread`, writer → reader, at the later read |
+| `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
+| `agent_cluster` | no label: a key group is agents sharing one API key, while an `AgentCluster` is keys that are one agent. Reported as `key_group_not_a_cluster` and kept on `Resolved::key_groups` |
+
+Coverage is `Complete { Construction }`: the swarm logs every read.
+
+### Detections (`detected.rs`)
+
+The export's rows say which transmissions to score; their evidence gives
+each content match's reader exchange, read location, carrier and kind, and
+the write and read accesses with their agents, exchanges and resources.
+Gateway agent ids are tied to truth agents through the exchange log (a
+match's `reader_exchange` names the reader; each access's `exchange` names
+its agent, under both its stored and canonical id); a channel's resources
+are its accesses' locators. Predictions are then `predict::from_transmission`
+as for any detector, and the scorer, alignment rule and gates are the
+eval's own. Origin span locations are unknown (`SpanIndex::span` is not on
+the API), so no swarm control names an origin.
+
+Reported, never silent: an exported transmission with no evidence
+(`missing_evidence`), a gateway agent no exchange ties to a truth agent
+(`unknown_detected_agent`; that transmission yields no predictions), and
+one gateway agent tied to two truth agents (`detected_agent_conflict`).
+
+### Bench run
+
+```text
+# 1. a fresh gateway data dir, then the swarm against it
+swarm --ground-truth runs/1/truth.jsonl …        # crates/demo, through the gateway
+# 2. once the gateway's watermark has passed the run, save its side
+ct-eval swarm-fetch --api http://crosstalk:8081 --truth runs/1/truth.jsonl --out runs/1
+#    (POST /exports, then GET /transmissions/{id}/evidence per row;
+#     --token-env VAR for a bearer token)
+# 3. score offline
+ct-eval swarm --truth runs/1/truth.jsonl \
+  --exchanges <data dir>/exchanges/exchange-log.jsonl \
+  --export runs/1/export.jsonl --out runs/1/report
+#    --blobs defaults to <data dir>/blobs, --evidence to evidence.jsonl beside the export
+```
+
+`ct-eval swarm` prints the score table, the truth and detection counts and
+the diagnostics table, writes `report.json`, `report.txt` and
+`diagnostics.json` (counts, the table and every entry) to `--out`, and
+exits 2 when a gate fails. A re-run over the same files is byte-identical
+(tested).
+
+| File | Role | Key exports |
+| --- | --- | --- |
+| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET`, `SwarmTruthError` |
+| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Delivery`, `Miss`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
+| `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
+| `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
+| `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
+| `src/datasets/swarm_truth/locate.rs` | tool results and `PUT` calls in exchanges | `tool_result`, `write_call`, `FoundResult`, `FoundCall` |
+| `src/datasets/swarm_truth/resolve.rs` | the join | `resolve`, `Resolved`, `AgentIndex`, `ResolveCounts`, `needs` |
+| `src/datasets/swarm_truth/diagnostics.rs` | join failures | `Diagnostics`, `Diagnostic`, `JoinFailure`, `Effect`, `RowKind`, `Side`, `DiagnosticCount` |
+| `src/datasets/swarm_truth/detected.rs` | the export and evidence as predictions | `read_export`, `read_evidence`, `predictions`, `SwarmDirectory`, `Blake3RowHasher`, `Exported` |
+| `src/datasets/swarm_truth/fetch.rs` | saving the gateway's side over HTTP | `fetch`, `FetchConfig`, `Fetched`, `FetchError` |
+| `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | |
+| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence) | |
+
+**Invariants.**
+- Every truth row becomes a label or a diagnostic; every exported
+  transmission becomes predictions or a diagnostic.
+- A label's reader exchange holds a tool result whose bytes hash to the
+  truth's `content.blake3`, and its content text is exactly that result's
+  text.
+- Only a `SelfRead` control may name one agent as sender and reader.
+
+## AI Village
+
+The AI Village converter (`src/datasets/ai_village/`, `ct-eval run
+--dataset ai-village [--mode window|claude-code] [--from DAY --to DAY]`)
+has its own page: [eval_ai_village.md](eval_ai_village.md). It adds
+`SourceError::AiVillage`, an `AiVillage` arm of the CLI's `AnySource`, and an
+`ai-village.json` (source stats and unlabelled predictions by reader source)
+next to the report.
+
+Reference baselines: Claude Code mode recalls 15,776 of 15,798
+construction-tier `get_events` deliveries (0.999); the 2026-07-13..17 window
+gives 116,410 exchanges, 97,978 structural chat labels (recall 0.999) and 10
+heuristic repository labels. Numbers and the false-positive picture are in
+[eval_ai_village.md](eval_ai_village.md#reference-baselines).
