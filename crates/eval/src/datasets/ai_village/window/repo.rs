@@ -11,11 +11,17 @@
 //! call in the same session (the first whose request carries the output).
 //! Other pairs are co-accesses only: the spec would hold them as suspected,
 //! and the eval has no label kind for them, so they are counted.
+//!
+//! A `Rejected` write (the spec's `WriteOutcome`) is recorded and counted
+//! but never pairs, and does not hide an earlier write; `Unknown` writes
+//! pair like `Delivered` ones.
 
 use std::collections::{BTreeMap, HashMap};
 
 use crosstalk_spec::support::Timestamp;
 use serde::{Deserialize, Serialize};
+
+use crosstalk_spec::derived::flow::access::WriteOutcome;
 
 use super::super::access::{Access, Op, Shell};
 use super::super::time::Day;
@@ -47,6 +53,15 @@ pub struct Pair {
 pub struct AccessStats {
     pub reads: u64,
     pub writes: u64,
+    pub delivered_writes: u64,
+    pub rejected_writes: u64,
+    pub unknown_writes: u64,
+    /// Accesses with an `http_request` equivalent (L5's `HttpTool` would
+    /// see them).
+    pub http_visible: u64,
+    /// Accesses only a Bash extractor could see (git, forge CLI issue and
+    /// review commands).
+    pub bash_only: u64,
     pub by_verb: BTreeMap<String, u64>,
     pub resources: u64,
     pub pairs: u64,
@@ -103,10 +118,22 @@ impl AccessLog {
                 .by_verb
                 .entry(record.access.verb.clone())
                 .or_default() += 1;
+            if record.access.http_visible() {
+                self.stats.http_visible += 1;
+            } else {
+                self.stats.bash_only += 1;
+            }
             match record.access.op {
-                Op::Write => {
+                Op::Write(outcome) => {
                     self.stats.writes += 1;
-                    latest_write.insert(key, index);
+                    match outcome {
+                        WriteOutcome::Delivered => self.stats.delivered_writes += 1,
+                        WriteOutcome::Rejected => self.stats.rejected_writes += 1,
+                        WriteOutcome::Unknown => self.stats.unknown_writes += 1,
+                    }
+                    if outcome.pairs() {
+                        latest_write.insert(key, index);
+                    }
                 }
                 Op::Read => {
                     self.stats.reads += 1;

@@ -15,6 +15,7 @@ path = "src/bin/ct-eval/main.rs"
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
 crosstalk-gateway = { path = "../gateway" }
+crosstalk-flow = { path = "../flow" }
 crosstalk-transport = { path = "../transport" }
 anyhow.workspace = true
 base64.workspace = true

@@ -123,8 +123,8 @@ fn repository_forms_meet_on_one_resource() {
         Some("https://quiet-rooms-gallery-83555a.gitlab.io/".to_owned())
     );
     assert_eq!(
-        key("https://Example.com:443/a/./b/../c?x=1#top"),
-        Some("https://example.com/a/c".to_owned())
+        key("https://Example.com:443/a/./b/../c?y=2&x=1#top"),
+        Some("https://example.com/a/c?x=1&y=2".to_owned())
     );
     assert_eq!(key("ftp://example.com/x"), None);
     // A forge page that names no repository is just its URL.
@@ -198,7 +198,7 @@ fn bash_commands_become_accesses() {
         "To https://github.com/ai-village-agents/tracker.git\n   1..2  main -> main",
     );
     assert_eq!(pushed.len(), 1);
-    assert_eq!(pushed[0].op, Op::Write);
+    assert!(pushed[0].op.is_write());
     assert_eq!(pushed[0].tool, Tool::Git);
     assert_eq!(
         locator_key(&pushed[0].resource),
@@ -227,7 +227,7 @@ fn bash_commands_become_accesses() {
         "https://github.com/ai-village-agents/tracker/issues/7#issuecomment-9",
     );
     assert_eq!(commented.len(), 1);
-    assert_eq!(commented[0].op, Op::Write);
+    assert!(commented[0].op.is_write());
     assert_eq!(commented[0].verb, "gh issue comment");
     assert_eq!(
         commented[0].payload,
@@ -244,14 +244,14 @@ fn bash_commands_become_accesses() {
     );
     let noted = shell.accesses("glab mr note 4 -m 'Looks good to me, merging'", "");
     // The directory's remote names the repository.
-    assert_eq!(noted[0].op, Op::Write);
+    assert!(noted[0].op.is_write());
     assert_eq!(locator_key(&noted[0].resource), "https://gitlab.com/g/proj");
     // curl: data makes a write, -G keeps a read.
     let posted = shell.accesses(
         "curl -s -X POST https://api.example.com/notes -H 'Content-Type: application/json' -d '{\"text\":\"hello there\"}'",
         "",
     );
-    assert_eq!(posted[0].op, Op::Write);
+    assert!(posted[0].op.is_write());
     assert_eq!(
         posted[0].payload,
         vec!["{\"text\":\"hello there\"}".to_owned()]
@@ -260,7 +260,7 @@ fn bash_commands_become_accesses() {
     assert_eq!(got[0].op, Op::Read);
     assert!(got[0].payload.is_empty());
     let api = shell.accesses("gh api repos/o/r/issues -f title=x", "");
-    assert_eq!(api[0].op, Op::Write);
+    assert!(api[0].op.is_write());
     assert_eq!(locator_key(&api[0].resource), "https://github.com/o/r");
     assert!(shell.accesses("ls -la && echo done", "").is_empty());
     assert!(
@@ -349,6 +349,21 @@ fn provider_shapes_become_assistant_parts() {
         vec!["turn-7-1", "turn-7-2"]
     );
     assert_eq!(gemini.stop, StopReason::ToolUse);
+    // An event's `data.output` can be a bare array of Anthropic blocks.
+    let blocks = response(
+        &json!([
+            {"type": "thinking", "thinking": "plan", "signature": "[BLOB_REMOVED]"},
+            {"type": "text", "text": "Good morning, village"},
+            {"type": "tool_use", "id": "toolu_2", "name": "start_using_computer", "input": {}}
+        ]),
+        "turn",
+    );
+    assert_eq!(blocks.protocol, WireProtocol::AnthropicMessages);
+    assert_eq!(blocks.parts.len(), 3);
+    assert!(
+        matches!(&blocks.parts[1], AssistantPart::Text(text) if text.0 == "Good morning, village")
+    );
+    assert_eq!(blocks.stop, StopReason::ToolUse);
     assert!(response(&json!(null), "t").parts.is_empty());
     assert!(response(&json!([]), "t").parts.is_empty());
 }

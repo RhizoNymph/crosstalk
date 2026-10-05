@@ -18,11 +18,20 @@
 //! | `https://gitlab.com/api/v4/projects/<id>/…` | `gitlab.com/api/v4/projects/<id>` (the id is all there is) |
 //! | `https://g.gitlab.io/p/…` | `gitlab.com/g/p` |
 //! | `https://<name>-<6 hex>.gitlab.io/…` (a unique Pages domain) | `https://<that host>/` (the site; its project is not in the name) |
-//! | any other http(s) URL | the URL with its query and fragment dropped |
+//! | any other http(s) URL | L5's locator for it ([`url_locator`]): the URL normalized, query parameters sorted, fragment dropped |
 //!
 //! Credentials in the authority (`https://oauth2:[REDACTED]@gitlab.com/…`)
-//! and a leading `www.` are dropped; hosts are lower-cased.
+//! are dropped, a forge's `www.` too; hosts are lower-cased.
+//!
+//! **The L5 contract.** Every resource here is a canonical URL an L5
+//! extractor produces or coarsens: a URL off the forges is exactly the
+//! locator L5's `HttpTool` extractor gives a `GET` of it, and a repository
+//! is the locator of its lower-cased web URL. [`canonical`] maps any L5
+//! locator (a URL, or a GitHub file `File { host: "github.com/o/r" }`) to
+//! the converter's resource, so a label's resource is a function of what
+//! the extractor saw.
 
+use crosstalk_flow::extract::resource::{url_locator, url_text};
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 
 /// A code forge with a canonical repository form.
@@ -110,6 +119,7 @@ pub fn from_url(text: &str) -> Option<Locator> {
     if scheme != "http" && scheme != "https" {
         return None;
     }
+    let whole = rest;
     let rest = rest.split(['#', '?']).next().unwrap_or(rest);
     let (authority, path) = match rest.find('/') {
         Some(at) => (&rest[..at], &rest[at..]),
@@ -131,12 +141,24 @@ pub fn from_url(text: &str) -> Option<Locator> {
     if let Some(locator) = forge_resource(host, &segments) {
         return Some(locator);
     }
-    Some(Locator::Url {
-        scheme,
-        host: Host(host.to_owned()),
-        path: crate::reference::route::normalize_path(path),
-        query: None,
-    })
+    url_locator(&format!("{scheme}://{whole}")).ok()
+}
+
+/// The converter's resource for a locator an L5 extractor produced: a URL
+/// through [`from_url`], a GitHub or GitLab file (`File { host:
+/// "<forge>/<repo>" }`) as its repository. `None` for local files, MCP and
+/// opaque resources.
+pub fn canonical(locator: &Locator) -> Option<Locator> {
+    match locator {
+        Locator::Url { .. } => from_url(&url_text(locator)?),
+        Locator::File {
+            host: Some(host), ..
+        } => {
+            let (forge, slug) = host.0.split_once('/')?;
+            forge_path(&forge.to_ascii_lowercase(), slug)
+        }
+        Locator::File { host: None, .. } | Locator::Mcp { .. } | Locator::Opaque { .. } => None,
+    }
 }
 
 fn forge_resource(host: &str, segments: &[&str]) -> Option<Locator> {

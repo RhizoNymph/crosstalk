@@ -405,6 +405,15 @@ impl Labels<'_> {
             let needs = need(writer_call.message.message(), &line);
             stats.count_need(&needs);
             stats.repo_labels += 1;
+            if write.access.http_visible() && read.access.http_visible() {
+                stats.repo_labels_http_visible += 1;
+            } else {
+                stats.repo_labels_bash_only += 1;
+            }
+            *stats
+                .repo_labels_by_verbs
+                .entry(format!("{} -> {}", write.access.verb, read.access.verb))
+                .or_default() += 1;
             builder.expect(Expectation::Transmission(ExpectedTransmission::new(
                 TransmissionLabel {
                     from: from.clone(),

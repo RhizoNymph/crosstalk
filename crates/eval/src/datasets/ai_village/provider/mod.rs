@@ -7,6 +7,7 @@
 //! | Shape | Detected by | Module |
 //! | --- | --- | --- |
 //! | Anthropic Messages object | an object with a `content` array of typed blocks | [`anthropic`] |
+//! | Anthropic content blocks | an array holding a `text`, `thinking`, `redacted_thinking`, `tool_use` or `server_tool_use` block (events' `data.output`) | [`anthropic`] |
 //! | OpenAI Responses item list | an array | [`openai::responses`] |
 //! | OpenAI chat completion message | an object with `role` (and no block array) | [`openai::chat`] |
 //! | Gemini `generateContent` | an object with `candidates` | [`gemini`] |
@@ -64,6 +65,9 @@ impl Response {
 /// no id (Gemini): the `n`th becomes `<fallback_id>-<n>`.
 pub fn response(raw: &Value, fallback_id: &str) -> Response {
     match raw {
+        Value::Array(items) if items.iter().any(anthropic_block) => {
+            anthropic::convert(&serde_json::json!({ "content": items }))
+        }
         Value::Array(items) => openai::responses::convert(items),
         Value::Object(members) if members.contains_key("candidates") => {
             gemini::convert(raw, fallback_id)
@@ -88,6 +92,15 @@ pub fn response(raw: &Value, fallback_id: &str) -> Response {
             stop: StopReason::Other,
         },
     }
+}
+
+/// Whether `item` is an Anthropic content block (no OpenAI Responses item
+/// has these types).
+fn anthropic_block(item: &Value) -> bool {
+    matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("text" | "thinking" | "redacted_thinking" | "tool_use" | "server_tool_use")
+    )
 }
 
 /// Tool-call arguments: a JSON string or a JSON value, as canonical JSON

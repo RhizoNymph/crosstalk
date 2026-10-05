@@ -2,6 +2,8 @@
 
 use crosstalk_spec::observed::message::{Message, MessageBody};
 
+use crosstalk_spec::derived::provenance::matching::Codec;
+
 use crate::reference::fold::fold;
 use crate::truth::MatchNeed;
 
@@ -11,6 +13,12 @@ use crate::truth::MatchNeed;
 pub fn json_escape(text: &str) -> String {
     let quoted = serde_json::Value::String(text.to_owned()).to_string();
     quoted[1..quoted.len() - 1].to_owned()
+}
+
+/// The value of `inner` read as the inside of a JSON string literal; `None`
+/// when it is not one (a bare `"`, a raw control character, a bad escape).
+pub fn json_unescape(inner: &str) -> Option<String> {
+    serde_json::from_str(&format!("\"{inner}\"")).ok()
 }
 
 /// Whether escaping changes `text`.
@@ -44,12 +52,23 @@ pub fn part_texts(message: &Message) -> Vec<String> {
 
 /// The weakest match a detector needs to tie `read` (the reader's bytes) to
 /// the sender's `response`: `Exact` when the bytes occur verbatim in one of
-/// its parts, `Normalized` when they do after folding (escapes, case,
-/// whitespace), else `Semantic`.
+/// its parts; `Decoded([JsonString])` when `read` is the inside of a JSON
+/// string whose value (one level of unescaping, the spec's
+/// `Codec::JsonString`) occurs verbatim; `Normalized` when they do after
+/// folding (escapes, case, whitespace); else `Semantic`.
 pub fn need(response: &Message, read: &str) -> MatchNeed {
     let texts = part_texts(response);
     if texts.iter().any(|text| text.contains(read)) {
         return MatchNeed::Exact;
+    }
+    if let Some(value) = json_unescape(read)
+        && value != read
+        && !value.trim().is_empty()
+        && texts.iter().any(|text| text.contains(&value))
+    {
+        return MatchNeed::Decoded {
+            codecs: vec![Codec::JsonString],
+        };
     }
     let folded = fold(read, 0).text;
     if !folded.trim().is_empty()

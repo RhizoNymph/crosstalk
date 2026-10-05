@@ -2,5 +2,6 @@
 
 mod claude_code;
 mod fixture;
+mod l5;
 mod units;
 mod window;

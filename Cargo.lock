@@ -457,6 +457,7 @@ dependencies = [
  "base64",
  "blake3",
  "clap",
+ "crosstalk-flow",
  "crosstalk-gateway",
  "crosstalk-sim",
  "crosstalk-spec",

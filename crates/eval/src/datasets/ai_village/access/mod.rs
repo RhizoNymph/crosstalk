@@ -11,9 +11,19 @@
 //! | `git pull`, `git fetch` | read | the output's `From <remote>` line, else a URL argument, else the directory's known remote |
 //! | `gh`/`glab` `issue`/`pr`/`mr` `create`, `comment`, `note`, `edit`, `close`, `reopen`, `merge`, `review`, `approve` | write | `-R`/`--repo`, else a URL argument, else the directory's remote, else a URL in the output |
 //! | `gh`/`glab` `issue`/`pr`/`mr` `view`, `list`, `diff`, `checks`, `status` | read | the same |
-//! | `gh api` / `glab api` | write with `-X` other than GET or a field flag, else read | the API path |
-//! | `curl` | write with `-X` other than GET/HEAD or a data/form/upload flag (unless `-G`), else read | each URL argument |
-//! | `wget` | write with `--post-data`/`--post-file`/`--method`, else read | each URL argument |
+//! | `gh api` / `glab api` (`repos/…`, `projects/…`) | the method (`-X`, else POST with a field flag, else GET) | the API path |
+//! | `curl` | the method (`-X`/`--request`, `-I` HEAD, else POST with a data/form flag unless `-G`, PUT with `-T`, else GET) | each URL argument |
+//! | `wget` | the method (`--method`, else POST with `--post-data`/`--post-file`, else GET) | each URL argument |
+//!
+//! HTTP commands follow the agreed L5 `HttpTool` contract ([`http`]):
+//! `GET`/`HEAD` read, `POST`/`PUT`/`PATCH`/`DELETE` write, any other method
+//! is no access, and each such access keeps the `http_request` call it is
+//! equivalent to ([`Access::http`]). git and the forge CLIs' issue, PR and
+//! MR commands speak their own protocols: only a Bash extractor sees them
+//! (`http` is `None`).
+//!
+//! Each write carries the spec's `WriteOutcome`, judged from the output
+//! ([`outcome`]); a read whose output shows a failure is no access.
 //!
 //! [`Shell`] keeps what one agent's shell has revealed: its working
 //! directory (the bash tool is one persistent shell) and the remote of each
@@ -23,11 +33,16 @@
 //! `--message` of issue and review commands, `-d`/`--data`/`--json` of curl),
 //! so a reader's output can be checked for it.
 
+pub mod http;
+pub mod outcome;
 pub mod shell;
 
 use std::collections::BTreeMap;
 
+use crosstalk_spec::derived::flow::access::WriteOutcome;
 use crosstalk_spec::derived::flow::resource::Locator;
+
+pub use http::{HTTP_TOOL, HttpMethod, HttpRequest};
 
 use super::resource::{Forge, from_remote, from_url, repo, urls};
 use shell::{SimpleCommand, commands, heredoc_argument};
@@ -35,10 +50,26 @@ use shell::{SimpleCommand, commands, heredoc_argument};
 /// The bash tool's home directory in the village's computers.
 pub const HOME: &str = "/home/computeruse";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A read, or a write with its outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
     Read,
-    Write,
+    Write(WriteOutcome),
+}
+
+impl Op {
+    pub fn is_write(self) -> bool {
+        matches!(self, Self::Write(_))
+    }
+
+    /// Whether this access can be one side of a pair: every read, and
+    /// every write the spec pairs (`WriteOutcome::pairs`).
+    pub fn pairs(self) -> bool {
+        match self {
+            Self::Read => true,
+            Self::Write(outcome) => outcome.pairs(),
+        }
+    }
 }
 
 /// The command that made an access.
@@ -61,6 +92,50 @@ pub struct Access {
     pub verb: String,
     /// Text a write carried; empty for reads.
     pub payload: Vec<String>,
+    /// The `http_request` call an HTTP command is equivalent to; `None`
+    /// for git and the forge CLIs' issue commands (Bash extractor only).
+    pub http: Option<HttpRequest>,
+}
+
+impl Access {
+    /// Whether L5's `HttpTool` extractor would see this access had the
+    /// agent used the equivalent call.
+    pub fn http_visible(&self) -> bool {
+        self.http.is_some()
+    }
+}
+
+/// An access before its output is judged.
+#[derive(Debug, Clone)]
+struct Draft {
+    write: bool,
+    resource: Locator,
+    tool: Tool,
+    verb: String,
+    payload: Vec<String>,
+    http: Option<HttpRequest>,
+}
+
+impl Draft {
+    /// The access, judged from `output`: a write gets its outcome, a read
+    /// with a failed output is dropped.
+    fn judge(self, output: &str) -> Option<Access> {
+        let op = if self.write {
+            Op::Write(outcome::write_outcome(self.tool, output))
+        } else if outcome::failed(output) {
+            return None;
+        } else {
+            Op::Read
+        };
+        Some(Access {
+            op,
+            resource: self.resource,
+            tool: self.tool,
+            verb: self.verb,
+            payload: self.payload,
+            http: self.http,
+        })
+    }
 }
 
 /// One agent's shell: working directory and known remotes.
@@ -118,6 +193,13 @@ impl Shell {
     /// The accesses of one executed command, given its output (stdout and
     /// stderr together). Updates the shell's directory and remotes.
     pub fn accesses(&mut self, command: &str, output: &str) -> Vec<Access> {
+        self.drafts(command, output)
+            .into_iter()
+            .filter_map(|draft| draft.judge(output))
+            .collect()
+    }
+
+    fn drafts(&mut self, command: &str, output: &str) -> Vec<Draft> {
         let mut out = Vec::new();
         for simple in commands(command) {
             let words = strip_prefixes(&simple);
@@ -158,7 +240,7 @@ impl Shell {
         self.remotes.insert(dir, remote.clone());
     }
 
-    fn git(&mut self, args: &[String], output: &str) -> Vec<Access> {
+    fn git(&mut self, args: &[String], output: &str) -> Vec<Draft> {
         let mut dir = self.cwd.clone();
         let mut at = 0;
         while at < args.len() && args[at].starts_with('-') {
@@ -179,12 +261,13 @@ impl Shell {
             .filter(|a| !a.starts_with('-'))
             .collect();
         let url_arg = rest.iter().find_map(|a| from_remote(a));
-        let access = |op, resource: Locator, verb: &str| Access {
-            op,
+        let access = |write: bool, resource: Locator, verb: &str| Draft {
+            write,
             resource,
             tool: Tool::Git,
             verb: format!("git {verb}"),
             payload: Vec::new(),
+            http: None,
         };
         match sub.as_str() {
             "clone" => {
@@ -200,7 +283,10 @@ impl Shell {
                     let target = resolve_in(&dir, target);
                     self.learn(target, &resource);
                 }
-                vec![access(Op::Read, resource, "clone")]
+                if outcome::failed(output) {
+                    return Vec::new();
+                }
+                vec![access(false, resource, "clone")]
             }
             "push" | "pull" | "fetch" => {
                 let marker = if sub == "push" { "To " } else { "From " };
@@ -216,8 +302,7 @@ impl Shell {
                     return Vec::new();
                 };
                 self.learn(dir, &resource);
-                let op = if sub == "push" { Op::Write } else { Op::Read };
-                vec![access(op, resource, sub)]
+                vec![access(sub == "push", resource, sub)]
             }
             "remote" => {
                 match rest.first().map(|s| s.as_str()) {
@@ -243,7 +328,7 @@ impl Shell {
         }
     }
 
-    fn forge_cli(&mut self, forge: Forge, args: &[String], output: &str) -> Vec<Access> {
+    fn forge_cli(&mut self, forge: Forge, args: &[String], output: &str) -> Vec<Draft> {
         let tool = match forge {
             Forge::GitHub => Tool::GitHubCli,
             Forge::GitLab => Tool::GitLabCli,
@@ -264,10 +349,10 @@ impl Shell {
         let Some(verb) = args.get(1) else {
             return Vec::new();
         };
-        let op = if WRITE_VERBS.contains(&verb.as_str()) {
-            Op::Write
+        let write = if WRITE_VERBS.contains(&verb.as_str()) {
+            true
         } else if READ_VERBS.contains(&verb.as_str()) {
-            Op::Read
+            false
         } else {
             return Vec::new();
         };
@@ -307,7 +392,7 @@ impl Shell {
         if forge == Forge::GitLab {
             payload_flags.push("-d");
         }
-        let payload = if op == Op::Write {
+        let payload = if write {
             flag(&payload_flags)
                 .into_iter()
                 .map(|value| heredoc_argument(&value).unwrap_or(value))
@@ -316,12 +401,13 @@ impl Shell {
         } else {
             Vec::new()
         };
-        vec![Access {
-            op,
+        vec![Draft {
+            write,
             resource,
             tool,
             verb: format!("{program} {noun} {verb}"),
             payload,
+            http: None,
         }]
     }
 }
@@ -368,21 +454,30 @@ fn strip_prefixes(simple: &SimpleCommand) -> Vec<String> {
     words.to_vec()
 }
 
-/// `gh api` / `glab api`.
-fn api(forge: Forge, tool: Tool, args: &[String]) -> Option<Access> {
+/// `gh api` / `glab api` on a repository or project path: the method is
+/// `-X`, else POST with a field flag, else GET; field values are the
+/// payload and the body (a JSON object, as the CLIs send it).
+fn api(forge: Forge, tool: Tool, args: &[String]) -> Option<Draft> {
     let mut method: Option<String> = None;
-    let mut fields = false;
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut input = false;
     let mut path: Option<&str> = None;
     let mut at = 0;
     while at < args.len() {
         let word = args[at].as_str();
         match word {
             "-X" | "--method" => {
-                method = args.get(at + 1).map(|m| m.to_ascii_uppercase());
+                method = args.get(at + 1).cloned();
                 at += 1;
             }
-            "-f" | "-F" | "--field" | "--raw-field" | "--input" => {
-                fields = true;
+            "-f" | "-F" | "--field" | "--raw-field" => {
+                if let Some((name, value)) = args.get(at + 1).and_then(|f| f.split_once('=')) {
+                    fields.push((name.to_owned(), value.to_owned()));
+                }
+                at += 1;
+            }
+            "--input" => {
+                input = true;
                 at += 1;
             }
             _ if word.starts_with('-') => {}
@@ -392,38 +487,61 @@ fn api(forge: Forge, tool: Tool, args: &[String]) -> Option<Access> {
         at += 1;
     }
     let path = path?.trim_start_matches('/');
-    let resource = match forge {
+    let (url, resource) = match forge {
         Forge::GitHub => {
+            let url = format!("https://api.github.com/{path}");
             let segments: Vec<&str> = path.split(['/', '?']).collect();
-            match segments.as_slice() {
+            let resource = match segments.as_slice() {
                 ["repos", owner, name, ..] => repo(Forge::GitHub, &format!("{owner}/{name}")),
                 _ => None,
-            }
+            }?;
+            (url, resource)
         }
         Forge::GitLab => {
             let path = path.strip_prefix("api/v4/").unwrap_or(path);
-            if path.starts_with("projects/") {
-                from_url(&format!("https://gitlab.com/api/v4/{path}"))
-            } else {
-                None
+            if !path.starts_with("projects/") {
+                return None;
             }
+            let url = format!("https://gitlab.com/api/v4/{path}");
+            let resource = from_url(&url)?;
+            (url, resource)
         }
-    }?;
-    let write = match method.as_deref() {
-        Some("GET") | Some("HEAD") => false,
-        Some(_) => true,
-        None => fields,
+    };
+    let method = match method {
+        Some(name) => HttpMethod::parse(&name)?,
+        None if !fields.is_empty() || input => HttpMethod::Post,
+        None => HttpMethod::Get,
+    };
+    let write = method.writes();
+    let body = (write && !fields.is_empty()).then(|| {
+        serde_json::Value::Object(
+            fields
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone().into()))
+                .collect(),
+        )
+        .to_string()
+    });
+    let payload = if write {
+        fields
+            .into_iter()
+            .map(|(_, value)| value)
+            .filter(|value| !value.trim().is_empty())
+            .collect()
+    } else {
+        Vec::new()
     };
     let program = match forge {
         Forge::GitHub => "gh",
         Forge::GitLab => "glab",
     };
-    Some(Access {
-        op: if write { Op::Write } else { Op::Read },
+    Some(Draft {
+        write,
         resource,
         tool,
         verb: format!("{program} api"),
-        payload: Vec::new(),
+        payload,
+        http: Some(HttpRequest { method, url, body }),
     })
 }
 
@@ -446,7 +564,7 @@ fn split_short(args: &[String]) -> Vec<String> {
     out
 }
 
-fn curl(args: &[String]) -> Vec<Access> {
+fn curl(args: &[String]) -> Vec<Draft> {
     let args = split_short(args);
     let args = args.as_slice();
     let mut method: Option<String> = None;
@@ -469,7 +587,7 @@ fn curl(args: &[String]) -> Vec<Access> {
         let takes_value = inline.is_none();
         match name {
             "-X" | "--request" => {
-                method = value().map(|m| m.to_ascii_uppercase());
+                method = value();
                 if takes_value {
                     at += 1;
                 }
@@ -482,12 +600,15 @@ fn curl(args: &[String]) -> Vec<Access> {
                     at += 1;
                 }
             }
-            "--url" => {
-                if let Some(url) = args.get(at + 1) {
-                    targets.push(url.as_str());
+            "--url" => match inline {
+                Some(url) => targets.push(url),
+                None => {
+                    if let Some(url) = args.get(at + 1) {
+                        targets.push(url.as_str());
+                    }
+                    at += 1;
                 }
-                at += 1;
-            }
+            },
             _ if CURL_DATA.contains(&name) => {
                 if let Some(value) = value() {
                     data.push(value);
@@ -511,52 +632,95 @@ fn curl(args: &[String]) -> Vec<Access> {
         }
         at += 1;
     }
-    let write = match method.as_deref() {
-        Some("GET") | Some("HEAD") => false,
-        Some(_) => true,
-        None => upload || (!data.is_empty() && !get),
+    let method = match method {
+        Some(name) => match HttpMethod::parse(&name) {
+            Some(method) => method,
+            None => return Vec::new(),
+        },
+        None if upload => HttpMethod::Put,
+        None if !data.is_empty() && !get => HttpMethod::Post,
+        None => HttpMethod::Get,
     };
-    let payload: Vec<String> = if write {
-        data.into_iter()
-            .filter(|value| !value.starts_with('@'))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let write = method.writes();
+    let sent: Vec<String> = data
+        .into_iter()
+        .filter(|value| !value.starts_with('@'))
+        .collect();
+    let body = (write && !sent.is_empty()).then(|| sent.join("&"));
+    let payload = if write { sent } else { Vec::new() };
+    drafts(targets, method, body, payload, Tool::Curl, "curl")
+}
+
+/// One draft per URL target of an HTTP command.
+fn drafts(
+    targets: Vec<&str>,
+    method: HttpMethod,
+    body: Option<String>,
+    payload: Vec<String>,
+    tool: Tool,
+    program: &str,
+) -> Vec<Draft> {
+    let write = method.writes();
     targets
         .into_iter()
-        .filter_map(from_url)
-        .map(|resource| Access {
-            op: if write { Op::Write } else { Op::Read },
+        .filter_map(|url| Some((url, from_url(url)?)))
+        .map(|(url, resource)| Draft {
+            write,
             resource,
-            tool: Tool::Curl,
-            verb: if write {
-                "curl write".to_owned()
-            } else {
-                "curl read".to_owned()
-            },
+            tool,
+            verb: format!("{program} {}", if write { "write" } else { "read" }),
             payload: payload.clone(),
+            http: Some(HttpRequest {
+                method,
+                url: url.to_owned(),
+                body: body.clone(),
+            }),
         })
         .collect()
 }
 
-fn wget(args: &[String]) -> Vec<Access> {
-    let write = args.iter().any(|a| {
-        a.starts_with("--post-data") || a.starts_with("--post-file") || a.starts_with("--method")
-    });
-    args.iter()
-        .filter(|a| a.starts_with("http://") || a.starts_with("https://"))
-        .filter_map(|a| from_url(a))
-        .map(|resource| Access {
-            op: if write { Op::Write } else { Op::Read },
-            resource,
-            tool: Tool::Wget,
-            verb: if write {
-                "wget write".to_owned()
-            } else {
-                "wget read".to_owned()
-            },
-            payload: Vec::new(),
-        })
-        .collect()
+fn wget(args: &[String]) -> Vec<Draft> {
+    let mut method: Option<String> = None;
+    let mut post: Option<String> = None;
+    let mut post_file = false;
+    let mut targets: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while at < args.len() {
+        let word = args[at].as_str();
+        let (name, inline) = match word.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => (name, Some(value.to_owned())),
+            _ => (word, None),
+        };
+        let mut value = || {
+            inline.clone().or_else(|| {
+                at += 1;
+                args.get(at).cloned()
+            })
+        };
+        match name {
+            "--method" => method = value(),
+            "--post-data" | "--body-data" => post = value(),
+            "--post-file" | "--body-file" => {
+                post_file = true;
+                let _ = value();
+            }
+            _ if word.starts_with("http://") || word.starts_with("https://") => {
+                targets.push(word);
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    let method = match method {
+        Some(name) => match HttpMethod::parse(&name) {
+            Some(method) => method,
+            None => return Vec::new(),
+        },
+        None if post.is_some() || post_file => HttpMethod::Post,
+        None => HttpMethod::Get,
+    };
+    let write = method.writes();
+    let body = post.filter(|_| write);
+    let payload = body.iter().cloned().collect();
+    drafts(targets, method, body, payload, Tool::Wget, "wget")
 }
