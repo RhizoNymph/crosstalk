@@ -1029,6 +1029,51 @@ times) and `miss` (the reader side only).
   when the `PUT`'s response reached the writer. Agent and page names
   (`agent-NNN`, `<topic>-<n>`) are opaque.
 
+### Run window (`window.rs`)
+
+The gateway's exchange log accumulates across runs, and the swarm derives
+session ids (and fake API keys) from `--seed`, so a run with a reused seed
+reuses its session ids: a truth session then also names every earlier
+run's exchanges in it (the 2026-10-05 seed-42 runs: 511 log lines for a
+run that sent 254 requests, 764 for one that sent 253). Before anything is
+joined, the log is cut to the run's window:
+
+```text
+[header.started_at_unix_ms, latest row time + slack]   both ends inclusive
+```
+
+The latest row time is the greatest `at_unix_ms`, `read_at_unix_ms` or
+`written_at_unix_ms` of any row (a truth with none ends at its start);
+the slack (`window::DEFAULT_SLACK_MS`, 60 s; `--run-slack-ms`) covers the
+requests an agent sends after its last read or write. An exchange is in the
+window when its `meta.started_at` is (`RunWindow::contains`).
+
+- Only in-window exchanges are indexed into sessions (`window::split`,
+  then `Sessions::index`), so they alone count in the traffic total and
+  the false-positives-per-1k denominator (`ResolveCounts::exchanges`),
+  the session/turn ordinals, and the agent map.
+- Each exchange of a truth session outside the window is reported
+  (`session_reused_outside_run`, `effect: excluded`, one entry per
+  exchange) and counted in `ResolveCounts::excluded_outside_window`; the
+  summary line prints `sessions N (M exchanges, K excluded outside run
+  window)`. Out-of-window exchanges of other sessions are dropped silently:
+  nothing in the truth names them.
+- A detected transmission whose every reader exchange (each content
+  match's `reader_exchange`, each read access's `exchange`) started outside
+  the window is another run's: reported (`outside_run_window`, `excluded`)
+  and neither predicts nor maps gateway agents, so it is never a false
+  positive. One with a reader exchange inside the window, or one the log
+  does not hold, is scored as before.
+- `diagnostics.json` carries the window (`window: {start_unix_ms,
+  end_unix_ms}`).
+
+On the two 2026-10-05 seed-42 bench runs the window keeps 254 and 253
+exchanges (257 and 511 excluded), and every `turn_mismatch` row (120 and
+111 joins that the content-hash fallback had rescued) disappears: the
+ordinals had counted the earlier runs' exchanges. The reread violations
+(1 and 5) are unchanged; the boilerplate run's false positives per 1k go
+from 53.7 (41 over 764) to 162.1 (41 over 253).
+
 ### Join rules (`resolve.rs`)
 
 - **Agents.** `AgentKey { world: header.world, name }`. A session id
@@ -1043,7 +1088,7 @@ times) and `miss` (the reader side only).
   precision) rather than dropped as `unknown_detected_agent`; exchanges in
   a session no row names still are. A `session` row whose session the log
   lacks is noted (`unknown_session`, `row: session`).
-- **Turns.** The log's exchanges are grouped by `meta.client.ids.session`
+- **Turns.** The log's in-window exchanges (above) are grouped by `meta.client.ids.session`
   (from `x-claude-code-session-id`) and ordered by (`started_at`, id). The
   position in that order is the session's generation-request ordinal, the
   truth's `turn`: only generation requests are captured, failed ones
@@ -1118,7 +1163,8 @@ suspected or discarded one whose evidence line is in `evidence.jsonl`
 both exported and in the evidence is predicted once.
 
 Reported, never silent: an exported transmission with no evidence
-(`missing_evidence`), a gateway agent no exchange ties to a truth agent
+(`missing_evidence`), one read only outside the run window
+(`outside_run_window`, see [Run window](#run-window-windowrs)), a gateway agent no exchange ties to a truth agent
 (`unknown_detected_agent`; that transmission yields no predictions), and
 one gateway agent tied to two truth agents (`detected_agent_conflict`).
 
@@ -1152,8 +1198,9 @@ exits 2 when a gate fails. A re-run over the same files is byte-identical
 ids, not the exchanges themselves, so the report's `totals.exchanges` (the
 header's "N exchanges", and the denominator of the false positives per 1k
 exchanges) is set from the resolver: the exchanges of the log in the
-truth's sessions (`ResolveCounts::exchanges`; exchanges in sessions no row
-names are not counted). The truth line under the table also prints the
+truth's sessions inside the run window (`ResolveCounts::exchanges`;
+exchanges in sessions no row names, and those outside the window, are not
+counted). The truth line under the table also prints the
 `session` row count (`ResolveCounts::sessions`, equal to the swarm
 report's `sessions`).
 
@@ -1189,18 +1236,19 @@ rows map them, and they are scored as false positives.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET_PREFIX`, `DETECTOR`, `SwarmTruthError` |
+| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `run_with`, `score`, `Options`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET_PREFIX`, `DETECTOR`, `SwarmTruthError` |
 | `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Scenario`, `SessionStart`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
 | `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
 | `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
 | `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
+| `src/datasets/swarm_truth/window.rs` | the run window | `RunWindow`, `split`, `Split`, `Reused`, `truth_sessions`, `reader_exchanges`, `outside_reader`, `DEFAULT_SLACK_MS` |
 | `src/datasets/swarm_truth/locate.rs` | tool results and `PUT` calls in exchanges | `tool_result`, `write_call`, `FoundResult`, `FoundCall` |
 | `src/datasets/swarm_truth/resolve.rs` | the join | `resolve`, `Resolved`, `AgentIndex`, `ResolveCounts`, `needs` |
 | `src/datasets/swarm_truth/diagnostics.rs` | join failures | `Diagnostics`, `Diagnostic`, `JoinFailure`, `Effect`, `RowKind`, `Side`, `DiagnosticCount` |
 | `src/datasets/swarm_truth/detected.rs` | the export and evidence as predictions | `read_export`, `read_evidence`, `predictions`, `SwarmDirectory`, `Blake3RowHasher`, `Exported` |
 | `src/datasets/swarm_truth/fetch.rs` | saving the gateway's side over HTTP | `fetch`, `FetchConfig`, `Fetched`, `FetchError` |
 | `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | |
-| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence) | |
+| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence; its exchanges 1 s apart from the header's start; `write_with_prior_run` adds an earlier run reusing a002's session and a detection read in it) | |
 
 **Invariants.**
 - Every truth row becomes a label or a diagnostic; every exported
@@ -1212,7 +1260,13 @@ rows map them, and they are scored as false positives.
 - A session maps to at most one agent; with `session` rows present, it is
   theirs. A truth file with no `session` rows scores exactly as before
   they existed (tested).
-- A swarm report's exchange count is the exchanges of the truth's sessions.
+- A swarm report's exchange count is the exchanges of the truth's sessions
+  that started inside the run window.
+- No exchange outside the run window is joined, ordinal-counted or mapped
+  to an agent; each one in a truth session is one `session_reused_outside_run`
+  entry. A detection read only outside the window is excluded, never
+  scored. A run whose log holds no other run's exchanges scores exactly as
+  before the window existed (tested).
 
 ## AI Village
 

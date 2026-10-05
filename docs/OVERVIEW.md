@@ -199,7 +199,9 @@ Overview:
       tier against regression gates.
       The swarm benchmark (ct-eval swarm) instead scores the live gateway:
       it joins the demo swarm's ground truth to the gateway's exchange log
-      and blobs, and scores a saved L8 transmissions export and its evidence,
+      (cut to the run window, so a reused session id's earlier-run
+      exchanges and detections are excluded and reported) and blobs, and
+      scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
       apart from overall). The truth's session rows map every gateway

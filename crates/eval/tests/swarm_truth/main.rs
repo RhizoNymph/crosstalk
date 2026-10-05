@@ -5,6 +5,7 @@
 mod fixture;
 mod scenario;
 mod sessions;
+mod window;
 
 use std::io::Cursor;
 

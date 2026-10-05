@@ -4,10 +4,17 @@
 //! ```text
 //! truth.jsonl (swarm --ground-truth) ─▶ truth_file::read ─┐
 //! exchange-log.jsonl + blobs/ ─▶ exchange_log, bodies ────┴▶ resolve ─▶ World (labels over real exchange ids)
-//!                                                                         + AgentIndex + Diagnostics
+//!          (window::split: only exchanges inside the run window)          + AgentIndex + Diagnostics
 //! export.jsonl + evidence.jsonl (fetch, or saved) ─▶ detected::predictions(AgentIndex) ─▶ Vec<Prediction>
 //!                                                    ─▶ Scorer::add_world ─▶ Report (+ gates) + diagnostics
 //! ```
+//!
+//! The exchange log accumulates across runs and a reused seed reuses
+//! session ids, so the log is first cut to the run window ([`window`]):
+//! the exchanges of the truth's sessions outside it are reported
+//! (`session_reused_outside_run`) and left out of the traffic count, the
+//! session ordinals and the agent map, and a detection read outside it is
+//! reported (`outside_run_window`) and not scored.
 //!
 //! Everything runs from saved files, so a run is offline and
 //! deterministic; [`fetch`] saves the gateway's side over HTTP.
@@ -21,6 +28,7 @@ pub mod locate;
 pub mod resolve;
 pub mod schema;
 pub mod truth_file;
+pub mod window;
 
 use std::fs::File;
 use std::io::BufReader;
@@ -40,6 +48,7 @@ use bodies::{BlobBodies, Bodies, Cached};
 use detected::{Exported, read_evidence, read_export};
 use exchange_log::{ExchangeLog, Sessions};
 use truth_file::TruthFile;
+use window::{DEFAULT_SLACK_MS, RunWindow};
 
 /// The prefix of every swarm-benchmark dataset id: a run scores under
 /// `demo-swarm/<scenario>` ([`schema::Scenario::dataset`]).
@@ -121,6 +130,8 @@ pub struct DetectedCounts {
 #[derive(Debug)]
 pub struct SwarmOutcome {
     pub report: Report,
+    /// The run window the exchange log was cut to.
+    pub window: RunWindow,
     pub resolved: ResolveCounts,
     pub detected: DetectedCounts,
     pub diagnostics: Diagnostics,
@@ -136,30 +147,68 @@ pub struct Detections<'a> {
     pub evidence: &'a [TransmissionEvidence],
 }
 
+/// How a run is scored, beyond its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// How many misses and false positives to keep as examples.
+    pub examples: usize,
+    /// The run window's slack past the truth's latest row time, in
+    /// milliseconds ([`window::RunWindow::of`]).
+    pub run_slack_ms: u64,
+}
+
+impl Options {
+    /// `examples` examples and the default slack ([`DEFAULT_SLACK_MS`]).
+    pub fn new(examples: usize) -> Self {
+        Self {
+            examples,
+            run_slack_ms: DEFAULT_SLACK_MS,
+        }
+    }
+}
+
 /// Scores the gateway's detections against the resolved truth, checking
 /// the gates tuned on [`DETECTOR`] only. `truth_name` names the truth file in labels' source references.
+/// Only the log's exchanges inside the run window count ([`window`]).
 pub fn score<B: Bodies>(
     truth: &TruthFile,
     truth_name: &str,
     log: ExchangeLog,
     bodies: B,
     detections: Detections<'_>,
-    examples: usize,
+    options: Options,
     gates: &Gates,
 ) -> Result<SwarmOutcome, SwarmTruthError> {
     let Detections { exported, evidence } = detections;
-    let sessions = Sessions::index(log.exchanges);
+    let run_window = RunWindow::of(truth, options.run_slack_ms);
+    let split = window::split(log.exchanges, run_window, &window::truth_sessions(truth));
+    let sessions = Sessions::index(split.inside);
     let mut bodies = Cached::new(bodies);
     let resolved = resolve(truth, truth_name, &sessions, &mut bodies)?;
+    let mut counts = resolved.counts;
+    counts.excluded_outside_window = split.reused.len() as u64;
     let mut diagnostics = resolved.diagnostics;
+    for reused in split.reused {
+        diagnostics.push(Diagnostic {
+            line: None,
+            row: None,
+            side: Side::Row,
+            failure: JoinFailure::SessionReusedOutsideRun {
+                session: reused.session,
+                exchange: reused.exchange,
+            },
+            effect: Effect::Excluded,
+        });
+    }
     let predictions = detected::predictions(
         exported,
         evidence,
         &resolved.agents,
+        &split.outside,
         &mut bodies,
         &mut diagnostics,
     );
-    let mut scorer = Scorer::new(examples);
+    let mut scorer = Scorer::new(options.examples);
     scorer.add_world(&resolved.world, &predictions);
     let mut score: Score = scorer.finish();
     // The world holds labels over the log's exchange ids, not the
@@ -179,7 +228,8 @@ pub fn score<B: Bodies>(
     );
     Ok(SwarmOutcome {
         report,
-        resolved: resolved.counts,
+        window: run_window,
+        resolved: counts,
         detected: DetectedCounts {
             exported: exported.transmissions.len() as u64,
             evidence: evidence.len() as u64,
@@ -200,11 +250,20 @@ fn open(path: &Path) -> Result<BufReader<File>, SwarmTruthError> {
         })
 }
 
-/// Reads every input file and scores, reading bodies from the gateway's
-/// blob directory.
+/// Reads every input file and scores with the default run-window slack,
+/// reading bodies from the gateway's blob directory.
 pub fn run(
     inputs: &Inputs,
     examples: usize,
+    gates: &Gates,
+) -> Result<SwarmOutcome, SwarmTruthError> {
+    run_with(inputs, Options::new(examples), gates)
+}
+
+/// [`run`] with explicit [`Options`].
+pub fn run_with(
+    inputs: &Inputs,
+    options: Options,
     gates: &Gates,
 ) -> Result<SwarmOutcome, SwarmTruthError> {
     let shown = inputs.truth.display().to_string();
@@ -233,5 +292,5 @@ pub fn run(
         exported: &exported,
         evidence: &evidence,
     };
-    score(&truth, &name, log, bodies, detections, examples, gates)
+    score(&truth, &name, log, bodies, detections, options, gates)
 }

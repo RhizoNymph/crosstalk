@@ -8,8 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use crosstalk_eval::datasets::swarm_truth::fetch::{FetchConfig, fetch as fetch_api};
+use crosstalk_eval::datasets::swarm_truth::window::{DEFAULT_SLACK_MS, RunWindow};
 use crosstalk_eval::datasets::swarm_truth::{
-    Inputs, default_blobs, default_evidence, run as run_swarm, truth_file,
+    Inputs, Options, default_blobs, default_evidence, run_with as run_swarm, truth_file,
 };
 use crosstalk_eval::report::table::render;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -46,6 +47,11 @@ pub struct SwarmArgs {
     /// How many misses and false positives to keep as examples.
     #[arg(long, default_value_t = 50)]
     examples: usize,
+    /// The run window's slack past the truth's latest row time, in
+    /// milliseconds: exchanges of the truth's sessions that started
+    /// outside the window are another run's and are left out.
+    #[arg(long, default_value_t = DEFAULT_SLACK_MS)]
+    run_slack_ms: u64,
 }
 
 #[derive(Args)]
@@ -71,6 +77,7 @@ pub struct FetchArgs {
 /// Counts written beside the report.
 #[derive(Serialize)]
 struct Written<'a> {
+    window: RunWindow,
     resolved: &'a crosstalk_eval::datasets::swarm_truth::ResolveCounts,
     detected: &'a crosstalk_eval::datasets::swarm_truth::DetectedCounts,
     key_groups: usize,
@@ -89,14 +96,19 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
         exchanges: args.exchanges,
         export: args.export,
     };
-    let outcome = run_swarm(&inputs, args.examples, &gates)?;
+    let options = Options {
+        examples: args.examples,
+        run_slack_ms: args.run_slack_ms,
+    };
+    let outcome = run_swarm(&inputs, options, &gates)?;
     let mut text = render(&outcome.report);
     let resolved = &outcome.resolved;
     text.push_str(&format!(
-        "\ntruth rows {}: sessions {} ({} exchanges), transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), unattributed reads {} (unjudged), key groups {}, dropped {}\n",
+        "\ntruth rows {}: sessions {} ({} exchanges, {} excluded outside run window), transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), unattributed reads {} (unjudged), key groups {}, dropped {}\n",
         resolved.rows,
         resolved.sessions,
         resolved.exchanges,
+        resolved.excluded_outside_window,
         resolved.transmissions,
         resolved.without_sender,
         resolved.self_reads,
@@ -119,6 +131,7 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
         fs::write(out.join("report.json"), json + "\n")?;
         fs::write(out.join("report.txt"), &text)?;
         let written = Written {
+            window: outcome.window,
             resolved: &outcome.resolved,
             detected: &outcome.detected,
             key_groups: outcome.key_groups,

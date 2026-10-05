@@ -17,6 +17,11 @@
 //! | a003 | 0 | the task | GET p2 |
 //! | a003 | 1 | GET p2 → `P2` (a transmission from a001) | GET p1 |
 //! | a003 | 2 | GET p1 → `P1` (a transmission from a001) | text |
+//!
+//! The run's exchanges start one second apart from the header's start
+//! (`T0`), inside the run window its rows imply (they end at `T0` + 2 s,
+//! plus the default minute of slack). [`write_with_prior_run`] also logs,
+//! an hour before, an earlier run that reused a002's session id.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -46,7 +51,7 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 };
 use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
 use crosstalk_spec::observed::message::{MessageBody, PartRef, encoding};
-use crosstalk_spec::support::{TimeWindow, Watermark};
+use crosstalk_spec::support::{TimeWindow, Timestamp, Watermark};
 use crosstalk_testkit::build::message::{
     assistant, assistant_text, system_text, tool_call, tool_result, user_text,
 };
@@ -117,12 +122,18 @@ pub struct Written {
     pub a003: Vec<Turn>,
     /// The gateway's confirmed transmissions, as the export holds them.
     pub transmissions: Vec<Transmission>,
+    /// The earlier run's exchanges in a002's session, an hour before the
+    /// run (empty unless written by [`write_with_prior_run`]).
+    pub prior_a002: Vec<Turn>,
 }
 
 struct Log {
     ids: Ids,
     envelopes: Vec<Envelope>,
     bodies: Vec<MessageBody>,
+    /// When the exchanges' run started.
+    base: Timestamp,
+    /// Seconds since `base` of the last exchange.
     clock: u64,
 }
 
@@ -131,7 +142,7 @@ impl Log {
     /// afterwards the history holds the response and `result`, if any.
     fn turn(&mut self, agent: &mut Agent, response: MessageBody, result: Option<MessageBody>) {
         self.clock += 1;
-        let at = after(T0, Duration::from_secs(self.clock * 10));
+        let at = after(self.base, Duration::from_secs(self.clock));
         let session = agent.session.clone();
         let credential = agent.credential;
         let normalized = NormalizedExchangeBuilder::new(&mut self.ids)
@@ -341,12 +352,41 @@ fn channel_transmission(
 
 /// Writes the whole fixture under `dir`: the truth file holds `truth`.
 pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
+    write_runs(dir, truth, false)
+}
+
+/// [`write`], with an earlier run an hour before in the same exchange log:
+/// a002's session id reused, its first two turns (`GET p1`, then the read
+/// of `P1` with the same tool use id), and a confirmed detection a001 →
+/// a002 read in that earlier run's second turn.
+pub fn write_with_prior_run(dir: &Path, truth: &[serde_json::Value]) -> Written {
+    write_runs(dir, truth, true)
+}
+
+fn write_runs(dir: &Path, truth: &[serde_json::Value], prior: bool) -> Written {
     let mut log = Log {
         ids: Ids::seeded(7),
         envelopes: Vec::new(),
         bodies: Vec::new(),
+        base: Timestamp::from_micros(T0.as_micros() - 3_600_000_000),
         clock: 0,
     };
+    let mut prior_a002 = prior.then(|| Agent::new(&mut log.ids, "a002"));
+    if let Some(agent) = &mut prior_a002 {
+        log.turn(
+            agent,
+            get("toolu_r1", "p1"),
+            Some(tool_result("toolu_r1", P1)),
+        );
+        log.turn(
+            agent,
+            get("toolu_r2", "p1"),
+            Some(tool_result("toolu_r2", P1)),
+        );
+    }
+    let prior_a002 = prior_a002.map_or_else(Vec::new, |agent| agent.turns);
+    log.base = T0;
+    log.clock = 0;
     let mut a001 = Agent::new(&mut log.ids, "a001");
     let mut a002 = Agent::new(&mut log.ids, "a002");
     let mut a003 = Agent::new(&mut log.ids, "a003");
@@ -467,7 +507,18 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         P1,
         300,
     );
-    let parts = [found, self_read, reread];
+    let mut parts = vec![found, self_read, reread];
+    if let Some(read) = prior_a002.get(1) {
+        parts.push(channel_transmission(
+            &mut ids,
+            (gateway.a001, gateway.a002),
+            &p1,
+            (a001.turns[0].id, a001.turns[0].response),
+            (read.id, read.last_tool.expect("a tool result")),
+            P1,
+            50,
+        ));
+    }
     let evidence: Vec<TransmissionEvidence> =
         parts.iter().map(|parts| evidence_of(parts, &p1)).collect();
     let transmissions: Vec<Transmission> =
@@ -500,6 +551,7 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         a002: a002.turns,
         a003: a003.turns,
         transmissions,
+        prior_a002,
     }
 }
 

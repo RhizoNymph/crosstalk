@@ -116,6 +116,19 @@ pub enum JoinFailure {
         transmission: TransmissionId,
         reason: String,
     },
+    /// An exchange of a truth session that started outside the run window:
+    /// the session id was reused by another run. It is left out of the
+    /// world's traffic, the session's ordinals and the agent map.
+    SessionReusedOutsideRun {
+        session: String,
+        exchange: ExchangeId,
+    },
+    /// A detected transmission whose every reader exchange started outside
+    /// the run window: another run's detection, not scored.
+    OutsideRunWindow {
+        transmission: TransmissionId,
+        exchange: ExchangeId,
+    },
 }
 
 impl JoinFailure {
@@ -137,6 +150,8 @@ impl JoinFailure {
             Self::UnknownDetectedAgent { .. } => "unknown_detected_agent",
             Self::DetectedAgentConflict { .. } => "detected_agent_conflict",
             Self::Unpredictable { .. } => "unpredictable",
+            Self::SessionReusedOutsideRun { .. } => "session_reused_outside_run",
+            Self::OutsideRunWindow { .. } => "outside_run_window",
         }
     }
 }
@@ -155,6 +170,9 @@ pub enum Effect {
     PredictionsDropped,
     /// Reported only; nothing was left out.
     Noted,
+    /// Left out as another run's: an exchange or a detection outside the
+    /// run window.
+    Excluded,
 }
 
 /// One join failure.
