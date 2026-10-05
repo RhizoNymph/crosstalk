@@ -17,3 +17,15 @@ path = "tau2-bench/data/tau2/results/final"
 
 [datasets.ai-village]
 path = "ai-village"
+
+[datasets.open_swe]
+path = "open-swe-traces"
+
+[datasets.lmcache]
+path = "lmcache"
+
+[datasets.swe_splice]
+path = "open-swe-traces"
+
+[datasets.cipher]
+path = "steganographic-evals/datasets/message_data"

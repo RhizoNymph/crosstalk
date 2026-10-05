@@ -90,6 +90,14 @@ pub fn render(report: &Report) -> String {
         o.counts.false_positive,
         o.counts.unjudged
     );
+    let reach = &report.out_of_reach;
+    if reach.counts.expected > 0 || reach.counts.predicted > 0 {
+        let _ = writeln!(
+            out,
+            "out of reach (missed by design, not in overall): found {} / {}, {} predictions\n",
+            reach.counts.found, reach.counts.expected, reach.counts.predicted
+        );
+    }
     let rows: Vec<[String; 13]> = report.rows.iter().map(cells).collect();
     let mut widths: Vec<usize> = HEADER.iter().map(|h| h.len()).collect();
     for row in &rows {
@@ -121,6 +129,25 @@ pub fn render(report: &Report) -> String {
         let _ = writeln!(out, "\nnegative-control violations:");
         for row in &report.violations {
             let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
+        }
+    }
+    if let Some(background) = &report.background {
+        let _ = writeln!(
+            out,
+            "\nfalse positives: {:.1} per 1k exchanges ({} over {})",
+            background.per_1k_exchanges, background.false_positives, background.exchanges
+        );
+        if !background.sources.is_empty() {
+            let _ = writeln!(out, "top boilerplate sources:");
+            for source in &background.sources {
+                let _ = writeln!(
+                    out,
+                    "  {:>6}  {:<14} {}",
+                    source.count,
+                    name(&source.reason),
+                    source.text
+                );
+            }
         }
     }
     if !report.gates.is_empty() {

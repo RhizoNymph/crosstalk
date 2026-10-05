@@ -133,6 +133,14 @@ pub enum SourceError {
     #[error(transparent)]
     AiVillage(#[from] crate::datasets::ai_village::AiVillageError),
     #[error(transparent)]
+    OpenSwe(#[from] crate::datasets::open_swe::OpenSweError),
+    #[error(transparent)]
+    Lmcache(#[from] crate::datasets::lmcache::LmcacheError),
+    #[error(transparent)]
+    Splice(#[from] crate::datasets::swe_splice::SpliceError),
+    #[error(transparent)]
+    Cipher(#[from] crate::datasets::cipher::CipherError),
+    #[error(transparent)]
     AgentDojo(#[from] crate::datasets::agentdojo::AgentDojoError),
     #[error(transparent)]
     Tau2(#[from] crate::datasets::tau2::Tau2Error),

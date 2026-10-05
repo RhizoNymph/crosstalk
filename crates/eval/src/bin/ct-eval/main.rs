@@ -13,12 +13,19 @@
 //! truth (see `datasets::swarm_truth`); `swarm-fetch` saves that export and
 //! its evidence from the L8 API.
 //!
-//! `--dataset` is `salt`, `agentdojo`, `tau2`, `ai-village`, `wiki`
-//! (collusion-wiki) or `swarm` (swarm-traces). For the wiki, `--family`, `--wiki`,
-//! `--min-agents` and `--max-agents` select worlds, and `--demo` picks the
-//! small relay-coordination demo subset. For AgentDojo, `--include
+//! `--dataset` is `salt`, `agentdojo`, `tau2`, `ai-village`, `open-swe`,
+//! `lmcache`, `swe-splice`, `cipher`, `wiki` (collusion-wiki) or `swarm`
+//! (swarm-traces). For the wiki, `--family`, `--wiki`, `--min-agents` and
+//! `--max-agents` select worlds, and `--demo` picks the small
+//! relay-coordination demo subset. For AgentDojo, `--include
 //! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
 //! exactly, and `run` also prints how the injections arrived.
+//!
+//! `--dataset open-swe | lmcache` mixes `--agents-per-world` independent
+//! trajectories per world from `--limit` shards (`--count` rows or sessions
+//! from each); `--dataset swe-splice` plants `--count` splices and
+//! `--dataset cipher` builds `--count` pairs per cipher, both seeded by
+//! `--corpus-seed`.
 //!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
@@ -39,8 +46,12 @@ use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::ai_village::report::Unlabelled;
 use crosstalk_eval::datasets::ai_village::time::Day;
 use crosstalk_eval::datasets::ai_village::{self as ai_village, AiVillageSource};
+use crosstalk_eval::datasets::cipher::{self, CipherSource};
+use crosstalk_eval::datasets::lmcache::LmcacheSource;
+use crosstalk_eval::datasets::open_swe::{self, Mixing, OpenSweSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
+use crosstalk_eval::datasets::swe_splice::{self, SpliceSource};
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
 use crosstalk_eval::detect::live::{LiveDetector, LiveSettings, gateway_backend};
@@ -79,6 +90,10 @@ enum Dataset {
     Salt,
     Agentdojo,
     Tau2,
+    OpenSwe,
+    Lmcache,
+    SweSplice,
+    Cipher,
     AiVillage,
     /// collusion-wiki: public wikis as dead drops.
     Wiki,
@@ -92,6 +107,10 @@ impl Dataset {
             Self::Salt => "salt",
             Self::Agentdojo => "agentdojo",
             Self::Tau2 => "tau2",
+            Self::OpenSwe => "open_swe",
+            Self::Lmcache => "lmcache",
+            Self::SweSplice => "swe_splice",
+            Self::Cipher => "cipher",
             Self::AiVillage => ai_village::DATASET,
             Self::Wiki => crosstalk_eval::datasets::wiki::DATASET,
             Self::Swarm => crosstalk_eval::datasets::swarm::DATASET,
@@ -114,6 +133,10 @@ enum AnySource {
     Salt(SaltSource),
     AgentDojo(AgentDojoSource),
     Tau2(Tau2Source),
+    OpenSwe(OpenSweSource),
+    Lmcache(LmcacheSource),
+    Splice(SpliceSource),
+    Cipher(CipherSource),
     AiVillage(Box<AiVillageSource>),
     Wiki(WikiSource),
     Swarm(SwarmSource),
@@ -125,6 +148,10 @@ impl TraceSource for AnySource {
             Self::Salt(source) => source.id(),
             Self::AgentDojo(source) => source.id(),
             Self::Tau2(source) => source.id(),
+            Self::OpenSwe(source) => source.id(),
+            Self::Lmcache(source) => source.id(),
+            Self::Splice(source) => source.id(),
+            Self::Cipher(source) => source.id(),
             Self::AiVillage(source) => source.id(),
             Self::Wiki(source) => source.id(),
             Self::Swarm(source) => source.id(),
@@ -136,6 +163,10 @@ impl TraceSource for AnySource {
             Self::Salt(source) => Box::new(source.worlds()),
             Self::AgentDojo(source) => Box::new(source.worlds()),
             Self::Tau2(source) => Box::new(source.worlds()),
+            Self::OpenSwe(source) => Box::new(source.worlds()),
+            Self::Lmcache(source) => Box::new(source.worlds()),
+            Self::Splice(source) => Box::new(source.worlds()),
+            Self::Cipher(source) => Box::new(source.worlds()),
             Self::AiVillage(source) => Box::new(source.worlds()),
             Self::Wiki(source) => Box::new(source.worlds()),
             Self::Swarm(source) => Box::new(source.worlds()),
@@ -161,6 +192,16 @@ struct SourceArgs {
     /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// Trajectories mixed into one world (open-swe, lmcache).
+    #[arg(long, default_value_t = open_swe::AGENTS_PER_WORLD)]
+    agents_per_world: usize,
+    /// Rows (open-swe) or sessions (lmcache) read from each file, splices
+    /// (swe-splice) or pairs per cipher (cipher).
+    #[arg(long)]
+    count: Option<usize>,
+    /// Seeds the synthetic corpora (swe-splice, cipher).
+    #[arg(long, default_value_t = 0)]
+    corpus_seed: u64,
     /// AI Village: which part to convert.
     #[arg(long, value_enum, default_value_t = VillageMode::Window)]
     mode: VillageMode,
@@ -289,6 +330,11 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         limit: args.limit,
         include: args.include.clone(),
     };
+    let opening = || format!("opening {} at {}", args.dataset.name(), root.display());
+    let mixing = Mixing {
+        agents_per_world: args.agents_per_world,
+        per_shard: args.count,
+    };
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
             .map(AnySource::Salt)
@@ -311,6 +357,28 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         )
         .map(AnySource::Tau2)
         .with_context(|| format!("opening τ²-bench at {}", root.display())),
+        Dataset::OpenSwe => OpenSweSource::open(&root, &selection, mixing)
+            .map(AnySource::OpenSwe)
+            .with_context(opening),
+        Dataset::Lmcache => LmcacheSource::open(&root, &selection, mixing)
+            .map(AnySource::Lmcache)
+            .with_context(opening),
+        Dataset::SweSplice => SpliceSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(swe_splice::SPLICES),
+            args.corpus_seed,
+        )
+        .map(AnySource::Splice)
+        .with_context(opening),
+        Dataset::Cipher => CipherSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
+            args.corpus_seed,
+        )
+        .map(AnySource::Cipher)
+        .with_context(opening),
         Dataset::AiVillage => {
             let mode = match args.mode {
                 VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
@@ -423,7 +491,11 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         | AnySource::AgentDojo(_)
         | AnySource::Tau2(_)
         | AnySource::Wiki(_)
-        | AnySource::Swarm(_) => None,
+        | AnySource::Swarm(_)
+        | AnySource::OpenSwe(_)
+        | AnySource::Lmcache(_)
+        | AnySource::Splice(_)
+        | AnySource::Cipher(_) => None,
     };
     if let Some(village) = &village {
         println!("{}", serde_json::to_string_pretty(village)?);

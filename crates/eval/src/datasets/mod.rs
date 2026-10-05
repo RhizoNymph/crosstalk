@@ -1,7 +1,15 @@
 pub mod agentdojo;
 pub mod ai_village;
+pub mod background;
+pub mod chat;
+pub mod cipher;
+pub mod lmcache;
+pub mod open_swe;
+pub mod parquet_rows;
+pub mod rng;
 pub mod salt;
 pub mod swarm;
 pub mod swarm_truth;
+pub mod swe_splice;
 pub mod tau2;
 pub mod wiki;

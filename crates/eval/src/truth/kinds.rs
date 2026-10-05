@@ -22,6 +22,10 @@ pub enum Tier {
     Heuristic,
     /// A human or model judge said so.
     Judged,
+    /// The construction guarantees it, but finding it needs a decoding no
+    /// detector is required to have (a cipher the spec's `Codec` cannot
+    /// name). Reported apart, as missed by design, not as a real miss.
+    OutOfReach,
 }
 
 /// Where the content sits in the reader's exchange: the spec's
@@ -40,8 +44,16 @@ pub use crosstalk_spec::derived::provenance::matching::CarrierKind;
 pub enum MatchNeed {
     Exact,
     Normalized,
-    Decoded { codecs: Vec<Codec> },
+    Decoded {
+        codecs: Vec<Codec>,
+    },
     Semantic,
+    /// Encoded with a cipher outside the spec's `Codec` (rotN, binary8,
+    /// letter substitution), named by `codec`; only an
+    /// [`OutOfReach`](Tier::OutOfReach) label needs it.
+    Undecodable {
+        codec: String,
+    },
 }
 
 impl MatchNeed {
@@ -63,7 +75,7 @@ impl MatchNeed {
         match self {
             Self::Exact => MatchClass::Exact,
             Self::Normalized => MatchClass::Normalized,
-            Self::Decoded { .. } => MatchClass::Decoded,
+            Self::Decoded { .. } | Self::Undecodable { .. } => MatchClass::Decoded,
             Self::Semantic => MatchClass::Semantic,
         }
     }

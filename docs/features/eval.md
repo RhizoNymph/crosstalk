@@ -238,7 +238,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
 | `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
-| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
+| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`; and `Undecodable` for out-of-reach labels), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
 | `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
@@ -246,6 +246,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
+| `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
 | `src/reference/mod.rs` | the reference matcher (with the boilerplate cutoff) | `run`, `ReferenceConfig` (`max_postings`), `ReferenceOutput`, `SpanRecord` |
 | `src/reference/fold.rs` | folding with offset maps | `fold`, `Folded`, `fold_plain`, `string_codec` |
@@ -258,7 +259,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
 | `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings`, `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `Unavailable`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs.in` | the `Live` adapter, out of the build until `Live` merges | `GatewayBackend`, `GatewayWorld` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report`, `Summary`, `ReportRow`, `table::render` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `background`), `Summary`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus` |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource`, `load_world`, `convert_trace`, `SaltError`, `DATASET` |
@@ -900,6 +901,7 @@ construction-tier `get_events` deliveries (0.999); the 2026-07-13..17 window
 gives 116,410 exchanges, 97,978 structural chat labels (recall 0.999) and 10
 heuristic repository labels. Numbers and the false-positive picture are in
 [eval_ai_village.md](eval_ai_village.md#reference-baselines).
+
 ## collusion-wiki
 
 Real AI-agent swarms that used public UseMod/ProWiki wikis as dead drops —
@@ -1123,3 +1125,21 @@ already exposes most of the plaintext.
 | `src/datasets/swarm/codec.rs` | the nested codec-chain decoder (`decode`, `Layer`, `Decoded`) |
 | `src/datasets/swarm/tally.rs` | decode-chain counts and lengths for the run report (`ChainTally`, `ChainStats`) |
 | `tests/swarm.rs`, `tests/fixtures/swarm/` | synthetic benign fixtures and tests |
+
+## SWE background, splices and cipher pairs
+
+`ct-eval run --dataset open-swe | lmcache | swe-splice | cipher` has its
+own page: [eval_swe_synthetic.md](eval_swe_synthetic.md). Open-SWE-Traces
+and LMCache trajectories are mixed into background worlds that hold only
+negative controls. The splice generator plants an exact Channel
+transmission through `Locator::File` between two real trajectories, in four
+variants. Cipher pairs deliver payloads encoded, and those whose encoding the
+spec's `Codec` cannot name are labelled `Tier::OutOfReach`. Every run's
+report now has an `out_of_reach` summary, kept out of `overall`, and a
+`background` summary for any run with negative controls: false positives
+per 1k exchanges and the top sources they fell on.
+
+Reference baselines: open-swe gives 330.7 false positives per 1k exchanges
+and lmcache 1,887.0. Splices are found 59/59 through an editor view and 0/15
+through a shell read, which the reference routes `Direct`. Cipher recall
+runs from 0.36 to 0.52 for the in-reach codecs, with 0/200 out of reach.
