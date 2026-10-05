@@ -168,6 +168,12 @@ async fn json_routes_decode_their_goldens() {
     )
     .await;
     answers(
+        "surface_actions/operators/me.json",
+        Route::Me,
+        async |client| client.me(c).await,
+    )
+    .await;
+    answers(
         "surface_reads/present/present_every_format.json",
         Route::Present,
         async |client| client.present(c).await,

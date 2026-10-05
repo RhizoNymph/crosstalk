@@ -60,7 +60,7 @@ pub type Export = SpecExportSource<
     InMemoryProjectionStore,
     InMemoryTopicCatalog,
     FakeEmbedder,
-    StoredTransmissions<MemoryVerdicts, Directory>,
+    StoredTransmissions<MemoryVerdicts, Directory, InMemoryTopicCatalog>,
 >;
 
 /// The evidence page's records by id: spans as L4 recorded them, and

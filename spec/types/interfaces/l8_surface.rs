@@ -237,8 +237,8 @@ impl WireRequest for AlertFilter {}
 /// ([`AlertState::kind`](crate::aggregates::alert::AlertState::kind)).
 pub use crate::aggregates::alert::AlertStateKind;
 
-/// Every method checks the caller's permission first and returns
-/// `Forbidden` without reading anything when it is missing. List methods
+/// Every method but `me` checks the caller's permission first and returns
+/// `Forbidden` without reading anything when it is missing; `me` needs none. List methods
 /// return `InvalidCursor` for a cursor the surface did not issue or issued
 /// for a different request.
 pub trait QueryApi {
@@ -771,6 +771,19 @@ pub trait QueryApi {
         &self,
         caller: &Caller,
     ) -> impl Future<Output = Result<Vec<Operator>, QueryError>> + Send;
+
+    /// Any caller. The caller's own operator: its id and name as the
+    /// directory holds them (`OperatorStore::operators`), with the
+    /// permissions this request was authenticated with
+    /// ([`Caller::permissions`], never empty). Needs no permission: every
+    /// caller may read itself, so a client can learn who it is and what it
+    /// may do before it offers anything. In trusted mode every request's
+    /// caller is the one configured operator with every permission,
+    /// whatever the request carries, so `me` answers with that operator.
+    /// `NotFound` only when the directory does not hold the caller's
+    /// operator, which a caller the directory built never meets: the
+    /// directory keeps every operator it ever defined.
+    fn me(&self, caller: &Caller) -> impl Future<Output = Result<Operator, QueryError>> + Send;
 
     /// View, or Content when `request` includes content or names a
     /// projection ([`ExportRequest::required_permission`]); without it,

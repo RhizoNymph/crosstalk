@@ -12,7 +12,7 @@ use crosstalk_spec::ids::{TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
 use crosstalk_spec::interfaces::l6_analysis::{
-    Embedder, SearchIndex, SearchQuery, SearchResults, TopicCatalog,
+    CatalogError, Embedder, SearchIndex, SearchQuery, SearchResults, TopicCatalog,
 };
 use crosstalk_spec::interfaces::l8_surface::lists::{SearchMode, SearchRequest};
 use crosstalk_spec::interfaces::l8_surface::summary::{
@@ -74,6 +74,31 @@ impl TopicsUnder {
             None => topic_under(transmission, self.version),
         }
     }
+}
+
+/// The catalog's assignments under `version` of the classified and
+/// aggregated ones among `transmissions`, read in batches of at most
+/// [`IdBatch::MAX`] ids: what every row reading a topic under a version
+/// (rows by id, a channel's transmissions, the transmissions export) reads
+/// it from.
+pub(crate) async fn read_topics_under<'a, C: TopicCatalog + Sync>(
+    catalog: &C,
+    version: TopicModelVersion,
+    transmissions: impl IntoIterator<Item = &'a Transmission> + Send,
+) -> Result<TopicsUnder, CatalogError> {
+    let ids: Vec<TransmissionId> = transmissions
+        .into_iter()
+        .filter(|transmission| classified(transmission))
+        .map(|transmission| transmission.id)
+        .collect();
+    let mut assigned = BTreeMap::new();
+    for chunk in ids.chunks(IdBatch::<TransmissionId>::MAX) {
+        let batch = IdBatch::new(chunk.iter().copied()).map_err(|_| CatalogError::Store {
+            reason: "an id batch over its maximum".to_owned(),
+        })?;
+        assigned.extend(catalog.assignments(version, &batch).await?);
+    }
+    Ok(TopicsUnder { version, assigned })
 }
 
 /// Whether a row shows `transmission`'s topic: only a classified or
@@ -256,26 +281,13 @@ impl<S: SurfaceStores> Surface<S> {
     }
 
     /// The catalog's assignments under `version` of the classified and
-    /// aggregated ones among `transmissions`, read in batches of at most
-    /// [`IdBatch::MAX`] ids.
+    /// aggregated ones among `transmissions` ([`read_topics_under`]).
     pub(crate) async fn topics_under<'a>(
         &self,
         version: TopicModelVersion,
-        transmissions: impl IntoIterator<Item = &'a Transmission>,
+        transmissions: impl IntoIterator<Item = &'a Transmission> + Send,
     ) -> Result<TopicsUnder, QueryError> {
-        let ids: Vec<TransmissionId> = transmissions
-            .into_iter()
-            .filter(|transmission| classified(transmission))
-            .map(|transmission| transmission.id)
-            .collect();
-        let mut assigned = BTreeMap::new();
-        for chunk in ids.chunks(IdBatch::<TransmissionId>::MAX) {
-            let batch = IdBatch::new(chunk.iter().copied()).map_err(|_| QueryError::Store {
-                reason: "an id batch over its maximum".to_owned(),
-            })?;
-            assigned.extend(self.stores.topics().assignments(version, &batch).await?);
-        }
-        Ok(TopicsUnder { version, assigned })
+        Ok(read_topics_under(self.stores.topics(), version, transmissions).await?)
     }
 
     /// The current verdict of a judgeable transmission; `None` otherwise.

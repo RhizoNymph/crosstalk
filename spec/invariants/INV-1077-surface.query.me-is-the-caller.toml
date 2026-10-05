@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.query.me-is-the-caller"
+statement = "QueryApi::me needs no permission and returns the caller's own operator: its id, its name as the directory holds it, and the permissions the caller was authenticated with; in trusted mode, the configured trusted operator with every permission, whatever the request carried. Over HTTP it is GET /me, served to every authenticated caller as the caller its credential names."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The UI needs to know who it is acting as and what it may do before it
+offers an action, and a caller without View must still learn that. The
+operators list needs View and does not say which entry is the caller, and
+the caller is derived from the credential, never sent, so the client cannot
+work it out itself.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_surface::tests::reads::me_is_the_callers_own_operator_for_every_caller",
+    "crosstalk_surface::tests::reads::me_in_trusted_mode_is_the_trusted_operator",
+    "crosstalk_api::http::integration::routes::me_is_served_to_every_caller",
+]
+integration = "crosstalk_client::me::every_token_reads_its_own_operator"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

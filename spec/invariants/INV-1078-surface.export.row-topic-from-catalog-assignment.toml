@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.export.row-topic-from-catalog-assignment"
+statement = "The topic of a classified or aggregated transmission's row in a transmissions export, and the topic its filter tests, is read under the export's resolved version as QueryApi::transmissions_by_id reads it: the catalog's stored assignment under that version (TopicCatalog::assignments), else the stored classification; so a transmission's export row equals its row by id under that version, after a re-fit too."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Rows by id and a channel's transmissions read the catalog's assignments
+(INV-1072); an export that read only the stored classification showed a
+re-fitted transmission as Unassigned under the version its by-id row showed
+a topic under, and its topic filter dropped it.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::content::export_rows_and_rows_by_id_agree_under_a_refit"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

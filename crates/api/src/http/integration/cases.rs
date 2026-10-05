@@ -277,6 +277,7 @@ pub(super) fn cases() -> Vec<Case> {
             .query::<PageRequest<()>>("page", &page)
             .returns(golden_text("surface_actions/audit/audit_page")),
         Case::new(Route::Operators).returns(golden_text("surface_actions/operators/operators")),
+        Case::new(Route::Me).returns(golden_text("surface_actions/operators/me")),
         Case::new(Route::Present).returns(golden_text("surface_reads/present/present_jsonl_only")),
     ]
 }

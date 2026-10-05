@@ -92,13 +92,18 @@ async fn every_route_is_served() {
 }
 
 /// A caller without the route's permission is a 403 naming it, and the
-/// method reads nothing.
+/// method reads nothing. A route any caller may call (`/me`) has no
+/// permission to lack; it is served to every caller below.
 #[tokio::test]
 async fn every_route_refuses_a_caller_without_its_permission() {
     for case in cases() {
         let route = case.route;
-        let RoutePermission::Fixed(needed) = route.permission() else {
-            panic!("{route:?}: a query route has a fixed permission");
+        let needed = match route.permission() {
+            RoutePermission::Fixed(needed) => needed,
+            RoutePermission::AnyCaller => continue,
+            RoutePermission::ByExportRequest => {
+                panic!("{route:?}: a query route has a fixed permission")
+            }
         };
         let fake = answering();
         let reply = send(&server(&fake), request(&case.request(), without(needed))).await;
@@ -109,6 +114,37 @@ async fn every_route_refuses_a_caller_without_its_permission() {
         );
         assert_eq!(reply.header(CACHE_CONTROL.as_str()), Some("no-store"));
         assert!(fake.untouched(), "{route:?}: nothing is read");
+    }
+}
+
+/// INV-1077: `GET /me` needs no permission: every caller, whichever
+/// permission it lacks, is served, and the surface is asked as that
+/// caller.
+#[tokio::test]
+async fn me_is_served_to_every_caller() {
+    let Some(case) = cases().into_iter().find(|case| case.route == Route::Me) else {
+        panic!("no case for /me");
+    };
+    let callers = std::iter::once(FULL)
+        .chain(crosstalk_spec::interfaces::l8_surface::Permission::ALL.map(without));
+    for n in callers {
+        let fake = answering();
+        let reply = send(&server(&fake), request(&case.request(), n)).await;
+        assert_eq!(reply.status, StatusCode::OK, "operator {n}: {reply:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&reply.body),
+            compact(&case.response),
+            "operator {n}"
+        );
+        assert_eq!(
+            fake.calls(),
+            vec![Call {
+                method: "me",
+                operator: operator(n),
+                args: case.args(),
+            }],
+            "operator {n}: asked as itself"
+        );
     }
 }
 

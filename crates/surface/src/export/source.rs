@@ -96,7 +96,7 @@ fn edge_error(error: EdgeQueryError) -> ExportPlanError {
     }
 }
 
-fn catalog_error(error: CatalogError) -> ExportPlanError {
+pub(super) fn catalog_error(error: CatalogError) -> ExportPlanError {
     match error {
         CatalogError::Store { reason } => ExportPlanError::Store { reason },
         CatalogError::UnknownVersion(version) => {
