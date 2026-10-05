@@ -17,8 +17,10 @@ implementation. It runs against three implementations:
   port and `crosstalk-client`'s `HttpClient`, no gateway and no Postgres
   (`crates/client/tests/conformance.rs`).
 
-The real surface fails ten tests today, the same ten in process and over
-HTTP; each is listed with its reason as an expected failure ("Findings").
+The real surface passes all 65 tests, in process and over HTTP. A harness
+lists any known failures in `Harness::expected_failures`; the real
+surface's list (`SURFACE_FAILURES`) is empty, and the ten it once held are
+recorded with their root causes in "Findings".
 
 This page has two parts:
 
