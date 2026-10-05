@@ -7,14 +7,17 @@
 //! run's:
 //!
 //! ```text
-//! [header.started_at_unix_ms, latest row time + slack]   (both ends inclusive)
+//! [header.started_at_unix_ms - lead, latest row time + slack]   (both ends inclusive)
 //! ```
 //!
 //! The latest row time is the greatest `at_unix_ms`, `read_at_unix_ms` or
 //! `written_at_unix_ms` of any row; the slack (default
 //! [`DEFAULT_SLACK_MS`]) covers the requests an agent sends after its last
 //! read or write. A truth with no timed row ends at its start plus the
-//! slack.
+//! slack. The lead (default [`DEFAULT_LEAD_MS`]) covers clock skew between
+//! the swarm's host and the gateway's, so a run's first exchange is never
+//! dropped; an earlier run reusing the seed is minutes or hours earlier,
+//! well outside it.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -30,6 +33,27 @@ use super::truth_file::{Row, TruthFile};
 /// The default slack past the latest row time: one minute.
 pub const DEFAULT_SLACK_MS: u64 = 60_000;
 
+/// The default lead before the header's start: five seconds.
+pub const DEFAULT_LEAD_MS: u64 = 5_000;
+
+/// How far the window reaches past the truth's own times, in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Margins {
+    /// Before the header's `started_at_unix_ms`.
+    pub lead_ms: u64,
+    /// After the latest row time.
+    pub slack_ms: u64,
+}
+
+impl Default for Margins {
+    fn default() -> Self {
+        Self {
+            lead_ms: DEFAULT_LEAD_MS,
+            slack_ms: DEFAULT_SLACK_MS,
+        }
+    }
+}
+
 /// The window a run's exchanges started in, both ends inclusive, in Unix
 /// milliseconds as the truth file writes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -39,9 +63,9 @@ pub struct RunWindow {
 }
 
 impl RunWindow {
-    /// The window of `truth`: from the header's start to the latest row
-    /// time plus `slack_ms`.
-    pub fn of(truth: &TruthFile, slack_ms: u64) -> Self {
+    /// The window of `truth`: from the header's start less the lead to the
+    /// latest row time plus the slack.
+    pub fn of(truth: &TruthFile, margins: Margins) -> Self {
         let start = truth.header.started_at_unix_ms;
         let latest = truth
             .rows
@@ -51,8 +75,8 @@ impl RunWindow {
             .unwrap_or(start)
             .max(start);
         Self {
-            start_unix_ms: start,
-            end_unix_ms: latest.saturating_add(slack_ms),
+            start_unix_ms: start.saturating_sub(margins.lead_ms),
+            end_unix_ms: latest.saturating_add(margins.slack_ms),
         }
     }
 

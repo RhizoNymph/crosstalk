@@ -352,7 +352,7 @@ fn channel_transmission(
 
 /// Writes the whole fixture under `dir`: the truth file holds `truth`.
 pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
-    write_runs(dir, truth, false)
+    write_runs(dir, truth, false, 0)
 }
 
 /// [`write`], with an earlier run an hour before in the same exchange log:
@@ -360,10 +360,17 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
 /// of `P1` with the same tool use id), and a confirmed detection a001 →
 /// a002 read in that earlier run's second turn.
 pub fn write_with_prior_run(dir: &Path, truth: &[serde_json::Value]) -> Written {
-    write_runs(dir, truth, true)
+    write_runs(dir, truth, true, 0)
 }
 
-fn write_runs(dir: &Path, truth: &[serde_json::Value], prior: bool) -> Written {
+/// [`write`], with the run's clock `behind_secs` seconds behind the
+/// header's: its exchanges start at `T0` + 1 s − `behind_secs`, one second
+/// apart, as when the swarm's host and the gateway's disagree.
+pub fn write_skewed(dir: &Path, truth: &[serde_json::Value], behind_secs: u64) -> Written {
+    write_runs(dir, truth, false, behind_secs)
+}
+
+fn write_runs(dir: &Path, truth: &[serde_json::Value], prior: bool, behind_secs: u64) -> Written {
     let mut log = Log {
         ids: Ids::seeded(7),
         envelopes: Vec::new(),
@@ -385,7 +392,7 @@ fn write_runs(dir: &Path, truth: &[serde_json::Value], prior: bool) -> Written {
         );
     }
     let prior_a002 = prior_a002.map_or_else(Vec::new, |agent| agent.turns);
-    log.base = T0;
+    log.base = Timestamp::from_micros(T0.as_micros() - behind_secs * 1_000_000);
     log.clock = 0;
     let mut a001 = Agent::new(&mut log.ids, "a001");
     let mut a002 = Agent::new(&mut log.ids, "a002");
@@ -711,6 +718,41 @@ fn access_only(written: &Written, discarded: bool) -> (TransmissionParts, Resour
         builder.build_parts().expect("an access-only transmission"),
         p2,
     )
+}
+
+/// Appends to the fixture's evidence file one discarded transmission
+/// a001 → a002 over p1 read at a002's turn 2: the read the truth calls a
+/// reread (line 5), which the gateway's confirmed reread detection also
+/// lands on.
+pub fn append_discarded_reread(written: &Written) {
+    let mut ids = Ids::seeded(31);
+    let (writer, reader) = (ids.agent(), ids.agent());
+    let p1 = ResourceBuilder::new(&mut ids)
+        .url("http", "wiki:8090", "/pages/p1", None)
+        .build();
+    let parts = TransmissionBuilder::new(&mut ids)
+        .between(writer, reader)
+        .opened_at(after(T0, Duration::from_secs(500)))
+        .accesses(|cross| {
+            cross
+                .resource(p1.id)
+                .write_access(|access| {
+                    access.in_exchange(written.a001[0].id).part(PartRef {
+                        message: written.a001[0].response,
+                        index: 0,
+                    })
+                })
+                .read_access(|access| {
+                    access.in_exchange(written.a002[2].id).part(PartRef {
+                        message: written.a002[2].last_tool.expect("a tool result"),
+                        index: 0,
+                    })
+                })
+        })
+        .discarded()
+        .build_parts()
+        .expect("a discarded transmission");
+    append_evidence(written, &evidence_of(&parts, &p1));
 }
 
 fn append_evidence(written: &Written, evidence: &TransmissionEvidence) {

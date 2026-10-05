@@ -6,7 +6,9 @@ use std::io::Cursor;
 
 use crosstalk_eval::datasets::swarm_truth::bodies::{BlobBodies, Cached};
 use crosstalk_eval::datasets::swarm_truth::exchange_log::{self, Sessions};
-use crosstalk_eval::datasets::swarm_truth::window::{self, DEFAULT_SLACK_MS, RunWindow};
+use crosstalk_eval::datasets::swarm_truth::window::{
+    self, DEFAULT_LEAD_MS, DEFAULT_SLACK_MS, Margins, RunWindow,
+};
 use crosstalk_eval::datasets::swarm_truth::{
     Effect, JoinFailure, Options, Side, SwarmOutcome, resolve, run, run_with, truth_file,
 };
@@ -23,6 +25,10 @@ use super::{inputs, judged, key, read_rows};
 const START_MS: u64 = 1_790_812_800_000;
 /// The latest time the fixture's rows name (the miss, at `START_MS` + 2 s).
 const LATEST_MS: u64 = 1_790_812_802_000;
+
+fn margins(lead_ms: u64, slack_ms: u64) -> Margins {
+    Margins { lead_ms, slack_ms }
+}
 
 fn scored(name: &str, prior: bool) -> (Written, SwarmOutcome) {
     let dir = fixture::dir(name);
@@ -55,7 +61,7 @@ fn windowed_truth(written: &Written) -> Vec<Expectation> {
     let text = std::fs::read_to_string(&written.truth).expect("the truth file");
     let truth = truth_file::read(Cursor::new(text)).expect("a valid truth file");
     let log = exchange_log::read(&written.exchanges).expect("the exchange log");
-    let run_window = RunWindow::of(&truth, DEFAULT_SLACK_MS);
+    let run_window = RunWindow::of(&truth, Margins::default());
     let split = window::split(log.exchanges, run_window, &window::truth_sessions(&truth));
     let sessions = Sessions::index(split.inside);
     let mut bodies = Cached::new(BlobBodies::open(&written.blobs).expect("the blobs"));
@@ -69,21 +75,25 @@ fn windowed_truth(written: &Written) -> Vec<Expectation> {
 // ---- the window ----
 
 #[test]
-fn the_window_runs_from_the_header_to_the_latest_row_plus_the_slack() {
+fn the_window_runs_from_the_header_less_the_lead_to_the_latest_row_plus_the_slack() {
     let truth = read_rows(&fixture::truth_rows()).expect("decodes");
-    let found = RunWindow::of(&truth, DEFAULT_SLACK_MS);
+    let found = RunWindow::of(&truth, Margins::default());
     assert_eq!(DEFAULT_SLACK_MS, 60_000);
+    assert_eq!(DEFAULT_LEAD_MS, 5_000);
     assert_eq!(
         found,
         RunWindow {
-            start_unix_ms: START_MS,
+            start_unix_ms: START_MS - 5_000,
             end_unix_ms: LATEST_MS + 60_000,
         }
     );
     assert_eq!(
-        RunWindow::of(&truth, 5).end_unix_ms,
-        LATEST_MS + 5,
-        "the slack is configurable"
+        RunWindow::of(&truth, margins(7, 5)),
+        RunWindow {
+            start_unix_ms: START_MS - 7,
+            end_unix_ms: LATEST_MS + 5,
+        },
+        "the lead and the slack are configurable"
     );
 }
 
@@ -99,11 +109,17 @@ fn a_rows_read_and_write_times_extend_the_window() {
     late["read_at_unix_ms"] = json!(START_MS + 9_000);
     late["written_at_unix_ms"] = json!(START_MS + 7_000);
     let truth = read_rows(&[fixture::header(), late.clone()]).expect("decodes");
-    assert_eq!(RunWindow::of(&truth, 0).end_unix_ms, START_MS + 9_000);
+    assert_eq!(
+        RunWindow::of(&truth, margins(0, 0)).end_unix_ms,
+        START_MS + 9_000
+    );
 
     late["read_at_unix_ms"] = json!(START_MS + 1_000);
     let truth = read_rows(&[fixture::header(), late]).expect("decodes");
-    assert_eq!(RunWindow::of(&truth, 0).end_unix_ms, START_MS + 7_000);
+    assert_eq!(
+        RunWindow::of(&truth, margins(0, 0)).end_unix_ms,
+        START_MS + 7_000
+    );
 }
 
 #[test]
@@ -112,7 +128,7 @@ fn a_truth_with_no_timed_row_ends_at_its_start_plus_the_slack() {
         "agents": ["a001"]});
     let truth = read_rows(&[fixture::header(), cluster]).expect("decodes");
     assert_eq!(
-        RunWindow::of(&truth, 1_000),
+        RunWindow::of(&truth, margins(0, 1_000)),
         RunWindow {
             start_unix_ms: START_MS,
             end_unix_ms: START_MS + 1_000,
@@ -154,7 +170,7 @@ fn a_run_without_reuse_excludes_nothing() {
     assert_eq!(
         outcome.window,
         RunWindow {
-            start_unix_ms: START_MS,
+            start_unix_ms: START_MS - DEFAULT_LEAD_MS,
             end_unix_ms: LATEST_MS + DEFAULT_SLACK_MS,
         }
     );
@@ -165,7 +181,7 @@ fn a_smaller_slack_leaves_out_the_later_exchanges() {
     let dir = fixture::dir("window-no-slack");
     let written = fixture::write(&dir, &fixture::truth_rows());
     let options = Options {
-        run_slack_ms: 0,
+        margins: margins(DEFAULT_LEAD_MS, 0),
         ..Options::new(50)
     };
     let outcome = run_with(&inputs(&written), options, &Gates::default()).expect("scores");
@@ -175,6 +191,61 @@ fn a_smaller_slack_leaves_out_the_later_exchanges() {
     assert_eq!(outcome.resolved.exchanges, 2);
     assert_eq!(outcome.resolved.excluded_outside_window, 9);
     assert_eq!(outcome.report.totals.exchanges, 2);
+}
+
+// ---- the lead ----
+
+#[test]
+fn an_exchange_just_before_the_headers_start_is_in_the_run() {
+    // The run's clock is 3 s behind the header's: its first exchange
+    // started 2 s before `started_at_unix_ms`.
+    let dir = fixture::dir("window-lead");
+    let written = fixture::write_skewed(&dir, &fixture::truth_rows(), 3);
+    let outcome = run(&inputs(&written), 50, &Gates::default()).expect("scores");
+    assert_eq!(outcome.resolved.exchanges, 11);
+    assert_eq!(outcome.resolved.excluded_outside_window, 0);
+    assert_eq!(
+        outcome
+            .diagnostics
+            .named("session_reused_outside_run")
+            .count(),
+        0
+    );
+    assert_eq!(outcome.diagnostics.named("turn_mismatch").count(), 1);
+
+    // Without the lead, the two exchanges before the start (a001's turns
+    // 0 and 1, at -2 s and -1 s) are left out.
+    let options = Options {
+        margins: margins(0, DEFAULT_SLACK_MS),
+        ..Options::new(50)
+    };
+    let outcome = run_with(&inputs(&written), options, &Gates::default()).expect("scores");
+    assert_eq!(outcome.resolved.excluded_outside_window, 2);
+    let excluded: Vec<_> = outcome
+        .diagnostics
+        .named("session_reused_outside_run")
+        .map(|diagnostic| diagnostic.failure.clone())
+        .collect();
+    let expected: Vec<_> = written.a001[..2]
+        .iter()
+        .map(|turn| JoinFailure::SessionReusedOutsideRun {
+            session: "session-a001".to_owned(),
+            exchange: turn.id,
+        })
+        .collect();
+    assert_eq!(excluded, expected);
+}
+
+#[test]
+fn the_lead_does_not_reach_an_earlier_run_an_hour_before() {
+    let truth = read_rows(&fixture::truth_rows()).expect("decodes");
+    let window = RunWindow::of(&truth, Margins::default());
+    let at = |ms: u64| Timestamp::from_micros(ms * 1000);
+    assert!(window.contains(at(START_MS - 2_000)));
+    assert!(!window.contains(at(START_MS - 3_600_000)));
+    let (_, outcome) = scored("window-lead-prior", true);
+    assert_eq!(outcome.resolved.excluded_outside_window, 2);
+    assert_eq!(outcome.resolved.exchanges, 11);
 }
 
 // ---- a reused session ----

@@ -141,6 +141,15 @@ pub fn render(report: &Report) -> String {
             let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
         }
     }
+    if !report.access_only_violations.is_empty() {
+        let _ = writeln!(
+            out,
+            "\naccess-only predictions under negative controls (not violations, not gated):"
+        );
+        for row in &report.access_only_violations {
+            let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
+        }
+    }
     if let Some(background) = &report.background {
         let _ = writeln!(
             out,

@@ -229,7 +229,14 @@ pub struct Score {
     pub totals: Totals,
     pub rows: Vec<Row>,
     pub transmissions: Vec<TransmissionRow>,
+    /// Negative-control violations by content-class predictions. Only
+    /// these are violations: gates and `sources` count them.
     pub violations: Vec<ViolationRow>,
+    /// Access-only predictions (`suspected`, `discarded`) that fall under a
+    /// negative control. Like access-only predictions finding a label, they
+    /// are kept apart: an access-only prediction is the detector declining
+    /// to confirm, not a claim, so it is reported here and never gated.
+    pub access_only_violations: Vec<ViolationRow>,
     /// At most the scorer's example cap of each.
     pub misses: Vec<Miss>,
     pub false_positives: Vec<FalsePositive>,
@@ -300,6 +307,7 @@ pub struct Scorer {
     rows: BTreeMap<RowKey, Counts>,
     transmissions: BTreeMap<TransmissionKey, TransmissionCounts>,
     violations: BTreeMap<(DatasetId, NegativeReason), u64>,
+    access_only_violations: BTreeMap<(DatasetId, NegativeReason), u64>,
     misses: Vec<Miss>,
     false_positives: Vec<FalsePositive>,
     sources: sources::SourceTally,
@@ -315,6 +323,7 @@ impl Scorer {
             rows: BTreeMap::new(),
             transmissions: BTreeMap::new(),
             violations: BTreeMap::new(),
+            access_only_violations: BTreeMap::new(),
             misses: Vec::new(),
             false_positives: Vec::new(),
             sources: sources::SourceTally::default(),
@@ -379,13 +388,22 @@ impl Scorer {
                 Outcome::False { violated, .. } => {
                     counts.false_positive += 1;
                     entry.2.wrong = true;
-                    if let Some(reason) = violated {
-                        *self
-                            .violations
-                            .entry((dataset.clone(), reason))
-                            .or_default() += 1;
-                        self.sources
-                            .add(reason, &excerpt(world, prediction).unwrap_or_default());
+                    match violated {
+                        Some(reason) if prediction.class.is_content() => {
+                            *self
+                                .violations
+                                .entry((dataset.clone(), reason))
+                                .or_default() += 1;
+                            self.sources
+                                .add(reason, &excerpt(world, prediction).unwrap_or_default());
+                        }
+                        Some(reason) => {
+                            *self
+                                .access_only_violations
+                                .entry((dataset.clone(), reason))
+                                .or_default() += 1;
+                        }
+                        None => {}
                     }
                     if self.false_positives.len() < self.example_cap {
                         self.false_positives.push(FalsePositive {
@@ -456,20 +474,24 @@ impl Scorer {
                 .into_iter()
                 .map(|(key, counts)| TransmissionRow { key, counts })
                 .collect(),
-            violations: self
-                .violations
-                .into_iter()
-                .map(|((dataset, reason), count)| ViolationRow {
-                    dataset,
-                    reason,
-                    count,
-                })
-                .collect(),
+            violations: violation_rows(self.violations),
+            access_only_violations: violation_rows(self.access_only_violations),
             misses: self.misses,
             false_positives: self.false_positives,
             sources: self.sources.top(),
         }
     }
+}
+
+fn violation_rows(counts: BTreeMap<(DatasetId, NegativeReason), u64>) -> Vec<ViolationRow> {
+    counts
+        .into_iter()
+        .map(|((dataset, reason), count)| ViolationRow {
+            dataset,
+            reason,
+            count,
+        })
+        .collect()
 }
 
 /// What a transmission's matches were judged: a transmission is genuine when

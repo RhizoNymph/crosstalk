@@ -321,7 +321,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
 | `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs` | the `LiveBackend` over `crosstalk_gateway::live::Live` | `GatewayBackend`, `GatewayWorld`, `flow_config` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `violations`, `access_only_violations`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource` (`with_pace`), `load_world`, `load_world_paced`, `convert_trace`, `convert_trace_paced`, `SaltError`, `DATASET` |
@@ -365,6 +365,17 @@ It is reported on its own line ("access-only recall (suspected or
 discarded only, not in overall)") and in `report.json`, never added to
 `overall`, and the line is left out of the table when no label is
 access-only.
+
+**Only content violates a control.** By the same rule, an access-only
+prediction that falls under a negative control is not a violation: a
+`discarded` (or `suspected`) transmission is the detector declining to
+confirm, not a claim. It is still a false positive in its own access-class
+row, but it is counted in `Score::access_only_violations` /
+`Report::access_only_violations` instead of `violations`, printed on its
+own line ("access-only predictions under negative controls (not
+violations, not gated)", left out when empty), and left out of the
+violation sources tally. `violations` gates and `Score::violation_count`
+read content-class violations only.
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct. One prediction aligned with
@@ -636,7 +647,8 @@ the reference baselines never fail a live run and the reverse. The
 demo-swarm gates are listed under [Swarm benchmark](#gates-demo-swarm).
 
 Metrics: `recall` and `precision` take a `min`; `violations` (negative
-controls predictions fell under, optionally of one `reason`) and
+controls content-class predictions fell under, optionally of one `reason`;
+access-only ones are never counted) and
 `fp_per_1k` (the selected rows' false positives per 1,000 of the run's
 exchanges, `Totals::exchanges`; skipped in a run with none) take a `max`.
 A gate that names a dataset the run did not score (no row or violation of
@@ -1039,14 +1051,19 @@ run that sent 254 requests, 764 for one that sent 253). Before anything is
 joined, the log is cut to the run's window:
 
 ```text
-[header.started_at_unix_ms, latest row time + slack]   both ends inclusive
+[header.started_at_unix_ms - lead, latest row time + slack]   both ends inclusive
 ```
 
 The latest row time is the greatest `at_unix_ms`, `read_at_unix_ms` or
 `written_at_unix_ms` of any row (a truth with none ends at its start);
 the slack (`window::DEFAULT_SLACK_MS`, 60 s; `--run-slack-ms`) covers the
-requests an agent sends after its last read or write. An exchange is in the
-window when its `meta.started_at` is (`RunWindow::contains`).
+requests an agent sends after its last read or write. The lead
+(`window::DEFAULT_LEAD_MS`, 5 s; `--run-lead-ms`) covers clock skew between
+the swarm's host and the gateway's, so a run's first exchange is never
+dropped (on the 2026-10-05 runs it started about 2 ms after the header's
+start); an earlier run reusing the seed is minutes or hours earlier, far
+outside it. Both are `window::Margins` (`Options::margins`). An exchange is
+in the window when its `meta.started_at` is (`RunWindow::contains`).
 
 - Only in-window exchanges are indexed into sessions (`window::split`,
   then `Sessions::index`), so they alone count in the traffic total and
@@ -1070,8 +1087,11 @@ window when its `meta.started_at` is (`RunWindow::contains`).
 On the two 2026-10-05 seed-42 bench runs the window keeps 254 and 253
 exchanges (257 and 511 excluded), and every `turn_mismatch` row (120 and
 111 joins that the content-hash fallback had rescued) disappears: the
-ordinals had counted the earlier runs' exchanges. The reread violations
-(1 and 5) are unchanged; the boilerplate run's false positives per 1k go
+ordinals had counted the earlier runs' exchanges. The 5 s lead changes
+neither count. The reread violations (1 and 5) were unchanged by the
+window: every one was a `discarded` prediction, and with access-only
+violations kept apart (below, under the alignment rule) both runs have 0;
+the boilerplate run's false positives per 1k go
 from 53.7 (41 over 764) to 162.1 (41 over 253).
 
 ### Join rules (`resolve.rs`)
@@ -1241,7 +1261,7 @@ rows map them, and they are scored as false positives.
 | `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
 | `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
 | `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
-| `src/datasets/swarm_truth/window.rs` | the run window | `RunWindow`, `split`, `Split`, `Reused`, `truth_sessions`, `reader_exchanges`, `outside_reader`, `DEFAULT_SLACK_MS` |
+| `src/datasets/swarm_truth/window.rs` | the run window | `RunWindow`, `Margins`, `DEFAULT_LEAD_MS`, `split`, `Split`, `Reused`, `truth_sessions`, `reader_exchanges`, `outside_reader`, `DEFAULT_SLACK_MS` |
 | `src/datasets/swarm_truth/locate.rs` | tool results and `PUT` calls in exchanges | `tool_result`, `write_call`, `FoundResult`, `FoundCall` |
 | `src/datasets/swarm_truth/resolve.rs` | the join | `resolve`, `Resolved`, `AgentIndex`, `ResolveCounts`, `needs` |
 | `src/datasets/swarm_truth/diagnostics.rs` | join failures | `Diagnostics`, `Diagnostic`, `JoinFailure`, `Effect`, `RowKind`, `Side`, `DiagnosticCount` |

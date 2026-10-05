@@ -48,7 +48,7 @@ use bodies::{BlobBodies, Bodies, Cached};
 use detected::{Exported, read_evidence, read_export};
 use exchange_log::{ExchangeLog, Sessions};
 use truth_file::TruthFile;
-use window::{DEFAULT_SLACK_MS, RunWindow};
+use window::{Margins, RunWindow};
 
 /// The prefix of every swarm-benchmark dataset id: a run scores under
 /// `demo-swarm/<scenario>` ([`schema::Scenario::dataset`]).
@@ -152,17 +152,17 @@ pub struct Detections<'a> {
 pub struct Options {
     /// How many misses and false positives to keep as examples.
     pub examples: usize,
-    /// The run window's slack past the truth's latest row time, in
-    /// milliseconds ([`window::RunWindow::of`]).
-    pub run_slack_ms: u64,
+    /// How far the run window reaches before the header's start and past
+    /// the truth's latest row time ([`window::RunWindow::of`]).
+    pub margins: Margins,
 }
 
 impl Options {
-    /// `examples` examples and the default slack ([`DEFAULT_SLACK_MS`]).
+    /// `examples` examples and the default margins ([`Margins::default`]).
     pub fn new(examples: usize) -> Self {
         Self {
             examples,
-            run_slack_ms: DEFAULT_SLACK_MS,
+            margins: Margins::default(),
         }
     }
 }
@@ -180,7 +180,7 @@ pub fn score<B: Bodies>(
     gates: &Gates,
 ) -> Result<SwarmOutcome, SwarmTruthError> {
     let Detections { exported, evidence } = detections;
-    let run_window = RunWindow::of(truth, options.run_slack_ms);
+    let run_window = RunWindow::of(truth, options.margins);
     let split = window::split(log.exchanges, run_window, &window::truth_sessions(truth));
     let sessions = Sessions::index(split.inside);
     let mut bodies = Cached::new(bodies);
@@ -250,7 +250,7 @@ fn open(path: &Path) -> Result<BufReader<File>, SwarmTruthError> {
         })
 }
 
-/// Reads every input file and scores with the default run-window slack,
+/// Reads every input file and scores with the default run-window margins,
 /// reading bodies from the gateway's blob directory.
 pub fn run(
     inputs: &Inputs,

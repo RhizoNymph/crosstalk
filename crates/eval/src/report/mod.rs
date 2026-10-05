@@ -49,7 +49,12 @@ pub struct Report {
     pub access_only: AccessOnly,
     pub rows: Vec<ReportRow>,
     pub transmissions: Vec<TransmissionRow>,
+    /// Negative-control violations by content-class predictions: what the
+    /// violation gates check.
     pub violations: Vec<ViolationRow>,
+    /// Access-only predictions under a negative control: reported apart,
+    /// never gated ([`Score::access_only_violations`]).
+    pub access_only_violations: Vec<ViolationRow>,
     pub gates: Vec<GateOutcome>,
     /// Worlds that could not be scored, with why.
     pub failures: Vec<String>,
@@ -157,6 +162,7 @@ impl Report {
             rows,
             transmissions: score.transmissions,
             violations: score.violations,
+            access_only_violations: score.access_only_violations,
             gates,
             failures,
             unscored,

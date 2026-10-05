@@ -2,6 +2,7 @@
 //! parsing, the join of truth rows to captured exchanges, and the scoring
 //! of a saved export.
 
+mod access_only;
 mod fixture;
 mod scenario;
 mod sessions;

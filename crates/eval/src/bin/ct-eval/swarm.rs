@@ -8,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use crosstalk_eval::datasets::swarm_truth::fetch::{FetchConfig, fetch as fetch_api};
-use crosstalk_eval::datasets::swarm_truth::window::{DEFAULT_SLACK_MS, RunWindow};
+use crosstalk_eval::datasets::swarm_truth::window::{
+    DEFAULT_LEAD_MS, DEFAULT_SLACK_MS, Margins, RunWindow,
+};
 use crosstalk_eval::datasets::swarm_truth::{
     Inputs, Options, default_blobs, default_evidence, run_with as run_swarm, truth_file,
 };
@@ -52,6 +54,10 @@ pub struct SwarmArgs {
     /// outside the window are another run's and are left out.
     #[arg(long, default_value_t = DEFAULT_SLACK_MS)]
     run_slack_ms: u64,
+    /// The run window's lead before the truth header's start, in
+    /// milliseconds: room for clock skew between the swarm and the gateway.
+    #[arg(long, default_value_t = DEFAULT_LEAD_MS)]
+    run_lead_ms: u64,
 }
 
 #[derive(Args)]
@@ -98,7 +104,10 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
     };
     let options = Options {
         examples: args.examples,
-        run_slack_ms: args.run_slack_ms,
+        margins: Margins {
+            lead_ms: args.run_lead_ms,
+            slack_ms: args.run_slack_ms,
+        },
     };
     let outcome = run_swarm(&inputs, options, &gates)?;
     let mut text = render(&outcome.report);

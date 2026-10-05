@@ -204,7 +204,8 @@ Overview:
       scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
-      apart from overall). The truth's session rows map every gateway
+      apart from overall; one under a negative control is reported apart
+      from the violations, never gated). The truth's session rows map every gateway
       session to its swarm agent; it scores under
       demo-swarm/<scenario> (headline or boilerplate), and its gates are
       those named detector "gateway-export".
@@ -1466,7 +1467,7 @@ Features Index:
       spec's SpanIndex, AccessStore and channel reads; one documented
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
-      and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      (content classes only; access-only ones reported apart) and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
       with the naive reference matcher (escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one
       classifier, with hits only two string levels explain out of reach
