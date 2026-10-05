@@ -1,0 +1,12 @@
+{
+  "mode": "agents",
+  "window": {
+    "from": "2026-10-02T00:00:00Z",
+    "to": "2026-10-03T00:00:00Z"
+  },
+  "weighting": "tx",
+  "topicVersion": 3,
+  "watermark": "2026-10-02T23:22:30Z",
+  "nodes": [],
+  "edges": []
+}

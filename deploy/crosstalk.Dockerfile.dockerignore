@@ -2,6 +2,5 @@
 .claude
 .mcp.json
 **/target
-ui
 deploy
 **/node_modules
