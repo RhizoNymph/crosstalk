@@ -236,8 +236,8 @@ Overview:
       where a default view ends (AppBackend::view_end: the present's now,
       unless the fixture replays up to a fixed end). Callers come from the spec's
       operator directory: trusted mode for the local backends, and over
-      HTTP the server's operator for the token (found in
-      QueryApi::operators, refreshed every 30 s); view windows are bucket-aligned
+      HTTP the server's operator for the token (QueryApi::me,
+      refreshed every 30 s); view windows are bucket-aligned
       and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates

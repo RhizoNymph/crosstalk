@@ -19,11 +19,9 @@ use topcoat::router::request::Request;
 use topcoat::router::{Body, BodyDataStream, Router, StatusCode};
 
 use super::identity::IdentityError;
-use crate::config::{HttpConfig, OperatorPick};
+use crate::config::HttpConfig;
 use crate::pages::common::paging::first;
-use crate::testing::http::{
-    HttpWorld, ONCALL_TOKEN, RESEARCHER_TOKEN, UNKNOWN_TOKEN, oncall, researcher, stranger,
-};
+use crate::testing::http::{HttpWorld, ONCALL_TOKEN, RESEARCHER_TOKEN, UNKNOWN_TOKEN};
 use crate::testing::{Reply, get_from, send_to};
 use crate::url::ulid::UlidId;
 use crosstalk_spec::interfaces::l8_surface::operators::{
@@ -70,7 +68,7 @@ async fn follow(router: &Router, uri: &str) -> (String, Reply) {
 /// The researcher's router over HTTP.
 async fn researcher_router(world: &HttpWorld) -> Router {
     let access = world
-        .access(RESEARCHER_TOKEN, researcher())
+        .access(RESEARCHER_TOKEN)
         .await
         .expect("the researcher's access");
     world.router(RESEARCHER_TOKEN, access)
@@ -99,39 +97,29 @@ async fn startup_learns_the_tokens_operator_and_permissions_from_the_server() {
     let started = super::start(&HttpConfig {
         url: world.base.clone(),
         token: BearerToken::new(RESEARCHER_TOKEN).expect("token"),
-        operator: researcher(),
     })
     .await
     .expect("the http backend starts");
     let access = started.identity.current();
     assert_eq!(access.name(), "researcher");
+    assert_eq!(access.caller().operator(), OPERATOR_RESEARCHER);
     assert_eq!(access.caller().permissions(), PermissionSet::ALL);
     started.refresh.abort();
 
-    let oncall_access = world
-        .access(ONCALL_TOKEN, oncall())
-        .await
-        .expect("on-call access");
+    // The world's directory holds two operators: each token is its own,
+    // with no operator named in config.
+    let oncall_access = world.access(ONCALL_TOKEN).await.expect("on-call access");
     assert_eq!(oncall_access.name(), "oncall");
+    assert_eq!(oncall_access.caller().operator(), OPERATOR_ONCALL);
     assert_eq!(
         oncall_access.caller().permissions(),
         PermissionSet::of([Permission::View, Permission::Content, Permission::Triage])
     );
 
-    // The world has two operators, so the only-one pick needs an id.
+    // A token the server does not know: the 401 is a store failure, and
+    // the UI does not start.
     assert!(matches!(
-        world
-            .access(RESEARCHER_TOKEN, OperatorPick::TheOnlyOne)
-            .await,
-        Err(IdentityError::Several { ids }) if ids.len() == 2
-    ));
-    assert!(matches!(
-        world.access(RESEARCHER_TOKEN, stranger()).await,
-        Err(IdentityError::NotListed(_))
-    ));
-    // A token the server does not know: the 401 is a store failure.
-    assert!(matches!(
-        world.access(UNKNOWN_TOKEN, researcher()).await,
+        world.access(UNKNOWN_TOKEN).await,
         Err(IdentityError::Read(QueryError::Store { .. }))
     ));
     world.stop().await;
@@ -295,10 +283,7 @@ fn assert_gateway_page(reply: &Reply, status: StatusCode, title: &str, url: &str
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refused_token_renders_the_token_refused_page() {
     let world = HttpWorld::start().await;
-    let access = world
-        .access(RESEARCHER_TOKEN, researcher())
-        .await
-        .expect("access");
+    let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     // The token is rotated on the server after the UI learned who it is.
     let router = world.router(UNKNOWN_TOKEN, access);
     let url = world.base.to_string();
@@ -347,10 +332,7 @@ async fn a_refused_token_renders_the_token_refused_page() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_gateway_renders_the_unreachable_page() {
     let world = HttpWorld::start().await;
-    let access = world
-        .access(RESEARCHER_TOKEN, researcher())
-        .await
-        .expect("access");
+    let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     let router = world.router(RESEARCHER_TOKEN, access);
     let url = world.base.to_string();
     world.stop().await;
@@ -379,7 +361,7 @@ async fn the_gateway_page_is_not_a_route_of_its_own() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_ui_gates_on_the_servers_permissions_for_the_token() {
     let world = HttpWorld::start().await;
-    let access = world.access(ONCALL_TOKEN, oncall()).await.expect("access");
+    let access = world.access(ONCALL_TOKEN).await.expect("access");
     let caller = access.caller();
     let router = world.router(ONCALL_TOKEN, access);
     let (_, reply) = follow(&router, "/alerts").await;
@@ -409,31 +391,31 @@ async fn the_ui_gates_on_the_servers_permissions_for_the_token() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_identity_follows_a_permission_change_on_the_server() {
+async fn the_identity_follows_a_change_on_the_server() {
+    // `me` answers with the operator's name as the server's directory holds
+    // it now and the permissions the request was authenticated with. The
+    // test server authenticates against a fixed directory, so a reload
+    // here changes the name; the gateway's authentication follows its
+    // directory, so there permissions follow too.
     let world = HttpWorld::start().await;
-    let access = world
-        .access(RESEARCHER_TOKEN, researcher())
-        .await
-        .expect("access");
+    let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     let (sender, mut receiver) = tokio::sync::watch::channel(access);
     let refresh = super::identity::spawn_refresh(
         world.client(RESEARCHER_TOKEN),
-        OPERATOR_RESEARCHER,
         sender,
         Duration::from_millis(50),
     );
-    let fewer = PermissionSet::of([Permission::View, Permission::Content]);
     world
         .load_access(&AccessConfig::Authenticated(vec![
             OperatorConfig {
                 id: OPERATOR_RESEARCHER,
-                name: OperatorName::new("researcher").expect("name"),
-                permissions: fewer,
+                name: OperatorName::new("lead researcher").expect("name"),
+                permissions: PermissionSet::ALL,
             },
             OperatorConfig {
                 id: OPERATOR_ONCALL,
                 name: OperatorName::new("oncall").expect("name"),
-                permissions: PermissionSet::ALL,
+                permissions: PermissionSet::of([Permission::View, Permission::Triage]),
             },
         ]))
         .await;
@@ -441,7 +423,8 @@ async fn the_identity_follows_a_permission_change_on_the_server() {
         .await
         .expect("a refresh in time")
         .expect("the refresher runs");
-    assert_eq!(receiver.borrow().caller().permissions(), fewer);
+    assert_eq!(receiver.borrow().name(), "lead researcher");
+    assert_eq!(receiver.borrow().caller().operator(), OPERATOR_RESEARCHER);
     refresh.abort();
     world.stop().await;
 }
