@@ -1410,8 +1410,13 @@ Features Index:
       http_request reads and writes of public wiki pages) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
-      spec NormalizedExchanges on a deterministic virtual clock, with typed,
-      JSONL-serialisable ground truth (expected transmissions, negative
+      spec NormalizedExchanges on a deterministic virtual clock (datasets
+      without times pace calls 1 to 5 s apart, seeded and configurable;
+      synthetic tool calls are answered in the agent's next request of one
+      growing conversation), with typed,
+      JSONL-serialisable ground truth (expected transmissions, access-only
+      expectations for content on a resource its sender never wrote
+      (INV-963, found only by suspected or discarded evidence), negative
       controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
@@ -1575,8 +1580,9 @@ Features Index:
       read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
       deliver steganographic-evals payloads encoded: base64, hex, URL and
       chains are in reach, while rotN, binary8 and substitution are
-      Tier::OutOfReach and reported as missed by design, as is a JSON-string
-      splice read through a shell (two string levels). crosstalk-flow's
+      Tier::OutOfReach and reported as missed by design; a JSON-string
+      splice read through a shell is in reach (L4 decodes the writer's
+      argument values, INV-1057, so the reader needs one level). crosstalk-flow's
       real extractors resolve the shell cat -n read and the editor view to
       the same Locator::File read. Reports gain out_of_reach and background
       (false positives per 1k exchanges, top sources) summaries.

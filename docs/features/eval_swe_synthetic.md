@@ -58,7 +58,7 @@ data/<harness>/<model>/<dataset>/*.parquet ─▶ open_swe::files::discover ─�
                                                 │  ParquetRows<OpenSweRow> (projected: instance_id, repo, trajectory_id, messages)
                                                 ▼
                                     open_swe::trajectory: chat::convert, call i = messages[..i] → messages[i]
-                                                │  clock compose(i, slot, 0)
+                                                │  clock pace.at(i, slot, 0): calls 1 to 5 s apart
 lmcache/data/*.parquet ─▶ segments (row groups) ─▶ Sessions (interleaved over groups/files)
                                                 │  call r = input_r → first assistant message of input_{r+1}
                                                 │  (Reconstructed, or Synthetic when history was rewritten)
@@ -129,28 +129,43 @@ any source ─▶ pipeline::run ─▶ Scorer (+ sources::SourceTally over every
   `OutOfReach`, and the reverse (`InvalidLabel::Reach`). Out-of-reach rows
   are kept out of `Report::overall` and reported in `Report::out_of_reach`.
   Gates select rows themselves, so a gate with no tier counts them too.
-- **Needs follow the spec's codecs (#58).** A JSON string level is
-  `Decoded([JsonString])`, and base64 inside one is
-  `Decoded([JsonString, Base64])`. Two JSON string levels are never undone
-  (`provenance.decode.one-string-level`), so a `json_string` file read
-  through a shell `cat` is out of reach (`json_string+json_string`). The
-  table:
+- **Needs follow the spec, not the reference matcher.** A JSON string
+  level is `Decoded([JsonString])`, and base64 inside one is
+  `Decoded([JsonString, Base64])`. A `json_string` file read through a
+  shell `cat` looks like two levels from the file's text, but one of them
+  is the writer's: the content sat escaped in the writer's JSON tool
+  arguments, and L4 cuts the writer's spans per decoded argument value
+  (INV-1057) before fingerprinting. So the reader's side needs one level
+  (the harness's JSON output) and the label is in reach, Construction
+  (the first live run found all six at a day's window). The reference
+  undoes both levels on the reader's side and misses it, which is a
+  reference miss. The table:
 
   | Variant | Editor view | Shell cat (JSON output) |
   | --- | --- | --- |
   | exact | `Exact` | `Decoded([JsonString])` |
   | whitespace | `Normalized` | `Decoded([JsonString])` |
-  | json_string | `Decoded([JsonString])` | out of reach |
+  | json_string | `Decoded([JsonString])` | `Decoded([JsonString])` |
   | base64 | `Decoded([Base64])` | `Decoded([JsonString, Base64])` |
+
+  Only the ciphers the spec's `Codec` cannot name (rotN, binary8,
+  substitution) are out of reach by design.
 
   A cipher's need comes from its actual output. An encoding that changes
   nothing needs `Exact`, and a chain drops any layer that changed nothing.
 - **Deterministic.** Splice `n` and cipher pair `c/i` draw from streams
   derived from `--corpus-seed`. Shards are read in sorted order. A rerun
   gives identical worlds and truth (tested).
-- **Splice clock.** A's call `i` is at `compose(a0 + i, 1, 0)` and B's call
-  `j` at `compose(b0 + j, 0, 0)`. The offsets put B's read call right after
-  A's write call, so the write precedes the read.
+- **Splice clock.** A's call `i` is at `pace.at(a0 + i, 1, 0)` and B's
+  call `j` at `pace.at(b0 + j, 0, 0)`, one paced step (1 to 5 s by
+  default, `corpus::clock::Pace`) per call. The offsets put B's read call
+  right after A's write call, so the write precedes the read and the read's
+  result arrives 2 to 10 s after it, inside the live detector's 60 s
+  correlation window (`the_read_arrives_within_the_live_correlation_window`).
+  The 1,000 s step before put every splice out of that window.
+- **Cipher shape.** A tool-result delivery is a `read_mailbox` call as the
+  receiver's first response and the encoding as its result in the
+  receiver's next request, the shape a harness gives a tool call.
 - **Tool calls carry `signature: None`.** Trace datasets record no
   per-call signatures.
 - **Bounded memory.** Parquet pages are read as rows are consumed. LMCache
