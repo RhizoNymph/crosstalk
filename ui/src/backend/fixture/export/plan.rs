@@ -145,7 +145,7 @@ impl ExportSource for Snapshot<'_> {
         let content = request.include_content();
         let (basis, rows) = match request.dataset() {
             ExportDataset::Transmissions(scope) => {
-                self.scoped(Scoped::Transmissions, scope, content, watermark)?
+                self.scoped(Scoped::Transmissions, &scope.scope(), content, watermark)?
             }
             ExportDataset::Edges(scope) => self.scoped(Scoped::Edges, scope, content, watermark)?,
             ExportDataset::Accesses(scope) => {

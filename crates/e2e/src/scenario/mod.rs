@@ -98,6 +98,29 @@ fn exchange_id(started_at: Timestamp, ordinal: u128) -> ExchangeId {
 impl Scenario {
     /// The wiki relay starting at `start`.
     pub fn wiki_relay(start: Timestamp) -> Self {
+        let answer = format!(
+            "The runbook is explicit about it: {SENTENCE} After that the rollback itself is a normal deploy of the previous tag."
+        );
+        Self::relay_with(start, tools::page_as_read(), answer)
+    }
+
+    /// The wiki relay where nothing crosses: A writes the page as before,
+    /// but by the time B reads it the page holds only a placeholder
+    /// ([`tools::withheld_as_read`]), and B's answer says so. B's read of
+    /// A's page is a co-access with no content match: the correlator opens
+    /// a channel transmission, suspects it when its evidence window closes
+    /// and discards it when its suspicion expires.
+    pub fn wiki_silent_read(start: Timestamp) -> Self {
+        Self::relay_with(
+            start,
+            tools::withheld_as_read(),
+            "The runbook page is under review and has no steps in it yet; I can't tell you what has to happen before a rollback.".to_owned(),
+        )
+    }
+
+    /// The relay with B's `Read` returning `read_result` and B answering
+    /// `answer`.
+    fn relay_with(start: Timestamp, read_result: String, answer: String) -> Self {
         let a = ScenarioAgent {
             name: "a",
             headers: SessionHeaders {
@@ -228,12 +251,10 @@ impl Scenario {
             role: Role::User,
             blocks: vec![Block::ToolResult {
                 tool_use_id: read_id,
-                content: tools::page_as_read(),
+                content: read_result,
             }],
         };
-        let b_answer = vec![Block::Text(format!(
-            "The runbook is explicit about it: {SENTENCE} After that the rollback itself is a normal deploy of the previous tag."
-        ))];
+        let b_answer = vec![Block::Text(answer)];
         exchanges.push(exchange(
             &b,
             start,

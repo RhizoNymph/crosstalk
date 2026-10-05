@@ -41,13 +41,13 @@ use crate::interfaces::l8_surface::export::{
     JsonlErrorKind, JsonlExport, RowHasher, RowRefused, SourceFailure, read_jsonl, settled_window,
 };
 use crate::interfaces::l8_surface::summary::{
-    Delivery, SummaryState, TopicUnder, TransmissionSummary,
+    Delivery, SummaryState, TopicUnder, TransmissionStateKind, TransmissionSummary,
 };
 use crate::interfaces::l8_surface::{Permission, QueryError};
 use crate::support::{Blake3, ByteRange, Finite, NonEmpty, TimeWindow, Watermark};
 use crate::wire::DecodeErrorKind;
 
-const AREA: &str = "surface_reads/export";
+pub(super) const AREA: &str = "surface_reads/export";
 
 /// The topic-model version every scoped export here resolves to.
 const V: TopicModelVersion = TopicModelVersion(4);
@@ -56,7 +56,7 @@ const V: TopicModelVersion = TopicModelVersion(4);
 /// goldens pin the trailer's shape, not the hash function; the digest in
 /// them is this stand-in's.
 #[derive(Debug, Default)]
-struct StandInHasher {
+pub(super) struct StandInHasher {
     fed: Vec<u8>,
 }
 
@@ -81,7 +81,7 @@ impl RowHasher for StandInHasher {
 
 // ── Requests ───────────────────────────────────────────────────────────────
 
-fn scope() -> ExportScope {
+pub(super) fn scope() -> ExportScope {
     ExportScope {
         window: day(),
         filter: TopologyFilter::default(),
@@ -95,7 +95,7 @@ fn projection() -> ProjectionId {
 /// The dataset of each kind, through an exhaustive match.
 fn dataset(kind: ExportDatasetKind) -> ExportDataset {
     match kind {
-        ExportDatasetKind::Transmissions => ExportDataset::Transmissions(scope()),
+        ExportDatasetKind::Transmissions => ExportDataset::Transmissions(scope().into()),
         ExportDatasetKind::Edges => ExportDataset::Edges(scope()),
         ExportDatasetKind::Accesses => ExportDataset::Accesses(scope()),
         ExportDatasetKind::Topics => ExportDataset::Topics(scope()),
@@ -195,7 +195,7 @@ fn model() -> EmbeddingModel {
     }
 }
 
-fn parts(request: ExportRequest, basis: ExportBasis, rows: u64) -> ExportHeaderParts {
+pub(super) fn parts(request: ExportRequest, basis: ExportBasis, rows: u64) -> ExportHeaderParts {
     ExportHeaderParts {
         id: export_id(),
         request,
@@ -209,7 +209,7 @@ fn parts(request: ExportRequest, basis: ExportBasis, rows: u64) -> ExportHeaderP
     }
 }
 
-fn scoped_basis() -> ExportBasis {
+pub(super) fn scoped_basis() -> ExportBasis {
     ExportBasis::Scoped {
         topic_version: V,
         filter: TopologyFilter::default().pinned(V),
@@ -360,7 +360,7 @@ fn matched_only(text: &str) -> Excerpted {
     Excerpted::Shown(Excerpt::cut(text, range, ExcerptWindow::MATCH_ONLY).expect("fits"))
 }
 
-fn transmission_row(content: bool) -> TransmissionRow {
+pub(super) fn transmission_row(content: bool) -> TransmissionRow {
     let summary = TransmissionSummary {
         id: tx(),
         to: coder(),
@@ -588,6 +588,7 @@ fn row_refusals_golden_in_every_variant() {
         match refused {
             RowRefused::OtherDataset { .. }
             | RowRefused::ContentMismatch { .. }
+            | RowRefused::StateNotInScope { .. }
             | RowRefused::OutOfOrder
             | RowRefused::BeyondPlan { .. }
             | RowRefused::AfterRefusal => refused,
@@ -599,6 +600,9 @@ fn row_refusals_golden_in_every_variant() {
             got: ExportDatasetKind::Edges,
         },
         RowRefused::ContentMismatch { requested: false },
+        RowRefused::StateNotInScope {
+            state: TransmissionStateKind::Suspected,
+        },
         RowRefused::OutOfOrder,
         RowRefused::BeyondPlan { planned: 2 },
         RowRefused::AfterRefusal,

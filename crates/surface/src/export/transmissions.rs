@@ -3,10 +3,13 @@
 //!
 //! - [`NoTransmissions`] refuses it, as the source did before the spec had
 //!   `TransmissionStore::list`.
-//! - [`StoredTransmissions`] lists every confirmed, classified or
-//!   aggregated transmission (`TransmissionStore::list`) and keeps those
-//!   whose `Confirmed::at` lies in the settled window, that cross agents
-//!   and that the filter admits; each row is `TransmissionRow::of` under
+//! - [`StoredTransmissions`] lists every transmission in the scope's
+//!   states (`TransmissionStore::list`; confirmed, classified and
+//!   aggregated by default) and keeps those whose row time
+//!   (`TransmissionRow::at`: `Confirmed::at`, or `opened_at` for an
+//!   unconfirmed one) lies in the settled window, that cross agents and
+//!   that the filter admits (an unconfirmed one tested with the writer of
+//!   its first co-access as sender, no topic); each row is `TransmissionRow::of` under
 //!   the store's directory, the current verdict and the topic under the
 //!   header's version, so it equals the row `transmissions_by_id` lists.
 //!   Content columns are not served: a request with them is refused.
@@ -20,6 +23,7 @@ use std::future::Future;
 
 use crosstalk_spec::aggregates::filter::{FilterSubject, TopologyFilter};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aliases::Aliases;
 use crosstalk_spec::aliases::Resolve;
 use crosstalk_spec::derived::flow::transmission::{Crossing, Transmission, TransmissionState};
 use crosstalk_spec::derived::flow::verdict::Verdict;
@@ -29,7 +33,7 @@ use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{TransmissionQuery, TransmissionStore};
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
 use crosstalk_spec::interfaces::l8_surface::export::rows::{TransmissionRow, verdict_rows};
-use crosstalk_spec::interfaces::l8_surface::export::{ExportPlanError, ExportRow};
+use crosstalk_spec::interfaces::l8_surface::export::{ExportPlanError, ExportRow, ExportStates};
 use crosstalk_spec::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -42,13 +46,15 @@ fn store(reason: impl Into<String>) -> ExportPlanError {
 
 /// What the transmissions dataset reads.
 pub trait TransmissionSource: Send + Sync {
-    /// The rows of the confirmed transmissions in `settled` that `filter`
-    /// admits, topics under `version`; `content` asks for content columns.
+    /// The rows of the transmissions in `states` whose row time lies in
+    /// `settled` and that `filter` admits, topics under `version`; `content`
+    /// asks for content columns.
     fn rows(
         &self,
         filter: &TopologyFilter,
         version: TopicModelVersion,
         settled: Option<TimeWindow>,
+        states: &ExportStates,
         content: bool,
     ) -> impl Future<Output = Result<Vec<ExportRow>, ExportPlanError>> + Send;
 
@@ -70,6 +76,7 @@ impl TransmissionSource for NoTransmissions {
         _filter: &TopologyFilter,
         _version: TopicModelVersion,
         _settled: Option<TimeWindow>,
+        _states: &ExportStates,
         _content: bool,
     ) -> Result<Vec<ExportRow>, ExportPlanError> {
         Err(store(
@@ -122,17 +129,13 @@ where
     S: TransmissionStore + TransmissionVerdicts + Send + Sync,
     D: AgentDirectory + ChannelDirectory + Send + Sync,
 {
-    /// Every stored confirmed (or later) transmission.
-    async fn confirmed(&self) -> Result<Vec<Transmission>, ExportPlanError> {
+    /// Every stored transmission in `states`.
+    async fn in_states(&self, states: &ExportStates) -> Result<Vec<Transmission>, ExportPlanError> {
         let window = TimeWindow::new(Timestamp::from_micros(0), crosstalk_spec::wire::time::MAX)
             .map_err(|_| store("the all-time window is empty"))?;
         self.list(TransmissionQuery {
             window,
-            states: Some(BTreeSet::from([
-                TransmissionStateKind::Confirmed,
-                TransmissionStateKind::Classified,
-                TransmissionStateKind::Aggregated,
-            ])),
+            states: Some(states.iter().collect::<BTreeSet<_>>()),
             channel: None,
         })
         .await
@@ -184,6 +187,7 @@ where
         filter: &TopologyFilter,
         version: TopicModelVersion,
         settled: Option<TimeWindow>,
+        states: &ExportStates,
         content: bool,
     ) -> Result<Vec<ExportRow>, ExportPlanError> {
         if content {
@@ -200,23 +204,36 @@ where
             channels: move |id: ChannelId| ChannelDirectory::canonical(directory, id),
         };
         let mut rows = Vec::new();
-        for transmission in self.confirmed().await? {
-            let Some(confirmed) = transmission.state.confirmed() else {
-                continue;
-            };
-            if !settled.contains(confirmed.at())
-                || transmission.crossing(aliases) == Crossing::WithinOneAgent
-            {
+        for transmission in self.in_states(states).await? {
+            if transmission.crossing(aliases) == Crossing::WithinOneAgent {
                 continue;
             }
             let verdict = self.verdict(&transmission).await?;
             let topic = topic_under(&transmission, version);
-            let Ok(row) = TransmissionRow::of(&transmission, aliases, |_| verdict, |_| topic, None)
-            else {
+            let Ok(row) = TransmissionRow::of_in_scope(
+                &transmission,
+                aliases,
+                |_| verdict,
+                |_| topic,
+                None,
+                states,
+            ) else {
                 continue;
             };
+            if !settled.contains(row.at()) {
+                continue;
+            }
+            // The sender: the delivery's for a confirmed row, the writer of
+            // the first co-access for an unconfirmed one.
+            let from = match row.delivery() {
+                Some(delivery) => delivery.from,
+                None => match transmission.state.co_accesses().first() {
+                    Some(co_access) => aliases.agent(co_access.writer()),
+                    None => continue,
+                },
+            };
             let subject = FilterSubject {
-                from: row.delivery().from,
+                from,
                 to: row.summary().to,
                 route: &row.summary().route,
                 topic: match topic {

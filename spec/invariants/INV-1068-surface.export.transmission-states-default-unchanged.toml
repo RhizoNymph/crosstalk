@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.export.transmission-states-default-unchanged"
+statement = "A transmissions export whose TransmissionScope::states is the default (ExportStates::confirmed: confirmed, classified, aggregated) is written exactly as before states existed: its request and header carry no states key (an explicitly named default decodes equal and is written without it), its rows carry no state column, and every row encodes, for the digest, to the bytes it encoded to before."
+kind = "representation"
+requires = ["unit"]
+rationale = """
+Eval keeps baselines of transmissions exports and the bench compares
+digests across gateway versions. Adding the states scope must not change a
+single byte of an export that does not use it, so every existing request,
+manifest and digest stays valid.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::surface_reads::export_states::default_transmission_exports_are_byte_identical",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_requests_golden_for_every_dataset",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_rows_golden_for_every_dataset",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

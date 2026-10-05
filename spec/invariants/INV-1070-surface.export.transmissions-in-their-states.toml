@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.export.transmissions-in-their-states"
+statement = "A transmissions export holds exactly the stored transmissions whose state is in its scope's states, whose row time (Confirmed::at, or Transmission::opened_at for an unconfirmed one) lies in the settled window, that cross agents and that the filter admits (an unconfirmed one tested with the writer of its first co-access as its sender and no topic); a transmission in another state is not a row."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+Eval and the bench need the co-accesses the correlator never confirmed.
+Selecting by state lets them ask for exactly those. Since the watermark
+trails the clock by evidence_window + suspected_ttl, a suspected
+transmission has expired into discarded before its opening is settled, so
+settled exports hold unconfirmed traffic as discarded rows.
+"""
+
+[evidence]
+integration = [
+    "crosstalk_gateway::live::tests::a_suspected_transmission_is_exported_only_in_its_state",
+    "crosstalk_e2e::smoke::serve::an_unconfirmed_co_access_is_exported_only_in_its_state",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }
