@@ -90,6 +90,16 @@ pub fn render(report: &Report) -> String {
         o.counts.false_positive,
         o.counts.unjudged
     );
+    let access = &report.access_only;
+    if access.labels > 0 {
+        let _ = writeln!(
+            out,
+            "access-only recall (suspected or discarded only, not in overall): {} ({} / {})\n",
+            rate(access.recall),
+            access.labels,
+            access.expected
+        );
+    }
     let reach = &report.out_of_reach;
     if reach.counts.expected > 0 || reach.counts.predicted > 0 {
         let _ = writeln!(

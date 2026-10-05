@@ -199,8 +199,9 @@ fn a_transmission_joins_to_the_readers_exchange_and_tool_result() {
     assert_eq!(label.content.at.part.index, 0);
     assert_eq!(label.content.at.range.start(), 0);
     assert_eq!(label.content.at.range.end() as usize, P1.len());
-    // P1 holds a quote and a newline, which the writer's PUT escapes.
-    assert_eq!(label.needs, MatchNeed::Normalized);
+    // P1 holds a quote and a newline, which the writer's PUT escapes: one
+    // JSON string level (spec #58), not normalization.
+    assert_eq!(label.needs, MatchNeed::json_string());
     assert_eq!(outcome.resolved.transmissions, 3);
     assert_eq!(outcome.resolved.without_sender, 0);
 }
@@ -401,10 +402,10 @@ fn a_found_transmission_is_a_true_positive() {
         .find(|row| {
             row.key.route == RouteKind::Channel
                 && row.key.carrier == CarrierKind::ToolResult
-                && row.key.class == EvidenceClass::from(MatchClass::Normalized)
+                && row.key.class == EvidenceClass::from(MatchClass::Decoded)
                 && row.key.tier == Some(Tier::Construction)
         })
-        .expect("the normalized channel row");
+        .expect("the decoded channel row");
     // Lines 2 and 7 carry P1; the gateway found line 2's.
     assert_eq!(row.counts.expected, 2);
     assert_eq!(row.counts.found, 1);
@@ -831,4 +832,71 @@ fn an_unattributed_read_with_the_wrong_hash_is_dropped() {
     assert_eq!(mismatches[0].effect, Effect::Dropped);
     assert_eq!(outcome.resolved.dropped, 1);
     assert_eq!(judged(&outcome), (0, 3, 0));
+}
+
+// ---- access-only detections ----
+
+#[test]
+fn a_suspected_transmission_predicts_from_its_evidence_accesses() {
+    for discarded in [false, true] {
+        let dir = fixture::dir(if discarded { "discarded" } else { "suspected" });
+        let written = fixture::write(&dir, &fixture::truth_rows());
+        let before = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+        fixture::append_access_only(&written, discarded);
+        let outcome = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+        let class = if discarded {
+            EvidenceClass::Discarded
+        } else {
+            EvidenceClass::Suspected
+        };
+        // The evidence's accesses make one prediction: a001 → a003 at
+        // a003's read of p2, located at the whole tool result.
+        let made: Vec<_> = outcome
+            .predictions
+            .iter()
+            .filter(|p| p.class == class)
+            .collect();
+        assert_eq!(made.len(), 1, "{:?}", outcome.diagnostics);
+        let prediction = made[0];
+        assert_eq!(
+            prediction.from,
+            AgentKey::new(WorldKey::new(fixture::WORLD), "a001")
+        );
+        assert_eq!(
+            prediction.to,
+            AgentKey::new(WorldKey::new(fixture::WORLD), "a003")
+        );
+        assert_eq!(prediction.reader_exchange, written.a003[1].id);
+        assert_eq!(prediction.read_at.range.start(), 0);
+        assert_eq!(prediction.read_at.range.end() as usize, P2.len());
+        assert_eq!(
+            prediction.origin_at.map(|at| at.part.message),
+            Some(written.a001[1].response)
+        );
+        let row = outcome
+            .report
+            .rows
+            .iter()
+            .find(|row| row.key.class == class)
+            .expect("the access-only row");
+        assert_eq!(row.counts.predicted, 1);
+        assert_eq!(row.counts.correct, 1, "it lines up with the P2 label");
+        // Access-only recall counts the P2 label; overall does not find it.
+        assert_eq!(outcome.report.access_only.labels, 1);
+        assert_eq!(
+            outcome.report.access_only.expected,
+            outcome.report.overall.counts.expected
+        );
+        assert!(outcome.report.access_only.recall.is_some_and(|r| r > 0.0));
+        assert_eq!(
+            outcome.report.overall.counts.found,
+            before.report.overall.counts.found
+        );
+        assert_eq!(outcome.report.overall.recall, before.report.overall.recall);
+        assert_eq!(before.report.access_only.labels, 0);
+        assert_eq!(outcome.detected.exported, 3, "the export is unchanged");
+        assert_eq!(outcome.detected.evidence, 4);
+        let text = crosstalk_eval::report::table::render(&outcome.report);
+        assert!(text.contains("access-only recall"), "{text}");
+    }
 }
