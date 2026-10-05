@@ -15,7 +15,9 @@
 //!
 //! A gate checks one detector's runs (`detector = "live"`, or
 //! `"gateway-export"` for `ct-eval swarm`; unset means the reference
-//! matcher). `recall` and `precision` take a `min`; `violations` (negative controls a
+//! matcher), and one forwarding setting (`forwarding = "on"` for `ct-eval
+//! run --detector live --forwarding on`; unset means off, the shipped
+//! setting). `recall` and `precision` take a `min`; `violations` (negative controls a
 //! prediction fell under, optionally of one `reason`) takes a `max`;
 //! `fp_per_1k` (the selected rows' false positives per 1,000 of the run's
 //! exchanges) takes a `max`, and is skipped in a run with no exchanges. A gate
@@ -25,6 +27,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::detect::live::Forwarding;
 use crate::keys::DatasetId;
 use crate::predict::EvidenceClass;
 use crate::score::{Score, Selector};
@@ -90,6 +93,11 @@ pub struct Gate {
     pub class: Option<EvidenceClass>,
     #[serde(default)]
     pub tier: Option<Tier>,
+    /// Which forwarding setting's runs it checks (`ct-eval run
+    /// --forwarding`; default off, the shipped setting). Only live runs
+    /// set it on; every other detector runs with it off.
+    #[serde(default)]
+    pub forwarding: Forwarding,
     #[serde(flatten)]
     pub check: Check,
 }
@@ -240,13 +248,28 @@ impl Gates {
         Self::parse(&text, &shown)
     }
 
-    /// The gates tuned on `detector`; the others do not apply to its runs.
+    /// The gates tuned on `detector`, whatever their forwarding setting;
+    /// the others do not apply to its runs. [`Gates::for_run`] also
+    /// selects by forwarding.
     pub fn for_detector(&self, detector: GateDetector) -> Self {
         Self {
             gates: self
                 .gates
                 .iter()
                 .filter(|gate| gate.detector == detector)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// The gates of one run: tuned on `detector`, with `forwarding` as the
+    /// run had it.
+    pub fn for_run(&self, detector: GateDetector, forwarding: Forwarding) -> Self {
+        Self {
+            gates: self
+                .gates
+                .iter()
+                .filter(|gate| gate.detector == detector && gate.forwarding == forwarding)
                 .cloned()
                 .collect(),
         }

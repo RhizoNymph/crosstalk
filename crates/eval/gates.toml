@@ -132,6 +132,20 @@ carrier = "user_turn"
 metric = "precision"
 min = 0.83
 
+# SALT forwarding row (`Tier::Forwarding`: deliveries pasting the sender's
+# own tool output), only in runs with `--forwarding on`. With forwarding
+# off (the shipped default) these are known misses, kept out of `overall`
+# and ungated.
+
+[[gate]]
+name = "salt (live, forwarding on): forwarded tool output is found"
+detector = "live"
+forwarding = "on"
+dataset = "salt"
+tier = "forwarding"
+metric = "recall"
+min = 0.95
+
 [[gate]]
 name = "salt (live): nothing is attributed to a scripted sender"
 detector = "live"

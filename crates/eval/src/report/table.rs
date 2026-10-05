@@ -108,6 +108,17 @@ pub fn render(report: &Report) -> String {
             reach.counts.found, reach.counts.expected, reach.counts.predicted
         );
     }
+    let forwarding = &report.forwarding;
+    if forwarding.counts.expected > 0 || forwarding.counts.predicted > 0 {
+        let _ = writeln!(
+            out,
+            "forwarding (sender relayed its own tool output, not in overall): recall {} ({} / {}), {} predictions\n",
+            rate(forwarding.recall),
+            forwarding.counts.found,
+            forwarding.counts.expected,
+            forwarding.counts.predicted
+        );
+    }
     let rows: Vec<[String; 13]> = report.rows.iter().map(cells).collect();
     let mut widths: Vec<usize> = HEADER.iter().map(|h| h.len()).collect();
     for row in &rows {
