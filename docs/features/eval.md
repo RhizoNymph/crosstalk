@@ -360,13 +360,6 @@ that no content prediction does stays `missed` and is also counted
 `suspected`. Selectors, gates and the overall summary read content rows
 unless they name an access class.
 
-**Forwarding labels are apart.** `overall` is every content row whose
-tier is neither `OutOfReach` nor `Forwarding`; the forwarding rows are
-summed in `Report::forwarding` and never move overall recall or
-precision, whatever the run's forwarding setting. Only `--detector live
---forwarding on` changes what L4 indexes; the labels are the same in
-every run.
-
 **A discarded co-access aligned with no label is dismissed**
 (`Outcome::Dismissed`, `Counts::dismissed`, the table's `dismissed`
 column). L5 opened it on a co-access and then decided it was not a
@@ -383,6 +376,13 @@ every reread's discarded co-access (INV-1122 discards it by design) to
 the `reread` control: 1 violation on the headline run, 5 on the
 boilerplate run, and 12 and 21 `discarded` rows scored false
 (`tests/score_discarded.rs`).
+
+**Forwarding labels are apart.** `overall` is every content row whose
+tier is neither `OutOfReach` nor `Forwarding`; the forwarding rows are
+summed in `Report::forwarding` and never move overall recall or
+precision, whatever the run's forwarding setting. Only `--detector live
+--forwarding on` changes what L4 indexes; the labels are the same in
+every run.
 
 **Access-only recall** (`Report::access_only`, `AccessOnly`) is those
 labels over every in-reach label: `overall.suspected / overall.expected`.
