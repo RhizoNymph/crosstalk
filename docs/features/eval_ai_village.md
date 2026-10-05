@@ -6,7 +6,7 @@ its own computer, a group chat, memories and goals. The dataset is a
 near-verbatim dump of the village database as gzipped JSON Lines under
 `~/Data/ai/agents/ai-village` (`ai-village` in `datasets.toml`). The
 converter turns it into eval worlds of spec `NormalizedExchange`s with
-labels, in two modes, and exposes its streaming passes, resource normalizer
+labels, in two modes, and exposes its streaming passes, resource lookup
 and bash access tagger for reuse (topology demos, the M3 UI corpus).
 
 General eval concepts (worlds, labels, alignment, scoring) are in
@@ -21,13 +21,18 @@ General eval concepts (worlds, labels, alignment, scoring) are in
   the village MCP server's `get_events` tool, keyed by event id.
 - **Window mode** (`--mode window --from DAY --to DAY`, default
   2026-07-13..07-17): every standard agent over a window of village days,
-  one world per day, with rebuilt requests, structural chat labels and
-  heuristic repository-channel labels; GUI edits of Google Docs and Gmail
+  one world per day, with rebuilt requests, structural chat labels,
+  heuristic content labels on repository files, threads and pages, and
+  access-only labels on repositories; GUI edits of Google Docs and Gmail
   counted.
+  `--hours N` (with `--from` equal to `--to`, `Mode::DaySlice`) keeps
+  only the first N hours of the day from its 10:00 UTC start
+  (`Window::first_hours`), a bounded window for the live detector.
 - **Reusable passes**: `tables` (one streaming pass per table, filtered by
-  a window early), `resource` (canonical repository and site resources, an
-  L5 locator's canonical form), `access` (bash command → resource reads and
-  writes with their `WriteOutcome` and `http_request` equivalent).
+  a window early), `resource` (L5's locator of a URL or remote, and the
+  kind of shared resource a locator is), `access` (a bash command → the
+  shared-resource reads and writes L5's extractor records, with their
+  `WriteOutcome` and the writer's typed text).
 
 ## Non-scope
 
@@ -38,9 +43,13 @@ General eval concepts (worlds, labels, alignment, scoring) are in
   system prompt and per-query prompts are missing.
 - **The Claude Code agent in window mode.** Its calls are not in
   `computer_use_turns`; windows hold the standard agents only.
-- **Co-access labels.** A repository read after another agent's write whose
-  output does not hold the write's text is counted, not labelled: the eval
-  has no label kind for a suspected (co-access only) transmission.
+- **Co-access labels off the repository.** A read of a file, thread or
+  page after another agent's write that carried text, whose output does
+  not hold that text, is counted, not labelled. Only a push's co-access
+  (whose write has no content to find) is an access-only label.
+- **Local files.** Every agent has its own computer, so a file outside a
+  clone of a forge repository (and a local bare repository) is never a
+  shared resource here.
 - **GUI transmissions** (Google Docs edits, Gmail) are unobservable from
   tool calls and are only counted.
 
@@ -67,12 +76,13 @@ ai-village/*.jsonl.gz ──▶ stream::Table::scan (flate2, line by line; creat
                        tables::scan_turns (raw lines bucketed by village day)
                        tables::scan_events (AGENT_TALK, USER_TALK; RoomTimeline from every event)
                        tables::scan_chat, tables::scan_memories
-                       tag: every bash turn ─▶ access::Shell::accesses ─▶ repo::AccessLog (pairs);
+                       tag: every bash turn ─▶ access::Shell::accesses (crosstalk_flow ToolExtractors,
+                            the shell's persistent state) ─▶ repo::AccessLog (pairs: content / access only);
                             GUI turns ─▶ gui::GuiStats
                      next_world (one per village day): day::build
                        calls::turn_call per turn (provider::response), talk_call for unmatched AGENT_TALK
                        requests: system prompt + session history + chat user turn (prompt)
-                       chat labels (Structural) and repo labels (Heuristic)
+                       chat labels (Structural), repo content labels and access-only labels (Heuristic)
                                      │
                                      ▼
                   World ─▶ Detector ─▶ score ─▶ report (+ ai-village.json: stats, unlabelled predictions)
@@ -181,106 +191,73 @@ ai-village/*.jsonl.gz ──▶ stream::Table::scan (flate2, line by line; creat
   call (the turn whose `send_message_back_to_chat` carried exactly the
   content, latest at or before the message), `Direct` / `UserTurn`, at the
   content's bytes.
-- **Repository channels (Heuristic).** `access::Shell` tags each bash
-  command, per agent in time order (the bash tool is one persistent shell,
-  so `cd` and learnt remotes carry over):
+- **Shared-resource accesses** (`access::Shell`). Every bash command goes
+  through `crosstalk_flow::extract::ToolExtractors` as the `bash` call the
+  agent made, with its output as a successful result (the village records
+  no exit status). The locator, the op and each write's `WriteOutcome`
+  are the extractor's; nothing is normalized here:
 
-  | Command | Access | Resource from |
+  | Command | Access | Locator |
   | --- | --- | --- |
-  | `git push` | write | the output's `To <remote>`, else a URL argument, else the directory's learnt remote |
-  | `git clone <url>` | read | the URL (the clone directory learns it) |
-  | `git pull` / `git fetch` | read | the output's `From <remote>`, else a URL argument, else the directory's remote |
-  | `gh`/`glab` `issue`/`pr`/`mr` create, comment, note, edit, close, reopen, merge, review, approve | write (payload: `--body`, `--title`, `--description`, `--message`, `-m`, glab `-d`, `$(cat <<EOF…)` bodies) | `-R`/`--repo`, else a URL argument, else the directory's remote, else a URL in the output |
-  | `gh`/`glab` `issue`/`pr`/`mr` view, list, diff, checks, status | read | the same |
-  | `gh api` / `glab api` | write with `-X` other than GET or a field flag, else read | the API path |
-  | `curl` | write with `-X` other than GET/HEAD or a data/form/upload flag (unless `-G`), else read (payload: data values) | every URL argument |
-  | `wget` | write with `--post-data`/`--post-file`/`--method`, else read | every URL argument |
+  | `git push` | write, no content in the call (`WritePayload::Unseen`) | `Locator::Repository { host, owner, name }` (lower case, no `.git`, GitLab groups joined with `/`) |
+  | `git pull`, `git fetch`, `git clone`, `gh repo clone` | read | the repository |
+  | `gh`/`glab` `issue`/`pr`/`mr` `create` | write | the collection: `/issues`, `/pulls`, `/-/issues`, `/-/merge_requests` |
+  | `comment`, `note`, `edit`, `review` | write | the thread: GitHub `https://<host>/<o>/<n>/issues/<N>` (issues and pulls alike), GitLab `/-/issues/<N>`, `/-/merge_requests/<N>` |
+  | `view`, `list` | read | the thread, the collection |
+  | `gh api`, `glab api`, `curl`, `wget` | the method's | the site rules: the repository (`api.github.com/repos/o/n`, codeload, web and tree URLs, Pages: `o.github.io/n` is `o/n`, `o.github.io` alone `o/o.github.io`), its file (`raw.githubusercontent.com`, `blob`/`raw`, `contents`, GitLab `repository/files`), a thread or collection; else L5's URL locator (a scheme-less host is `https`) |
+  | `cat`, `head`, `tail`, `sed -n '<lines>p'` of a file; `>`, `>>`, `tee` into one | read; write | in a clone whose remote is known, the repository's file `File { host: "<host>/<o>/<n>", path }`; else a local file (not kept) |
 
-  A **pair** is a read whose latest earlier write to the same resource came
-  from another agent. It is a label (`Channel { resource }`, `ToolResult`,
-  Heuristic) when the read's output holds a payload line of the write (≥ 24
-  bytes, ≥ 20 letters or digits), located at that line, at the reader's next
-  call in the same session (the first whose request carries the output).
-  Otherwise it is a co-access only (counted). A pair whose write is on an
-  earlier day has its writer's exchange in another world: counted, not
-  labelled.
-- **Canonical resources** (`resource::from_url`, `from_remote`): every form
-  of a repository meets on one canonical URL,
-  `https://<forge>/<owner>/<repo>` with a lower-cased path: git remotes
-  (https, `git@host:`, `ssh://`), web URLs (`/-/` subpaths, `.git`),
-  `api.github.com/repos/o/r/…`, `raw.githubusercontent.com/o/r/…`,
-  `gitlab.com/api/v4/projects/<url-encoded path>/…`, Pages
-  (`o.github.io/r/…`, `g.gitlab.io/p/…`). A numeric GitLab project id stays
-  `https://gitlab.com/api/v4/projects/<id>`, a unique GitLab Pages domain
-  (`<name>-<6 hex>.gitlab.io`) stays its site, and any other URL is itself
-  without query or fragment. Credentials and `www.` are dropped.
+  A read whose output reports a failure is no access; a write's outcome is
+  read from the output for git, curl, wget and the forge CLIs. Only shared
+  resources are kept (`resource::kind`: `Repository`, `RepoFile`, `Url`).
+
+  **The shell's state** is the converter's, because the gateway's context
+  cannot know it (see Gaps): the bash tool is one persistent shell per
+  agent, so the working directory carries over (the context is moved as
+  L5's persistent `Bash` moves it); `~` and `$HOME` are
+  `/home/computeruse`, expanded before extraction; clones the extractor
+  learns (`git clone`, `gh repo clone`, `git remote add`, `git remote -v`)
+  are kept per agent across the window; and a clone made before the
+  window is learnt from the remote a push or pull prints (`To <remote>`,
+  `From <remote>`): the directory the command ended in is bound to it and
+  the command is extracted again.
+
+  A write keeps its **authored text** (`access::payload`): here-document
+  bodies, body and title flags, API fields, curl and wget data, `echo`
+  and `printf` arguments; a `git push` has none (`Payload::Unseen`).
+- **Pairs** (`window::repo`). A pair is a read whose latest earlier write
+  to the same locator came from another agent. What it becomes:
+
+  | Write | Pair | Label |
+  | --- | --- | --- |
+  | `git push` (`Payload::Unseen`) | access only | `Expectation::AccessOnly` (`ExpectedAccess`): `Channel { Repository }`, `ToolResult`, Heuristic, over the read's whole output. The gateway records a push without spans, so co-access alone links it and the spec keeps it Suspected; only a suspected or discarded prediction finds it, under access-only recall |
+  | authored text, a line of which (≥ 24 bytes, ≥ 20 letters or digits) is in the read's output | content | `Expectation::Transmission`: `Channel { resource }` (the repository file, thread, collection or page), `ToolResult`, Heuristic, at that line, `needs` from the writer's call |
+  | authored text not in the output | co-access only | counted (`repo_co_access`) |
+
+  Content therefore crosses only where it does in the gateway: a file a
+  writer wrote in a clone and a reader read from another clone or a raw
+  URL of the same repository file, an issue comment read back, a page
+  posted and fetched. Both labels sit at the reader's next call in the
+  same session (the first whose request carries the output). A pair whose
+  write is on an earlier day has its writer's exchange in another world:
+  counted, not labelled. Rejected writes never pair.
 - **GUI edits** (`gui::GuiStats`): GUI turns whose typed text or the model's
   visible text names Google Docs or Gmail are counted, never labelled.
 - **Coverage** is `Partial`.
 
-### Write outcomes
+### The L5 extractor
 
-Each write carries the spec's `WriteOutcome` (`access::outcome`), judged
-from the command's output alone (the village's bash turns record no exit
-status, and git and gh write progress to stderr):
-
-- `Rejected`: the output reports a failure: a first line opening with
-  `fatal:`, `error:`, `curl: (`, `HTTP 4xx/5xx`, `GraphQL:`, `gh: `,
-  `Permission denied`, `could not` and the like; a git push's
-  `! [rejected]`, `! [remote rejected]` or `error: failed to push`; or a
-  JSON body whose top-level `message`/`error` is a known API failure (`Bad
-  credentials`, `Not Found`, `Validation Failed`, `401 Unauthorized`, …).
-- `Delivered`: the tool's success shows (a push's `a..b main -> main` or
-  `Everything up-to-date`; a forge CLI's printed URL or `✓`; an API body
-  with `html_url`, `web_url` or `created_at`).
-- `Unknown`: neither (most `curl` writes).
-
-A rejected write is recorded and counted but never pairs, and it does not
-hide the latest earlier write to its resource (`WriteOutcome::pairs`). A
-read whose output reports a failure is no access (the spec's reads need a
-delivered result), so a failed `git clone` or `curl` reads nothing.
-
-### The L5 contract
-
-The agreed L5 `HttpTool` contract: a call of a tool named `http_request`,
-`fetch`, `web_fetch` or `curl` with `url` and `method` arguments; `GET` and
-`HEAD` read, `POST`, `PUT`, `PATCH` and `DELETE` write (the written spans
-from the first of `body`, `content`, `text`, `data`), any other method is
-no access; the locator is the canonical URL.
-
-AI Village agents make no such call. Every repository and web access is
-inside a `bash` command (or a GUI action), and the exchanges keep those
-calls exactly as the model made them. The converter meets the contract in
-three ways:
-
-- **HTTP equivalents.** Each `curl`, `wget`, `gh api` and `glab api`
-  access keeps the `http_request` call it is equivalent to
-  (`Access::http`, `access::HttpRequest`; `HttpRequest::tool_call` builds
-  it): the method as the contract reads it (`-X`/`--request`, `-I` HEAD,
-  `-T` PUT, data or field flags POST unless `-G`, else GET), the URL as
-  written (`gh api <path>` is `https://api.github.com/<path>`, `glab api
-  <path>` is `https://gitlab.com/api/v4/<path>`) and the body (curl's data
-  values joined with `&` as curl sends them; the API fields as a JSON
-  object). A method outside the six is no access, as in L5.
-- **Canonical resources.** A URL off the forges is exactly the locator
-  L5's extractor gives it (`crosstalk_flow::extract::resource::url_locator`:
-  scheme and host lower-cased, default port, user info and fragment
-  dropped, dot segments resolved, percent-encoding normalized, query
-  parameters sorted). A repository is the locator of its lower-cased web
-  URL (`https://github.com/<owner>/<repo>`), which every remote, API, raw,
-  blob and Pages form of it maps to. `resource::canonical` maps any L5
-  locator (a URL, or L5's GitHub file `File { host: "github.com/o/r" }`) to
-  the converter's resource, and a test runs L5's `ToolExtractors` over the
-  equivalent calls to check that the two agree.
-- **Bash-only accesses.** `git push`, `git clone`, `git pull`/`fetch` and
-  the forge CLIs' issue, PR and MR commands speak git or the CLIs' own
-  GraphQL: only a Bash extractor could see them (`Access::http` is
-  `None`). A label counts as `repo_labels_http_visible` when both its write
-  and its read have an HTTP equivalent, else `repo_labels_bash_only`. L5's
-  Bash extractor today reads `curl`/`wget` and learns clones from `git
-  clone`/`gh repo clone`, but records no access for `git push`,
-  `git pull` or any `gh`/`glab` issue command, so it would see the
-  `curl`/`wget` side of a label at most.
+The converter calls the gateway's own extractor, so a label's resource is
+by construction what the gateway records for the same call:
+`tests/ai_village/l5.rs` builds a window from representative village
+commands (`git clone`, a file written in a clone and pushed, `git pull`,
+`sed -n` of the cloned file, `gh issue create`/`list`/`comment`/`view`,
+`glab issue note` read back through the GitLab API, a Pages fetch, a raw
+file fetch) and runs `ToolExtractors` itself, as the gateway does (the
+`bash` tool, default config, one context per agent), asserting that every
+label's resource is a write of the writer's call and a read of the
+reader's call, that access-only labels are exactly the `Unseen` writes,
+and which labels exist. The one difference is the shell state above.
 
 The Claude Code agent's `WebFetch` calls are the only fetch-tool-shaped
 calls in the dataset.
@@ -289,17 +266,16 @@ calls in the dataset.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/ai_village/mod.rs` | the source and its modes | `AiVillageSource`, `Mode`, `Stats`, `AiVillageError`, `DATASET`, `DEFAULT_FROM`, `DEFAULT_TO` |
+| `src/datasets/ai_village/mod.rs` | the source and its modes | `AiVillageSource`, `Mode` (`ClaudeCode`, `Window`, `DaySlice`), `Stats`, `AiVillageError`, `DATASET`, `DEFAULT_FROM`, `DEFAULT_TO` |
 | `…/stream.rs` | streaming a table | `Table` (`scan`, `load`, `path`, `file_name`), `decode`, `created_at`, `string_field`, `StreamError` |
-| `…/time.rs` | times, village days, windows | `parse_timestamp`, `format_seconds`, `Day`, `village_day`, `Window`, `TimeError` |
+| `…/time.rs` | times, village days, windows | `parse_timestamp`, `format_seconds`, `Day`, `village_day`, `Window` (`days`, `first_hours`), `TimeError` |
 | `…/schema.rs` | the rows read | `AgentRow`, `RoomRow`, `SessionRow`, `TurnRow`, `EventRow`, `ChatRow`, `MemoryRow`, `VillageGoalRow`, `AgentGoalRow`, `ClaudeCodeRow` |
 | `…/tables.rs` | reusable passes | `load_directory`/`Directory`, `load_sessions`, `scan_turns`, `scan_events`/`EventScan`, `events_by_id`, `leading_id`, `scan_chat`, `scan_memories`/`Memories`, `load_goals`/`Goals` |
 | `…/rooms.rs` | room membership | `RoomTimeline`, `ROOMS_V1_MICROS` |
-| `…/resource.rs` | canonical resources | `from_url`, `from_remote`, `repo`, `canonical`, `Forge`, `urls` |
-| `…/access/mod.rs` | bash accesses | `Shell` (`accesses`), `Access` (`http_visible`), `Op` (`Read`, `Write(WriteOutcome)`), `Tool`, `HOME` |
-| `…/access/http.rs` | the L5 `HttpTool` contract | `HttpRequest` (`tool_call`), `HttpMethod`, `HTTP_TOOL` |
-| `…/access/outcome.rs` | judging an output | `failed`, `write_outcome` |
-| `…/access/shell.rs` | word splitting | `commands`, `SimpleCommand`, `heredoc_argument` |
+| `…/resource.rs` | L5's locators and shared kinds | `from_url` (site rules, else the URL), `from_remote` (`RepoId`), `kind`, `ResourceKind` |
+| `…/access/mod.rs` | bash accesses through `ToolExtractors` | `Shell` (`accesses`, `cwd`, `unextracted`), `Access` (`payload`, `label`), `Op` (`Read`, `Write { outcome, payload }`), `Payload` (`Unseen`, `Authored`), `expand_home`, `HOME`, `BASH_TOOL` |
+| `…/access/payload.rs` | a write's typed text | `authored`, `heredoc_bodies` |
+| `…/access/shell.rs` | word splitting (reports, payloads) | `commands`, `SimpleCommand`, `heredoc_argument` |
 | `…/provider/{mod,anthropic,openai,gemini}.rs` | provider responses → canonical | `response`, `Response`, `arguments`, `anthropic::{block, tool_result}` |
 | `…/text.rs` | locating text, match needs | `json_escape`, `json_unescape`, `escapes`, `find`, `need`, `visible_text` |
 | `…/claude_code/mod.rs` | the Claude Code source | `ClaudeCodeStream`, `ClaudeCodeStats`, `after` |
@@ -310,10 +286,10 @@ calls in the dataset.
 | `…/window/calls.rs` | a day's calls | `Call`, `Origin`, `turn_call`, `talk_call`, `results`, `output_text`, `senders`, `by_agent` |
 | `…/window/prompt.rs` | synthetic prompts | `system`, `chat`, `ChatLine` |
 | `…/window/day.rs` | a day's world | `build`, `CHAT_HORIZON_MICROS` |
-| `…/window/repo.rs` | access log and pairs | `AccessLog`, `AccessRecord`, `Pair`, `AccessStats`, `TurnRef`, `payload_line` |
+| `…/window/repo.rs` | access log and pairs | `AccessLog`, `AccessRecord`, `Pair`, `Link` (`Content`, `AccessOnly`), `AccessStats`, `TurnRef`, `payload_line` |
 | `…/window/gui.rs` | GUI edit counts | `GuiStats` |
 | `…/report.rs` | unlabelled predictions | `Unlabelled`, `tool_kind` |
-| `tests/ai_village/` | synthetic fixtures written to a temp dir; units, Claude Code, window, the L5 contract (`l5.rs`, runs `crosstalk-flow`'s extractor) | |
+| `tests/ai_village/` | synthetic fixtures written to a temp dir; units, Claude Code, window, agreement with the gateway's extractor (`l5.rs`, runs `crosstalk-flow`'s `ToolExtractors` over the window's calls) | |
 
 ## Reference baselines
 
@@ -350,40 +326,130 @@ quiz data", news phrases such as "the Department of Defense").
 ct-eval run --dataset ai-village --mode window   # 2026-07-13..17
 ```
 
-5 village days, 26 agents, 116,410 exchanges (one per turn), 97,988 labels:
-97,978 structural chat labels and 10 heuristic repository labels. About
-14.7 min and 6.6 GB peak (the week's raw turn lines are held per day; the
-three full passes over the 2.4 GB turns and memories tables dominate).
+5 village days, 26 agents, 116,410 exchanges (one per turn), 98,076
+content labels (97,978 structural chat labels and 98 heuristic channel
+labels) and 277 access-only labels. About 36 min and 6.7 GB peak with
+the bash commands going through L5's extractor (14.7 min before, on a
+lightly loaded machine; this run shared 16 cores with two live runs).
 
 | route | carrier | class | tier | expected | found | recall |
 | --- | --- | --- | --- | ---: | ---: | ---: |
 | direct | user_turn | exact | structural | 61860 | 61788 | 0.999 |
 | direct | user_turn | normalized | structural | 48 | 48 | 1.000 |
 | direct | user_turn | decoded | structural | 36070 | 36070 | 1.000 |
-| channel | tool_result | exact / decoded | heuristic | 10 | 0 | 0.000 |
+| channel | tool_result | exact | heuristic | 60 | 0 | 0.000 |
+| channel | tool_result | decoded | heuristic | 38 | 0 | 0.000 |
+| channel | tool_result | suspected (access-only labels) | heuristic | 277 | 0 | 0.000 |
 
-The 36,070 `decoded` labels were `normalized` before the string level
-rule (they need one JSON string level undone, `Decoded([JsonString])`);
-48 need whitespace or case only, and none is two levels deep, so no
-window label is out of reach. Claude Code mode's labels did not move.
+The 36,070 `decoded` chat labels need one JSON string level undone
+(`Decoded([JsonString])`); 48 need whitespace or case only, and none is
+two levels deep, so no window label is out of reach.
 
-- **Accesses.** 21,668 (14,934 reads, 6,734 writes: 4,891 delivered, 48
-  rejected, 1,795 unknown) on 2,397 resources; 15,480 have an
-  `http_request` equivalent (curl 11,047, `glab api` 4,427, wget 6) and
-  6,188 are Bash-only (git push 4,759, pull 718, fetch 449, clone 130,
-  `glab` issue/MR commands 132).
-- **Pairs.** 993 cross-agent read-after-write pairs: 10 labels, 870
-  co-access only (most writes are `git push`, whose payload is code the
-  converter does not keep), 76 across days, 37 with no next call. Of the
-  10 labels, 5 are `glab api` on both sides (HTTP-visible) and 5 have a
-  `glab mr`/`issue` command on one side (Bash only).
+- **Accesses** (the extractor's, shared resources only): 23,230 (13,997
+  reads, 9,233 writes: 9,022 delivered, 83 rejected, 128 unknown) on
+  6,691 resources. By kind: repository 4,500 writes (4,493 pushes, the
+  rest API writes) and 1,451 reads; repository files 2,928 writes and
+  4,892 reads; pages, threads and API URLs 1,805 writes and 7,654 reads.
+  72 commands the extractor refused (unterminated quotes and the like).
+- **Pairs.** 522 cross-agent read-after-write pairs: 303 on a push
+  (access only) and 219 on written text. 277 access-only labels and 98
+  content labels (76 on a repository file: written in one clone and read
+  from another or from a raw URL; 22 on a thread, collection or page), 68
+  content pairs whose output holds none of the writer's text, 61 across
+  days, 18 with no next call. Before (the converter's own normalizer,
+  every repository form one `Url`): 993 pairs, 10 labels and 870
+  co-accesses counted but not scored.
 - **Channel recall 0** is the reference matcher's: it routes bash results
-  as `Direct` (see Gaps).
-- Unjudged predictions: 578,674 in system prompts (memories quoting other
-  agents), 362,110 in user turns (chat quoted again later), 80,664 in bash
-  local-file reads, 44,148 in bash repository commands. **Shared web
-  content**: 36,176 in bash web reads and 21,684 in scripts fetching a URL.
+  as `Direct` and reports no co-access (see Gaps).
+- Unjudged predictions: 578,136 in system prompts (memories quoting other
+  agents), 361,968 in user turns (chat quoted again later), 79,730 in bash
+  local-file reads, 43,939 in bash repository commands. **Shared web
+  content**: 35,914 in bash web reads and 21,579 in scripts fetching a URL.
 - GUI: 34,999 GUI turns; 1,347 name Gmail and 141 Google Docs (counted).
+
+### Live (`--detector live`), 2026-10-05
+
+Rescored after the gateway's L5 repository and shell semantics
+(`Locator::Repository`, git/gh/glab extraction, shell outcomes read from
+output, content confirmed up to `content_retention_ms`). The week window
+does not finish live in useful time (about one village hour per wall
+hour with full rebuilt session histories, so roughly two days for the
+week), so the window is the bounded slice `--from 2026-07-13 --to
+2026-07-13 --hours 8` (10:00 to 18:00 UTC, the village's first two
+working hours: 6,452 exchanges, 25 agents). The window was never run live
+before, so its "before" is the previous converter (base `c9e0465` with
+the slice option) under today's gateway. Each run shared 16 cores with two
+others.
+
+| run | labels in reach | before: recall / precision | now: recall / precision | repo channel content labels found | access-only recall | time | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Claude Code, all 993 contexts | 15798 | 0.998 / 1.000 (#83) | 0.998 / 1.000 (15772 / 15798) | - | - | 64 min (52.5 in #83) | 0.8 GB |
+| window slice, before (old converter) | 4078 | 0.999 / 1.000 | - | 0 / 4 | - | 3.5 h | 1.2 GB |
+| window slice, now | 4089 (+ 15 access-only) | - | 0.996 / 1.000 (4074 / 4089) | 0 / 15 | 0.000 (0 / 15) | 3.6 h | 1.3 GB |
+
+Reference on the same slice: 4,074 / 4,078 before and 4,074 / 4,089 now
+(chat unchanged; channel rows 0 by construction).
+
+Reading it:
+
+- **Chat is untouched**: 4,074 chat labels found either way; the overall
+  recall moves only because 11 more channel labels are in reach (4 → 15).
+- **The repository labels are not found live** (0 of 15 content, 0 of 15
+  access-only). Most of their accesses are invisible to the gateway's
+  context (Gaps: over the week, of the converter's accesses, 3,483
+  repository and 4,320 repository-file accesses need a clone the gateway
+  never learns, and 442 and 1,054 more a `~` it does not follow), so
+  neither side of a pair is a co-access for L5. The short ones (`Wave 2
+  Survey: Claude Fable 5`, 29 bytes, six labels) are under L4's 32-byte
+  shingle. The access-only pairs also sit minutes apart, beyond the
+  agreed 60 s correlation window.
+- **A day-long correlation window does not run**: with
+  `--correlation-window 86400` the slice's world fails in prediction
+  conversion (`PredictError::UnlocatedAccess`: read access
+  `01KXE46805TY443EM5HE3VE2YF` names a result part that is not in its
+  exchange), so no wider access-only recall is reported.
+
+### Findings for the gateway (2026-10-05)
+
+Found by running the extractor as the gateway runs it (the `bash` tool,
+default config, one context per agent) next to the converter over the
+week's bash turns. Exchange ids are each turn's own exchange (its call).
+
+1. **The context cannot follow the village's shell** (see Gaps): of the
+   converter's accesses, 3,483 repository, 4,320 repository-file and 31
+   thread accesses depend on a clone the gateway never learns (made
+   before the window, or bound in a directory the gateway's non-persistent
+   `bash` context never reaches), and 442, 1,054 and 27 more on `~` or
+   `$HOME`, e.g. `01KXE3J8NFPA8TNQ3T8JDP9N5C` (`cd ~/wellbeing-compass &&
+   … git push`), `01KXEAYNKYNVQVQBSHD22HR3WW` (`git push` in a clone
+   entered in an earlier call), `01KXEB6MG9ZY9FBDHM15SB025E` (`cd
+   …/ai-wellbeing/village-ci-tools && git pull` in a clone made before the
+   window). Expected: a push or pull whose output prints its remote
+   (`To <url>`, `From <url>`) is that remote's, whatever the context
+   knows; `bash` tools of harnesses with one persistent shell persist
+   their directory.
+2. **A wrong binding attributes pushes to the wrong repository.** Seven
+   pushes and pulls are recorded on a repository the converter, following
+   the shell, does not attribute them to. Confirmed by the output in
+   `01KXESRHVM2S1265BP82GN2RCR` (`git push origin main`, output `To
+   https://gitlab.com/ai-village-agents/village/constraint-dashboard.git`,
+   recorded as a write of `daily-signal-garden-gpt55`); the others
+   include `01KXESQPE17KBP4TKRAK0HCY59`, `01KXET8ZTTFVD2MCFCGW3ZH7S6`
+   (also recorded on `daily-signal-garden-gpt55`) and
+   `01KXHB5HQQHV7CBSMV31T798NT` (a pull recorded on
+   `deepseek-pattern-archive`). The non-persistent context resolves the
+   remote name through a directory the agent had left. Expected: the
+   printed remote wins over a bound one.
+3. **A read is recorded for a command that never ran.**
+   `01KXED5HV034DD2CSEZCVNJ0FV`: `cd ai-wellbeing && sed -n '1,220p'
+   wave2-visualization.html`, output `cd: ai-wellbeing: No such file or
+   directory`, is recorded as a read of the repository file. `cat`,
+   `head`, `tail` and `sed -n` reads have no command rule, so an output
+   that is only a shell error still delivers.
+4. **A read access names a result part outside its exchange** under a
+   day-long correlation window (`--correlation-window 86400`, slice
+   above): access `01KXE46805TY443EM5HE3VE2YF`; the eval's prediction
+   conversion fails the world (`PredictError::UnlocatedAccess`).
 
 ## Invariants and constraints
 
@@ -404,19 +470,22 @@ window label is out of reach. Claude Code mode's labels did not move.
 - **Rejected writes never pair.** A `Rejected` write is counted and kept
   in the log but is never the write of a pair; a read with a failed output
   is no access.
-- **Resources are canonical URLs.** Every label resource is a
-  `Locator::Url`: off the forges, exactly L5's `url_locator`; on them, the
-  repository's lower-cased web URL. `resource::canonical` of L5's locator
-  for an equivalent `http_request` is the access's resource.
+- **Resources are the extractor's locators.** Every channel label's
+  resource is a locator `ToolExtractors` gave the writer's and the
+  reader's `bash` calls: `Locator::Repository`, a repository's `File`, or
+  a `Url`. Nothing in the converter normalizes a resource.
+- **Access-only exactly for unseen writes.** A pair is an access-only
+  label when, and only when, its write carries no content in the call
+  (`WritePayload::Unseen`, a `git push`); content labels need a line of
+  the writer's typed text in the reader's output.
+- **Only shared resources.** Local files and local bare repositories are
+  dropped: each agent has its own computer.
 - **The exchanges keep the raw calls.** Bash commands and GUI actions stay
-  as the model made them; HTTP equivalents live beside the accesses, never
-  in the exchanges.
+  as the model made them.
 - **No dataset bytes in the repository.** Tests write synthetic rows.
 
 ## Gaps
 
-- **Eval core: no co-access label.** A suspected (co-access-only) transmission
-  has no expectation kind; such pairs are counted, not scored.
 - **Eval core: negative controls need a named sender.** "Shared web content"
   traps (two agents fetching one page) cannot be labelled without naming a
   sender, so they surface as unjudged predictions (`ai-village.json`'s
@@ -428,16 +497,17 @@ window label is out of reach. Claude Code mode's labels did not move.
 - **Spec: no replayed-request fidelity marker.** Exchanges with a rebuilt
   request travel as ordinary full-history exchanges; only the eval's
   `Fidelity` says so.
-- **Spec: no repository resource.** L5 names a repository's files
-  (`File { host: "github.com/o/r", path }`) and URLs, but nothing names the
-  repository itself, which is what `git push`, `git pull` and an issue
-  comment touch. The converter's repository channel is a `Url` of the
-  repository's web URL, coarser than L5's files: a `curl` of a raw file and
-  a `git push` meet on it here, and on nothing in L5.
-- **Spec: no exit status for shell results.** Village bash turns carry
-  stdout and stderr only, and L5 reads no shell result text (`ContentRule`
-  none for shell tools), so L5 would mark every shell write `Delivered`
-  where this converter judges `Rejected` or `Unknown` from the text.
+- **Gateway context: the shell's state.** The converter knows what the
+  gateway's per-conversation context cannot, and the live detector misses
+  accesses for it (counted over the week window, 2026-07-13..17, against
+  the extractor run as the gateway runs it; see Reference baselines):
+  L5's `bash` tool does not persist its working directory, L5 does not
+  follow `~` or `$HOME`, and a clone made before the conversation is never
+  learnt from the remote a push or pull prints. A context that is wrong
+  rather than unknown is worse: a `git remote add` or clone the gateway
+  places in the home directory (the agent had moved elsewhere in an
+  earlier call) binds the home directory, and later pushes from other
+  clones are attributed to that repository.
 - **Spec types not used here.** `IngressMode::Replay { corpus }` is for the
   corpus client, which the eval core has not moved to yet; the eval core
   still has its own `CarrierKind` (TODO in `truth/kinds.rs`), so the

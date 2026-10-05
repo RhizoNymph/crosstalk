@@ -1439,7 +1439,10 @@ Features Index:
       growing conversation), with typed,
       JSONL-serialisable ground truth (expected transmissions, out of reach
       when undecodable or read from a medium the sender never wrote
-      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
+      (INV-963), access-only expectations that only suspected or discarded
+      evidence finds (a co-access whose write carries no spans, such as a
+      git push), negative controls, exemptions, agent clusters, with
+      tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented
@@ -1646,21 +1649,26 @@ Features Index:
       (default 2026-07-13..17): every standard agent, one world per village
       day, requests rebuilt from responses (system prompt from goals and
       memory, session history, chat since the previous call), structural
-      chat labels, heuristic repository-channel labels from bash accesses
-      on canonical repository URLs, GUI edits counted. Bash accesses follow
-      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
-      their equivalent http_request {method, url, body} call, git and the
-      forge CLIs' issue commands are marked Bash-only, every resource is a
-      canonical URL (L5's url_locator off the forges, the repository's web
-      URL on them), and each write carries the spec's WriteOutcome
-      (rejected writes never pair). Its streaming table passes, resource
-      normalizer and bash access tagger are reusable.
+      chat labels, heuristic channel labels from bash accesses, GUI edits
+      counted. Every bash command goes through crosstalk-flow's
+      ToolExtractors as the bash call the agent made, so each access's
+      locator (Locator::Repository for git push/pull/clone, the
+      repository's File for a clone's or a raw URL's file, the issue or
+      merge request page, else L5's URL locator), op and WriteOutcome are
+      the gateway's; the converter adds the shell's true state (the
+      persistent working directory, ~, clones learnt from a push's or
+      pull's printed remote) and keeps shared resources only. A pair whose
+      write is a git push (no spans) is an access-only expectation on the
+      repository; a pair whose writer's typed text reaches the reader's
+      output through one file, thread or page is a content label. Its
+      streaming table passes, resource lookup and bash access tagger are
+      reusable.
     entry_points:
       - crates/eval/src/datasets/ai_village/mod.rs
       - crates/eval/src/datasets/ai_village/tables.rs
       - crates/eval/src/datasets/ai_village/resource.rs
       - crates/eval/src/datasets/ai_village/access/mod.rs
-      - crates/eval/src/datasets/ai_village/access/http.rs
+      - crates/eval/src/datasets/ai_village/window/repo.rs
     depends_on: [eval, flow_extract]
     doc: docs/features/eval_ai_village.md
 ```

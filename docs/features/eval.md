@@ -19,8 +19,11 @@ as dev-dependencies.
 - **Corpus model.** `TraceSource` is a stream of `World`s: sets of agents
   that only talk to each other. Each world holds its exchanges in
   virtual-time order and its truth.
-- **Labels.** Expected transmissions, negative controls, exemptions
-  (places left unjudged) and agent clusters, with tiers, as JSONL.
+- **Labels.** Expected transmissions, access-only expectations (a
+  co-access with no content to confirm it: a write that carries no spans,
+  such as a `git push`, or content on a resource its sender never wrote,
+  INV-963), negative controls, exemptions (places left unjudged) and
+  agent clusters, with tiers, as JSONL.
 - **Predictions.** The eval-side view of a detector's output, converted
   from spec `Transmission`s: their `ContentMatch`es, and the `CoAccess`
   records of suspected and discarded ones, read through the spec's read
@@ -299,7 +302,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/corpus/clock.rs` | the virtual clock | `Pace` (`DEFAULT`, `new`, `at`, `min`, `max`), `compose(major, minor, sub)` (the default pace), `ordinal` (ordering only, for fixtures), `EPOCH_MICROS`, `MIN_STEP` |
 | `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
-| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
+| `src/truth/mod.rs` | labels | `Expectation` (with `AccessOnly`), `ExpectedTransmission`/`TransmissionLabel`, `ExpectedAccess` (a channel transmission only access evidence finds), `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
 | `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`, `through_json_string`, `two_string_levels`, `tier`; and `Undecodable` for out-of-reach labels), `json_escapes`, `TWO_STRING_LEVELS`, `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
@@ -321,7 +324,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
 | `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs` | the `LiveBackend` over `crosstalk_gateway::live::Live` | `GatewayBackend`, `GatewayWorld`, `flow_config` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly` (content labels only access evidence aligned with; access-only labels found: `expected_access`, `found_access`, `access_recall`), `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource` (`with_pace`), `load_world`, `load_world_paced`, `convert_trace`, `convert_trace_paced`, `SaltError`, `DATASET` |
@@ -335,7 +338,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `access_only.rs` is access-only labels and their scoring; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -365,6 +368,21 @@ It is reported on its own line ("access-only recall (suspected or
 discarded only, not in overall)") and in `report.json`, never added to
 `overall`, and the line is left out of the table when no label is
 access-only.
+
+**Access-only labels** (`Expectation::AccessOnly`, `ExpectedAccess`) are
+the reverse: transmissions a detector can only suspect, because no
+content links the write and the read (the write carries no spans, as a
+`git push` does, or the content sits on a resource its sender never
+wrote, INV-963). Only a suspected or discarded prediction finds one. It
+is counted in the `suspected` row of its route, carrier and tier, so
+content recall never sees it, and the report gives its recall on its own
+line ("access-only labels (expect a suspected transmission; not in
+overall)", `AccessOnly::access_recall`). A content prediction aligned
+with one is correct, since its pair and place are right, but finds
+nothing. An access-only label must be routed through a channel
+(`InvalidLabel::AccessOffChannel`). A gate reads its rows with
+`class = "suspected"`. AI Village's repository pushes are the dataset
+that uses them ([eval_ai_village.md](eval_ai_village.md)).
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct. One prediction aligned with
