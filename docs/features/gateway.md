@@ -29,6 +29,10 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   `BlobStore` and `EventBus` and an injected `Clock`, with
   `Pipeline::ingest` for pre-normalized exchanges (see
   [Pipeline](#pipeline-the-library-entry-point)).
+- `crosstalk_gateway::live::Live`: every layer (L3 to L7, a minimal L6
+  classifier) and the L8 surface in one process over the memory stores,
+  with `Live::settle` for deterministic replay (see
+  [Live](#live-the-whole-detection-path-in-one-process)).
 - Graceful shutdown on SIGINT and SIGTERM.
 - JSON logs on stdout.
 - `migrate`: connects to Postgres and ensures the extensions
@@ -42,8 +46,11 @@ follow the deployment contract in `docs/features/deploy.md` (branch
 - The L8 HTTP binding on `api.listen` (P7.1): the section is checked and
   nothing is bound. The `api` role starts nothing and says so in the logs.
 - L6 (`analysis` role, `embeddings` section): checked and unused (P6).
-- L3 to L7 consumers (P4 to P6). The `pipeline` role runs only the exchange
-  log today.
+- L3 to L7 consumers in the `serve` roles (P4 to P6): they run only in
+  `Live`, over the memory stores. The `pipeline` role runs only the
+  exchange log today.
+- Topic modelling in `Live`: its classifier assigns every transmission
+  unassigned under the active version; the watermark is not recomputed.
 - A cross-node bus (P9). The bus is in-process, so a `proxy` process and a
   `pipeline` process do not reach each other; `--role all` is the only role
   that captures and logs end to end (the gateway warns at start otherwise).
@@ -312,6 +319,138 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 | `capture::CaptureError` | `NotNormalized(Refusal)`, `Ingest(IngestError)` |
 | `capture::Refusal` | `UnsupportedProtocol(WireProtocol)`, `Refused { protocol, error: NormalizeError }`; `failure()` is its `NormalizeFailure` (the `/metrics` labels) |
 
+## Live: the whole detection path in one process
+
+`crosstalk_gateway::live::Live` is every layer and the L8 surface in one
+process, over one set of in-memory stores: what the UI binary hosts, what
+the e2e smoke (`crosstalk_e2e::compose`) drives, and what eval builds
+against. It is memory-only (`crosstalk-memory`'s reference stores, plus
+L3's `MemoryConversations` and L4's `MemoryProvenanceStore`); the blob
+store is in memory or on disk.
+
+```rust
+let live = Live::start(LiveConfig {
+    surface,                       // crosstalk_api::InProcessOptions (its clock and timing are replaced)
+    clock: LiveClock::Manual(clock), // or LiveClock::Read(Arc<dyn Clock>) for the wall or a sim clock
+    blobs: BlobConfig::Memory,     // or BlobConfig::Fs { root }
+    bus: BusConfig::default(),
+    pipeline: Settings::default(), // put retry; consumer_retry is every slot group's policy
+    flow: FlowConfig::default(),   // correlation_window_ms, evidence_window_ms, suspected_ttl_ms, shards, tick_ms
+    provenance: ProvenanceConfig::default(),
+    ticking: Ticking::OnSettle,    // or Ticking::Periodic (every flow.tick_ms, plus settle)
+    seed: 7,                       // every id generator's entropy
+    capture: None,                 // or the proxy's capture receiver
+}).await?;                         // Result<Live, LiveError>
+live.pipeline().ingest(normalized, at).await?;   // replay and live capture take the same path
+let settled = live.settle(until).await?;         // Result<Settled { at, passes }, SettleError>
+let page = live.stores().transmissions.list(&query, &request).await?;  // TransmissionStore::list
+let placed = live.layers().conversations.placement(exchange).await?;   // ExchangePlacements::placement
+live.shutdown(deadline).await;                   // LiveDrained { capture, stages }
+```
+
+### Data and control flow
+
+```text
+proxy capture ─▶ CaptureStage (L1) ─┐
+replay / caller ─▶ pipeline().ingest(exchange, at) ─▶ blobs + ExchangeCaptured
+                                    ▼
+MpscBus, one consumer group per slot (live-<slot>):
+  L3 reconstruct   ExchangeCaptured ─▶ agents, conversations ─▶ AgentSeen, ConversationDelta
+  L4 provenance    ExchangeCaptured, ConversationDelta ─▶ scan (spans, matches)
+                   ─▶ extraction step (Extracted, a local channel to L5)
+                   ─▶ SpanOriginated, SpanRelayed, ContentMatched
+  L5 flow          Extracted + ExchangeCaptured, ContentMatched, ChannelDiscovered, ... + ticks
+                   ─▶ resources, accesses, channels, transmissions
+                   ─▶ AccessRecorded, ChannelCrossAccessed, TransmissionConfirmed/Suspected
+  L6 classify      TransmissionConfirmed ─▶ catalog assignment, Classified state ─▶ TransmissionClassified
+  L7 topology      TransmissionClassified, AccessRecorded, VerdictSet, topic versions ─▶ edges ─▶ EdgeUpdated
+  evidence         SpanOriginated/Relayed, AccessRecorded ─▶ MemoryEvidence (span from L4's store,
+                   access and resource from AccessStore::accesses)
+  surface relay    every subject but ExchangeCaptured ─▶ node facts, live feed
+stores ─ Outbox ─▶ forward_outbox ─▶ bus      (ChannelDiscovered, Changed::*, AlertRuleChanged, ...)
+Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores, bus and blobs
+```
+
+- **Start.** Open the blob store, start the bus, build the surface with
+  `InProcess::start_with(options, Backbone { bus, blobs, outbox, events })`
+  (the stores publish into the outbox; the relay reads `events`, fed by
+  the surface relay stage), build the pipeline, fill every slot
+  (`wiring::wire_all`), subscribe every slot's group, and only then spawn
+  the stages, the outbox forwarder, the ticker (`Ticking::Periodic`) and
+  the capture stage.
+- **Slots.** A slot holds a [`Stage`] (`subjects`, `handle(&Envelope)`,
+  `tick(now)`) run by the generic loop, or a whole task
+  (`Stages::fill_task`) for a consumer with inputs besides the bus (L5).
+  `StageError::Retry` nacks (redelivered under the group's policy, then
+  dead-lettered); `StageError::Reject` acks and logs at error. Every
+  stage also answers `Command::Tick { now }` and `Command::Drain`.
+- **L3.** `crosstalk_reconstruct::consumer::ReconstructConsumer` over the
+  shared `MemoryAgents`, a `ConversationThreader` over the process's
+  `MemoryConversations`, and ULID sources seeded from `seed`. It
+  publishes its own envelopes (ids derived from the exchange).
+- **L4 and the extraction step.** `crosstalk_provenance::engine::Provenance`
+  over a `MemoryFingerprintIndex`, the process's `MemoryProvenanceStore`,
+  no semantic matcher and the blob store's messages, driven by the stage
+  rather than the crate's `run` loop, so eviction follows ticks. After a
+  delta is scanned, the extraction step (`layers::extract`) turns its
+  tool calls and results into the flow consumer's `Extracted` inputs, and
+  only then are provenance's envelopes published: the flow consumer takes
+  queued extracted inputs before its next delivery, so it sees a read's
+  access before the content match the read carried. A write call's
+  accesses are held (`Extracted::Write { outcome: None }`) with the spans
+  `write_spans` finds at the call's part; its result, in a later delta of
+  the conversation, releases them (`WriteResult`) and yields the call's
+  reads, by the reading agent in the result's exchange at that exchange's
+  start, naming the result part. A server tool's result in the same
+  output is extracted at once. Access ids are derived from the exchange,
+  the call and the access's place.
+- **L5.** `crosstalk_flow::consumer::FlowConsumer` over the shared
+  registry (`MemoryChannels`), `MemoryVerdicts` and `MemoryAgents`, on its
+  own task: commands first (a tick drains the queued extracted inputs,
+  then `FlowConsumer::tick(now)`), then extracted inputs, then
+  deliveries.
+- **L6.** The gateway's minimal `Classifier`: on `TransmissionConfirmed`
+  it assigns the transmission, unassigned (`topic: None`), under the
+  catalog's active version (`TopicLifecycle::assign`), saves it as
+  `Classified` (`TransmissionStore::save`) and publishes
+  `TransmissionClassified { cause: Confirmation }`. No topic model runs
+  in the process.
+- **L7.** `crosstalk_topology::consumer::handle` over the shared
+  `InMemoryEdgeStore`, announcing through a `BusAnnouncer`. The watermark
+  is not recomputed (no frontier source in memory yet), so buckets stay
+  open and transmissions stay `Classified`.
+- **Settle.** `Live::settle(until)` moves a manual clock forwards to
+  `until` (never backwards; a read clock stays), then runs passes until
+  one handles nothing new: wait until every slot's group is empty, the
+  outbox is flushed and every stage's side inputs are drained (twice in a
+  row), tick every stage at the clock's time in slot order, wait again.
+  It gives up with `SettleError::NotQuiet` after 64 passes. Under
+  `Ticking::OnSettle`, nothing time-driven runs between settles, and
+  every id is derived from its input or drawn from a seeded generator in
+  input order, so the same input settles to the same stores
+  (`crosstalk_e2e` `determinism::two_settled_runs_give_identical_transmissions`).
+- **Shutdown.** Stop the ticker, join the capture stage, wait for the
+  groups to empty, stop the bus, join the stages, stop the forwarder and
+  the surface's relay and live feed.
+
+### Public interface
+
+| Item | What |
+| --- | --- |
+| `Live` | `start(LiveConfig)`, `pipeline() -> &Arc<LivePipeline>`, `surface() -> &Arc<Surface<LiveStores>>`, `stores() -> &LiveStores`, `layers() -> &LayerStores`, `context()`, `clock()`, `filled()`, `caller(RequestIdentity)`, `settle(Timestamp) -> Result<Settled, SettleError>`, `shutdown(Instant) -> LiveDrained` |
+| `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `ticking: Ticking`, `seed`, `capture` |
+| `LiveError` | `Flow`, `Blobs`, `Bus`, `Surface`, `Pipeline`, `Slot`, `Subscribe { slot, error }` |
+| `LiveClock` | `Read(Arc<dyn Clock>)`, `Manual(ManualClock)`; `reader`, `now`, `advance_to` |
+| `Ticking` | `Periodic`, `OnSettle` |
+| `Settled`, `SettleError` | `{ at, passes }`; `StageStopped(Slot)`, `OutboxStopped`, `Depth { slot, error }`, `NotQuiet { passes }` |
+| `LiveStores`, `LayerStores` | `MemoryStores<LiveBlobs>`; `{ conversations: MemoryConversations, provenance: MemoryProvenanceStore }` |
+| `BlobConfig`, `LiveBlobs` | `Memory`, `Fs { root }`; the one `BlobStore` over either |
+| `Stage`, `Stages`, `Slot`, `StageContext`, `StageError`, `Command`, `Control`, `Activity`, `Publisher` | the slot interface (above) |
+| `wiring::wire_all`, `wire_l3` .. `wire_l7`, `wire_evidence` | what fills each slot |
+| `layers::{Reconstruct, ProvenanceStage, Extraction, Topology, l5::fill}` | the layer stages |
+| `Classifier`, `EvidenceFeeder`, `ProvenanceSpans`, `SpanSource` | L6, the evidence feeder and its span source |
+| `pipeline::Ingester::publish(BusEvent, at)`, `PublishError` | publish a derived event with an id from the pipeline's generator |
+
 ## Persistence: a P3 stopgap
 
 The spec has no exchange store or exchange log trait. Bodies go to the
@@ -365,7 +504,7 @@ gracefully.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/gateway/Cargo.toml` | Manifest: spec, canonical, ingress, store, transport; bytes, http-body-util, hyper (client, http1, server), hyper-util, serde, serde_json, thiserror, tokio, tracing, tracing-subscriber (env-filter, fmt, json, std); dev: sim, testkit, tempfile | — |
+| `crates/gateway/Cargo.toml` | Manifest: spec, api, canonical, flow, ingress, memory, provenance, reconstruct, store, surface, topology, transport; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util, serde, serde_json, thiserror, tokio, tracing, tracing-subscriber (env-filter, fmt, json, std); dev: sim, testkit, tempfile | — |
 | `config.example.json`, `.env.example` | The localhost config and the environment | — |
 | `src/main.rs` | The binary: parse, log, run, wait for SIGINT/SIGTERM, shut down | `main` |
 | `src/lib.rs` | Crate doc and modules | — |
@@ -382,6 +521,16 @@ gracefully.
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |
 | `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` (the health report and the refusal counts) |
+| `src/live/mod.rs` | `Live`: start, accessors, shutdown | `Live`, `LiveConfig`, `LiveError`, `LiveDrained`, `LivePipeline`, `Ticking` |
+| `src/live/settle.rs` | Driving the process to a fixed point | `Live::settle`, `Settled`, `SettleError` |
+| `src/live/stage.rs` | The slot interface and the generic stage loop | `Stage`, `Stages`, `Slot`, `StageContext`, `StageError`, `Command`, `Control`, `Activity`, `Publisher`, `LiveStores`, `LayerStores`, `settle_delivery` |
+| `src/live/wiring.rs` | One function per slot | `wire_all`, `wire_l3`, `wire_l4`, `wire_l5`, `wire_l6`, `wire_l7`, `wire_evidence` |
+| `src/live/layers/` | The layer stages: `l3.rs` (reconstruct), `l4.rs` (provenance), `extract.rs` (L5's extraction step), `l5.rs` (flow task), `l7.rs` (topology) | `Reconstruct`, `ProvenanceStage`, `Extraction`, `ExtractStepError`, `l5::fill`, `Topology` |
+| `src/live/classify.rs` | The minimal L6 classifier | `Classifier` |
+| `src/live/evidence.rs` | Spans, accesses and resources into the surface's evidence records | `EvidenceFeeder`, `SpanSource`, `ProvenanceSpans`, `SpanSourceError` |
+| `src/live/relay.rs` | The outbox forwarder and the surface relay stage | — |
+| `src/live/clock.rs`, `blobs.rs` | The injected clock; the blob store choice | `LiveClock`; `BlobConfig`, `LiveBlobs` |
+| `src/live/tests.rs` | `crosstalk_gateway::live::tests::*` | — |
 | `src/tasks.rs` | Per-task running flags | `Tasks` (`spawn`, `states`) |
 | `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
@@ -411,6 +560,13 @@ gracefully.
 | `tests::pipeline_ingest_retries_blob_faults_then_fails_typed` | With every put failing before (and, separately, after) it commits: exactly `attempts` puts `backoff` apart, `IngestError::NotStored` with the attempt count, nothing published, `store_retries` = attempts - 1; a put that committed is stored once. Under 10% transient failures and latency every exchange is stored and published, with one retry per failed put |
 | `tests::pipeline_concurrent_ingests_keep_ids_monotonic` | Four rounds of the corpus ingested concurrently over a slow store and a slow bus (whose acceptance order follows call order only if ingest serializes mint and publish), with `at` spread back and forth: every one published, ids distinct and reaching the bus in strictly increasing order, each envelope stamped its `at` and its id never in an earlier millisecond |
 | `tests::dst_blobs_written_before_capture_published` | INV-48 (dst): under put latency and failures before and after the write, with seeded feed timing, every blob (bodies and media) an event names is stored when the event arrives; an exchange whose puts all failed publishes nothing; each exchange is published at most once |
+| `live::tests::every_slot_runs_and_shutdown_drains` | Every slot is filled; shutdown drains every group |
+| `live::tests::settle_moves_the_clock_forwards_and_reaches_a_fixed_point` | `settle` moves a manual clock to `until`, never back, and returns after a pass that changed nothing |
+| `live::tests::a_slot_is_filled_once` | `SlotTaken` for a second fill |
+| `live::tests::a_store_event_reaches_the_bus_and_the_live_feed` | A registry write's `Changed::Channel` reaches the bus through the outbox and the live feed through the surface relay |
+| `live::tests::a_confirmed_transmission_is_classified_under_the_active_version` | `TransmissionConfirmed` gives `TransmissionClassified` under version 0, unassigned, an assignment in the catalog and a `Classified` stored state |
+| `live::tests::an_access_and_its_resource_reach_the_evidence_records` | `AccessRecorded` fills the evidence records from `AccessStore::accesses` |
+| `live::tests::bodies_can_live_on_the_filesystem` | `BlobConfig::Fs` stores bodies the surface reads |
 | unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text (the `normalize_failed` series sum to the health total), healthcheck URL checks, refusal codes |
 
 ```sh
@@ -445,6 +601,11 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
 - Shutdown is bounded: `drain_timeout_ms` plus `flush_timeout_ms` plus a
   second for the ops listener.
 - No `unwrap` or `expect` outside tests; errors are typed (`thiserror`).
+- `Live`: every slot's group subscribes before anything is published; a
+  stage's derived events are published only after the store writes they
+  announce; the extraction step hands a delta's accesses to L5 before
+  provenance's events for that delta are published; under
+  `Ticking::OnSettle` the same input settles to the same transmissions.
 
 ### Invariant evidence
 

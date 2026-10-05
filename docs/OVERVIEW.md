@@ -80,7 +80,13 @@ Overview:
     Pipeline (build over any blob store, bus and injected clock), and a
     pre-normalized exchange enters it through Pipeline::ingest, the same
     path the capture stage takes after L1 (P3.1), so the eval harness can
-    drive the real layers under simulated time. crosstalk-eval is that
+    drive the real layers under simulated time. crosstalk_gateway::live::
+    Live composes every layer in one process over the memory stores: L3
+    reconstruct, L4 provenance with L5's extraction step, L5 flow, a
+    minimal L6 classifier and L7 topology as bus consumer slots, the store
+    outboxes forwarded onto the bus, and crosstalk-api's InProcess surface
+    over the same stores; Live::settle drives it deterministically to a
+    fixed point (gateway). crosstalk-eval is that
     harness (eval): it converts public multi-agent datasets (SALT-NLP
     first) into labelled corpora of spec NormalizedExchanges, scores a
     detector against the labels, and runs both a naive reference matcher
@@ -183,8 +189,10 @@ Overview:
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
-      through L0 and L1, fed through Pipeline::ingest, and asserted through
-      the L8 surface; the scenario is reusable for demos.
+      through L0 and L1, fed through a gateway Live process (every layer
+      consuming the bus), and asserted through the L8 surface; two settled
+      runs give identical transmissions. The scenario is reusable for
+      demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -534,7 +542,9 @@ Features Index:
       each resource included), kept by NodeFeeder from L3's and L5's events
       and rebuilt from the stores on start. crosstalk-api's InProcess builds it over
       the reference stores with a relay from their outbox to the node
-      facts and the feed. The HTTP server (P7.1) is not part of it.
+      facts and the feed; InProcess::start_with takes a composer's own
+      Backbone (bus, blob store, outbox, relay input), which gateway's
+      Live uses to feed the relay from the bus. The HTTP server (P7.1) is not part of it.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
@@ -928,18 +938,36 @@ Features Index:
       after L1. Envelope ids reach the bus in strictly increasing order
       under concurrent ingests. Every serve role builds one; the eval
       harness (crosstalk-eval, a composer) builds one over simulated
-      stores and time.
+      stores and time. live::Live is the whole detection path and the L8
+      surface in one process over the memory stores (what the UI hosts,
+      the e2e smoke drives and eval builds against): Live::start(LiveConfig
+      { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
+      flow: FlowConfig (correlation_window_ms, evidence_window_ms,
+      suspected_ttl_ms, shards, tick_ms), provenance, ticking, seed,
+      capture }) fills one consumer slot per layer (L3
+      ReconstructConsumer; L4 Provenance then the extraction step feeding
+      L5 its Extracted inputs; L5 FlowConsumer on its own task; the
+      gateway's minimal L6 classifier; L7 topology::consumer::handle; an
+      evidence feeder; a surface relay), forwards the stores' outbox onto
+      the bus, and builds the surface with InProcess::start_with over the
+      same stores. Live::settle(until) moves a manual clock, ticks every
+      stage and drains every group until a pass changes nothing;
+      Live::stores and Live::layers expose TransmissionStore::list and
+      ExchangePlacements::placement for eval.
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
       - crates/gateway/src/pipeline/mod.rs
       - crates/gateway/src/pipeline/ingest.rs
+      - crates/gateway/src/live/mod.rs
+      - crates/gateway/src/live/settle.rs
+      - crates/gateway/src/live/wiring.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs
       - crates/gateway/src/ops/mod.rs
       - scripts/try-claude-code.sh
-    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
+    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit, memory, surface_service, reconstruct, provenance, flow_extract, flow_correlator, topology_store]
     doc: docs/features/gateway.md
   analysis:
     description: >

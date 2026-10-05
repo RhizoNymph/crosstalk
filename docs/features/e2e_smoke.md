@@ -24,8 +24,11 @@ be a layer depending on the gateway, which the rule refuses.
 - **Capture through the production L0 and L1 code.** That means
   `Routes::resolve`, `HeaderIdentifier::context`,
   `AdapterDecoder::decode_now` and `AnthropicMessages::normalize`.
-- **A composition shaped like `crosstalk_gateway::live::Live`** (pipeline,
-  stores, surface). It is wired from what is merged today.
+- **The composition is `crosstalk_gateway::live::Live`** (pipeline,
+  stores, surface, every layer consuming the bus), on a `ManualClock`
+  the feed moves; `compose` ticks periodically for the polling tests,
+  `compose_with(start, Ticking::OnSettle)` for runs driven by
+  `Live::settle`.
 - **Feeding:** the scenario is ingested in time order, with the clock
   moved for each exchange.
 - **Surface readers:** agents by session, edges, the A→B channel edge, the
@@ -34,8 +37,10 @@ be a layer depending on the gateway, which the rule refuses.
 - **Tests:**
   - those that run today: the scenario, L0/L1, the pipeline, and the
     surface answering;
-  - those that wait for L3 to L7 in `Live`, marked
-    `#[ignore = "waits for …"]`.
+  - those that wait for L3 to L7 in `Live`, still marked
+    `#[ignore = "waits for …"]`; run them with `--include-ignored`;
+  - the determinism test: the scenario fed and settled twice gives
+    identical transmissions, at least one confirmed.
 
 ## Non-scope
 
@@ -150,9 +155,8 @@ feed(scenario, pipeline, advance)
     advance(ended_at)                      (ManualClock::set in the tests)
     Pipeline::ingest(normalized, ended_at) → blobs stored, ExchangeCaptured on the bus
 compose(start) → Composition { pipeline, stores, surface, clock, caller }
-  today: InProcess::start (memory stores + Surface) and Pipeline::build over
-         InProcess's MemoryBlobStore and MpscBus clones; nothing consumes the bus
-  later: Live::start(config), the one change, in compose
+  Live::start(LiveConfig { surface: options::in_process, clock: Manual, flow: options::flow, .. })
+  L3 → L4 (+ extraction) → L5 → L6 → L7 consume the bus; the evidence feeder and surface relay too
 read::* (generic over QueryApi) → agents, edges, edge transmissions, rows, evidence, channels
 ```
 
@@ -163,40 +167,35 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 
 | File | Role | Key exports |
 | ---- | ---- | ----------- |
-| `crates/e2e/Cargo.toml` | The crate. It depends on spec, api, canonical, gateway, ingress, memory, surface and transport. | |
+| `crates/e2e/Cargo.toml` | The crate. It depends on spec, api, canonical, flow, gateway, ingress, memory, provenance, surface and transport. | |
 | `crates/e2e/src/lib.rs` | The crate root. | re-exports `Capture`, `compose`, `Composition`, `feed`, `Fed`, `Scenario`, `WireExchange` |
 | `crates/e2e/src/scenario/mod.rs` | The wiki relay. | `Scenario`, `Scenario::wiki_relay`, `Scenario::ends_at`, `ScenarioAgent`, `WireExchange`, `SENTENCE`, `DEFAULT_START` |
 | `crates/e2e/src/scenario/tools.rs` | The page and the `Write`/`Read` calls. | `WIKI_PAGE`, `write_call`, `read_call` |
 | `crates/e2e/src/scenario/wire.rs` | Claude Code request heads and bodies, and SSE responses. | `HttpRequest`, `HttpResponse`, `Block`, `Turn`, `SessionHeaders`, `request`, `response` |
 | `crates/e2e/src/capture.rs` | L0 and L1 without a socket. | `Capture::{new, raw, normalized}`, `CaptureError`, `ROUTE` |
-| `crates/e2e/src/compose.rs` | The composition. | `compose`, `Composition`, `ComposeError`, `E2ePipeline` |
+| `crates/e2e/src/compose.rs` | The composition: a `Live` process. | `compose`, `compose_with`, `Composition` (`live`, `shutdown`), `ComposeError`, `E2ePipeline` |
 | `crates/e2e/src/feed.rs` | Ingests in time order. | `feed`, `Fed`, `FeedError` |
-| `crates/e2e/src/options.rs` | The composition's config: 5-minute buckets, the world seed's correlator timing, and trusted access. | `in_process`, `timing`, `BUCKET`, `OptionsError` |
-| `crates/e2e/src/read.rs` | Surface readers. | `window`, `agents`, `Agents`, `AgentRead`, `edges`, `channel_edge`, `edge_transmissions`, `summaries`, `evidence`, `channels`, `ReadError` |
+| `crates/e2e/src/options.rs` | The composition's config: 5-minute buckets, the correlator timing (a 3 s evidence window, so B's read's window closes by the scenario's end, where the clock stops), L5's `FlowConfig`, and trusted access. | `in_process`, `timing`, `flow`, `BUCKET`, `EVIDENCE_WINDOW`, `OptionsError` |
+| `crates/e2e/src/read.rs` | Surface readers, and every stored transmission (`TransmissionStore::list`). | `window`, `agents`, `Agents`, `AgentRead`, `edges`, `channel_edge`, `edge_transmissions`, `summaries`, `evidence`, `channels`, `all_transmissions`, `ReadError` |
+| `crates/e2e/tests/smoke/determinism.rs` | Two settled runs give identical transmissions. | |
 | `crates/e2e/tests/smoke/scenario.rs` | Determinism, time order, and the L0 identity. Also checks the history replay L3 threads by, the `Write` arguments carrying the sentence, and the read result and B's answer carrying it. | |
 | `crates/e2e/tests/smoke/extract.rs` | The scenario's `Write` and `Read` calls, with their results, through L5's `ToolExtractors` (crosstalk-flow, a dev-dependency) under the context the system prompt states: one delivered write and one read on the page's file locator. | |
 | `crates/e2e/tests/smoke/pipeline.rs` | Every body is stored, and every exchange is published in order, stamped at its end. | |
 | `crates/e2e/tests/smoke/surface.rs` | The surface answers today. Plus ignored tests: two agents (L3), the A→B channel edge, the confirmed transmission, the evidence match, and the channel created by the cross-agent transmission, listed and confirmed. | |
 | `crates/gateway/tests/architecture.rs` | `Composer::E2e`, and `e2e_composes_gateway_and_layers_and_no_layer_uses_it`. | |
 
-## Switching to `Live`
+## Running against `Live`
 
-`compose` is the only place that builds anything.
-
-1. When `crosstalk_gateway::live::Live::start` lands, build `pipeline`,
-   `stores` and `surface` from it in `compose`, and keep the
-   `Composition` fields. The tests and readers do not change.
-2. Then run the smoke with `--include-ignored`. Once it passes, drop the
-   `#[ignore]` attributes.
-
-If `Live`'s stores or surface types differ from `MemoryStores` and
-`Surface<MemoryStores>`, only the field types of `Composition` change.
+`compose` builds a `Live` process. Run the smoke with
+`--include-ignored`; the ignored detection tests pass except the
+evidence test (see Gaps found), and their `#[ignore]` attributes can be
+dropped once it does.
 
 To feed a running `Live` from `crosstalk-ui` for a demo:
 
 ```rust
 let scenario = Scenario::wiki_relay(now);
-feed(&scenario, &live.pipeline, |_| {}).await?;
+feed(&scenario, live.pipeline(), |_| {}).await?;
 ```
 
 Then read through the UI, or through `crosstalk_e2e::read`.
@@ -227,20 +226,21 @@ Then read through the UI, or through `crosstalk_e2e::read`.
 
 ## Gaps found (for the gateway's composition)
 
-- **The evidence page has nothing to read.**
-  - In-process, `transmission_evidence` reads spans, accesses and
-    resources from `MemoryEvidence`, which only a seeder fills.
-  - `Live` must hand the surface L4's spans and L5's accesses and
-    resources. Otherwise the evidence test fails even with detection
-    working.
-- **Store events don't reach the bus.**
-  - `InProcess`'s stores publish to an in-process `Outbox` that is relayed
-    to the node facts and the live feed, not to the `MpscBus`.
-  - Events a store publishes for other consumers (L6 and L7 consume L5's
-    `TransmissionConfirmed`, then `TransmissionClassified`) need a bus in
-    `Live`.
-- **Edges need L6.** L7 consumes `TransmissionClassified`, so `Live`
-  needs the L6 classifier consumer as well as the L7 edge consumer.
+- **The evidence test expects sentence-sized spans** (open). Its
+  assertions that every highlight lies inside `SENTENCE` and that every
+  match is carried by B's tool result do not hold for L4 as built:
+  - A's whole `Write` argument text is novel, so it is one originated
+    span, and the origin excerpt highlights all of it (the JSON
+    arguments, page and path);
+  - the read-side highlight is the matched k-gram run in B's tool
+    result, which spans line-number prefixes and the page's later lines;
+  - B's `Read` call arguments repeat A's file path, which B never saw:
+    a `ReaderOutput` match the correlator folds into the channel
+    transmission (an unobserved carrier), so not every match is a tool
+    result.
+- Resolved by `Live`: the evidence feeder fills `MemoryEvidence` from
+  L4's span store and L5's `AccessStore`; the stores' outbox is forwarded
+  onto the bus; the gateway runs a minimal L6 classifier.
 - **Tool extraction** (resolved by the L5 port): the extractor catalog
   maps tool names and argument keys to locators and access kinds, a
   local harness's file locators carry no host, and HTTP tools decide
