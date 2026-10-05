@@ -18,8 +18,8 @@ unit = [
     "crosstalk_memory::flow::registry::tests::late_confirmation_on_a_superseded_channel_advances_its_superseder",
     "crosstalk_memory::flow::registry::tests::traffic::a_declared_channel_is_in_use_from_its_first_cross_agent_transmission",
 ]
-property = "crosstalk_flow::channel::tests::traffic_detection_transitions"
+property = "crosstalk_flow::store::tests::detection::traffic_detection_transitions"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

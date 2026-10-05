@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.store.events-relayed-after-commit"
+statement = "A flow store relays an event it decided to its sink only after the transaction that staged it in the outbox committed; a refused or rolled-back write relays nothing; and an event staged by a committed write whose own relay failed or found no receiver stays staged until a later relay on the same database sends it."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+A store publishes what it decides (ChannelDiscovered, ChannelPromoted,
+VerdictSet, Changed). Publishing before commit would let a consumer
+re-query and miss the change, or act on a change that then rolled back;
+publishing after commit from memory alone would lose the event when the
+process stops between the two. Staging events in the deciding transaction
+and relaying them after commit gives at-least-once delivery of exactly the
+committed decisions, which consumers already tolerate (the bus redelivers).
+"""
+
+[evidence]
+integration = [
+    "crosstalk_flow::store::tests::verdicts::pg_outbox_keeps_events_until_relayed",
+    "crosstalk_flow::store::tests::registry::pg_promote_publishes_after_commit",
+    "crosstalk_flow::store::tests::verdicts::pg_verdict_set_outbox",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

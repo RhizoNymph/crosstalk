@@ -291,7 +291,12 @@ where
     })
 }
 
-async fn run_case<S: VerdictStore>(
+/// One case of [`check_transmission_verdicts`] on a subject built by the
+/// caller, for a store that needs an async or multi-threaded setup per case
+/// and drives its own proptest runner over [`verdict_ops`]. `sut_events`
+/// receives what `sut` publishes; `agents` is the registry harness's
+/// `directory`.
+pub async fn run_case<S: VerdictStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
     agents: MemoryAgents,

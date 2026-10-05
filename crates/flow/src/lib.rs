@@ -11,5 +11,7 @@ pub mod correlate;
 
 pub mod extract;
 
+pub mod store;
+
 #[cfg(test)]
 mod tests {}

@@ -13,8 +13,8 @@ preview itself change what it predicts.
 
 [evidence]
 unit = "crosstalk_flow::tests::promotion_coverage_matches_reference"
-integration = "crosstalk_flow::tests::pg_promotion_coverage_changes_nothing"
+integration = "crosstalk_flow::store::tests::registry::pg_promotion_coverage_changes_nothing"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

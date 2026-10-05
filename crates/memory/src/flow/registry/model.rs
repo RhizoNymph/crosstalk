@@ -443,7 +443,12 @@ impl Case {
     }
 }
 
-async fn run_case<S: ChannelStore>(
+/// One case of [`check_channel_registry`] on a subject built by the
+/// caller: for a store that needs an async or multi-threaded setup per case
+/// (a Postgres store on a fresh schema), which drives its own proptest
+/// runner over [`registry_ops`]. `sut_events` receives what `sut`
+/// publishes; `agents` is [`directory`]'s.
+pub async fn run_case<S: ChannelStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
     agents: MemoryAgents,

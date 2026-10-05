@@ -20,8 +20,8 @@ unit = [
     "crosstalk_memory::flow::registry::tests::traffic::channels_list_newest_created_first",
     "crosstalk_memory::flow::registry::tests::channel_reads_list_filtered_newest_first",
 ]
-property = "crosstalk_flow::registry::tests::channel_reads_agree_with_reference_model"
+property = "crosstalk_flow::store::tests::model::registry_agrees_with_reference_model"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
