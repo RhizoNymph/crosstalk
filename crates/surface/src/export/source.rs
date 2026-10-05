@@ -11,7 +11,7 @@
 //! | accesses | `EdgeStore::channel_topology` of each bucket of the settled window |
 //! | edges | `EdgeStore::graph` of each bucket, once per topic of the version (one-topic filters), outliers as the rest |
 //! | topics | `EdgeStore::totals` of the settled window under a one-topic filter, per topic |
-//! | transmissions | the [`TransmissionSource`] given ([`StoredTransmissions`]: `TransmissionStore::list`, rows as `transmissions_by_id` lists them, no content columns); refused by default ([`NoTransmissions`]) |
+//! | transmissions | the [`TransmissionSource`] given ([`StoredTransmissions`]: `TransmissionStore::list` in the scope's states, rows as `transmissions_by_id` lists them, no content columns); refused by default ([`NoTransmissions`]) |
 //! | verdicts | the same [`TransmissionSource`]: [`StoredTransmissions`] gives `verdict_rows` of every judgeable transmission opened in the settled window; refused by default |
 //!
 //! Every row is read when the export is planned (the count must be known
@@ -497,11 +497,11 @@ where
                 (scoped_basis(version, filter, settled), rows)
             }
             ExportDataset::Transmissions(scope) => {
-                let (version, _, filter) = self.scoped(scope).await?;
+                let (version, _, filter) = self.scoped(&scope.scope()).await?;
                 let settled = settled_window(scope.window, watermark);
                 let rows = self
                     .transmissions
-                    .rows(&filter, version, settled, content)
+                    .rows(&filter, version, settled, &scope.states, content)
                     .await?;
                 (scoped_basis(version, filter, settled), rows)
             }

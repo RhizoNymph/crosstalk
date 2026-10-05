@@ -14,8 +14,9 @@ use crate::ids::ExportId;
 
 use super::digest::{ExportDigest, RowHasher, hash_row};
 use super::manifest::{ExportEnd, ExportFailure, ExportHeader, ExportTrailer, SourceFailure};
-use super::request::ExportDatasetKind;
+use super::request::{ExportDatasetKind, ExportStates};
 use super::rows::{ExportRow, RowKey};
+use crate::interfaces::l8_surface::summary::TransmissionStateKind;
 
 /// Why the sealer refused a row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +35,11 @@ pub enum RowRefused {
     /// Content columns present when the request did not include content,
     /// or missing when it did.
     ContentMismatch { requested: bool },
+    /// A transmission row outside the header's states, or whose state
+    /// column does not match them: present in an export with the default
+    /// states, missing in one with explicit states. `state` is the row's
+    /// summary state.
+    StateNotInScope { state: TransmissionStateKind },
     /// A key not after the previous row's: out of order, or a repeat.
     OutOfOrder,
     /// More rows than the header planned.
@@ -49,6 +55,8 @@ pub struct ExportSealer<H> {
     export: ExportId,
     dataset: ExportDatasetKind,
     content: bool,
+    /// The header's states, for a transmissions export.
+    states: Option<ExportStates>,
     planned: u64,
     rows: u64,
     last: Option<RowKey>,
@@ -64,6 +72,7 @@ impl<H: RowHasher> ExportSealer<H> {
             export: header.id(),
             dataset: header.request().dataset().kind(),
             content: header.request().include_content(),
+            states: header.request().dataset().states().cloned(),
             planned: header.rows(),
             rows: 0,
             last: None,
@@ -74,7 +83,9 @@ impl<H: RowHasher> ExportSealer<H> {
     }
 
     /// Accept `row` as the next row: of the header's dataset, with content
-    /// columns exactly when the request includes content, after the
+    /// columns exactly when the request includes content, a transmission
+    /// row in the header's states with its state column exactly when they
+    /// are explicit, after the
     /// previous row in key order, and within the planned count. An accepted
     /// row is counted and digested; a refused one is neither, and every
     /// later row is refused too.
@@ -92,6 +103,8 @@ impl<H: RowHasher> ExportSealer<H> {
             Err(RowRefused::ContentMismatch {
                 requested: self.content,
             })
+        } else if let Some(state) = self.out_of_scope(row) {
+            Err(RowRefused::StateNotInScope { state })
         } else if self.last.as_ref().is_some_and(|last| key <= *last) {
             Err(RowRefused::OutOfOrder)
         } else if self.rows >= self.planned {
@@ -109,6 +122,17 @@ impl<H: RowHasher> ExportSealer<H> {
         self.rows += 1;
         self.last = Some(key);
         Ok(())
+    }
+
+    /// The state of a transmission row that the header's states do not
+    /// admit, with its column as they require.
+    fn out_of_scope(&self, row: &ExportRow) -> Option<TransmissionStateKind> {
+        let (ExportRow::Transmission(row), Some(states)) = (row, &self.states) else {
+            return None;
+        };
+        let state = row.summary().state.kind();
+        let column_as_required = row.state().is_some() != states.is_confirmed();
+        (!states.contains(state) || !column_as_required).then_some(state)
     }
 
     /// Rows accepted so far.

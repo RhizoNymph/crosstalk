@@ -23,8 +23,9 @@ config, and export
 | `TransmissionSummary`, `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionPage` | response of `transmissions_by_id` | plain: the per-state shape is the enum |
 | `TransmissionEvidence` (with `MatchEvidence`, `MatchQuotes`, `AccessDetail`) | response of `transmission_evidence` (`Option`) | through `assemble` over its own transmission, answering each request with the next decoded match or access (`InvalidTransmissionEvidence`); `AccessDetail` through `new` |
 | `Excerpt`, `Excerpted` | response (inside evidence and export rows); the highlight as `{"start", "end"}` | `Excerpt` through `new`, which now also refuses counts that fit no part (`CountsOverflow`) |
+| `ExportRequest`'s transmissions dataset (`TransmissionScope`, `ExportStates`) | request | `{"window", "filter", "states": ["suspected", ..]}`; `states` left out when it is the default, and decoded through `ExportStates::new` (`[]` is `Empty`, a repeat `Duplicate`, `detected` `Detected`); goldens `export_request_transmissions` (default, unchanged) and `export_request_transmissions_all_states` |
 | `ExportHeader` (with `ExportBasis`, `GatewayVersion`) | export line, audit event; stamped, never a request | through `ExportHeader::new` (its `ExportHeaderParts`) |
-| `ExportRow` and each dataset's row | export line | `TransmissionRow` through `new` (its delivery is the summary's, not written twice; a delivery whose sender is the summary's reader is `WithinOneAgent`); a point row's `ProjectedPoint` through `ProjectedPoint::new` (its `PointParts`; a point whose sender is its reader is refused); the rest plain |
+| `ExportRow` and each dataset's row | export line | `TransmissionRow` through its checks (its delivery is the summary's, not written twice; a delivery whose sender is the summary's reader is `WithinOneAgent`; `strongest` is left out for an unconfirmed row and `state`, the summary's `TransmissionStateKind` as a string, is written only in an export with explicit states, `{"summary", "content", "state": "suspected"}`); a point row's `ProjectedPoint` through `ProjectedPoint::new` (its `PointParts`; a point whose sender is its reader is refused); the rest plain |
 | `ExportTrailer` (with `ExportEnd`, `ExportFailure`, `RowRefused`, `ExportDigest`) | export line, audit event | checked for what the sealer guarantees about it alone (`InvalidTrailer`); rows and digest by `verify_export` |
 | `ExportLine` | one JSONL line: `header`, `row` or `trailer`, adjacently tagged; never a request (it holds the stamped header) | plain; `read_jsonl` checks the framing ([export.md](../export.md#formats)) |
 | `ExportEvent` | inside the audit log's `ExportRecord` | plain |
@@ -152,6 +153,8 @@ tests are also evidence for the area invariants they recheck
 `surface.query.selection-bounded`, `surface.export.header-matches-request`,
 `surface.export.request-content-columns`,
 `surface.export.transmission-row-confirmed`,
+`surface.export.transmission-states-default-unchanged`,
+`surface.export.transmission-row-states`,
 `surface.export.truncation-detected`) and for the general wire
 invariants (`canonical.wire.checked-decode`, `goldens-pin-format`,
 `round-trip`, `strict-decode`, `surface.wire.authority-not-decoded`).

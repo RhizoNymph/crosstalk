@@ -17,7 +17,8 @@ use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::provenance::matching::Carrier;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::export::{
-    ExportDataset, ExportFormat, ExportRequest, ExportRow, ExportScope, ExportStep, ExportStream,
+    ExportDataset, ExportFormat, ExportRequest, ExportRow, ExportScope, ExportStates, ExportStep,
+    ExportStream, TransmissionScope,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::RequestIdentity;
 use crosstalk_spec::support::Timestamp;
@@ -115,10 +116,13 @@ async fn serve_all_exports_and_shows_the_confirmed_transmission_over_http() -> R
         .ok_or_else(|| unexpected("agents a and b over http"))?;
 
     let request = ExportRequest::new(
-        ExportDataset::Transmissions(ExportScope {
-            window,
-            filter: TopologyFilter::default(),
-        }),
+        ExportDataset::Transmissions(
+            ExportScope {
+                window,
+                filter: TopologyFilter::default(),
+            }
+            .into(),
+        ),
         ExportFormat::Jsonl,
         false,
     )
@@ -146,7 +150,7 @@ async fn serve_all_exports_and_shows_the_confirmed_transmission_over_http() -> R
         )));
     };
     assert_eq!(row.summary().to, b);
-    assert_eq!(row.delivery().from, a);
+    assert_eq!(row.delivery().map(|delivery| delivery.from), Some(a));
     assert!(
         matches!(row.summary().route, Route::Channel(_)),
         "{:?}",
@@ -184,6 +188,129 @@ async fn serve_all_exports_and_shows_the_confirmed_transmission_over_http() -> R
         "a request without the token was served"
     );
 
+    running.shutdown().await;
+    Ok(())
+}
+
+/// Export the transmissions of `window` in `states` over `http`: its rows,
+/// once the trailer verified complete.
+async fn export_states(
+    http: &HttpClient,
+    caller: &crosstalk_spec::interfaces::l8_surface::Caller,
+    window: crosstalk_spec::support::TimeWindow,
+    states: ExportStates,
+) -> Result<Vec<ExportRow>, Failure> {
+    let request = ExportRequest::new(
+        ExportDataset::Transmissions(TransmissionScope {
+            window,
+            filter: TopologyFilter::default(),
+            states,
+        }),
+        ExportFormat::Jsonl,
+        false,
+    )
+    .map_err(|error| unexpected(format!("export request: {error:?}")))?;
+    let export = http
+        .export(caller, &request)
+        .await
+        .map_err(|error| unexpected(format!("export: {error:?}")))?;
+    let mut rows = Vec::new();
+    let mut stream = export.rows;
+    let trailer = loop {
+        match stream.next().await {
+            ExportStep::Row(row, rest) => {
+                rows.push(row);
+                stream = rest;
+            }
+            ExportStep::End(trailer) => break trailer,
+        }
+    };
+    if !trailer.is_complete() {
+        return Err(unexpected(format!("incomplete export: {trailer:?}")));
+    }
+    Ok(rows)
+}
+
+/// INV-1070, over HTTP: B reads A's page after it was replaced, so the
+/// co-access carries no content match. The correlator suspects it, then
+/// discards it when its suspicion expires, which is always before its
+/// opening time is settled (the watermark trails the clock by
+/// `evidence_window + suspected_ttl`). Settled, it is in the export exactly
+/// when the requested states include `discarded`, with its `state` column,
+/// and never in the default (confirmed-only) export.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unconfirmed_co_access_is_exported_only_in_its_state() -> Result<(), Failure> {
+    use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind as Kind;
+
+    let dir = tempfile::tempdir()?;
+    let scenario =
+        crosstalk_e2e::Scenario::wiki_silent_read(crosstalk_e2e::scenario::DEFAULT_START);
+    let clock = ManualClock::at(scenario.start);
+    let running = gateway::start_on(
+        &config(&dir.path().join("data"))?,
+        Role::All,
+        lookup,
+        LiveClock::Manual(clock.clone()),
+    )
+    .await?;
+    let live = running
+        .live()
+        .ok_or_else(|| unexpected("role all runs a live process"))?;
+    feed(&scenario, live.pipeline(), |at| clock.set(at)).await?;
+
+    // Past the evidence window, before the suspicion expires: suspected,
+    // and not yet settled, so no export holds it.
+    let suspected_at = Timestamp::from_micros(
+        scenario.ends_at().as_micros() + u64::try_from(options::EVIDENCE_WINDOW.as_micros())?,
+    );
+    live.settle(suspected_at).await?;
+    let stored = crosstalk_e2e::read::all_transmissions(&live.stores().transmissions).await?;
+    let [only] = stored.as_slice() else {
+        return Err(unexpected(format!(
+            "{} transmissions, expected 1",
+            stored.len()
+        )));
+    };
+    assert_eq!(Kind::of(&only.state), Kind::Suspected, "{only:?}");
+
+    let bound = options::EVIDENCE_WINDOW + options::SUSPECTED_TTL + options::BUCKET;
+    let until =
+        Timestamp::from_micros(scenario.ends_at().as_micros() + u64::try_from(bound.as_micros())?);
+    live.settle(until).await?;
+    assert!(live.watermark() > scenario.ends_at());
+    let stored = crosstalk_e2e::read::all_transmissions(&live.stores().transmissions).await?;
+    let [only] = stored.as_slice() else {
+        return Err(unexpected(format!(
+            "{} transmissions, expected 1",
+            stored.len()
+        )));
+    };
+    assert_eq!(Kind::of(&only.state), Kind::Discarded, "{only:?}");
+
+    let caller = live
+        .caller(RequestIdentity::Verified(ApiOperator::ID))
+        .await
+        .map_err(|error| unexpected(format!("caller: {error:?}")))?;
+    let http = client(&running)?;
+    let window = read::window(&scenario, options::BUCKET)?;
+    let states = |kinds: &[Kind]| {
+        ExportStates::new(kinds.to_vec()).map_err(|error| unexpected(format!("{error:?}")))
+    };
+
+    let default = export_states(&http, &caller, window, ExportStates::confirmed()).await?;
+    assert!(default.is_empty(), "the default export holds {default:?}");
+    let suspected_only = export_states(&http, &caller, window, states(&[Kind::Suspected])?).await?;
+    assert!(suspected_only.is_empty(), "{suspected_only:?}");
+    for requested in [states(&[Kind::Discarded])?, ExportStates::all()] {
+        let rows = export_states(&http, &caller, window, requested).await?;
+        let [ExportRow::Transmission(row)] = rows.as_slice() else {
+            return Err(unexpected(format!("{rows:?}")));
+        };
+        assert_eq!(row.summary().id, only.id);
+        assert_eq!(row.state(), Some(Kind::Discarded));
+        assert_eq!(row.delivery(), None);
+        assert_eq!(row.at(), only.opened_at);
+    }
     running.shutdown().await;
     Ok(())
 }

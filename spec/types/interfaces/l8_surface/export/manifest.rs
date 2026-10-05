@@ -18,7 +18,9 @@ use crate::support::{Blank, NonBlank, TimeWindow, Timestamp, Watermark};
 use crate::wire::Rejected;
 
 use super::digest::ExportDigest;
-use super::request::{ExportDataset, ExportDatasetKind, ExportRequest};
+use super::request::{
+    ExportDataset, ExportDatasetKind, ExportRequest, ExportScope, TransmissionScope,
+};
 use super::seal::RowRefused;
 
 /// The gateway build that produced an export (its release version), so a
@@ -182,23 +184,36 @@ impl ExportHeader {
                     filter,
                     settled,
                 },
-                ExportDataset::Transmissions(scope)
-                | ExportDataset::Edges(scope)
-                | ExportDataset::Accesses(scope)
-                | ExportDataset::Topics(scope),
+                ExportDataset::Transmissions(TransmissionScope {
+                    window,
+                    filter: requested,
+                    ..
+                })
+                | ExportDataset::Edges(ExportScope {
+                    window,
+                    filter: requested,
+                })
+                | ExportDataset::Accesses(ExportScope {
+                    window,
+                    filter: requested,
+                })
+                | ExportDataset::Topics(ExportScope {
+                    window,
+                    filter: requested,
+                }),
             ) => {
-                if let TopicVersionSelector::Pinned(requested) = scope.filter.topic_version
-                    && requested != *topic_version
+                if let TopicVersionSelector::Pinned(pinned) = requested.topic_version
+                    && pinned != *topic_version
                 {
                     return Err(InvalidHeader::VersionMismatch {
-                        requested,
+                        requested: pinned,
                         resolved: *topic_version,
                     });
                 }
-                if *filter != scope.filter.clone().pinned(*topic_version) {
+                if *filter != requested.clone().pinned(*topic_version) {
                     return Err(InvalidHeader::FilterNotPinned);
                 }
-                if *settled != settled_window(scope.window, parts.watermark) {
+                if *settled != settled_window(*window, parts.watermark) {
                     return Err(InvalidHeader::SettledWindow);
                 }
             }
@@ -407,6 +422,7 @@ impl TryFrom<RawExportTrailer> for ExportTrailer {
                 }
                 RowRefused::OtherDataset { .. }
                 | RowRefused::ContentMismatch { .. }
+                | RowRefused::StateNotInScope { .. }
                 | RowRefused::OutOfOrder
                 | RowRefused::BeyondPlan { .. } => Ok(()),
             },

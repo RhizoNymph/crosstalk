@@ -557,3 +557,110 @@ async fn the_verdicts_export_covers_unconfirmed_transmissions() {
     assert_eq!(seen, expected);
     live.shutdown(Instant::now() + PATIENCE).await;
 }
+
+/// INV-1070, from the store: a stored suspected transmission (a co-access
+/// with no content match) is a row of a transmissions export exactly when
+/// its states include `suspected`, carrying its state and timed by its
+/// opening; the default export holds only the confirmed one.
+#[tokio::test]
+async fn a_suspected_transmission_is_exported_only_in_its_state() {
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
+    use crosstalk_spec::interfaces::l8_surface::export::{
+        ExportDataset, ExportRequest, ExportRow, ExportStates, ExportStep, ExportStream,
+        TransmissionScope,
+    };
+    use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind as Kind;
+    use crosstalk_spec::support::TimeWindow;
+
+    let live = start().await;
+    let mut ids = Ids::seeded(31);
+    let (a, b) = (ids.agent(), ids.agent());
+    let at = |minutes: u64| Timestamp::from_micros(T0.as_micros() + minutes * MINUTE);
+    let build = |ids: &mut Ids, state: fn(TransmissionBuilder) -> TransmissionBuilder| {
+        let channel = ids.channel();
+        match state(
+            TransmissionBuilder::new(ids)
+                .between(a, b)
+                .channel(channel)
+                .opened_at(at(10)),
+        )
+        .build()
+        {
+            Ok(transmission) => transmission,
+            Err(error) => panic!("fixture: {error:?}"),
+        }
+    };
+    let suspected = build(&mut ids, TransmissionBuilder::suspected);
+    let confirmed = build(&mut ids, TransmissionBuilder::confirmed);
+    let mut store = live.stores().transmissions.clone();
+    for transmission in [&suspected, &confirmed] {
+        assert_eq!(store.save(transmission.clone()).await, Ok(()));
+    }
+    // Past the default settle bound (120 s + 1800 s) of the window's end.
+    let settled = live.settle(at(180)).await;
+    assert!(settled.is_ok(), "{settled:?}");
+    let caller = match live.caller(RequestIdentity::Anonymous).await {
+        Ok(caller) => caller,
+        Err(error) => panic!("caller: {error:?}"),
+    };
+    let Ok(window) = TimeWindow::new(T0, at(60)) else {
+        panic!("window");
+    };
+    let export = |states: ExportStates| {
+        let live = &live;
+        let caller = caller.clone();
+        async move {
+            let request = match ExportRequest::new(
+                ExportDataset::Transmissions(TransmissionScope {
+                    window,
+                    filter: Default::default(),
+                    states,
+                }),
+                ExportFormat::Jsonl,
+                false,
+            ) {
+                Ok(request) => request,
+                Err(error) => panic!("request: {error:?}"),
+            };
+            let export = match live.surface().export(&caller, &request).await {
+                Ok(export) => export,
+                Err(error) => panic!("export: {error:?}"),
+            };
+            let mut rows = Vec::new();
+            let mut stream = export.rows;
+            loop {
+                match stream.next().await {
+                    ExportStep::Row(ExportRow::Transmission(row), rest) => {
+                        rows.push((row.summary().id, row.state()));
+                        stream = rest;
+                    }
+                    ExportStep::Row(other, _) => panic!("not a transmission row: {other:?}"),
+                    ExportStep::End(trailer) => {
+                        assert!(trailer.is_complete(), "{trailer:?}");
+                        return rows;
+                    }
+                }
+            }
+        }
+    };
+    assert_eq!(
+        export(ExportStates::confirmed()).await,
+        vec![(confirmed.id, None)]
+    );
+    let Ok(with_suspected) = ExportStates::new(vec![Kind::Suspected, Kind::Confirmed]) else {
+        panic!("states");
+    };
+    let mut rows = export(with_suspected).await;
+    rows.sort();
+    let mut expected = vec![
+        (suspected.id, Some(Kind::Suspected)),
+        (confirmed.id, Some(Kind::Confirmed)),
+    ];
+    expected.sort();
+    assert_eq!(rows, expected);
+    let Ok(discarded_only) = ExportStates::new(vec![Kind::Discarded]) else {
+        panic!("states");
+    };
+    assert_eq!(export(discarded_only).await, Vec::new());
+    live.shutdown(Instant::now() + PATIENCE).await;
+}

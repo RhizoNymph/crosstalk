@@ -196,10 +196,13 @@ async fn fetch_async(config: &FetchConfig, out: &Path) -> Result<Fetched, FetchE
         token: config.token.clone(),
     };
     let request = ExportRequest::new(
-        ExportDataset::Transmissions(ExportScope {
-            window: config.window,
-            filter: TopologyFilter::default(),
-        }),
+        ExportDataset::Transmissions(
+            ExportScope {
+                window: config.window,
+                filter: TopologyFilter::default(),
+            }
+            .into(),
+        ),
         ExportFormat::Jsonl,
         false,
     )

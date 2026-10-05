@@ -38,7 +38,12 @@
 //! | `MatchClass` | `u8`: exact 0, normalized 1, decoded 2, semantic 3 |
 //! | `CarrierKind` | `u8`: tool result 0, user turn 1, system prompt 2, reader output 3 |
 //! | `QualityMatch` | `u8`: content 0 then its class and its carrier kind, suspected 1, discarded 2 |
-//! | `TransmissionStateKind` | `u8`: confirmed 0, classified 1, aggregated 2 (a row is never in another state) |
+//! | `TransmissionStateKind` | `u8`: confirmed 0, classified 1, aggregated 2, awaiting content 3, suspected 4, discarded 5 (a row is never detected) |
+//!
+//! A transmission row writes its delivery and strongest class only when it
+//! is confirmed (its state code says so), and its state column, at the end,
+//! only in an export with explicit states, so a confirmed-only export's
+//! encoding is the one it always was.
 //! | `TopicUnder` | `u8`: topic 0 then its id, outlier 1, unassigned 2 |
 //! | `MessageHash` | its 32 digest bytes |
 //! | `Excerpted` | `u8` 0 then the excerpt's text (string), highlight start and end (`u32`), bytes elided before and after and bytes of highlight cut (`u64`); or `u8` 1 then the dropped body's `MessageHash` |
@@ -139,33 +144,32 @@ pub fn encode_route(route: &Route, out: &mut Vec<u8>) {
 }
 
 /// A transmission row: its summary's id, reader, route, opened time and
-/// state kind, its delivery (sender, `Confirmed::at`, matched bytes), its
-/// topic when classified, its verdict, then the row's strongest class and
-/// content.
+/// state code, its delivery (sender, `Confirmed::at`, matched bytes) when
+/// confirmed, its topic when classified, its verdict, then the row's
+/// strongest class when confirmed, its content, and its state column when
+/// present.
 fn transmission(row: &TransmissionRow, out: &mut Vec<u8>) {
     let summary = row.summary();
-    let delivery = row.delivery();
     id(summary.id.as_ulid(), out);
     id(summary.to.as_ulid(), out);
     encode_route(&summary.route, out);
     time(summary.opened_at, out);
-    out.push(match summary.state.kind() {
-        TransmissionStateKind::Classified => 1,
-        TransmissionStateKind::Aggregated => 2,
-        TransmissionStateKind::Confirmed
-        | TransmissionStateKind::Detected
-        | TransmissionStateKind::AwaitingContent
-        | TransmissionStateKind::Suspected
-        | TransmissionStateKind::Discarded => 0,
-    });
-    id(delivery.from.as_ulid(), out);
-    time(delivery.confirmed_at, out);
-    u64_le(delivery.matched_bytes.get(), out);
+    out.push(state_code(summary.state.kind()));
+    // A confirmed row's delivery and strongest class are always present and
+    // an unconfirmed row's never: the state code says which, so neither is
+    // written as an option (a default export's bytes are unchanged).
+    if let Some(delivery) = row.delivery() {
+        id(delivery.from.as_ulid(), out);
+        time(delivery.confirmed_at, out);
+        u64_le(delivery.matched_bytes.get(), out);
+    }
     option(summary.state.topic(), out, topic_under);
     option(summary.state.verdict(), out, |verdict, out| {
         out.push(verdict_code(verdict))
     });
-    out.push(class(row.strongest()));
+    if let Some(strongest) = row.strongest() {
+        out.push(class(strongest));
+    }
     option(row.content(), out, |content, out| {
         option(content.topic_label.as_deref(), out, string);
         len(content.matches.iter().count(), out);
@@ -175,6 +179,27 @@ fn transmission(row: &TransmissionRow, out: &mut Vec<u8>) {
             excerpted(&text.quotes.read, out);
         }
     });
+    // The state column exists only in an export with explicit states (the
+    // header's request says which), so it is appended only then.
+    if let Some(state) = row.state() {
+        out.push(state_code(state));
+    }
+}
+
+/// A state's code: confirmed 0, classified 1, aggregated 2 (the codes a
+/// confirmed-only export has always used), awaiting content 3, suspected
+/// 4, discarded 5. `Detected` is never a row; it takes 6 so the function
+/// is total.
+fn state_code(state: TransmissionStateKind) -> u8 {
+    match state {
+        TransmissionStateKind::Confirmed => 0,
+        TransmissionStateKind::Classified => 1,
+        TransmissionStateKind::Aggregated => 2,
+        TransmissionStateKind::AwaitingContent => 3,
+        TransmissionStateKind::Suspected => 4,
+        TransmissionStateKind::Discarded => 5,
+        TransmissionStateKind::Detected => 6,
+    }
 }
 
 fn topic_under(topic: TopicUnder, out: &mut Vec<u8>) {

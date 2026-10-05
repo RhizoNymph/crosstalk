@@ -2,12 +2,14 @@
 //! content columns are included; the permission that needs; and how large
 //! an export may be.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::filter::TopologyFilter;
 use crate::ids::ProjectionId;
+use crate::interfaces::l8_surface::summary::TransmissionStateKind;
 use crate::interfaces::l8_surface::{ConflictKind, Permission};
 use crate::support::TimeWindow;
 use crate::wire::{Rejected, WireRequest};
@@ -21,6 +23,157 @@ use crate::wire::{Rejected, WireRequest};
 pub struct ExportScope {
     pub window: TimeWindow,
     pub filter: TopologyFilter,
+}
+
+/// The scope of a transmissions export: the shared window and filter, and
+/// which transmission states it holds.
+///
+/// On the wire, `{"window": .., "filter": .., "states": [..]}`, where
+/// `states` is left out when it is the default ([`ExportStates::confirmed`]),
+/// so a request or header written before `states` existed is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct TransmissionScope {
+    pub window: TimeWindow,
+    pub filter: TopologyFilter,
+    #[serde(default, skip_serializing_if = "ExportStates::is_confirmed")]
+    pub states: ExportStates,
+}
+
+impl TransmissionScope {
+    /// The confirmed transmissions of `scope`: the default.
+    pub fn confirmed(scope: ExportScope) -> Self {
+        Self {
+            window: scope.window,
+            filter: scope.filter,
+            states: ExportStates::confirmed(),
+        }
+    }
+
+    /// The window and the filter, as the other scoped datasets hold them.
+    pub fn scope(&self) -> ExportScope {
+        ExportScope {
+            window: self.window,
+            filter: self.filter.clone(),
+        }
+    }
+}
+
+impl From<ExportScope> for TransmissionScope {
+    fn from(scope: ExportScope) -> Self {
+        Self::confirmed(scope)
+    }
+}
+
+/// Which transmission states a transmissions export holds: a non-empty set
+/// of every [`TransmissionStateKind`] but `Detected` (a detected
+/// transmission names no sender and no co-access, so it is not traffic and
+/// is never a row).
+///
+/// The default, [`ExportStates::confirmed`], is `Confirmed`, `Classified`
+/// and `Aggregated`. Built only through [`ExportStates::new`]. On the wire,
+/// an array of state names in ascending [`TransmissionStateKind`] order,
+/// `["suspected", "confirmed", "classified", "aggregated"]`, decoded
+/// through the constructor (any order; a repeat, `detected` and an empty
+/// array are refused).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    try_from = "Vec<TransmissionStateKind>",
+    into = "Vec<TransmissionStateKind>"
+)]
+pub struct ExportStates(BTreeSet<TransmissionStateKind>);
+
+/// Why a list of states is not an [`ExportStates`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidExportStates {
+    Empty,
+    Duplicate(TransmissionStateKind),
+    /// `Detected` is never exported.
+    Detected,
+}
+
+impl ExportStates {
+    /// The states that carry a confirmation.
+    pub const CONFIRMED: [TransmissionStateKind; 3] = [
+        TransmissionStateKind::Confirmed,
+        TransmissionStateKind::Classified,
+        TransmissionStateKind::Aggregated,
+    ];
+
+    /// Every state an export can hold.
+    pub const ALL: [TransmissionStateKind; 6] = [
+        TransmissionStateKind::AwaitingContent,
+        TransmissionStateKind::Suspected,
+        TransmissionStateKind::Confirmed,
+        TransmissionStateKind::Classified,
+        TransmissionStateKind::Aggregated,
+        TransmissionStateKind::Discarded,
+    ];
+
+    pub fn new(states: Vec<TransmissionStateKind>) -> Result<Self, InvalidExportStates> {
+        if states.is_empty() {
+            return Err(InvalidExportStates::Empty);
+        }
+        let mut set = BTreeSet::new();
+        for state in states {
+            if state == TransmissionStateKind::Detected {
+                return Err(InvalidExportStates::Detected);
+            }
+            if !set.insert(state) {
+                return Err(InvalidExportStates::Duplicate(state));
+            }
+        }
+        Ok(Self(set))
+    }
+
+    /// `Confirmed`, `Classified` and `Aggregated`: the default.
+    pub fn confirmed() -> Self {
+        Self(Self::CONFIRMED.into_iter().collect())
+    }
+
+    /// Every exportable state.
+    pub fn all() -> Self {
+        Self(Self::ALL.into_iter().collect())
+    }
+
+    /// Whether this is the default set.
+    pub fn is_confirmed(&self) -> bool {
+        *self == Self::confirmed()
+    }
+
+    pub fn contains(&self, state: TransmissionStateKind) -> bool {
+        self.0.contains(&state)
+    }
+
+    /// Whether any state without a confirmation is included.
+    pub fn includes_unconfirmed(&self) -> bool {
+        self.0.iter().any(|state| !Self::CONFIRMED.contains(state))
+    }
+
+    /// In ascending order; never empty.
+    pub fn iter(&self) -> impl Iterator<Item = TransmissionStateKind> + '_ {
+        self.0.iter().copied()
+    }
+}
+
+impl Default for ExportStates {
+    fn default() -> Self {
+        Self::confirmed()
+    }
+}
+
+impl TryFrom<Vec<TransmissionStateKind>> for ExportStates {
+    type Error = Rejected<InvalidExportStates>;
+
+    fn try_from(states: Vec<TransmissionStateKind>) -> Result<Self, Self::Error> {
+        Self::new(states).map_err(|error| Rejected::new("export states", error))
+    }
+}
+
+impl From<ExportStates> for Vec<TransmissionStateKind> {
+    fn from(states: ExportStates) -> Self {
+        states.0.into_iter().collect()
+    }
 }
 
 /// The one dataset an export holds, with what selects its rows.
@@ -39,9 +192,11 @@ pub struct ExportScope {
     deny_unknown_fields
 )]
 pub enum ExportDataset {
-    /// Confirmed transmissions whose `Confirmed::at` lies in the settled
-    /// window and that the filter admits.
-    Transmissions(ExportScope),
+    /// Transmissions in the scope's states (confirmed ones by default) that
+    /// the filter admits and whose row time lies in the settled window:
+    /// `Confirmed::at` for a confirmed one, `Transmission::opened_at` for an
+    /// unconfirmed one ([`super::rows::TransmissionRow::at`]).
+    Transmissions(TransmissionScope),
     /// Edge buckets in the settled window, resolved, filtered and summed as
     /// `topology` counts them, one row per bucket. The window must be
     /// aligned to buckets.
@@ -133,14 +288,26 @@ impl ExportDataset {
         }
     }
 
-    /// The scope of a scoped dataset; `None` for a projection or verdicts.
-    pub fn scope(&self) -> Option<&ExportScope> {
+    /// The window and filter of a scoped dataset; `None` for a projection
+    /// or verdicts.
+    pub fn scope(&self) -> Option<ExportScope> {
         match self {
-            Self::Transmissions(scope)
-            | Self::Edges(scope)
-            | Self::Accesses(scope)
-            | Self::Topics(scope) => Some(scope),
+            Self::Transmissions(scope) => Some(scope.scope()),
+            Self::Edges(scope) | Self::Accesses(scope) | Self::Topics(scope) => Some(scope.clone()),
             Self::Projection(_) | Self::Verdicts(_) => None,
+        }
+    }
+
+    /// The states a transmissions export holds; `None` for another
+    /// dataset.
+    pub fn states(&self) -> Option<&ExportStates> {
+        match self {
+            Self::Transmissions(scope) => Some(&scope.states),
+            Self::Edges(_)
+            | Self::Accesses(_)
+            | Self::Topics(_)
+            | Self::Projection(_)
+            | Self::Verdicts(_) => None,
         }
     }
 }
@@ -241,9 +408,10 @@ impl ExportFormats {
 /// One export request.
 ///
 /// Built only through [`ExportRequest::new`], which refuses
-/// `include_content` for a dataset with no content columns, so a request
-/// never asks for columns that cannot be delivered. A request, decoded
-/// through it.
+/// `include_content` for a dataset with no content columns, and for a
+/// transmissions export that includes unconfirmed states (an unconfirmed
+/// transmission has no content match to quote), so a request never asks for
+/// columns that cannot be delivered. A request, decoded through it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", try_from = "RawExportRequest")]
 pub struct ExportRequest {
@@ -256,6 +424,9 @@ pub struct ExportRequest {
 pub enum InvalidExportRequest {
     /// `include_content` for accesses or verdicts.
     NoContentColumns { dataset: ExportDatasetKind },
+    /// `include_content` for a transmissions export whose states include an
+    /// unconfirmed one.
+    ContentWithUnconfirmedStates,
 }
 
 /// [`ExportRequest`]'s fields, decoded without the check.
@@ -288,6 +459,13 @@ impl ExportRequest {
         let kind = dataset.kind();
         if include_content && !kind.has_content_columns() {
             return Err(InvalidExportRequest::NoContentColumns { dataset: kind });
+        }
+        if include_content
+            && dataset
+                .states()
+                .is_some_and(ExportStates::includes_unconfirmed)
+        {
+            return Err(InvalidExportRequest::ContentWithUnconfirmedStates);
         }
         Ok(Self {
             dataset,

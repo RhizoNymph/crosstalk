@@ -21,7 +21,7 @@
 //!
 //! | Dataset | Row | Key |
 //! | --- | --- | --- |
-//! | transmissions | [`TransmissionRow`] | (`Confirmed::at`, `id`) |
+//! | transmissions | [`TransmissionRow`] | ([`TransmissionRow::at`]: `Confirmed::at`, or `opened_at` for an unconfirmed row, `id`) |
 //! | edges | [`EdgeRow`] | (bucket start, sender, reader, route, topic) |
 //! | accesses | [`AccessRow`] | (bucket start, agent, channel, op) |
 //! | topics | [`TopicRow`] | `topic` |
@@ -73,51 +73,75 @@ use crate::support::{Finite, NonEmpty, TimeWindow, Timestamp};
 use crate::wire::Rejected;
 
 use super::digest::encode_route;
-use super::request::ExportDatasetKind;
+use super::request::{ExportDatasetKind, ExportStates};
 
-/// One confirmed transmission: the [`TransmissionSummary`] the surface
-/// lists for it, resolved with the aliases captured when the export started
-/// and with its topic under the header's version, the strongest class of
-/// its content matches and, when the request includes content, its topic
-/// label and quoted text.
+/// One transmission: the [`TransmissionSummary`] the surface lists for it,
+/// resolved with the aliases captured when the export started and with its
+/// topic under the header's version; for a confirmed one (`Confirmed`,
+/// `Classified`, `Aggregated`) the strongest class of its content matches
+/// and, when the request includes content, its topic label and quoted text;
+/// and, in an export whose [`ExportStates`] are not the default, its state.
 ///
-/// Built only through [`TransmissionRow::new`] and [`TransmissionRow::of`],
-/// which take a confirmed summary (`Confirmed`, `Classified` or
-/// `Aggregated`): the dataset holds confirmed transmissions, ordered and
-/// windowed by `Confirmed::at`, so every row has a [`Delivery`]. Its sender
-/// and reader are different agents: a transmission whose two agents have
-/// since merged into one is a transmission nowhere, so it is not a row.
+/// Built only through [`TransmissionRow::new`], [`TransmissionRow::of`] and
+/// their `_in_scope` forms, which check:
 ///
-/// On the wire, `{"summary": .., "strongest": .., "content": ..}`: the
-/// delivery is the summary's, so it is not written twice, and decoding goes
-/// through [`TransmissionRow::new`].
+/// - a confirmed row has a [`Delivery`] and a strongest class, an
+///   unconfirmed one (`AwaitingContent`, `Suspected`, `Discarded`) neither,
+///   and no content columns; a `Detected` summary is never a row;
+/// - a confirmed row's sender and reader are different agents (a
+///   transmission whose two agents have since merged into one is a
+///   transmission nowhere);
+/// - the state column is present exactly when the row is built for an
+///   explicit (non-default) set of states, and then names the summary's
+///   state; a row without it is a confirmed one.
+///
+/// On the wire, `{"summary": .., "strongest": .., "content": .., "state":
+/// ..}`: the delivery is the summary's, so it is not written twice;
+/// `strongest` is left out for an unconfirmed row and `state` for a row of
+/// a default export, so a default export's rows are written as they were
+/// before states existed. Decoding goes through the same checks.
+///
+/// [`ExportStates`]: super::request::ExportStates
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawTransmissionRow", into = "RawTransmissionRow")]
 pub struct TransmissionRow {
     summary: TransmissionSummary,
-    delivery: Delivery,
-    strongest: MatchClass,
+    delivery: Option<Delivery>,
+    strongest: Option<MatchClass>,
     content: Option<TransmissionContent>,
+    state: Option<TransmissionStateKind>,
 }
 
 /// A summary that cannot head a transmission row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidTransmissionRow {
-    /// The transmission is not confirmed, so it has no `Confirmed::at` to
-    /// order and window it by.
+    /// The transmission is not confirmed, and the row is for the default
+    /// states, or carries a strongest class or content as if it were.
     NotConfirmed(TransmissionStateKind),
     /// Its sender and reader resolve to this one agent.
     WithinOneAgent(AgentId),
+    /// A confirmed row without its strongest class.
+    NoStrongestClass,
+    /// The state is not one of the export's states (`Detected` never is).
+    StateNotInScope(TransmissionStateKind),
+    /// The state column names another state than the summary's.
+    StateMismatch {
+        column: TransmissionStateKind,
+        summary: TransmissionStateKind,
+    },
 }
 
 /// [`TransmissionRow`]'s wire form: its fields without the delivery, which
-/// [`TransmissionRow::new`] takes from the summary.
+/// the checks take from the summary.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawTransmissionRow {
     summary: TransmissionSummary,
-    strongest: MatchClass,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    strongest: Option<MatchClass>,
     content: Option<TransmissionContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<TransmissionStateKind>,
 }
 
 impl From<TransmissionRow> for RawTransmissionRow {
@@ -126,6 +150,7 @@ impl From<TransmissionRow> for RawTransmissionRow {
             summary: row.summary,
             strongest: row.strongest,
             content: row.content,
+            state: row.state,
         }
     }
 }
@@ -134,35 +159,89 @@ impl TryFrom<RawTransmissionRow> for TransmissionRow {
     type Error = Rejected<InvalidTransmissionRow>;
 
     fn try_from(raw: RawTransmissionRow) -> Result<Self, Self::Error> {
-        Self::new(raw.summary, raw.strongest, raw.content)
+        Self::checked(raw.summary, raw.strongest, raw.content, raw.state)
             .map_err(|error| Rejected::new("transmission row", error))
     }
 }
 
 impl TransmissionRow {
+    /// A row of a default (confirmed-only) export: `summary` must be
+    /// confirmed.
     pub fn new(
         summary: TransmissionSummary,
         strongest: MatchClass,
         content: Option<TransmissionContent>,
     ) -> Result<Self, InvalidTransmissionRow> {
-        let Some(&delivery) = summary.state.delivery() else {
-            return Err(InvalidTransmissionRow::NotConfirmed(summary.state.kind()));
-        };
-        if delivery.from == summary.to {
-            return Err(InvalidTransmissionRow::WithinOneAgent(summary.to));
+        Self::checked(summary, Some(strongest), content, None)
+    }
+
+    /// A row of an export holding `states`: `strongest` is `Some` exactly
+    /// for a confirmed summary, and the state column is written when
+    /// `states` is not the default.
+    pub fn new_in_scope(
+        summary: TransmissionSummary,
+        strongest: Option<MatchClass>,
+        content: Option<TransmissionContent>,
+        states: &ExportStates,
+    ) -> Result<Self, InvalidTransmissionRow> {
+        let kind = summary.state.kind();
+        if !states.contains(kind) {
+            return Err(InvalidTransmissionRow::StateNotInScope(kind));
+        }
+        let column = (!states.is_confirmed()).then_some(kind);
+        Self::checked(summary, strongest, content, column)
+    }
+
+    fn checked(
+        summary: TransmissionSummary,
+        strongest: Option<MatchClass>,
+        content: Option<TransmissionContent>,
+        state: Option<TransmissionStateKind>,
+    ) -> Result<Self, InvalidTransmissionRow> {
+        let kind = summary.state.kind();
+        if let Some(column) = state
+            && column != kind
+        {
+            return Err(InvalidTransmissionRow::StateMismatch {
+                column,
+                summary: kind,
+            });
+        }
+        let delivery = summary.state.delivery().copied();
+        match delivery {
+            Some(delivery) => {
+                if strongest.is_none() {
+                    return Err(InvalidTransmissionRow::NoStrongestClass);
+                }
+                if delivery.from == summary.to {
+                    return Err(InvalidTransmissionRow::WithinOneAgent(summary.to));
+                }
+            }
+            None => {
+                // Unconfirmed: only in an explicit export, with nothing a
+                // confirmation would give.
+                if state.is_none() || strongest.is_some() || content.is_some() {
+                    return Err(InvalidTransmissionRow::NotConfirmed(kind));
+                }
+                if kind == TransmissionStateKind::Detected {
+                    return Err(InvalidTransmissionRow::StateNotInScope(kind));
+                }
+            }
         }
         Ok(Self {
             summary,
             delivery,
             strongest,
             content,
+            state,
         })
     }
 
-    /// The reference row of `transmission`: its [`TransmissionSummary::of`]
-    /// under `aliases`, `verdict` and `topic` (the export's captured
-    /// resolution, verdict copy and header version), and
-    /// [`MatchClass::strongest`] of its content matches.
+    /// The reference row of a confirmed `transmission` in a default
+    /// export: its [`TransmissionSummary::of`] under `aliases`, `verdict`
+    /// and `topic` (the export's captured resolution, verdict copy and
+    /// header version), and [`MatchClass::strongest`] of its content
+    /// matches.
     pub fn of(
         transmission: &Transmission,
         aliases: impl Aliases,
@@ -180,25 +259,55 @@ impl TransmissionRow {
         Self::new(summary, strongest, content)
     }
 
+    /// The reference row of `transmission` in an export holding `states`:
+    /// as [`TransmissionRow::of`], for a confirmed or an unconfirmed one.
+    pub fn of_in_scope(
+        transmission: &Transmission,
+        aliases: impl Aliases,
+        verdict: impl FnOnce(TransmissionId) -> Option<Verdict>,
+        topic: impl FnOnce(TransmissionId) -> TopicUnder,
+        content: Option<TransmissionContent>,
+        states: &ExportStates,
+    ) -> Result<Self, InvalidTransmissionRow> {
+        let strongest = transmission.state.confirmed().map(MatchClass::strongest);
+        let summary = TransmissionSummary::of(transmission, aliases, verdict, topic);
+        Self::new_in_scope(summary, strongest, content, states)
+    }
+
     /// The row `transmissions_by_id` lists for the transmission.
     pub fn summary(&self) -> &TransmissionSummary {
         &self.summary
     }
 
-    /// The summary's delivery: canonical sender, `Confirmed::at`, matched
-    /// bytes.
-    pub fn delivery(&self) -> &Delivery {
-        &self.delivery
+    /// The summary's delivery (canonical sender, `Confirmed::at`, matched
+    /// bytes); `None` for an unconfirmed row.
+    pub fn delivery(&self) -> Option<&Delivery> {
+        self.delivery.as_ref()
     }
 
-    /// [`MatchClass::strongest`] of its content matches.
-    pub fn strongest(&self) -> MatchClass {
+    /// [`MatchClass::strongest`] of its content matches; `None` for an
+    /// unconfirmed row.
+    pub fn strongest(&self) -> Option<MatchClass> {
         self.strongest
     }
 
     /// Present exactly when the request includes content.
     pub fn content(&self) -> Option<&TransmissionContent> {
         self.content.as_ref()
+    }
+
+    /// The state column: the summary's state, present exactly in an export
+    /// whose states are not the default.
+    pub fn state(&self) -> Option<TransmissionStateKind> {
+        self.state
+    }
+
+    /// The row's time, which the dataset windows and orders by:
+    /// `Confirmed::at` for a confirmed row, `Transmission::opened_at` for
+    /// an unconfirmed one.
+    pub fn at(&self) -> Timestamp {
+        self.delivery
+            .map_or(self.summary.opened_at, |delivery| delivery.confirmed_at)
     }
 }
 
@@ -359,7 +468,9 @@ pub enum ExportRow {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RowKey {
     Transmission {
-        confirmed_at: Timestamp,
+        /// [`TransmissionRow::at`]: `Confirmed::at`, or `opened_at` for an
+        /// unconfirmed row.
+        at: Timestamp,
         id: TransmissionId,
     },
     Edge {
@@ -412,7 +523,7 @@ impl ExportRow {
     pub fn key(&self) -> RowKey {
         match self {
             Self::Transmission(row) => RowKey::Transmission {
-                confirmed_at: row.delivery.confirmed_at,
+                at: row.at(),
                 id: row.summary.id,
             },
             Self::Edge(row) => {
