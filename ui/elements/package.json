@@ -1,0 +1,35 @@
+{
+  "name": "crosstalk-elements",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Custom elements for the crosstalk operator UI: topology graph, UMAP projection, time brush and live updates.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "demo": "node scripts/build.mjs --serve",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@sigma/edge-curve": "3.1.0",
+    "graphology": "0.26.0",
+    "graphology-layout-forceatlas2": "0.10.1",
+    "pub-sub-es": "3.0.0",
+    "regl": "2.1.1",
+    "regl-scatterplot": "1.16.0",
+    "sigma": "3.0.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "24.19.0",
+    "esbuild": "0.28.2",
+    "graphology-types": "0.24.8",
+    "typescript": "7.0.2",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
+  }
+}

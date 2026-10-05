@@ -51,6 +51,7 @@ crates/
   api/                     crosstalk-api          P7.1   HTTP + SSE server for the L8 surface
   client/                  crosstalk-client       P7.2   L8 traits over HTTP, for the UI
   gateway/                 crosstalk-gateway      P3     the `crosstalk` binary; wiring
+  demo/                    crosstalk-demo         —      tool: fake upstream, wiki, agent swarm (demo.md)
 scripts/
   check.sh                 every workspace check
   inv_check.py             the invariant validator
@@ -96,7 +97,8 @@ gateway (and the composers beside it). The roles:
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
 | composition | `api`, `client`, `e2e`, `eval`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
-| test support | `memory`, `sim`, `testkit` |
+| test support | `conformance`, `memory`, `sim`, `testkit`, `world` |
+| tool | `demo` |
 | open | `spec`, `store`, and every third-party crate |
 
 The rules, applied to every declared dependency (normal, dev and build,
@@ -107,11 +109,13 @@ including optional and target-specific ones) of every workspace member:
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
-2. `memory`, `sim` and `testkit` are never a normal or build dependency of a
+2. `conformance`, `memory`, `sim`, `testkit` and `world` are never a normal or build dependency of a
    layer crate; they may be dev-dependencies.
+3. A layer crate never depends on a tool crate (`demo`) under any kind.
 
 Layer crates may depend freely on `spec`, `store` and third-party crates.
-Composition and support crates are unrestricted.
+Composition, support and tool crates are unrestricted (`demo` takes
+`testkit` as a normal dependency).
 
 ### The architecture test
 
@@ -124,7 +128,8 @@ parses the JSON with `serde_json`.
   `Build` (an unknown `kind` is an error, not a default).
 - `check(&Edge) -> Option<Violation>` is the rule for one edge, and
   `violations` collects every broken edge. `Violation` is `LayerOnLayer`,
-  `LayerOnComposer` or `TestSupportNotDev`, each carrying the edge.
+  `LayerOnComposer`, `TestSupportNotDev` or `LayerOnTool`, each carrying
+  the edge.
 - `workspace_obeys_the_dependency_rule` fails with every violation listed.
 - `workspace_has_every_crate_the_rule_names` fails if a crate the rule
   names is missing, so the rule can never pass vacuously after a rename.

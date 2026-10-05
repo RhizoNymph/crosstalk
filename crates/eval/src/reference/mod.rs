@@ -13,14 +13,29 @@
 //!    input or earlier output, at least `min_span` folded bytes long. Their
 //!    shingles are indexed.
 //!
-//! A hit is classified `Exact` when the reader's matched bytes occur
-//! verbatim in the span, else `Normalized` (equal after [folding](mod@fold): escape
-//! unfolding, case and whitespace). Candidate tokens are also decoded
+//! Matching compares under [folding](mod@fold): string-escape unfolding,
+//! case and whitespace. A hit is then [classified](classify::classify)
+//! `Exact` when the reader's matched bytes occur verbatim in the span,
+//! `Normalized` when case and whitespace folding alone make them equal, and
+//! `Decoded([JsonString])` or `Decoded([YamlString])` when one side's
+//! string escapes had to be undone. Candidate tokens are also decoded
 //! (base64, hex, URL encoding) and matched as `Decoded`. Opaque blobs
 //! ([`opaque`]) are cut out before spans, matching and decoding. Hits are
 //! grouped into one confirmed spec `Transmission` per (reader exchange,
 //! sender, route), with the route from where the hit sits ([`route`]).
+//!
+//! **Boilerplate.** A shingle held by more than `max_postings` distinct
+//! originated spans is boilerplate, as L4's frequency cutoff makes it
+//! (`interfaces::l4_provenance`): its postings are dropped and it is ignored
+//! on lookup from then on. Text many agents originate independently (a
+//! wiki's new-page template, a URL every agent's task names) is a shared
+//! source, not evidence of who a reader got it from; without the cutoff each
+//! occurrence in a read matches every originating span, so matches grow as
+//! reads × occurrences × originators. The reference counts only originated
+//! spans toward the frequency (L4 also counts scanned inputs) and has no
+//! retention window: a world is one replay.
 
+pub mod classify;
 pub mod decode;
 pub mod fold;
 pub mod opaque;
@@ -35,7 +50,7 @@ use crosstalk_spec::derived::flow::transmission::{
 };
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::SpanLocation;
-use crosstalk_spec::ids::{ChannelId, ExchangeId, SpanId};
+use crosstalk_spec::ids::{AgentId, ChannelId, ExchangeId, SpanId};
 use crosstalk_spec::observed::message::{Message, MessageBody, ToolName};
 use crosstalk_spec::support::NonEmpty;
 
@@ -61,6 +76,9 @@ pub struct ReferenceConfig {
     /// The fewest letters and digits a span or match must hold, so a window
     /// of mostly JSON syntax (`"}]","reasoning":"the `) never counts.
     pub min_word_chars: usize,
+    /// The most distinct originated spans a shingle may be posted for; one
+    /// more makes it boilerplate (never indexed or looked up again).
+    pub max_postings: usize,
 }
 
 impl Default for ReferenceConfig {
@@ -70,6 +88,7 @@ impl Default for ReferenceConfig {
             min_span: 24,
             min_decoded: 16,
             min_word_chars: 20,
+            max_postings: 16,
         }
     }
 }
@@ -85,11 +104,13 @@ pub struct ReferenceOutput {
     pub matches: usize,
 }
 
-/// An indexed span: whose output it is in and where.
+/// An indexed span: whose output it is in, who wrote it and where (the
+/// spec's `IndexedSpan`, by id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpanRecord {
     pub id: SpanId,
     pub exchange: ExchangeId,
+    pub author: AgentId,
     pub location: SpanLocation,
 }
 
@@ -103,10 +124,44 @@ pub enum ReferenceError {
     InvalidTransmission(String),
 }
 
+/// A shingle's postings: the spans whose originated text holds it, until
+/// more than `max_postings` do; then it is boilerplate for the rest of the
+/// world.
+enum Postings {
+    Spans(Vec<usize>),
+    Boilerplate,
+}
+
+impl Postings {
+    /// Posts `span` (once), turning boilerplate past `max`.
+    fn post(&mut self, span: usize, max: usize) {
+        let Self::Spans(spans) = self else {
+            return;
+        };
+        if spans.last() == Some(&span) {
+            return;
+        }
+        if spans.len() >= max {
+            *self = Self::Boilerplate;
+        } else {
+            spans.push(span);
+        }
+    }
+
+    fn spans(&self) -> &[usize] {
+        match self {
+            Self::Spans(spans) => spans,
+            Self::Boilerplate => &[],
+        }
+    }
+}
+
 struct IndexedSpan {
     id: SpanId,
     agent: usize,
     raw: String,
+    /// `raw` under case and whitespace folding alone.
+    plain: String,
 }
 
 /// A hit before grouping: who sent it, how it travelled, the match.
@@ -122,7 +177,7 @@ struct Matcher<'w> {
     config: ReferenceConfig,
     spans: Vec<IndexedSpan>,
     records: Vec<SpanRecord>,
-    index: HashMap<u64, Vec<usize>>,
+    index: HashMap<u64, Postings>,
     seen: Vec<HashSet<u64>>,
     channels: BTreeMap<ChannelId, Vec<Locator>>,
     matches: usize,
@@ -244,19 +299,26 @@ impl Matcher<'_> {
                         ),
                     );
                     let span = self.spans.len();
-                    self.spans.push(IndexedSpan { id, agent, raw });
+                    let plain = fold::fold_plain(&raw);
+                    self.spans.push(IndexedSpan {
+                        id,
+                        agent,
+                        raw,
+                        plain,
+                    });
                     self.records.push(SpanRecord {
                         id,
                         exchange: exchange.id(),
+                        author: self.world.agents()[agent].id,
                         location,
                     });
                     for &(hash, offset) in &windows {
                         if offset >= start && offset + k <= end && !self.seen[agent].contains(&hash)
                         {
-                            let entry = self.index.entry(hash).or_default();
-                            if entry.last() != Some(&span) {
-                                entry.push(span);
-                            }
+                            self.index
+                                .entry(hash)
+                                .or_insert_with(|| Postings::Spans(Vec::new()))
+                                .post(span, self.config.max_postings);
                         }
                     }
                 }
@@ -295,11 +357,8 @@ impl Matcher<'_> {
                     let read = text
                         .get(raw_start as usize..raw_end as usize)
                         .unwrap_or_default();
-                    let kind = if self.spans[span].raw.contains(read) {
-                        MatchKind::Exact
-                    } else {
-                        MatchKind::Normalized
-                    };
+                    let indexed = &self.spans[span];
+                    let kind = classify::classify(&indexed.raw, &indexed.plain, read);
                     found.entry((span, raw_start, raw_end)).or_insert(kind);
                 }
             }
@@ -342,8 +401,8 @@ impl Matcher<'_> {
     fn lookup(&self, windows: &[(u64, usize)], reader: usize) -> BTreeMap<usize, Vec<usize>> {
         let mut hits: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for &(hash, offset) in windows {
-            if let Some(spans) = self.index.get(&hash) {
-                for &span in spans {
+            if let Some(postings) = self.index.get(&hash) {
+                for &span in postings.spans() {
                     if self.spans[span].agent != reader {
                         hits.entry(span).or_default().push(offset);
                     }

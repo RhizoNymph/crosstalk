@@ -89,13 +89,18 @@ Overview:
     fixed point (gateway). crosstalk-eval is that
     harness (eval): it converts public multi-agent datasets (SALT-NLP
     first) into labelled corpora of spec NormalizedExchanges, scores a
-    detector against the labels, and runs both a naive reference matcher
-    and Pipeline::ingest (unscored until detection consumers exist). crosstalk-analysis has
+    detector against the labels, and runs a naive reference matcher,
+    Pipeline::ingest (unscored: it has no detection consumers) and a
+    LiveBackend seam that scores the gateway's live composition once
+    crosstalk_gateway::live::Live merges. crosstalk-analysis has
     L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
     SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
-    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint. The
-    other crates are still empty. The phased implementation plan, with its
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint.
+    The operator UI (crosstalk-ui, ui/) runs on the spec's L8 traits,
+    implemented by a fixture backend by default, or by the in-process
+    surface seeded with the synthetic world (ui). The other crates are
+    still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -181,11 +186,17 @@ Overview:
     eval: >
       Crate crosstalk-eval (a composer, beside the gateway rather than in
       it) and its ct-eval binary: dataset converters stream worlds of spec
-      NormalizedExchanges with ground-truth labels; a detector (the naive
-      reference matcher, or the gateway's own Pipeline::ingest, which is
-      unscored until L3 to L5 consume the bus) produces spec Transmissions;
-      the scorer aligns them with the labels and reports per dataset,
-      route, carrier, match class and tier against regression gates.
+      NormalizedExchanges (replayed: IngressMode::Replay) with ground-truth
+      labels; a detector (the naive reference matcher, the gateway's own
+      Pipeline::ingest, which is unscored, or a LiveBackend composition)
+      produces spec Transmissions, whose spans, accesses and channel
+      resources are read back through the spec's read traits (SpanIndex,
+      AccessStore, ChannelReads); the scorer aligns them with the labels
+      and reports per dataset, route, carrier, match or access class and
+      tier against regression gates.
+      The swarm benchmark (ct-eval swarm) instead scores the live gateway:
+      it joins the demo swarm's ground truth to the gateway's exchange log
+      and blobs, and scores a saved L8 transmissions export and its evidence.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -200,6 +211,22 @@ Overview:
       Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
       stored, how they run and how they scale is in docs/infrastructure.md.
 
+    ui: >
+      Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
+      web UI. Server-rendered pages plus custom elements for the topology
+      graph and UMAP projection (WebGL), the time brush (SVG) and the
+      live-update listener, fed by the UI's own /data/ routes. Reads, acts
+      and subscribes only through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), called on one concrete backend type, an
+      enum over the deterministic fixture, the world (crosstalk-api's
+      InProcess surface seeded by crosstalk-world) and, later,
+      crosstalk-client's HTTP backend as one more arm. The clock, bucket
+      width, export formats and rule defaults are QueryApi::present, read
+      once per request; the one backend question outside the spec is
+      where a default view ends (AppBackend::view_end: the present's now,
+      unless the fixture replays up to a fixed end). Callers come from the spec's
+      operator directory in trusted mode; view windows are bucket-aligned
+      and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
     exchange data only as spec bus events or through spec traits that
@@ -303,6 +330,11 @@ Overview:
     responses, errors, live-feed items and bus events between
     nodes are decoded strictly, so a node that does not know a field or
     variant refuses the delivery rather than dropping data.
+    The operator UI renders L8's reads (QueryApi), with view state in the
+    URL (a bucket-aligned window and a pinned topic version), sends every
+    operator action through OperatorActions::act, downloads exports as
+    JSON Lines, and re-renders a page's region when the live feed (SSE from
+    LiveFeed) names something the page shows.
 
 Features Index:
   type_spec:
@@ -333,6 +365,48 @@ Features Index:
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
     doc: docs/features/type_spec.md
+  follow_mode:
+    status: design
+    description: >
+      Keeping UI views live as a gateway produces data. A follow=<span>
+      page key resolves on every render to the window ending at the
+      present (rounded up to a bucket) and is pinned into today's citeable
+      from/to URLs for everything below the page; the provisional tail
+      after the watermark is marked. Pages refresh by a server re-render
+      that Topcoat merges into the DOM, triggered by a tracked signal that
+      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
+      elements keep their nodes and update in place (topology keeps node
+      positions and places new nodes with fixed-node ForceAtlas2; the time
+      brush stays anchored right). Includes the spec gap list (the present,
+      the bucket width, a coalesced traffic event, channel events for
+      traffic-driven listing changes, data revisions, projection
+      extensions), the fixture's controllable clock and deterministic
+      trickle, the testing strategy and a parallel implementation plan.
+    entry_points:
+      - ui/src/url/view_state.rs
+      - ui/src/pages/view.rs
+      - ui/src/components/live.rs
+      - ui/src/data/live.rs
+      - ui/elements/src/live/element.ts
+      - ui/elements/src/shared/element.ts
+      - ui/elements/src/topology/element.ts
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/follow_mode.md
+  conversation_view:
+    status: design
+    description: >
+      Operator page for one agent's conversation, turn by turn: inputs of
+      any role in request order and outputs, with provenance marks (text
+      other agents originated, output spans and who later read them,
+      relayed text, sub-agent delegations), harness claims, origin (fork,
+      compaction), compaction boundaries, WebSocket increments and replayed traffic
+      (labelled, filterable). Structure
+      with View, text with Content; turns paged by citeable index windows.
+      Waits on proposed L8 conversation reads
+      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+    entry_points: []
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/conversation_view.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
@@ -482,9 +556,9 @@ Features Index:
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
       crates never depend on each other or on the composers api, client,
-      eval or gateway, take
-      transport only as a dev-dependency, and take memory, sim and testkit
-      only as dev-dependencies) checked by an architecture test over cargo
+      eval or gateway, take transport only as a dev-dependency, take
+      memory, sim and testkit only as dev-dependencies, and never depend
+      on the tool crate demo) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
       validator), and the invariant evidence path convention
       (crosstalk_spec:: or crosstalk_<crate>::, checked by
@@ -1127,7 +1201,9 @@ Features Index:
       observability (host, container, Postgres and log metrics, dashboards,
       alert rules). Defines the contract the crosstalk binary implements:
       serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
-      endpoints and the config file's top-level keys.
+      endpoints and the config file's top-level keys. Also notes for
+      running on a shared host (snap Docker, host port clashes, syncing a
+      checkout, a smoke test, inspecting the distroless gateway).
     entry_points:
       - deploy/compose.yaml
       - deploy/run.sh
@@ -1136,6 +1212,66 @@ Features Index:
       - docs/infrastructure.md
     depends_on: [workspace, store, ingress, transport]
     doc: docs/features/deploy.md
+  demo:
+    description: >
+      crosstalk-demo (crates/demo, a tool crate no layer depends on), one
+      binary with four subcommands. upstream is a fake Anthropic upstream:
+      POST /v1/messages, streaming SSE or JSON, in the real wire format,
+      answered with text and tool_use deterministically from a seed and the
+      request body, with a configurable first-byte wait and stream pacing.
+      wiki is an in-memory HTTP page store with versions and authors, the
+      shared channel. swarm runs N agents through the crosstalk proxy. Each
+      keeps a growing conversation, resent whole every turn, with fake
+      x-api-keys per agent or group. The one declared tool is http_request
+      (L5's HTTP tool contract); the model's GET and PUT calls of
+      <wiki>/pages/<page> run against the wiki, and their results go back as
+      tool_result, so one agent's model output reaches another's input and
+      L5 can discover the wiki as a channel. swarm reports throughput,
+      p50/p95/p99 time to first byte and total time, and the expected
+      transmissions, self-reads, rereads and misses, optionally as a
+      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      read the writer's and reader's session, turn and tool_use id, the
+      content's hashes and its exact message/block in the reader's request),
+      which ct-eval scores against.
+      healthcheck serves the distroless image. deploy/compose.demo.yaml,
+      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
+      demo up|run|down|logs run the demo on the compose stack. It reuses
+      testkit's harness client and SSE parser and the spec's seeded random
+      source.
+    entry_points:
+      - crates/demo/src/main.rs
+      - crates/demo/src/upstream/mod.rs
+      - crates/demo/src/wiki/mod.rs
+      - crates/demo/src/swarm/mod.rs
+      - crates/demo/src/swarm/truth.rs
+      - deploy/compose.demo.yaml
+      - deploy/run.sh
+    depends_on: [testkit, deploy, gateway, workspace]
+    doc: docs/features/demo.md
+  conformance:
+    description: >
+      crosstalk-conformance (crates/conformance, TestSupport): the L8
+      conformance suite, tests generic over any implementation of the L8
+      traits (QueryApi, OperatorActions, LiveFeed, export). A harness
+      provisions worlds from scenarios (facts over typed roles: agents,
+      resources, channels, transmissions with their evidence, merges,
+      promotions, policies, verdicts, topic history, dead letters), the
+      suite checks every fact of a scenario through L8 before relying on
+      it, and assertions are relations the spec defines and what the facts
+      imply, citing spec/invariants ids, never totals of one world.
+      suite!(harness) instantiates every test; the UI fixture runs it
+      (ui/src/backend/fixture/conformance, binding the named scenarios to
+      its generated week). Next: a harness over crosstalk-surface and the
+      memory stores seeded by crosstalk-world, then scenarios seeded
+      through the write traits.
+    entry_points:
+      - crates/conformance/src/lib.rs
+      - crates/conformance/src/harness/mod.rs
+      - crates/conformance/src/scenario/mod.rs
+      - crates/conformance/src/suite.rs
+      - ui/src/backend/fixture/conformance/mod.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, type_spec]
+    doc: docs/features/conformance.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's
@@ -1166,31 +1302,88 @@ Features Index:
       - crates/world/tests/support/mod.rs
     depends_on: [type_spec, memory, transport, workspace]
     doc: docs/features/world.md
+  ui:
+    description: >
+      Operator web UI (crosstalk-ui, a workspace member): an overview,
+      topology (agents or bipartite with channels) with an edge drawer,
+      transmission evidence with verdicts, search and UMAP exploration,
+      topics (with version pins), channels (active, unconfirmed, declared
+      with no traffic yet, and the review queue; a channel's suspected
+      transmissions with verdicts; a shared confirmed-only filter) with
+      promotion, agents with merges, alerts and rules, export (JSON Lines
+      downloads), audit and pipeline, kept current by the SSE live feed.
+      Reads and acts through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), the channel-semantics port's shapes
+      included, on one of three backends (backend::AppBackend): the
+      deterministic fixture (default; optionally replaying its last hours
+      for demos), the world backend (crosstalk_api::InProcess over the
+      memory stores, seeded with crosstalk-world), or the gateway's live
+      composition behind the `live` cargo feature (a stub until the
+      gateway provides it). The UI declares no traits of its own: the
+      clock, bucket width, export formats and rule version come from
+      QueryApi::present (app::present, once per request), and where a
+      default view ends from AppBackend::view_end.
+      Built from the workspace root into deploy/ui.Dockerfile and
+      deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
+    entry_points:
+      - ui/src/main.rs
+      - ui/src/app.rs
+      - ui/src/backend/mod.rs
+      - ui/src/backend/dispatch.rs
+      - ui/src/backend/fixture/surface.rs
+      - ui/src/backend/world/mod.rs
+      - ui/src/pages/mod.rs
+      - ui/src/pages/view.rs
+      - ui/src/data/mod.rs
+      - ui/src/data/live.rs
+      - ui/src/pages/topology/mod.rs
+      - ui/src/pages/explore/mod.rs
+      - ui/src/pages/export/mod.rs
+      - ui/elements/src/topology/element.ts
+      - ui/elements/src/live/element.ts
+      - deploy/ui.Dockerfile
+    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service]
+    doc: docs/features/ui.md
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP first) streaming worlds of checked spec
-      NormalizedExchanges on a deterministic virtual clock, with typed,
+      (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
+      http_request reads and writes of public wiki pages) and swarm-traces (a
+      decode-chain corpus reported by chain, count and length only))
+      streaming worlds of checked
+      spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
-      controls, agent clusters, with tiers); predictions converted from
-      spec Transmissions and ContentMatches; one documented alignment rule
-      and a scorer with TP/FP/FN by dataset, route, carrier, match class
-      and tier, negative-control violations and a DetectionQuality bridge;
-      a Detector seam with the naive reference matcher (escape-aware
-      normalization, decoding, opaque-blob exclusion) and the gateway
-      pipeline (Pipeline::ingest under the corpus clock or a sim clock,
-      reported as unscored until detection consumers exist); reports and
-      regression gates.
+      controls, exemptions, agent clusters, with tiers); predictions converted from
+      spec Transmissions (one per ContentMatch, and one per CoAccess of a
+      suspected or discarded transmission) through a read seam over the
+      spec's SpanIndex, AccessStore and channel reads; one documented
+      alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
+      kind, match or access class and tier, negative-control violations
+      and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      with the naive reference matcher (escape-aware matching classed as
+      Exact, Normalized or Decoded([JsonString | YamlString]), decoding,
+      opaque-blob exclusion, an L4-style boilerplate cutoff on shingle
+      postings), the gateway pipeline (Pipeline::ingest under
+      the corpus clock or a sim clock, reported as unscored), and
+      LiveDetector over the LiveBackend seam (a fresh composition per
+      world: ingest, settle, list transmissions, read spans, accesses,
+      channel resources and L3 attribution), whose real Live adapter is a
+      stub until Live merges; reports and regression gates.
     entry_points:
       - crates/eval/src/lib.rs
       - crates/eval/src/pipeline.rs
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/datasets/wiki/mod.rs
+      - crates/eval/src/datasets/swarm/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
-    depends_on: [type_spec, gateway, transport, sim, testkit]
+      - crates/eval/src/datasets/swarm_truth/mod.rs
+      - crates/eval/src/predict/reads.rs
+      - crates/eval/src/detect/live/mod.rs
+    depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
     doc: docs/features/eval.md
   e2e_smoke:
     description: >
@@ -1301,4 +1494,55 @@ Features Index:
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md
+  eval_swe_synthetic:
+    description: >
+      Background and synthetic corpora for crosstalk-eval (ct-eval --dataset
+      open-swe | lmcache | swe-splice | cipher). Open-SWE-Traces and LMCache
+      trajectories (Parquet, read with the parquet crate; Open-SWE tool
+      results paired with calls by position, LMCache responses taken from
+      the next request) are mixed into background worlds with only
+      Boilerplate/SharedSource negative controls. Seeded splices plant one
+      Channel/File transmission from A's file write to B's harness-format
+      read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
+      deliver steganographic-evals payloads encoded: base64, hex, URL and
+      chains are in reach, while rotN, binary8 and substitution are
+      Tier::OutOfReach and reported as missed by design. Reports gain
+      out_of_reach and background (false positives per 1k exchanges, top
+      sources) summaries.
+    entry_points:
+      - crates/eval/src/datasets/background.rs
+      - crates/eval/src/datasets/open_swe/mod.rs
+      - crates/eval/src/datasets/lmcache/mod.rs
+      - crates/eval/src/datasets/swe_splice/mod.rs
+      - crates/eval/src/datasets/cipher/mod.rs
+      - crates/eval/src/score/sources.rs
+    depends_on: [eval, type_spec]
+    doc: docs/features/eval_swe_synthetic.md
+  eval_ai_village:
+    description: >
+      The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval
+      --dataset ai-village). Claude Code mode: the Claude Agent SDK agent's
+      exact calls, one world per context, with construction-tier labels for
+      every chat message it read through the village MCP server's
+      get_events (keyed by event id; Direct/ToolResult). Window mode
+      (default 2026-07-13..17): every standard agent, one world per village
+      day, requests rebuilt from responses (system prompt from goals and
+      memory, session history, chat since the previous call), structural
+      chat labels, heuristic repository-channel labels from bash accesses
+      on canonical repository URLs, GUI edits counted. Bash accesses follow
+      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
+      their equivalent http_request {method, url, body} call, git and the
+      forge CLIs' issue commands are marked Bash-only, every resource is a
+      canonical URL (L5's url_locator off the forges, the repository's web
+      URL on them), and each write carries the spec's WriteOutcome
+      (rejected writes never pair). Its streaming table passes, resource
+      normalizer and bash access tagger are reusable.
+    entry_points:
+      - crates/eval/src/datasets/ai_village/mod.rs
+      - crates/eval/src/datasets/ai_village/tables.rs
+      - crates/eval/src/datasets/ai_village/resource.rs
+      - crates/eval/src/datasets/ai_village/access/mod.rs
+      - crates/eval/src/datasets/ai_village/access/http.rs
+    depends_on: [eval, flow_extract]
+    doc: docs/features/eval_ai_village.md
 ```

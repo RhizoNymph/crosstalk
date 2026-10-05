@@ -53,7 +53,7 @@ use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l6_analysis::Embedder;
 use crosstalk_spec::support::Timestamp;
-use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
+use crosstalk_store::{SerializableRetry, retry_serializable};
 use sqlx::PgPool;
 
 use crate::pg::outbox::{self, Pending};
@@ -202,7 +202,7 @@ where
                 let mut events = Vec::new();
                 for (index, rule) in builtins {
                     let json = crate::pg::codec::to_json("alert rule", &rule)
-                        .map_err(|error| TxError::Abort(StorageFailure::from(error)))?;
+                        .map_err(|error| StorageFailure::from(error).into_tx(|failure| failure))?;
                     let inserted = sqlx::query(
                         "INSERT INTO analysis.alert_rules (id, builtin, definition, revision) \
                          VALUES ($1, $2, $3, 1) ON CONFLICT (id) DO NOTHING",
@@ -218,7 +218,7 @@ where
                 }
                 outbox::append(conn, events)
                     .await
-                    .map_err(|error| TxError::Abort(StorageFailure::from(error)))
+                    .map_err(|error| StorageFailure::from(error).into_tx(|failure| failure))
             })
         })
         .await

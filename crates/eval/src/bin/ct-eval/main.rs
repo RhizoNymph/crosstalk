@@ -2,15 +2,36 @@
 //!
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
+//!               [--detector reference|pipeline|live] [--seed N]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
+//! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
+//! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
+//! ct-eval run   --dataset ai-village [--mode window|claude-code] [--from DAY] [--to DAY] [--limit N] …
 //! ```
 //!
-//! `--dataset` is `salt`, `agentdojo` or `tau2`. For AgentDojo, `--include
+//! `swarm` scores the gateway's saved export against a demo swarm's ground
+//! truth (see `datasets::swarm_truth`); `swarm-fetch` saves that export and
+//! its evidence from the L8 API.
+//!
+//! `--dataset` is `salt`, `agentdojo`, `tau2`, `ai-village`, `open-swe`,
+//! `lmcache`, `swe-splice`, `cipher`, `wiki` (collusion-wiki) or `swarm`
+//! (swarm-traces). For the wiki, `--family`, `--wiki`, `--min-agents` and
+//! `--max-agents` select worlds, and `--demo` picks the small
+//! relay-coordination demo subset. For AgentDojo, `--include
 //! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
 //! exactly, and `run` also prints how the injections arrived.
 //!
+//! `--dataset open-swe | lmcache` mixes `--agents-per-world` independent
+//! trajectories per world from `--limit` shards (`--count` rows or sessions
+//! from each); `--dataset swe-splice` plants `--count` splices and
+//! `--dataset cipher` builds `--count` pairs per cipher, both seeded by
+//! `--corpus-seed`.
+//!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
+//! `--detector live` scores the gateway's live composition through
+//! `detect::live`; until `crosstalk_gateway::live::Live` is in the build it
+//! reports "live backend unavailable" and exits 1.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -22,8 +43,18 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
 use crosstalk_eval::corpus::{SourceError, TraceSource, World};
 use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
+use crosstalk_eval::datasets::ai_village::report::Unlabelled;
+use crosstalk_eval::datasets::ai_village::time::Day;
+use crosstalk_eval::datasets::ai_village::{self as ai_village, AiVillageSource};
+use crosstalk_eval::datasets::cipher::{self, CipherSource};
+use crosstalk_eval::datasets::lmcache::LmcacheSource;
+use crosstalk_eval::datasets::open_swe::{self, Mixing, OpenSweSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
+use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
+use crosstalk_eval::datasets::swe_splice::{self, SpliceSource};
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
+use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
+use crosstalk_eval::detect::live::{LiveDetector, LiveSettings, gateway_backend};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
@@ -32,6 +63,8 @@ use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
 use tracing_subscriber::EnvFilter;
+
+mod swarm;
 
 #[derive(Parser)]
 #[command(name = "ct-eval", about = "crosstalk evaluation harness")]
@@ -46,6 +79,10 @@ enum Command {
     Run(RunArgs),
     /// Dump the dataset's labels as JSONL.
     Truth(TruthArgs),
+    /// Score the gateway's saved export against a demo swarm's ground truth.
+    Swarm(swarm::SwarmArgs),
+    /// Save the gateway's transmissions export and their evidence.
+    SwarmFetch(swarm::FetchArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -53,6 +90,15 @@ enum Dataset {
     Salt,
     Agentdojo,
     Tau2,
+    OpenSwe,
+    Lmcache,
+    SweSplice,
+    Cipher,
+    AiVillage,
+    /// collusion-wiki: public wikis as dead drops.
+    Wiki,
+    /// swarm-traces: the decoder corpus.
+    Swarm,
 }
 
 impl Dataset {
@@ -61,8 +107,25 @@ impl Dataset {
             Self::Salt => "salt",
             Self::Agentdojo => "agentdojo",
             Self::Tau2 => "tau2",
+            Self::OpenSwe => "open_swe",
+            Self::Lmcache => "lmcache",
+            Self::SweSplice => "swe_splice",
+            Self::Cipher => "cipher",
+            Self::AiVillage => ai_village::DATASET,
+            Self::Wiki => crosstalk_eval::datasets::wiki::DATASET,
+            Self::Swarm => crosstalk_eval::datasets::swarm::DATASET,
         }
     }
+}
+
+/// Which part of AI Village to convert.
+#[derive(Clone, Copy, ValueEnum)]
+enum VillageMode {
+    /// Every agent over `--from`..=`--to`, one world per village day.
+    Window,
+    /// The Claude Code agent's stream, one world per context (`--limit`
+    /// caps the contexts).
+    ClaudeCode,
 }
 
 /// Any dataset's source.
@@ -70,6 +133,13 @@ enum AnySource {
     Salt(SaltSource),
     AgentDojo(AgentDojoSource),
     Tau2(Tau2Source),
+    OpenSwe(OpenSweSource),
+    Lmcache(LmcacheSource),
+    Splice(SpliceSource),
+    Cipher(CipherSource),
+    AiVillage(Box<AiVillageSource>),
+    Wiki(WikiSource),
+    Swarm(SwarmSource),
 }
 
 impl TraceSource for AnySource {
@@ -78,6 +148,13 @@ impl TraceSource for AnySource {
             Self::Salt(source) => source.id(),
             Self::AgentDojo(source) => source.id(),
             Self::Tau2(source) => source.id(),
+            Self::OpenSwe(source) => source.id(),
+            Self::Lmcache(source) => source.id(),
+            Self::Splice(source) => source.id(),
+            Self::Cipher(source) => source.id(),
+            Self::AiVillage(source) => source.id(),
+            Self::Wiki(source) => source.id(),
+            Self::Swarm(source) => source.id(),
         }
     }
 
@@ -86,6 +163,13 @@ impl TraceSource for AnySource {
             Self::Salt(source) => Box::new(source.worlds()),
             Self::AgentDojo(source) => Box::new(source.worlds()),
             Self::Tau2(source) => Box::new(source.worlds()),
+            Self::OpenSwe(source) => Box::new(source.worlds()),
+            Self::Lmcache(source) => Box::new(source.worlds()),
+            Self::Splice(source) => Box::new(source.worlds()),
+            Self::Cipher(source) => Box::new(source.worlds()),
+            Self::AiVillage(source) => Box::new(source.worlds()),
+            Self::Wiki(source) => Box::new(source.worlds()),
+            Self::Swarm(source) => Box::new(source.worlds()),
         };
         worlds
     }
@@ -101,12 +185,49 @@ struct SourceArgs {
     /// The datasets config (default: the crate's `datasets.toml`).
     #[arg(long)]
     config: Option<PathBuf>,
-    /// Read at most this many trace files (stratified across conditions).
+    /// Read at most this many worlds (SALT: trace files, stratified across
+    /// conditions; wiki: worlds, largest first).
     #[arg(long)]
     limit: Option<usize>,
     /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// Trajectories mixed into one world (open-swe, lmcache).
+    #[arg(long, default_value_t = open_swe::AGENTS_PER_WORLD)]
+    agents_per_world: usize,
+    /// Rows (open-swe) or sessions (lmcache) read from each file, splices
+    /// (swe-splice) or pairs per cipher (cipher).
+    #[arg(long)]
+    count: Option<usize>,
+    /// Seeds the synthetic corpora (swe-splice, cipher).
+    #[arg(long, default_value_t = 0)]
+    corpus_seed: u64,
+    /// AI Village: which part to convert.
+    #[arg(long, value_enum, default_value_t = VillageMode::Window)]
+    mode: VillageMode,
+    /// AI Village window: the first village day (YYYY-MM-DD).
+    #[arg(long, default_value = ai_village::DEFAULT_FROM)]
+    from: String,
+    /// AI Village window: the last village day, included.
+    #[arg(long, default_value = ai_village::DEFAULT_TO)]
+    to: String,
+    /// Wiki: keep only pages in these task clusters, e.g. relay-coordination
+    /// (repeatable).
+    #[arg(long)]
+    family: Vec<String>,
+    /// Wiki: keep only pages on these wikis, e.g. dse (repeatable).
+    #[arg(long)]
+    wiki: Vec<String>,
+    /// Wiki: keep only worlds with at least this many agents.
+    #[arg(long)]
+    min_agents: Option<usize>,
+    /// Wiki: drop worlds with more than this many agents (bounds a demo).
+    #[arg(long)]
+    max_agents: Option<usize>,
+    /// Wiki: the demo subset (`WikiSelection::demo`); overrides the other
+    /// wiki filters and `--limit`.
+    #[arg(long)]
+    demo: bool,
 }
 
 #[derive(Args)]
@@ -125,7 +246,7 @@ struct RunArgs {
     /// Which detector to run.
     #[arg(long, value_enum, default_value_t = DetectorChoice::Reference)]
     detector: DetectorChoice,
-    /// Seeds the gateway pipeline's envelope ids (`--detector pipeline`).
+    /// Seeds the gateway's envelope ids (`--detector pipeline` or `live`).
     #[arg(long, default_value_t = 0)]
     seed: u64,
     #[command(flatten)]
@@ -139,6 +260,9 @@ enum DetectorChoice {
     /// The gateway pipeline (`Pipeline::ingest`); unscored until the
     /// detection layers consume the bus.
     Pipeline,
+    /// The gateway's live composition (L3–L7) through `LiveBackend`;
+    /// unavailable until `crosstalk_gateway::live::Live` is in the build.
+    Live,
 }
 
 /// Reference matcher parameters (defaults: `ReferenceConfig::default`).
@@ -153,6 +277,10 @@ struct MatcherArgs {
     /// Fewest letters and digits a span or match must hold.
     #[arg(long)]
     min_word_chars: Option<usize>,
+    /// The most distinct originated spans a shingle may be posted for
+    /// before it is boilerplate.
+    #[arg(long)]
+    max_postings: Option<usize>,
 }
 
 impl MatcherArgs {
@@ -162,6 +290,7 @@ impl MatcherArgs {
             k: self.k.unwrap_or(base.k),
             min_span: self.min_span.unwrap_or(base.min_span),
             min_word_chars: self.min_word_chars.unwrap_or(base.min_word_chars),
+            max_postings: self.max_postings.unwrap_or(base.max_postings),
             ..base
         }
     }
@@ -201,6 +330,11 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         limit: args.limit,
         include: args.include.clone(),
     };
+    let opening = || format!("opening {} at {}", args.dataset.name(), root.display());
+    let mixing = Mixing {
+        agents_per_world: args.agents_per_world,
+        per_shard: args.count,
+    };
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
             .map(AnySource::Salt)
@@ -223,10 +357,70 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         )
         .map(AnySource::Tau2)
         .with_context(|| format!("opening τ²-bench at {}", root.display())),
+        Dataset::OpenSwe => OpenSweSource::open(&root, &selection, mixing)
+            .map(AnySource::OpenSwe)
+            .with_context(opening),
+        Dataset::Lmcache => LmcacheSource::open(&root, &selection, mixing)
+            .map(AnySource::Lmcache)
+            .with_context(opening),
+        Dataset::SweSplice => SpliceSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(swe_splice::SPLICES),
+            args.corpus_seed,
+        )
+        .map(AnySource::Splice)
+        .with_context(opening),
+        Dataset::Cipher => CipherSource::open(
+            &root,
+            &selection,
+            args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
+            args.corpus_seed,
+        )
+        .map(AnySource::Cipher)
+        .with_context(opening),
+        Dataset::AiVillage => {
+            let mode = match args.mode {
+                VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
+                VillageMode::Window => ai_village::Mode::Window {
+                    from: Day::parse(&args.from)?,
+                    to: Day::parse(&args.to)?,
+                },
+            };
+            AiVillageSource::open(&root, mode)
+                .map(|source| AnySource::AiVillage(Box::new(source)))
+                .with_context(|| format!("opening AI Village at {}", root.display()))
+        }
+        Dataset::Wiki => WikiSource::open(
+            &root,
+            &if args.demo {
+                WikiSelection::demo()
+            } else {
+                WikiSelection {
+                    families: args.family.clone(),
+                    wikis: args.wiki.clone(),
+                    min_agents: args.min_agents,
+                    max_agents: args.max_agents,
+                    limit: args.limit,
+                }
+            },
+        )
+        .map(AnySource::Wiki)
+        .with_context(|| format!("opening collusion-wiki at {}", root.display())),
+        Dataset::Swarm => SwarmSource::open(&root, &SwarmSelection { limit: args.limit })
+            .map(AnySource::Swarm)
+            .with_context(|| format!("opening swarm-traces at {}", root.display())),
     }
 }
 
 fn run_command(args: RunArgs) -> Result<ExitCode> {
+    // swarm-traces labels hold real attack payloads: its reports carry only
+    // counts, lengths and codec chains, never a miss or false-positive
+    // example (which would print the label's text).
+    let examples = match args.source.dataset {
+        Dataset::Swarm => 0,
+        _ => args.examples,
+    };
     let mut source = open_source(&args.source)?;
     let gates_path = args
         .gates
@@ -238,17 +432,29 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         Gates::default()
     };
     let dataset = source.id();
+    let mut unlabelled = Unlabelled::default();
+    let observe = |world: &World, predicted: &[_]| {
+        if matches!(args.source.dataset, Dataset::AiVillage) {
+            unlabelled.observe(world, predicted);
+        }
+    };
     let (name, summary) = match args.detector {
         DetectorChoice::Reference => {
             let mut detector = ReferenceDetector {
                 config: args.matcher.config(),
             };
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, examples, observe);
+            (detector.name().to_owned(), summary)
+        }
+        DetectorChoice::Live => {
+            let backend = gateway_backend()?;
+            let mut detector = LiveDetector::new(backend, LiveSettings::short(args.seed)?)?;
+            let summary = run(&mut source, &mut detector, examples, |_, _| {});
             (detector.name().to_owned(), summary)
         }
     };
@@ -267,12 +473,44 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         table.push('\n');
         table.push_str(&source.tally().to_string());
     }
+    if let AnySource::Wiki(source) = &source {
+        table.push('\n');
+        table.push_str(&source.families().to_string());
+    }
+    if let AnySource::Swarm(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
+    let village = match &source {
+        AnySource::AiVillage(source) => Some(serde_json::json!({
+            "stats": source.stats(),
+            "unlabelled_predictions": unlabelled,
+        })),
+        AnySource::Salt(_)
+        | AnySource::AgentDojo(_)
+        | AnySource::Tau2(_)
+        | AnySource::Wiki(_)
+        | AnySource::Swarm(_)
+        | AnySource::OpenSwe(_)
+        | AnySource::Lmcache(_)
+        | AnySource::Splice(_)
+        | AnySource::Cipher(_) => None,
+    };
+    if let Some(village) = &village {
+        println!("{}", serde_json::to_string_pretty(village)?);
+    }
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
         let json = serde_json::to_string_pretty(&report)?;
         fs::write(out.join("report.json"), json + "\n")?;
         fs::write(out.join("report.txt"), &table)?;
+        if let Some(village) = &village {
+            fs::write(
+                out.join("ai-village.json"),
+                serde_json::to_string_pretty(village)? + "\n",
+            )?;
+        }
     }
     Ok(if report.gates_failed() {
         ExitCode::from(2)
@@ -282,6 +520,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
 }
 
 fn truth_command(args: TruthArgs) -> Result<ExitCode> {
+    if let Dataset::Swarm = args.source.dataset {
+        // The labels' text is the encoded payload itself.
+        anyhow::bail!(
+            "swarm-traces labels hold real attack payloads; `truth` does not dump them (use `run`, whose report carries only codec chains, counts and lengths)"
+        );
+    }
     let mut source = open_source(&args.source)?;
     let mut out: Box<dyn Write> = match &args.out {
         Some(path) => Box::new(BufWriter::new(
@@ -318,6 +562,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run_command(args),
         Command::Truth(args) => truth_command(args),
+        Command::Swarm(args) => swarm::run(args),
+        Command::SwarmFetch(args) => swarm::fetch(args),
     };
     match result {
         Ok(code) => code,

@@ -1,0 +1,212 @@
+// STUB, NOT IN THE BUILD. The `LiveBackend` adapter over
+// `crosstalk_gateway::live::Live`, written against the agreed shapes and
+// the names on `feat/live-composition` (commit 40cb34c, "wip: add Live
+// composition ..."). `Live` has not merged, and even that branch lacks
+// `Live::settle`, a `FlowConfig` on `LiveConfig`, `TransmissionStore::list`
+// (P0.10), a `SpanIndex` on `LiveStores` and an L3 read of an exchange's
+// agent and conversation, so this file does not compile yet and is kept
+// out of the crate (no `mod` names it). Once `Live` merges:
+//
+// 1. rename this file to `gateway.rs` and add `mod gateway;` to
+//    `detect/live/mod.rs`;
+// 2. make `gateway_backend()` return `Ok(gateway::GatewayBackend)`, typed
+//    `Result<gateway::GatewayBackend, BackendError>`;
+// 3. fix the names marked AGREED below to whatever merged.
+//
+// It is wiring only: every eval-side decision (ordering, settling, mapping
+// agents, predictions, scoring) is in `LiveDetector`.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use crosstalk_gateway::live::{BlobConfig, Live, LiveConfig, LiveStores};
+use crosstalk_gateway::pipeline::Settings;
+use crosstalk_memory::flow::MemoryChannels;
+use crosstalk_memory::provenance::MemoryFingerprintIndex;
+use crosstalk_memory::reconstruct::MemoryAgents;
+use crosstalk_memory::support::ManualClock;
+use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::ids::{ExchangeId, SeededRandom};
+use crosstalk_spec::interfaces::l1_canonical::NormalizedExchange;
+use crosstalk_spec::interfaces::l5_flow::transmissions::{TransmissionQuery, TransmissionStore}; // AGREED: P0.10
+use crosstalk_spec::paging::{PageRequest, PageSize};
+use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_transport::BusConfig;
+
+use super::{Attribution, BackendError, LiveBackend, LiveRead, LiveSettings, LiveWorld, all_time};
+use crate::predict::reads::RegistryResources;
+
+/// How long `shutdown` waits for the stages to drain.
+const DRAIN: Duration = Duration::from_secs(5);
+
+/// Builds a fresh `Live` per world.
+pub struct GatewayBackend;
+
+pub struct GatewayWorld {
+    live: Live,
+    clock: ManualClock,
+    stores: LiveStores,
+    channels: RegistryResources<MemoryChannels<MemoryAgents>>,
+}
+
+fn reason(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+impl LiveBackend for GatewayBackend {
+    type World = GatewayWorld;
+
+    async fn build(
+        &mut self,
+        settings: &LiveSettings,
+        start: Timestamp,
+    ) -> Result<GatewayWorld, BackendError> {
+        let clock = ManualClock::at(start);
+        let live = Live::start(LiveConfig {
+            // e2e's `options::in_process(clock)` (the surface's clock is
+            // the clock every stage reads), moved where eval can reach it.
+            surface: crosstalk_gateway::live::in_process_options(clock.clone()) // AGREED
+                .map_err(|error| BackendError::Build {
+                    reason: reason(error),
+                })?,
+            blobs: BlobConfig::Memory,
+            bus: BusConfig::default(),
+            pipeline: Settings::default(),
+            id_entropy: SeededRandom::new(settings.seed),
+            capture: None,
+            // AGREED: the flow consumer's timing, e.g. a 10 s evidence
+            // window and a 60 s suspected TTL.
+            flow: settings.timing,
+        })
+        .await
+        .map_err(|error| BackendError::Build {
+            reason: reason(error),
+        })?;
+        let stores = live.stores().clone();
+        let window = all_time().map_err(|error| BackendError::Build {
+            reason: reason(error),
+        })?;
+        Ok(GatewayWorld {
+            channels: RegistryResources::new(stores.channels.clone(), window),
+            stores,
+            clock,
+            live,
+        })
+    }
+}
+
+impl LiveWorld for GatewayWorld {
+    // AGREED: L4's span store on `LiveStores`, a `SpanIndex` (the branch's
+    // `MemoryEvidence` only answers one span at a time, as `Span`).
+    type Spans = MemoryFingerprintIndex;
+    type Accesses = MemoryChannels<MemoryAgents>;
+    type Channels = RegistryResources<MemoryChannels<MemoryAgents>>;
+
+    async fn ingest(
+        &mut self,
+        exchange: NormalizedExchange,
+        at: Timestamp,
+    ) -> Result<(), BackendError> {
+        let id = exchange.exchange.meta.id;
+        self.clock.set(at);
+        self.live
+            .pipeline()
+            .ingest(exchange, at)
+            .await
+            .map(|_| ())
+            .map_err(|error| BackendError::Ingest {
+                exchange: id,
+                reason: format!("{error:?}"),
+            })
+    }
+
+    async fn settle(&mut self, until: Timestamp) -> Result<(), BackendError> {
+        // AGREED: advances the clock, ticks the correlator, drains to a
+        // fixpoint.
+        self.live
+            .settle(until)
+            .await
+            .map_err(|error| BackendError::Settle {
+                until,
+                reason: reason(error),
+            })
+    }
+
+    async fn transmissions(&self, window: TimeWindow) -> Result<Vec<Transmission>, BackendError> {
+        let read = |error: String| BackendError::Read {
+            read: LiveRead::Transmissions,
+            reason: error,
+        };
+        let size = PageSize::new(PageSize::MAX).map_err(|error| read(format!("{error:?}")))?;
+        let query = TransmissionQuery {
+            window,
+            states: None, // AGREED: every state
+            channel: None,
+        };
+        let mut out = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .stores
+                .transmissions
+                .list(&query, &PageRequest { size, after })
+                .await
+                .map_err(|error| read(format!("{error:?}")))?;
+            let (items, next) = page.into_parts();
+            out.extend(items);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(out),
+            }
+        }
+    }
+
+    fn spans(&self) -> &MemoryFingerprintIndex {
+        &self.stores.spans // AGREED
+    }
+
+    fn accesses(&self) -> &MemoryChannels<MemoryAgents> {
+        &self.stores.channels
+    }
+
+    fn channels(&self) -> &RegistryResources<MemoryChannels<MemoryAgents>> {
+        &self.channels
+    }
+
+    async fn attribution(
+        &self,
+        exchanges: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, Attribution>, BackendError> {
+        // AGREED: L3's read of the agent and conversation of an exchange.
+        let attributed = self
+            .stores
+            .agents
+            .exchanges(exchanges)
+            .await
+            .map_err(|error| BackendError::Read {
+                read: LiveRead::Attribution,
+                reason: format!("{error:?}"),
+            })?;
+        Ok(attributed
+            .into_iter()
+            .map(|(exchange, (agent, conversation))| {
+                (
+                    exchange,
+                    Attribution {
+                        agent,
+                        conversation,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    async fn shutdown(self) {
+        let drained = self
+            .live
+            .shutdown(tokio::time::Instant::now() + DRAIN)
+            .await;
+        tracing::debug!(?drained, "live composition stopped");
+    }
+}

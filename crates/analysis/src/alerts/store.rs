@@ -43,10 +43,11 @@ macro_rules! failure {
 
 failure!(RuleError, TriageError, AlertActionError, AlertReadError);
 
-/// A storage failure inside a transaction body: abort with the spec
-/// error's `Store` variant.
+/// A storage failure inside a transaction body. A driver error goes back to
+/// `retry_serializable` (which retries a serialization failure or deadlock);
+/// anything else aborts with the spec error's `Store` variant.
 pub(crate) fn abort<E: Failure>(failure: impl Into<StorageFailure>) -> TxError<E> {
-    TxError::Abort(E::store(failure.into().reason()))
+    failure.into().into_tx(|failure| E::store(failure.reason()))
 }
 
 /// A storage failure outside a transaction.
@@ -302,15 +303,26 @@ pub(crate) async fn active(
 }
 
 /// Store a newly opened alert at `AlertRevision::OPENED` and return the
-/// events announcing it.
+/// events announcing it. The caller has read that its key has no active
+/// alert.
+///
+/// A concurrent transaction may open one for the key first. A plain insert
+/// would then fail with a unique violation on `alerts_one_active_per_key`,
+/// which Postgres reports as a serialization failure only when the earlier
+/// read locked that index page. `ON CONFLICT DO NOTHING` on the same index
+/// always reports a conflicting row the snapshot cannot see as a
+/// serialization failure, so `retry_serializable` re-runs the transaction
+/// and the retry folds the draft into the winner's alert. A conflict the
+/// snapshot can see contradicts the caller's read: an invariant failure.
 pub(crate) async fn open_alert(
     conn: &mut PgConnection,
     alert: &Alert,
 ) -> Result<Vec<BusEvent>, StorageFailure> {
     let (kind, subject_id) = subject_columns(alert.subject);
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO analysis.alerts (id, rule, subject, subject_kind, subject_id, state, alert, revision) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 1)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 1) \
+         ON CONFLICT (rule, subject) WHERE state IN ('open', 'acknowledged') DO NOTHING",
     )
     .bind(id_text(alert.id))
     .bind(id_text(alert.rule))
@@ -321,6 +333,12 @@ pub(crate) async fn open_alert(
     .bind(to_json("alert", alert)?)
     .execute(&mut *conn)
     .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(StorageFailure::Invariant(format!(
+            "alert {:?} conflicts with an active alert its transaction did not read",
+            alert.id
+        )));
+    }
     Ok(vec![
         BusEvent::Insight(InsightEvent::AlertOpened(alert.clone())),
         BusEvent::Changed(Changed::Alert(alert.id)),

@@ -8,13 +8,19 @@
 //!    `client` or `gateway`, under any dependency kind, with one exception:
 //!    it may use `transport` as a dev-dependency (an in-process bus for its
 //!    tests);
-//! 2. `memory`, `sim`, `testkit` and `world` are only ever
+//! 2. `conformance`, `memory`, `sim`, `testkit` and `world` are only ever
 //!    dev-dependencies of a layer crate, never normal or build
-//!    dependencies.
+//!    dependencies;
+//! 3. a layer crate never depends on a tool crate (`demo`: the load
+//!    generator and demo swarm) under any dependency kind.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client`, `eval` (the evaluation harness, `crates/eval`) and `e2e` (the
-//! end-to-end smoke harness, `crates/e2e`) compose layer crates.
+//! `client`, `eval` (the evaluation harness, `crates/eval`), `e2e` (the
+//! end-to-end smoke harness, `crates/e2e`) and `ui` compose layer crates.
+//! `ui` (the operator UI, `crosstalk-ui`) is an application: it may depend
+//! on `surface`, `api`, `client`, the memory stores and the world seed; no
+//! layer crate may depend on it. Tool crates are unrestricted in what they
+//! depend on (`demo` takes `testkit` as a normal dependency).
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -66,7 +72,8 @@ impl Layer {
     }
 }
 
-/// The crates allowed to wire layer crates together.
+/// The crates allowed to wire layer crates together: the gateway, its
+/// HTTP server and client, the evaluation harness, and the operator UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Composer {
     Api,
@@ -74,15 +81,17 @@ enum Composer {
     E2e,
     Eval,
     Gateway,
+    Ui,
 }
 
 impl Composer {
-    const ALL: [Composer; 5] = [
+    const ALL: [Composer; 6] = [
         Composer::Api,
         Composer::Client,
         Composer::E2e,
         Composer::Eval,
         Composer::Gateway,
+        Composer::Ui,
     ];
 
     fn dir(self) -> &'static str {
@@ -92,6 +101,7 @@ impl Composer {
             Composer::E2e => "e2e",
             Composer::Eval => "eval",
             Composer::Gateway => "gateway",
+            Composer::Ui => "ui",
         }
     }
 }
@@ -99,6 +109,7 @@ impl Composer {
 /// Test-only support crates: dev-dependencies of layer crates, never more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TestSupport {
+    Conformance,
     Memory,
     Sim,
     Testkit,
@@ -106,7 +117,8 @@ enum TestSupport {
 }
 
 impl TestSupport {
-    const ALL: [TestSupport; 4] = [
+    const ALL: [TestSupport; 5] = [
+        TestSupport::Conformance,
         TestSupport::Memory,
         TestSupport::Sim,
         TestSupport::Testkit,
@@ -115,10 +127,28 @@ impl TestSupport {
 
     fn dir(self) -> &'static str {
         match self {
+            TestSupport::Conformance => "conformance",
             TestSupport::Memory => "memory",
             TestSupport::Sim => "sim",
             TestSupport::Testkit => "testkit",
             TestSupport::World => "world",
+        }
+    }
+}
+
+/// Tool crates: binaries beside the product (load generators, demos).
+/// Nothing in a layer depends on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Tool {
+    Demo,
+}
+
+impl Tool {
+    const ALL: [Tool; 1] = [Tool::Demo];
+
+    fn dir(self) -> &'static str {
+        match self {
+            Tool::Demo => "demo",
         }
     }
 }
@@ -129,6 +159,7 @@ enum Role {
     Layer(Layer),
     Composer(Composer),
     TestSupport(TestSupport),
+    Tool(Tool),
     /// `crosstalk-spec`, `crosstalk-store`, or a crate outside the workspace:
     /// anyone may depend on it.
     Open,
@@ -148,6 +179,9 @@ impl Role {
         }
         if let Some(t) = TestSupport::ALL.into_iter().find(|t| t.dir() == dir) {
             return Role::TestSupport(t);
+        }
+        if let Some(t) = Tool::ALL.into_iter().find(|t| t.dir() == dir) {
+            return Role::Tool(t);
         }
         Role::Open
     }
@@ -176,9 +210,11 @@ enum Violation {
     LayerOnLayer { edge: Edge },
     /// A layer crate depends on `api`, `client` or `gateway`.
     LayerOnComposer { edge: Edge },
-    /// `memory`, `sim`, `testkit` or `world` is a non-dev dependency of a
+    /// `conformance`, `memory`, `sim`, `testkit` or `world` is a non-dev dependency of a
     /// layer crate.
     TestSupportNotDev { edge: Edge },
+    /// A layer crate depends on a tool crate.
+    LayerOnTool { edge: Edge },
 }
 
 impl fmt::Display for Violation {
@@ -194,6 +230,7 @@ impl fmt::Display for Violation {
                 "test-support crate is a non-dev dependency of a layer crate",
                 edge,
             ),
+            Violation::LayerOnTool { edge } => ("layer crate depends on a tool crate", edge),
         };
         write!(f, "{what}: {} -> {} ({:?})", e.from, e.to, e.kind)
     }
@@ -211,6 +248,7 @@ fn check(edge: &Edge) -> Option<Violation> {
         Role::TestSupport(_) if edge.kind != DepKind::Dev => {
             Some(Violation::TestSupportNotDev { edge: edge.clone() })
         }
+        Role::Tool(_) => Some(Violation::LayerOnTool { edge: edge.clone() }),
         Role::TestSupport(_) | Role::Open => None,
     }
 }
@@ -352,6 +390,7 @@ fn workspace_has_every_crate_the_rule_names() -> Result<(), MetadataError> {
         .map(Layer::dir)
         .chain(Composer::ALL.into_iter().map(Composer::dir))
         .chain(TestSupport::ALL.into_iter().map(TestSupport::dir))
+        .chain(Tool::ALL.into_iter().map(Tool::dir))
         .chain(["store", "spec"]);
     for dir in expected {
         let name = format!("crosstalk-{dir}");
@@ -473,6 +512,39 @@ fn test_support_is_only_a_dev_dependency_of_layers() {
 }
 
 #[test]
+fn layer_on_tool_is_refused_for_every_kind() {
+    for from in Layer::ALL {
+        for to in Tool::ALL {
+            for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+                let e = edge(from.dir(), to.dir(), kind);
+                assert_eq!(check(&e), Some(Violation::LayerOnTool { edge: e.clone() }));
+            }
+        }
+    }
+}
+
+#[test]
+fn tools_may_use_test_support_and_layers() {
+    for from in Tool::ALL {
+        let targets = TestSupport::ALL
+            .into_iter()
+            .map(TestSupport::dir)
+            .chain(Layer::ALL.into_iter().map(Layer::dir))
+            .chain(["store", "spec"]);
+        for to in targets {
+            for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+                assert_eq!(
+                    check(&edge(from.dir(), to, kind)),
+                    None,
+                    "{} -> {to}",
+                    from.dir()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn layers_may_use_spec_store_and_third_party_crates() {
     for from in Layer::ALL {
         for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
@@ -549,9 +621,14 @@ fn roles_classify_by_package_name() {
         Role::of("crosstalk-testkit"),
         Role::TestSupport(TestSupport::Testkit)
     );
+    assert_eq!(Role::of("crosstalk-demo"), Role::Tool(Tool::Demo));
     assert_eq!(
         Role::of("crosstalk-world"),
         Role::TestSupport(TestSupport::World)
+    );
+    assert_eq!(
+        Role::of("crosstalk-conformance"),
+        Role::TestSupport(TestSupport::Conformance)
     );
     assert_eq!(Role::of("crosstalk-store"), Role::Open);
     assert_eq!(Role::of("crosstalk-spec"), Role::Open);
@@ -568,6 +645,25 @@ fn eval_composes_gateway_and_layers() {
                 check(&edge(layer.dir(), "eval", kind)),
                 Some(Violation::LayerOnComposer {
                     edge: edge(layer.dir(), "eval", kind)
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn ui_is_an_application_that_may_compose_layers() {
+    assert_eq!(Role::of("crosstalk-ui"), Role::Composer(Composer::Ui));
+    for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+        assert_eq!(check(&edge("ui", "spec", kind)), None);
+        for to in ["surface", "api", "client"] {
+            assert_eq!(check(&edge("ui", to, kind)), None, "ui -> {to}");
+        }
+        for layer in Layer::ALL {
+            assert_eq!(
+                check(&edge(layer.dir(), "ui", kind)),
+                Some(Violation::LayerOnComposer {
+                    edge: edge(layer.dir(), "ui", kind)
                 })
             );
         }

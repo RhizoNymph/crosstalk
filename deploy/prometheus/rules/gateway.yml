@@ -1,0 +1,169 @@
+# Gateway health alerts for the single-machine compose deployment.
+#
+# There is no Alertmanager: these alerts only surface in the Prometheus UI
+# (/alerts) and in Grafana (Alerting > Alert rules, data source "Prometheus",
+# plus the "Firing gateway alerts" stat on the crosstalk / gateway
+# dashboard). Nothing pages anyone.
+#
+# Metric source: the gateway's own /metrics on its ops listener (job
+# crosstalk, crates/gateway/src/ops/metrics.rs). Every series, every label
+# value included, is exposed from start at 0, so increase() sees the first
+# failure after a restart. The gateway being down or unscraped is covered by
+# ScrapeTargetDown{job="crosstalk"} and ContainerDown in infrastructure.yml,
+# not here.
+#
+# Each failure counter below is an exchange lost or at risk, so those rules
+# fire on the first increase with no `for:` (one evaluation interval, 15s).
+# They resolve 5 minutes after the last failure.
+
+groups:
+  - name: crosstalk-gateway
+    rules:
+      # ------------------------------------------------------------ pipeline
+      - alert: CrosstalkNormalizeFailures
+        expr: |
+          sum by (job, instance) (
+            increase(crosstalk_pipeline_exchanges_total{job="crosstalk", outcome="normalize_failed"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk refused to normalize {{ $value | humanize }} exchange(s) in 5m"
+          description: >-
+            The capture stage on {{ $labels.instance }} could not normalize
+            {{ $value | humanize }} captured exchange(s) in the last 5 minutes
+            (outcome normalize_failed). They were forwarded to the client but
+            nothing was stored or published. A harness has likely changed its
+            request or response format; the gateway's WARN/ERROR logs name the
+            exchange and the reason (Logs row of the crosstalk / gateway
+            dashboard).
+
+      - alert: CrosstalkPipelineStoreFailures
+        expr: |
+          sum by (job, instance) (
+            increase(crosstalk_pipeline_exchanges_total{job="crosstalk", outcome="store_failed"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk could not store the bodies of {{ $value | humanize }} exchange(s) in 5m"
+          description: >-
+            On {{ $labels.instance }}, {{ $value | humanize }} exchange(s) in the
+            last 5 minutes failed every blob put attempt (outcome store_failed)
+            and were not published. Check the data volume
+            (/var/lib/crosstalk/blobs: disk full, permissions) and the
+            "Blob put retries/s" panel.
+
+      - alert: CrosstalkPublishFailures
+        expr: |
+          sum by (job, instance) (
+            increase(crosstalk_pipeline_exchanges_total{job="crosstalk", outcome="publish_failed"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk failed to publish {{ $value | humanize }} exchange(s) in 5m"
+          description: >-
+            On {{ $labels.instance }}, {{ $value | humanize }} exchange(s) in the
+            last 5 minutes were normalized and stored but not published on the
+            bus (outcome publish_failed: the bus refused the event, or no
+            envelope id was left). No consumer, the exchange log included, saw
+            them.
+
+      # The capture and publish counters move within milliseconds of each
+      # other, but can straddle a scrape at the window's end; `for: 2m`
+      # absorbs that.
+      - alert: CrosstalkNothingPublished
+        expr: |
+          (
+            sum by (job, instance) (increase(crosstalk_capture_exchanges_total{job="crosstalk"}[10m])) > 0
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (increase(crosstalk_pipeline_exchanges_total{job="crosstalk", outcome="published"}[10m])) == 0
+          )
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "crosstalk captured exchanges but published none in 10m"
+          description: >-
+            {{ $labels.instance }} handed {{ $value | humanize }} exchange(s) to
+            the capture stage in the last 10 minutes and published none of
+            them. Nothing is being recorded. See the Pipeline row of the
+            crosstalk / gateway dashboard for the outcome they ended in
+            (normalize_failed, store_failed, publish_failed) and the companion
+            alert.
+
+      # ------------------------------------------------------------- capture
+      - alert: CrosstalkCaptureDropped
+        expr: |
+          sum by (job, instance, reason) (
+            increase(crosstalk_capture_uncaptured_total{job="crosstalk", reason=~"channel_full|channel_closed"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk dropped {{ $value | humanize }} exchange(s) at capture hand-off ({{ $labels.reason }})"
+          description: >-
+            The proxy on {{ $labels.instance }} forwarded {{ $value | humanize }}
+            generation exchange(s) in the last 5 minutes without capturing them
+            because the capture channel was
+            {{ if eq $labels.reason "channel_full" }}full (the capture stage is
+            falling behind; raise ingress.capture.channel_capacity or find what
+            slows the blob store){{ else }}closed (the capture task has stopped;
+            check /readyz and the logs){{ end }}.
+
+      # decode_error is the capture-side twin of normalize_failed: a
+      # generation request whose body the adapter could not decode.
+      - alert: CrosstalkCaptureDecodeErrors
+        expr: |
+          sum by (job, instance) (
+            increase(crosstalk_capture_uncaptured_total{job="crosstalk", reason="decode_error"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk could not decode {{ $value | humanize }} generation request(s) in 5m"
+          description: >-
+            The proxy on {{ $labels.instance }} forwarded {{ $value | humanize }}
+            generation request(s) in the last 5 minutes whose bodies it could
+            not decode (reason decode_error: not JSON, a missing field, an
+            unsupported version or encoding, over a size bound, or cut short).
+            They were not captured. A harness may have changed its request
+            format.
+
+      # -------------------------------------------------------- exchange log
+      - alert: CrosstalkExchangeLogWriteFailures
+        expr: |
+          sum by (job, instance) (
+            increase(crosstalk_exchange_log_deliveries_total{job="crosstalk", outcome="write_failed"}[5m])
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "crosstalk failed {{ $value | humanize }} exchange log write(s) in 5m"
+          description: >-
+            The exchange log consumer on {{ $labels.instance }} failed to append
+            {{ $value | humanize }} delivery(ies) in the last 5 minutes. Failed
+            appends are nacked and retried by the bus, then dead-lettered, so
+            exchanges are being lost if this persists. Check the data volume
+            (/var/lib/crosstalk/exchanges: disk full, permissions, IO errors).
+
+      # ----------------------------------------------------------- lifecycle
+      # A graceful shutdown takes at most drain_timeout_ms + flush_timeout_ms
+      # + 1s (56s by default), so draining for 2 minutes means it is stuck.
+      - alert: CrosstalkDraining
+        expr: |
+          max by (job, instance) (crosstalk_draining{job="crosstalk"}) == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk on {{ $labels.instance }} has been draining for over 2m"
+          description: >-
+            The gateway on {{ $labels.instance }} began shutting down more than
+            2 minutes ago and is still serving /metrics. A graceful shutdown is
+            bounded at about 56s with the default shutdown config, so it is
+            stuck: /readyz is 503 and new proxy connections are refused.
+            Restart the container.

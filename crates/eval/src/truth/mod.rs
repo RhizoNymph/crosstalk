@@ -7,7 +7,9 @@
 //! - a [`NegativeControl`]: a pair, exchange or location where a detector
 //!   must **not** report a transmission (a rejected send, text both agents
 //!   got from a shared source, harness boilerplate, a scripted sender);
-//! - an [`AgentCluster`]: agent keys that name one agent, for identity tests.
+//! - an [`AgentCluster`]: agent keys that name one agent, for identity tests;
+//! - an [`Exemption`]: a reader exchange and location where a prediction is
+//!   unjudged (content from a sender the dataset cannot name).
 //!
 //! Labels are built through checked constructors (and deserialised through
 //! the same checks), and written as JSONL ([`jsonl`]) so reports can cite
@@ -89,6 +91,8 @@ pub enum InvalidLabel {
     Unbounded,
     #[error("an agent cluster needs at least two agents")]
     SmallCluster,
+    #[error("a label needs an undecodable codec exactly when its tier is out of reach")]
+    Reach,
 }
 
 fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
@@ -106,7 +110,8 @@ fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
 
 /// One transmission a detector should report. Built only through
 /// [`ExpectedTransmission::new`]: sender and reader differ and share a world,
-/// and the content text is as long as its location.
+/// the content text is as long as its location, and it needs an
+/// undecodable codec exactly when its tier is out of reach.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "TransmissionLabel", into = "TransmissionLabel")]
 pub struct ExpectedTransmission(TransmissionLabel);
@@ -120,6 +125,10 @@ impl ExpectedTransmission {
                 text,
                 location: label.content.at.len(),
             });
+        }
+        let undecodable = matches!(label.needs, MatchNeed::Undecodable { .. });
+        if undecodable != (label.tier == Tier::OutOfReach) {
+            return Err(InvalidLabel::Reach);
         }
         Ok(Self(label))
     }
@@ -157,6 +166,16 @@ pub enum NegativeReason {
     /// The sender is scripted and made no exchange, so nothing it "said"
     /// originated in an exchange the gateway could see.
     NoSenderExchange,
+    /// The reader read back what it wrote itself: no other agent was
+    /// involved. The only control whose sender and reader are one agent,
+    /// so a detector that splits one agent in two is charged here.
+    SelfRead,
+    /// The reader read text it had already read earlier in the same
+    /// session: the transmission is at the first read, not this one.
+    Reread,
+    /// The read found nothing (no page, or an empty one): nobody's text
+    /// arrived in it.
+    Miss,
 }
 
 /// The fields of a negative control, before checking.
@@ -183,15 +202,19 @@ pub struct NegativeLabel {
 }
 
 /// A place where a prediction from `from` to `to` is wrong. Built only
-/// through [`NegativeControl::new`]: the pair is valid and it names a reader
-/// exchange, a location or an origin.
+/// through [`NegativeControl::new`]: the pair is valid (sender and reader
+/// may be one agent only for [`NegativeReason::SelfRead`]) and it names a
+/// reader exchange, a location or an origin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "NegativeLabel", into = "NegativeLabel")]
 pub struct NegativeControl(NegativeLabel);
 
 impl NegativeControl {
     pub fn new(label: NegativeLabel) -> Result<Self, InvalidLabel> {
-        check_pair(&label.from, &label.to)?;
+        match label.reason {
+            NegativeReason::SelfRead if label.from == label.to => {}
+            _ => check_pair(&label.from, &label.to)?,
+        }
         if label.reader_exchange.is_none() && label.at.is_none() && label.origin.is_none() {
             return Err(InvalidLabel::Unbounded);
         }
@@ -256,6 +279,33 @@ impl From<AgentCluster> for ClusterLabel {
     }
 }
 
+/// Why a place is exempt from judging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExemptionReason {
+    /// Content did arrive here from another agent, but the dataset does not
+    /// know which one wrote it (a read whose write was never logged).
+    UnknownSender,
+}
+
+/// A place in one reader exchange where any prediction is unjudged:
+/// neither correct nor false, whatever the world's coverage. It keeps a
+/// world `Complete` while admitting the few deliveries its truth could not
+/// attribute. Every field is required, so an exemption is always bounded
+/// to one reader exchange and one location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct Exemption {
+    pub to: AgentKey,
+    pub reader_exchange: ExchangeId,
+    pub at: SpanLocation,
+    /// The text concerned, for reports.
+    pub text: Option<String>,
+    pub reason: ExemptionReason,
+    pub tier: Tier,
+    pub source: SourceRef,
+}
+
 /// One label.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "expect", content = "label", rename_all = "snake_case")]
@@ -263,4 +313,6 @@ pub enum Expectation {
     Transmission(ExpectedTransmission),
     NoTransmission(NegativeControl),
     AgentCluster(AgentCluster),
+    /// Predictions here are unjudged.
+    Unjudged(Exemption),
 }

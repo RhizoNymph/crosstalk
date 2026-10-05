@@ -125,7 +125,21 @@ pub enum SourceError {
     #[error(transparent)]
     Salt(#[from] crate::datasets::salt::SaltError),
     #[error(transparent)]
+    Wiki(#[from] Box<crate::datasets::wiki::WikiError>),
+    #[error(transparent)]
+    Swarm(#[from] Box<crate::datasets::swarm::SwarmError>),
+    #[error(transparent)]
     Corpus(#[from] CorpusError),
+    #[error(transparent)]
+    AiVillage(#[from] crate::datasets::ai_village::AiVillageError),
+    #[error(transparent)]
+    OpenSwe(#[from] crate::datasets::open_swe::OpenSweError),
+    #[error(transparent)]
+    Lmcache(#[from] crate::datasets::lmcache::LmcacheError),
+    #[error(transparent)]
+    Splice(#[from] crate::datasets::swe_splice::SpliceError),
+    #[error(transparent)]
+    Cipher(#[from] crate::datasets::cipher::CipherError),
     #[error(transparent)]
     AgentDojo(#[from] crate::datasets::agentdojo::AgentDojoError),
     #[error(transparent)]

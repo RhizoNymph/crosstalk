@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::quality::MatchClass;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::derived::provenance::matching::{Carrier, Codec};
+use crosstalk_spec::derived::provenance::matching::Codec;
 use serde::{Deserialize, Serialize};
 
 /// How a label was obtained, strongest first. Statistical thresholds are set
@@ -22,54 +22,60 @@ pub enum Tier {
     Heuristic,
     /// A human or model judge said so.
     Judged,
+    /// The construction guarantees it, but finding it needs a decoding no
+    /// detector is required to have (a cipher the spec's `Codec` cannot
+    /// name). Reported apart, as missed by design, not as a real miss.
+    OutOfReach,
 }
 
-/// Where the content sits in the reader's exchange: the spec's `Carrier`
-/// without its parameter, for breakdown rows.
-///
-/// TODO(docs/spec-eval-gaps): replace with the spec's `CarrierKind`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CarrierKind {
-    ToolResult,
-    UserTurn,
-    SystemPrompt,
-    ReaderOutput,
-}
-
-impl From<&Carrier> for CarrierKind {
-    fn from(carrier: &Carrier) -> Self {
-        match carrier {
-            Carrier::ToolResult(_) => Self::ToolResult,
-            Carrier::UserTurn => Self::UserTurn,
-            Carrier::SystemPrompt => Self::SystemPrompt,
-            Carrier::ReaderOutput => Self::ReaderOutput,
-        }
-    }
-}
+/// Where the content sits in the reader's exchange: the spec's
+/// `CarrierKind` (`Carrier::kind`), which breakdown rows and the spec's
+/// quality rows both group by.
+pub use crosstalk_spec::derived::provenance::matching::CarrierKind;
 
 /// The weakest match a detector should need to find a labelled content:
 /// `Exact` when the text arrives byte for byte, `Normalized` when it differs
-/// by whitespace, case or a layer of JSON/YAML string escaping, `Decoded`
-/// when it arrives encoded, `Semantic` when only its meaning survives.
-///
-/// TODO(docs/spec-eval-gaps): escape unfolding becomes
-/// `Decoded([JsonString | YamlString])` once the spec has those codecs.
+/// only by whitespace or case, `Decoded` when it arrives encoded (one level
+/// of JSON or YAML string escaping is the spec's `Codec::JsonString` or
+/// `Codec::YamlString`, `provenance.match.string-serialised-decoded`),
+/// `Semantic` when only its meaning survives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "class", rename_all = "snake_case")]
 pub enum MatchNeed {
     Exact,
     Normalized,
-    Decoded { codecs: Vec<Codec> },
+    Decoded {
+        codecs: Vec<Codec>,
+    },
     Semantic,
+    /// Encoded with a cipher outside the spec's `Codec` (rotN, binary8,
+    /// letter substitution), named by `codec`; only an
+    /// [`OutOfReach`](Tier::OutOfReach) label needs it.
+    Undecodable {
+        codec: String,
+    },
 }
 
 impl MatchNeed {
+    /// Text serialised once as a JSON string: `Decoded([JsonString])`.
+    pub fn json_string() -> Self {
+        Self::Decoded {
+            codecs: vec![Codec::JsonString],
+        }
+    }
+
+    /// Text serialised once as a YAML scalar: `Decoded([YamlString])`.
+    pub fn yaml_string() -> Self {
+        Self::Decoded {
+            codecs: vec![Codec::YamlString],
+        }
+    }
+
     pub fn class(&self) -> MatchClass {
         match self {
             Self::Exact => MatchClass::Exact,
             Self::Normalized => MatchClass::Normalized,
-            Self::Decoded { .. } => MatchClass::Decoded,
+            Self::Decoded { .. } | Self::Undecodable { .. } => MatchClass::Decoded,
             Self::Semantic => MatchClass::Semantic,
         }
     }

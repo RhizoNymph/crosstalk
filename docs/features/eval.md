@@ -11,28 +11,35 @@ The crate is `crosstalk-eval` (`crates/eval`). Its binary is `ct-eval`. It
 is a composer in the workspace's dependency rule
 (`crates/gateway/tests/architecture.rs`), so it may depend on
 `crosstalk-gateway` and the layer crates; today it uses the gateway's
-pipeline and transport's bus and blob store, with sim and testkit as
-dev-dependencies.
+pipeline and transport's bus and blob store, with sim, testkit and memory
+as dev-dependencies.
 
 ## Scope
 
 - **Corpus model.** `TraceSource` is a stream of `World`s: sets of agents
   that only talk to each other. Each world holds its exchanges in
   virtual-time order and its truth.
-- **Labels.** Expected transmissions, negative controls and agent clusters,
-  with tiers, as JSONL.
+- **Labels.** Expected transmissions, negative controls, exemptions
+  (places left unjudged) and agent clusters, with tiers, as JSONL.
 - **Predictions.** The eval-side view of a detector's output, converted
-  from spec `Transmission`s and their `ContentMatch`es.
+  from spec `Transmission`s: their `ContentMatch`es, and the `CoAccess`
+  records of suspected and discarded ones, read through the spec's read
+  traits (`SpanIndex`, `AccessStore`, `ChannelReads`/`resource_use`).
 - **Scoring.** One alignment rule, TP/FP/FN broken down by dataset × route
   kind × carrier × match class × tier, negative-control violations, and a
   bridge to the spec's `DetectionQuality`.
 - **Detectors.** A naive reference matcher (span/shingle matching with
-  escape-aware normalization and decoding), and the gateway pipeline
-  itself (`Pipeline::ingest`), unscored until its detection layers exist.
+  escape-aware normalization and decoding), the gateway pipeline itself
+  (`Pipeline::ingest`, unscored: it has no detection consumers), and the
+  `LiveBackend` seam that scores the gateway's live composition
+  (`crosstalk_gateway::live::Live`, L3–L7) once it merges.
 - **Reports and gates.** A table, a JSON report, and regression gates in
   `gates.toml`.
 - **The SALT converter.**
 - **The AgentDojo and τ²-bench converters** (see their sections below).
+- **The demo swarm benchmark** (`ct-eval swarm`): the live gateway scored
+  on the demo swarm's traffic against the swarm's own ground truth (see
+  its section below).
 
 ## Non-scope
 
@@ -49,16 +56,21 @@ dev-dependencies.
 
 ```text
 dataset files ──▶ TraceSource::worlds()          (one World at a time; e.g. SaltSource, one trace file each)
-                    │  WorldBuilder: agents (synthetic ClientContext), exchanges (ExchangeDraft → spec Exchange
-                    │  → checked NormalizedExchange → CorpusExchange), labels, coverage
+                    │  WorldBuilder: agents (synthetic ClientContext, IngressMode::Replay { corpus }),
+                    │  exchanges (ExchangeDraft → spec Exchange → checked NormalizedExchange → CorpusExchange),
+                    │  labels, coverage
                     ▼
                   World { agents, exchanges (time order), truth, coverage }
                     │
-                    ├──▶ Detector::detect(&World) ─▶ Detection { transmissions, channels, spans }
-                    │        ReferenceDetector, or PipelineDetector (below)
+                    ├──▶ Detector::detect(&World) ─▶ Detection { transmissions, agents: AgentMap, resolved }
+                    │        ReferenceDetector, PipelineDetector or LiveDetector (below)
+                    │        resolved = Resolved::gather(transmissions, Reads { spans, accesses, channels })
+                    │                   SpanIndex::spans · AccessStore::accesses · ChannelResources (ChannelReads +
+                    │                   ChannelRegistry::resource_use), by IdBatch
                     │                 │
                     │                 ▼
                     │        predict::from_transmission (via WorldDirectory) ─▶ Vec<Prediction>
+                    │          confirmed: one per ContentMatch · suspected/discarded: one per CoAccess
                     ▼                 ▼
                   score::Judge (alignment rule) ─▶ Scorer::add_world ─▶ Score
                                                          │
@@ -76,6 +88,22 @@ bounded by the largest world, never the dataset.
 detector plugs in. Everything after it is detector-agnostic: predictions,
 scoring, reports and gates.
 
+A `Detection` holds the spec `Transmission`s, an `AgentMap` (the
+detector's agent ids as corpus agents) and a `Resolved` snapshot: every
+span, access and channel the transmissions name, read through the spec's
+read traits by `Resolved::gather` (`predict/reads.rs`), in batches of at
+most `IdBatch::MAX`. That one code path serves every detector:
+
+- the reference matcher, over eval-owned tables (`predict/memory.rs`:
+  `SpanTable: SpanIndex`, `AccessTable: AccessStore`,
+  `ChannelTable: ChannelResources`), whose reads never suspend and run
+  without a runtime (`reads::ready`);
+- crosstalk-memory's `MemoryFingerprintIndex` (`SpanIndex`) and
+  `MemoryChannels` (`AccessStore`, and `ChannelReads` +
+  `ChannelRegistry::resource_use` through `RegistryResources`), as the
+  live test backend uses;
+- the gateway's own stores, through `LiveBackend`.
+
 - `ReferenceDetector` runs the reference matcher.
 - `gateway::PipelineDetector` runs the gateway's own composition behind
   the proxy, per world, on a fresh in-process bus and memory blob store:
@@ -90,18 +118,110 @@ scoring, reports and gates.
      the envelope read back and checked: it names the exchange, carries the
      id `ingest` returned and is stamped at the corpus time;
   4. `pipeline.shutdown(deadline)`.
-- L3–L5 have no bus consumers yet, so no transmissions come back. The
-  detection says `DetectionStatus::NoConsumers { ingested }`; the run
-  counts the world as unscored (`RunSummary::unscored`), and the report
-  says "no detector consumers yet" instead of scoring zero. When the
-  consumers land, `PipelineDetector` reads their transmissions, channels
-  and spans back into a `Detection` and the rest of the run is unchanged.
+- `Pipeline` alone has no detection consumers, so no transmissions come
+  back. The detection says `DetectionStatus::NoConsumers { ingested }`;
+  the run counts the world as unscored (`RunSummary::unscored`), and the
+  report says "no detector consumers yet" instead of scoring zero. The
+  detection layers are scored through `LiveDetector` instead.
 - `gateway::ingest_world` is the same loop over any spec `BlobStore` and
   `EventBus`. The smoke test (`tests/pipeline.rs`) runs it under
   crosstalk-sim's clock (its default epoch is the corpus clock's,
   2026-01-01), advancing paused time to each exchange's corpus time.
 
 `ct-eval run --detector pipeline` runs the pipeline path.
+
+### The live seam (`detect::live`)
+
+`LiveDetector<B: LiveBackend>` scores the gateway's live composition. The
+seam is two traits with exactly the operations the composition offers
+(agreed with the implementation session; `Live` is WIP on
+`feat/live-composition` and not merged):
+
+```rust
+pub trait LiveBackend {
+    type World: LiveWorld;
+    /// A fresh composition: empty stores, clock at `start`, correlator under `settings.timing`.
+    fn build(&mut self, settings: &LiveSettings, start: Timestamp)
+        -> impl Future<Output = Result<Self::World, BackendError>>;
+}
+
+pub trait LiveWorld {
+    type Spans: SpanIndex + Sync;
+    type Accesses: AccessStore + Sync;
+    type Channels: ChannelResources + Sync;
+    /// Pipeline::ingest(exchange, at), the clock moved to `at` first.
+    fn ingest(&mut self, exchange: NormalizedExchange, at: Timestamp) -> impl Future<Output = Result<(), BackendError>>;
+    /// Live::settle(until): clock advanced, correlator ticked, drained to a fixpoint.
+    fn settle(&mut self, until: Timestamp) -> impl Future<Output = Result<(), BackendError>>;
+    /// TransmissionStore::list(TransmissionQuery { window, states: all, channel: None }), every page.
+    fn transmissions(&self, window: TimeWindow) -> impl Future<Output = Result<Vec<Transmission>, BackendError>>;
+    fn spans(&self) -> &Self::Spans;
+    fn accesses(&self) -> &Self::Accesses;
+    fn channels(&self) -> &Self::Channels;
+    /// L3: the agent and conversation of each exchange.
+    fn attribution(&self, exchanges: &IdBatch<ExchangeId>)
+        -> impl Future<Output = Result<BTreeMap<ExchangeId, Attribution>, BackendError>>;
+    fn shutdown(self) -> impl Future<Output = ()>;
+}
+```
+
+Per world, on a current-thread runtime:
+
+1. `build(settings, first exchange's time)`: a fresh composition. One is
+   never reused across worlds: resources canonicalize by URL or path, so
+   two worlds would cross-link through one.
+2. `ingest` each exchange in world order at its corpus time.
+3. `settle(last exchange + settle_after)`, where `settle_after` is
+   `CorrelationTiming::settle_after` (evidence window + suspected TTL).
+   The eval's timing (`LiveSettings::short`) is a 60 s correlation
+   window, a 10 s evidence window and a 60 s suspected TTL, so a world
+   settles 70 s of virtual time after its last exchange and every
+   transmission is final. Any still `Detected` or `AwaitingContent` is
+   logged and makes no prediction.
+4. `transmissions(all_time())`, sorted by id (the final set is
+   deterministic; its listing order need not be).
+5. `attribution` of every world exchange, in batches, into an `AgentMap`:
+   each detector agent stands for the corpus agent whose exchanges it
+   holds. Several detector agents for one corpus agent (a split) are fine;
+   one detector agent holding two corpus agents' exchanges (a merge) fails
+   the world (`AgentMapError::Merged`), since its evidence cannot be told
+   apart.
+6. `Resolved::gather` over `spans()`, `accesses()` and `channels()`, then
+   `shutdown`.
+
+Predictions (`predict::from_transmission`):
+
+- confirmed, classified or aggregated: one per `ContentMatch`, of its match
+  class and carrier kind, with `origin_at` from the span's `IndexedSpan`;
+- suspected or discarded: one per `CoAccess`, aligned through its two
+  accesses: the sender is the write access's agent, the reader the read
+  access's agent at the read's exchange, `read_at` the whole tool result
+  the read returned (`AccessOp::Read::result`), `origin_at` the whole
+  write call; class `suspected` or `discarded`, carrier `tool_result`;
+- detected or awaiting content: none.
+
+Each prediction carries its transmission's `QualityMatch`, so the scorer's
+transmission rows are the spec's `DetectionQuality` rows (tested), with
+verdicts the truth implies (`score::quality`).
+
+`gateway_backend()` returns the real adapter once `Live` merges; until
+then it returns `BackendError::Unavailable`, and `ct-eval run --detector
+live` prints "live backend unavailable" and exits 1. The adapter is
+written, wiring only, in `src/detect/live/gateway.rs.in`, which no `mod`
+names, so it stays out of the build: it does not compile against the
+unmerged API. Its `AGREED` markers name what it expects that
+`feat/live-composition` (40cb34c) does not have yet:
+
+| Agreed | On the branch |
+| --- | --- |
+| `Live::settle(until)` | absent; `Live::shutdown(deadline)` only drains |
+| a `FlowConfig` for `Live` (short timing for eval) | `crosstalk_flow::consumer::FlowConfig` exists; `LiveConfig` has no flow field, and L5 is not wired (`wire_l5` is a TODO) |
+| `Live::ingest(exchange, at)` | `live.pipeline().ingest(exchange, at)` |
+| `Live::stores() -> LiveStores` | `stores() -> &LiveStores` (`MemoryStores<LiveBlobs>`): `agents`, `channels` (`MemoryChannels`: `AccessStore`, `ChannelReads`, `resource_use`), `transmissions` (`MemoryVerdicts`) |
+| `TransmissionStore::list(TransmissionQuery { window, states, channel }, page)` (P0.10) | absent: `TransmissionStore` has `save` and `transmission(id)` only |
+| `SpanIndex::spans` on the live stores | absent: spans reach `MemoryEvidence` through `EvidenceRecords::span` one at a time, and the evidence feeder uses `NoSpans` |
+| an L3 read of an exchange's agent and conversation | absent from the spec and the branch |
+| a fresh `Live` per world, built with `Live::start(LiveConfig)` | `Live::start` exists; the clock is the `surface.clock` (`ManualClock` in e2e), set through e2e's `options::in_process` |
 
 ## Files
 
@@ -115,25 +235,31 @@ scoring, reports and gates.
 | `src/corpus/exchange.rs` | one exchange | `CorpusExchange` (checked), `HashedMessage`, `Fidelity`, `normalized` (the checked `NormalizedExchange` builder), `CorpusError` |
 | `src/corpus/builder.rs` | how converters build worlds | `WorldBuilder`, `ExchangeDraft` |
 | `src/corpus/clock.rs` | the virtual clock | `compose(major, minor, sub)`, `ordinal`, `EPOCH_MICROS` |
-| `src/corpus/client.rs` | per-agent client context | `synthetic_client`, `vendor_of` |
+| `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
-| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
-| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind`, `MatchNeed` (with spec `Codec`s), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
+| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
+| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`; and `Undecodable` for out-of-reach labels), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
-| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `Directory`, `WorldDirectory`, `from_transmission` |
-| `src/score/align.rs` | **the alignment rule** | `aligns`, `violates`, `specificity` |
+| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
+| `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
+| `src/predict/memory.rs` | eval-owned stores behind the seam | `SpanTable` (`SpanIndex`), `AccessTable` (`AccessStore`), `ChannelTable` (`ChannelResources`) |
+| `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
-| `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionRow` |
+| `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
+| `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
-| `src/reference/mod.rs` | the reference matcher | `run`, `ReferenceConfig`, `ReferenceOutput`, `SpanRecord` |
-| `src/reference/fold.rs` | normalization with offset maps | `fold`, `Folded` |
+| `src/reference/mod.rs` | the reference matcher (with the boilerplate cutoff) | `run`, `ReferenceConfig` (`max_postings`), `ReferenceOutput`, `SpanRecord` |
+| `src/reference/fold.rs` | folding with offset maps | `fold`, `Folded`, `fold_plain`, `string_codec` |
+| `src/reference/classify.rs` | a hit's match class | `classify` |
 | `src/reference/opaque.rs` | opaque blobs | `opaque_ranges`, `segments` |
 | `src/reference/decode.rs` | base64, hex, URL decoding | `decode_candidates` |
 | `src/reference/shingle.rs` | k-gram rolling hashes | `shingles`, `covered` |
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
 | `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report`, `Summary`, `ReportRow`, `table::render` |
+| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings`, `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `Unavailable`, `gateway_backend`, `all_time` |
+| `src/detect/live/gateway.rs.in` | the `Live` adapter, out of the build until `Live` merges | `GatewayBackend`, `GatewayWorld` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `background`), `Summary`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus` |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource`, `load_world`, `convert_trace`, `SaltError`, `DATASET` |
@@ -142,10 +268,12 @@ scoring, reports and gates.
 | `src/datasets/salt/messages.rs` | SALT messages to canonical | `convert`, `content_text`, `arguments` |
 | `src/datasets/salt/episode.rs` | exchange reconstruction and clock | `reconstruct`, `AgentEpisode`, `Turn`, `delivered_turn` |
 | `src/datasets/salt/truth.rs` | SALT labels | `EpisodeLabels`, `Labelled`, `SHARED_TOOLS` |
+| `src/datasets/wiki/` | collusion-wiki as a `TraceSource` (see below) | `WikiSource`, `WikiSelection` (`demo`), `tools`, `DATASET` |
+| `src/datasets/swarm/` | swarm-traces as a `TraceSource` (see below) | `SwarmSource`, `SwarmSelection`, `codec::decode`, `ChainTally`, `DATASET` |
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`pipeline.rs` is the sim smoke test of `Pipeline::ingest`); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -162,9 +290,19 @@ prediction meets a label. They align when all of these hold:
 
 Match class and carrier never decide alignment; they only pick the row.
 
+**Only content finds a label.** A suspected or discarded prediction (a
+co-access with no content match) is judged by the same rule and counted in
+its own row (class `suspected` or `discarded`), but a label it aligns with
+that no content prediction does stays `missed` and is also counted
+`suspected`. Selectors, gates and the overall summary read content rows
+unless they name an access class.
+
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct.
-- A prediction that aligns with nothing is checked against negative
+- A prediction that aligns with nothing is unjudged when an exemption
+  covers it (`exempts`: same reader and reader exchange, overlapping read
+  location; the sender is not compared).
+- Otherwise it is checked against negative
   controls (`violates`, most specific first). If it violates one, it is a
   false positive charged to that control.
 - Otherwise the world's coverage decides. Under `Complete { tier }` it is a
@@ -172,10 +310,12 @@ Match class and carrier never decide alignment; they only pick the row.
 
 **`DetectionQuality` agrees.** `score::quality` builds the spec's
 `DetectionQuality::tally` from the detector's transmissions with verdicts
-implied by the same judgements: genuine if any match is correct, false if
-none is and one is false, unlabeled otherwise. The scorer's transmission
-rows equal its rows (tested). `DetectionQuality` cannot see total misses;
-the scorer's `missed` can.
+implied by the same judgements: genuine if any prediction is correct,
+false if none is and one is false, unlabeled otherwise. The scorer's
+transmission rows are keyed by the spec's `QualityMatch` (confirmed by
+the strongest match's class and carrier, suspected, discarded) and equal
+its rows (tested, for every state). `DetectionQuality` cannot see total
+misses; the scorer's `missed` can.
 
 **Determinism.**
 - Every id derives from the dataset id and a source reference
@@ -191,8 +331,18 @@ real trace files).
 
 **Spec types, not mirrors.** Labels, predictions and reports use the
 spec's serde types directly (`SpanLocation`, `Locator`,
-`DelegationDirection`, `RouteKind`, `MatchClass`, `Codec`, `ExchangeId`,
-`TransmissionId`, `MessageHash`). Message hashing, canonical JSON and the
+`DelegationDirection`, `RouteKind`, `MatchClass`, `CarrierKind`,
+`QualityMatch`, `Codec`, `ExchangeId`, `TransmissionId`, `MessageHash`),
+and read a detector's evidence through the spec's read traits
+(`SpanIndex`, `AccessStore`, `ChannelReads`, `ChannelRegistry`).
+
+**Replayed corpora.** Every corpus exchange's ingress is
+`IngressMode::Replay { corpus }`, one `CorpusId` per dataset
+(`eval-<dataset>`), which only `Pipeline::ingest`'s callers set
+(INV-972). Each agent keeps one stable synthetic API-key credential (a
+digest of its key); under `Replay` it is scoped to the corpus, since L3
+attributes and merges replayed exchanges only within their corpus
+(INV-973). Message hashing, canonical JSON and the
 normalized-exchange invariants are the spec's (`encoding`, `json`,
 `NormalizedExchange::check`). `HashedMessage` can only be built by hashing
 its body through the spec's encoding.
@@ -224,7 +374,23 @@ its body through the spec's encoding.
 The SALT converter maps signatures and encrypted reasoning to
 `Reasoning::Opaque`, which has no part text.
 
-**Escapes.** Folding (`reference/fold.rs`) unfolds JSON and YAML string
+**Boilerplate cutoff.** A shingle posted for more than
+`ReferenceConfig::max_postings` (default 16, `--max-postings`) distinct
+originated spans is boilerplate, as L4's frequency cutoff makes it
+(`interfaces::l4_provenance`). Its postings are dropped, and it is never
+indexed or looked up again in that world (`reference::Postings`, a
+`Spans | Boilerplate` enum). Text that many agents originate independently
+is a shared source, not evidence of who a reader got it from. Examples are a
+wiki's new-page template, or a URL every agent's task names. Without the
+cutoff, each occurrence in a read matches every originating span, so matches
+grow as reads × occurrences × originators. Before the cutoff, collusion-wiki's
+largest world (2,553 agents) held 22.6M content matches and passed 8 GB. With
+it, the whole export takes 2.2 GB (see below). The reference counts only
+originated spans toward the frequency, while L4 also counts scanned inputs.
+It has no retention window, because a world is one replay. SALT, AgentDojo
+and τ²-bench reports are unchanged by it.
+
+**Escapes.** Matching folds (`reference/fold.rs`) JSON and YAML string
 escapes at any nesting depth:
 - `\n`, `\t`, `\r`, `\b`, `\f` become whitespace;
 - `\uXXXX` and surrogate pairs become the character they name;
@@ -233,8 +399,16 @@ escapes at any nesting depth:
 
 It then folds case and collapses whitespace. Content one agent writes
 inside JSON tool arguments therefore matches the same content delivered
-raw. A SALT label needs `Normalized` exactly when its content holds a
-character JSON escapes.
+raw. Undoing escapes is decoding, not normalization (spec #58), so a hit
+is then classified (`reference/classify.rs`): `Exact` when the span holds
+the read bytes, `Normalized` when case and whitespace folding alone make
+them equal (`fold_plain`), and otherwise `Decoded([JsonString])` or
+`Decoded([YamlString])`, by the escapes the text holds (`string_codec`:
+an escaped line break or space, `\x`, `\0`, `\a`, `\e`, `\v`, `\N`,
+`\_`, `\L`, `\P` or `\U` is YAML's). A SALT label needs
+`Decoded([JsonString])` exactly when its content holds a character JSON
+escapes; AgentDojo's `JsonString` and `YamlString` arrivals need
+`Decoded([JsonString])` and `Decoded([YamlString])`.
 
 **The virtual clock.** `compose(major, minor, sub)` gives
 `EPOCH + major·1000 s + minor·1 ms + sub·1 µs`, with bounded components, so
@@ -261,25 +435,28 @@ exchange that first carries the delivered message (tested).
 - **Negative controls.**
   - `RejectedSend`: failed `send_message` events. The origin is the failed
     call's arguments, so a violation is a prediction whose evidence is text
-    that was never delivered.
+    that was never delivered. The converter gives the failed call's result
+    `ToolOutcome::Error`, so a gateway's L5 records it as a
+    `WriteOutcome::Rejected` write that never pairs; the label checks that
+    no detector credits it anyway. Wherever the eval builds spec `Access`es
+    (the live test backend), a rejected send is `WriteOutcome::Rejected`.
   - `NoSenderExchange`: scripted Bob's deliveries.
   - `SharedSource`: system prompts, and results of `inspect_database`,
     `query_database`, `read_code`, `read_source` and `resolve_records`.
   - `Boilerplate`: harness user turns.
 
-## Shortcuts that in-flight spec changes replace
+## Spec #58 in the eval
 
-`docs/spec-eval-gaps` adds spec types the eval works around today. The eval
-does not depend on them yet; when they land:
+Every shortcut the eval took before spec #58 (`docs/spec-eval-gaps`) is
+gone:
 
-| Spec change | Replaces |
+| Spec change | What the eval does now |
 | --- | --- |
-| `IngressMode::Replay { corpus: CorpusId }` | the fabricated `ClientContext` (`corpus/client.rs`: a reverse-proxy route named after the dataset); corpus-ingested exchanges must use `Replay` |
-| `SpanIndex::span` | the span directory (`Detection::spans`, `Directory::span`, `ReferenceOutput::spans`) the eval keeps to locate a match's origin |
-| `CarrierKind` | the eval's own `truth::CarrierKind` and its mapping from `Carrier` |
-| `WriteOutcome` (on `AccessOp::Write`), `ToolOutcome::Unknown` | the eval-only `NegativeReason::RejectedSend` label for failed `send_message` calls, which becomes a rejected write the detector itself sees |
-| `Codec::JsonString`, `Codec::YamlString` | the JSON/YAML escape class folded into `Normalized` (`MatchNeed::Normalized` for escaped deliveries, the reference matcher's escape unfolding) |
-| an access-by-id read | channel-route alignment's dependence on the detector reporting each channel's resources (`Directory::channel`) |
+| `IngressMode::Replay { corpus: CorpusId }` | corpus exchanges are replayed under one corpus per dataset (`corpus::client::corpus_id`), with one stable synthetic credential per agent, corpus-scoped (INV-973) |
+| `SpanIndex::spans`, `AccessStore::accesses`, `ChannelReads` / `resource_use` | predictions read a detector's spans, accesses and channel resources through them (`predict/reads.rs`); the eval's private span directory and channel lookups are gone |
+| `CarrierKind` | score rows and `DetectionQuality` use the spec's (`Carrier::kind`); `QualityMatch::Content { class, carrier }` keys the scorer's transmission rows |
+| `WriteOutcome` (on `AccessOp::Write`) | SALT keeps its `RejectedSend` truth label; a failed send's result is `ToolOutcome::Error`, and the eval builds rejected sends as `WriteOutcome::Rejected` accesses |
+| `Codec::JsonString`, `Codec::YamlString` | escaped text is `Decoded([JsonString])` or `Decoded([YamlString])` in labels and in the reference matcher; `Normalized` is whitespace and case only |
 
 ## How to add a converter
 
@@ -319,12 +496,21 @@ ct-eval run --dataset salt --limit 53
 | route | carrier | class | tier | expected | found | recall | predicted | correct | false | precision |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | direct | user_turn | exact | construction | 2806 | 2722 | 0.970 | 7046 | 7024 | 22 | 0.997 |
-| direct | user_turn | normalized | construction | 1044 | 842 | 0.807 | 2015 | 2015 | 0 | 1.000 |
+| direct | user_turn | normalized | construction | 0 | 0 | - | 347 | 347 | 0 | 1.000 |
+| direct | user_turn | decoded | construction | 1044 | 842 | 0.807 | 1668 | 1668 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 1678 | 0 | 1678 | 0.000 |
-| direct | tool_result | normalized | construction | 0 | 0 | - | 3032 | 0 | 3032 | 0.000 |
+| direct | tool_result | normalized | construction | 0 | 0 | - | 457 | 0 | 457 | 0.000 |
+| direct | tool_result | decoded | construction | 0 | 0 | - | 2575 | 0 | 2575 | 0.000 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 89 | 0 | 89 | 0.000 |
-| direct | tool_result | normalized | structural | 0 | 0 | - | 12 | 0 | 12 | 0.000 |
+| direct | tool_result | decoded | structural | 0 | 0 | - | 12 | 0 | 12 | 0.000 |
 
+- With the string codecs (spec #58), escaped deliveries need
+  `Decoded([JsonString])`: their 1,044 labels moved from the `normalized`
+  row to `decoded` with the same 842 found. The matcher finds exactly what
+  it found before; only its classes changed: of the 2,015 user-turn
+  predictions it called `normalized`, 1,668 needed a JSON string decoded
+  and 347 only whitespace or case (pieces of an escaped delivery between
+  its escapes). Totals, violations and gates are unchanged.
 - Overall recall is 0.926; overall precision is 0.652 (0.988 on user
   turns).
 - Violations: `rejected_send` 171, `boilerplate` 89, `shared_source` 12,
@@ -381,9 +567,9 @@ Where the reference loses:
     - `JsonString` (`\n`, `\"`, `\uXXXX`);
     - `YamlString` (`\`-newline continuations, `\ `, `\xXX`, `''`).
 
-    Every decoding is followed by whitespace folding. Until spec PR #58's
-    `Codec::JsonString`/`YamlString` land, all but `Exact` map to
-    `Normalized` (`Arrival::need`, TODO(#58)).
+    Every decoding is followed by whitespace folding. `Whitespace` needs
+    `Normalized`, `JsonString` `Decoded([JsonString])` and `YamlString`
+    `Decoded([YamlString])` (`Arrival::need`, spec #58).
   - **Absent.** An injection in no output the victim read (the tool was
     never called, or a defense such as `transformers_pi_detector` replaced
     it with "Data omitted") gets no label.
@@ -488,10 +674,13 @@ ct-eval run --dataset agentdojo --include pipeline=gpt-4o-2024-05-13 \
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | channel | tool_result | normalized | construction | 359 | 87 | 0.242 | 87 | 87 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 328 | 142 | 186 | 0.433 |
-| direct | tool_result | normalized | construction | 2324 | 2324 | 1.000 | 3549 | 3030 | 519 | 0.854 |
+| direct | tool_result | normalized | construction | 294 | 294 | 1.000 | 1736 | 1289 | 447 | 0.743 |
+| direct | tool_result | decoded | construction | 2030 | 2030 | 1.000 | 1813 | 1741 | 72 | 0.960 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 45 | 0 | 45 | 0.000 |
 
-Overall recall is 0.899 and precision 0.813.
+Overall recall is 0.899 and precision 0.813. Before the string codecs the
+two direct `normalized` and `decoded` rows were one `normalized` row
+(2,324 labels, 3,549 predictions); the totals are unchanged.
 
 Arrival classes:
 
@@ -549,3 +738,408 @@ under `shared_source` controls.
   words, which therefore originate nothing new.
 - **False positives.** Coincidental phrasing shared between one side's
   turns and the other side's tool output or policy.
+
+## Swarm benchmark
+
+`src/datasets/swarm_truth/` scores the **live gateway** on traffic from the
+demo swarm (`crates/demo`, `swarm --ground-truth PATH`). Unlike the dataset
+converters, the exchanges are the gateway's own captures with their real
+ids; the eval only labels them and scores what the gateway exported. The
+dataset id is `demo-swarm`; one run is one world (`header.world`).
+
+**Scope.** Reading truth v2, joining it to the gateway's exchange log and
+blobs, scoring a saved transmissions export with its evidence, a typed
+join-diagnostics table, and fetching the export over the L8 API.
+**Non-scope.** Driving the swarm or the gateway, identity scoring (key
+groups are kept but not labelled, see below), and Parquet exports.
+
+### Inputs
+
+| File | Written by | Format |
+| --- | --- | --- |
+| `truth.jsonl` | `swarm --ground-truth` | truth v2: one object per line tagged by `kind` (`schema.rs`, strict: only `version` 2, no unknown kinds or fields) |
+| `<data dir>/exchanges/exchange-log.jsonl` | the gateway's exchange-log consumer | one spec `Envelope` per line, each `ingest`/`exchange_captured` with one `Exchange` (meta, request hashes, outcome); a torn last line is ignored |
+| `<data dir>/blobs/` | the gateway's `FsBlobStore` | each message body's canonical encoding under its `MessageHash`; read through `FsBlobStore` and decoded with the spec's strict decoder |
+| `export.jsonl` | `POST /exports` | spec JSONL export framing (header, `transmission` rows, trailer); read with `read_jsonl` and checked with `verify_export` and the BLAKE3 row digest (`ROW_DIGEST_CONTEXT`), so a cut-off export is refused |
+| `evidence.jsonl` | `GET /transmissions/{id}/evidence?window={"context":0}` | one spec `TransmissionEvidence` per line, for the exported transmissions |
+
+Truth v2 lines: `header` (version, world, run, seed, agent and key counts,
+`claude_code_shape`, start time, gateway and wiki URLs; `run` is a ULID), then
+`agent_cluster` (one per key group), then `transmission`, `self_read` and
+`reread` (writer and reader with key group, session, turn and tool use id,
+`route: {kind: channel, url}`, `carrier: tool_result`, the read tool,
+`content: {blake3, sha256, excerpt, at: {message, block, tool_use_id}}` and
+times) and `miss` (the reader side only).
+
+- Writer == reader is always `self_read`, even on a repeat read; `reread`
+  is cross-agent only: a version the reader already read earlier in the
+  same session.
+- A read whose write event never arrived is an `unattributed_read`: the
+  reader side, the page `version` the wiki's response header reported, and
+  the content, with no writer. These rows come at the run's end, after
+  every other row, in read order.
+- No row is written for a read whose follow-up request was never sent (no
+  exchange carries it), or for a failed `PUT`.
+- `at_unix_ms` is `started_at_unix_ms + at_ms`; `written_at_unix_ms` is
+  when the `PUT`'s response reached the writer. Agent and page names
+  (`agent-NNN`, `<topic>-<n>`) are opaque.
+
+### Join rules (`resolve.rs`)
+
+- **Agents.** `AgentKey { world: header.world, name }`. A session id
+  belongs to the agent the truth rows name for it (a session claimed by
+  two agents is reported, `session_conflict`); an exchange belongs to its
+  session's agent.
+- **Turns.** The log's exchanges are grouped by `meta.client.ids.session`
+  (from `x-claude-code-session-id`) and ordered by (`started_at`, id). The
+  position in that order is the session's generation-request ordinal, the
+  truth's `turn`: only generation requests are captured, failed ones
+  included.
+- **Reader.** The exchange at `reader_turn`, checked by a tool result part
+  for `content.at.tool_use_id` whose text BLAKE3-hashes to
+  `content.blake3`. If that exchange lacks the tool result, the session's
+  first exchange holding it is used and the row is reported
+  (`turn_mismatch`, kept). A tool result whose bytes hash otherwise drops
+  the row (`hash_mismatch`). No exchange holding it drops the row
+  (`turn_out_of_range` or `tool_use_missing`), as does an unknown session.
+- **Writer.** The exchange at `writer_turn`, checked by its response's
+  `PUT` tool call `writer_tool_use_id` whose arguments' `body` hashes to
+  `content.blake3`; the same fallback. A writer that does not join leaves
+  the label with no sender exchange (`kept_without_sender`).
+- **Location.** The whole text of the reader's tool result part (the
+  `Tool` message's hash, the result's index, `0..len`). `content.at`'s wire
+  indices are not used: the canonical request splits and reorders the wire
+  array.
+
+| Row | Becomes |
+| --- | --- |
+| `transmission` | `ExpectedTransmission`: Channel route with `Locator::Url` of the canonical URL (L5's `url_locator`), `ToolResult` carrier, `Construction` tier, `needs` `Normalized` when the page holds a character JSON escapes (the writer's `PUT` carries it escaped) and `Exact` otherwise |
+| `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read (the one control whose sender and reader are one agent: it catches a detector that splits one agent in two) |
+| `reread` | `NegativeControl` `Reread`, writer → reader, at the later read |
+| `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
+| `unattributed_read` | `Exemption` `UnknownSender` at the read (joined like any read, hash-checked): a prediction into that reader exchange on that content is unjudged, neither correct nor false |
+| `agent_cluster` | no label: a key group is agents sharing one API key, while an `AgentCluster` is keys that are one agent. Reported as `key_group_not_a_cluster` and kept on `Resolved::key_groups` |
+
+Coverage is `Complete { Construction }`: the swarm logs every read, the
+ones it cannot attribute as exemptions, so only those places are left
+unjudged and the rest of the world stays complete.
+
+### Detections (`detected.rs`)
+
+The export's rows say which transmissions to score; their evidence gives
+each content match's reader exchange, read location, carrier and kind, and
+the write and read accesses with their agents, exchanges and resources.
+Gateway agent ids are tied to truth agents through the exchange log (a
+match's `reader_exchange` names the reader; each access's `exchange` names
+its agent, under both its stored and canonical id); a channel's resources
+are its accesses' locators. Predictions are then `predict::from_transmission`
+as for any detector, and the scorer, alignment rule and gates are the
+eval's own. Origin span locations are unknown (`SpanIndex::span` is not on
+the API), so no swarm control names an origin.
+
+Reported, never silent: an exported transmission with no evidence
+(`missing_evidence`), a gateway agent no exchange ties to a truth agent
+(`unknown_detected_agent`; that transmission yields no predictions), and
+one gateway agent tied to two truth agents (`detected_agent_conflict`).
+
+### Bench run
+
+```text
+# 1. a fresh gateway data dir, then the swarm against it
+swarm --ground-truth runs/1/truth.jsonl …        # crates/demo, through the gateway
+# 2. once the gateway's watermark has passed the run, save its side
+ct-eval swarm-fetch --api http://crosstalk:8081 --truth runs/1/truth.jsonl --out runs/1
+#    (POST /exports, then GET /transmissions/{id}/evidence per row;
+#     --token-env VAR for a bearer token)
+# 3. score offline
+ct-eval swarm --truth runs/1/truth.jsonl \
+  --exchanges <data dir>/exchanges/exchange-log.jsonl \
+  --export runs/1/export.jsonl --out runs/1/report
+#    --blobs defaults to <data dir>/blobs, --evidence to evidence.jsonl beside the export
+```
+
+`ct-eval swarm` prints the score table, the truth and detection counts and
+the diagnostics table, writes `report.json`, `report.txt` and
+`diagnostics.json` (counts, the table and every entry) to `--out`, and
+exits 2 when a gate fails. A re-run over the same files is byte-identical
+(tested).
+
+| File | Role | Key exports |
+| --- | --- | --- |
+| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET`, `SwarmTruthError` |
+| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
+| `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
+| `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
+| `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
+| `src/datasets/swarm_truth/locate.rs` | tool results and `PUT` calls in exchanges | `tool_result`, `write_call`, `FoundResult`, `FoundCall` |
+| `src/datasets/swarm_truth/resolve.rs` | the join | `resolve`, `Resolved`, `AgentIndex`, `ResolveCounts`, `needs` |
+| `src/datasets/swarm_truth/diagnostics.rs` | join failures | `Diagnostics`, `Diagnostic`, `JoinFailure`, `Effect`, `RowKind`, `Side`, `DiagnosticCount` |
+| `src/datasets/swarm_truth/detected.rs` | the export and evidence as predictions | `read_export`, `read_evidence`, `predictions`, `SwarmDirectory`, `Blake3RowHasher`, `Exported` |
+| `src/datasets/swarm_truth/fetch.rs` | saving the gateway's side over HTTP | `fetch`, `FetchConfig`, `Fetched`, `FetchError` |
+| `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | |
+| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence) | |
+
+**Invariants.**
+- Every truth row becomes a label or a diagnostic; every exported
+  transmission becomes predictions or a diagnostic.
+- A label's reader exchange holds a tool result whose bytes hash to the
+  truth's `content.blake3`, and its content text is exactly that result's
+  text.
+- Only a `SelfRead` control may name one agent as sender and reader.
+
+## AI Village
+
+The AI Village converter (`src/datasets/ai_village/`, `ct-eval run
+--dataset ai-village [--mode window|claude-code] [--from DAY --to DAY]`)
+has its own page: [eval_ai_village.md](eval_ai_village.md). It adds
+`SourceError::AiVillage`, an `AiVillage` arm of the CLI's `AnySource`, and an
+`ai-village.json` (source stats and unlabelled predictions by reader source)
+next to the report.
+
+Reference baselines: Claude Code mode recalls 15,776 of 15,798
+construction-tier `get_events` deliveries (0.999); the 2026-07-13..17 window
+gives 116,410 exchanges, 97,978 structural chat labels (recall 0.999) and 10
+heuristic repository labels. Numbers and the false-positive picture are in
+[eval_ai_village.md](eval_ai_village.md#reference-baselines).
+
+## collusion-wiki
+
+Real AI-agent swarms that used public UseMod/ProWiki wikis as dead drops —
+the "a public wiki agents start writing to" case crosstalk was built for. The
+export (`~/Data/ai/agents/collusion-wiki`, files `revisions.jsonl.gz` and
+`pages.jsonl.gz`; the `.zip` duplicates them) records page edits, not model
+calls, so the converter (`src/datasets/wiki/`) **synthesises** every exchange
+and marks it `Fidelity::Synthetic`.
+
+### Agents, exchanges and worlds
+
+- **Agent identity** is the revision's `label` (chosen username) or, when the
+  label is blank (899 of 14,591 revisions), its `/16` address as `ip16:<a.b>`.
+  A blank username is not an identity; the `/16` is the only stable signal the
+  export keeps, so blank-label saves are attributed by address and documented
+  as such (`Revision::identity`).
+- **A write** is one revision: an `http_request` `POST` tool call whose `body`
+  argument is the lines that revision inserted (its hunks' new-line ranges), so
+  that text is originated in that exchange.
+- **A read** is synthesised just before an edit whose author differs from the
+  page's previous author: an `http_request` `GET` of the page URL whose tool
+  result is the page body as of the previous revision. This is the
+  **read-before-edit assumption** — an agent that edits a page after another
+  agent must have fetched it first. A consecutive same-author edit gets no read.
+- **A world** is one connected component of the agent–page graph (agents linked
+  by a page both edited, `plan_worlds`), so a world is a set of agents that
+  could only have reached each other through shared pages. Worlds are emitted
+  largest-first. `--limit` caps them, `--family` and `--wiki` filter pages, and
+  `--min-agents` and `--max-agents` bound world size. The full export's giant
+  component has 2,553 agents; most components are a single agent.
+- **The demo subset** (`WikiSelection::demo`, `--demo`) is the five largest
+  relay-coordination worlds of 2 to 12 agents. It is the M2 "undeclared public
+  wiki channel" case at a size a demo can show end to end: 5 worlds, 33
+  agents, 98 exchanges and 197 labels, in 0.25 s and 85 MB.
+
+Line provenance (`attribution.rs`) replays each page's hunks to attribute every
+body line to the revision that wrote it, so a reader's surviving view of each
+earlier author is exact. Virtual time is a global per-world counter through
+`corpus::clock::ordinal`, so reads precede edits and a sender's edit precedes
+any reader's read of it.
+
+### Labels (Heuristic tier, Channel route)
+
+- **Channel transmission** (`ToolResult` carrier): from each earlier distinct
+  author whose inserted lines are still present in the body a reader read, at
+  the read exchange, located in the read's tool result, routed through the
+  page's public `Locator::Url`. `Exact`, or `Normalized` when the surviving
+  text holds a character JSON escapes (it sits escaped inside the writer's tool
+  arguments).
+- **Relay** (`ReaderOutput` carrier): when a reader's own edit re-inserts an
+  earlier author's line verbatim (and the line needs no JSON escaping, so it
+  sits byte-identical in the write's canonical arguments). The reference
+  matcher never predicts a `ReaderOutput`, so these are deliberate misses that
+  exercise the carrier.
+
+Coverage is `Partial`: the labels are a heuristic sample (surviving lines at or
+above the reference's 24-byte / 20-alphanumeric floor), so an unlabelled
+prediction is unjudged, not a false positive. Recall validates the labels. The
+run also prints the channel-discovery inputs per `page_family`: pages, pages
+two or more agents wrote, and revisions (`WikiSource::families`,
+`FamilyTally`).
+
+### Results on the export
+
+The whole export (`ct-eval run --dataset wiki --examples 0`) has 14,591
+revisions on 4,579 pages. It has 3,216 identities, 114 of them `ip16:`
+fallbacks (899 blank-label revisions). It converts to 591 worlds and 23,691
+exchanges: 14,591 writes and 9,100 synthesised reads. All 41,202 labels are
+Heuristic tier: 40,394 Channel/`ToolResult` and 808 relays (`ReaderOutput`).
+1,268 pages have two or more authors. The largest families are:
+
+| page_family | multi-author / pages |
+| --- | ---: |
+| relay-coordination | 362 / 709 |
+| source-cache-url-list | 305 / 1,231 |
+| source-or-unclassified | 93 / 677 |
+| off_store_unclassified | 86 / 671 |
+| oecd-equity | 52 / 99 |
+| datausa-clothing-workforce | 46 / 98 |
+| datausa-cashiers-masters | 41 / 76 |
+| probe-test | 39 / 236 |
+| loop-chain-infrastructure | 7 / 339 |
+
+Reference matcher, channel route:
+
+| scope | labels | recall | exact | normalized | relay | correct / predicted | time | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| whole export | 41,202 | 0.938 | 0.919 | 0.967 | 0 / 808 | 408,745 / 1,844,405 | 29 s | 2.2 GB |
+| `--wiki dse` | 40,160 | 0.938 | 0.920 | 0.968 | 0 / 800 | 403,554 / 1,787,253 | 31 s | 2.1 GB |
+| `--wiki fractal` | 126 | 0.944 | 1.000 | 0.931 | 0 / 1 | 2,197 / 12,544 | 0.5 s | 85 MB |
+| `--demo` | 197 | 0.975 | 1.000 | 0.970 | none | 247 / 458 | 0.25 s | 85 MB |
+
+Precision is 1.000 wherever it is judged; the rest is unjudged under
+`Partial`. Relays are never found, by design. `--max-postings` trades memory
+for little recall on dse: 4 gives 0.929 at 0.9 GB, 16 gives 0.938 at 2.1 GB,
+and 64 gives 0.942 at 8.1 GB.
+
+**The out-of-memory failure, and its fix.** Conversion was never the cost.
+The largest world converts in 1.7 s at 200 MB, and its biggest revision body
+is 38 KB. The reference matcher was. Text that many identities originate
+independently is posted once per originating span, for example UseMod's
+new-page default text (inserted by 267 identities) and common API URL
+prefixes (up to 1,766 spans per shingle). Every read of a page carrying that
+text matched every one of those spans. One read produced 276,889 hits, and
+the giant world accumulated 22.6M content matches in 1.19M transmissions
+before the 8 GB cap aborted it. The boilerplate cutoff (above) removes that
+fan-out. `tests/wiki.rs::large_template_bodies_stay_linear` and
+`tests/reference.rs::matches_grow_linearly_with_the_read_body` are the
+regressions.
+
+### The shortener and events
+
+`shortener-logs.json.gz` (499 `rmn.re` links) is a second channel in
+principle, but its only per-link activity is an aggregate click count with no
+address, so writes and reads cannot be attributed by `ip16`; it is reported,
+not converted. `events.jsonl.gz` (save/delete/probe/revert) is not needed —
+saves are the revisions, reads are not logged, and the converter's
+read-before-edit assumption supplies the reads.
+
+### M2 pipeline input contract
+
+The converter's output is a valid input to `Pipeline::ingest` (the M2 path:
+converter → ingest → L3–L5 → a discovered wiki channel and confirmed
+transmissions). Ingest uses eval core's synthetic `ClientContext`
+(`corpus/client.rs`), as every converter does. It moves to
+`IngressMode::Replay { corpus }` when eval core does (see the shortcuts
+table). The agreed L5 `HttpTool` shape, emitted from one place
+(`wiki::tools`, tested by `reads_and_writes_take_the_http_tool_shape` and
+`channel_labels_sit_in_the_read_tool_result`):
+
+- read: `http_request {"method":"GET","url":<canonical page url>}`; the
+  tool_result is the read part and holds the page body (INV-269);
+- write: `http_request {"method":"POST","url":<same url>,"body":<inserted text>}`;
+  spans come from `body`.
+
+The extractor treats a tool as `HttpTool` by name (`http_request`, `fetch`,
+`web_fetch`, `curl`) with `url` + `method`; `GET`/`HEAD` are reads,
+`POST`/`PUT`/`PATCH`/`DELETE` writes (spans from the first of
+`body`/`content`/`text`/`data`), and the locator is the canonical URL
+regardless of tool name. A write and a read of one page use the identical URL
+string, so they land on one `Locator::Url` — never an MCP-shaped tool, whose
+locator would carry the tool name and split the resource.
+
+### Files
+
+| File | Role |
+| --- | --- |
+| `src/datasets/wiki/mod.rs` | `WikiSource` (a `TraceSource`), reading, component planning, `WikiSelection` |
+| `src/datasets/wiki/schema.rs` | the revision and page records read (`Revision`, `Page`, `Hunk`, `Revision::identity`) |
+| `src/datasets/wiki/attribution.rs` | hunk replay to per-line provenance (`attribute`, `runs`, `line_byte_range`) |
+| `src/datasets/wiki/resource.rs` | the page's public URL and `Locator` (`page_url`, `page_locator`) |
+| `src/datasets/wiki/tools.rs` | the one place the read/write tool shape is defined (`TOOL`, `read_args`, `write_args`) |
+| `src/datasets/wiki/build.rs` | the two passes: exchanges, then channel and relay labels |
+| `src/datasets/wiki/tally.rs` | channel-discovery inputs per `page_family` (`FamilyTally`, `FamilyStats`) |
+| `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests |
+
+## swarm-traces
+
+A decoder test corpus. The export
+(`~/Data/ai/agents/swarm-traces/redacted.jsonl.gz`, 189,579 rows of
+`{id, cite, kind ∈ {payload, recovered_text, response}, parent_id, tags,
+text}`) holds encoded payloads agents passed each other and, for many, a
+recovered-text child. **The payloads are real attack content; the converter
+treats them purely as text — it never executes any of it and never fetches any
+URL in it. No dataset bytes are committed; the fixtures are synthetic strings
+that mimic the encoding structure only.**
+
+### Decoding and worlds
+
+`codec.rs` decodes one token through a chain of codecs (base64, hex,
+URL-encoding and `\x..` byte escapes, `atob(...)` unwrapped), peeling layers
+until none applies and returning the chain it verified by actually decoding.
+Only base64/hex/URL map to a spec `Codec`; a `\x..` layer has none and is a
+reported gap.
+
+For each payload the converter (`src/datasets/swarm/`) extracts candidate
+tokens (base64/hex/URL runs, `atob` inners, `\x..` runs), and for every token
+that decodes to printable text ≥24 bytes with ≥20 alphanumerics it builds a
+two-agent `World`:
+
+- the **author** originates the decoded plaintext in its output;
+- the **reader** receives the encoded token in a `fetch_drop` tool result. The
+  call names no resource, so the route is `Direct`.
+
+The expected transmission is a `Decoded`-class edge author → reader
+(`ToolResult` carrier), labelled `MatchNeed::Decoded { codecs }` with the
+verified chain, located at the encoded token in the reader's tool result.
+Tier is `Construction` when the payload has a recovered-text/response child
+(the recovery is corroborated) and `Structural` otherwise (decode-only, the
+property-test style). Coverage is `Complete`, so the only cross-agent content
+is the token and precision is meaningful.
+
+### What the reference shows
+
+The reference matcher decodes one base64/hex/URL layer in a reader's input and
+matches it against sender spans, so a single-layer token is found and a nested
+chain is a reported miss — the point of the corpus. The run reports the
+`Decoded`-row recall (the decoder's recall) and, from the converter's verified
+chains, codec-chain frequencies (`SwarmSource::tally`, `ChainTally`).
+
+Reports carry only codec chains, counts and lengths, never payload text:
+- `run --dataset swarm` forces `--examples 0`, because a miss example prints
+  its label's text;
+- `truth --dataset swarm` refuses, because a label's text is the token;
+- `SwarmError` names a token only by its length.
+
+On the export, 91,037 payloads yield 659,746 distinct candidate tokens. Of
+these, 629 decode through a verified chain to printable text of at least 24
+bytes: `url` 615, `url.url` 13 and `base64` 1. 170 are Construction tier
+and 459 Structural. No `\x..` byte-escape chain reaches the floor, so no gap
+chain is reported on this export. The reference finds 627 of the 629
+`Decoded` labels (recall 0.997, precision 1.000, 2 s, 195 MB). It finds the
+`url.url` chains too, because one URL decode of a double-encoded token
+already exposes most of the plaintext.
+
+### Files
+
+| File | Role |
+| --- | --- |
+| `src/datasets/swarm/mod.rs` | `SwarmSource` (a `TraceSource`), token extraction, the two-agent decoded worlds, `SwarmSelection` |
+| `src/datasets/swarm/codec.rs` | the nested codec-chain decoder (`decode`, `Layer`, `Decoded`) |
+| `src/datasets/swarm/tally.rs` | decode-chain counts and lengths for the run report (`ChainTally`, `ChainStats`) |
+| `tests/swarm.rs`, `tests/fixtures/swarm/` | synthetic benign fixtures and tests |
+
+## SWE background, splices and cipher pairs
+
+`ct-eval run --dataset open-swe | lmcache | swe-splice | cipher` has its
+own page: [eval_swe_synthetic.md](eval_swe_synthetic.md). Open-SWE-Traces
+and LMCache trajectories are mixed into background worlds that hold only
+negative controls. The splice generator plants an exact Channel
+transmission through `Locator::File` between two real trajectories, in four
+variants. Cipher pairs deliver payloads encoded, and those whose encoding the
+spec's `Codec` cannot name are labelled `Tier::OutOfReach`. Every run's
+report now has an `out_of_reach` summary, kept out of `overall`, and a
+`background` summary for any run with negative controls: false positives
+per 1k exchanges and the top sources they fell on.
+
+Reference baselines: open-swe gives 330.7 false positives per 1k exchanges
+and lmcache 1,887.0. Splices are found 59/59 through an editor view and 0/15
+through a shell read, which the reference routes `Direct`. Cipher recall
+runs from 0.36 to 0.52 for the in-reach codecs, with 0/200 out of reach.
