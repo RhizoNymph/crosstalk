@@ -511,8 +511,8 @@ demo services.
 | `crates/demo/Cargo.toml` | `crosstalk-demo`: spec, testkit; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, sha2, thiserror, tokio (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), tracing, tracing-subscriber (env-filter, fmt, json, std); bin `crosstalk-demo` |
 | `crates/demo/src/**` | See [Layout and reuse](#layout-and-reuse) |
 | `crates/gateway/tests/architecture.rs` | Adds the `Tool` role (`demo`), `Violation::LayerOnTool`, and tests for it |
-| `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime) |
-| `deploy/compose.demo.yaml` | Override: swaps the config mount of `migrate` and `crosstalk` to the demo config; adds `fake-upstream`, `wiki` and `swarm` (profile `swarm`, `restart: "no"`) |
+| `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime), and `ct-eval` with `crates/eval/gates.toml` for `run.sh bench` ([bench.md](bench.md)) |
+| `deploy/compose.demo.yaml` | Override: swaps the config mount of `migrate` and `crosstalk` to the demo config; adds `fake-upstream`, `wiki`, `swarm` (profile `swarm`, `restart: "no"`) and `bench` (ct-eval, profile `bench`, see [bench.md](bench.md)) |
 | `deploy/demo/crosstalk.demo.json` | `deploy/config/crosstalk.json` with the Anthropic route's `base_url` set to `http://fake-upstream:8070` |
 | `deploy/run.sh` | `demo up`, `demo run [swarm options]`, `demo down`, `demo logs` |
 

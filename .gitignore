@@ -2,3 +2,4 @@
 /spec/target
 /deploy/.env
 /.env.test
+/deploy/bench/

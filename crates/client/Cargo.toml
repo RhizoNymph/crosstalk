@@ -22,6 +22,9 @@ tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+crosstalk-api = { path = "../api", features = ["world"] }
+crosstalk-conformance = { path = "../conformance" }
+crosstalk-world = { path = "../world" }
 http-body-util = { workspace = true, features = ["channel"] }
 hyper = { workspace = true, features = ["client", "http1", "server"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }

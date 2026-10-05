@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
 #
 # crosstalk-demo: the fake Anthropic upstream, the shared wiki and the agent
-# swarm (one binary, subcommands). Build context is the repository root:
+# swarm (one binary, subcommands), plus ct-eval for `run.sh bench` (the
+# deployment host has no Rust toolchain). Build context is the repository root:
 #   docker build -f deploy/demo.Dockerfile -t crosstalk-demo:dev .
 # (deploy/compose.demo.yaml does this for you.)
 
@@ -19,16 +20,26 @@ RUN rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
 WORKDIR /src
 COPY . .
 
+# One cargo invocation for both binaries, so they share one dependency
+# resolution and one lock on the cached target dir. ct-eval's default gates
+# path is compiled in as /src/crates/eval/gates.toml, which the runtime image
+# does not have; the file is shipped beside it and `bench` passes --gates.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --locked --release -p crosstalk-demo --bin crosstalk-demo \
-    && install -D target/release/crosstalk-demo /out/crosstalk-demo
+    cargo build --locked --release \
+        -p crosstalk-demo --bin crosstalk-demo \
+        -p crosstalk-eval --bin ct-eval \
+    && install -D target/release/crosstalk-demo /out/crosstalk-demo \
+    && install -D target/release/ct-eval /out/ct-eval \
+    && install -D -m 0644 crates/eval/gates.toml /out/eval/gates.toml
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /out/crosstalk-demo /usr/local/bin/crosstalk-demo
+COPY --from=build /out/ct-eval /usr/local/bin/ct-eval
+COPY --from=build /out/eval/gates.toml /usr/local/share/crosstalk-eval/gates.toml
 
-# 8070 fake upstream, 8090 wiki. The swarm listens on nothing.
+# 8070 fake upstream, 8090 wiki. The swarm and ct-eval listen on nothing.
 EXPOSE 8070 8090
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/crosstalk-demo"]

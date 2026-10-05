@@ -6,20 +6,25 @@ implementation of the spec's L8 traits (`QueryApi`, `OperatorActions`,
 relies on (alias resolution, counting by confirmation time, bucket-aligned
 windows and the watermark, shares, filters and paging, permissions, the
 channel rules, action outcomes and audit) as `async` tests generic over the
-implementation. Today it runs against the UI's fixture backend
-(`ui/src/backend/fixture`). The next harness runs it against the real
-surface (`crosstalk-surface` over the memory stores seeded by
-`crosstalk-world`, the UI's world backend).
+implementation. It runs against three implementations:
+
+- **The UI's fixture backend** (`ui/src/backend/fixture`), in
+  `cargo test -p crosstalk-ui`.
+- **The real surface in process:** `crosstalk-surface` over the memory
+  stores seeded with `crosstalk-world` through the spec's write traits
+  (`crates/api/tests/conformance.rs`).
+- **The same surface over HTTP:** `crosstalk-api`'s server on a loopback
+  port and `crosstalk-client`'s `HttpClient`, no gateway and no Postgres
+  (`crates/client/tests/conformance.rs`).
+
+The real surface fails ten tests today, the same ten in process and over
+HTTP; each is listed with its reason as an expected failure ("Findings").
 
 This page has two parts:
 
-- **What exists.** The suite in the workspace, instantiated for the UI
-  fixture.
-- **The redesign.** The suite seeded through the spec's write traits, run
-  against the memory stores, then Postgres and the HTTP client. The
-  coordinator and the gateway team decided this; the write traits and
-  `crosstalk-world` now exist on `staging`, and the next step is described
-  below.
+- **What exists.** The suite, its harnesses and what they found.
+- **The redesign.** The suite seeding its own scenarios through the write
+  traits, so any store set (memory, Postgres) runs it; the next step.
 
 ## Scope
 
@@ -32,7 +37,11 @@ This page has two parts:
 - **The tests.** One `async fn` per test, generic over the harness,
   grouped by area, each citing the `spec/invariants` id it checks.
 - **`suite!`.** The macro that instantiates every test for one harness.
-- **The fixture's harness** (`ui/src/backend/fixture/conformance/`).
+- **The harnesses:** the fixture's (`ui/src/backend/fixture/conformance/`),
+  the in-process surface's and the HTTP client's, the world binder they
+  share, and `crosstalk-api`'s world server (feature `world`).
+- **Expected failures:** what an implementation is known to get wrong,
+  listed per harness so the suite stays green and honest.
 
 ## Non-scope
 
@@ -55,6 +64,11 @@ This page has two parts:
 | --- | --- | --- |
 | `crates/conformance` `crosstalk-conformance` | The suite: harness trait, scenarios, self-check, tests, `suite!`. A TestSupport crate in the architecture test (`crates/gateway/tests/architecture.rs`): only ever a dev-dependency of a layer crate. | `crosstalk-spec`, and the workspace's `thiserror` and `tokio` (`rt`, `time`, `macros`, `sync`). No new third-party dependency. |
 | `ui` `crosstalk-ui` | Its fixture holds `FixtureHarness` under `cfg(test)` (`ui/src/backend/fixture/conformance/`) and runs the suite in `cargo test -p crosstalk-ui`. | `crosstalk-conformance` as a dev-dependency |
+| `crates/api` `crosstalk-api` | Feature `world`: `crosstalk_api::world` seeds the world into the in-process surface (`seed_world`) and serves it over HTTP on a loopback port (`serve_world`). Its `tests/conformance.rs` (needs `--features world`) runs the suite in process. | `crosstalk-world`, optional under `world`; `crosstalk-conformance` as a dev-dependency |
+| `crates/client` `crosstalk-client` | Its `tests/conformance.rs` runs the suite over HTTP against `serve_world`. | dev-dependencies: `crosstalk-api` (`world`), `crosstalk-conformance`, `crosstalk-world` |
+
+`crosstalk-conformance` also depends on `crosstalk-world` (TestSupport on
+TestSupport), for the world binder.
 
 ### Data and control flow
 
@@ -64,7 +78,8 @@ suite!(harness) ── one #[test] per suite test ──▶ run(harness, test)
                                                    ▼
 test(&harness) ── World::open(harness, scenario) ──▶ Harness::provision(Provision { scenario, knobs })
                      │                                  └─▶ Provisioned { backend, bindings }
-                     │   + Harness::{operators, bucket_width, extent, now, row_hasher}
+                     │   + Harness::{operator, extent, row_hasher, expected_failures}
+                     │   + QueryApi::present (bucket width, now)
                      ▼
             reads and actions through QueryApi / OperatorActions / LiveFeed only
             roles → ids through Bindings; expectations from the scenario's facts
@@ -93,13 +108,15 @@ pub trait Harness {
     type Backend: QueryApi + OperatorActions + LiveFeed;
     type Hasher: RowHasher;
     async fn provision(&self, request: Provision<'_>) -> Result<Provisioned<Self::Backend>, ProvisionError>;
-    fn operators(&self) -> Operators;          // two operators the backend's directory defines
-    fn bucket_width(&self) -> BucketWidth;     // QueryApi does not expose it
-    async fn now(&self, backend: &Self::Backend) -> Timestamp;
+    fn operator(&self, holds: PermissionSet) -> OperatorId; // who a caller with exactly `holds` is
     async fn extent(&self, backend: &Self::Backend) -> TimeWindow; // aligned, covers every fact
     fn row_hasher(&self) -> Self::Hasher;      // verify_export's digest
+    fn expected_failures(&self) -> &[ExpectedFailure] { &[] }
 }
 ```
+
+The bucket width and the present come from the backend itself
+(`QueryApi::present`), as a client reads them.
 
 **`provision`.**
 - Takes a `Scenario` and `Knobs`. The knobs are the spec's own config types:
@@ -110,9 +127,28 @@ pub trait Harness {
 **`ProvisionError`.** Either `Unsupported { scenario }` (the fixture
 provisions only the named scenarios) or `Failed { scenario, reason }`.
 
-**`Callers`.** Builds callers the only way the spec builds one: an
-authenticated `OperatorDirectory` for one of the harness's operators,
-holding exactly the permissions a test asks for.
+**Callers.** `harness::caller(operator, permissions)` builds a caller the
+only way the spec builds one: an authenticated `OperatorDirectory` for
+that operator, holding exactly those permissions. `World::caller(perms)`
+asks the harness which operator holds them (`Harness::operator`):
+- **The fixture and the in-process surface** check only the caller's
+  permissions, so every partial set maps to one operator.
+- **Over HTTP** the caller is derived from the bearer token and never
+  sent, so the HTTP harness gives each permission set its own operator and
+  token in the server's directory, and the backend routes each call to
+  that operator's client.
+
+**`Routed<R>`** (`routed.rs`) is that backend in general: it owns a
+`Route` (whatever keeps the implementation alive) and forwards every
+`QueryApi`, `OperatorActions` and `LiveFeed` method to the implementation
+`Route::route(caller)` picks.
+
+**Expected failures.** `Harness::expected_failures` lists tests the
+implementation is known to fail, each with its reason. `run` requires
+each listed test to fail (its panic is caught and the reason printed) and
+fails a listed test that passes (`RunError::UnexpectedPass`), so a fix
+shows up as a request to remove the entry, and nothing is silently
+skipped.
 
 ### The scenario vocabulary (`conformance/src/scenario/`)
 
@@ -305,6 +341,60 @@ week from a seed. It provisions a named scenario by binding.
 - extent: `[START, NOW + BUCKET)`;
 - hasher: the fixture's `RowDigest` stand-in.
 
+### Harnesses over the real surface
+
+**The world server** (`crosstalk_api::world`, feature `world`), reusable
+by any test or tool that wants the real surface over the synthetic world:
+- `seed_world(WorldOptions)` starts `InProcess` over empty memory stores
+  configured from the world's config, seeds the world through the write
+  traits (`Seeding`: the memory stores as `crosstalk_world::WorldStores`)
+  and starts the clock: the config time while seeding, then the anchor,
+  fixed (`WorldTime::Fixed`, tests) or moving on (`WorldTime::Live`).
+  `WorldOptions` also takes the feed's `LiveConfig`, the `ExportLimits`
+  and operators added to the world's directory. It returns the
+  `SeededWorld`: the `InProcess`, the world's `Scenario` handles, the
+  access config.
+- `serve_world(SeededWorld, tokens)` serves its surface with `HttpApi` on
+  `127.0.0.1:0`, each static bearer token authenticating its operator;
+  `HttpWorld::base_url` and `shutdown`.
+
+**The world binder** (`crosstalk_conformance::world::bind`) binds the
+named scenarios to a seeded world through the spec's store read traits
+(`AgentDirectory`, `ChannelDirectory`, `ChannelReads`, `AccessStore`,
+`TransmissionStore`, `TransmissionVerdicts`) and the world's handles
+(agents by fixture key, `ChannelKey`, `MergeKey`, `RuleKey`, the lone
+resource, dropped bodies). It reads every stored transmission once, with
+its verdict log and the resources its co-access records touched, and runs
+the same searches the fixture's binder runs over the fixture's internals:
+so it works for any store set the world is seeded into, Postgres
+included.
+
+**The in-process harness** (`crates/api/tests/conformance.rs`): seeds a
+world per test, binds it, and routes every call to the one surface. The
+researcher is the lead; every partial permission set is the on-call
+operator.
+
+**The HTTP harness** (`crates/client/tests/conformance.rs`): seeds the
+same world with an extra operator per partial permission set (62 of
+them, ids `OPERATOR_BASE | bits`), serves it with one token per
+operator, and routes each call to the `HttpClient` holding the caller's
+operator's token.
+
+### Findings
+
+Running the suite against the real surface found four gaps, the same in
+process and over HTTP. They are `SURFACE_FAILURES` in
+`crosstalk_conformance::world`, which both harnesses list:
+
+| Tests | Finding |
+| --- | --- |
+| `graph::the_channel_centred_view_shares_the_topology_edges`, `graph::channel_graph_draws_only_listed_channels` | `channel_topology` draws no access edges for a discovered channel's resources (accessed before the channel existed): the hijacked wiki has none though its row counts 3 writers and 8 readers, and the unconfirmed S3 channel, listed as `Channel(Unconfirmed)`, is not drawn (INV-860, INV-861). |
+| `graph::route_and_topic_filters_and_their_conjunction` | A topic filter keeps transmissions whose `transmissions_by_id` rows are `Unassigned` under the pinned version (439 of 678 in the week): the edge store's topic buckets and the rows' topics disagree (INV-345, INV-400). |
+| `scenarios::dropped_bodies`, `scenarios::everything` | `transmission_evidence` for a transmission whose body retention dropped fails with `Store("span missing")` instead of answering `BodyDropped` on that side (INV-698). |
+| `projections::*` (5) | No projection fitter runs in the in-process composition (nor anywhere yet): a `fit_projection` job never leaves the queue. |
+
+The fixture passes all 65; it lists no expected failures.
+
 ### Invariants and constraints
 
 - Tests reach the implementation only through the L8 traits and the
@@ -333,6 +423,11 @@ week from a seed. It provisions a named scenario by binding.
 | `crates/conformance/src/tests/*.rs` | The tests by area | one `pub async fn` per test |
 | `crates/conformance/src/suite.rs` | Runner and macro | `run`, `RunError`, `suite!` |
 | `ui/src/backend/fixture/conformance/{mod,bind,find,suite}.rs` | The fixture's harness (test-only) | `FixtureHarness`, `SEED` |
+| `crates/conformance/src/routed.rs` | The forwarding backend | `Route`, `Routed` |
+| `crates/conformance/src/world/{mod,find}.rs` | The world binder and the surface's expected failures | `bind`, `WorldReads`, `SURFACE_FAILURES` |
+| `crates/api/src/world.rs` | The world server (feature `world`) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `SeededWorld`, `HttpWorld`, `Seeding`, `SeedClock`, `WorldServeError` |
+| `crates/api/tests/conformance.rs` | The in-process harness | `InProcessHarness` |
+| `crates/client/tests/conformance.rs` | The HTTP harness | `HttpHarness` |
 | `crates/gateway/tests/architecture.rs` | Registers `conformance` as TestSupport | `TestSupport::Conformance` |
 
 ## The redesign: seeding through the write traits
@@ -386,16 +481,13 @@ week from a seed. It provisions a named scenario by binding.
 
 ### Next steps
 
-1. **A world harness.** `Harness` for the UI's world backend (or directly
-   for `crosstalk_api::InProcess` over `MemoryStores` seeded by
-   `crosstalk-world`), binding the named scenarios to the world's
-   `Scenario` handles. Transmission roles the world does not name are
-   found through L8 reads (edges' and channels' transmission pages, read
-   by id) or through the memory stores' read traits; scenarios whose roles
-   cannot be bound that way are `Unsupported` there. This is where the
-   suite first meets the real surface.
-2. **A generic seeder.** The harness below, so the suite seeds its own
-   scenarios and any store set runs it.
+1. **Done: harnesses over the real surface**, in process and over HTTP,
+   binding the named scenarios to the seeded world through the store read
+   traits (above).
+2. **A Postgres harness.** The same binder over the Postgres stores once
+   the world can be seeded into them.
+3. **A generic seeder.** The harness below, so the suite seeds its own
+   (and new, composed) scenarios and any store set runs it.
 
 ### The harness, redesigned
 
@@ -553,20 +645,28 @@ pipeline derives what the write-level seeding asserted directly.
 
 For the gateway's developers.
 
-**Today's API.**
+**Today's API.** Start from the HTTP harness
+(`crates/client/tests/conformance.rs`): it is the gateway's shape.
 
 1. Depend on `crosstalk-conformance` as a dev-dependency.
 2. Implement `Harness` in your test support:
-   - `provision` builds a fresh backend and writes each fact of the
-     scenario. Use your write path for each fact, as in the table above.
-     Return `Bindings`, with `bindings.bind(role, id)` for every role,
-     using the ids your stores assigned.
-   - `operators` names two operators your directory defines.
-   - `bucket_width`, `now` and `extent` answer from your edge store and
-     clock.
-   - `row_hasher` returns your BLAKE3 row hasher.
+   - `provision` builds a fresh backend whose world holds the scenario.
+     Seed `crosstalk-world` into your stores and bind with
+     `crosstalk_conformance::world::bind` over your stores' read traits,
+     as the in-process and HTTP harnesses do; or write each fact through
+     your write path and bind every role yourself
+     (`bindings.bind(role, id)`).
+   - `operator(holds)` names who a caller holding exactly `holds` is; if
+     your surface authenticates each request, give each set its own
+     operator and credential (the HTTP harness shows how) and route calls
+     with `Routed`.
+   - `extent` is an aligned window covering your data; `row_hasher` is
+     your BLAKE3 row hasher. The bucket width and the present are read
+     from your `QueryApi::present`.
+   - `expected_failures` lists what you know you fail, with reasons;
+     start from `SURFACE_FAILURES` if you serve `crosstalk-surface`.
 3. In a test module, call
-   `crosstalk_conformance::suite!(path::to::YourHarness::new())`.
+   `crosstalk_conformance::suite!(path::to::YourHarness)`.
 4. Run `cargo test`. The `scenarios::*` tests fail first if a fact is not
    observable as the spec says. Fix those before reading other failures.
 

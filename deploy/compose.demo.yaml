@@ -8,6 +8,11 @@
 #
 # The swarm is under the `swarm` profile and never restarts, so `up` never
 # starts a 200-agent run by accident. See docs/features/demo.md.
+#
+#   bash deploy/run.sh bench --agents 20 --duration 2m   # one scored run
+#
+# `bench` (profile `bench`) is ct-eval from the same image; run.sh drives it.
+# See docs/features/bench.md.
 
 x-demo-logging: &demo-logging
   driver: json-file
@@ -99,3 +104,23 @@ services:
         condition: service_healthy
       fake-upstream:
         condition: service_healthy
+
+  # ct-eval, one subcommand per `run.sh bench` step (the options replace the
+  # empty command). Reads the gateway's exchange log and blobs from the
+  # `data` volume in place, read-only, and writes under deploy/bench/.
+  # run.sh sets BENCH_UID/BENCH_GID to the invoking user so the run's files
+  # are theirs; the volume's files are world-readable (0644/0755).
+  bench:
+    <<: *demo-image
+    profiles: [bench]
+    entrypoint: [/usr/local/bin/ct-eval]
+    command: []
+    restart: "no"
+    user: "${BENCH_UID:-65532}:${BENCH_GID:-65532}"
+    environment:
+      RUST_LOG: ${DEMO_LOG:-info}
+      # ct-eval swarm-fetch --token-env CROSSTALK_API_TOKEN
+      CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
+    volumes:
+      - ./bench:/bench
+      - data:/var/lib/crosstalk:ro

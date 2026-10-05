@@ -10,20 +10,20 @@ An operator UI turns those records into a topology graph, a channel-centred view
 
 ## Status
 
-This is a hackathon-stage project. The design is fully specified; the implementation is partway through a phased roadmap.
+This is an early-stage project. The design is fully specified, and detection now runs end to end; what remains is measuring how well it works.
 
 | Area | State |
 |---|---|
 | Specification (`spec/`) | Done. Types, per-layer traits and invariants, plus the JSON wire contract with golden files. `scripts/inv_check.py` validates the invariants. |
-| Capture (`crosstalk` binary) | Working. Reverse proxy for Anthropic Messages over HTTP/SSE. Claude Code pointed at it through `ANTHROPIC_BASE_URL` works unchanged, and every exchange is normalized, stored and logged. |
+| Capture and serving (`crosstalk` binary) | Working. Reverse proxy for Anthropic Messages over HTTP/SSE; Claude Code pointed at it through `ANTHROPIC_BASE_URL` works unchanged. `serve --role all` runs the proxy, the detection pipeline and the HTTP API together. |
 | Transport, store, blob store | Working. In-process bus with retries and dead letters; Postgres harness with per-layer migrations. |
-| Surface service (L8) | Working, in process, over reference stores. It covers queries, operator actions, the live feed and export. |
-| Detection (L3–L7: reconstruct, provenance, flow, topology) | Specified, with reference in-memory stores. The pipeline stages are being integrated and are **not yet wired end to end** on this branch. |
-| Evaluation (`crates/eval`, `ct-eval`) | Converts public multi-agent datasets (SALT-NLP first) into labelled corpora and scores detectors against them. Ships a naive reference matcher as the baseline the pipeline has to beat. |
-| Operator UI (`ui/`) | Builds as part of the workspace. It runs on a synthetic fixture world, optionally in replay mode, or on the seeded world through the in-process surface service. It is not yet connected to live detection output. |
-| Deployment (`deploy/`) | Docker Compose stack with the gateway, Postgres, Grafana, Prometheus, Loki and Alloy. A demo swarm sends synthetic agent traffic through the proxy without spending real tokens. |
+| Detection (L3–L7: reconstruct, provenance, flow, analysis, topology) | Wired end to end through `Live`. In the e2e smoke test, one agent's output read by another becomes a confirmed transmission and an A→B channel edge. Its accuracy on real traffic has not yet been measured. |
+| Surface service (L8) | Working, in process and over HTTP (`api.listen`, bearer token). It covers queries, operator actions, the live feed and export. |
+| Evaluation (`crates/eval`, `ct-eval`) | Converts public multi-agent datasets into labelled corpora, including SALT-NLP, AgentDojo, τ²-bench, AI Village and collusion-wiki traces. It scores detectors against them, with a naive reference matcher as the baseline to beat. Scoring the live pipeline is in progress. |
+| Operator UI (`ui/`) | Runs on a synthetic fixture world (optionally in replay mode) or on the seeded world. Connecting it to a running gateway over HTTP is in progress. |
+| Deployment (`deploy/`) | Docker Compose stack with the gateway, Postgres, Grafana, Prometheus, Loki and Alloy. A demo swarm sends synthetic agent traffic with known ground truth, and `run.sh bench` scores the gateway's detections against it. |
 
-The demo shows what an operator sees. Its data is scripted fixture data, not the output of live detection. The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadmap.md).
+The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Layout
 

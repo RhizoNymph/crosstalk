@@ -10,5 +10,6 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-world = { path = "../world" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }

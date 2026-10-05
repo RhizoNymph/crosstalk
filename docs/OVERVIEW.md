@@ -213,6 +213,9 @@ Overview:
       and the infrastructure observability stack (Prometheus, Grafana, Loki,
       Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
       stored, how they run and how they scale is in docs/infrastructure.md.
+      run.sh bench drives one scored detection benchmark on that stack: the
+      demo swarm through the real gateway, its detections exported over the
+      L8 API, and ct-eval (shipped in the demo image) scoring them.
 
     ui: >
       Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
@@ -1248,8 +1251,9 @@ Features Index:
       content's hashes and its exact message/block in the reader's request),
       which ct-eval scores against.
       healthcheck serves the distroless image. deploy/compose.demo.yaml,
-      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
-      demo up|run|down|logs run the demo on the compose stack. It reuses
+      deploy/demo.Dockerfile (which also ships ct-eval for run.sh bench),
+      deploy/demo/crosstalk.demo.json and run.sh demo up|run|down|logs run
+      the demo on the compose stack. It reuses
       testkit's harness client and SSE parser and the spec's seeded random
       source.
     entry_points:
@@ -1262,6 +1266,29 @@ Features Index:
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]
     doc: docs/features/demo.md
+  bench:
+    description: >
+      The live detection benchmark on the single-machine compose
+      deployment (bash deploy/run.sh bench, implemented in deploy/bench.sh).
+      One run: restart wiki and crosstalk at the start (fresh world, empty
+      in-memory detection state), run the demo swarm through the real
+      gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
+      run id a UTC timestamp), wait until /healthz live.watermark_micros
+      passes the swarm's end (exports are cut at the watermark), export the
+      gateway's detections with ct-eval swarm-fetch over the L8 API, and
+      score them with ct-eval swarm against the exchange log and blobs read
+      in place from the data volume (mounted read-only into the bench
+      service). Prints precision, recall and the gate result and passes
+      ct-eval's exit code through (2 = a gate failed). Fails fast unless
+      /readyz has the `live` and `api` tasks running and the API takes the
+      token. ct-eval ships in the crosstalk-demo image.
+    entry_points:
+      - deploy/run.sh
+      - deploy/bench.sh
+      - deploy/compose.demo.yaml
+      - deploy/demo.Dockerfile
+    depends_on: [demo, eval, deploy, gateway, http_api]
+    doc: docs/features/bench.md
   conformance:
     description: >
       crosstalk-conformance (crates/conformance, TestSupport): the L8
@@ -1273,18 +1300,25 @@ Features Index:
       suite checks every fact of a scenario through L8 before relying on
       it, and assertions are relations the spec defines and what the facts
       imply, citing spec/invariants ids, never totals of one world.
-      suite!(harness) instantiates every test; the UI fixture runs it
-      (ui/src/backend/fixture/conformance, binding the named scenarios to
-      its generated week). Next: a harness over crosstalk-surface and the
-      memory stores seeded by crosstalk-world, then scenarios seeded
-      through the write traits.
+      suite!(harness) instantiates every test; a harness lists what its
+      implementation is known to fail, and a listed test that passes fails.
+      It runs against the UI fixture (ui/src/backend/fixture/conformance),
+      the in-process crosstalk-surface over memory stores seeded by
+      crosstalk-world (crates/api/tests/conformance.rs) and the same surface
+      over HTTP through crosstalk-client (crates/client/tests/conformance.rs),
+      the last two through crosstalk_api::world (feature world: seed_world,
+      serve_world) and the world binder over the store read traits. Next:
+      Postgres, and scenarios seeded through the write traits.
     entry_points:
       - crates/conformance/src/lib.rs
       - crates/conformance/src/harness/mod.rs
       - crates/conformance/src/scenario/mod.rs
       - crates/conformance/src/suite.rs
       - ui/src/backend/fixture/conformance/mod.rs
-    depends_on: [query_surface, read_models, export, channel_semantics, type_spec]
+      - crates/api/src/world.rs
+      - crates/api/tests/conformance.rs
+      - crates/client/tests/conformance.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, type_spec, world, http_api, surface_service]
     doc: docs/features/conformance.md
   world:
     description: >

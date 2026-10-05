@@ -1,14 +1,14 @@
-//! A provisioned world as a test sees it: the backend, the bindings, the
-//! harness's answers and ready-made callers.
+//! A provisioned world as a test sees it: the backend, the bindings, its
+//! present and ready-made callers.
 
 use crosstalk_spec::aggregates::series::BucketWidth;
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PermissionSet, QueryApi};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 /// A day in microseconds.
 const DAY: u64 = 24 * 3600 * 1_000_000;
 
-use crate::harness::{Callers, Harness, Knobs, Provision};
+use crate::harness::{Harness, Knobs, Provision, caller};
 use crate::scenario::{Role, RoleKind, Scenario};
 
 /// One provisioned world. Tests panic on anything unexpected: a world
@@ -18,7 +18,6 @@ pub struct World<'h, H: Harness> {
     pub backend: H::Backend,
     pub scenario: Scenario,
     pub bindings: crate::scenario::Bindings,
-    pub callers: Callers,
     /// The lead operator with every permission.
     pub lead: Caller,
     /// Covers every provisioned fact; on bucket boundaries.
@@ -41,12 +40,15 @@ impl<'h, H: Harness> World<'h, H> {
             })
             .await
             .unwrap_or_else(|e| panic!("provision {}: {e}", scenario.name()));
-        let callers = Callers::new(harness.operators());
-        let lead = callers
-            .lead()
+        let lead = caller(harness.operator(PermissionSet::ALL), PermissionSet::ALL)
             .unwrap_or_else(|e| panic!("lead caller: {e}"));
         let extent = harness.extent(&provisioned.backend).await;
-        let bucket = harness.bucket_width();
+        let bucket = provisioned
+            .backend
+            .present(&lead)
+            .await
+            .unwrap_or_else(|e| panic!("present: {e:?}"))
+            .bucket_width;
         assert!(
             bucket.is_boundary(extent.start()) && bucket.is_boundary(extent.end()),
             "the harness's extent {extent:?} is on bucket boundaries"
@@ -56,7 +58,6 @@ impl<'h, H: Harness> World<'h, H> {
             backend: provisioned.backend,
             scenario,
             bindings: provisioned.bindings,
-            callers,
             lead,
             extent,
             bucket,
@@ -89,10 +90,11 @@ impl<'h, H: Harness> World<'h, H> {
             .unwrap_or_else(|e| panic!("{e} in {}", self.scenario.name()))
     }
 
-    /// The other operator holding exactly `permissions`.
+    /// The operator the harness names for exactly `permissions`, holding
+    /// them.
     pub fn caller(&self, permissions: &[Permission]) -> Caller {
-        self.callers
-            .with(permissions)
+        let holds = PermissionSet::of(permissions.iter().copied());
+        caller(self.harness.operator(holds), holds)
             .unwrap_or_else(|e| panic!("caller {permissions:?}: {e}"))
     }
 
@@ -105,8 +107,12 @@ impl<'h, H: Harness> World<'h, H> {
         self.caller(&held)
     }
 
-    /// The backend's present.
+    /// The backend's present (`QueryApi::present`).
     pub async fn now(&self) -> Timestamp {
-        self.harness.now(&self.backend).await
+        self.backend
+            .present(&self.lead)
+            .await
+            .unwrap_or_else(|e| panic!("present: {e:?}"))
+            .now
     }
 }

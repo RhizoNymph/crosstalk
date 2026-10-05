@@ -148,7 +148,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/config/crosstalk.json` | Gateway config (contract above). |
 | `deploy/config/ui.json` | UI config (fixture backend until the HTTP backend lands). |
 | `deploy/.env.example` | Every variable compose reads, with the defaults: secrets, host ports and binds, `DOCKER_ROOT_DIR` (Docker's data root, for cAdvisor) and Postgres/Prometheus tuning. |
-| `deploy/run.sh` | `init`, `up`, `infra`, `down`, `logs`, `ps`, `psql`, `urls`. Sets `DOCKER_ROOT_DIR` from `docker info` unless the environment or `deploy/.env` does. |
+| `deploy/run.sh` | `init`, `up`, `infra`, `down`, `logs`, `ps`, `psql`, `urls` (plus `demo ...` and `bench`, see below). Sets `DOCKER_ROOT_DIR` from `docker info` unless the environment or `deploy/.env` does. |
 | `deploy/postgres/init/` | First-start SQL: extensions and the monitor role. |
 | `deploy/prometheus/prometheus.yml` | Scrape jobs: `prometheus`, `node`, `cadvisor`, `postgres`, `loki`, `alloy`, `grafana`, `crosstalk`. |
 | `deploy/prometheus/rules/infrastructure.yml` | Infra alert rules (group `crosstalk-infra`). |
@@ -158,7 +158,8 @@ without breaking the linking of exchanges across the change:
 | `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
-| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). |
+| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries `ct-eval`, and the override adds the `bench` service (profile `bench`). |
+| `deploy/bench.sh`, `deploy/bench/` (gitignored) | `run.sh bench`: one scored detection benchmark on the demo stack, its runs under `deploy/bench/<run>/`; see [bench.md](bench.md). |
 
 ## Store tests against the compose Postgres
 
