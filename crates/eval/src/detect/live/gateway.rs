@@ -82,6 +82,7 @@ pub fn flow_config(timing: CorrelationTiming) -> Result<FlowConfig, BackendError
         correlation_window_ms: ms(timing.correlation_window())?,
         evidence_window_ms: ms(timing.evidence_window())?,
         suspected_ttl_ms: ms(timing.suspected_ttl())?,
+        content_retention_ms: FlowConfig::default().content_retention_ms,
         shards: 1,
         tick_ms: TICK_MS,
     })

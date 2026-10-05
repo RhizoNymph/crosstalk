@@ -159,7 +159,7 @@ where
             entropy,
         } = deps;
         Self {
-            shards: Shards::new(settings.timing, settings.shards),
+            shards: Shards::new(settings.timing, settings.content_retention, settings.shards),
             publisher: Publisher::new(bus, Arc::clone(&clock), entropy),
             settings,
             registry,

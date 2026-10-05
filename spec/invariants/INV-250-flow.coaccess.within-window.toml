@@ -8,6 +8,9 @@ Without a bound, any read of a long-lived shared resource pairs with every
 earlier write by any agent, and suspected transmissions grow without limit.
 The window is the trade-off between recall and false positives.
 `CoAccess::new` rejects a longer lag with `InvalidCoAccess::OutsideWindow`.
+The correlator builds an access-only co-access with the correlation
+window, and one backed by a content match the write explains with the
+content retention (`flow.correlator.content-confirms-past-window`).
 """
 
 [evidence]

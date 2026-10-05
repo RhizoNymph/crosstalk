@@ -1,0 +1,29 @@
+[invariant]
+id = "flow.correlator.reread-refreshes-delivery"
+statement = "Within one medium and the content retention, at most one channel transmission is confirmed holding a content match of a given sender span read by a given reader: a later read by the same reader, in another exchange, whose tool result carries a span already delivered to it refreshes that delivery and confirms nothing; a co-access the reread opened is suspected and discarded unless the reread carries new content, which it confirms alone."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A reader re-reading a page version it already read in the same session
+received nothing new, yet a channel transmission is identified by the
+reader exchange, so each reread confirmed another transmission
+(crosstalk-infra's node0 bench: 9 negative controls violated). Content-
+confirmed delivery is keyed on (sender span, reader, medium) instead.
+Transmissions open eagerly on co-access, so a reread within the window
+still opens one; it is decided after the earlier read (decisions run in
+read order), finds its spans delivered, and is never confirmed, so the
+export, which holds confirmed transmissions only, has one. The delivery
+records are kept per medium for the content retention after their last
+read.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::correlate::tests::rereads::two_reads_of_one_page_version_give_one_transmission",
+    "crosstalk_flow::correlate::tests::rereads::a_reread_a_day_later_opens_nothing",
+    "crosstalk_flow::correlate::tests::rereads::a_reread_with_new_content_confirms_only_the_new_content",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

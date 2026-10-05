@@ -476,6 +476,48 @@ fn flow_config_is_checked() {
     }
 }
 
+/// `content_retention_ms` defaults to L4's 30-day index retention, is
+/// read into the settings, and may not be shorter than the correlation
+/// window (`flow.correlator.content-confirms-past-window`).
+#[test]
+fn content_retention_is_configured() {
+    use std::time::Duration;
+
+    use crate::correlate::{DEFAULT_CONTENT_RETENTION, InvalidRetention};
+
+    assert_eq!(
+        Duration::from_millis(FlowConfig::default().content_retention_ms),
+        DEFAULT_CONTENT_RETENTION
+    );
+    let parsed: Result<FlowConfig, _> =
+        serde_json::from_str(r#"{"content_retention_ms": 86400000}"#);
+    let Ok(parsed) = parsed else {
+        panic!("{parsed:?}");
+    };
+    let settings = Settings::try_from(parsed);
+    let Ok(settings) = settings else {
+        panic!("{settings:?}");
+    };
+    assert_eq!(
+        settings.content_retention.get(),
+        Duration::from_secs(86_400)
+    );
+    let short = FlowConfig {
+        correlation_window_ms: 60_000,
+        content_retention_ms: 59_999,
+        ..FlowConfig::default()
+    };
+    assert_eq!(
+        Settings::try_from(short),
+        Err(InvalidFlowConfig::ContentRetention(
+            InvalidRetention::ShorterThanWindow {
+                retention: Duration::from_millis(59_999),
+                window: Duration::from_secs(60),
+            }
+        ))
+    );
+}
+
 /// Updates the stored state does not admit (a stale suspicion, a
 /// discard, a repeated opening) change nothing and announce nothing: a
 /// stored transmission never moves back.

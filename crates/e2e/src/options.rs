@@ -66,6 +66,7 @@ pub fn flow() -> Result<FlowConfig, OptionsError> {
         correlation_window_ms: ms(CORRELATION_WINDOW)?,
         evidence_window_ms: ms(EVIDENCE_WINDOW)?,
         suspected_ttl_ms: ms(SUSPECTED_TTL)?,
+        content_retention_ms: FlowConfig::default().content_retention_ms,
         shards: 1,
         tick_ms: 50,
     })

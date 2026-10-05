@@ -27,7 +27,7 @@ use crosstalk_spec::ids::{AgentId, ChannelId, ExchangeId};
 use crosstalk_spec::observed::message::{ToolCallId, ToolName};
 use crosstalk_spec::support::Timestamp;
 
-use crate::correlate::{Decided, Kin, MediumKey, ReadPart, WindowedCorrelator};
+use crate::correlate::{ContentRetention, Decided, Kin, MediumKey, ReadPart, WindowedCorrelator};
 
 /// The consumer's correlator shards.
 #[derive(Debug, Clone)]
@@ -50,10 +50,14 @@ fn spread(tag: u8, id: u128, shards: usize) -> usize {
 }
 
 impl Shards {
-    pub fn new(timing: CorrelationTiming, count: NonZeroUsize) -> Self {
+    pub fn new(
+        timing: CorrelationTiming,
+        retention: ContentRetention,
+        count: NonZeroUsize,
+    ) -> Self {
         Self {
             shards: (0..count.get())
-                .map(|_| WindowedCorrelator::new(timing))
+                .map(|_| WindowedCorrelator::with_retention(timing, retention))
                 .collect(),
             reads: BTreeMap::new(),
         }

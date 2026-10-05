@@ -27,7 +27,7 @@ pub mod url;
 pub use key::{KeyCanon, KeyError};
 pub use path::{AbsolutePath, FileScope, PathError, WrittenPath, absolute_locator, file_locator};
 pub use repo::{ForgeRepo, ForgeStyle, RepoBindings, RepoId, ThreadKind};
-pub use url::{UrlError, scan_urls, url_locator, url_text};
+pub use url::{UrlError, scan_urls, tool_url_locator, url_locator, url_text};
 
 #[cfg(test)]
 mod tests;

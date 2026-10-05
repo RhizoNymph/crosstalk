@@ -173,7 +173,9 @@
 //! evaluation shows this rule insufficient.
 //!
 //! **Timing.** The correlator is configured with a [`CorrelationTiming`]: it
-//! pairs a write and a read within `correlation_window`, opens a channel
+//! pairs a write and a read within `correlation_window` (or, when a content
+//! match in the read's tool result is explained by the write, within its
+//! content retention: `flow.correlator.content-confirms-past-window`), opens a channel
 //! transmission `AwaitingContent` until `window_closes_at(read.at)`, keeps it
 //! `Suspected` until `expires_at(since)`, and opens a pending tool-result
 //! match as `Direct(ToolResult)` at `window_closes_at` of its exchange's

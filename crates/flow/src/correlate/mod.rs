@@ -2,7 +2,9 @@
 //!
 //! ```text
 //!   write (A, r) ─┐ pairing::co_access (within correlation_window, A ≠ B, write pairs)
-//!   read  (B, r) ─┴──▶ OpenChannel (AwaitingContent until window_closes_at(read.at))
+//!   read  (B, r) ─┤   or pairing::content_co_access (a held match in B's read that
+//!                 │   A's write explains, within content_retention)
+//!                 └──▶ OpenChannel (AwaitingContent until window_closes_at(read.at))
 //!                          │ window closes, a held match explained by A's write
 //!                          ├──────────────▶ Confirm (every such match, every co-access)
 //!                          │ window closes, none
@@ -20,6 +22,7 @@
 //! - [`route`]: route precedence.
 //! - [`kinship`]: parent links for `Delegation`.
 //! - [`lifecycle`]: which update may follow which.
+//! - [`retention`]: how long a write can still be confirmed by content.
 //! - [`WindowedCorrelator`]: one shard's correlator, implementing the
 //!   spec's `Correlator`.
 
@@ -30,6 +33,7 @@ pub mod kinship;
 pub mod lifecycle;
 mod medium;
 pub mod pairing;
+pub mod retention;
 pub mod route;
 mod windowed;
 
@@ -37,6 +41,7 @@ pub(crate) use ids::Derive;
 pub use key::MediumKey;
 pub use kinship::{Kin, Kinship};
 pub use medium::Medium;
+pub use retention::{ContentRetention, DEFAULT_CONTENT_RETENTION, InvalidRetention};
 pub use windowed::{Decided, MediumEvidence, ReadPart, UNKNOWN_TOOL, WindowedCorrelator};
 
 #[cfg(test)]

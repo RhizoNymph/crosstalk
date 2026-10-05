@@ -95,6 +95,32 @@ pub(crate) struct Held {
     pub(crate) read_at: Timestamp,
 }
 
+/// A span delivered to a reader on this medium: what a reread repeats
+/// (`flow.correlator.reread-refreshes-delivery`). A span has one origin
+/// agent, so the sender is implied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Delivery {
+    origin: SpanId,
+    reader: AgentId,
+}
+
+impl Delivery {
+    pub(crate) fn of(content: &ContentMatch) -> Self {
+        Self {
+            origin: content.origin(),
+            reader: content.reader(),
+        }
+    }
+}
+
+/// The channel transmission that first delivered a span to a reader, and
+/// the last read (that or a reread) that carried it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Delivered {
+    pub(crate) transmission: TransmissionId,
+    pub(crate) last: Timestamp,
+}
+
 /// One medium's evidence.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Medium {
@@ -105,6 +131,9 @@ pub struct Medium {
     /// when the last one was.
     pub(crate) retired: BTreeMap<Ident, (u32, Timestamp)>,
     pub(crate) held: BTreeMap<MatchKey, Held>,
+    /// Every span a confirmed transmission delivered to a reader here,
+    /// kept for the content retention after its last read.
+    pub(crate) delivered: BTreeMap<Delivery, Delivered>,
 }
 
 impl Medium {
@@ -114,6 +143,7 @@ impl Medium {
             && self.open.is_empty()
             && self.retired.is_empty()
             && self.held.is_empty()
+            && self.delivered.is_empty()
     }
 
     /// The open transmission of `ident`, if any: the earliest opened one

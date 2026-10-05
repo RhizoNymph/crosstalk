@@ -235,7 +235,8 @@ shutdown   live.shutdown(now + 5 s) -> LiveDrained                logged at debu
 
 `flow_config` turns `LiveSettings::timing` into L5's `FlowConfig`
 (milliseconds), with one shard, so the correlator sees inputs in their
-order, and a 1 s `tick_ms` that `Ticking::OnSettle` never uses.
+order, a 1 s `tick_ms` that `Ticking::OnSettle` never uses, and L5's
+default `content_retention_ms` (30 days).
 
 How the merged API differs from what the seam was written against, and
 what the eval does about it:
@@ -272,6 +273,11 @@ the first live run's 1,000 s step put every such pair out of reach
 `--evidence-window`, `--suspected-ttl`) still override the windows, and
 `--pace-min-ms` / `--pace-max-ms` (default 1000 / 5000, seeded by
 `--corpus-seed`) the step.
+
+The window bounds access-only pairing only: a read whose tool result
+carries the writer's span confirms within L5's `content_retention_ms`
+(30 days by default, `flow.correlator.content-confirms-past-window`), so
+content-confirmed channel transmissions no longer depend on it.
 
 **Fetch tools.** AgentDojo's `get_webpage` reads a page by its `url`, but
 it is not one of L5's built-in HTTP tools. `crates/eval/extract/agentdojo.json`

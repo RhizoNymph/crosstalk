@@ -15,7 +15,10 @@
 //! content. For a channel transmission that is the read, so a transmission
 //! the correlator still holds open can be confirmed at most
 //! [`CorrelationTiming::settle_after`] after its time. The correlation window
-//! does not add to that: it bounds how far before the read the write was.
+//! does not add to that: it bounds how far before the read the write was,
+//! for access-only pairing. A read whose tool result holds content the
+//! write explains pairs with it within the flow correlator's content
+//! retention instead (`flow.correlator.content-confirms-past-window`).
 //!
 //! [`Confirmed::at`]: crate::derived::flow::transmission::Confirmed::at
 

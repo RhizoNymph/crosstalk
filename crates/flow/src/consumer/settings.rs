@@ -1,6 +1,7 @@
 //! The flow consumer's configuration: the correlator's timing (whose
-//! `settle_after` is the settle window), the number of correlator shards,
-//! and how often it ticks.
+//! `settle_after` is the settle window), how long a write can still be
+//! confirmed by content, the number of correlator shards, and how often it
+//! ticks.
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -8,10 +9,15 @@ use std::time::Duration;
 use crosstalk_spec::derived::flow::timing::{CorrelationTiming, InvalidTiming};
 use serde::Deserialize;
 
+use crate::correlate::{ContentRetention, InvalidRetention};
+
 /// Checked settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub timing: CorrelationTiming,
+    /// The longest write-to-read lag a content-confirmed channel
+    /// transmission may have (`flow.correlator.content-confirms-past-window`).
+    pub content_retention: ContentRetention,
     pub shards: NonZeroUsize,
     /// How often the consumer ticks, in elapsed (tokio) time. Each tick
     /// reads the injected clock, which a replay drives, so windows close on
@@ -29,6 +35,8 @@ pub struct FlowConfig {
     pub evidence_window_ms: u64,
     #[serde(default = "defaults::suspected_ttl_ms")]
     pub suspected_ttl_ms: u64,
+    #[serde(default = "defaults::content_retention_ms")]
+    pub content_retention_ms: u64,
     #[serde(default = "defaults::shards")]
     pub shards: usize,
     #[serde(default = "defaults::tick_ms")]
@@ -51,6 +59,12 @@ mod defaults {
         1_800_000
     }
 
+    /// L4's span index retention, 30 days: content confirms a write read
+    /// up to this long after it.
+    pub fn content_retention_ms() -> u64 {
+        2_592_000_000
+    }
+
     pub fn shards() -> usize {
         1
     }
@@ -66,6 +80,7 @@ impl Default for FlowConfig {
             correlation_window_ms: defaults::correlation_window_ms(),
             evidence_window_ms: defaults::evidence_window_ms(),
             suspected_ttl_ms: defaults::suspected_ttl_ms(),
+            content_retention_ms: defaults::content_retention_ms(),
             shards: defaults::shards(),
             tick_ms: defaults::tick_ms(),
         }
@@ -77,6 +92,8 @@ impl Default for FlowConfig {
 pub enum InvalidFlowConfig {
     #[error("correlation timing: {0:?}")]
     Timing(InvalidTiming),
+    #[error("content_retention_ms: {0}")]
+    ContentRetention(InvalidRetention),
     #[error("shards must be at least 1")]
     ZeroShards,
     #[error("tick_ms must be at least 1")]
@@ -93,12 +110,16 @@ impl TryFrom<FlowConfig> for Settings {
             Duration::from_millis(config.suspected_ttl_ms),
         )
         .map_err(InvalidFlowConfig::Timing)?;
+        let content_retention =
+            ContentRetention::new(Duration::from_millis(config.content_retention_ms), timing)
+                .map_err(InvalidFlowConfig::ContentRetention)?;
         let shards = NonZeroUsize::new(config.shards).ok_or(InvalidFlowConfig::ZeroShards)?;
         if config.tick_ms == 0 {
             return Err(InvalidFlowConfig::ZeroTick);
         }
         Ok(Self {
             timing,
+            content_retention,
             shards,
             tick_every: Duration::from_millis(config.tick_ms),
         })

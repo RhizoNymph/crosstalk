@@ -199,9 +199,9 @@ uses the published API port (`CROSSTALK_API_PORT`) the same way.
 ## Flow config for the bench
 
 The gateway's Live pipeline reads an optional top-level `flow` section:
-`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `shards`
-and `tick_ms`. `deploy/config/crosstalk.json` spells out the defaults (600 s,
-120 s, 1800 s, 1, 1 s); `deploy/demo/crosstalk.demo.json` shortens two for
+`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`,
+`content_retention_ms`, `shards` and `tick_ms`. `deploy/config/crosstalk.json`
+spells out the defaults (600 s, 120 s, 1800 s, 30 days, 1, 1 s); `deploy/demo/crosstalk.demo.json` shortens two for
 the bench, and `crates/demo`'s `tests::deploy` allows exactly those two (and
 the upstream URL) to differ:
 

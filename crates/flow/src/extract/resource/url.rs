@@ -1,5 +1,6 @@
 //! URLs: normalization and the URL locator
-//! (`flow.resource.url-normalization`).
+//! (`flow.resource.url-normalization`), and a tool's `url` argument with
+//! no scheme (`flow.extract.bare-host-url-is-https`).
 //!
 //! The [`url`] crate parses (WHATWG): it lowercases the scheme and a special
 //! scheme's host (IDNA to punycode), drops the default port and resolves
@@ -49,6 +50,79 @@ pub fn url_locator(text: &str) -> Result<Locator, UrlError> {
         path,
         query: url.query().and_then(sorted_query),
     })
+}
+
+/// The canonical locator of a fetch tool's or an HTTP tool's `url`
+/// argument (`flow.extract.bare-host-url-is-https`): [`url_locator`], and
+/// when that fails on text with no scheme that names a host
+/// (`www.informations.com`, `example.com:8080/a`), the locator of that
+/// text as `https://`. A model often leaves the scheme off; the tool
+/// fetches the page all the same.
+pub fn tool_url_locator(text: &str) -> Result<Locator, UrlError> {
+    url_locator(text).or_else(|error| match bare_host(text.trim()) {
+        Some(bare) => url_locator(&format!("https://{bare}")),
+        None => Err(error),
+    })
+}
+
+/// File extensions that are also TLDs and that a bare file name ends in
+/// (`README.md`, `main.rs`). Text that is only such a name, with no
+/// `www.`, port or path, is a file name, not a host.
+const FILE_EXTENSIONS: &[&str] = &[
+    "bash", "bin", "cfg", "conf", "cpp", "css", "csv", "dart", "doc", "docx", "env", "exe", "gif",
+    "go", "gz", "hpp", "htm", "html", "ini", "ipynb", "java", "jpeg", "jpg", "js", "json", "jsx",
+    "kt", "lock", "log", "lua", "md", "mdx", "pdf", "php", "pl", "png", "pptx", "py", "rb", "rs",
+    "rst", "sh", "so", "sql", "svg", "swift", "tar", "tex", "toml", "ts", "tsv", "tsx", "txt",
+    "vue", "wasm", "xls", "xlsx", "xml", "yaml", "yml", "zip",
+];
+
+/// `text` when it is a bare `host[:port][/path…]`: no scheme, no
+/// whitespace, a host that is a domain (dot-separated labels of letters,
+/// digits and inner hyphens, ending in an alphabetic label of two or more
+/// characters) and an optional numeric port. Not a bare file name.
+fn bare_host(text: &str) -> Option<&str> {
+    if text.is_empty() || text.contains("://") || text.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let authority_end = text.find(['/', '?', '#']).unwrap_or(text.len());
+    let authority = &text[..authority_end];
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    if let Some(port) = port
+        && (port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let domain = host.strip_suffix('.').unwrap_or(host);
+    if domain.len() > 253 {
+        return None;
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    let tld = labels.last().copied().filter(|_| labels.len() >= 2)?;
+    let label_ok = |label: &str| {
+        !label.is_empty()
+            && label.chars().count() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_alphanumeric() || c == '-')
+    };
+    if !labels.iter().all(|label| label_ok(label))
+        || tld.chars().count() < 2
+        || !tld.chars().all(char::is_alphabetic)
+    {
+        return None;
+    }
+    let only_a_name = port.is_none() && authority_end == text.len();
+    let lower = domain.to_lowercase();
+    if only_a_name
+        && !lower.starts_with("www.")
+        && FILE_EXTENSIONS.contains(&tld.to_lowercase().as_str())
+    {
+        return None;
+    }
+    Some(text)
 }
 
 /// The URL text a locator was made from, in canonical form: parsing it
