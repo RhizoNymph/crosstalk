@@ -1443,6 +1443,30 @@ release build, run beside the base commit on one machine:
   the same schema matches the forward. Those tool calls record no access,
   so INV-963 does not hold them back.
 
+**Committed defaults** (forwarding off, short-span floor 24, the
+time-ordered spread rule of INV-1094, reader-output floor 64 with a
+non-boilerplate support fingerprint), measured on the integration tip
+c9e0465 (with the L5 fixes) against that tip plus this branch, live, release
+build, run side by side:
+
+| dataset | build | recall | precision | FP / 1k exchanges | reader-output FP | time |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| SALT `--limit 53` | tip | 0.719 | 0.704 | 137.8 | 1,029 | 15.4 min |
+| SALT `--limit 53` | tip + L4 | 0.765 | 0.842 | 70.6 | 243 | 13.7 min |
+| wiki `--max-agents 100` | tip | 0.901 | 1.000 | - | - | 12 s |
+| wiki `--max-agents 100` | tip + L4 | 0.950 | 1.000 | - | - | 12 s |
+| swarm-traces | tip | 0.981 | 1.000 | - | - | 14 s |
+| swarm-traces | tip + L4 | 1.000 | 1.000 | - | - | 14 s |
+
+Every gate passes on both builds. Choosing the floor (SALT on this branch
+before the L5 fixes, forwarding off; the user-turn gate then stood at
+0.830): no short spans, recall 0.766, precision 0.732, gate 0.861; floor 16,
+0.792 / 0.703, gate 0.816 (fails); floor 24, 0.775 / 0.732, gate 0.856;
+floor 32, 0.746 / 0.726, gate 0.856; short spans matched only against a
+whole user-turn part found nothing (identical to no short spans). The
+normalized user-turn rise (48 to 288) comes with the context k-grams
+(INV-1091); without them recall fell to 0.748 and the gate to 0.805.
+
 ### Gates
 
 `gates.toml` gates the live detector (`detector = "live"`) a little below
