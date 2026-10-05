@@ -21,7 +21,7 @@ use super::form::{
     Choices, RuleKindChoice, TopicOption, Values, parse_semantic, parse_watched, rule_form,
 };
 use super::model::{semantic_query, staleness, status_label, status_tone, watched_topics};
-use crate::app::{backend, caller, can};
+use crate::app::{backend, caller, can, present};
 use crate::components::form::LINK;
 use crate::components::{Tone, error_panel, href, page_header, state_badge};
 use crate::error::UiError;
@@ -29,8 +29,7 @@ use crate::pages::common::action::{Failure, done, perform, require, settled, sta
 use crate::pages::common::flash::Flash;
 use crate::pages::common::form::FormFields;
 use crate::pages::common::links::rule_url;
-use crate::pages::common::rules::rule;
-use crate::pages::common::topics::{all_topics, default_version};
+use crate::pages::common::topics::all_topics;
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
@@ -71,12 +70,13 @@ pub enum Target {
     Existing(AlertRuleId),
 }
 
-/// The topic version to pick topics from: the history's active one.
-async fn current_version(
-    cx: &Cx,
-    caller: &Caller,
-) -> std::result::Result<TopicModelVersion, UiError> {
-    Ok(default_version(backend(cx), caller).await?)
+/// The topic version to pick topics from: the present's rule version, the
+/// one `CreateRule` and `UpdateRule` check.
+async fn current_version(cx: &Cx) -> std::result::Result<TopicModelVersion, UiError> {
+    present(cx)
+        .await
+        .map(|present| present.current_rule_version)
+        .map_err(|e| UiError::from(e.clone()))
 }
 
 /// The topics and sinks a form may pick. Topics need `Content`: their
@@ -88,7 +88,7 @@ struct Options {
 }
 
 async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiError> {
-    let version = current_version(cx, caller).await?;
+    let version = current_version(cx).await?;
     let sinks = backend(cx).sinks(caller).await?;
     let topics = if can(caller, Permission::Content) {
         all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version))
@@ -123,7 +123,8 @@ async fn existing(
     caller: &Caller,
     id: AlertRuleId,
 ) -> std::result::Result<AlertRuleDef, UiError> {
-    let found = rule(backend(cx), caller, id)
+    let found = backend(cx)
+        .alert_rule(caller, id)
         .await?
         .ok_or(UiError::Query(QueryError::NotFound))?;
     if matches!(found.rule(), AlertRule::Builtin(_)) {

@@ -1,6 +1,5 @@
 //! The fixture behind the spec's traits: `QueryApi` (every read and the
-//! export), `OperatorActions`, `LiveFeed`, and the contract gaps `Present`
-//! and `ExportFormats`. Each method checks the caller's permission first,
+//! export), `OperatorActions` and `LiveFeed`. Each method checks the caller's permission first,
 //! then reads under the state's lock through [`super::queries`], or acts
 //! through [`super::actions`] and publishes what changed to the feed.
 
@@ -34,7 +33,7 @@ use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
-use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportFormat, ExportRequest};
+use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest};
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter, SearchRequest, TopicPage,
 };
@@ -46,12 +45,9 @@ use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, OperatorActions, Permission,
     QueryApi, SinkInfo,
 };
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::TimeWindow;
 
 use crate::backend::Result;
-use crate::contract::formats::ExportFormats;
-use crate::contract::present::Present;
-use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::AlertRuleId;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
@@ -67,41 +63,7 @@ use crosstalk_spec::paging::{
 
 use super::queries::require;
 
-use super::{FixtureBackend, actions, clock, export, live, queries};
-impl Present for FixtureBackend {
-    /// Five minutes: the watermark, ten minutes before `now`, is a bucket
-    /// boundary.
-    fn bucket_width(&self) -> BucketWidth {
-        clock::BUCKET
-    }
-
-    /// The end of the generated data. Buckets before the watermark (ten
-    /// minutes earlier) are final.
-    async fn now(&self, caller: &Caller) -> Result<Timestamp> {
-        require(caller, Permission::View)?;
-        Ok(self.state.read().await.clock.now())
-    }
-
-    /// The end of the data: a replay fills a default window in.
-    async fn view_end(&self, caller: &Caller) -> Result<Timestamp> {
-        require(caller, Permission::View)?;
-        let clock = self.state.read().await.clock;
-        Ok(match clock {
-            clock::Clock::Replay { .. } => {
-                clock::plus(clock.view_end(), clock::BUCKET.as_micros().get())
-            }
-            clock::Clock::Fixed | clock::Clock::Live { .. } => clock.now(),
-        })
-    }
-}
-
-impl ExportFormats for FixtureBackend {
-    /// JSONL only: a Parquet export is refused with `Store`.
-    fn export_formats(&self) -> &'static [ExportFormat] {
-        export::FORMATS
-    }
-}
-
+use super::{FixtureBackend, actions, export, live, queries};
 /// Every read `QueryApi` defines, with the spec's semantics; see
 /// [`queries`] and [`export`].
 impl QueryApi for FixtureBackend {
@@ -112,12 +74,15 @@ impl QueryApi for FixtureBackend {
         Ok(Watermark(self.state.read().await.clock.watermark()))
     }
 
-    /// The fixture's present: its clock, the bucket width and export
-    /// formats the contract gaps report (`contract::present`,
-    /// `contract::formats`), and its rule version, remap threshold and
-    /// frame retention.
+    /// The fixture's present: its clock, its five-minute bucket width (the
+    /// watermark, ten minutes before `now`, is a bucket boundary), the
+    /// formats it writes (JSONL only: a Parquet export is refused with
+    /// `Store`), and its rule version, remap threshold and frame retention.
     async fn present(&self, caller: &Caller) -> Result<SpecPresent> {
         require(caller, Permission::View)?;
+        #[cfg(test)]
+        self.present_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.read(queries::present).await
     }
 

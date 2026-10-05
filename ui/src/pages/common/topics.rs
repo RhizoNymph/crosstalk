@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
-use crosstalk_spec::aggregates::series::{SeriesGrouping, SeriesGroups};
+use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrouping, SeriesGroups};
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::interfaces::l8_surface::lists::TopicPage;
@@ -14,7 +14,6 @@ use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
 use crosstalk_spec::paging::{PageRequest, PageSize, TopicList};
 use crosstalk_spec::support::TimeWindow;
 
-use crate::contract::present::Present;
 use crate::data::timeline::timeline_grid;
 use crate::error::UiError;
 use crate::url::scope::ViewFilter;
@@ -90,18 +89,19 @@ impl Trends {
 }
 
 /// Transmissions per step of a [`TREND_BUCKETS`]-point grid over `window`
-/// for each topic of `version` (and its outliers), from one `series`
-/// grouped by topic with no filter but the version, so a trend follows
-/// what the version's topic sizes count (though graph-counted: self-edges
-/// left out).
-pub async fn topic_trends<B: QueryApi + Present>(
+/// (in buckets of `bucket`, the present's width) for each topic of
+/// `version` (and its outliers), from one `series` grouped by topic with
+/// no filter but the version, so a trend follows what the version's topic
+/// sizes count (though graph-counted: self-edges left out).
+pub async fn topic_trends<B: QueryApi>(
     backend: &B,
     caller: &Caller,
     window: TimeWindow,
+    bucket: BucketWidth,
     version: TopicModelVersion,
 ) -> Result<Trends, UiError> {
-    let grid = timeline_grid(window, backend.bucket_width(), TREND_BUCKETS)
-        .map_err(|e| UiError::field("window", e))?;
+    let grid =
+        timeline_grid(window, bucket, TREND_BUCKETS).map_err(|e| UiError::field("window", e))?;
     let series = backend
         .series(
             caller,

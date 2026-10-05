@@ -14,7 +14,7 @@ pub mod quality;
 pub mod request;
 
 use crosstalk_spec::interfaces::l8_surface::Permission;
-use crosstalk_spec::interfaces::l8_surface::export::ExportFormat;
+use crosstalk_spec::interfaces::l8_surface::export::ExportFormats;
 use topcoat::Result;
 use topcoat::context::{Cx, try_request_context};
 use topcoat::router::content::Form;
@@ -27,10 +27,9 @@ use topcoat::view::{View, component, view};
 use self::jsonl::{Download, download};
 use self::quality::{quality_lines, quality_section};
 use self::request::{DatasetChoice, FORMATS, format_code, format_label, parse};
-use crate::app::{backend, caller, can};
+use crate::app::{backend, caller, can, present};
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL, SECTION, SECTION_TITLE};
 use crate::components::{error_panel, format_time, href, page_header};
-use crate::contract::formats::ExportFormats;
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::FormFields;
@@ -62,7 +61,8 @@ async fn export_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<Download
     let backend = backend(cx);
     let exported = async {
         require(&caller, Permission::View)?;
-        let request = parse(&fields, &state, &caller, backend.export_formats())?;
+        let writes = present(cx).await.map_err(|e| UiError::from(e.clone()))?;
+        let request = parse(&fields, &state, &caller, writes.export_formats.as_slice())?;
         let export = backend.export(&caller, &request).await?;
         download(export).await
     }
@@ -97,11 +97,19 @@ fn show(cx: &Cx, rejected: Rejected) -> topcoat::Error {
 #[component]
 async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> Result<impl View> {
     let caller = caller(cx);
-    let allowed = require(&caller, Permission::View);
+    // The formats the backend writes, from the request's present (which
+    // needs View, like the page).
+    let allowed = match require(&caller, Permission::View) {
+        Ok(()) => present(cx)
+            .await
+            .map(|present| present.export_formats.clone())
+            .map_err(|e| UiError::from(e.clone())),
+        Err(error) => Err(error),
+    };
     let content = can(&caller, Permission::Content);
     let backend = backend(cx);
     let quality = match &allowed {
-        Ok(()) => backend
+        Ok(_) => backend
             .detection_quality(&caller, state.scope.window)
             .await
             .map(|quality| quality_lines(quality.rows()))
@@ -123,7 +131,6 @@ async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> R
             vec![state.scope.topic_version.0]
         }
     };
-    let writes = backend.export_formats();
     let (status, refusal, retained): (Option<StatusCode>, _, _) = match rejected {
         None => (None, None, None),
         Some(Rejected { error, fields }) => (Some(status_of(&error)), Some(error), Some(fields)),
@@ -143,7 +150,7 @@ async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> R
                 (status_of(&error))
                 error_panel(error: &error)
             },
-            Ok(()) => {
+            Ok(writes) => {
                 if let Some(error) = refusal {
                     <div class="mb-4">error_panel(error: &error)</div>
                 }
@@ -163,7 +170,7 @@ async fn export_form(
     window: String,
     versions: Vec<u32>,
     content: bool,
-    writes: &'static [ExportFormat],
+    writes: ExportFormats,
     retained: Option<FormFields>,
 ) -> Result<impl View> {
     let pick = |key: &str| {
@@ -196,7 +203,7 @@ async fn export_form(
     let formats: Vec<(&str, String, bool, bool)> = FORMATS
         .iter()
         .map(|f| {
-            let available = writes.contains(f);
+            let available = writes.offers(*f);
             let label = if available {
                 format_label(*f).to_owned()
             } else {

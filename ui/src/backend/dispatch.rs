@@ -1,7 +1,7 @@
 //! [`AppBackend`] behind every trait the pages use: the spec's `QueryApi`,
-//! `OperatorActions` and `LiveFeed`, the contract gaps `Present` and
-//! `ExportFormats`. Each forwards to the configured backend;
-//! the export rows and live streams are enums over the backends' own.
+//! `OperatorActions` and `LiveFeed`. Each forwards to the configured
+//! backend; the export rows and live streams are enums over the backends'
+//! own. Beside them, [`AppBackend::view_end`]: where a default view ends.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +16,7 @@ use crosstalk_spec::aggregates::edge::{
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo, ProjectionParams};
 use crosstalk_spec::aggregates::quality::DetectionQuality;
-use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrid, SeriesGrouping, TopologySeries};
+use crosstalk_spec::aggregates::series::{SeriesGrid, SeriesGrouping, TopologySeries};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
 use crosstalk_spec::aggregates::watermark::{Watermark, Watermarked};
@@ -35,7 +35,7 @@ use crosstalk_spec::interfaces::l8_surface::channels::{
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{
-    Export, ExportFormat, ExportRequest, ExportStep, ExportStream,
+    Export, ExportRequest, ExportStep, ExportStream,
 };
 use crosstalk_spec::interfaces::l8_surface::lists::{
     AlertRuleFilter, ChannelFilter as SpecChannelFilter, SearchRequest, TopicPage,
@@ -61,8 +61,6 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use super::fixture::{FixtureBackend, export as fixture_export, live as fixture_live};
 use super::world::WorldSurface;
 use super::{AppBackend, Result};
-use crate::contract::formats::ExportFormats;
-use crate::contract::present::Present;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
@@ -258,39 +256,17 @@ impl LiveFeed for AppBackend {
     }
 }
 
-/// Runs `$body` with `$b` bound to the fixture or the world backend
-/// itself, for the UI's own traits and the port-shaped reads.
-macro_rules! on_backend {
-    ($self:expr, $b:ident => $body:expr) => {
-        match $self {
-            AppBackend::Fixture(fixture) => {
-                let $b: &FixtureBackend = fixture;
-                $body
-            }
-            AppBackend::World($b) => $body,
+impl AppBackend {
+    /// Where a default view's window ends, given the present the request
+    /// read: `present.now`, except for a fixture replaying up to a fixed
+    /// end. Not a gateway question: only the fixture replays.
+    pub fn view_end(&self, present: &SpecPresent) -> Timestamp {
+        match self {
+            Self::Fixture(fixture) => fixture.view_end(present),
+            Self::World(_) => present.now,
             #[cfg(feature = "live")]
-            AppBackend::Live(live) => match *live {},
+            Self::Live(live) => match *live {},
         }
-    };
-}
-
-impl Present for AppBackend {
-    fn bucket_width(&self) -> BucketWidth {
-        on_backend!(self, b => b.bucket_width())
-    }
-
-    async fn now(&self, caller: &Caller) -> Result<Timestamp> {
-        on_backend!(self, b => b.now(caller).await)
-    }
-
-    async fn view_end(&self, caller: &Caller) -> Result<Timestamp> {
-        on_backend!(self, b => b.view_end(caller).await)
-    }
-}
-
-impl ExportFormats for AppBackend {
-    fn export_formats(&self) -> &'static [ExportFormat] {
-        on_backend!(self, b => b.export_formats())
     }
 }
 
