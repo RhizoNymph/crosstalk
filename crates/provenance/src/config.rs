@@ -10,7 +10,8 @@
 //! {"winnow": {"k": 32, "w": 16},
 //!  "decode": {"max_depth": 3, "max_layers": 32, "min_encoded_run": 16},
 //!  "index": {"cutoff": 50, "retention_secs": 2592000, "shards": 1, "owned": [0]},
-//!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85}
+//!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85,
+//!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"]}
 //! ```
 
 use std::collections::BTreeSet;
@@ -57,6 +58,53 @@ pub enum ConfigError {
     NoSuchShard { shard: u16, shards: u16 },
     #[error("the semantic threshold must be within 0..=1")]
     Threshold,
+    #[error("a locator argument key must be non-empty")]
+    EmptyLocatorKey,
+}
+
+/// The tool-call argument keys whose string values name the resource a
+/// call acts on (a path, a URL) rather than content the tool writes: such
+/// a value yields no originated span. Only a value directly under one of
+/// these keys is excluded; a URL inside a content value still counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatorKeys(BTreeSet<String>);
+
+/// The default locator keys.
+pub const DEFAULT_LOCATOR_KEYS: [&str; 5] = ["file_path", "path", "notebook_path", "url", "uri"];
+
+impl LocatorKeys {
+    /// Every key in `keys`, each non-empty.
+    pub fn new(keys: impl IntoIterator<Item = String>) -> Result<Self, ConfigError> {
+        let keys: BTreeSet<String> = keys.into_iter().collect();
+        if keys.iter().any(String::is_empty) {
+            return Err(ConfigError::EmptyLocatorKey);
+        }
+        Ok(Self(keys))
+    }
+
+    /// No key is a locator: every string value can yield a span.
+    pub fn none() -> Self {
+        Self(BTreeSet::new())
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.0.contains(key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+}
+
+impl Default for LocatorKeys {
+    fn default() -> Self {
+        Self(
+            DEFAULT_LOCATOR_KEYS
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect(),
+        )
+    }
 }
 
 /// Shingle length `k` and winnow window `w`, checked.
@@ -219,6 +267,7 @@ pub struct ProvenanceConfig {
     index: IndexSettings,
     eviction_interval: Duration,
     semantic_threshold: Similarity,
+    locator_keys: LocatorKeys,
 }
 
 impl ProvenanceConfig {
@@ -239,7 +288,19 @@ impl ProvenanceConfig {
             index,
             eviction_interval,
             semantic_threshold,
+            locator_keys: LocatorKeys::default(),
         })
+    }
+
+    /// The argument keys whose values yield no originated span.
+    pub fn locator_keys(&self) -> &LocatorKeys {
+        &self.locator_keys
+    }
+
+    /// This configuration with other locator keys.
+    pub fn with_locator_keys(mut self, locator_keys: LocatorKeys) -> Self {
+        self.locator_keys = locator_keys;
+        self
     }
 
     pub fn winnow(&self) -> WinnowParams {
@@ -292,6 +353,7 @@ impl Default for ProvenanceConfig {
             decode: DecodeLimits::default(),
             index: IndexSettings::default(),
             eviction_interval: Duration::from_secs(3600),
+            locator_keys: LocatorKeys::default(),
             // Infallible: 0.85 is within Similarity's 0..=1.
             semantic_threshold: Similarity::new(DEFAULT_THRESHOLD)
                 .expect("the default threshold is a similarity"),
@@ -414,6 +476,15 @@ struct RawConfig {
     eviction_interval_secs: u64,
     #[serde(default = "default_threshold")]
     semantic_threshold: f32,
+    #[serde(default = "default_locator_keys")]
+    locator_keys: Vec<String>,
+}
+
+fn default_locator_keys() -> Vec<String> {
+    DEFAULT_LOCATOR_KEYS
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect()
 }
 
 fn default_eviction() -> u64 {
@@ -443,6 +514,7 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
         )?;
         let threshold =
             Similarity::new(raw.semantic_threshold).map_err(|_| ConfigError::Threshold)?;
+        let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         Self::new(
             winnow,
             decode,
@@ -450,6 +522,7 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             Duration::from_secs(raw.eviction_interval_secs),
             threshold,
         )
+        .map(|config| config.with_locator_keys(locator_keys))
     }
 }
 

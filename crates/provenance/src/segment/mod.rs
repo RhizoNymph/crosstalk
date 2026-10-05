@@ -20,7 +20,10 @@
 //!    a stretch is first cut to the string values it covers
 //!    ([`string_values`]), so an originated span never holds a key, a
 //!    quote or the structure, and its view is what the tool wrote
-//!    (`provenance.span.tool-arguments-per-value`). It is kept when it has at least one k-gram
+//!    (`provenance.span.tool-arguments-per-value`). A value directly under
+//!    a locator key (`ProvenanceConfig::locator_keys`: a path or a URL the
+//!    call acts on) is left out entirely (`provenance.span.locator-arguments-excluded`).
+//!    It is kept when it has at least one k-gram
 //!    (shorter text can never be matched).
 //!    None of its k-grams occurs in any input layer, so it shares no
 //!    fingerprint with the inputs (`provenance.span.originated-absent-from-inputs`).
@@ -43,7 +46,8 @@ use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
 pub use self::coverage::{Coverage, MessageKGrams, Occurrence, message_kgrams};
-pub use self::view::{PartKind, TextPart, string_values, text_parts, view};
+pub use self::view::{PartKind, TextPart, keyed_string_values, string_values, text_parts, view};
+use crate::config::LocatorKeys;
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing};
 use crate::text::{MappedText, normalize, trim_range};
@@ -53,6 +57,7 @@ use crate::text::{MappedText, normalize, trim_range};
 pub struct NovelRunSegmenter {
     winnowing: Winnowing,
     pipeline: DecodePipeline,
+    locator_keys: LocatorKeys,
 }
 
 /// A run of consecutive output k-grams found consecutively in one input
@@ -67,11 +72,20 @@ pub struct Run {
 }
 
 impl NovelRunSegmenter {
+    /// A segmenter with the default locator keys.
     pub fn new(winnowing: Winnowing, pipeline: DecodePipeline) -> Self {
         Self {
             winnowing,
             pipeline,
+            locator_keys: LocatorKeys::default(),
         }
+    }
+
+    /// This segmenter with other locator keys: string values directly under
+    /// them yield no originated span.
+    pub fn with_locator_keys(mut self, locator_keys: LocatorKeys) -> Self {
+        self.locator_keys = locator_keys;
+        self
     }
 
     pub fn winnowing(&self) -> &Winnowing {
@@ -156,9 +170,17 @@ impl NovelRunSegmenter {
         }
         let mut novel = gaps(&mut covered, text_len);
         if part.kind == PartKind::ToolArguments
-            && let Some(values) = string_values(&part.text)
+            && let Some(values) = keyed_string_values(&part.text)
         {
-            novel = within(&novel, &values);
+            let content: Vec<(u32, u32)> = values
+                .into_iter()
+                .filter(|(key, _)| {
+                    key.as_deref()
+                        .is_none_or(|key| !self.locator_keys.contains(key))
+                })
+                .map(|(_, range)| range)
+                .collect();
+            novel = within(&novel, &content);
         }
         for (start, end) in novel {
             let Some((start, end)) = trim_range(&part.text, start, end) else {

@@ -132,19 +132,18 @@ fn server_tool_results_get_no_span() {
 
 /// INV-1057 (`provenance.span.tool-arguments-per-value`): originated spans
 /// in tool-call arguments are cut from the decoded string values, so their
-/// text equals what the tool wrote: a `Write {file_path, content}` with a
-/// novel page yields the page as its own span (its view equal to the
-/// content, escapes decoded), the path as another, and no span holds a key,
-/// a quote or the JSON structure.
+/// text equals what the tool wrote: a call with a novel page and a novel
+/// title yields each as its own span (its view equal to the value, escapes
+/// decoded), and no span holds a key, a quote or the JSON structure.
 #[test]
 fn tool_argument_spans_are_cut_per_string_value() {
     let content =
         "# Runbook\n\nBefore any \"rollback\" of the ledger service, drain the amber queue.\n";
-    let path = "/srv/team-wiki/runbooks/ledger-rollback-procedure.md";
+    let title = "Ledger service rollback procedure for every region";
     let call = tool_call(
         "call_1",
-        "Write",
-        &serde_json::json!({ "file_path": path, "content": content, "mode": 420 }),
+        "Publish",
+        &serde_json::json!({ "title": title, "content": content, "mode": 420 }),
     );
     let output = message(assistant(vec![call]));
     let drafts = segmenter().segment(&output, &[]);
@@ -163,13 +162,55 @@ fn tool_argument_spans_are_cut_per_string_value() {
             .into_text()
         })
         .collect();
-    // Canonical JSON orders the keys: `content` before `file_path`.
-    assert_eq!(views, vec![content.to_owned(), path.to_owned()]);
+    // Canonical JSON orders the keys: `content` before `title`.
+    assert_eq!(views, vec![content.to_owned(), title.to_owned()]);
     for draft in &drafts {
         let raw = slice(&output, draft);
-        assert!(!raw.contains("\"file_path\""), "a key in {raw:?}");
+        assert!(!raw.contains("\"title\""), "a key in {raw:?}");
         assert!(!raw.contains("\"content\""), "a key in {raw:?}");
     }
+}
+
+fn views_of(segmenter: &NovelRunSegmenter, arguments: &serde_json::Value) -> Vec<String> {
+    let output = message(assistant(vec![tool_call("call_1", "Write", arguments)]));
+    segmenter
+        .segment(&output, &[])
+        .iter()
+        .map(|draft| {
+            crate::segment::view(
+                &slice(&output, draft),
+                crate::segment::PartKind::ToolArguments,
+            )
+            .into_text()
+        })
+        .collect()
+}
+
+/// INV-1058 (`provenance.span.locator-arguments-excluded`): a string value
+/// directly under a locator key (`file_path`, `path`, `notebook_path`,
+/// `url`, `uri` by default) yields no originated span, while a URL inside a
+/// content value still counts: the e2e-shaped `Write {file_path, content}`
+/// yields exactly one span, the content.
+#[test]
+fn locator_arguments_yield_no_span() {
+    let content = "# Runbook\n\nBefore any rollback, read https://wiki.example.com/runbooks/ledger-rollback-details first.\n";
+    let path = "/srv/team-wiki/runbooks/ledger-rollback-procedure.md";
+    let views = views_of(
+        &segmenter(),
+        &serde_json::json!({ "file_path": path, "content": content }),
+    );
+    assert_eq!(views, vec![content.to_owned()]);
+    for key in crate::config::DEFAULT_LOCATOR_KEYS {
+        let views = views_of(&segmenter(), &serde_json::json!({ key: path }));
+        assert!(views.is_empty(), "{key}: {views:?}");
+    }
+    // Configured away, the path is a span again.
+    let open = segmenter().with_locator_keys(crate::config::LocatorKeys::none());
+    let views = views_of(
+        &open,
+        &serde_json::json!({ "file_path": path, "content": content }),
+    );
+    assert_eq!(views, vec![content.to_owned(), path.to_owned()]);
 }
 
 /// A value too short for one k-gram yields no span; text that is not JSON

@@ -309,6 +309,13 @@ they become originated spans, so a span's view equals the decoded value
 the tool received; a `Write {file_path, content}` yields the page and the
 path as two spans. A value with no k-gram (shorter than k) yields none.
 Arguments that are not JSON are segmented whole. Relayed runs are not cut.
+A string value directly under a locator key (`ProvenanceConfig::locator_keys`,
+`LocatorKeys`; default `file_path`, `path`, `notebook_path`, `url`, `uri`,
+JSON `locator_keys`) yields no originated span at all (INV-1058,
+`provenance.span.locator-arguments-excluded`): it names the resource the
+call acts on, not content the tool wrote. A URL inside a content value
+still counts. So `Write {file_path, content}` yields one span, the
+content.
 
 `MemoryProvenanceStore` also implements the spec's `SpanIndex` over the
 spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
