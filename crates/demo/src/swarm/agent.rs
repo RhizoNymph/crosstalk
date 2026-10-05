@@ -83,10 +83,11 @@ impl Agent {
         let system = format!(
             "You are {name}, a research agent on a team of {} agents. Your focus is {}. \
              The team shares a wiki at {}/pages/<name>: read pages with {HTTP_TOOL} GET before \
-             relying on them and record what you learn with {HTTP_TOOL} PUT. Be concise.",
+             relying on them and record what you learn with {HTTP_TOOL} PUT. Be concise.\n\n{}",
             config.agents,
             focus.label,
-            config.wiki.url()
+            config.wiki.url(),
+            config.scenario.marker()
         );
         Self {
             index,
@@ -164,6 +165,14 @@ pub async fn run(
     tracing::debug!(agent = %agent.name, "agent starting");
     while !*stop.borrow() {
         let mut conversation = Conversation::new(session_id(&mut rng), config.claude_code_shape);
+        let _ = events
+            .send(Event::ConversationStarted {
+                agent: agent.name.clone(),
+                key_group: agent.key_group,
+                session: conversation.session().to_owned(),
+                started_at_unix_ms: shared.clock.now().unix_ms,
+            })
+            .await;
         let prompts = config.turns.get().draw(&mut rng);
         let mut completed = true;
         while u64::from(conversation.prompts()) < prompts {

@@ -278,6 +278,8 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     assert_eq!(header["keys"], 3);
     assert_eq!(header["agents_per_key"], 2);
     assert_eq!(header["claude_code_shape"], run.config.claude_code_shape);
+    assert_eq!(header["scenario"], run.config.scenario.name());
+    assert_eq!(run.report.scenario, run.config.scenario);
     assert_eq!(header["gateway_url"], run.config.gateway.url());
     assert_eq!(header["wiki_url"], run.config.wiki.url());
     let started = header["started_at_unix_ms"].as_u64().expect("start");
@@ -314,7 +316,44 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     let mut kinds = BTreeSet::new();
     let mut skipped_failure = false;
     let mut by_kind: BTreeMap<String, u64> = BTreeMap::new();
-    for row in &rows[4..] {
+    // One `session` row per conversation the gateway saw, naming the agent
+    // the request's metadata names.
+    let cluster_of: BTreeMap<&str, &Value> = clusters
+        .iter()
+        .flat_map(|c| {
+            c["agents"]
+                .as_array()
+                .expect("agents")
+                .iter()
+                .map(move |a| (a.as_str().expect("name"), &c["key_group"]))
+        })
+        .collect();
+    let mut session_agents: BTreeMap<String, String> = BTreeMap::new();
+    for row in rows[4..].iter().filter(|r| r["kind"] == "session") {
+        assert_eq!(row["world"], world);
+        let session = row["session"].as_str().expect("session").to_owned();
+        let agent = row["agent"].as_str().expect("agent").to_owned();
+        assert_eq!(&row["key_group"], cluster_of[agent.as_str()]);
+        assert!(row["started_at_unix_ms"].as_u64().expect("start") >= started);
+        assert!(
+            session_agents.insert(session, agent).is_none(),
+            "one session row per conversation"
+        );
+    }
+    for (session, requests) in &run.sessions {
+        let agent = session_agents
+            .get(session)
+            .unwrap_or_else(|| panic!("no session row for {session}"));
+        for request in requests {
+            let sent: Value = serde_json::from_slice(&request.body).expect("request json");
+            assert_eq!(
+                sent["metadata"]["user_id"],
+                format!("{agent}_session_{session}")
+            );
+        }
+    }
+    assert_eq!(session_agents.len() as u64, run.report.sessions);
+    for row in rows[4..].iter().filter(|r| r["kind"] != "session") {
         let kind = row["kind"].as_str().expect("kind").to_owned();
         *by_kind.entry(kind.clone()).or_default() += 1;
         kinds.insert(kind.clone());

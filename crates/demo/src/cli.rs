@@ -10,6 +10,7 @@ use std::str::FromStr;
 use crate::anthropic::sse::Split;
 use crate::http::BaseUrl;
 use crate::knobs::{Fraction, PositiveSpan, Span, parse_duration};
+use crate::protocol::Scenario;
 use crate::swarm::config::{SwarmConfig, TaskMix};
 use crate::upstream::UpstreamConfig;
 use crate::upstream::generate::GenConfig;
@@ -27,7 +28,8 @@ usage:
                        [--read-fraction F] [--pages N] [--topics N] [--duration D]
                        [--ramp D] [--seed N] [--stream-fraction F] [--model NAME]
                        [--max-tokens N] [--idle-timeout D] [--grace D]
-                       [--ground-truth PATH] [--json] [--claude-code-shape]
+                       [--scenario headline|boilerplate] [--ground-truth PATH]
+                       [--json] [--claude-code-shape]
   crosstalk-demo healthcheck --url URL
   crosstalk-demo help
 
@@ -38,7 +40,9 @@ words 40..160, first byte 300..1500 ms, stream 1000..10000 ms; wiki
 http://127.0.0.1:8080/anthropic and http://127.0.0.1:8090, 150 agents, a key
 each, think 2000..8000 ms, 4..12 prompts per conversation, write 0.25, read
 0.35, 40 pages, 8 topics, 5m, ramp 20s, seed 42, all streaming, model
-claude-opus-5-5, max tokens 4096, idle timeout 120s, grace 30s.
+claude-opus-5-5, max tokens 4096, idle timeout 120s, grace 30s, scenario
+headline (high-entropy prose; boilerplate: templated prose that unrelated
+agents share).
 ";
 
 /// A parsed command line.
@@ -243,6 +247,7 @@ fn swarm(args: &[String]) -> Result<Command, UsageError> {
             "idle-timeout",
             "grace",
             "ground-truth",
+            "scenario",
         ],
         &["json", "claude-code-shape"],
     )?;
@@ -289,6 +294,7 @@ fn swarm(args: &[String]) -> Result<Command, UsageError> {
         duration: flags.duration("duration", d.duration)?,
         ramp: flags.duration("ramp", d.ramp)?,
         seed: flags.get("seed", d.seed)?,
+        scenario: flags.get::<Scenario>("scenario", d.scenario)?,
         claude_code_shape: flags.switch("claude-code-shape"),
         stream_fraction: flags.get("stream-fraction", d.stream_fraction)?,
         model,
