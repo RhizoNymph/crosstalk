@@ -23,7 +23,7 @@ use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ResourceId, SpanId};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
-use crosstalk_surface::export::SpecExportSource;
+use crosstalk_surface::export::{SpecExportSource, StoredTransmissions};
 use crosstalk_surface::nodes::NodeCache;
 use crosstalk_surface::{EvidenceRecords, RecordReadError, SurfaceStores};
 use crosstalk_transport::blob::MemoryBlobStore;
@@ -52,8 +52,13 @@ impl ChannelDirectory for Directory {
 pub type Edges = InMemoryEdgeStore<Env<InMemoryTopicCatalog, Directory, NodeCache>>;
 pub type Alerts = InMemoryAlertStore<FakeEmbedder, Directory>;
 pub type Search = InMemorySearchIndex<Directory>;
-pub type Export =
-    SpecExportSource<Edges, InMemoryProjectionStore, InMemoryTopicCatalog, FakeEmbedder>;
+pub type Export = SpecExportSource<
+    Edges,
+    InMemoryProjectionStore,
+    InMemoryTopicCatalog,
+    FakeEmbedder,
+    StoredTransmissions<MemoryVerdicts, Directory>,
+>;
 
 /// Spans, accesses and resources by id, which no reference store keeps:
 /// whoever seeds the world adds them here, so the evidence page can be read.

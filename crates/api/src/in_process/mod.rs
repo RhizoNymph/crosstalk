@@ -56,7 +56,7 @@ use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, CallerError, OperatorLoadError, OperatorStore, RequestIdentity,
 };
 use crosstalk_spec::support::{Blake3, Clock, Similarity};
-use crosstalk_surface::export::SpecExportSource;
+use crosstalk_surface::export::{SpecExportSource, StoredTransmissions};
 use crosstalk_surface::live::{FeedClosed, FeedHandle, FeedWriter};
 use crosstalk_surface::nodes::{NodeCache, NodeFeedError, NodeFeeder};
 use crosstalk_surface::{Surface, SurfaceConfig};
@@ -231,7 +231,7 @@ where
             },
             Env {
                 topics: catalog.clone(),
-                directory,
+                directory: directory.clone(),
                 nodes: nodes.clone(),
             },
             outbox.clone(),
@@ -243,7 +243,11 @@ where
             projections.clone(),
             catalog.clone(),
             embedder.clone(),
-        );
+        )
+        .with_transmissions(StoredTransmissions::new(
+            transmissions.clone(),
+            directory.clone(),
+        ));
         let stores = MemoryStores {
             agents,
             channels,

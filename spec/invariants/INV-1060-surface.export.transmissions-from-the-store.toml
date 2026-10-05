@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.export.transmissions-from-the-store"
+statement = "SpecExportSource with StoredTransmissions exports, for a Transmissions request without content columns, exactly the confirmed, classified or aggregated stored transmissions whose Confirmed::at lies in the settled window, that cross agents and that the filter admits, each as TransmissionRow::of under the store's directory, current verdict and the header's topic version; a request with content columns is refused."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+The transmissions export is what eval and the node bench read detection
+from. Listing through TransmissionStore::list and building each row as
+transmissions_by_id does keeps the export and the UI in agreement about
+every row.
+"""
+
+[evidence]
+integration = "crosstalk_e2e::smoke::serve::serve_all_exports_and_shows_the_confirmed_transmission_over_http"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }
