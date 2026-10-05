@@ -1519,7 +1519,8 @@ Features Index:
       typed JSON configuration of tool name and argument paths to a
       resource and an op). Every locator is canonical, so agents touching one thing meet
       on one resource: lexical paths, relative paths against the stated
-      or tracked working directory (Opaque without one), normalized URLs,
+      or tracked working directory (Opaque without one), normalized URLs
+      (Opaque, keyed by the normalized raw text, when IDNA refuses the host),
       folded MCP keys, MediaWiki pages as their canonical article URL
       whatever URL or API reaches them, a forge repository as the spec's
       canonical Locator::Repository from every remote, web, API and Pages

@@ -1,0 +1,23 @@
+[invariant]
+id = "flow.resource.invalid-host-url-opaque"
+statement = "A scheme://authority URL whose host fails IDNA or host parsing (such as http://xn--/path) yields a Locator::Opaque on the tool \"<url>\" keyed by the URL text trimmed, with its scheme and host part lower-cased and its user info and fragment dropped; it never yields a Locator::Url, and spellings that differ only in that normalization share one ResourceId."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+The url crate refuses hosts IDNA cannot process (an `xn--` label that is not
+valid punycode). Dropping such an access would hide a real read or write:
+two agents that both reach the same invalid URL still share whatever is
+behind it. An Opaque locator built from a deterministic normalization of
+the raw text keeps them on one resource without pretending the text is a
+parsed URL; credentials in user info are dropped as they are for valid
+URLs. Other parse errors (no scheme, a bad port) stay errors.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::resource::tests::invalid_host_url_is_opaque"
+property = "crosstalk_flow::extract::resource::tests::equivalent_urls_share_resource_id"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }
