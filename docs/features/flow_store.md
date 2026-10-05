@@ -17,8 +17,8 @@ model-tested against the `crosstalk-memory` reference stores.
   `AgentDirectory` agents are resolved through at every read.
 - `PgTransmissionStore<D>`: `TransmissionStore` (save, transmission) and
   `TransmissionVerdicts` (set, log, quality).
-- The access store: accesses (with a `write_outcome` column for the eval
-  spec's `WriteOutcome`) recorded through `ChannelTraffic::record_access`
+- The access store: accesses (a write's `WriteOutcome` also in the
+  `write_outcome` column) recorded through `ChannelTraffic::record_access`
   and read by `resource_use`; indexed by id for the coming
   `AccessStore::accesses`.
 - Declarations, promotion, supersession and policy history.

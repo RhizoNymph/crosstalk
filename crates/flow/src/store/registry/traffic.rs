@@ -10,7 +10,7 @@
 //! channel and one `ChannelDiscovered` is staged
 //! (`flow.registry.at-most-one-channel-per-resource`).
 
-use crosstalk_spec::derived::flow::access::{Access, AccessKind};
+use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, WriteOutcome};
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::channel::policy::Policy;
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, Seed};
@@ -100,9 +100,14 @@ pub(crate) async fn record_access(conn: &mut PgConnection, access: Access) -> Tr
         AccessKind::Write => "write",
         AccessKind::Read => "read",
     };
-    // The spec's Access carries no write outcome yet; the column is filled
-    // once it does.
-    let write_outcome: Option<&str> = None;
+    let write_outcome: Option<&str> = match &access.op {
+        AccessOp::Write { outcome, .. } => Some(match outcome {
+            WriteOutcome::Delivered => "delivered",
+            WriteOutcome::Rejected => "rejected",
+            WriteOutcome::Unknown => "unknown",
+        }),
+        AccessOp::Read { .. } => None,
+    };
     sqlx::query(
         "INSERT INTO flow.accesses (id, resource_id, agent, at, kind, write_outcome, access) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
