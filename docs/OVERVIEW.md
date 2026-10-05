@@ -127,7 +127,9 @@ Overview:
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
-      escape-folded normalization) and L5 flow detection (resource
+      escape-folded normalization, boilerplate rules: template skeletons,
+      fragments the origin was given by its own upstream, and unobserved
+      copies without a rare token are not matched) and L5 flow detection (resource
       extraction with write outcomes, channel registry with promotion and
       supersession, in which a channel exists only once a transmission
       between different agents goes through it, write/read correlation
@@ -1234,7 +1236,9 @@ Features Index:
       prompt and the output (k-grams, plus exact hashes of short token
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
-      under stricter length and frequency rules, boilerplate Common) and
+      under stricter length and rare-token rules, boilerplate Common),
+      drops short matches that are template skeletons or that the origin
+      was given token for token in its own request, and
       picks carrier, kind, read range and matched bytes; the index holds
       originated spans and, with forwarding on (off by default), forwarded
       ones (relayed from the agent's own input, indexed under the

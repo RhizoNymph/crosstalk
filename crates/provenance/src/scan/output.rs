@@ -10,8 +10,9 @@
 //! (`provenance.match.reader-output-detected`,
 //! `provenance.match.reader-output-relayed-span`) when the stretch passes
 //! the stricter reader-output rules (`provenance.match.reader-output-strict`:
-//! a length floor, and a supporting fingerprint seen in few texts). The
-//! uncovered rest is
+//! a length floor and a hit on its source; and, by default, a token rare
+//! relative to the source's holders, `provenance.match.reader-output-rare-token`).
+//! The uncovered rest is
 //! resolved again, since its own fingerprints are a different selection.
 //! A candidate with no hits is `Common` when every one of its fingerprints
 //! is above the cutoff at the exchange's time
@@ -40,6 +41,8 @@ use super::hits::{extents_by_span, merge};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
+use crate::config::RareToken;
+use crate::fingerprint::token;
 use crate::segment::{Coverage, TextPart, run_bytes, runs, text_parts, view};
 use crate::span::span_id;
 use crate::store::ProvenanceStore;
@@ -318,13 +321,17 @@ impl Scanner {
     /// agent's span passes the stricter `ReaderOutput` rules
     /// (`provenance.match.reader-output-strict`): one contiguous run of at
     /// least `ReaderOutputRules::min_chars` normalized characters holding a
-    /// hit on its source. Such a run is distinctive whatever its spread, so
-    /// a broadcast copied by many agents keeps matching its first writer.
-    /// The stretch stays relayed either way; only the match is withheld.
+    /// hit on its source, and, when `ReaderOutputRules::rare_token` is
+    /// `Required`, a rare token (`Scanner::holds_rare_token`,
+    /// `provenance.match.reader-output-rare-token`). The spread rule never
+    /// applies, so a broadcast copied by many agents keeps matching its
+    /// first writer. The stretch stays relayed either way; only the match
+    /// is withheld.
     async fn reader_output_admitted<I, S, M, L>(
         &self,
-        session: &Session<'_, I, S, M, L>,
+        session: &mut Session<'_, I, S, M, L>,
         part: &TextPart<'_>,
+        source: SpanId,
         (start, end): (u32, u32),
         support: &[Fingerprint],
     ) -> Result<bool, ScanError>
@@ -345,7 +352,59 @@ impl Scanner {
             tracing::debug!(exchange = ?session.exchange, chars, "reader-output stretch holds no hit on its source");
             return Ok(false);
         }
+        if rules.rare_token() == RareToken::Required
+            && !self
+                .holds_rare_token(session, part, source, (start, end))
+                .await?
+        {
+            tracing::debug!(exchange = ?session.exchange, chars, "reader-output stretch holds no rare token");
+            return Ok(false);
+        }
         Ok(true)
+    }
+
+    /// Whether the stretch `[start, end)` of `part` holds a whole token
+    /// (`fingerprint::token`) seen in at most `SpreadRule::rare_bound`
+    /// texts for the source's holders: its originations, its copies in
+    /// other outputs and the reads matched on it (its `Propagated` hits),
+    /// each of which observed the token once
+    /// (`provenance.match.reader-output-rare-token`).
+    async fn holds_rare_token<I, S, M, L>(
+        &self,
+        session: &mut Session<'_, I, S, M, L>,
+        part: &TextPart<'_>,
+        source: SpanId,
+        (start, end): (u32, u32),
+    ) -> Result<bool, ScanError>
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        let reads = match session.live.get(source).map(|record| &record.span.state) {
+            Some(SpanState::Propagated { hits, .. }) => {
+                usize::try_from(hits.get()).unwrap_or(usize::MAX)
+            }
+            _ => 0,
+        };
+        let holders = session
+            .live
+            .originations(source)
+            .len()
+            .saturating_add(reads);
+        let bound = self.spread().rare_bound(holders);
+        let tokens = token::whole_tokens_in(
+            &part.text,
+            usize::try_from(start).unwrap_or(usize::MAX),
+            usize::try_from(end).unwrap_or(usize::MAX),
+        );
+        for token in tokens {
+            if session.token_frequency(token).await? <= bound {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The piece `[start, end)` relayed from `source`, with a `ReaderOutput`
@@ -372,7 +431,7 @@ impl Scanner {
         let mut found = None;
         if record.span.agent != session.reader
             && self
-                .reader_output_admitted(session, part, (start, end), support)
+                .reader_output_admitted(session, part, source, (start, end), support)
                 .await?
         {
             let read = slice(&part.text, start, end).unwrap_or_default();

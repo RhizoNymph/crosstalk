@@ -22,6 +22,13 @@
 //! `matched_bytes` counts the covered bytes, at most the origin span's
 //! length for an exact match (`provenance.match.bytes-within-span`). Hits
 //! on the reader's own spans are skipped (`provenance.match.self-hit-skipped`).
+//!
+//! A candidate made only of short runs (each under
+//! `SpreadRule::distinctive_chars`) is dropped whole when it is a template
+//! skeleton (`provenance.match.skeleton-dropped`), or when each of its runs
+//! repeats, token for token, a part its origin span's agent was given in
+//! its own request (`provenance.match.inherited-fragment-dropped`,
+//! `inherited`).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -136,7 +143,7 @@ impl Scanner {
     /// Whether a span's hit extents in a layer (layer byte offsets) hold a
     /// contiguous run of at least `SpreadRule::distinctive_chars` normalized
     /// characters: such a match is never dropped as a skeleton.
-    fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
+    pub(crate) fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
         merge(extents.to_vec()).iter().any(|(start, end)| {
             let slice = layer
                 .get(
@@ -251,6 +258,13 @@ impl Scanner {
                 if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
                 {
                     tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
+                    continue;
+                }
+                if self
+                    .inherited_fragment(session, layer.text.text(), span, &extents)
+                    .await?
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, "inherited fragment dropped");
                     continue;
                 }
                 let merged = merge(
