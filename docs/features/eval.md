@@ -844,6 +844,9 @@ one gateway agent tied to two truth agents (`detected_agent_conflict`).
 
 ### Bench run
 
+On the compose deployment, `bash deploy/run.sh bench` runs these steps
+end to end ([bench.md](bench.md)). By hand:
+
 ```text
 # 1. a fresh gateway data dir, then the swarm against it
 swarm --ground-truth runs/1/truth.jsonl …        # crates/demo, through the gateway
