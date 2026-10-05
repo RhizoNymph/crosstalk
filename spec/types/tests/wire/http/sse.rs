@@ -105,6 +105,27 @@ fn the_end_event_carries_the_reason_and_no_id() {
     }
 }
 
+/// A server never ends a stream with the client-only `unreachable`: the
+/// end it sends is `LiveEnd::served`, so `Unreachable` goes out as
+/// `shutting_down`, and every other end as itself.
+#[test]
+fn the_client_only_end_is_never_sent() {
+    for end in [
+        LiveEnd::Lagged,
+        LiveEnd::SessionEnded,
+        LiveEnd::ShuttingDown,
+        LiveEnd::Unreachable,
+    ] {
+        let served = end.served();
+        assert!(!served.is_client_only(), "{end:?}");
+        assert_eq!(served == end, !end.is_client_only(), "{end:?}");
+        let json = serde_json::to_string(&served).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(end_frame(end), format!("event: end\ndata: {json}\n\n"));
+        assert!(!end_frame(end).contains("unreachable"), "{end:?}");
+    }
+    assert_eq!(LiveEnd::Unreachable.served(), LiveEnd::ShuttingDown);
+}
+
 #[test]
 fn the_stream_is_uncached_event_stream() {
     assert_eq!(EVENT_STREAM, "text/event-stream");

@@ -148,13 +148,17 @@ fn cursor_reasons_ends_and_resumes_golden() {
 
     fn end(end: LiveEnd) -> LiveEnd {
         match end {
-            LiveEnd::Lagged | LiveEnd::SessionEnded | LiveEnd::ShuttingDown => end,
+            LiveEnd::Lagged
+            | LiveEnd::SessionEnded
+            | LiveEnd::ShuttingDown
+            | LiveEnd::Unreachable => end,
         }
     }
     let ends = [
         LiveEnd::Lagged,
         LiveEnd::SessionEnded,
         LiveEnd::ShuttingDown,
+        LiveEnd::Unreachable,
     ]
     .map(end);
     assert_golden(AREA, "live_ends", &ends.to_vec());

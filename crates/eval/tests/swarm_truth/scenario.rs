@@ -153,16 +153,17 @@ fn the_fp_rate_gate_is_a_ceiling_per_1k_exchanges() {
                 value: rate,
                 bound: 0.0
             },
-            // No headline rows in a boilerplate run: none of its false
-            // positives count.
-            &GateStatus::Pass { value: 0.0 },
+            // A headline gate says nothing about a boilerplate run.
+            &GateStatus::OtherDataset,
         ]
     );
 }
 
 #[test]
 fn the_fp_rate_gate_skips_a_run_without_exchanges() {
-    let gates = Gates::parse(&fp_gate("demo-swarm/boilerplate", 0.0), "fixture").expect("parses");
+    // No dataset named: the exchange count alone decides.
+    let text = "[[gate]]\nname = \"fp\"\nmetric = \"fp_per_1k\"\nmax = 0.0\n";
+    let gates = Gates::parse(text, "fixture").expect("parses");
     let empty = Scorer::new(0).finish();
     assert_eq!(empty.totals.exchanges, 0);
     let outcomes = gates.evaluate(&empty);
@@ -183,4 +184,35 @@ fn the_swarms_header_line_decodes_in_its_key_order() {
     let truth = read_rows(&[header]).expect("decodes");
     assert_eq!(truth.header.scenario(), Scenario::Boilerplate);
     assert_eq!(truth.header.agents, 5);
+}
+
+#[test]
+fn a_headline_run_skips_the_boilerplate_gates() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gates.toml");
+    let gates = Gates::load(&path).expect("the shipped gates load");
+    let outcome = scored("scenario-other-dataset", None, &gates);
+    assert_eq!(outcome.report.dataset.as_str(), "demo-swarm/headline");
+    for gate in &outcome.report.gates {
+        if gate.name.starts_with("demo-swarm/boilerplate") {
+            assert_eq!(gate.status, GateStatus::OtherDataset, "{}", gate.name);
+        } else {
+            assert_ne!(gate.status, GateStatus::OtherDataset, "{}", gate.name);
+        }
+    }
+    let text = crosstalk_eval::report::table::render(&outcome.report);
+    let line = text
+        .lines()
+        .find(|line| line.contains("demo-swarm/boilerplate"))
+        .expect("the boilerplate gate is listed");
+    assert!(line.contains("skip  (other dataset)"), "{line}");
+    assert!(!line.contains("pass"), "{line}");
+}
+
+#[test]
+fn a_gate_of_another_dataset_never_passes_on_an_empty_count() {
+    let text = "[[gate]]\nname = \"salt violations\"\ndetector = \"gateway-export\"\ndataset = \"salt\"\nmetric = \"violations\"\nmax = 0\n";
+    let gates = Gates::parse(text, "fixture").expect("parses");
+    let outcome = scored("scenario-other-violations", None, &gates);
+    assert_eq!(outcome.report.gates[0].status, GateStatus::OtherDataset);
+    assert!(!outcome.report.gates_failed());
 }

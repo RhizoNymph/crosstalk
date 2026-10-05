@@ -12,7 +12,7 @@ use super::super::harness::assert_golden;
 use super::AREA;
 use crate::interfaces::l8_surface::http::{ErrorStatus, Status};
 use crate::interfaces::l8_surface::{
-    ActionError, ConflictKind, InputError, Permission, QueryError,
+    ActionError, ConflictKind, InputError, Permission, QueryError, UnavailableKind,
 };
 use crate::wire::{DecodeError, DecodeErrorKind};
 
@@ -24,11 +24,13 @@ struct StatusRow<E> {
     error: E,
 }
 
-/// Every query error: each variant, with `Conflict` and `InvalidInput`
-/// once per conflict and input error.
+/// Every query error a server answers: each variant but the client-only
+/// `Unavailable`, with `Conflict` and `InvalidInput` once per conflict and
+/// input error.
 fn every_query_error_expanded() -> Vec<QueryError> {
     let mut errors: Vec<QueryError> = every_query_error()
         .into_iter()
+        .filter(|error| !error.is_client_only())
         .filter(|error| !matches!(error, QueryError::Conflict(_) | QueryError::InvalidInput(_)))
         .collect();
     errors.extend(every_conflict().into_iter().map(QueryError::Conflict));
@@ -43,6 +45,7 @@ fn every_query_error_expanded() -> Vec<QueryError> {
 fn every_action_error_expanded() -> Vec<ActionError> {
     let mut errors: Vec<ActionError> = every_action_error()
         .into_iter()
+        .filter(|error| !error.is_client_only())
         .filter(|error| {
             !matches!(
                 error,
@@ -169,5 +172,72 @@ fn status_codes_are_distinct() {
     assert_eq!(codes.len(), Status::ALL.len());
     for error in every_query_error_expanded() {
         assert!(error.status().code() >= 400, "{error:?}");
+    }
+}
+
+/// The client-only `Unavailable` is never served: what a server answers
+/// for every error (`served`) is not client-only, keeps the error's status,
+/// and is the error itself unless it was `Unavailable`, which is `Store`
+/// with the same reason. So the status tables, which list what a server
+/// answers, hold no `Unavailable`.
+#[test]
+fn a_server_never_serves_a_client_only_error() {
+    let mut queries = every_query_error_expanded();
+    let mut actions = every_action_error_expanded();
+    for kind in UnavailableKind::ALL {
+        let reason = format!("{kind:?}");
+        queries.push(QueryError::Unavailable {
+            kind,
+            reason: reason.clone(),
+        });
+        actions.push(ActionError::Unavailable {
+            kind,
+            reason: reason.clone(),
+        });
+        assert_eq!(
+            QueryError::Unavailable {
+                kind,
+                reason: reason.clone()
+            }
+            .served(),
+            QueryError::Store {
+                reason: reason.clone()
+            }
+        );
+        assert_eq!(
+            ActionError::Unavailable {
+                kind,
+                reason: reason.clone()
+            }
+            .served(),
+            ActionError::Store { reason }
+        );
+    }
+    for error in queries {
+        let served = error.clone().served();
+        assert!(!served.is_client_only(), "{error:?}");
+        assert_eq!(served.status(), error.status(), "{error:?}");
+        assert_eq!(
+            served.status() == Status::ServiceUnavailable,
+            matches!(served, QueryError::Store { .. }),
+            "{error:?}"
+        );
+        if !error.is_client_only() {
+            assert_eq!(served, error);
+        }
+    }
+    for error in actions {
+        let served = error.clone().served();
+        assert!(!served.is_client_only(), "{error:?}");
+        assert_eq!(served.status(), error.status(), "{error:?}");
+        if !error.is_client_only() {
+            assert_eq!(served, error);
+        }
+    }
+    for row in rows(every_query_error_expanded()) {
+        assert!(!row.error.is_client_only(), "{row:?}");
+    }
+    for row in rows(every_action_error_expanded()) {
+        assert!(!row.error.is_client_only(), "{row:?}");
     }
 }

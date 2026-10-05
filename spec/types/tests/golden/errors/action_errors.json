@@ -6,6 +6,13 @@
     }
   },
   {
+    "type": "unavailable",
+    "data": {
+      "kind": "unauthenticated",
+      "reason": "no caller: AuthError { reason: Expired }"
+    }
+  },
+  {
     "type": "not_found"
   },
   {

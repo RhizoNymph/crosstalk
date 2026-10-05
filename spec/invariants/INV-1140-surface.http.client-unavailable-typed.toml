@@ -1,0 +1,36 @@
+[invariant]
+id = "surface.http.client-unavailable-typed"
+statement = "Only a client produces QueryError::Unavailable, ActionError::Unavailable and LiveEnd::Unreachable: the HTTP client returns a call that never reached a surface that answered as Unavailable with the UnavailableKind of its cause (a 401 Unauthenticated, a failed connect or send Transport, a failed body read Body, no response in time Timeout) and a reason that is the ClientError's text with its prefix (no caller: , sending the request: , reading the body: , no response within ), and every other failure as Store; a server answers every error and live end as its served() form, which is never client-only and keeps the error's status, so no response body or SSE end event ever carries one, and the client refuses one that does."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A UI must tell "sign in again" and "the gateway is unreachable" apart
+from a store failure, and matching on the reason text breaks with every
+rewording. A typed kind makes the distinction structured. The variants
+mean the exchange failed before any surface decided anything, so a
+server answering one would be lying about where the failure happened:
+the server serves it as Store (same reason, same 503) and ShuttingDown,
+and the client treats an unavailable body or unreachable end as a
+response the binding does not describe. The reason keeps the old prefix
+so existing readers of the text keep working while they move to the kind.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_client::tests::errors::each_failure_kind_is_its_typed_unavailable",
+    "crosstalk_client::tests::errors::a_401_is_unauthenticated",
+    "crosstalk_client::tests::errors::transport_failures_are_unavailable_errors",
+    "crosstalk_client::tests::errors::a_response_off_the_binding_stays_store",
+    "crosstalk_client::tests::errors::an_unavailable_body_from_a_server_is_not_trusted",
+    "crosstalk_client::tests::live::reconnects_give_up_after_the_policy",
+    "crosstalk_client::tests::live::an_unreachable_end_from_the_server_is_a_cut",
+    "crosstalk_spec::tests::wire::http::status::a_server_never_serves_a_client_only_error",
+    "crosstalk_spec::tests::wire::http::sse::the_client_only_end_is_never_sent",
+    "crosstalk_spec::tests::audit::a_client_only_action_error_audits_as_its_served_store",
+    "crosstalk_api::http::integration::errors::a_client_only_error_is_never_answered",
+    "crosstalk_api::http::integration::live::a_client_only_end_is_never_sent",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

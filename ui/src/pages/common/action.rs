@@ -108,7 +108,7 @@ pub fn status_of(error: &UiError) -> StatusCode {
                 StatusCode::NOT_FOUND
             }
             QueryError::Conflict(_) | QueryError::VersionNotRetained { .. } => StatusCode::CONFLICT,
-            QueryError::Store { .. } => StatusCode::BAD_GATEWAY,
+            QueryError::Store { .. } | QueryError::Unavailable { .. } => StatusCode::BAD_GATEWAY,
         },
     }
 }

@@ -8,6 +8,15 @@
 //! All four enums are responses, adjacently tagged on the wire
 //! ([`crate::wire`]): `{"type": "not_found"}`,
 //! `{"type": "conflict", "data": {"type": "rule_stale", "data": {"rule": ..}}}`.
+//!
+//! **Client-only variants.** `QueryError::Unavailable` and
+//! `ActionError::Unavailable` are produced only by a client of the surface
+//! (`crosstalk-client`): the call never reached a surface that answered it,
+//! and [`UnavailableKind`] says why. A surface never returns one, and a
+//! server never answers one: it answers [`QueryError::served`] (or
+//! [`ActionError::served`]) of what it was handed, which turns a
+//! client-only variant into `Store` with the same reason
+//! (`surface.http.client-only-errors-never-served`).
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +43,15 @@ use super::export::ExportFormat;
 pub enum QueryError {
     /// A store or bus failure; retrying may succeed.
     Store {
+        reason: String,
+    },
+    /// Client-only: the call never reached a surface that answered it, for
+    /// the reason `kind` names; retrying may succeed (after signing in
+    /// again, for `Unauthenticated`). `reason` is the client's description
+    /// of the cause. A surface never returns it and a server never answers
+    /// it ([`QueryError::served`]).
+    Unavailable {
+        kind: UnavailableKind,
         reason: String,
     },
     NotFound,
@@ -71,11 +89,93 @@ pub enum QueryError {
     deny_unknown_fields
 )]
 pub enum ActionError {
-    Store { reason: String },
+    Store {
+        reason: String,
+    },
+    /// Client-only, as [`QueryError::Unavailable`]: the action never reached
+    /// a surface, so it had no effect and was not audited.
+    Unavailable {
+        kind: UnavailableKind,
+        reason: String,
+    },
     NotFound,
-    Forbidden { missing: Permission },
+    Forbidden {
+        missing: Permission,
+    },
     Conflict(ConflictKind),
     InvalidInput(InputError),
+}
+
+/// Why a client's call never reached a surface that answered it. Each kind
+/// is one way the HTTP exchange failed before the surface decided anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnavailableKind {
+    /// The server answered `401`: the request had no caller (no
+    /// credential, an invalid one, or an expired session). Sign in again.
+    Unauthenticated,
+    /// Connecting, sending the request or reading the response head
+    /// failed.
+    Transport,
+    /// Reading the response body failed: the connection was cut or reset.
+    Body,
+    /// No response, or no bytes of a streamed body, within the client's
+    /// configured time.
+    Timeout,
+}
+
+impl UnavailableKind {
+    pub const ALL: [Self; 4] = [
+        Self::Unauthenticated,
+        Self::Transport,
+        Self::Body,
+        Self::Timeout,
+    ];
+}
+
+impl QueryError {
+    /// What a server answers for this error: the error itself, except that
+    /// a client-only `Unavailable` (which a surface never returns, so a
+    /// server can only be handed one by a client it relays to) becomes
+    /// `Store` with the same reason. Never `Unavailable`, and always of the
+    /// same `ErrorStatus` (503).
+    pub fn served(self) -> Self {
+        match self {
+            Self::Unavailable { reason, .. } => Self::Store { reason },
+            Self::Store { .. }
+            | Self::NotFound
+            | Self::Forbidden { .. }
+            | Self::VersionNotRetained { .. }
+            | Self::Conflict(_)
+            | Self::InvalidInput(_)
+            | Self::InvalidCursor
+            | Self::ProjectionNotRetained { .. } => self,
+        }
+    }
+
+    /// Whether only a client produces this error ([`QueryError::served`]).
+    pub fn is_client_only(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+    }
+}
+
+impl ActionError {
+    /// As [`QueryError::served`]: never `Unavailable`.
+    pub fn served(self) -> Self {
+        match self {
+            Self::Unavailable { reason, .. } => Self::Store { reason },
+            Self::Store { .. }
+            | Self::NotFound
+            | Self::Forbidden { .. }
+            | Self::Conflict(_)
+            | Self::InvalidInput(_) => self,
+        }
+    }
+
+    /// Whether only a client produces this error ([`ActionError::served`]).
+    pub fn is_client_only(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+    }
 }
 
 /// A request that is valid on its own but not in the current state.
@@ -219,6 +319,7 @@ impl From<ActionError> for QueryError {
     fn from(error: ActionError) -> Self {
         match error {
             ActionError::Store { reason } => Self::Store { reason },
+            ActionError::Unavailable { kind, reason } => Self::Unavailable { kind, reason },
             ActionError::NotFound => Self::NotFound,
             ActionError::Forbidden { missing } => Self::Forbidden { missing },
             ActionError::Conflict(kind) => Self::Conflict(kind),

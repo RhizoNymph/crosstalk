@@ -16,8 +16,9 @@
 //!
 //! When the stream ends (`LiveEnd`) a last event without an id is sent,
 //! `event: end` with `{"reason": "lagged" \| "session-ended" \|
-//! "shutting-down"}`, and the response closes; the browser reconnects
-//! with its last id.
+//! "shutting-down" \| "unreachable"}`, and the response closes; the
+//! browser reconnects with its last id. `unreachable` is the http
+//! backend's client giving up on the gateway (`LiveEnd::Unreachable`).
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -144,6 +145,7 @@ pub fn ended(end: LiveEnd) -> Event {
         LiveEnd::Lagged => "lagged",
         LiveEnd::SessionEnded => "session-ended",
         LiveEnd::ShuttingDown => "shutting-down",
+        LiveEnd::Unreachable => "unreachable",
     };
     Event::new()
         .event("end")

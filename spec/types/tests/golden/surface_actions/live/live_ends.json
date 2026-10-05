@@ -1,5 +1,6 @@
 [
   "lagged",
   "session_ended",
-  "shutting_down"
+  "shutting_down",
+  "unreachable"
 ]

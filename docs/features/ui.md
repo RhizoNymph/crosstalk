@@ -267,11 +267,15 @@ backend::http::start
 Over HTTP every failure reaches the pages as the spec's error and renders
 in the UI's existing error states, never a panic:
 
-- `crosstalk-client` folds what the spec's errors have no variant for (a
-  transport failure, a timeout, a `401`, a response the binding does not
-  describe) into `QueryError::Store { reason }` / `ActionError::Store`,
-  the reason naming the cause ("no caller: ..." for a `401`). A `403` is
-  the server's `Forbidden { missing }`.
+- `crosstalk-client` returns a call that never reached the gateway (a
+  `401`, a transport failure, a cut body, a timeout) as the client-only
+  `QueryError::Unavailable { kind, reason }` / `ActionError::Unavailable`,
+  `kind` an `UnavailableKind` (`Unauthenticated`, `Transport`, `Body`,
+  `Timeout`) and the reason naming the cause with its old prefix ("no
+  caller: ..." for a `401`). A response the binding does not describe is
+  still `Store { reason }`. A `403` is the server's `Forbidden { missing }`.
+  For now the UI treats `Unavailable` exactly as `Store` (same text,
+  statuses and log level); pages can switch to matching on `kind`.
 - A page whose present cannot be read (every page reads it first) goes
   through `pages::view::page_defaults_error`:
   - **the gateway page** when the http backend could not reach the
@@ -305,7 +309,7 @@ in the UI's existing error states, never a panic:
   - `/_gateway` asked for directly is a 404.
   - Each rendering is logged at error with `failure`, `url` and `path`.
 - `backend::http::log` logs each failed call with `backend = "http"`,
-  `method` and `error`: `Store` at error, `Forbidden` at warn, answers
+  `method` and `error`: `Store` and `Unavailable` at error, `Forbidden` at warn, answers
   about the request (not found, invalid input, conflicts) at debug. A live
   stream that ends (the client gave up reconnecting, or the token was
   refused) is logged at warn with its `LiveEnd`.
@@ -314,7 +318,8 @@ in the UI's existing error states, never a panic:
   is cut, reconnects with `Last-Event-ID` (the client's `ReconnectPolicy`:
   8 tries, 250 ms doubling to 10 s), so the gateway replays what the cut
   lost. A `401`/`403` on reconnect ends it with `SessionEnded`, running
-  out of tries with `ShuttingDown`; `/data/live` then sends its `end`
+  out of tries with the client-only `Unreachable` (`"unreachable"` to the
+  browser); `/data/live` then sends its `end`
   event and the browser's `EventSource` reconnects to the UI with its
   last id, which the UI passes on as `Resume`.
 
@@ -918,7 +923,7 @@ GET /data/live (View; Last-Event-ID ─▶ Resume::from_last_event_id)
   `resync` with `{"reason": "expired" | "other-epoch" | "ahead-of-head" |
   "unreadable"}`, `heartbeat` with `{}`. When the stream ends (`LiveEnd`)
   a last `event: end` with `{"reason": "lagged" | "session-ended" |
-  "shutting-down"}` (no id) is sent and the response closes; the browser's
+  "shutting-down" | "unreachable"}` (no id) is sent and the response closes; the browser's
   `EventSource` reconnects with its last id. Built on Topcoat's `sse`
   feature (`Sse`, `Event`, `last_event_id`), which takes a
   `futures_core::Stream` (hence the `futures-core` dependency, the

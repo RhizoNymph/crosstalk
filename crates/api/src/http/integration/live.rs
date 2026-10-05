@@ -125,6 +125,22 @@ async fn live_resumes_from_last_event_id_or_cursor() {
     assert!(fake.untouched());
 }
 
+/// The server never sends the client-only `unreachable`: a stream the
+/// surface ended with it (no surface does) ends with `shutting_down`, the
+/// end it is served as.
+#[tokio::test]
+async fn a_client_only_end_is_never_sent() {
+    let fake = feed(LiveEnd::Unreachable);
+    let reply = send(&server(&fake), live("/live", None, FULL)).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let body = String::from_utf8(reply.body.to_vec()).expect("UTF-8");
+    assert!(!body.contains("unreachable"), "{body}");
+    let last = body.trim_end().split("\n\n").last().expect("the end event");
+    let reason: LiveEnd =
+        serde_json::from_str(last.trim_start_matches("event: end\ndata: ")).expect("JSON");
+    assert_eq!(reason, LiveEnd::ShuttingDown);
+}
+
 /// Each item is one event (`event`, `id`, `data`), exactly `event_frame`'s
 /// bytes; the stream's end is one `end` event with no `id`, and then the
 /// body ends.

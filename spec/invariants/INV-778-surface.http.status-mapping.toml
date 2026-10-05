@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.http.status-mapping"
-statement = "ErrorStatus::status is total over QueryError, ActionError (every ConflictKind and InputError matched with no wildcard) and AuthError, gives each error the status its golden table records, gives an ActionError the status of QueryError::from of it, and every error response carries the error's wire JSON as its body."
+statement = "ErrorStatus::status is total over QueryError, ActionError (every ConflictKind and InputError matched with no wildcard) and AuthError, gives each error a server answers the status its golden table records (the client-only Unavailable, which a server never answers, is 503, the status of the Store it is served as), gives an ActionError the status of QueryError::from of it, and every error response carries the error's wire JSON as its body."
 kind = "domain"
 property = "postcondition"
 requires = ["type", "unit", "integration"]

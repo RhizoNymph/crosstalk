@@ -272,6 +272,12 @@ impl Score {
         sum
     }
 
+    /// Whether the run scored `dataset`: any row or violation of it.
+    pub fn scored(&self, dataset: &DatasetId) -> bool {
+        self.rows.iter().any(|row| row.key.dataset == *dataset)
+            || self.violations.iter().any(|row| row.dataset == *dataset)
+    }
+
     /// Negative-control violations matching `dataset` (any when `None`).
     pub fn violation_count(
         &self,
