@@ -580,7 +580,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "bytes",
+ "crosstalk-api",
+ "crosstalk-conformance",
  "crosstalk-spec",
+ "crosstalk-world",
  "http-body-util",
  "hyper",
  "hyper-util",

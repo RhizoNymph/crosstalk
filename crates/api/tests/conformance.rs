@@ -10,7 +10,7 @@ use crosstalk_conformance::harness::{
     ExpectedFailure, Harness, Provision, ProvisionError, Provisioned,
 };
 use crosstalk_conformance::routed::{Route, Routed};
-use crosstalk_conformance::world::{WorldReads, bind};
+use crosstalk_conformance::world::{SURFACE_FAILURES, WorldReads, bind};
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, PermissionSet, QueryApi};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -105,65 +105,9 @@ impl Harness for InProcessHarness {
     }
 
     fn expected_failures(&self) -> &[ExpectedFailure] {
-        EXPECTED_FAILURES
+        SURFACE_FAILURES
     }
 }
-
-/// What the in-process surface over the seeded world is known to get
-/// wrong or lack; see `docs/features/conformance.md`, "Findings".
-pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
-    ExpectedFailure {
-        test: "graph::the_channel_centred_view_shares_the_topology_edges",
-        reason: ACCESS_EDGES,
-    },
-    ExpectedFailure {
-        test: "graph::channel_graph_draws_only_listed_channels",
-        reason: ACCESS_EDGES,
-    },
-    ExpectedFailure {
-        test: "graph::route_and_topic_filters_and_their_conjunction",
-        reason: TOPIC_FILTER,
-    },
-    ExpectedFailure {
-        test: "scenarios::dropped_bodies",
-        reason: DROPPED_BODY,
-    },
-    ExpectedFailure {
-        test: "scenarios::everything",
-        reason: DROPPED_BODY,
-    },
-    ExpectedFailure {
-        test: "projections::every_fit_is_a_new_job_with_a_reproducible_frame",
-        reason: NO_FITTER,
-    },
-    ExpectedFailure {
-        test: "projections::samples_honour_the_window_and_filter",
-        reason: NO_FITTER,
-    },
-    ExpectedFailure {
-        test: "projections::a_narrower_fit_keeps_what_it_admits_of_a_wider_sample",
-        reason: NO_FITTER,
-    },
-    ExpectedFailure {
-        test: "projections::too_few_points_fail_the_job",
-        reason: NO_FITTER,
-    },
-    ExpectedFailure {
-        test: "projections::jobs_list_newest_first",
-        reason: NO_FITTER,
-    },
-];
-
-const ACCESS_EDGES: &str = "channel_topology draws no access edges for a discovered channel's \
-    resources (accessed before the channel existed), so the hijacked wiki has none and the \
-    unconfirmed S3 channel is not drawn (INV-860, INV-861)";
-const TOPIC_FILTER: &str = "a topic filter keeps transmissions whose transmissions_by_id rows are \
-    Unassigned under the pinned version: the edge store's topic buckets and the rows' topics \
-    disagree (INV-345, INV-400)";
-const DROPPED_BODY: &str = "transmission_evidence for a transmission whose body retention dropped \
-    fails with Store(\"span missing\") instead of answering BodyDropped on that side (INV-698)";
-const NO_FITTER: &str = "no projection fitter runs in the in-process composition: a fit_projection \
-    job never leaves the queue";
 
 /// `[anchor - 8 days, anchor + one bucket)`: the anchor is on a bucket
 /// boundary, so both ends are.
