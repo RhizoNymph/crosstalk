@@ -1,4 +1,4 @@
-# Regression gates for `ct-eval run`. A run fails (exit 2) when a gated
+# Regression gates for `ct-eval run` and `ct-eval swarm`. A run fails (exit 2) when a gated
 # metric falls below its `min` (or above its `max`). A gate whose rows hold
 # no data in a run is skipped, so small `--limit` runs only check what they
 # reach.
@@ -258,3 +258,57 @@ dataset = "swe_splice"
 route = "channel"
 metric = "precision"
 min = 0.99
+
+# ---------------------------------------------------------------------------
+# Demo swarm benchmark (`ct-eval swarm`, detector `gateway-export`). A run
+# scores under `demo-swarm/<scenario>`, the truth header's `scenario`
+# (missing: headline).
+#
+# Headline: a little below the first live bench (2026-10-05,
+# docs/features/eval.md "Swarm benchmark"): channel / tool_result / exact
+# recall 1.000 (58 / 58), precision 0.951. Rereads must not be reported at
+# all (the first bench had 9; L4's reread dedup removes them).
+#
+# Overall precision (0.175) is not gated: its false positives are
+# template-phrase ReaderOutput false positives (mostly 34–46-byte
+# unobserved/reader_output template matches), pending the L4 ReaderOutput
+# floor and more entropy in the swarm's generator.
+
+[[gate]]
+name = "demo-swarm/headline: wiki pages read through tool results are found"
+detector = "gateway-export"
+dataset = "demo-swarm/headline"
+route = "channel"
+carrier = "tool_result"
+class = "exact"
+metric = "recall"
+min = 0.95
+
+[[gate]]
+name = "demo-swarm/headline: exact matches in wiki tool results are deliveries"
+detector = "gateway-export"
+dataset = "demo-swarm/headline"
+route = "channel"
+carrier = "tool_result"
+class = "exact"
+metric = "precision"
+min = 0.90
+
+[[gate]]
+name = "demo-swarm/headline: no reread is reported as a transmission"
+detector = "gateway-export"
+dataset = "demo-swarm/headline"
+metric = "violations"
+reason = "reread"
+max = 0
+
+# Boilerplate: agents write template-heavy text, so this bench measures the
+# background false-positive rate. PLACEHOLDER, loose on purpose: calibrate
+# after L4 match-quality lands, from a measured boilerplate run.
+
+[[gate]]
+name = "demo-swarm/boilerplate: false positives per 1k exchanges stay bounded"
+detector = "gateway-export"
+dataset = "demo-swarm/boilerplate"
+metric = "fp_per_1k"
+max = 10000.0

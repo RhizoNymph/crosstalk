@@ -29,9 +29,8 @@ and produces no score. See [Pending](#pending) for what is still needed.
 - Detection itself, the L8 API and the flow config. Those are the gateway's
   (see [Pending](#pending)); the bench only consumes them.
 - Scoring logic. It is `ct-eval swarm`, unchanged.
-- Gates for `demo-swarm`. `crates/eval/gates.toml` has none yet, so a run
-  reports `gates: none apply to demo-swarm` and passes. Add them there once
-  there is a baseline.
+- Gates for `demo-swarm/<scenario>`. They live in `crates/eval/gates.toml`
+  (`detector = "gateway-export"`; see eval.md, Swarm benchmark).
 - Comparing runs, trends and dashboards.
 - Pruning the exchange log and blobs. They accumulate across runs (below).
 - Multi-machine deployments. The bench assumes the gateway, the swarm and
@@ -261,5 +260,6 @@ like the `DEMO_*` variables they are not in `.env.example`.
 - **Lag gauge.** Waiting on the watermark is exact for exports but coarse
   (5-minute buckets); a per-consumer lag gauge is on the gateway's
   observability list.
-- **Gates.** `crates/eval/gates.toml` has no `demo-swarm` gates yet; they
-  are set from the first real run on node0, so until then every run passes.
+- **Gates.** `crates/eval/gates.toml` gates `demo-swarm/headline` from the
+  first real run on node0; the `demo-swarm/boilerplate` false-positive
+  ceiling is a placeholder until a measured run.

@@ -32,24 +32,25 @@ use serde::Serialize;
 pub use diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, RowKind, Side};
 pub use resolve::{AgentIndex, ResolveCounts, Resolved, resolve};
 
-use crate::keys::DatasetId;
 use crate::pipeline::Unscored;
 use crate::predict::Prediction;
-use crate::report::{Gates, Report};
+use crate::report::{GateDetector, Gates, Report};
 use crate::score::{Score, Scorer};
 use bodies::{BlobBodies, Bodies, Cached};
 use detected::{Exported, read_evidence, read_export};
 use exchange_log::{ExchangeLog, Sessions};
 use truth_file::TruthFile;
 
-/// The dataset id of every swarm-benchmark row.
-pub const DATASET: &str = "demo-swarm";
+/// The prefix of every swarm-benchmark dataset id: a run scores under
+/// `demo-swarm/<scenario>` ([`schema::Scenario::dataset`]).
+pub const DATASET_PREFIX: &str = "demo-swarm";
 
 /// The model name the world's agents are declared with (the swarm's
 /// agents talk to an Anthropic-shaped upstream).
 pub const MODEL: &str = "anthropic/claude";
 
-/// The detector name reports carry.
+/// The detector name reports carry; gates name it the same way
+/// ([`GateDetector::GatewayExport`]).
 pub const DETECTOR: &str = "gateway-export";
 
 #[derive(Debug, thiserror::Error)]
@@ -135,8 +136,8 @@ pub struct Detections<'a> {
     pub evidence: &'a [TransmissionEvidence],
 }
 
-/// Scores the gateway's detections against the resolved truth.
-/// `truth_name` names the truth file in labels' source references.
+/// Scores the gateway's detections against the resolved truth, checking
+/// the gates tuned on [`DETECTOR`] only. `truth_name` names the truth file in labels' source references.
 pub fn score<B: Bodies>(
     truth: &TruthFile,
     truth_name: &str,
@@ -160,10 +161,16 @@ pub fn score<B: Bodies>(
     );
     let mut scorer = Scorer::new(examples);
     scorer.add_world(&resolved.world, &predictions);
-    let score: Score = scorer.finish();
-    let outcomes = gates.evaluate(&score);
+    let mut score: Score = scorer.finish();
+    // The world holds labels over the log's exchange ids, not the
+    // exchanges themselves, so the scorer counts none: its traffic is the
+    // exchanges of the truth's sessions.
+    score.totals.exchanges = resolved.counts.exchanges;
+    let outcomes = gates
+        .for_detector(GateDetector::GatewayExport)
+        .evaluate(&score);
     let report = Report::new(
-        DatasetId::new(DATASET),
+        truth.header.scenario().dataset(),
         DETECTOR,
         score,
         outcomes,
