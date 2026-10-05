@@ -32,7 +32,8 @@ as dev-dependencies.
   escape-aware normalization and decoding), the gateway pipeline itself
   (`Pipeline::ingest`, unscored: it has no detection consumers), and the
   `LiveBackend` seam that scores the gateway's live composition
-  (`crosstalk_gateway::live::Live`, L3–L7) once it merges.
+  (`crosstalk_gateway::live::Live`, L3–L7) through its adapter,
+  `detect::live::gateway`.
 - **Reports and gates.** A table, a JSON report (with `overall`, an
   `out_of_reach` summary and an `access_only` recall kept apart from
   it), and regression gates in `gates.toml`, found by `GateSearch`
@@ -136,8 +137,8 @@ most `IdBatch::MAX`. That one code path serves every detector:
 
 `LiveDetector<B: LiveBackend>` scores the gateway's live composition. The
 seam is two traits with exactly the operations the composition offers
-(agreed with the implementation session; `Live` is WIP on
-`feat/live-composition` and not merged):
+(agreed with the implementation session before `Live` merged; the
+differences are under "The adapter" below):
 
 ```rust
 pub trait LiveBackend {
@@ -206,24 +207,62 @@ Each prediction carries its transmission's `QualityMatch`, so the scorer's
 transmission rows are the spec's `DetectionQuality` rows (tested), with
 verdicts the truth implies (`score::quality`).
 
-`gateway_backend()` returns the real adapter once `Live` merges; until
-then it returns `BackendError::Unavailable`, and `ct-eval run --detector
-live` prints "live backend unavailable" and exits 1. The adapter is
-written, wiring only, in `src/detect/live/gateway.rs.in`, which no `mod`
-names, so it stays out of the build: it does not compile against the
-unmerged API. Its `AGREED` markers name what it expects that
-`feat/live-composition` (40cb34c) does not have yet:
+### The adapter (`detect::live::gateway`)
 
-| Agreed | On the branch |
-| --- | --- |
-| `Live::settle(until)` | absent; `Live::shutdown(deadline)` only drains |
-| a `FlowConfig` for `Live` (short timing for eval) | `crosstalk_flow::consumer::FlowConfig` exists; `LiveConfig` has no flow field, and L5 is not wired (`wire_l5` is a TODO) |
-| `Live::ingest(exchange, at)` | `live.pipeline().ingest(exchange, at)` |
-| `Live::stores() -> LiveStores` | `stores() -> &LiveStores` (`MemoryStores<LiveBlobs>`): `agents`, `channels` (`MemoryChannels`: `AccessStore`, `ChannelReads`, `resource_use`), `transmissions` (`MemoryVerdicts`) |
-| `TransmissionStore::list(TransmissionQuery { window, states, channel }, page)` (P0.10) | absent: `TransmissionStore` has `save` and `transmission(id)` only |
-| `SpanIndex::spans` on the live stores | absent: spans reach `MemoryEvidence` through `EvidenceRecords::span` one at a time, and the evidence feeder uses `NoSpans` |
-| an L3 read of an exchange's agent and conversation | absent from the spec and the branch |
-| a fresh `Live` per world, built with `Live::start(LiveConfig)` | `Live::start` exists; the clock is the `surface.clock` (`ManualClock` in e2e), set through e2e's `options::in_process` |
+`gateway_backend()` returns `GatewayBackend`, the `LiveBackend` over the
+gateway's merged `crosstalk_gateway::live::Live`; `ct-eval run --detector
+live` runs it. It is wiring only:
+
+```text
+build      clock = ManualClock::at(start)
+           Live::start(LiveConfig::new(LiveClock::Manual(clock), flow_config(settings.timing), settings.seed))
+             memory blobs, Ticking::OnSettle, ProvenanceConfig::default() (k 32, w 16, cutoff 50)
+ingest     clock.set(at) (forward only); live.pipeline().ingest(exchange, at)
+settle     live.settle(until) -> Settled { at, passes }      logged at debug
+read       live.stores().transmissions.list(TransmissionQuery { window, states: None, channel: None }, page)
+             every page, PageSize::MAX
+           live.layers().provenance        SpanIndex::spans (MemoryProvenanceStore)
+           live.stores().channels          AccessStore; RegistryResources over all time for channels
+           live.layers().conversations     ExchangePlacements::placement, one exchange at a time
+shutdown   live.shutdown(now + 5 s) -> LiveDrained                logged at debug
+```
+
+`flow_config` turns `LiveSettings::timing` into L5's `FlowConfig`
+(milliseconds), with one shard, so the correlator sees inputs in their
+order, and a 1 s `tick_ms` that `Ticking::OnSettle` never uses.
+
+How the merged API differs from what the seam was written against, and
+what the eval does about it:
+
+| Agreed | Merged | In the eval |
+| --- | --- | --- |
+| `Live::settle(until)` | `Live::settle(&self, until) -> Result<Settled, SettleError>` | the `Settled` is logged; a `SettleError` fails the world (`BackendError::Settle`) |
+| a `FlowConfig` on `LiveConfig` | `LiveConfig::new(LiveClock, FlowConfig, seed)`, surface defaults, `Ticking::OnSettle` | `gateway::flow_config` |
+| `Live::ingest(exchange, at)` | `live.pipeline().ingest(exchange, at)`; the clock is the `ManualClock` inside `LiveClock::Manual` | the adapter keeps a clone and moves it to `at` first |
+| `SpanIndex` on the live stores | `live.layers().provenance` (`MemoryProvenanceStore`): only originated spans (`Originated`, `Indexed`, `Propagated`, `Expired`); relayed and common spans are absent | `LiveWorld::Spans = MemoryProvenanceStore` |
+| an L3 read of an exchange's agent and conversation | `ExchangePlacements::placement(exchange) -> Option<Placement { agent, conversation }>` on `live.layers().conversations`, one exchange per call | `attribution` keeps its batch shape and loops; an exchange never threaded is absent |
+| `TransmissionStore::list` | as agreed | as written |
+| `BackendError::Unavailable`, the `Unavailable` backend | not needed | removed; `gateway_backend()` cannot fail |
+
+The eval-side traits (`LiveBackend`, `LiveWorld`) did not change shape.
+
+**Ingest does not yield.** `Pipeline::ingest` publishes to the in-process
+bus without suspending, and the eval drives a current-thread runtime, so
+every exchange of a world is captured before any stage runs; the stages
+handle them all inside `settle`, with the clock already at `until`. The
+order they see is the publish order, so runs are reproducible (two runs
+give byte-identical reports and predictions,
+`tests/live_gateway.rs`), but stages that read the clock (L3's and L4's id
+generators, L5's `now`) read the settle time, not the exchange's.
+Provenance eviction happens once, at the settle tick: a world is never
+evicted mid-replay.
+
+**The correlation window is corpus time.** `LiveSettings::short` keeps
+the agreed 60 s correlation window, but the corpus clock steps one
+`compose` major (1,000 s) per call on SALT, the SWE corpora and splices, so
+a write and a read two calls apart never co-access under it. `ct-eval run
+--correlation-window S` (and `--evidence-window`, `--suspected-ttl`)
+override the windows; splices need about a day (`86400`) to be reachable.
 
 ## Files
 
@@ -259,8 +298,8 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
 | `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
-| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings`, `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `Unavailable`, `gateway_backend`, `all_time` |
-| `src/detect/live/gateway.rs.in` | the `Live` adapter, out of the build until `Live` merges | `GatewayBackend`, `GatewayWorld` |
+| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
+| `src/detect/live/gateway.rs` | the `LiveBackend` over `crosstalk_gateway::live::Live` | `GatewayBackend`, `GatewayWorld`, `flow_config` |
 | `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
@@ -275,7 +314,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -307,7 +346,13 @@ discarded only, not in overall)") and in `report.json`, never added to
 access-only.
 
 - A label is found when any prediction aligns with it. Several predictions
-  aligned with one label are each correct.
+  aligned with one label are each correct. One prediction aligned with
+  several labels (a match whose read range covers two adjacent labelled
+  texts of one sender, as L4 reports AgentDojo's injection slots) finds
+  every one of them, and is itself counted once, as correct, in the first
+  one's row (`Judge::aligned`). Until 2026-10-05 it found only the first;
+  reference baselines measured before then undercount by that much
+  (wiki `--demo` 0.975 → 1.000).
 - A prediction that aligns with nothing is unjudged when an exemption
   covers it (`exempts`: same reader and reader exchange, overlapping read
   location; the sender is not compared).
@@ -540,7 +585,13 @@ gateway's own.
 The CLI prints which one it used (`gates: PATH (--gates | CT_EVAL_GATES |
 installed | crate)`) or `no gates` on stderr. A missing default (2–4) is
 never an error, and falls through to the next; only an explicit
-`--gates` that does not exist is (`GateError::Missing`). There are no
+`--gates` that does not exist is (`GateError::Missing`).
+
+Each gate checks one detector's runs: `detector = "live"` (or
+`"pipeline"`), and a gate that names none is the reference matcher's
+(`GateDetector`, `Gates::for_detector`). `ct-eval run` evaluates only the
+gates of the detector it ran, so the reference baselines never fail a live
+run and the reverse. There are no
 demo-swarm gates yet: they wait for a calibrated first live run.
 
 ## How to add a converter
