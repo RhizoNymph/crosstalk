@@ -103,7 +103,7 @@ pub fn render(report: &Report) -> String {
     if access.expected_access > 0 {
         let _ = writeln!(
             out,
-            "access-only labels (expect a suspected transmission, INV-963; not in overall): {} ({} / {})\n",
+            "access-only labels (expect a suspected transmission; not in overall): {} ({} / {})\n",
             rate(access.access_recall),
             access.found_access,
             access.expected_access

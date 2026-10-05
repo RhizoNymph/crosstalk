@@ -52,17 +52,17 @@ pub struct WindowStats {
     pub chat_labels: u64,
     /// Deliveries whose reader call came after the horizon.
     pub chat_late: u64,
+    /// Content labels: a writer's typed text in a reader's output, through
+    /// one resource.
     pub repo_labels: u64,
-    /// Repository labels whose write and read both have an `http_request`
-    /// equivalent: the only ones L5's `HttpTool` extractor could pair.
-    pub repo_labels_http_visible: u64,
-    /// Repository labels a Bash extractor alone could pair (a git or forge
-    /// CLI command on either side).
-    pub repo_labels_bash_only: u64,
-    /// Repository labels by `<write verb> -> <read verb>`.
-    pub repo_labels_by_verbs: BTreeMap<String, u64>,
-    /// Pairs whose read output holds none of the write's payload.
+    /// Access-only labels: a `git push` and a read of the repository.
+    pub repo_access_only_labels: u64,
+    /// Labels by `<content|access_only> <resource kind>`.
+    pub repo_labels_by_kind: BTreeMap<String, u64>,
+    /// Content pairs whose read output holds none of the write's text.
     pub repo_co_access: u64,
+    /// Access-only pairs whose read printed nothing to place a label on.
+    pub repo_access_only_empty: u64,
     pub repo_cross_day: u64,
     pub repo_no_next_call: u64,
     pub labels_by_need: BTreeMap<String, u64>,

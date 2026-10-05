@@ -22,9 +22,12 @@
 //! from the speaker's call that sent it (the turn whose
 //! `send_message_back_to_chat` carried exactly the content).
 //!
-//! **Repository labels** (Heuristic): see [`super::repo`]. Both accesses of
-//! a pair must fall in the day: a pair across days has its write in another
-//! world and is counted, not labelled.
+//! **Repository labels** (Heuristic): see [`super::repo`]: content labels
+//! where a writer's typed text reaches a reader through one resource, and
+//! access-only labels (`Expectation::AccessOnly`) where a `git push` and a
+//! read of the repository are a co-access only. Both accesses of a pair
+//! must fall in the day: a pair across days has its write in another world
+//! and is counted, not labelled.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -39,7 +42,7 @@ use super::super::time::{Day, parse_timestamp};
 use super::super::{AiVillageError, DATASET};
 use super::calls::{self, Call, Origin};
 use super::prompt::{self, ChatLine};
-use super::repo::payload_line;
+use super::repo::{Link, payload_line};
 use super::{Shared, WindowStats};
 use crate::corpus::{
     Coverage, Driven, ExchangeDraft, Fidelity, HashedMessage, World, WorldBuilder,
@@ -47,8 +50,8 @@ use crate::corpus::{
 use crate::keys::{AgentKey, DatasetId, SourceRef, WorldKey};
 use crate::location;
 use crate::truth::{
-    CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, RouteExpectation, Tier,
-    TransmissionLabel,
+    CarrierKind, Expectation, ExpectedAccess, ExpectedContent, ExpectedTransmission, MatchNeed,
+    RouteExpectation, Tier, TransmissionLabel,
 };
 
 /// A chat message is labelled at a reader call at most four hours later.
@@ -378,18 +381,6 @@ impl Labels<'_> {
                 stats.repo_no_next_call += 1;
                 continue;
             };
-            let Some(result) = results.get(&(reader.clone(), *read_index)) else {
-                stats.repo_co_access += 1;
-                continue;
-            };
-            let Ok(text) = result.message().part_text(0) else {
-                stats.repo_co_access += 1;
-                continue;
-            };
-            let Some((line, start, end)) = payload_line(&write.access.payload, &text) else {
-                stats.repo_co_access += 1;
-                continue;
-            };
             let (Some(from), Some(to), Some(sender), Some(reader_exchange), Some(writer_call)) = (
                 self.keys.get(writer),
                 self.keys.get(reader),
@@ -399,45 +390,99 @@ impl Labels<'_> {
             ) else {
                 continue;
             };
-            let (Ok(start), Ok(end)) = (u32::try_from(start), u32::try_from(end)) else {
+            let Some(text) = results
+                .get(&(reader.clone(), *read_index))
+                .and_then(|result| Some((result, result.message().part_text(0).ok()?)))
+            else {
+                stats.repo_co_access += 1;
                 continue;
             };
-            let at = location::in_message(result.message(), 0, start, end)?;
-            let needs = need(writer_call.message.message(), &line);
-            let tier = needs.tier(Tier::Heuristic);
-            stats.count_need(&needs);
-            stats.repo_labels += 1;
-            if write.access.http_visible() && read.access.http_visible() {
-                stats.repo_labels_http_visible += 1;
-            } else {
-                stats.repo_labels_bash_only += 1;
+            let (result, output) = text;
+            let source = SourceRef::new(
+                Table::ComputerUseTurns.file_name(),
+                format!(
+                    "/{}#write={}&access={}",
+                    read.turn,
+                    write.turn,
+                    read.access.label()
+                ),
+            );
+            let route = RouteExpectation::Channel {
+                resource: read.access.resource.clone(),
+            };
+            let kind = read.access.kind.as_str();
+            match pair.link {
+                Link::AccessOnly => {
+                    // The whole output: where a suspected transmission
+                    // places the read.
+                    let Ok(end) = u32::try_from(output.len()) else {
+                        continue;
+                    };
+                    if end == 0 {
+                        stats.repo_access_only_empty += 1;
+                        continue;
+                    }
+                    let at = location::in_message(result.message(), 0, 0, end)?;
+                    stats.repo_access_only_labels += 1;
+                    *stats
+                        .repo_labels_by_kind
+                        .entry(format!("access_only {kind}"))
+                        .or_default() += 1;
+                    builder.expect(Expectation::AccessOnly(ExpectedAccess::new(
+                        TransmissionLabel {
+                            from: from.clone(),
+                            to: to.clone(),
+                            sender_exchange: Some(*sender),
+                            reader_exchange: *reader_exchange,
+                            route,
+                            carrier: CarrierKind::ToolResult,
+                            content: ExpectedContent {
+                                text: output.into_owned(),
+                                at,
+                            },
+                            needs: MatchNeed::Exact,
+                            tier: Tier::Heuristic,
+                            source,
+                        },
+                    )?));
+                }
+                Link::Content => {
+                    let Some((line, start, end)) = write
+                        .access
+                        .payload()
+                        .and_then(|payload| payload_line(payload, &output))
+                    else {
+                        stats.repo_co_access += 1;
+                        continue;
+                    };
+                    let (Ok(start), Ok(end)) = (u32::try_from(start), u32::try_from(end)) else {
+                        continue;
+                    };
+                    let at = location::in_message(result.message(), 0, start, end)?;
+                    let needs = need(writer_call.message.message(), &line);
+                    let tier = needs.tier(Tier::Heuristic);
+                    stats.count_need(&needs);
+                    stats.repo_labels += 1;
+                    *stats
+                        .repo_labels_by_kind
+                        .entry(format!("content {kind}"))
+                        .or_default() += 1;
+                    builder.expect(Expectation::Transmission(ExpectedTransmission::new(
+                        TransmissionLabel {
+                            from: from.clone(),
+                            to: to.clone(),
+                            sender_exchange: Some(*sender),
+                            reader_exchange: *reader_exchange,
+                            route,
+                            carrier: CarrierKind::ToolResult,
+                            content: ExpectedContent { text: line, at },
+                            needs,
+                            tier,
+                            source,
+                        },
+                    )?));
+                }
             }
-            *stats
-                .repo_labels_by_verbs
-                .entry(format!("{} -> {}", write.access.verb, read.access.verb))
-                .or_default() += 1;
-            builder.expect(Expectation::Transmission(ExpectedTransmission::new(
-                TransmissionLabel {
-                    from: from.clone(),
-                    to: to.clone(),
-                    sender_exchange: Some(*sender),
-                    reader_exchange: *reader_exchange,
-                    route: RouteExpectation::Channel {
-                        resource: read.access.resource.clone(),
-                    },
-                    carrier: CarrierKind::ToolResult,
-                    content: ExpectedContent { text: line, at },
-                    needs,
-                    tier,
-                    source: SourceRef::new(
-                        Table::ComputerUseTurns.file_name(),
-                        format!(
-                            "/{}#write={}&verb={}",
-                            read.turn, write.turn, read.access.verb
-                        ),
-                    ),
-                },
-            )?));
         }
         Ok(())
     }

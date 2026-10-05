@@ -5,10 +5,9 @@
 //! - a [`ExpectedTransmission`]: one agent's text must be found in another
 //!   agent's input at a given reader exchange and location;
 //! - an [`ExpectedAccess`]: the same, through a channel, but one the
-//!   detector must only suspect: the sender never wrote the resource the
-//!   reader read it from, so its content is a shared upstream source that
-//!   stays Suspected and is never confirmed (INV-963,
-//!   `flow.route.shared-upstream-stays-suspected`);
+//!   detector can only suspect: a co-access with no content to confirm it
+//!   (a write that carries no spans, such as a `git push`; or content the
+//!   sender never wrote to the resource, INV-963);
 //! - a [`NegativeControl`]: a pair, exchange or location where a detector
 //!   must **not** report a transmission (a rejected send, text both agents
 //!   got from a shared source, harness boilerplate, a scripted sender);
@@ -158,13 +157,15 @@ impl From<ExpectedTransmission> for TransmissionLabel {
     }
 }
 
-/// A transmission a detector should see only as an access pattern: a
-/// reader read the sender's content from a resource the sender never
-/// wrote. By INV-963 (`flow.route.shared-upstream-stays-suspected`) such
-/// content is a shared upstream source: the detector suspects the channel
-/// on its co-access and never confirms it. Only access evidence (a
-/// suspected or discarded prediction) finds the label, and it is scored
-/// apart from content recall, under access-only recall.
+/// A transmission a detector should see only as an access pattern: the
+/// sender wrote a resource and the reader read it, but no content links
+/// the two. The write carries no spans (a `git push`: its content is not
+/// in the call, `WritePayload::Unseen`), or the reader got the sender's
+/// content from a resource the sender never wrote (INV-963,
+/// `flow.route.shared-upstream-stays-suspected`). The detector suspects
+/// the channel on its co-access and never confirms it. Only access
+/// evidence (a suspected or discarded prediction) finds the label, and it
+/// is scored apart from content recall, under access-only recall.
 ///
 /// Built only through [`ExpectedAccess::new`]: a valid
 /// [`ExpectedTransmission`] whose route is a channel, since access evidence
@@ -364,7 +365,7 @@ pub struct Exemption {
 #[serde(tag = "expect", content = "label", rename_all = "snake_case")]
 pub enum Expectation {
     Transmission(ExpectedTransmission),
-    /// A transmission only access evidence should find (INV-963).
+    /// A transmission only access evidence should find.
     AccessOnly(ExpectedAccess),
     NoTransmission(NegativeControl),
     AgentCluster(AgentCluster),
