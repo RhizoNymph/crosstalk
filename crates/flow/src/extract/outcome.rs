@@ -5,7 +5,7 @@
 //! PR): without a result a write is `Unknown`; a result the wire flags as
 //! an error is `Rejected`; otherwise the tool's content rule reads the
 //! result's text (`Delivered` or `Rejected`), and a tool with no content
-//! rule keeps the wire's word (`Success` is `Delivered`; the coming
+//! rule keeps the wire's word (`Success` is `Delivered`,
 //! `ToolOutcome::Unknown` is `Unknown`). [`content_rule`] is the per-tool
 //! table; [`write_outcome`] applies it.
 //!
@@ -71,9 +71,11 @@ pub fn write_outcome(tool: &KnownTool<'_>, result: Option<&ToolResult>) -> Write
     };
     match result.outcome {
         ToolOutcome::Error => WriteOutcome::Rejected,
-        ToolOutcome::Success => match content_rule(tool) {
+        outcome @ (ToolOutcome::Success | ToolOutcome::Unknown) => match content_rule(tool) {
             Some(rule) if rule.refuses(&result_text(result)) => WriteOutcome::Rejected,
-            Some(_) | None => WriteOutcome::Delivered,
+            Some(_) => WriteOutcome::Delivered,
+            None if outcome == ToolOutcome::Success => WriteOutcome::Delivered,
+            None => WriteOutcome::Unknown,
         },
     }
 }

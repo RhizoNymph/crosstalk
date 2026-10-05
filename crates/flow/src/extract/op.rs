@@ -1,60 +1,15 @@
-//! What an extraction yields, with each write's outcome.
-//!
-//! The eval spec PR adds `WriteOutcome` (on `AccessOp::Write`) and
-//! `ExtractedOp` (on `ExtractedAccess`, replacing `kind`). Until it merges,
-//! [`WriteOutcome`] and [`ExtractedOp`] mirror those types here, and
-//! [`Classified::into_spec`] drops the outcome to fit today's
-//! [`ExtractedAccess`]. Binding them at merge is: delete the two local
-//! enums, import the spec's, and build `ExtractedAccess { op, .. }` in
-//! `into_spec`.
+//! What an extraction yields, with each write's outcome: the spec's
+//! [`WriteOutcome`] and [`ExtractedOp`], carried by [`Classified`] into an
+//! [`ExtractedAccess`].
 
+pub use crosstalk_spec::derived::flow::access::WriteOutcome;
 use crosstalk_spec::derived::flow::access::{AccessKind, Extraction};
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::interfaces::l5_flow::ExtractedAccess;
+pub use crosstalk_spec::interfaces::l5_flow::ExtractedOp;
 
-/// What became of a write: whether the call's arguments reached the
-/// resource. Mirrors the eval spec PR's `WriteOutcome`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WriteOutcome {
-    /// The tool reported success.
-    Delivered,
-    /// The tool refused or failed the call: recorded, never paired.
-    Rejected,
-    /// Nothing says whether it reached the resource. Paired at lower
-    /// confidence.
-    Unknown,
-}
-
-impl WriteOutcome {
-    /// Whether a write with this outcome can pair with a read: every
-    /// outcome but `Rejected`.
-    pub fn pairs(self) -> bool {
-        match self {
-            Self::Delivered | Self::Unknown => true,
-            Self::Rejected => false,
-        }
-    }
-}
-
-/// An extracted access's operation: a write carries its outcome, a read
-/// none. Mirrors the eval spec PR's `ExtractedOp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExtractedOp {
-    Write(WriteOutcome),
-    Read,
-}
-
-impl ExtractedOp {
-    pub fn kind(self) -> AccessKind {
-        match self {
-            Self::Write(_) => AccessKind::Write,
-            Self::Read => AccessKind::Read,
-        }
-    }
-}
-
-/// One access a call implies, with its operation's outcome. The shape
-/// `ExtractedAccess` takes once the eval spec PR merges.
+/// One access a call implies, with its operation's outcome: the fields of
+/// an `ExtractedAccess`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Classified {
     pub op: ExtractedOp,
@@ -63,10 +18,10 @@ pub struct Classified {
 }
 
 impl Classified {
-    /// Today's spec shape, which carries no write outcome.
+    /// The spec's shape, the write's outcome included.
     pub fn into_spec(self) -> ExtractedAccess {
         ExtractedAccess {
-            kind: self.op.kind(),
+            op: self.op,
             locator: self.locator,
             via: self.via,
         }

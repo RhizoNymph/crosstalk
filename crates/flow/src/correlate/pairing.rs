@@ -2,17 +2,14 @@
 //! which content match a write explains, and when a write's outcome is
 //! final.
 //!
-//! Every rule that decides whether evidence counts lives here, so the
-//! write outcomes of the eval spec PR bind in this file alone:
+//! Every rule that decides whether evidence counts lives here:
 //!
 //! - **Outcomes** (`flow.coaccess.write-not-rejected`,
 //!   `flow.correlator.unknown-write-pairs`): a write pairs when its outcome
 //!   [`WriteOutcome::pairs`]: `Delivered` and `Unknown` alike (the lower
 //!   confidence of `Unknown` is documentation, never a number), never
-//!   `Rejected`. [`outcome`] reads it from the access. Until
-//!   `AccessOp::Write` carries `outcome`, every write reads as
-//!   `Delivered`; the consumer never hands the correlator a rejected write
-//!   at all.
+//!   `Rejected`. [`outcome`] reads it from the access
+//!   (`AccessOp::Write::outcome`).
 //! - **Settling** (`flow.correlator.write-held-until-outcome`): a write
 //!   whose result has not arrived is held until [`write_settles_at`], then
 //!   released as `Unknown`.
@@ -28,6 +25,7 @@
 //!   confirms nothing (`flow.route.shared-upstream-stays-suspected`), and
 //!   the channel transmission stays suspected on its co-accesses.
 
+pub use crosstalk_spec::derived::flow::access::WriteOutcome;
 use crosstalk_spec::derived::flow::access::{Access, AccessOp};
 use crosstalk_spec::derived::flow::evidence::{CoAccess, InvalidCoAccess};
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
@@ -36,56 +34,28 @@ use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::Timestamp;
 
-/// What became of a write: whether the call's arguments reached the
-/// resource. Mirrors the eval spec PR's `WriteOutcome`, which replaces it
-/// when that PR lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WriteOutcome {
-    /// The tool reported success.
-    Delivered,
-    /// The tool refused or failed the call: recorded, never paired.
-    Rejected,
-    /// Nothing says whether it reached the resource, or no result arrived
-    /// before the settle window closed. Paired like `Delivered`.
-    Unknown,
-}
-
-impl WriteOutcome {
-    /// Whether a write with this outcome can pair into a `CoAccess`.
-    pub fn pairs(self) -> bool {
-        match self {
-            Self::Delivered | Self::Unknown => true,
-            Self::Rejected => false,
-        }
-    }
-}
-
 /// The outcome of `access` when it is a write, `None` for a read.
-///
-/// Binding point: once `AccessOp::Write` carries `outcome`, this returns
-/// it. Until then every recorded write is `Delivered`.
 pub fn outcome(access: &Access) -> Option<WriteOutcome> {
     match &access.op {
-        AccessOp::Write { .. } => Some(WriteOutcome::Delivered),
+        AccessOp::Write { outcome, .. } => Some(*outcome),
         AccessOp::Read { .. } => None,
     }
 }
 
 /// The operation of a write recorded with `outcome`.
-///
-/// Binding point: once `AccessOp::Write` carries `outcome`, it is stored
-/// here. Until then the outcome is not recorded on the access.
 pub fn write_op(call: PartRef, spans: Vec<SpanId>, outcome: WriteOutcome) -> AccessOp {
-    let _recorded_once_the_spec_carries_it = outcome;
-    AccessOp::Write { call, spans }
+    AccessOp::Write {
+        call,
+        spans,
+        outcome,
+    }
 }
 
 /// When a write made at `write_at` whose result has not arrived stops being
-/// held: `write_at + settle_after` (the eval spec's
-/// `CorrelationTiming::write_settles_at`).
+/// held: the spec's `CorrelationTiming::write_settles_at`
+/// (`write_at + settle_after`).
 pub fn write_settles_at(timing: CorrelationTiming, write_at: Timestamp) -> Timestamp {
-    let micros = u64::try_from(timing.settle_after().as_micros()).unwrap_or(u64::MAX);
-    Timestamp::from_micros(write_at.as_micros().saturating_add(micros))
+    timing.write_settles_at(write_at)
 }
 
 /// Why a write and a read did not pair.

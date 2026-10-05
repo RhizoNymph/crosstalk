@@ -3,13 +3,13 @@
 
 use serde_json::json;
 
-use crosstalk_spec::derived::flow::access::{AccessKind, Extraction};
+use crosstalk_spec::derived::flow::access::Extraction;
 use crosstalk_spec::interfaces::l5_flow::{ExtractError, ExtractedAccess, ResourceExtractor};
 use crosstalk_spec::observed::message::{ToolArguments, ToolCall, ToolResult};
 
 use super::support::*;
 use crate::extract::{
-    Classified, ConversationContext, ExtractConfig, ToolExtractors, WriteOutcome,
+    Classified, ConversationContext, ExtractConfig, ExtractedOp, ToolExtractors, WriteOutcome,
 };
 
 use Extraction::{Parsed, Scanned, Structured};
@@ -514,7 +514,7 @@ fn spec_trait_reports_kinds_and_handled_tools() {
     assert_eq!(
         got,
         vec![ExtractedAccess {
-            kind: AccessKind::Write,
+            op: ExtractedOp::Write(Rejected),
             locator: file("/a/b"),
             via: Structured,
         }],

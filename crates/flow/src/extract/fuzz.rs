@@ -63,6 +63,7 @@ fn arbitrary_call() -> impl Strategy<Value = ToolCall> {
             name: ToolName(name),
             arguments,
             execution: ToolExecution::Client,
+            signature: None,
         }),
     ]
 }

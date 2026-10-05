@@ -19,8 +19,8 @@ datasets with corpus timestamps.
   transmission for content after a discard), non-channel routes
   (`Delegation`, `Direct`, `Unobserved`) in the spec's precedence, evidence
   that arrives in any order, ids derived from what they name.
-- The pairing rules in one module (`correlate::pairing`), ready for the
-  eval spec PR's `WriteOutcome`.
+- The pairing rules in one module (`correlate::pairing`), over the spec's
+  `WriteOutcome` on `AccessOp::Write`.
 - Correlator shards keyed by medium (canonical channel, or resource on no
   channel), the routing between them, and the handoff of a medium's
   evidence on discovery, on promotion and whenever an access resolves a
@@ -153,19 +153,19 @@ a decision whose state is already stored goes on to the record and publish
 steps, so a step retried after its save committed completes. Events are
 published after the store write commits, in commit order.
 
-## Pairing rules and the eval spec PR
+## Pairing rules and write outcomes
 
 Everything that decides whether evidence counts is in
-`correlate/pairing.rs`. When the eval spec PR (#58) lands:
+`correlate/pairing.rs`, bound to the eval spec (#58) types:
 
-| Rule | Binding |
+| Rule | Where |
 | --- | --- |
-| `WriteOutcome` sits on `AccessOp::Write` | delete the local `WriteOutcome` mirror and import the spec's; `pairing::outcome` returns the field; `pairing::write_op` stores it |
-| Rejected writes never pair (INV-958) | already: the consumer never correlates a rejected write, `co_access` and `links` refuse one |
-| Unknown pairs like Delivered (INV-960) | already: `WriteOutcome::pairs`; no numeric confidence |
-| Held writes settle at `write_settles_at` (INV-959) | replace `pairing::write_settles_at` with `CorrelationTiming::write_settles_at` |
-| Shared upstream stays suspected (INV-963) | already: a carried match confirms only through `links`, which requires a paired write of the sender holding the span |
-| Retry after a rejected write (INV-962) | already: the rejected write is never in a medium, so a match on the relayed span links to the retry alone |
+| `WriteOutcome` sits on `AccessOp::Write` | the spec's `WriteOutcome`, re-exported; `pairing::outcome` returns the field; `pairing::write_op` stores it |
+| Rejected writes never pair (INV-958) | the consumer records a rejected write but never correlates it; `co_access` and `links` refuse one |
+| Unknown pairs like Delivered (INV-960) | `WriteOutcome::pairs`; no numeric confidence |
+| Held writes settle at `write_settles_at` (INV-959) | `pairing::write_settles_at` delegates to `CorrelationTiming::write_settles_at` |
+| Shared upstream stays suspected (INV-963) | a carried match confirms only through `links`, which requires a paired write of the sender holding the span |
+| Retry after a rejected write (INV-962) | the rejected write is never in a medium, so a match on the relayed span links to the retry alone |
 | `ExtractedAccess::op` carries the outcome | the extraction step maps it into `Extracted::Write { outcome }` |
 
 Evidence for INV-959 and INV-963 exists under the names the eval PR's

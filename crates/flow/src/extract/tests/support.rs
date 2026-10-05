@@ -25,6 +25,7 @@ pub fn call(name: &str, arguments: Value) -> ToolCall {
         // for the arguments these tests use.
         arguments: ToolArguments::Json(CanonicalJson(arguments.to_string())),
         execution: ToolExecution::Client,
+        signature: None,
     }
 }
 

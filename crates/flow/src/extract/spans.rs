@@ -4,15 +4,16 @@
 //! The spans are the originated spans located in the call's part (its
 //! arguments), plus, for every span there that provenance classified
 //! `Relayed(RelaySource::Span(s))` where `s` is the writer's own earlier
-//! span, the span `s` (the eval spec PR's
+//! span, the span `s` (the eval spec's
 //! `flow.access.write-spans-include-self-relay`): a retry of a rejected
 //! write relays the rejected attempt's text, and a reader's match on it
 //! must link to the retry too. Spans relayed from another agent's output
 //! stay out; the match belongs to its originator.
 //!
 //! L4's spans arrive as an input: the flow consumer passes the writer's
-//! spans of the exchange (from `SpanIndex::spans` once the eval spec PR
-//! adds it) and a lookup of a relay source's agent.
+//! spans of the exchange and a lookup of a relay source's agent. Reading
+//! them through the spec's `SpanIndex::spans` is not wired into the
+//! consumer yet.
 
 use crosstalk_spec::derived::flow::access::AccessOp;
 use crosstalk_spec::derived::provenance::span::{Origin, RelaySource, Span};
@@ -63,7 +64,7 @@ pub enum AccessOpError {
 
 /// The stored operation of an extracted access: a write names the call
 /// part and carries `spans` ([`write_spans`]); a read names the result
-/// part. The write's outcome joins `AccessOp::Write` with the eval spec PR.
+/// part, with the write's outcome.
 pub fn access_op(
     op: ExtractedOp,
     call: PartRef,
@@ -71,7 +72,11 @@ pub fn access_op(
     spans: Vec<SpanId>,
 ) -> Result<AccessOp, AccessOpError> {
     match op {
-        ExtractedOp::Write(_) => Ok(AccessOp::Write { call, spans }),
+        ExtractedOp::Write(outcome) => Ok(AccessOp::Write {
+            call,
+            spans,
+            outcome,
+        }),
         ExtractedOp::Read => result
             .map(|result| AccessOp::Read { result })
             .ok_or(AccessOpError::ReadWithoutResult),

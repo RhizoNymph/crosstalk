@@ -5,7 +5,7 @@ the spec's `ResourceExtractor` (`spec/types/interfaces/l5_flow.rs`),
 roadmap P5's first item. It turns one assistant tool call, and its result
 once that arrives, into the accesses the call implies: which resource,
 read or written, how the locator was found (`Extraction`) and, for a write,
-what became of it (`WriteOutcome`, from the eval spec PR). Everything here
+what became of it (the spec's `WriteOutcome`). Everything here
 is pure and synchronous. The flow consumer (feat/flow-correlator) calls it
 and turns its output into stored `Access`es.
 
@@ -179,7 +179,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | File | Role | Key exports |
 | --- | --- | --- |
 | `extract/mod.rs` | the composite extractor | `ToolExtractors` (`new`, `identify`, `extract_classified`, `ResourceExtractor`) |
-| `extract/op.rs` | outputs; mirrors of the eval PR's types | `WriteOutcome` (`pairs`), `ExtractedOp`, `Classified` (`into_spec`), `Candidate` |
+| `extract/op.rs` | outputs; re-exports the spec's `WriteOutcome` and `ExtractedOp` | `WriteOutcome` (`pairs`), `ExtractedOp`, `Classified` (`into_spec`), `Candidate` |
 | `extract/outcome.rs` | result judging, per known tool | `ContentRule`, `content_rule`, `write_outcome`, `read_delivered`, `result_text` |
 | `extract/catalog.rs` | known tools | `KnownTool`, `FileTool`, `FetchTool`, `ShellTool`, `HttpTool`, `McpTool`, `FILE_TOOLS`, `FETCH_TOOLS`, `SHELL_TOOLS`, `identify`, `mcp_name` |
 | `extract/args.rs` | arguments | `Args`, `ArgPath` (JSON Pointer), `ArgError`, `InvalidArgPath` |
@@ -284,7 +284,7 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   `flow.resource.http-url-tool-independent`,
   `flow.resource.wiki-page-spelling-independent`,
   `flow.resource.repo-file-clone-independent`.
-- Eval spec PR invariants, tested here ahead of the merge:
+- Eval spec invariants tested here:
   `flow.extract.write-outcome-classified`
   (`extract::tests::write_outcome_follows_result`,
   `extract::tests::message_tool_refusal_text_is_rejected`),
@@ -303,14 +303,16 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
 - No access carries credentials: URL user info is dropped (query
   parameters are kept, as the spec requires).
 
-## Binding the eval spec PR
+## Eval spec types
 
-The PR adds `WriteOutcome`, `ExtractedOp`, `ExtractedAccess { op, .. }`,
-`AccessOp::Write { outcome, .. }` and `ToolOutcome::Unknown`. At the merge:
+The extractor uses the eval spec's (#58) `WriteOutcome`, `ExtractedOp`,
+`ExtractedAccess { op, .. }`, `AccessOp::Write { outcome, .. }` and
+`ToolOutcome::Unknown` directly:
 
-1. `op.rs`: delete the local `WriteOutcome` and `ExtractedOp`, import the
-   spec's; `Classified::into_spec` builds `ExtractedAccess { op, locator, via }`.
-2. `outcome.rs`: add `ToolOutcome::Unknown => content rule, else Unknown` to
-   `write_outcome`.
+1. `op.rs` re-exports the spec's `WriteOutcome` and `ExtractedOp`;
+   `Classified::into_spec` builds `ExtractedAccess { op, locator, via }`.
+2. `outcome.rs`: `ToolOutcome::Unknown` goes through the tool's content
+   rule like `Success`; a tool with no content rule keeps `Unknown`.
 3. `spans.rs`: `access_op` puts the outcome into `AccessOp::Write`.
-4. `context.rs`: `observe` keeps learning on `ToolOutcome::Unknown`.
+4. `context.rs`: `observe` keeps learning on `ToolOutcome::Unknown` (it
+   skips only `Error`).

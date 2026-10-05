@@ -200,6 +200,7 @@ fn access_operations() {
         Ok(AccessOp::Write {
             call: call_part(),
             spans: vec![SpanId::from_ulid(1)],
+            outcome: WriteOutcome::Rejected,
         }),
     );
     assert_eq!(
