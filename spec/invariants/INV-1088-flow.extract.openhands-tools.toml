@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.extract.openhands-tools"
+statement = "OpenHands' `execute_bash` is a shell tool whose shell persists across calls and `str_replace_editor` a file tool: a heredoc or redirection into a file through `execute_bash` and a `create` through the editor yield a Write of that file."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+SWE trajectories from OpenHands write files through `execute_bash`
+heredocs; without the tool known, the sender's write was never recorded
+while the reader's read was, so the read paired with nothing.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::forges::openhands_writes"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

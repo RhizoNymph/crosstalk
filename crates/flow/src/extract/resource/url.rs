@@ -68,7 +68,10 @@ pub fn url_text(locator: &Locator) -> Option<String> {
             }
             Some(text)
         }
-        Locator::File { .. } | Locator::Mcp { .. } | Locator::Opaque { .. } => None,
+        Locator::File { .. }
+        | Locator::Mcp { .. }
+        | Locator::Opaque { .. }
+        | Locator::Repository { .. } => None,
     }
 }
 

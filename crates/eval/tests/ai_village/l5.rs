@@ -206,7 +206,7 @@ fn the_l5_extractor_meets_the_converter_on_one_resource() {
             .unwrap_or_else(|e| panic!("{command}: {e:?}"));
         assert_eq!(extracted.len(), 1, "{command}: {extracted:?}");
         assert_eq!(
-            matches!(extracted[0].op, ExtractedOp::Write(_)),
+            matches!(extracted[0].op, ExtractedOp::Write { .. }),
             write,
             "{command}"
         );

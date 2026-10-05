@@ -6,9 +6,14 @@
 //! - `cat`, `head`, `tail`, `tac` and `bat` read their file operands (or
 //!   their `<` input) when their output reaches the result, that is, is not
 //!   redirected to a file. `tee` writes its operands.
+//! - `sed -n` printing line numbers (`sed -n '3,10p' f`, `sed -n 5p f`,
+//!   `'$p'`) reads its file operands, like `cat`, when its output reaches
+//!   the result. Any other `sed` script is no access.
 //! - `curl` and `wget` are HTTP requests (`net`).
-//! - `git` and `gh` clone repositories, name remotes and show files of a
-//!   repository (`git`).
+//! - `git` clones repositories, names remotes, shows files of a
+//!   repository, pushes to and pulls from it (`git`); `gh` and `glab`
+//!   clone, read and write issues and pull/merge requests and make API
+//!   requests (`forge`).
 //! - `cd` moves the working directory later commands resolve against; one
 //!   it cannot follow makes it unknown, so relative paths after it are
 //!   keyed as written.
@@ -23,6 +28,7 @@ use crate::extract::op::Candidate;
 use crate::extract::resource::{AbsolutePath, FileScope, RepoBindings, file_locator};
 use crate::extract::sites::SitesConfig;
 
+use super::forge::Cli;
 use super::lex::{Command, RedirectOp, Script, Word};
 use super::options::{NO_VALUES, OptSpec, Options};
 
@@ -143,7 +149,9 @@ impl<'a> Shell<'a> {
             "curl" => self.curl(args, stdout_to_file, found),
             "wget" => self.wget(args, stdout_to_file, found),
             "git" => self.git(args, stdout_to_file, found),
-            "gh" => self.gh(args),
+            "gh" => self.forge_cli(Cli::Gh, args, stdout_to_file, found),
+            "glab" => self.forge_cli(Cli::Glab, args, stdout_to_file, found),
+            "sed" if !stdout_to_file => self.sed(args, found),
             _ => {}
         }
     }
@@ -256,6 +264,59 @@ fn change_directory(cwd: Option<&AbsolutePath>, args: &[Word]) -> Option<Absolut
     }
     cwd?.join(target).ok()
 }
+
+impl Shell<'_> {
+    /// `sed -n '<lines>p' <file>…`: a read of each file.
+    fn sed(&self, args: &[Word], found: &mut Vec<Candidate>) {
+        let parsed = Options::parse(args, &SED);
+        if !parsed.has(&["-n", "--quiet", "--silent"])
+            || parsed.has(&["-i", "--in-place"])
+            || parsed
+                .options
+                .iter()
+                .any(|(name, _)| name.starts_with("--in-place"))
+        {
+            return;
+        }
+        let mut operands = parsed.operands.iter();
+        let script = match parsed.last(&["-e", "--expression"]) {
+            Some(script) => script,
+            None => match operands.next() {
+                Some(script) => *script,
+                None => return,
+            },
+        };
+        if !script.as_literal().is_some_and(prints_lines) {
+            return;
+        }
+        for word in operands.filter(|word| word.text != "-") {
+            if let Some(locator) = self.file(word) {
+                found.push(Candidate::read(locator, Extraction::Parsed));
+            }
+        }
+    }
+}
+
+/// A sed script that only prints a line or a range of lines: `5p`,
+/// `3,10p`, `10,$p`, `$p`.
+fn prints_lines(script: &str) -> bool {
+    let Some(address) = script.trim().strip_suffix('p') else {
+        return false;
+    };
+    let line = |text: &str| {
+        let text = text.trim();
+        text == "$" || (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+    };
+    match address.split_once(',') {
+        Some((from, to)) => line(from) && line(to),
+        None => line(address),
+    }
+}
+
+const SED: OptSpec = OptSpec {
+    short_values: "elf",
+    long_values: &["--expression", "--file", "--line-length"],
+};
 
 const HEAD_TAIL: OptSpec = OptSpec {
     short_values: "nc",

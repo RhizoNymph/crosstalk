@@ -20,6 +20,7 @@ use crosstalk_gateway::live::{
 use crosstalk_gateway::pipeline::Settings;
 use crosstalk_memory::support::ManualClock;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_reconstruct::thread::ThreadConfig;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::operators::{CallerError, RequestIdentity};
 use crosstalk_spec::support::Timestamp;
@@ -79,6 +80,7 @@ pub async fn compose_with(start: Timestamp, ticking: Ticking) -> Result<Composit
         flow: options::flow()?,
         provenance: ProvenanceConfig::default(),
         extract: crosstalk_flow::extract::ExtractConfig::default(),
+        threading: ThreadConfig::default(),
         ticking,
         seed: 0xE2E,
         capture: None,

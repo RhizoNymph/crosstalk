@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.resource.repository-canonical"
+statement = "Locator::repository returns Locator::Repository with the host lower case without `www.`, port or trailing dot, the owner's segments and the name lower case and the name without `.git`, so two spellings differing only in those give equal locators, and refuses an empty or malformed host, owner or name."
+kind = "representation"
+requires = ["type", "unit", "property"]
+rationale = """
+A repository is the resource `git push`, `git pull` and an issue comment
+touch. Forges treat owner and name case-insensitively and serve
+`name.git` as `name`; a locator that kept the spelling would split one
+repository into several resources, and the registry keys resources by
+locator.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::resource::Locator::repository"
+unit = "crosstalk_spec::tests::repository::spellings_of_one_repository_are_one_locator"
+property = "crosstalk_spec::tests::repository::repository_locator_is_canonical"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

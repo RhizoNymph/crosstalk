@@ -165,6 +165,7 @@ Everything that decides whether evidence counts is in
 | Unknown pairs like Delivered (INV-960) | `WriteOutcome::pairs`; no numeric confidence |
 | Held writes settle at `write_settles_at` (INV-959) | `pairing::write_settles_at` delegates to `CorrelationTiming::write_settles_at` |
 | Shared upstream stays suspected (INV-963) | a carried match confirms only through `links`, which requires a paired write of the sender holding the span |
+| Shared public content stays suspected (INV-1087) | agents fetching one page none of them wrote: matches among their results confirm nothing, and with no writer nothing opens (`tests/shared_web.rs`, AI Village-shaped synthetic bash web reads) |
 | Retry after a rejected write (INV-962) | the rejected write is never in a medium, so a match on the relayed span links to the retry alone |
 | `ExtractedAccess::op` carries the outcome | the extraction step maps it into `Extracted::Write { outcome }` |
 

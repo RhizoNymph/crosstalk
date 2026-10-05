@@ -219,7 +219,7 @@ fn access_operations() {
     };
     assert_eq!(
         access_op(
-            ExtractedOp::Write(WriteOutcome::Rejected),
+            ExtractedOp::write(WriteOutcome::Rejected),
             call_part(),
             None,
             vec![SpanId::from_ulid(1)],

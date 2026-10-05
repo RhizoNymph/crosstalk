@@ -332,7 +332,7 @@ impl Gen<'_> {
         let via = match resource.1 {
             Locator::Url { .. } if self.rng.chance(0.3) => Extraction::Parsed,
             Locator::Url { .. } => Extraction::Scanned,
-            Locator::Opaque { .. } => Extraction::Parsed,
+            Locator::Opaque { .. } | Locator::Repository { .. } => Extraction::Parsed,
             Locator::File { .. } | Locator::Mcp { .. } => Extraction::Structured,
         };
         let op = match kind {

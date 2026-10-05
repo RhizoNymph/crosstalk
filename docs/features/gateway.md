@@ -369,6 +369,7 @@ let live = Live::start(LiveConfig {
     pipeline: Settings::default(), // put retry; consumer_retry is every slot group's policy
     flow: FlowConfig::default(),   // correlation_window_ms, evidence_window_ms, suspected_ttl_ms, shards, tick_ms
     provenance: ProvenanceConfig::default(),
+    threading: ThreadConfig::default(), // L3's seen-message retention (30 days)
     ticking: Ticking::OnSettle,    // or Ticking::Periodic (every flow.tick_ms, plus settle)
     seed: 7,                       // every id generator's entropy
     capture: None,                 // or the proxy's capture receiver
@@ -496,11 +497,13 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
 | `Live` | `start(LiveConfig)`, `pipeline() -> &Arc<LivePipeline>`, `surface() -> &Arc<Surface<LiveStores>>`, `stores() -> &LiveStores`, `layers() -> &LayerStores`, `context()`, `clock()`, `filled()`, `caller(RequestIdentity)`, `settle(Timestamp) -> Result<Settled, SettleError>`, `shutdown(Instant) -> LiveDrained` |
 | `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `extract: ExtractConfig`, `ticking: Ticking`, `seed`, `capture` |
 | `LiveConfig::new(LiveClock, FlowConfig, seed)` | the defaults: memory blobs, `Ticking::OnSettle`, trusted access, five-minute buckets (`DEFAULT_BUCKET`), the default provenance config; `DefaultsError` |
+| `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `threading: ThreadConfig`, `ticking: Ticking`, `seed`, `capture` |
+| `LiveConfig::new(LiveClock, FlowConfig, seed)` | the defaults: memory blobs, `Ticking::OnSettle`, trusted access, five-minute buckets (`DEFAULT_BUCKET`), the default provenance and threading configs; `DefaultsError` |
 | `LiveError` | `Flow`, `Blobs`, `Bus`, `Surface`, `Pipeline`, `Slot`, `Subscribe { slot, error }` |
 | `LiveClock` | `Read(Arc<dyn Clock>)`, `Manual(ManualClock)`; `reader`, `now`, `advance_to` |
 | `Ticking` | `Periodic`, `OnSettle` |
 | `Settled`, `SettleError` | `{ at, passes }`; `StageStopped(Slot)`, `OutboxStopped`, `Depth { slot, error }`, `NotQuiet { passes }` |
-| `LiveStores`, `LayerStores` | `MemoryStores<LiveBlobs>`; `{ conversations: MemoryConversations, provenance: MemoryProvenanceStore }` |
+| `LiveStores`, `LayerStores` | `MemoryStores<LiveBlobs>`; `{ conversations: MemoryConversations, provenance: MemoryProvenanceStore }`, `LayerStores::new(ThreadConfig)` |
 | `BlobConfig`, `LiveBlobs` | `Memory`, `Fs { root }`; the one `BlobStore` over either |
 | `Stage`, `Stages`, `Slot`, `StageContext`, `StageError`, `Command`, `Control`, `Activity`, `Publisher` | the slot interface (above) |
 | `wiring::wire_all`, `wire_l3` .. `wire_l7`, `wire_evidence` | what fills each slot |

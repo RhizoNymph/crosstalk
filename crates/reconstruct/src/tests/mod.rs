@@ -12,6 +12,7 @@ mod pg_props;
 mod pg_threads;
 mod placement;
 mod rig;
+mod seen;
 mod support;
 mod table;
 mod thread_props;

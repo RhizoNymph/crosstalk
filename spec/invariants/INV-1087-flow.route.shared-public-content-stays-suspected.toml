@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.route.shared-public-content-stays-suspected"
+statement = "When several agents read one resource none of them wrote, matches between their tool results confirm nothing: the correlator emits no Confirm, OpenConfirmed or Extend, opens nothing when no agent wrote the resource, and every transmission a third agent's write opened ends Suspected or Discarded."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+AI Village agents fetch the same public pages; their results match each
+other because the page is a shared upstream source, not because one agent
+sent the other anything. This is flow.route.shared-upstream-stays-suspected
+applied to public web reads.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlate::tests::shared_web::a_match_between_readers_keeps_the_transmission_suspected"
+property = "crosstalk_flow::correlate::tests::shared_web::shared_public_content_confirms_nothing"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

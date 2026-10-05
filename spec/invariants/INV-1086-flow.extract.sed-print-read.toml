@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.extract.sed-print-read"
+statement = "A shell `sed -n` whose script only prints a line or a line range (`Np`, `X,Yp`, `$` as either bound), without `-i`, yields a Read of each file operand when its output reaches the result, and any other sed script yields no read."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Agents page through files with `sed -n 'X,Yp'` as often as with `cat`,
+`head` and `tail`; the printed lines are the file's content and a reader's
+match on them is a read of the file.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::forges::sed_prints_are_reads"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -41,6 +41,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
+use crosstalk_eval::corpus::clock::Pace;
 use crosstalk_eval::corpus::{SourceError, TraceSource, World};
 use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::ai_village::report::Unlabelled;
@@ -202,9 +203,18 @@ struct SourceArgs {
     /// (swe-splice) or pairs per cipher (cipher).
     #[arg(long)]
     count: Option<usize>,
-    /// Seeds the synthetic corpora (swe-splice, cipher).
+    /// Seeds the synthetic corpora (swe-splice, cipher) and the virtual
+    /// clock's steps.
     #[arg(long, default_value_t = 0)]
     corpus_seed: u64,
+    /// The shortest step between two calls of a dataset that records no
+    /// times, in ms (SALT, AgentDojo, wiki, swarm, open-swe, swe-splice,
+    /// cipher; τ², AI Village and LMCache keep their own times).
+    #[arg(long, default_value_t = 1_000)]
+    pace_min_ms: u64,
+    /// The longest such step, in ms.
+    #[arg(long, default_value_t = 5_000)]
+    pace_max_ms: u64,
     /// AI Village: which part to convert.
     #[arg(long, value_enum, default_value_t = VillageMode::Window)]
     mode: VillageMode,
@@ -394,9 +404,15 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         agents_per_world: args.agents_per_world,
         per_shard: args.count,
     };
+    let pace = Pace::new(
+        std::time::Duration::from_millis(args.pace_min_ms),
+        std::time::Duration::from_millis(args.pace_max_ms),
+        args.corpus_seed,
+    )
+    .context("--pace-min-ms and --pace-max-ms")?;
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
-            .map(AnySource::Salt)
+            .map(|source| AnySource::Salt(source.with_pace(pace)))
             .with_context(|| format!("opening SALT at {}", root.display())),
         Dataset::Agentdojo => AgentDojoSource::open(
             &root,
@@ -405,7 +421,7 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
                 include: selection.include,
             },
         )
-        .map(AnySource::AgentDojo)
+        .map(|source| AnySource::AgentDojo(source.with_pace(pace)))
         .with_context(|| format!("opening AgentDojo at {}", root.display())),
         Dataset::Tau2 => Tau2Source::open(
             &root,
@@ -417,7 +433,7 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         .map(AnySource::Tau2)
         .with_context(|| format!("opening τ²-bench at {}", root.display())),
         Dataset::OpenSwe => OpenSweSource::open(&root, &selection, mixing)
-            .map(AnySource::OpenSwe)
+            .map(|source| AnySource::OpenSwe(source.with_pace(pace)))
             .with_context(opening),
         Dataset::Lmcache => LmcacheSource::open(&root, &selection, mixing)
             .map(AnySource::Lmcache)
@@ -428,7 +444,7 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
             args.count.unwrap_or(swe_splice::SPLICES),
             args.corpus_seed,
         )
-        .map(AnySource::Splice)
+        .map(|source| AnySource::Splice(source.with_pace(pace)))
         .with_context(opening),
         Dataset::Cipher => CipherSource::open(
             &root,
@@ -436,7 +452,7 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
             args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
             args.corpus_seed,
         )
-        .map(AnySource::Cipher)
+        .map(|source| AnySource::Cipher(source.with_pace(pace)))
         .with_context(opening),
         Dataset::AiVillage => {
             let mode = match args.mode {
@@ -464,10 +480,10 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
                 }
             },
         )
-        .map(AnySource::Wiki)
+        .map(|source| AnySource::Wiki(source.with_pace(pace)))
         .with_context(|| format!("opening collusion-wiki at {}", root.display())),
         Dataset::Swarm => SwarmSource::open(&root, &SwarmSelection { limit: args.limit })
-            .map(AnySource::Swarm)
+            .map(|source| AnySource::Swarm(source.with_pace(pace)))
             .with_context(|| format!("opening swarm-traces at {}", root.display())),
     }
 }

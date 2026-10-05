@@ -227,8 +227,10 @@ fn reads_and_writes_take_the_http_tool_shape() {
     let url = page_url("dse", "RelayIndexAlpha");
     let mut gets = 0;
     let mut posts = 0;
+    // Each call is the response of one exchange (requests repeat it as
+    // history after that).
     for exchange in world.exchanges() {
-        for message in exchange.request().chain(exchange.response()) {
+        if let Some(message) = exchange.response() {
             let Some(args) = http_call(message) else {
                 continue;
             };
@@ -276,11 +278,122 @@ fn channel_labels_sit_in_the_read_tool_result() {
             .text(message)
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(text, label.content.text);
+        let MessageBody::Tool(results) = &message.body else {
+            unreachable!("checked above");
+        };
+        let call_id = &results.first().call_id;
         let call = exchange
             .request()
-            .find_map(http_call)
+            .find_map(|m| match &m.body {
+                MessageBody::Assistant(parts) => parts.iter().find_map(|part| match part {
+                    AssistantPart::ToolCall(call) if &call.id == call_id => match &call.arguments {
+                        ToolArguments::Json(json) => {
+                            serde_json::from_str::<serde_json::Value>(&json.0).ok()
+                        }
+                        ToolArguments::Invalid(_) => None,
+                    },
+                    _ => None,
+                }),
+                _ => None,
+            })
             .expect("the read call precedes its result");
         assert_eq!(call["method"], "GET");
+    }
+}
+
+// --- the shape of a harness ---
+
+/// The world's exchanges of one agent, in time order.
+fn exchanges_of<'w>(
+    world: &'w World,
+    name: &str,
+) -> Vec<&'w crosstalk_eval::corpus::CorpusExchange> {
+    world
+        .exchanges()
+        .iter()
+        .filter(|e| e.agent().name == name)
+        .collect()
+}
+
+#[test]
+fn each_agent_is_one_growing_conversation() {
+    let all = worlds(&WikiSelection::default());
+    for world in &all {
+        for agent in world.agents() {
+            let mine = exchanges_of(world, &agent.key.name);
+            assert!(!mine.is_empty());
+            for pair in mine.windows(2) {
+                let (before, after) = (pair[0], pair[1]);
+                let mut expected: Vec<_> = before.exchange().request.clone();
+                expected.push(before.response().expect("a response").hash);
+                let request = &after.exchange().request;
+                assert!(
+                    request.len() > expected.len() && request[..expected.len()] == expected[..],
+                    "{}: each request extends the previous request and response",
+                    agent.key
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_call_is_answered_in_the_next_request() {
+    let all = worlds(&WikiSelection::default());
+    let mut calls = 0;
+    for world in &all {
+        for agent in world.agents() {
+            let mine = exchanges_of(world, &agent.key.name);
+            for (at, exchange) in mine.iter().enumerate() {
+                let Some(MessageBody::Assistant(parts)) = exchange.response().map(|m| &m.body)
+                else {
+                    continue;
+                };
+                for part in parts {
+                    let AssistantPart::ToolCall(call) = part else {
+                        continue;
+                    };
+                    calls += 1;
+                    // Never answered in the request that made it.
+                    let answers = |e: &crosstalk_eval::corpus::CorpusExchange| {
+                        e.request().any(|m| match &m.body {
+                            MessageBody::Tool(results) => {
+                                results.iter().any(|r| r.call_id == call.id)
+                            }
+                            _ => false,
+                        })
+                    };
+                    assert!(!answers(exchange));
+                    let next = mine.get(at + 1).expect("a call is followed by its result");
+                    let new_inputs: Vec<_> = next
+                        .request()
+                        .skip(exchange.exchange().request.len() + 1)
+                        .collect();
+                    assert!(
+                        new_inputs.iter().any(|m| matches!(
+                            &m.body,
+                            MessageBody::Tool(results) if results.iter().any(|r| r.call_id == call.id)
+                        )),
+                        "the result is among the next request's new inputs"
+                    );
+                }
+            }
+        }
+    }
+    // Four writes and three reads (every revision after the first changes
+    // author) on the shared page, one write on the solo page.
+    assert_eq!(calls, 4 + 3 + 1);
+}
+
+#[test]
+fn calls_are_seconds_apart() {
+    let world = relay_world(&worlds(&WikiSelection::default())).clone();
+    for pair in world.exchanges().windows(2) {
+        let gap = pair[1].at().as_micros() - pair[0].at().as_micros();
+        assert!(
+            (1_000_000..=5_000_000).contains(&gap),
+            "consecutive calls are 1 to 5 s apart, not {gap} µs"
+        );
     }
 }
 

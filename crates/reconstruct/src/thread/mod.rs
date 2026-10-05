@@ -9,8 +9,10 @@
 //! increment resolution through stored responses (`ResponsesStateThreader`)
 //! and compaction (`CompactionThreader`).
 //!
-//! Stores: [`MemoryConversations`] and [`PgConversations`].
+//! Stores: [`MemoryConversations`] and [`PgConversations`], configured by
+//! [`ThreadConfig`].
 
+pub mod config;
 pub mod history;
 pub mod memory;
 pub mod messages;
@@ -27,6 +29,7 @@ use crosstalk_spec::interfaces::l3_reconstruction::{ThreadError, ThreadOutcome, 
 use crosstalk_spec::observed::client::RequestClass;
 use crosstalk_spec::observed::exchange::{Continuation, Exchange, ExchangeOutcome};
 
+pub use config::{DEFAULT_SEEN_RETENTION, SeenRetention, ThreadConfig, ThreadConfigError};
 pub use history::{ChainHash, Entry};
 pub use memory::MemoryConversations;
 pub use messages::{DEFAULT_SUMMARY_PREAMBLES, Facts, MessageReader};
@@ -176,6 +179,7 @@ where
             .map_err(|error| failure(StorageFailure::Ids(error)))?;
         Ok(ThreadInput {
             exchange: exchange.meta.id,
+            at: exchange.meta.started_at,
             agent,
             members,
             request,

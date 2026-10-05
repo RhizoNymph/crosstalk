@@ -9,15 +9,20 @@
 //! ([`mediawiki`]), so an agent editing a page through the API and another
 //! fetching its article URL meet on one resource.
 //!
-//! A GitHub file is read at its `blob`, `raw` or `raw.githubusercontent.com`
-//! URL and read or written through the contents API; each names the file
-//! as the repository's file (`RepoId::file`), the locator a clone's file
-//! gets ([`github`]).
+//! A forge repository, its files and its issues and pull or merge
+//! requests have one locator each, whatever web, raw, API or Pages URL
+//! reaches them ([`github`], [`gitlab`]): the repository is
+//! `Locator::Repository` (`RepoId::locator`), the locator `git push`,
+//! `git pull` and `git clone` of any of its remotes give; a file is the
+//! repository's file (`RepoId::file`), the locator a clone's file gets; a
+//! thread is its canonical web page (`ForgeRepo::thread`), the locator the
+//! `gh` and `glab` CLIs' issue and pull/merge request commands give.
 //!
 //! Which hosts are MediaWiki sites is configured ([`SitesConfig`]); the
 //! default covers the Wikimedia projects and Fandom.
 
 pub mod github;
+pub mod gitlab;
 pub mod mediawiki;
 
 use serde::{Deserialize, Serialize};
@@ -40,9 +45,14 @@ pub struct SiteAccess {
 pub struct SitesConfig {
     #[serde(default = "default_mediawiki")]
     pub mediawiki: Vec<MediaWikiSite>,
-    /// Whether GitHub's URLs are read as repository files.
+    /// Whether GitHub's URLs are read as its repositories, their files
+    /// and threads.
     #[serde(default = "enabled")]
     pub github: bool,
+    /// Whether `gitlab.com`'s URLs are read as its projects, their files
+    /// and threads.
+    #[serde(default = "enabled")]
+    pub gitlab: bool,
 }
 
 impl Default for SitesConfig {
@@ -50,6 +60,7 @@ impl Default for SitesConfig {
         Self {
             mediawiki: default_mediawiki(),
             github: true,
+            gitlab: true,
         }
     }
 }
@@ -127,6 +138,7 @@ impl SitesConfig {
         Self {
             mediawiki: Vec::new(),
             github: false,
+            gitlab: false,
         }
     }
 
@@ -142,6 +154,7 @@ impl SitesConfig {
             .filter(|site| site.hosts.iter().any(|pattern| pattern.matches(name)))
             .find_map(|site| mediawiki::apply(site, request));
         wiki.or_else(|| self.github.then(|| github::apply(request)).flatten())
+            .or_else(|| self.gitlab.then(|| gitlab::apply(request)).flatten())
     }
 }
 
@@ -245,6 +258,14 @@ impl From<SitePath> for String {
     fn from(path: SitePath) -> Self {
         path.0
     }
+}
+
+/// A URL path's non-empty segments, each percent-decoded.
+pub(crate) fn segments(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(percent_decode)
+        .collect()
 }
 
 /// `text` with every `%XX` escape decoded; an undecodable result keeps the

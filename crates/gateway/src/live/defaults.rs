@@ -10,6 +10,7 @@ use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_memory::analysis::catalog::RetentionPolicy;
 use crosstalk_memory::model::build::test_model;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_reconstruct::thread::ThreadConfig;
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
@@ -42,7 +43,7 @@ impl LiveConfig {
     /// [`Live::settle`](super::Live::settle) (`Ticking::OnSettle`), seeded
     /// with `seed`; everything else the surface's defaults: trusted access
     /// (one operator with every permission), five-minute buckets, JSONL
-    /// export, the default provenance and extractor configs. Change any field after.
+    /// export, the default provenance, extractor and threading configs. Change any field after.
     pub fn new(clock: LiveClock, flow: FlowConfig, seed: u64) -> Result<Self, DefaultsError> {
         Ok(Self {
             surface: surface(&clock)?,
@@ -53,6 +54,7 @@ impl LiveConfig {
             flow,
             provenance: ProvenanceConfig::default(),
             extract: ExtractConfig::default(),
+            threading: ThreadConfig::default(),
             ticking: Ticking::OnSettle,
             seed,
             capture: None,

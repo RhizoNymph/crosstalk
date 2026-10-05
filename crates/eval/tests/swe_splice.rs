@@ -225,16 +225,12 @@ fn variants_render_and_need_what_they_should() {
         Variant::Base64.need(shell),
         decoded(vec![Codec::JsonString, Codec::Base64])
     );
-    // A JSON string inside a JSON string is two string levels: the spec
-    // undoes one (provenance.decode.one-string-level).
+    // A JSON string inside a JSON string: the writer's level is undone by
+    // L4 on the writer's argument values (INV-1057), so the reader's side
+    // needs one level and the label is in reach.
     assert_eq!(
         Variant::JsonString.need(shell),
-        (
-            MatchNeed::Undecodable {
-                codec: "json_string+json_string".into()
-            },
-            Tier::OutOfReach
-        )
+        decoded(vec![Codec::JsonString])
     );
 }
 
@@ -299,14 +295,9 @@ fn splices_plant_one_channel_transmission() {
         let labels = planted(world);
         assert_eq!(labels.len(), 1);
         let label = labels[0].label();
-        let nested = variant == Variant::JsonString
-            && world.key().as_str().ends_with(ReadForm::ShellCat.name());
-        let tier = if nested {
-            Tier::OutOfReach
-        } else {
-            Tier::Construction
-        };
-        assert_eq!(label.tier, tier);
+        // Every variant and read form is in reach (a JSON string read
+        // through a shell too, see `Variant::need`).
+        assert_eq!(label.tier, Tier::Construction);
         assert_eq!(label.carrier, CarrierKind::ToolResult);
         assert!(label.from.name.starts_with("sender/"));
         assert!(label.to.name.starts_with("reader/"));
@@ -543,4 +534,28 @@ fn the_real_extractor_reads_a_shell_cat_as_the_same_file() {
         file_read(SPLICED_PATH).locator,
         "the shell read and the editor view name one resource"
     );
+}
+
+#[test]
+fn the_read_arrives_within_the_live_correlation_window() {
+    // The reader's read call is one step after the sender's write and its
+    // result one step later still: 2 to 10 s with the default pace, inside
+    // `LiveSettings::short`'s 60 s correlation window.
+    for world in splice_worlds(8, 7) {
+        let label = planted(&world)[0].label();
+        let sender = label.sender_exchange.expect("the writing exchange");
+        let at = |id| {
+            world
+                .exchange(id)
+                .unwrap_or_else(|| panic!("no exchange {id:?}"))
+                .at()
+                .as_micros()
+        };
+        let gap = at(label.reader_exchange) - at(sender);
+        assert!(
+            (2_000_000..=10_000_000).contains(&gap),
+            "{}: the read result arrives {gap} µs after the write",
+            world.key()
+        );
+    }
 }

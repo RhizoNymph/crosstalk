@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crosstalk_api::MemoryStores;
 use crosstalk_flow::consumer::Settings as FlowSettings;
 use crosstalk_provenance::store::MemoryProvenanceStore;
-use crosstalk_reconstruct::thread::MemoryConversations;
+use crosstalk_reconstruct::thread::{MemoryConversations, ThreadConfig};
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::EventId;
 use crosstalk_spec::interfaces::l2_transport::{
@@ -55,6 +55,16 @@ pub type LiveStores = MemoryStores<LiveBlobs>;
 pub struct LayerStores {
     pub conversations: MemoryConversations,
     pub provenance: MemoryProvenanceStore,
+}
+
+impl LayerStores {
+    /// Empty stores, the conversations kept with `threading`.
+    pub fn new(threading: ThreadConfig) -> Self {
+        Self {
+            conversations: MemoryConversations::with_config(threading),
+            provenance: MemoryProvenanceStore::default(),
+        }
+    }
 }
 
 /// Where a stage publishes the events it decides: the pipeline's own

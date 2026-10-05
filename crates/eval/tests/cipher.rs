@@ -200,7 +200,14 @@ fn a_pair_world_labels_the_encoded_bytes() {
         assert_eq!(pair.delivery, delivery);
         let built = world(&pair).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built.agents().len(), 2);
-        assert_eq!(built.exchanges().len(), 2);
+        // A tool-result delivery takes the receiver two exchanges: the call,
+        // then its result in the next request.
+        let receiver = if delivery == Delivery::ToolResult {
+            2
+        } else {
+            1
+        };
+        assert_eq!(built.exchanges().len(), 1 + receiver);
         assert_eq!(
             built.coverage(),
             Coverage::Complete {

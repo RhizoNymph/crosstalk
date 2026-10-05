@@ -17,6 +17,7 @@ mod handoff;
 mod pairing;
 mod props;
 mod routes;
+mod shared_web;
 
 /// The kinds of `decided`, in order.
 fn kinds(decided: &[Decided]) -> Vec<UpdateKind> {

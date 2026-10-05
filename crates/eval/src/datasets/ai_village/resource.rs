@@ -146,7 +146,7 @@ pub fn from_url(text: &str) -> Option<Locator> {
 
 /// The converter's resource for a locator an L5 extractor produced: a URL
 /// through [`from_url`], a GitHub or GitLab file (`File { host:
-/// "<forge>/<repo>" }`) as its repository. `None` for local files, MCP and
+/// "<forge>/<repo>" }`) or repository (`Repository`) as its repository. `None` for local files, MCP and
 /// opaque resources.
 pub fn canonical(locator: &Locator) -> Option<Locator> {
     match locator {
@@ -156,6 +156,9 @@ pub fn canonical(locator: &Locator) -> Option<Locator> {
         } => {
             let (forge, slug) = host.0.split_once('/')?;
             forge_path(&forge.to_ascii_lowercase(), slug)
+        }
+        Locator::Repository { host, owner, name } => {
+            forge_path(&host.0, &format!("{owner}/{name}"))
         }
         Locator::File { host: None, .. } | Locator::Mcp { .. } | Locator::Opaque { .. } => None,
     }

@@ -9,6 +9,7 @@
 pub(crate) mod oracle;
 pub(crate) mod script;
 
+use crosstalk_spec::ids::MessageHash;
 use crosstalk_spec::interfaces::l3_reconstruction::{ThreadOutcome, Threader};
 use crosstalk_spec::observed::message::Role;
 use crosstalk_testkit::build::ExchangeBuilder;
@@ -301,7 +302,8 @@ fn previous_response_matches_only_in_scope() {
 
 /// `reconstruct.thread.compaction-next-turn-extends`: the turn after a
 /// compaction extends the compaction's conversation with only its new
-/// messages.
+/// messages (less any another of the cluster's conversations holds:
+/// the scripts reuse follow-up texts, `reconstruct.delta.excludes-seen-elsewhere`).
 #[test]
 fn turn_after_compaction_extends_compaction() {
     property(
@@ -318,7 +320,7 @@ fn turn_after_compaction_extends_compaction() {
                 system: SystemChange::Same,
                 ending: Ending::Completed,
             });
-            let (_, _, after, steps) = play(&ops).await?;
+            let (played, threader, after, steps) = play(&ops).await?;
             let Some(ThreadOutcome::Compacts { conversation, .. }) =
                 oracle.outcomes.last().cloned()
             else {
@@ -339,12 +341,22 @@ fn turn_after_compaction_extends_compaction() {
             };
             prop_assert_eq!(*extended, conversation);
             let last = steps.last().ok_or_else(|| TestCaseError::fail("no step"))?;
+            let stored = oracle::snapshot(threader.store()).await?;
+            let cluster = played.cluster_of(last.agent);
+            let elsewhere = |message: &MessageHash| {
+                stored.iter().any(|(id, held)| {
+                    *id != conversation
+                        && cluster.contains(&held.agent)
+                        && held.messages.contains(message)
+                })
+            };
             let added: Vec<_> = last
                 .request
                 .iter()
                 .rev()
                 .take(1)
                 .map(|entry| entry.message)
+                .filter(|message| !elsewhere(message))
                 .collect();
             prop_assert_eq!(&delta.new_inputs, &added);
             Ok(())

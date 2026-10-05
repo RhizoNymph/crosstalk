@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.extract.git-repository-ops"
+statement = "For a shell call, `git push` (not `--dry-run`) yields a Write of the repository it pushes to with WritePayload::Unseen, and `git pull`, `git fetch` and `git clone` yield a Read of the repository, the repository being the remote operand when it is a URL or path, else the remote the clone the command runs in is bound to, and no access when neither is known."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Repositories are the AI Village's main shared medium, and push, pull and
+clone speak git, not HTTP: only the shell extractor can see them. A push
+carries no content in its arguments (the commits were made earlier), so
+its write must carry no spans: crediting the command's text as written
+content would let a reader's match on the command confirm a transmission.
+"""
+
+[evidence]
+unit = ["crosstalk_flow::extract::tests::forges::git_push_pull_fetch_clone", "crosstalk_flow::extract::tests::forges::an_unseen_write_carries_no_spans"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -35,7 +35,7 @@ use crosstalk_spec::observed::message::{AssistantPart, MessageBody, Text, UserPa
 pub use files::{RunFile, Selection};
 pub use tally::Tally;
 
-use crate::corpus::clock::{ClockError, compose};
+use crate::corpus::clock::{ClockError, Pace};
 use crate::corpus::{
     CorpusError, Coverage, Driven, ExchangeDraft, Fidelity, HashedMessage, SourceError,
     TraceSource, World, WorldBuilder,
@@ -102,6 +102,7 @@ pub struct AgentDojoSource {
     root: PathBuf,
     files: Vec<RunFile>,
     tally: Tally,
+    pace: Pace,
 }
 
 impl AgentDojoSource {
@@ -112,7 +113,14 @@ impl AgentDojoSource {
             root: root.to_path_buf(),
             files: files::discover(root, selection)?,
             tally: Tally::default(),
+            pace: Pace::DEFAULT,
         })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     pub fn files(&self) -> &[RunFile] {
@@ -133,16 +141,26 @@ impl TraceSource for AgentDojoSource {
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
         let root = &self.root;
         let tally = &mut self.tally;
+        let pace = self.pace;
         self.files.iter().map(move |file| {
-            let loaded = load_world(root, &file.relative)?;
+            let loaded = load_world_paced(root, &file.relative, pace)?;
             tally.add(&loaded.tally);
             Ok(loaded.world)
         })
     }
 }
 
-/// Reads and converts one run file.
+/// Reads and converts one run file, calls [`Pace::DEFAULT`] apart.
 pub fn load_world(root: &Path, relative: &Path) -> Result<Loaded, AgentDojoError> {
+    load_world_paced(root, relative, Pace::DEFAULT)
+}
+
+/// Reads and converts one run file, calls `pace` apart.
+pub fn load_world_paced(
+    root: &Path,
+    relative: &Path,
+    pace: Pace,
+) -> Result<Loaded, AgentDojoError> {
     let path = root.join(relative);
     let bytes = fs::read(&path).map_err(|source| AgentDojoError::Io {
         path: path.display().to_string(),
@@ -153,7 +171,7 @@ pub fn load_world(root: &Path, relative: &Path) -> Result<Loaded, AgentDojoError
         source,
     })?;
     let file = relative.to_string_lossy().replace('\\', "/");
-    convert_run(&run, &file)
+    convert_run_paced(&run, &file, pace)
 }
 
 /// The model behind a pipeline name: the name without a defense suffix.
@@ -164,8 +182,16 @@ pub fn model_of(pipeline: &str) -> &str {
         .unwrap_or(pipeline)
 }
 
-/// Converts a parsed run into a world named after `file`.
+/// Converts a parsed run into a world named after `file`, calls
+/// [`Pace::DEFAULT`] apart.
 pub fn convert_run(run: &Run, file: &str) -> Result<Loaded, AgentDojoError> {
+    convert_run_paced(run, file, Pace::DEFAULT)
+}
+
+/// Converts a parsed run into a world named after `file`. The attacker's
+/// exchange is call step 0 and the victim's response at message `i` step
+/// `i + 1`, so each tool run between two of its calls takes a step too.
+pub fn convert_run_paced(run: &Run, file: &str, pace: Pace) -> Result<Loaded, AgentDojoError> {
     let dataset = DatasetId::new(DATASET);
     let mut builder = WorldBuilder::new(dataset, WorldKey::new(files::world_name(Path::new(file))));
     let model = model_of(&run.pipeline_name);
@@ -173,7 +199,7 @@ pub fn convert_run(run: &Run, file: &str) -> Result<Loaded, AgentDojoError> {
     let conversation = messages::convert(&run.messages)?;
     let attacker = if run.attacked() {
         let key = builder.agent(ATTACKER, Driven::Model, "agentdojo-attacker")?;
-        let exchange = builder.exchange(attacker_draft(run, &key, file)?)?;
+        let exchange = builder.exchange(attacker_draft(run, &key, file, pace)?)?;
         Some((key, exchange))
     } else {
         None
@@ -183,7 +209,9 @@ pub fn convert_run(run: &Run, file: &str) -> Result<Loaded, AgentDojoError> {
         if raw.role != "assistant" {
             continue;
         }
-        let at = compose(0, index as u64 + 1, 0).map_err(AgentDojoError::Clock)?;
+        let at = pace
+            .at(index as u64 + 1, 0, 0)
+            .map_err(AgentDojoError::Clock)?;
         let draft = ExchangeDraft {
             agent: victim.clone(),
             at,
@@ -238,6 +266,7 @@ fn attacker_draft(
     run: &Run,
     attacker: &crate::keys::AgentKey,
     file: &str,
+    pace: Pace,
 ) -> Result<ExchangeDraft, AgentDojoError> {
     let attack = run.attack_type.as_deref().unwrap_or("unknown");
     let goal = run.injection_task_id.as_deref().unwrap_or("unknown");
@@ -252,7 +281,7 @@ fn attacker_draft(
         .collect();
     Ok(ExchangeDraft {
         agent: attacker.clone(),
-        at: compose(0, 0, 0).map_err(AgentDojoError::Clock)?,
+        at: pace.at(0, 0, 0).map_err(AgentDojoError::Clock)?,
         protocol: WireProtocol::OpenAiChat,
         model: format!("agentdojo-attack/{attack}"),
         request: vec![request],
