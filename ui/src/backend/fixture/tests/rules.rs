@@ -15,7 +15,6 @@ use crosstalk_spec::support::{NonEmpty, Similarity};
 use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::text::Theme;
-use super::super::world::topics::QUERY_CONTEXT_CHARS;
 use super::{caller, collect, first, fresh, researcher, shared};
 use crate::backend::alert_state;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
@@ -228,10 +227,6 @@ async fn rules_are_resolved_against_the_current_version_and_sinks() {
             ActionError::InvalidInput(InputError::UnknownSink {
                 sink: SinkId::from_ulid(9),
             }),
-        ),
-        (
-            refused(semantic(&"key ".repeat(QUERY_CONTEXT_CHARS)), Vec::new()),
-            ActionError::InvalidInput(InputError::QueryTooLong),
         ),
     ];
     for (action, error) in cases {

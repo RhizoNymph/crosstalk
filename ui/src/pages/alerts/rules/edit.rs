@@ -519,7 +519,7 @@ mod tests {
                 .body
                 .contains("name: rule name is longer than 80 characters")
         );
-        // The embedder, not the form, says how long a query may be.
+        // The spec bounds a query's length; the form refuses longer text.
         let long_text = "key+".repeat(1200);
         let reply = post(
             &url,
@@ -532,7 +532,7 @@ mod tests {
             "{}",
             reply.body
         );
-        assert!(reply.body.contains("the text is too long to embed"));
+        assert!(reply.body.contains("at most 1000 characters"));
     }
 
     #[tokio::test]

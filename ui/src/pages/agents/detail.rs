@@ -304,7 +304,9 @@ pub(crate) mod tests {
         AgentCluster, AgentClusterParts, AgentProfileParts, AgentTraffic,
     };
     use crosstalk_spec::ids::MergeId;
-    use crosstalk_spec::observed::agent::{ActiveAgentState, Agent, AgentState, MergedInto};
+    use crosstalk_spec::observed::agent::{
+        ActiveAgentState, Agent, AgentState, MergeAuthor, MergeRecord, MergeRequest, MergedInto,
+    };
 
     use super::*;
     use crate::components::href::tests::state;
@@ -389,7 +391,17 @@ pub(crate) mod tests {
             agent: detail.cluster.agent().clone(),
             aliases: vec![alias],
             children: Vec::new(),
-            merges: Vec::new(),
+            merges: vec![MergeRecord::new(
+                MergeId::from_ulid(4),
+                MergeRequest::new(
+                    AgentId::from_ulid(9),
+                    AgentId::from_ulid(1),
+                    MergeAuthor::Resolver,
+                )
+                .expect("request"),
+                Timestamp::from_micros(0),
+                Vec::new(),
+            )],
             vetoes: Vec::new(),
             lookup: AgentLookup::Redirected {
                 from: AgentId::from_ulid(9),

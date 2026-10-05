@@ -395,11 +395,18 @@ mod tests {
             parse_semantic(&blank, &[]).err(),
             Some(invalid("text", "required"))
         );
-        // How long the text may be is the embedder's to say (`QueryTooLong`).
-        let long = "x".repeat(5000);
+        // The spec bounds the text (`RULE_QUERY_MAX_CHARS`); the form says so.
+        let long = "x".repeat(1001);
         let long_text =
             FormFields::from_pairs(&[("name", "n"), ("text", &long), ("threshold", "0.7")]);
-        assert!(parse_semantic(&long_text, &[]).is_ok());
+        assert_eq!(
+            parse_semantic(&long_text, &[]).err(),
+            Some(invalid("text", "at most 1000 characters"))
+        );
+        let longest = "x".repeat(1000);
+        let longest_text =
+            FormFields::from_pairs(&[("name", "n"), ("text", &longest), ("threshold", "0.7")]);
+        assert!(parse_semantic(&longest_text, &[]).is_ok());
         let sink = SinkId::from_ulid(9).to_ulid();
         let complete = FormFields::from_pairs(&[
             ("name", "Keys"),
