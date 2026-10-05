@@ -343,6 +343,21 @@ Features Index:
       - ui/elements/src/topology/element.ts
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
+  conversation_view:
+    status: design
+    description: >
+      Operator page for one agent's conversation, turn by turn: inputs of
+      any role in request order and outputs, with provenance marks (text
+      other agents originated, output spans and who later read them,
+      relayed text, sub-agent delegations), harness claims, origin (fork,
+      compaction), compaction boundaries, WebSocket increments and replayed traffic
+      (labelled, filterable). Structure
+      with View, text with Content; turns paged by citeable index windows.
+      Waits on proposed L8 conversation reads
+      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+    entry_points: []
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/conversation_view.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
