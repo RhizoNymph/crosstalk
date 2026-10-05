@@ -323,14 +323,19 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
             }
         }
     }
-    for reader in book.finish() {
-        tracing::info!(
-            reader = %reader.reader,
-            page = %reader.page,
-            session = %reader.session,
-            "read of a version this run never saw written; no ground-truth row"
-        );
+    let unattributed = book.finish();
+    for row in &unattributed {
+        if let Row::UnattributedRead(read) = row {
+            tracing::info!(
+                reader = %read.reader,
+                page = %read.page,
+                version = read.version,
+                session = %read.reader_session,
+                "read of a version this run never saw written; writing an unattributed_read row"
+            );
+        }
     }
+    append(&mut truth, &unattributed).await;
     if let Some(mut out) = truth
         && let Err(source) = out.file.flush().await
     {

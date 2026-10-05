@@ -14,7 +14,9 @@
 //!
 //! A read whose write has not been reported yet waits for it; one whose
 //! write never arrives (a version written before this run, or by a writer
-//! cut off before reporting) is counted as unattributed and gets no row.
+//! cut off before reporting) is written at the end as `unattributed_read`:
+//! its content is known, its writer is not, so a scorer can leave a
+//! detection of it unjudged instead of counting it as a false positive.
 //!
 //! [`Row`] is the file's JSON-lines schema: a `header` first, one
 //! `agent_cluster` per key group, then a row per read.
@@ -257,6 +259,24 @@ pub struct Miss {
     pub at_unix_ms: u64,
 }
 
+/// A read of a version whose write this run never saw: written when the
+/// run ends, after every other row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Unattributed {
+    pub world: String,
+    pub reader: String,
+    pub reader_key_group: u32,
+    pub page: String,
+    pub version: u64,
+    pub reader_session: String,
+    pub reader_turn: u32,
+    pub reader_tool_use_id: String,
+    pub read_tool: ReadTool,
+    pub content: Content,
+    pub at_ms: u64,
+    pub at_unix_ms: u64,
+}
+
 /// The agents sharing one key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cluster {
@@ -274,6 +294,7 @@ pub enum Row {
     SelfRead(Delivered),
     Reread(Delivered),
     Miss(Miss),
+    UnattributedRead(Unattributed),
     AgentCluster(Cluster),
 }
 
@@ -429,15 +450,37 @@ impl TruthBook {
     }
 
     /// Ends the book: reads still waiting for their write are unattributed.
-    /// Returns their readers, for logging.
-    pub fn finish(&mut self) -> Vec<Reader> {
-        let left: Vec<Reader> = self
+    /// Returns their rows in read order (time, then tool_use id).
+    pub fn finish(&mut self) -> Vec<Row> {
+        let mut left: Vec<Unattributed> = self
             .waiting
             .drain()
-            .flat_map(|(_, waiting)| waiting.into_iter().map(|found| found.by))
+            .flat_map(|((_, version), waiting)| {
+                waiting.into_iter().map(move |found| (version, found))
+            })
+            .map(|(version, found)| {
+                let by = found.by;
+                Unattributed {
+                    world: self.world.clone(),
+                    read_tool: by.read_tool(),
+                    reader: by.reader,
+                    reader_key_group: by.key_group,
+                    page: by.page.to_string(),
+                    version,
+                    reader_session: by.session,
+                    reader_turn: by.turn,
+                    reader_tool_use_id: by.tool_use_id,
+                    content: found.content,
+                    at_ms: by.at_ms,
+                    at_unix_ms: by.read_at_unix_ms,
+                }
+            })
             .collect();
+        left.sort_by(|a, b| {
+            (a.at_ms, &a.reader_tool_use_id).cmp(&(b.at_ms, &b.reader_tool_use_id))
+        });
         self.counts.unattributed += left.len() as u64;
-        left
+        left.into_iter().map(Row::UnattributedRead).collect()
     }
 
     fn classify(&mut self, write: &WriteRecord, found: Found) -> Row {

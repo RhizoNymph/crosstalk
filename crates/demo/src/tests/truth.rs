@@ -525,6 +525,7 @@ fn kind(row: &Row) -> &'static str {
         Row::SelfRead(_) => "self_read",
         Row::Reread(_) => "reread",
         Row::Miss(_) => "miss",
+        Row::UnattributedRead(_) => "unattributed_read",
         Row::AgentCluster(_) => "agent_cluster",
     }
 }
@@ -570,7 +571,22 @@ fn the_book_classifies_every_read() {
     book.end_session("s-a");
     let after_end = book.read(read("agent-002", "s-a", "p-1", Some(("agent-000", 1))));
     assert_eq!(after_end.as_ref().map(kind), Some("transmission"));
-    assert_eq!(book.finish().len(), 1);
+    let unattributed = book.finish();
+    assert_eq!(
+        unattributed.iter().map(kind).collect::<Vec<_>>(),
+        ["unattributed_read"]
+    );
+    let Some(Row::UnattributedRead(left)) = unattributed.first() else {
+        panic!("an unattributed read")
+    };
+    assert_eq!(
+        (left.reader.as_str(), left.page.as_str(), left.version),
+        ("agent-001", "p-1", 9)
+    );
+    assert_eq!(left.reader_session, "s-d");
+    assert_eq!(left.at_unix_ms, 1_250);
+    // Finishing again finds nothing left.
+    assert!(book.finish().is_empty());
     let counts = book.counts();
     assert_eq!(
         (
@@ -733,4 +749,37 @@ fn rows_have_exactly_the_v2_keys() {
         ])
     );
     assert_eq!(encoded["value"]["kind"], "miss");
+
+    // A read whose write this run never saw.
+    assert!(
+        book.read(read("agent-002", "s", "p-3", Some(("agent-009", 5))))
+            .is_none()
+    );
+    let left = book.finish();
+    let encoded = encode(left.first().expect("unattributed row"));
+    assert_eq!(
+        encoded["order"],
+        json!([
+            "kind",
+            "world",
+            "reader",
+            "reader_key_group",
+            "page",
+            "version",
+            "reader_session",
+            "reader_turn",
+            "reader_tool_use_id",
+            "read_tool",
+            "content",
+            "at_ms",
+            "at_unix_ms"
+        ])
+    );
+    let value = &encoded["value"];
+    assert_eq!(value["kind"], "unattributed_read");
+    assert_eq!(value["version"], 5);
+    assert_eq!(
+        keys(&value["content"]),
+        BTreeSet::from(["at", "blake3", "excerpt", "sha256"])
+    );
 }
