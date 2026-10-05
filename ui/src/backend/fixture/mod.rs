@@ -163,6 +163,15 @@ impl FixtureBackend {
         self.feed.epoch()
     }
 
+    /// The same world with another configured default remap threshold
+    /// (`AlertRuleConfig::default_remap_threshold`), which the present
+    /// reports and `CreateRule` fills a missing threshold with.
+    #[cfg(test)]
+    pub fn with_default_remap(mut self, threshold: crosstalk_spec::support::Similarity) -> Self {
+        self.world.rule_config.default_remap_threshold = threshold;
+        self
+    }
+
     /// The same world with another `export.max_rows`.
     #[cfg(test)]
     pub fn with_export_limits(mut self, limits: ExportLimits) -> Self {

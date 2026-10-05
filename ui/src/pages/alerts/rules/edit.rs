@@ -37,6 +37,7 @@ use crosstalk_spec::interfaces::l8_surface::ConflictKind;
 use crosstalk_spec::interfaces::l8_surface::OperatorAction;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::support::Similarity;
 
 path_param!(rule_ulid);
 
@@ -49,8 +50,9 @@ struct NewQuery {
 
 /// A new rule's starting values. `?topic=<id>` (the explore page's "Watch"
 /// links) picks that topic when the form offers it.
-fn new_values(cx: &Cx, kind: RuleKindChoice, offered: &[TopicId]) -> Values {
-    let mut values = Values::defaults(kind);
+fn new_values(cx: &Cx, kind: RuleKindChoice, options: &Options) -> Values {
+    let offered = &options.choices.topics;
+    let mut values = Values::defaults(kind, options.remap);
     let topic = query_params::<NewQuery>(cx)
         .ok()
         .and_then(|q| q.topic.as_deref())
@@ -70,25 +72,24 @@ pub enum Target {
     Existing(AlertRuleId),
 }
 
-/// The topic version to pick topics from: the present's rule version, the
-/// one `CreateRule` and `UpdateRule` check.
-async fn current_version(cx: &Cx) -> std::result::Result<TopicModelVersion, UiError> {
-    present(cx)
-        .await
-        .map(|present| present.current_rule_version)
-        .map_err(|e| UiError::from(e.clone()))
-}
-
-/// The topics and sinks a form may pick. Topics need `Content`: their
-/// labels come from message text.
+/// The topics and sinks a form may pick, and the remap threshold a new
+/// watched-topic rule starts at. Topics need `Content`: their labels come
+/// from message text.
 struct Options {
     choices: Choices,
     topics: Vec<TopicOption>,
     sinks: Vec<(String, String)>,
+    /// The present's default (`Present::default_remap_threshold`): what a
+    /// rule created without a threshold takes.
+    remap: Similarity,
 }
 
+/// The form's options, from the request's present: topics of its rule
+/// version (`Present::current_rule_version`, the one `CreateRule` and
+/// `UpdateRule` check) and its default remap threshold.
 async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiError> {
-    let version = current_version(cx).await?;
+    let present = present(cx).await.map_err(|e| UiError::from(e.clone()))?;
+    let version = present.current_rule_version;
     let sinks = backend(cx).sinks(caller).await?;
     let topics = if can(caller, Permission::Content) {
         all_topics(backend(cx), caller, TopicVersionSelector::Pinned(version))
@@ -114,6 +115,7 @@ async fn options(cx: &Cx, caller: &Caller) -> std::result::Result<Options, UiErr
             .into_iter()
             .map(|s| (s.id.to_ulid(), s.name))
             .collect(),
+        remap: present.default_remap_threshold,
     })
 }
 
@@ -299,7 +301,7 @@ async fn editor(
             },
             *kind,
             href(&format!("{PATH}/new"), state, &[]),
-            new_values(cx, *kind, &options.choices.topics),
+            new_values(cx, *kind, &options),
             None,
         ),
         Target::Existing(id) => {

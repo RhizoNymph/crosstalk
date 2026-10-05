@@ -69,10 +69,15 @@ pub fn router() -> Router {
 
 /// The router over `backend`.
 pub fn router_over(backend: FixtureBackend) -> Router {
+    router_over_app(crate::backend::AppBackend::from(backend))
+}
+
+/// The router over any configured backend (the world's, say).
+pub fn router_over_app(backend: crate::backend::AppBackend) -> Router {
     Router::builder()
         .discover()
         .app_context(operator())
-        .app_context(crate::backend::AppBackend::from(backend))
+        .app_context(backend)
         .assets(assets())
         .runtime()
         .build()

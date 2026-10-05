@@ -19,7 +19,6 @@ use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
-use crosstalk_spec::support::Similarity;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
@@ -36,7 +35,6 @@ use crate::components::{
     segmented,
 };
 use crate::error::UiError;
-use crate::pages::alerts::rules::form::DEFAULT_REMAP;
 use crate::pages::common::action::{Failure, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::invalid;
@@ -82,20 +80,6 @@ struct Loaded {
     topics: std::result::Result<Table, UiError>,
     /// The lineage to the next version: its number and rows.
     remap: Option<(u32, Vec<RemapRow>)>,
-}
-
-/// The remap threshold the table maps at: the rule form's default.
-fn default_threshold() -> std::result::Result<Similarity, UiError> {
-    DEFAULT_REMAP
-        .parse::<f32>()
-        .ok()
-        .and_then(|value| Similarity::new(value).ok())
-        .ok_or_else(|| {
-            invalid(
-                "remap_threshold",
-                "the default threshold is not a similarity",
-            )
-        })
 }
 
 /// The rows of the selected version's `topics`: sizes over the window,
@@ -159,7 +143,14 @@ async fn load(
             let (_, next) =
                 all_topics(backend, caller, TopicVersionSelector::Pinned(lineage.to())).await?;
             let rules = all_rules(backend, caller).await?;
-            let rows = remap_rows(&lineage, &from, &next, &rules, default_threshold()?, state);
+            let rows = remap_rows(
+                &lineage,
+                &from,
+                &next,
+                &rules,
+                present.default_remap_threshold,
+                state,
+            );
             Some((lineage.to().0, rows))
         }
         Ok(None) | Err(QueryError::NotFound) => None,
