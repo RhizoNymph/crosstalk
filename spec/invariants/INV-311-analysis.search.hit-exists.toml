@@ -12,7 +12,7 @@ confirmed transmissions have content to index; suspected ones do not.
 """
 
 [evidence]
-integration = "crosstalk_analysis::tests::search_hits_resolve_to_confirmed_transmissions"
+integration = "crosstalk_analysis::search::tests::cases::search_hits_resolve_to_confirmed_transmissions"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

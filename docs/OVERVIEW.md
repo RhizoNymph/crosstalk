@@ -35,7 +35,9 @@ Overview:
     implemented but not yet wired into the gateway (provenance). L5 flow
     has its extractors, correlator and consumer (flow_extract,
     flow_correlator) and its Postgres stores (flow_store); L7 has its
-    Postgres edge store and bus consumer (topology_store); L6 is partial.
+    Postgres edge store and bus consumer (topology_store); L6 has its
+    remote adapters (analysis) and Postgres search and alerts
+    (search_alerts).
     The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
     the graphs' node facts, generic over the spec's store traits) is
@@ -941,8 +943,8 @@ Features Index:
     doc: docs/features/gateway.md
   analysis:
     description: >
-      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). So far its
-      remote module: SidecarTopicModel (TopicModel: fits the catalog's
+      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). Its Postgres
+      search and alert stores are search_alerts. Its remote module: SidecarTopicModel (TopicModel: fits the catalog's
       version over documents at a given time through the sidecar, computes
       centroids as normalized member means and derives topic ids from the
       fit time, version and cluster; assigns locally to the nearest
@@ -1206,4 +1208,24 @@ Features Index:
       - crates/flow/src/consumer/apply.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
+  search_alerts:
+    description: >
+      crosstalk-analysis (crates/analysis, L6, P6.2) on Postgres. PgSearchIndex
+      implements SearchIndex and SearchCorpus (full-text tsvector terms plus
+      pgvector embeddings, scores computed in SQL exactly as the reference,
+      the filter applied in Rust before the page is cut, keyed cursors), and
+      PgProjectionSource samples the same documents. PgAlertStore implements
+      AlertRuleStore, AlertTriage, AlertRuleMaintenance, AlertActions and
+      AlertReads in SERIALIZABLE transactions with an outbox published after
+      commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
+      is the alerts consumer group, built like the gateway pipeline's
+      stages. Model-tested against crosstalk-memory's harnesses.
+    entry_points:
+      - crates/analysis/src/search/mod.rs
+      - crates/analysis/src/alerts/mod.rs
+      - crates/analysis/src/alerts/eval/mod.rs
+      - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/pg/mod.rs
+    depends_on: [type_spec, store, memory, gateway]
+    doc: docs/features/search_alerts.md
 ```

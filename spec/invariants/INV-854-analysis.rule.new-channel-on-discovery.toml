@@ -13,7 +13,7 @@ channel.
 """
 
 [evidence]
-unit = "crosstalk_analysis::rules::tests::new_channel_only_on_discovery"
+unit = "crosstalk_analysis::alerts::eval::tests::new_channel_only_on_discovery"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

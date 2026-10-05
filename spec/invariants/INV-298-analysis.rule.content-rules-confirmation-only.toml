@@ -12,9 +12,9 @@ because dedup only folds into active alerts.
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::watched_topic_ignores_refit_classification", "crosstalk_analysis::tests::semantic_rule_ignores_refit_classification"]
-property = "crosstalk_analysis::tests::content_rules_never_draft_on_refit"
+unit = ["crosstalk_analysis::alerts::eval::tests::watched_topic_ignores_refit_classification", "crosstalk_analysis::alerts::eval::tests::semantic_rule_ignores_refit_classification"]
+property = "crosstalk_analysis::alerts::eval::tests::content_rules_never_draft_on_refit"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

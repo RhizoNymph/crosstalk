@@ -11,7 +11,7 @@ operator makes it.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::rule_sinks_must_be_configured"
+unit = "crosstalk_analysis::alerts::tests::rules::rule_sinks_must_be_configured"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

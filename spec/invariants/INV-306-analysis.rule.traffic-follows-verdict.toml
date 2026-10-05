@@ -15,9 +15,9 @@ absorbed is judged by the promoted channel's policy
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::unreviewed_channel_traffic_drafts", "crosstalk_analysis::tests::sanctioned_channel_traffic_does_not_draft", "crosstalk_analysis::tests::direct_route_traffic_does_not_draft"]
-property = "crosstalk_analysis::tests::traffic_rules_agree_with_policy_verdict"
+unit = ["crosstalk_analysis::alerts::eval::tests::unreviewed_channel_traffic_drafts", "crosstalk_analysis::alerts::eval::tests::sanctioned_channel_traffic_does_not_draft", "crosstalk_analysis::alerts::eval::tests::direct_route_traffic_does_not_draft"]
+property = "crosstalk_analysis::alerts::eval::tests::traffic_rules_agree_with_policy_verdict"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

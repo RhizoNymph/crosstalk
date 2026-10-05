@@ -16,7 +16,7 @@ the alert as closed.
 [evidence]
 unit = [
   "crosstalk_spec::tests::query_errors::alert_action_errors_map_to_typed_action_errors",
-  "crosstalk_analysis::tests::resolving_an_open_alert_is_refused",
+  "crosstalk_analysis::alerts::tests::triage::resolving_an_open_alert_is_refused",
 ]
 
 [evidence-review]
