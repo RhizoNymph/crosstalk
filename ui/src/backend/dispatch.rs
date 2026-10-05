@@ -2,6 +2,10 @@
 //! `OperatorActions` and `LiveFeed`. Each forwards to the configured
 //! backend; the export rows and live streams are enums over the backends'
 //! own. Beside them, [`AppBackend::view_end`]: where a default view ends.
+//!
+//! The http backend's failed calls and ended live streams are logged
+//! ([`super::http::log`]); the other backends run in this process and log
+//! nothing here.
 
 use std::collections::BTreeMap;
 
@@ -58,7 +62,10 @@ use crosstalk_spec::paging::{
 };
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+use crosstalk_client::{HttpClient, HttpLiveStream};
+
 use super::fixture::{FixtureBackend, export as fixture_export, live as fixture_live};
+use super::http::log;
 use super::world::WorldSurface;
 use super::{AppBackend, Result};
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
@@ -66,10 +73,11 @@ use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
 };
 use crosstalk_spec::paging::ChannelTransmissionList;
 
-/// Runs `$body` with `$b` bound to the fixture or to the world's surface,
-/// for a method both implement through the same trait.
+/// Runs `$body` with `$b` bound to the fixture, the world's surface or the
+/// http client, for a method all implement through the same trait; the
+/// http backend's failure is logged as `$method`'s.
 macro_rules! on_spec {
-    ($self:expr, $b:ident => $body:expr) => {
+    ($self:expr, $method:expr, $b:ident => $body:expr) => {
         match $self {
             AppBackend::Fixture(fixture) => {
                 let $b: &FixtureBackend = fixture;
@@ -79,8 +87,10 @@ macro_rules! on_spec {
                 let $b = world.surface();
                 $body
             }
-            #[cfg(feature = "live")]
-            AppBackend::Live(live) => match *live {},
+            AppBackend::Http(client) => {
+                let $b: &HttpClient = client;
+                log::outcome($method, $body)
+            }
         }
     };
 }
@@ -90,7 +100,7 @@ macro_rules! forward_reads {
     ($(fn $name:ident(&self, caller: &Caller $(, $arg:ident: $ty:ty)*) -> $ret:ty;)*) => {
         $(
             async fn $name(&self, caller: &Caller $(, $arg: $ty)*) -> Result<$ret> {
-                on_spec!(self, b => QueryApi::$name(b, caller $(, $arg)*).await)
+                on_spec!(self, stringify!($name), b => QueryApi::$name(b, caller $(, $arg)*).await)
             }
         )*
     };
@@ -100,6 +110,7 @@ macro_rules! forward_reads {
 pub enum AppExportRows {
     Fixture(Box<fixture_export::ExportRows>),
     World(Box<<WorldSurface as QueryApi>::ExportRows>),
+    Http(Box<<HttpClient as QueryApi>::ExportRows>),
 }
 
 impl ExportStream for AppExportRows {
@@ -113,6 +124,10 @@ impl ExportStream for AppExportRows {
                 ExportStep::Row(row, rest) => ExportStep::Row(row, Self::World(Box::new(rest))),
                 ExportStep::End(trailer) => ExportStep::End(trailer),
             },
+            Self::Http(rows) => match (*rows).next().await {
+                ExportStep::Row(row, rest) => ExportStep::Row(row, Self::Http(Box::new(rest))),
+                ExportStep::End(trailer) => ExportStep::End(trailer),
+            },
         }
     }
 }
@@ -121,6 +136,7 @@ impl ExportStream for AppExportRows {
 pub enum AppStream {
     Fixture(fixture_live::FeedStream),
     World(<WorldSurface as LiveFeed>::Stream),
+    Http(HttpLiveStream),
 }
 
 impl LiveStream for AppStream {
@@ -128,6 +144,13 @@ impl LiveStream for AppStream {
         match self {
             Self::Fixture(stream) => stream.next().await,
             Self::World(stream) => stream.next().await,
+            Self::Http(stream) => {
+                let next = stream.next().await;
+                if let Err(end) = next {
+                    log::live_ended(end);
+                }
+                next
+            }
         }
     }
 }
@@ -221,8 +244,14 @@ impl QueryApi for AppBackend {
                     rows: AppExportRows::World(Box::new(export.rows)),
                 })
             }
-            #[cfg(feature = "live")]
-            AppBackend::Live(live) => match *live {},
+            AppBackend::Http(client) => {
+                let export =
+                    log::outcome("export", QueryApi::export(client, caller, request).await)?;
+                Ok(Export {
+                    header: export.header,
+                    rows: AppExportRows::Http(Box::new(export.rows)),
+                })
+            }
         }
     }
 }
@@ -233,7 +262,7 @@ impl OperatorActions for AppBackend {
         caller: &Caller,
         action: OperatorAction,
     ) -> std::result::Result<ActionOutcome, ActionError> {
-        on_spec!(self, b => OperatorActions::act(b, caller, action).await)
+        on_spec!(self, "act", b => OperatorActions::act(b, caller, action).await)
     }
 }
 
@@ -250,8 +279,11 @@ impl LiveFeed for AppBackend {
                 .subscribe(caller, resume)
                 .await
                 .map(AppStream::World),
-            #[cfg(feature = "live")]
-            AppBackend::Live(live) => match *live {},
+            AppBackend::Http(client) => log::outcome(
+                "subscribe",
+                LiveFeed::subscribe(client, caller, resume).await,
+            )
+            .map(AppStream::Http),
         }
     }
 }
@@ -259,13 +291,12 @@ impl LiveFeed for AppBackend {
 impl AppBackend {
     /// Where a default view's window ends, given the present the request
     /// read: `present.now`, except for a fixture replaying up to a fixed
-    /// end. Not a gateway question: only the fixture replays.
+    /// end. Not a gateway question: only the fixture replays, so the world
+    /// and the gateway over HTTP end at their present.
     pub fn view_end(&self, present: &SpecPresent) -> Timestamp {
         match self {
             Self::Fixture(fixture) => fixture.view_end(present),
-            Self::World(_) => present.now,
-            #[cfg(feature = "live")]
-            Self::Live(live) => match *live {},
+            Self::World(_) | Self::Http(_) => present.now,
         }
     }
 }

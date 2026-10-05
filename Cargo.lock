@@ -912,11 +912,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crosstalk-api",
+ "crosstalk-client",
  "crosstalk-conformance",
- "crosstalk-memory",
  "crosstalk-spec",
  "crosstalk-surface",
- "crosstalk-transport",
  "crosstalk-world",
  "futures-core",
  "jiff",
