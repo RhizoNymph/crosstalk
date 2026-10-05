@@ -22,6 +22,7 @@
 pub mod align;
 pub mod judge;
 pub mod quality;
+pub mod sources;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -29,6 +30,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use judge::{Judge, Outcome};
+pub use sources::SourceCount;
 
 use crate::corpus::World;
 use crate::keys::{DatasetId, SourceRef};
@@ -220,6 +222,9 @@ pub struct Score {
     /// At most the scorer's example cap of each.
     pub misses: Vec<Miss>,
     pub false_positives: Vec<FalsePositive>,
+    /// The shared texts negative-control violations fell on, largest
+    /// first, tallied over every violation ([`sources`]).
+    pub sources: Vec<SourceCount>,
 }
 
 /// What a row selector picks; `None` matches anything.
@@ -276,6 +281,7 @@ pub struct Scorer {
     violations: BTreeMap<(DatasetId, NegativeReason), u64>,
     misses: Vec<Miss>,
     false_positives: Vec<FalsePositive>,
+    sources: sources::SourceTally,
 }
 
 impl Scorer {
@@ -290,6 +296,7 @@ impl Scorer {
             violations: BTreeMap::new(),
             misses: Vec::new(),
             false_positives: Vec::new(),
+            sources: sources::SourceTally::default(),
         }
     }
 
@@ -347,6 +354,8 @@ impl Scorer {
                             .violations
                             .entry((dataset.clone(), reason))
                             .or_default() += 1;
+                        self.sources
+                            .add(reason, &excerpt(world, prediction).unwrap_or_default());
                     }
                     if self.false_positives.len() < self.example_cap {
                         self.false_positives.push(FalsePositive {
@@ -425,6 +434,7 @@ impl Scorer {
                 .collect(),
             misses: self.misses,
             false_positives: self.false_positives,
+            sources: self.sources.top(),
         }
     }
 }

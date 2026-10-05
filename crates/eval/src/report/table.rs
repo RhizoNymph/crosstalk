@@ -131,6 +131,25 @@ pub fn render(report: &Report) -> String {
             let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
         }
     }
+    if let Some(background) = &report.background {
+        let _ = writeln!(
+            out,
+            "\nfalse positives: {:.1} per 1k exchanges ({} over {})",
+            background.per_1k_exchanges, background.false_positives, background.exchanges
+        );
+        if !background.sources.is_empty() {
+            let _ = writeln!(out, "top boilerplate sources:");
+            for source in &background.sources {
+                let _ = writeln!(
+                    out,
+                    "  {:>6}  {:<14} {}",
+                    source.count,
+                    name(&source.reason),
+                    source.text
+                );
+            }
+        }
+    }
     if !report.gates.is_empty() {
         let _ = writeln!(out, "\ngates:");
         for gate in &report.gates {

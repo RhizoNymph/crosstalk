@@ -10,7 +10,7 @@ pub use gates::{Check, Gate, GateOutcome, GateStatus, Gates};
 use crate::keys::DatasetId;
 use crate::pipeline::Unscored;
 use crate::score::{
-    Counts, FalsePositive, Miss, RowKey, Score, Totals, TransmissionRow, ViolationRow,
+    Counts, FalsePositive, Miss, RowKey, Score, SourceCount, Totals, TransmissionRow, ViolationRow,
 };
 use crate::truth::Tier;
 
@@ -55,6 +55,20 @@ pub struct Report {
     pub unscored: Unscored,
     pub misses: Vec<Miss>,
     pub false_positives: Vec<FalsePositive>,
+    /// The false-positive rate and its sources, when the run had negative
+    /// controls.
+    pub background: Option<Background>,
+}
+
+/// What a run's negative controls say: how often the detector reported
+/// a transmission per exchange it read, and the shared texts it fell on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Background {
+    /// Every false positive, out-of-reach rows included.
+    pub false_positives: u64,
+    pub exchanges: u64,
+    pub per_1k_exchanges: f64,
+    pub sources: Vec<SourceCount>,
 }
 
 impl Report {
@@ -75,6 +89,17 @@ impl Report {
                 overall.add(&row.counts);
             }
         }
+        let false_positives = overall.false_positive + out_of_reach.false_positive;
+        let background =
+            (score.totals.negative_controls > 0 && score.totals.exchanges > 0).then(|| {
+                Background {
+                    false_positives,
+                    exchanges: score.totals.exchanges,
+                    per_1k_exchanges: false_positives as f64 * 1000.0
+                        / score.totals.exchanges as f64,
+                    sources: score.sources,
+                }
+            });
         let rows = score
             .rows
             .into_iter()
@@ -107,6 +132,7 @@ impl Report {
             unscored,
             misses: score.misses,
             false_positives: score.false_positives,
+            background,
         }
     }
 

@@ -14,7 +14,11 @@ use crosstalk_eval::datasets::open_swe::{
 };
 use crosstalk_eval::datasets::parquet_rows::{ParquetError, ParquetRows, row_groups};
 use crosstalk_eval::datasets::salt::Selection;
-use crosstalk_eval::pipeline::{ReferenceDetector, run};
+use crosstalk_eval::keys::DatasetId;
+use crosstalk_eval::pipeline::{ReferenceDetector, Unscored, run};
+use crosstalk_eval::report::Report;
+use crosstalk_eval::report::table::render;
+use crosstalk_eval::score::sources::{SOURCE_CHARS, TOP_SOURCES};
 use crosstalk_eval::truth::{Expectation, NegativeReason, Tier};
 use crosstalk_spec::observed::message::{AssistantPart, MessageBody, Reasoning};
 use crosstalk_spec::support::Timestamp;
@@ -351,6 +355,55 @@ fn the_reference_matcher_only_makes_false_positives_on_background() {
         score.false_positives
     );
     assert!(score.violation_count(None, Some(NegativeReason::Boilerplate)) >= 1);
+}
+
+#[test]
+fn background_runs_report_the_false_positive_rate_and_its_sources() {
+    let mut source = OpenSweSource::open(&root(), &Selection::default(), mixing(16))
+        .unwrap_or_else(|e| panic!("{e}"));
+    // No examples kept: the source tally is complete regardless.
+    let summary = run(&mut source, &mut ReferenceDetector::default(), 0, |_, _| {});
+    let score = summary.score;
+    assert!(score.false_positives.is_empty());
+    let violations = score.violation_count(None, None);
+    assert!(violations >= 1);
+    assert!(score.sources.len() <= TOP_SOURCES);
+    let tallied: u64 = score.sources.iter().map(|s| s.count).sum();
+    if score.sources.len() < TOP_SOURCES {
+        assert_eq!(tallied, violations);
+    }
+    assert!(
+        score
+            .sources
+            .windows(2)
+            .all(|pair| pair[0].count >= pair[1].count)
+    );
+    assert!(score.sources.iter().all(|s| {
+        s.count > 0
+            && s.text.chars().count() <= SOURCE_CHARS
+            && !s.text.contains('\n')
+            && s.text == s.text.trim()
+    }));
+    let exchanges = score.totals.exchanges;
+    let false_positives = score.total(&Default::default()).false_positive;
+    let report = Report::new(
+        DatasetId::new("open_swe"),
+        "reference",
+        score,
+        Vec::new(),
+        Vec::new(),
+        Unscored::default(),
+    );
+    let Some(background) = &report.background else {
+        panic!("a world with negative controls has a background summary");
+    };
+    assert_eq!(background.false_positives, false_positives);
+    assert_eq!(background.exchanges, exchanges);
+    let rate = false_positives as f64 * 1000.0 / exchanges as f64;
+    assert!((background.per_1k_exchanges - rate).abs() < 1e-9);
+    let text = render(&report);
+    assert!(text.contains("per 1k exchanges"), "{text}");
+    assert!(text.contains("top boilerplate sources"), "{text}");
 }
 
 #[test]
