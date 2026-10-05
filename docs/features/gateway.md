@@ -399,9 +399,10 @@ MpscBus, one consumer group per slot (live-<slot>):
                    ─▶ AccessRecorded, ChannelCrossAccessed, TransmissionConfirmed/Suspected
   L6 classify      TransmissionConfirmed ─▶ catalog assignment, Classified state ─▶ TransmissionClassified
   L7 topology      TransmissionClassified, AccessRecorded, VerdictSet, topic versions ─▶ edges ─▶ EdgeUpdated
-  evidence         SpanOriginated ─▶ MemoryEvidence (span from SpanIndex::spans on
-                   L4's MemoryProvenanceStore; MemoryEvidence reads accesses and resources
-                   from the registry itself)
+  evidence         SpanOriginated, SpanRelayed from an input (a forwarded span)
+                   ─▶ MemoryEvidence (span from SpanIndex::spans on L4's
+                   MemoryProvenanceStore, a forward's state restated from its event;
+                   MemoryEvidence reads accesses and resources from the registry itself)
   surface relay    every subject but ExchangeCaptured ─▶ node facts, live feed
 stores ─ Outbox ─▶ forward_outbox ─▶ bus      (ChannelDiscovered, Changed::*, AlertRuleChanged, ...)
 Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores, bus and blobs

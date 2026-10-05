@@ -1,0 +1,30 @@
+[invariant]
+id = "provenance.index.remainder-around-relay-matchable"
+statement = "In an output part, adjacent spans that are posted (originated or forwarded) with only whitespace between them are winnowed as one text, and each selected k-gram is also posted under the span holding more than half of its normalized characters; a k-gram is never posted under an originated span holding half of it or less."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A reply that quotes a phrase of the message it answers is cut into a
+forwarded run and originated remainders around it, each often shorter than
+a shingle (k = 32): on their own text they have no k-gram, and a reader of
+the whole reply matched nothing of them (SALT: 246 of 2,487 exact
+deliveries of 47 to 300 bytes missed, exchange 01KDVDNA0C9RCBYW8FYCB7ZR3N).
+Winnowing the run of adjacent posted spans as one text selects the k-grams
+a reader holding the whole run selects too, and posting each under the span
+that holds most of it keeps attribution honest: a k-gram mostly over the
+quote goes to the forwarded span, never to an originated one, so relayed
+text is never re-originated. The spans' own winnowed fingerprints are
+still posted, so a span is found by its own text as before
+(provenance.index.originated-indexed). Originated text without a k-gram is
+kept from the short-span floor (ShortSpans::min_chars) so such a remainder
+has a span to post under.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::match_quality::originated_remainder_around_a_relayed_middle_matches"
+property = "crosstalk_provenance::props::context_kgrams_go_to_the_span_holding_most_of_them"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

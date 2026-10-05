@@ -83,3 +83,52 @@ pub fn rolling(chars: &[char], k: usize) -> Vec<u64> {
 pub fn kgram(chars: &[char]) -> u64 {
     rolling(chars, chars.len()).first().copied().unwrap_or(0)
 }
+
+/// Prefix hashes of a character sequence: the hash of any window in O(1),
+/// equal to [`kgram`] of that window.
+#[derive(Debug, Clone)]
+pub struct Prefix {
+    /// `prefix[i]` is the polynomial of the first `i` characters.
+    prefix: Vec<u64>,
+    /// `powers[n]` is `BASE^n`.
+    powers: Vec<u64>,
+}
+
+impl Prefix {
+    pub fn new(chars: &[char]) -> Self {
+        let mut prefix = Vec::with_capacity(chars.len() + 1);
+        let mut powers = Vec::with_capacity(chars.len() + 1);
+        prefix.push(0);
+        powers.push(1);
+        for ch in chars {
+            let last = prefix.last().copied().unwrap_or(0);
+            prefix.push(add(mul(last, BASE), value(*ch)));
+            let power = powers.last().copied().unwrap_or(1);
+            powers.push(mul(power, BASE));
+        }
+        Self { prefix, powers }
+    }
+
+    /// The hash of characters `start..end`, as [`kgram`] gives it; `None`
+    /// for an empty or out-of-range window.
+    pub fn window(&self, start: usize, end: usize) -> Option<u64> {
+        if start >= end || end >= self.prefix.len() {
+            return None;
+        }
+        let high = *self.prefix.get(end)?;
+        let low = mul(*self.prefix.get(start)?, *self.powers.get(end - start)?);
+        let length = u64::try_from(end - start).unwrap_or(u64::MAX);
+        Some(mix(sub(high, low) ^ length.rotate_left(56)))
+    }
+}
+
+/// Mixed into the hash of a whole short value, so it never equals the
+/// k-gram fingerprint of the same characters: a short-span hash names a
+/// whole value, a k-gram any window.
+const SHORT_DOMAIN: u64 = 0x5348_4F52_545F_5350;
+
+/// The exact hash of a whole short value, from its window hash
+/// ([`kgram`] or [`Prefix::window`]).
+pub fn short(window: u64) -> u64 {
+    mix(window ^ SHORT_DOMAIN)
+}

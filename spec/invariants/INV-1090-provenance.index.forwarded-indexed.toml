@@ -1,0 +1,43 @@
+[invariant]
+id = "provenance.index.forwarded-indexed"
+statement = "When forwarding is enabled (ProvenanceConfig::forwarding), processing a ConversationDelta inserts every below-cutoff fingerprint of each span it classifies Relayed with RelaySource::Input into the FingerprintIndex under the span's own agent, the span's state stays Relayed, SpanIndex::spans returns it, and it is evicted after retention like an originated span. When forwarding is disabled (the default) such a span is neither indexed nor returned by SpanIndex::spans. A span classified Relayed with RelaySource::Span is never indexed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Text an agent copies from its own inputs (a fetched page, a tool result,
+a message it received) and passes on is a forward: "A forwards a document
+to B". Before, such a span was never indexed, so the forward was invisible
+unless the document's original writer was itself a visible agent whose
+span the reader matched. The forwarding agent is now the matchable author
+of its forwarded text: its span is indexed under that agent and a peer's
+later read of it matches it. The span's classification does not change:
+it is still published as SpanRelayed from that input, and its relay source
+still names the input it was copied from. The store keeps the forward's
+indexing beside the span (pending, indexed, expired), so hits on it count
+no Propagated state and expiry evicts it like an originated span.
+
+A reader that read the same upstream source itself, rather than the
+forward, also matches the forwarded span. That is a shared-upstream match,
+and L5 keeps it from confirming a channel: the sender never wrote the
+resource the reader read (flow.route.shared-upstream-stays-suspected).
+Text relayed from another agent's indexed span stays unindexed: its
+author is that span's agent, whose span the reader already matches.
+
+Forwarding is off by default. Measured on SALT (--limit 53, live) it
+raised recall from 0.792 to 0.957 but dropped precision from 0.703 to
+0.310: agents paste their own tool output (a database schema), and every
+peer's own read of the same upstream matches the forward through a tool
+result that records no access, which INV-963 does not hold back. Before it
+is turned on, shared-upstream matches on forwards need handling for
+ToolResult reads without an access, and for SystemPrompt and UserTurn
+reads of text forwarded from a shared prompt or an orchestrator's turn.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::match_quality::forwarded_text_is_indexed_under_the_forwarder", "crosstalk_provenance::tests::match_quality::forwarded_text_is_not_indexed_when_forwarding_is_off", "crosstalk_provenance::tests::match_quality::span_relays_are_not_indexed"]
+integration = "crosstalk_provenance::integration::pg_forwarded_spans_index_and_expire"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

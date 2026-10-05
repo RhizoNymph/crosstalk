@@ -7,8 +7,10 @@ mod config;
 mod decode;
 mod fingerprint;
 pub(crate) mod fixtures;
+mod match_quality;
 pub(crate) mod scenarios;
 mod segment;
+mod short;
 mod store;
 
 /// `provenance.match.carrier-from-part`: a read in a tool result.

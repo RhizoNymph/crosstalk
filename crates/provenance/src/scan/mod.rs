@@ -19,8 +19,9 @@
 //!   is `Common` when every fingerprint is boilerplate, else `Originated`.
 //!
 //! [`Scanner::index_work`] then gives the index writes for the committed
-//! spans: the postings of each originated span and one observation per
-//! span and per scanned input part
+//! spans: the postings of each originated and each forwarded span (its own
+//! fingerprints, its context k-grams and a whole short value's hash,
+//! `postings`) and one observation per span and per scanned input part
 //! (`provenance.index.originated-indexed`,
 //! `provenance.index.scanned-texts-observed`). It is a function of the
 //! stored spans and the delta's messages, so a redelivery after a crash
@@ -34,6 +35,7 @@ pub mod hits;
 pub mod kind;
 pub mod messages;
 mod output;
+mod postings;
 mod reads;
 
 use std::collections::{BTreeSet, HashMap};
@@ -51,7 +53,7 @@ use crosstalk_spec::support::{Similarity, Timestamp};
 use self::cache::KGramCache;
 use self::hits::LiveSpans;
 use self::messages::{LoadError, MessageSource};
-use crate::config::{IndexSettings, ProvenanceConfig};
+use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing, positioned};
 use crate::segment::{Coverage, NovelRunSegmenter, PartKind, message_kgrams, text_parts, view};
@@ -135,6 +137,9 @@ pub struct Scanner {
     segmenter: NovelRunSegmenter,
     settings: IndexSettings,
     threshold: Similarity,
+    reader_output: ReaderOutputRules,
+    forwarding: bool,
+    spread: SpreadRule,
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
@@ -173,8 +178,9 @@ where
             return Ok(());
         }
         let records = self.env.store.spans(&missing).await?;
-        self.live
-            .extend(LiveSpans::new(records, self.watermark, self.now));
+        let mut live = LiveSpans::new(records, self.watermark, self.now);
+        live.add_relays(self.env.store.relays(&missing).await?, self.now);
+        self.live.extend(live);
         Ok(())
     }
 
@@ -237,9 +243,13 @@ impl Scanner {
         let pipeline = DecodePipeline::new(config.decode());
         Self {
             segmenter: NovelRunSegmenter::new(winnowing, pipeline)
-                .with_locator_keys(config.locator_keys().clone()),
+                .with_locator_keys(config.locator_keys().clone())
+                .with_short_spans(config.short_spans()),
             settings: config.index().clone(),
             threshold: config.semantic_threshold(),
+            reader_output: config.reader_output(),
+            forwarding: config.forwarding(),
+            spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
         }
     }
@@ -288,6 +298,19 @@ impl Scanner {
 
     pub fn settings(&self) -> &IndexSettings {
         &self.settings
+    }
+
+    pub fn short_spans(&self) -> ShortSpans {
+        self.segmenter.short_spans()
+    }
+
+    pub fn reader_output(&self) -> ReaderOutputRules {
+        self.reader_output
+    }
+
+    /// The cross-agent spread rule (`provenance.match.cross-agent-spread`).
+    pub fn spread(&self) -> SpreadRule {
+        self.spread
     }
 
     /// `kgrams` on this node's shards.
@@ -362,6 +385,7 @@ impl Scanner {
             spans,
             matches,
             messages,
+            forwarding: self.forwarding,
         })
     }
 
@@ -395,20 +419,47 @@ impl Scanner {
 
     /// The index writes for `spans` (an exchange's committed spans) and the
     /// delta's scanned input parts.
+    ///
+    /// - Each span's own winnowed fingerprints are observed (one text).
+    /// - An originated span that is a whole short value also observes its
+    ///   short-span hash, as a text of its own: a short value's frequency
+    ///   is how many texts were that whole value.
+    /// - Each originated span, and each forwarded one when forwarding is on,
+    ///   is posted: its own fingerprints,
+    ///   the k-grams it mostly covers in its run of adjacent indexed spans
+    ///   (`Scanner::context_kgrams`), and its short-span hash.
+    /// - Each scanned input part observes its layers' fingerprints, and,
+    ///   when a layer is a whole short value, that layer's hash apart.
     pub fn index_work(&self, loaded: &Loaded, spans: &[Span]) -> IndexWork {
         let mut work = IndexWork::default();
         if let Some(output) = &loaded.output {
+            let parts = text_parts(output);
+            let mut context = self.context_kgrams(&parts, spans);
             for span in spans {
                 let kgrams = self.span_kgrams(output, span);
                 work.observations
                     .push(kgrams.iter().map(|kgram| kgram.fingerprint).collect());
-                if span.state != SpanState::Originated {
+                let short = match span.state {
+                    SpanState::Originated => self.span_short(&parts, span),
+                    _ => None,
+                };
+                if let Some(short) = short {
+                    work.observations.push(vec![short.fingerprint]);
+                }
+                let forwarded = self.forwarding && span.state.is_forwarded();
+                if span.state != SpanState::Originated && !forwarded {
                     continue;
                 }
-                let owned = self.owned(kgrams);
-                if let Some(originated) = OriginatedSpan::new(span.clone()) {
-                    work.postings.push((originated, positioned(&owned)));
-                }
+                let Some(indexed) = OriginatedSpan::new(span.clone()) else {
+                    continue;
+                };
+                let mut posted = kgrams;
+                posted.extend(context.remove(&span.id).unwrap_or_default());
+                posted.extend(short);
+                let mut seen = BTreeSet::new();
+                posted.retain(|kgram| seen.insert((kgram.fingerprint, kgram.start)));
+                let owned = self.owned(posted);
+                work.postings.push((indexed, positioned(&owned)));
             }
         }
         for (message, scanned_as) in loaded.listed() {
@@ -423,6 +474,10 @@ impl Scanner {
                             .into_iter()
                             .collect(),
                     );
+                    let short = self.part_short(&part.text, part.kind);
+                    if !short.is_empty() {
+                        work.observations.push(short.into_iter().collect());
+                    }
                 }
             }
         }

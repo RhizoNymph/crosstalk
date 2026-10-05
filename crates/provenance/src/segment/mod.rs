@@ -23,8 +23,12 @@
 //!    (`provenance.span.tool-arguments-per-value`). A value directly under
 //!    a locator key (`ProvenanceConfig::locator_keys`: a path or a URL the
 //!    call acts on) is left out entirely (`provenance.span.locator-arguments-excluded`).
-//!    It is kept when it has at least one k-gram
-//!    (shorter text can never be matched).
+//!    It is kept when it has at least one k-gram, or at least
+//!    `ShortSpans::min_chars` normalized characters (`ProvenanceConfig::short_spans`):
+//!    a short whole value is matched by its exact hash, and a short remainder
+//!    next to a forwarded run by the k-grams it mostly covers there
+//!    (`provenance.index.remainder-around-relay-matchable`). Shorter text is
+//!    never matched.
 //!    None of its k-grams occurs in any input layer, so it shares no
 //!    fingerprint with the inputs (`provenance.span.originated-absent-from-inputs`).
 //!
@@ -47,9 +51,10 @@ use crosstalk_spec::support::ByteRange;
 
 pub use self::coverage::{Coverage, MessageKGrams, Occurrence, message_kgrams};
 pub use self::view::{PartKind, TextPart, keyed_string_values, string_values, text_parts, view};
-use crate::config::LocatorKeys;
+use crate::config::{LocatorKeys, ShortSpans};
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing};
+use crate::text::normalize::trimmed_len;
 use crate::text::{MappedText, normalize, trim_range};
 
 /// The segmenter.
@@ -58,6 +63,7 @@ pub struct NovelRunSegmenter {
     winnowing: Winnowing,
     pipeline: DecodePipeline,
     locator_keys: LocatorKeys,
+    short_spans: ShortSpans,
 }
 
 /// A run of consecutive output k-grams found consecutively in one input
@@ -78,7 +84,27 @@ impl NovelRunSegmenter {
             winnowing,
             pipeline,
             locator_keys: LocatorKeys::default(),
+            short_spans: ShortSpans::default(),
         }
+    }
+
+    /// This segmenter with another short-span floor: originated text with
+    /// no k-gram is kept from `short_spans.min_chars()` characters.
+    pub fn with_short_spans(mut self, short_spans: ShortSpans) -> Self {
+        self.short_spans = short_spans;
+        self
+    }
+
+    pub fn short_spans(&self) -> ShortSpans {
+        self.short_spans
+    }
+
+    /// Whether originated text (its view) is long enough to keep: it has a
+    /// k-gram, or the short-span floor's characters.
+    pub fn matchable(&self, seen: &str) -> bool {
+        let normalized = normalize(seen);
+        normalized.len() >= self.winnowing.k()
+            || trimmed_len(&normalized) >= self.short_spans.min_chars()
     }
 
     /// This segmenter with other locator keys: string values directly under
@@ -187,11 +213,7 @@ impl NovelRunSegmenter {
                 continue;
             };
             let text = &part.text[usize_of(start)..usize_of(end)];
-            if self
-                .winnowing
-                .kgrams(view(text, part.kind).text())
-                .is_empty()
-            {
+            if !self.matchable(view(text, part.kind).text()) {
                 continue;
             }
             if let Some(draft) = draft(part_ref, start, end, Origin::Originated) {

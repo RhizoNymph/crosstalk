@@ -8,6 +8,11 @@
 //! (wherever it appears in the request). Other parts of assistant messages
 //! replayed as inputs carry nothing.
 //!
+//! Each layer is looked up by its winnowed k-grams and by the short-span
+//! hashes of its normalized token runs (`provenance.match.short-span-exact`,
+//! [`crate::fingerprint::short`]), so a whole short value another agent
+//! wrote is found where it is read whole.
+//!
 //! Per origin span, one layer wins: one whose text holds the origin span's
 //! whole text (normalized) before one that does not, then the one covering
 //! most part bytes, then the shorter chain, so the kind names the chain that
@@ -28,13 +33,15 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{AssistantPart, Message, MessageBody, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{covered, extents_by_span, merge};
+use super::hits::{covered, extents_by_span, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
 use crate::decode::Step;
+use crate::fingerprint::short;
 use crate::segment::{PartKind, TextPart, text_parts, view};
 use crate::store::ProvenanceStore;
+use crate::text::normalize;
 use crate::text::normalize::normalized_string;
 
 /// The carrier a read in `part` of `message` has; `None` for parts that
@@ -126,6 +133,22 @@ impl Scanner {
         Ok(matches)
     }
 
+    /// Whether a span's hit extents in a layer (layer byte offsets) hold a
+    /// run of at least `SpreadRule::distinctive_chars` normalized
+    /// characters: such a run is never suppressed by the spread rule.
+    fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
+        merge(extents.to_vec()).iter().any(|(start, end)| {
+            let slice = layer
+                .get(
+                    usize::try_from(*start).unwrap_or(usize::MAX)
+                        ..usize::try_from(*end).unwrap_or(usize::MAX),
+                )
+                .unwrap_or_default();
+            crate::text::normalize::trimmed_len(&normalize(slice))
+                >= self.spread().distinctive_chars()
+        })
+    }
+
     async fn read_part<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
@@ -144,15 +167,43 @@ impl Scanner {
         let mut found: BTreeMap<SpanId, Vec<Candidate>> = BTreeMap::new();
         for (index, layer) in layers.iter().enumerate() {
             let mapped = base.compose(layer.text.clone());
-            let kgrams = self.owned(self.winnowing().winnow(layer.text.text()));
+            let mut queries = self.winnowing().winnow(layer.text.text());
+            queries.extend(short::token_runs(
+                &normalize(layer.text.text()),
+                self.short_spans(),
+            ));
+            let kgrams = self.owned(queries);
             let hits = session.lookup(&kgrams).await?;
             let reader = session.reader;
             let live = &session.live;
-            let by_span = extents_by_span(&hits, &kgrams, |span| {
+            let keep = |span| {
                 live.get(span)
-                    .is_some_and(|record| record.span.agent != reader)
-            });
+                    .is_some_and(|record: &crate::store::SpanRecord| record.span.agent != reader)
+            };
+            let by_span = extents_by_span(&hits, &kgrams, keep);
+            // The spread rule: hits on boilerplate fragments count only
+            // inside a distinctive run (`provenance.match.cross-agent-spread`).
+            let spread = spread_boilerplate(&hits, live, self.spread());
+            let narrow = if spread.is_empty() {
+                None
+            } else {
+                let kept: Vec<_> = hits
+                    .iter()
+                    .filter(|hit| !spread.contains(&hit.fingerprint))
+                    .cloned()
+                    .collect();
+                Some(extents_by_span(&kept, &kgrams, keep))
+            };
             for (span, extents) in by_span {
+                let extents = match &narrow {
+                    Some(narrow) if !self.distinctive(layer.text.text(), &extents) => {
+                        match narrow.get(&span) {
+                            Some(kept) => kept.clone(),
+                            None => continue,
+                        }
+                    }
+                    _ => extents,
+                };
                 let merged = merge(
                     extents
                         .into_iter()
