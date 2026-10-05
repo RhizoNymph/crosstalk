@@ -5,6 +5,7 @@
 //! HTTP.)
 
 use crosstalk_api::MemoryStores;
+use crosstalk_api::ProjectionFitting;
 use crosstalk_api::world::{SeededWorld, WorldOptions, seed_world};
 use crosstalk_conformance::harness::{
     ExpectedFailure, Harness, Provision, ProvisionError, Provisioned,
@@ -50,6 +51,10 @@ impl Harness for InProcessHarness {
             reason,
         };
         let mut options = WorldOptions::new(SEED, UI_ANCHOR).map_err(|e| failed(e.to_string()))?;
+        // Projection jobs are fitted in process, deterministically.
+        options.projection_fitting = ProjectionFitting::Deterministic {
+            poll: std::time::Duration::from_millis(20),
+        };
         if let Some(live) = request.knobs.live {
             options.live = live;
         }

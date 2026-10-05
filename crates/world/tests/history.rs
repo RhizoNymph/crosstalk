@@ -64,6 +64,87 @@ fn dropped_bodies_are_gone_on_their_side_only() -> Result {
     })
 }
 
+/// INV-1076: every content match's origin span is recorded through L4's
+/// `SpanIndex`, written by the match's sender, and its location names the
+/// sender's body: present unless retention dropped the sender side.
+#[test]
+fn every_origin_span_is_recorded_by_its_sender() -> Result {
+    use crosstalk_spec::batch::IdBatch;
+    use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
+    use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionQuery;
+    use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+    let seeded = shared();
+    let dropped: BTreeSet<_> = seeded
+        .scenario
+        .dropped()
+        .iter()
+        .filter(|(_, side)| *side == BodySide::Sender)
+        .map(|(id, _)| *id)
+        .collect();
+    run(async {
+        let query = TransmissionQuery {
+            window: TimeWindow::new(Timestamp::from_micros(0), crosstalk_spec::wire::time::MAX)
+                .map_err(|e| format!("{e:?}"))?,
+            states: None,
+            channel: None,
+        };
+        let mut request = PageRequest {
+            size: PageSize::new(PageSize::MAX).map_err(|e| format!("{e:?}"))?,
+            after: None,
+        };
+        let mut stored = Vec::new();
+        loop {
+            let page = seeded
+                .stores
+                .transmissions
+                .list(&query, &request)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            let (items, next) = page.into_parts();
+            stored.extend(items);
+            match next {
+                Some(next) => request.after = Some(next),
+                None => break,
+            }
+        }
+        let mut checked = 0usize;
+        for transmission in stored {
+            let Some(confirmed) = transmission.state.confirmed() else {
+                continue;
+            };
+            for content in confirmed.content().iter() {
+                let batch = IdBatch::new([content.origin()]).map_err(|e| format!("{e:?}"))?;
+                let spans = seeded
+                    .stores
+                    .spans
+                    .spans(&batch)
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                let span = spans
+                    .get(&content.origin())
+                    .ok_or_else(|| format!("span {:?} recorded", content.origin()))?;
+                assert_eq!(span.author, confirmed.from(), "{:?}", transmission.id);
+                let body = seeded
+                    .stores
+                    .blobs
+                    .get(span.location.part.message)
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                assert_eq!(
+                    body.is_none(),
+                    dropped.contains(&transmission.id),
+                    "{:?}",
+                    transmission.id
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "content matches were checked");
+        Ok(())
+    })
+}
+
 #[test]
 fn verdict_logs_hold_both_verdicts_and_a_withdrawal() -> Result {
     let seeded = shared();

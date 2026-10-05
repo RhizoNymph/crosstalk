@@ -1,6 +1,9 @@
-//! The rest of the world's past: message bodies, the projection jobs, and
-//! the dead letters.
+//! The rest of the world's past: span records, message bodies, the
+//! projection jobs, and the dead letters.
 //!
+//! - **Spans.** Every content match's origin span, recorded through L4's
+//!   `SpanIndex` when its exchange was captured: where the evidence page
+//!   reads a sender-side excerpt's location from.
 //! - **Bodies.** Every message body a content match or span names, put in
 //!   the blob store when its exchange was captured, except the ones
 //!   content retention dropped.
@@ -25,6 +28,7 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::PipelineFrontier;
 use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::provenance::span::{OriginatedSpan, Span, SpanState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
@@ -45,6 +49,23 @@ use crate::script::{Op, Script};
 use crate::text::Theme;
 
 use super::channels::{Placement, promotion};
+
+/// Every content match's origin span, recorded through L4 when its
+/// exchange was captured, in span id order.
+pub fn spans(generated: &Generated, script: &mut Script) -> Result<(), WorldError> {
+    for (id, recorded) in generated.traffic.blobs.spans() {
+        let span = OriginatedSpan::new(Span {
+            id,
+            location: recorded.indexed.location,
+            agent: recorded.indexed.author,
+            exchange: recorded.indexed.exchange,
+            state: SpanState::Originated,
+        })
+        .ok_or_else(|| WorldError::missing(format!("an originated span {id:?}")))?;
+        script.push(recorded.at, Op::Span(Box::new(span)));
+    }
+    Ok(())
+}
 
 pub fn bodies(generated: &Generated, script: &mut Script) {
     for (hash, body) in generated.traffic.blobs.clone().into_bodies() {

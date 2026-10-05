@@ -13,6 +13,7 @@ use crosstalk_spec::derived::flow::channel::promotion::Promotion;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::Verdict;
+use crosstalk_spec::derived::provenance::span::OriginatedSpan;
 use crosstalk_spec::ids::{
     AgentId, ChannelId, ConfigHash, MessageHash, OperatorId, ProjectionId, ResourceId, SinkId,
     TransmissionId,
@@ -94,6 +95,11 @@ pub enum Op {
         label: AgentLabel,
         by: OperatorId,
     },
+
+    // Provenance (L4).
+    /// `SpanIndex::record` of the originated span a content match names as
+    /// its origin, when its exchange was captured.
+    Span(Box<OriginatedSpan>),
 
     // Channels and transmissions (L5).
     /// `ChannelTraffic::add_resource` at the resource's first sighting,

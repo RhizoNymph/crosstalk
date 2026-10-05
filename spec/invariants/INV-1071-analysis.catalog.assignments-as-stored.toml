@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.catalog.assignments-as-stored"
+statement = "TopicCatalog::assignments(version, ids) maps each transmission of ids that version holds a stored assignment for to that assignment's topic (None for an outlier), read in one snapshot; a transmission the version holds none for is absent, and every id is absent under a version that is unknown, still fitting or dropped, so the keys are a subset of ids."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A re-fit assigns transmissions under a newer version without reclassifying
+their stored state, so a transmission's topic under any version but its own
+classification's is only in the catalog. Rows, the graph's topic slots,
+search and projection samples must read one source per version or linked
+views disagree on which transmissions a topic filter keeps.
+"""
+
+[evidence]
+unit = "crosstalk_memory::analysis::tests::catalog::assignments_read_back_the_stored_topics_of_a_batch"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

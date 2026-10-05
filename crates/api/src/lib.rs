@@ -15,7 +15,9 @@ pub mod in_process;
 #[cfg(feature = "world")]
 pub mod world;
 
-pub use in_process::{Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores};
+pub use in_process::{
+    Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores, ProjectionFitting,
+};
 
 #[cfg(test)]
 mod tests;

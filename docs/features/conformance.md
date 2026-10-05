@@ -350,6 +350,9 @@ by any test or tool that wants the real surface over the synthetic world:
   traits (`Seeding`: the memory stores as `crosstalk_world::WorldStores`)
   and starts the clock: the config time while seeding, then the anchor,
   fixed (`WorldTime::Fixed`, tests) or moving on (`WorldTime::Live`).
+  Before the world is read it waits for `InProcess::settle`, so the
+  graphs' node facts hold every seeded event, then starts the in-process
+  projection fitter when `WorldOptions::projection_fitting` asks.
   `WorldOptions` also takes the feed's `LiveConfig`, the `ExportLimits`
   and operators added to the world's directory. It returns the
   `SeededWorld`: the `InProcess`, the world's `Scenario` handles, the
@@ -382,16 +385,17 @@ operator's token.
 
 ### Findings
 
-Running the suite against the real surface found four gaps, the same in
-process and over HTTP. They are `SURFACE_FAILURES` in
-`crosstalk_conformance::world`, which both harnesses list:
+Running the suite against the real surface first found four gaps, the
+same in process and over HTTP, listed as `SURFACE_FAILURES` in
+`crosstalk_conformance::world`. All four are fixed where they arose, and
+the list is empty: the surface passes all 65, in process and over HTTP.
 
-| Tests | Finding |
-| --- | --- |
-| `graph::the_channel_centred_view_shares_the_topology_edges`, `graph::channel_graph_draws_only_listed_channels` | `channel_topology` draws no access edges for a discovered channel's resources (accessed before the channel existed): the hijacked wiki has none though its row counts 3 writers and 8 readers, and the unconfirmed S3 channel, listed as `Channel(Unconfirmed)`, is not drawn (INV-860, INV-861). |
-| `graph::route_and_topic_filters_and_their_conjunction` | A topic filter keeps transmissions whose `transmissions_by_id` rows are `Unassigned` under the pinned version (439 of 678 in the week): the edge store's topic buckets and the rows' topics disagree (INV-345, INV-400). |
-| `scenarios::dropped_bodies`, `scenarios::everything` | `transmission_evidence` for a transmission whose body retention dropped fails with `Store("span missing")` instead of answering `BodyDropped` on that side (INV-698). |
-| `projections::*` (5) | No projection fitter runs in the in-process composition (nor anywhere yet): a `fit_projection` job never leaves the queue. |
+| Tests | Finding | Root cause and fix |
+| --- | --- | --- |
+| `graph::the_channel_centred_view_shares_the_topology_edges`, `graph::channel_graph_draws_only_listed_channels` | `channel_topology` drew no access edges for a discovered channel: the hijacked wiki had none, and the unconfirmed S3 channel was not drawn (INV-860, INV-861). | Not the buckets (they resolve at read time): the node facts lagged the stores. The in-process relay applied events one by one, re-reading each channel per event, and `seed_world` returned before it had caught up, so channels discovered during the seed were unknown to `NodeFacts`. The relay now applies whatever backlog it finds at once (`NodeFeeder::apply_all`, INV-1075) and `seed_world` waits for `InProcess::settle` (INV-1074). |
+| `graph::route_and_topic_filters_and_their_conjunction` | A topic filter kept transmissions whose `transmissions_by_id` rows were `Unassigned` under the pinned version (INV-345, INV-400). | Rows read a transmission's topic from its stored classification only; a re-fit assigns it under a newer version in the catalog without reclassifying the state, and the edge store's topic slots read those assignments. The spec gained `TopicCatalog::assignments` (INV-1071) and rows read it, falling back to the stored classification (INV-1072). |
+| `scenarios::dropped_bodies`, `scenarios::everything` | `transmission_evidence` for a dropped body failed with `Store("span missing")` instead of `BodyDropped` (INV-698). | Not a mapping: the seeded world wrote no spans, accesses or resources where the evidence page reads them. The world now records every content match's origin span through L4's `SpanIndex` (`WorldStores::Spans`), and `MemoryEvidence` reads accesses and resources from the registry that recorded them (INV-1076). |
+| `projections::*` (5) | A `fit_projection` job never left the queue. | No fitter ran in process. `InProcess` gained an opt-in deterministic fitter (`ProjectionFitting::Deterministic`, `FakeLayoutFitter`, INV-1073), which both harnesses turn on through `WorldOptions::projection_fitting`. |
 
 The fixture passes all 65; it lists no expected failures.
 

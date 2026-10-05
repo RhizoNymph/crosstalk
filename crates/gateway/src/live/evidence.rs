@@ -1,31 +1,25 @@
-//! Feeding the surface's evidence records from the bus.
+//! Feeding the surface's span records from the bus.
 //!
 //! The evidence page reads spans, accesses and resources by id
-//! ([`MemoryEvidence`]). This stage copies them in as L4 and L5 announce
-//! them, reading each record from the store that wrote it:
+//! ([`MemoryEvidence`]). Accesses and resources it reads from the registry
+//! that recorded them; spans this stage copies in as L4 announces them:
+//! on `SpanOriginated`, the span's record from L4's `SpanIndex`
+//! ([`SpanSource`], [`IndexedSpans`]). Provenance commits a span before it
+//! publishes the event naming it, and only originated spans are ever the
+//! origin of a content match.
 //!
-//! - `SpanOriginated`: the span's record from L4's `SpanIndex`
-//!   ([`SpanSource`], [`IndexedSpans`]); provenance commits a span before
-//!   it publishes the event naming it, and only originated spans are ever
-//!   the origin of a content match;
-//! - `AccessRecorded`: the access and its resource from the registry's
-//!   batch read (`AccessStore::accesses`), as recorded.
-//!
-//! Kept to this one module: once the surface reads `SpanIndex` and
-//! `AccessStore` itself, this stage goes away.
+//! Kept to this one module: once the surface reads `SpanIndex` itself,
+//! this stage goes away.
 
 use std::future::Future;
 
 use crosstalk_api::in_process::MemoryEvidence;
-use crosstalk_memory::flow::MemoryChannels;
-use crosstalk_memory::reconstruct::MemoryAgents;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::provenance::span::{Span, SpanState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
-use crosstalk_spec::ids::{AccessId, SpanId};
+use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
-use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
 
 use super::stage::{Stage, StageError};
 
@@ -77,17 +71,12 @@ impl<I: SpanIndex + Send + Sync + 'static> SpanSource for IndexedSpans<I> {
 /// The evidence slot's stage.
 pub struct EvidenceFeeder<S> {
     evidence: MemoryEvidence,
-    accesses: MemoryChannels<MemoryAgents>,
     spans: S,
 }
 
 impl<S: SpanSource> EvidenceFeeder<S> {
-    pub fn new(evidence: MemoryEvidence, accesses: MemoryChannels<MemoryAgents>, spans: S) -> Self {
-        Self {
-            evidence,
-            accesses,
-            spans,
-        }
+    pub fn new(evidence: MemoryEvidence, spans: S) -> Self {
+        Self { evidence, spans }
     }
 
     async fn span(&self, id: SpanId) -> Result<(), StageError> {
@@ -105,42 +94,16 @@ impl<S: SpanSource> EvidenceFeeder<S> {
             }),
         }
     }
-
-    async fn access(&self, id: AccessId) -> Result<(), StageError> {
-        let batch = IdBatch::new([id]).map_err(|error| StageError::Reject {
-            reason: format!("one id is a batch: {error:?}"),
-        })?;
-        let read = self
-            .accesses
-            .accesses(&batch)
-            .await
-            .map_err(|error| StageError::Retry {
-                reason: format!("reading the access: {error:?}"),
-            })?;
-        match read.get(&id) {
-            Some((access, resource)) => {
-                self.evidence.insert_access(access.clone());
-                self.evidence.insert_resource(resource.clone());
-            }
-            None => {
-                tracing::warn!(access = %id.ulid_text(), "announced access not recorded");
-            }
-        }
-        Ok(())
-    }
 }
 
 impl<S: SpanSource> Stage for EvidenceFeeder<S> {
     fn subjects(&self) -> Vec<Subject> {
-        vec![Subject::SpanOriginated, Subject::AccessRecorded]
+        vec![Subject::SpanOriginated]
     }
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
         match &envelope.event {
             BusEvent::Detect(DetectEvent::SpanOriginated { span, .. }) => self.span(*span).await,
-            BusEvent::Detect(DetectEvent::AccessRecorded { access, .. }) => {
-                self.access(access.id).await
-            }
             _ => Ok(()),
         }
     }

@@ -158,9 +158,13 @@ impl WorldBackend {
                 })
                 .collect(),
             projection_lease: Duration::from_secs(600),
+            projection_fitting: crosstalk_api::ProjectionFitting::External,
         };
         let in_process = InProcess::start(options).await?;
         world.seed(&mut Seeding(in_process.stores.clone())).await?;
+        // The graphs' node facts follow the stores through the relay: the
+        // world is read only once the relay has applied every seeded event.
+        in_process.settle().await?;
         clock.serve();
         tracing::info!(seed, "world seeded into the in-process surface");
         Ok((

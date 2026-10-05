@@ -59,6 +59,7 @@ pub fn assemble(inputs: Inputs<'_>) -> Result<Assembled, WorldError> {
     channels::assemble(generated, &placement, &mut script)?;
     transmissions::assemble(generated, embedder, &mut script)?;
     alerts::assemble(generated, config, &placement.created(), &mut script)?;
+    surface::spans(generated, &mut script)?;
     surface::bodies(generated, &mut script);
     let jobs = surface::projections(generated, config, anchor, &mut script)?;
     surface::letters(generated, &placement, anchor, &mut script)?;

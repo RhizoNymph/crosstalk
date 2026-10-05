@@ -386,3 +386,85 @@ async fn evidence_quotes_both_sides_and_reports_dropped_bodies() {
         Ok(None)
     );
 }
+
+/// INV-1072: a row's topic under a version is the catalog's stored
+/// assignment under it, whatever version the transmission's own state was
+/// classified under; with no assignment under the version, its stored
+/// classification decides. Rows by id and a channel's transmissions agree.
+#[tokio::test]
+async fn row_topics_are_the_catalogs_assignments_under_the_version() {
+    use crosstalk_memory::model::build::topic_id;
+    use crosstalk_spec::interfaces::l6_analysis::lifecycle::{StoredAssignment, TopicLifecycle};
+    use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+    use crosstalk_spec::paging::ChannelTransmissionList;
+
+    let fixture = Fixture::new().await;
+    let scene = fixture.scene().await;
+    let caller = fixture.caller(Who::Viewer).await;
+    let t1 = &scene.t1.transmission;
+    let Some(confirmed) = t1.state.confirmed() else {
+        panic!("t1 is confirmed");
+    };
+    // A re-fit assigns t1 under v1 without reclassifying its stored state
+    // (classified under v0).
+    let v1 = fixture.fit(minute(30), &[7], true).await;
+    let mut catalog = fixture.world.catalog.clone();
+    let assigned = catalog
+        .assign(
+            t1.id,
+            v1,
+            StoredAssignment {
+                topic: Some(topic_id(7)),
+                confirmed_at: confirmed.at(),
+                matched_bytes: confirmed.matched_bytes(),
+                from: confirmed.from(),
+                to: t1.to,
+            },
+        )
+        .await;
+    assert!(assigned.is_ok(), "{assigned:?}");
+    let Ok(selection) = TransmissionSelection::new(vec![t1.id]) else {
+        panic!("selection");
+    };
+    let topic_of = |page: crosstalk_spec::interfaces::l8_surface::summary::TransmissionPage| {
+        page.page.items().first().and_then(|row| row.state.topic())
+    };
+    for (version, expected) in [
+        (v1, TopicUnder::Topic(topic_id(7))),
+        (TopicModelVersion(0), TopicUnder::Outlier),
+    ] {
+        let rows = fixture
+            .surface
+            .transmissions_by_id(
+                &caller,
+                &selection,
+                TopicVersionSelector::Pinned(version),
+                &page(10),
+            )
+            .await;
+        let Ok(rows) = rows else {
+            panic!("rows under {version:?}: {rows:?}");
+        };
+        assert_eq!(topic_of(rows), Some(expected), "rows under {version:?}");
+        let listed = fixture
+            .surface
+            .channel_transmissions(
+                &caller,
+                scene.c1,
+                &ChannelTransmissionFilter::default(),
+                TopicVersionSelector::Pinned(version),
+                &page::<ChannelTransmissionList>(10),
+            )
+            .await;
+        let Ok(listed) = listed else {
+            panic!("channel transmissions under {version:?}: {listed:?}");
+        };
+        let topic = listed
+            .page
+            .items()
+            .iter()
+            .find(|row| row.summary().id == t1.id)
+            .and_then(|row| row.summary().state.topic());
+        assert_eq!(topic, Some(expected), "channel rows under {version:?}");
+    }
+}

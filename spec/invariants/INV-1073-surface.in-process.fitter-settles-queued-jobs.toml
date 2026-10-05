@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.in-process.fitter-settles-queued-jobs"
+statement = "With ProjectionFitting::Deterministic, each pass of the in-process fitter requeues lapsed jobs, then claims every queued projection job oldest first and either completes it with the frame of its sample laid out by FakeLayoutFitter (header: the job, the spec's version and limit, the sample's watermark and matching count) or fails it with the FitFailure the sample source or the fitter refused it with; a transient sample or backend failure leaves it fitting until its lease lapses."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+fit_projection only queues a job; without a fitter in the in-process
+composition no job ever left the queue, so projections could not be read
+in tests, demos or the conformance suite. The fitter is opt-in and
+deterministic so a fit reproduces bit for bit.
+"""
+
+[evidence]
+integration = [
+    "crosstalk_api::tests::in_process::a_pass_fits_every_queued_job",
+    "crosstalk_api::tests::in_process::deterministic_refusals_fail_the_job",
+    "crosstalk_api::tests::in_process::a_transient_failure_leaves_the_job_to_its_lease",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

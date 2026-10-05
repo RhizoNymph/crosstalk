@@ -27,6 +27,7 @@ use crosstalk_spec::aggregates::topic_history::{
     CompletedFit, DuplicateTopic, FitRecord, InvalidVersionInfo, TopicLineage, TopicSize,
     TopicSizes, TopicVersionHistory, TopicVersionInfo, TopicVersionStatus, TopicVersionStatusKind,
 };
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{TopicId, TransmissionId};
@@ -678,5 +679,25 @@ impl TopicCatalog for InMemoryTopicCatalog {
         .map_err(|error| CatalogError::Store {
             reason: error.to_string(),
         })
+    }
+
+    async fn assignments(
+        &self,
+        version: TopicModelVersion,
+        ids: &IdBatch<TransmissionId>,
+    ) -> Result<BTreeMap<TransmissionId, Option<TopicId>>, CatalogError> {
+        let state = lock(&self.state);
+        let readable = state
+            .history
+            .get(version)
+            .is_some_and(|info| info.status().kind() != TopicVersionStatusKind::Fitting);
+        let Some(stored) = state.assignments.get(&version).filter(|_| readable) else {
+            return Ok(BTreeMap::new());
+        };
+        Ok(ids
+            .ids()
+            .iter()
+            .filter_map(|id| stored.get(id).map(|assignment| (*id, assignment.topic)))
+            .collect())
     }
 }

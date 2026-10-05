@@ -397,9 +397,9 @@ MpscBus, one consumer group per slot (live-<slot>):
                    ─▶ AccessRecorded, ChannelCrossAccessed, TransmissionConfirmed/Suspected
   L6 classify      TransmissionConfirmed ─▶ catalog assignment, Classified state ─▶ TransmissionClassified
   L7 topology      TransmissionClassified, AccessRecorded, VerdictSet, topic versions ─▶ edges ─▶ EdgeUpdated
-  evidence         SpanOriginated, AccessRecorded ─▶ MemoryEvidence (span from SpanIndex::spans on
-                   L4's MemoryProvenanceStore,
-                   access and resource from AccessStore::accesses)
+  evidence         SpanOriginated ─▶ MemoryEvidence (span from SpanIndex::spans on
+                   L4's MemoryProvenanceStore; MemoryEvidence reads accesses and resources
+                   from the registry itself)
   surface relay    every subject but ExchangeCaptured ─▶ node facts, live feed
 stores ─ Outbox ─▶ forward_outbox ─▶ bus      (ChannelDiscovered, Changed::*, AlertRuleChanged, ...)
 Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores, bus and blobs
@@ -569,7 +569,7 @@ gracefully.
 | `src/live/wiring.rs` | One function per slot | `wire_all`, `wire_l3`, `wire_l4`, `wire_l5`, `wire_l6`, `wire_l7`, `wire_evidence` |
 | `src/live/layers/` | The layer stages: `l3.rs` (reconstruct), `l4.rs` (provenance), `extract.rs` (L5's extraction step), `l5.rs` (flow task), `l7.rs` (topology) | `Reconstruct`, `ProvenanceStage`, `Extraction`, `ExtractStepError`, `l5::fill`, `Topology` |
 | `src/live/classify.rs` | The minimal L6 classifier | `Classifier` |
-| `src/live/evidence.rs` | Spans, accesses and resources into the surface's evidence records | `EvidenceFeeder`, `SpanSource`, `IndexedSpans`, `SpanSourceError` |
+| `src/live/evidence.rs` | Spans into the surface's evidence records (accesses and resources are read from the registry) | `EvidenceFeeder`, `SpanSource`, `IndexedSpans`, `SpanSourceError` |
 | `src/live/relay.rs` | The outbox forwarder and the surface relay stage | — |
 | `src/live/clock.rs`, `blobs.rs` | The injected clock; the blob store choice | `LiveClock`; `BlobConfig`, `LiveBlobs` |
 | `src/live/defaults.rs` | `LiveConfig::new`: the surface's defaults | `DEFAULT_BUCKET`, `DefaultsError` |

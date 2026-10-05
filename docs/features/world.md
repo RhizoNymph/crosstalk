@@ -135,6 +135,7 @@ every write is given its time; nothing reads a clock while seeding.
 | `CreateAgent`, `Advance` | `AgentLifecycle::create`, `advance` |
 | `Claim`, `Activity` | `ClaimStore::record`, `ActivityStore::record` |
 | `Merge`, `Unmerge`, `Rename` | `IdentityResolver::merge`, `unmerge`, `rename` (operator ones audited) |
+| `Span` | `SpanIndex::record` of each content match's origin span (`OriginatedSpan`, written by the match's sender; its exchange id is the span's own ULID, since the sender's exchange is not modelled), when its exchange was captured, in span id order |
 | `AddResource` | `ChannelTraffic::add_resource`, which must place the resource where `Placement` does (`Diverged` otherwise) |
 | `Discover` | `ChannelTraffic::discover` under the plan's minted id, which must answer `Created` |
 | `Detection` | `ChannelTraffic::set_detection` (`Dormant`, `Unused`) |
@@ -243,18 +244,18 @@ seed does not work around any of them.
 
 | # | Fixture read | Needed for | Missing | Proposed shape |
 | --- | --- | --- | --- | --- |
-| 1 | A transmission's topic under a version (`TxRecord::assignment`) | `transmissions_by_id` (`TopicUnder`), `edge_transmissions` rows, the transmissions export's topic column | No read of a stored assignment. `TopicLifecycle::assign` writes it; `TopicCatalog` reads only sizes. The memory search index and edge store reach it through `InMemoryTopicCatalog::assignment`, an inherent method behind the memory-only `TopicVersions` trait. | `TopicCatalog::assignments(version, ids: &IdBatch<TransmissionId>) -> BTreeMap<TransmissionId, StoredAssignment>` (`VersionNotRetained` for a dropped version) |
-| 2 | A span's location (`Blobs::span`) | `transmission_evidence`: the sender-side excerpt of every content match | No span store. `FingerprintIndex` keeps fingerprints only; nothing records an `OriginatedSpan` (its location) for reading back. | L4 `SpanStore`: `record(span: OriginatedSpan)` (the provenance consumer's write) and `spans(ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, OriginatedSpan>` |
-| 3 | An access and its resource by id (`World::access`, `World::resource`) | `transmission_evidence`'s `AccessDetail` for co-access evidence | `ChannelTraffic::record_access` stores accesses, but `ChannelReads` reads only channels and their transmissions; a resource is readable only inside a windowed `resource_use` page. | `ChannelReads::accesses(ids: &IdBatch<AccessId>) -> BTreeMap<AccessId, (Access, Resource)>` |
+| 1 | A transmission's topic under a version (`TxRecord::assignment`) | `transmissions_by_id` (`TopicUnder`), `edge_transmissions` rows, the transmissions export's topic column | Resolved: `TopicCatalog::assignments(version, ids)` (INV-1071); rows by id and a channel's transmissions read it (INV-1072). The transmissions export still reads the stored classification. | — |
+| 2 | A span's location (`Blobs::span`) | `transmission_evidence`: the sender-side excerpt of every content match | Resolved: the seed records every origin span through L4's `SpanIndex::record` (`WorldStores::Spans`, op `Span`); the in-process `MemoryEvidence` keeps them (INV-1076). | — |
+| 3 | An access and its resource by id (`World::access`, `World::resource`) | `transmission_evidence`'s `AccessDetail` for co-access evidence | Resolved: `AccessStore::accesses` reads accesses with their resources; the in-process `MemoryEvidence` reads them, and a resource by id (`MemoryChannels::resource`), from the registry. | — |
 | 4 | Transmissions by state, channel and window (`World::transmissions`) | Verdicts and quality rows over unconfirmed transmissions (`verdict_rows` export of a verdict on a suspected one), a review queue of suspected transmissions across channels (one channel's is `ChannelReads::transmissions`) | `TransmissionStore` reads one id. `EdgeStore::transmissions` drills into an edge, which holds aggregated confirmed transmissions only. | `TransmissionStore::list(query: TransmissionQuery { window, states, channel }, page: &PageRequest<TransmissionList>) -> Page<Transmission, TransmissionList>` (channel resolved through `ChannelDirectory`) |
 | 5 | Content retention dropping a body (`Blobs::drop_body`) | Seeding the dropped-bodies scenario; retention itself | `BlobStore` has `put` and `get`, no delete, and no content retention is specified. The seed never stores those bodies (a `get` of `None` is "dropped by retention" by the spec's definition). | `BlobStore::drop(hash)`, or an L2 `ContentRetention::enforce(now) -> Vec<MessageHash>` |
 | 6 | The configured sinks, built-in rules and retention as config loads (`config::record`) | Seeding config through writes; config reloads | Only operators load through a trait (`OperatorStore::load`, audited in one transaction). Sinks, built-in rule status and sinks, topic retention and frame retention are store constructor config; their `ConfigChange` entries are appended to the audit log separately, so a load and its entries are not one transaction. | A config-load trait per area mirroring `OperatorStore::load`: `SinkRegistry::load(sinks, hash, at)`, `AlertRuleStore::provision(builtins, hash, at)`, `TopicCatalog::set_retention(policy, hash, at)`, each returning its `ConfigChange`s and appending them in its transaction |
 
 Related, not a spec gap: the memory crate implements `NodeFacts` only as
-`StaticNodes` (set by hand), so graphs over the seeded memory stores draw
-nodes with the defaults (no labels, claims or policies). A `NodeFacts`
-cache fed by L3's and L5's events (as the spec describes it) is wiring
-work for `crosstalk-surface` or the gateway.
+`StaticNodes` (set by hand). Over the in-process surface the graphs read
+`crosstalk-surface`'s `NodeCache`, fed by the relay; `seed_world` (and the
+UI's world backend) wait for `InProcess::settle` so it holds every seeded
+event before the world is read.
 
 ## Channel-semantics tests
 
@@ -311,7 +312,7 @@ the semantics rule out (see divergence 2).
 | --- | --- | --- |
 | `crates/world/src/lib.rs` | Crate docs and re-exports | `World`, `WorldConfig`, `WorldEmbedder`, `WorldStores`, `Scenario`, `ChannelKey`, `MergeKey`, `RuleKey`, `JobKey`, `BodySide`, `Anchor`, `WorldClock`, `UI_ANCHOR`, `WorldError`, `StoreError` |
 | `crates/world/src/seed.rs` | `World`: new, config, clock, embedder, seed (declare, generate, assemble, run) | `World` |
-| `crates/world/src/stores.rs` | The stores the seed writes, as spec traits | `WorldStores` |
+| `crates/world/src/stores.rs` | The stores the seed writes, as spec traits (L4's `SpanIndex` among them) | `WorldStores` |
 | `crates/world/src/config.rs` | Store configuration as spec values; operators; constants | `WorldConfig`, `SinkDef`, `BuiltinDef`, `OPERATOR_RESEARCHER`, `OPERATOR_ONCALL`, `REMAP_THRESHOLD`, `document` |
 | `crates/world/src/clock.rs` | Anchor, offsets, the world clock | `Anchor`, `WorldClock`, `BUCKET`, `UI_ANCHOR`, `plus`, `minus` |
 | `crates/world/src/mint.rs` | Ids from one-shot seeded `UlidGenerator`s | `Mint` |

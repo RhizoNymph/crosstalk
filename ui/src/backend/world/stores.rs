@@ -3,7 +3,7 @@
 //! state with the surface.
 
 use crosstalk_api::MemoryStores;
-use crosstalk_api::in_process::{Alerts, Edges, Search};
+use crosstalk_api::in_process::{Alerts, Edges, MemoryEvidence, Search};
 use crosstalk_memory::analysis::catalog::InMemoryTopicCatalog;
 use crosstalk_memory::analysis::projection::InMemoryProjectionStore;
 use crosstalk_memory::flow::{MemoryChannels, MemoryVerdicts};
@@ -20,6 +20,7 @@ pub struct Seeding(pub MemoryStores);
 
 impl WorldStores for Seeding {
     type Agents = MemoryAgents;
+    type Spans = MemoryEvidence;
     type Channels = MemoryChannels<MemoryAgents>;
     type Transmissions = MemoryVerdicts;
     type Catalog = InMemoryTopicCatalog;
@@ -35,6 +36,9 @@ impl WorldStores for Seeding {
 
     fn agents(&mut self) -> &mut Self::Agents {
         &mut self.0.agents
+    }
+    fn spans(&mut self) -> &mut Self::Spans {
+        &mut self.0.evidence
     }
     fn channels(&mut self) -> &mut Self::Channels {
         &mut self.0.channels

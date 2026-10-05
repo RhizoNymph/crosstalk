@@ -88,13 +88,12 @@ pub fn wire_l7(stages: &mut Stages, ctx: &StageContext) -> Result<(), SlotTaken>
     stages.fill(Slot::L7Topology, Topology::new(ctx))
 }
 
-/// The evidence records, from L4's span events and L5's accesses.
+/// The evidence page's span records, from L4's span events.
 pub fn wire_evidence(stages: &mut Stages, ctx: &StageContext) -> Result<(), SlotTaken> {
     stages.fill(
         Slot::Evidence,
         EvidenceFeeder::new(
             ctx.stores.evidence.clone(),
-            ctx.stores.channels.clone(),
             IndexedSpans(ctx.layers.provenance.clone()),
         ),
     )

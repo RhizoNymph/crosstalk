@@ -104,6 +104,8 @@ pub mod alerts;
 pub mod corpus;
 pub mod lifecycle;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::alert::{
@@ -124,6 +126,7 @@ use crate::aggregates::projection::{
 use crate::aggregates::retention::{Pin, PinChange, RetentionPolicy};
 use crate::aggregates::topic::{Assignment, Embedding, EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::{TopicLineage, TopicSizes, TopicVersionHistory};
+use crate::batch::IdBatch;
 use crate::derived::flow::channel::policy::Policy;
 #[cfg(doc)]
 use crate::derived::flow::verdict::CurrentVerdict;
@@ -245,6 +248,22 @@ pub trait TopicCatalog {
         version: TopicModelVersion,
         page: &PageRequest<TopicList>,
     ) -> impl Future<Output = Result<Page<Topic, TopicList>, CatalogError>> + Send;
+
+    /// The stored assignments under `version` of the transmissions in
+    /// `ids`, read in one snapshot: each assigned transmission's topic,
+    /// `None` for an outlier. A transmission `version` holds no assignment
+    /// for (classified under other versions only, or never), and every id
+    /// under a version that is unknown, still fitting or dropped (its
+    /// assignments deleted), is absent: the map's keys are a subset of
+    /// `ids` (`analysis.catalog.assignments-as-stored`). What a row's
+    /// `TopicUnder` under a version is read from, so rows agree with the
+    /// graph's topic slots, search and projection samples under that
+    /// version.
+    fn assignments(
+        &self,
+        version: TopicModelVersion,
+        ids: &IdBatch<TransmissionId>,
+    ) -> impl Future<Output = Result<BTreeMap<TransmissionId, Option<TopicId>>, CatalogError>> + Send;
 }
 
 /// A query as the index runs it. The surface builds it from the operator's

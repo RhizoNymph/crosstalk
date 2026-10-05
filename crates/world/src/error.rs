@@ -11,6 +11,7 @@ use crosstalk_spec::ids::UlidExhausted;
 use crosstalk_spec::interfaces::l2_transport::{BlobError, BusError};
 use crosstalk_spec::interfaces::l3_reconstruction::ResolveError;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::AgentLifecycleError;
+use crosstalk_spec::interfaces::l4_provenance::SpanIndexError;
 use crosstalk_spec::interfaces::l5_flow::channels::TrafficError;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStoreError;
 use crosstalk_spec::interfaces::l5_flow::verdicts::VerdictError;
@@ -35,6 +36,8 @@ pub enum StoreError {
     Lifecycle(AgentLifecycleError),
     #[error("identity resolver, claims or activity: {0:?}")]
     Resolve(ResolveError),
+    #[error("span index: {0:?}")]
+    Spans(SpanIndexError),
     #[error("channel traffic: {0:?}")]
     Traffic(TrafficError),
     #[error("channel registry: {0:?}")]
@@ -90,6 +93,7 @@ macro_rules! store_error_from {
 store_error_from! {
     AgentLifecycleError => Lifecycle,
     ResolveError => Resolve,
+    SpanIndexError => Spans,
     TrafficError => Traffic,
     RegistryError => Registry,
     PromoteError => Promote,

@@ -134,10 +134,15 @@ missing }` before anything is read. Then, by area:
   "_" hex(MAC)` under a keyed BLAKE3 MAC drawn at start, so a forged,
   altered or other request's cursor is `InvalidCursor`. A later page checks
   the pinned version is still retained. Each row is `TransmissionSummary::of`
-  with the current verdict (judgeable states only) and the topic from the
-  stored classification: no spec read returns a transmission's assignment
-  under another version, so one stored under another version reads as
-  `Unassigned`. A transmission that no longer crosses agents (its sender
+  with the current verdict (judgeable states only) and the topic under the
+  page's version (`TopicsUnder`, `query/content.rs`): the catalog's stored
+  assignment under it, read for the page's classified transmissions in
+  batches (`TopicCatalog::assignments`), or, when the catalog holds none,
+  what the stored classification says under that version (`Unassigned`
+  for a classification under another one). A re-fit assigns transmissions
+  under a newer version without reclassifying their stored state, and the
+  graph's topic slots, search and projection samples read the catalog, so
+  rows agree with them (INV-1072). A transmission that no longer crosses agents (its sender
   and reader merged into one) is left out, as `TransmissionSummary::listed`
   leaves it out; an unmerge lists it again.
 - **A channel's transmissions** (`channel_transmissions`,
@@ -145,8 +150,8 @@ missing }` before anything is read. Then, by area:
   `ChannelDirectory`; the first page resolves the version as a linked view
   does; `ChannelReads::transmissions` pages the crossing transmissions,
   newest opened first; each row is `ChannelTransmission::of` with the
-  current verdict and the topic from the stored classification, kept when
-  the filter matches it. The surface's cursor wraps the registry's with
+  current verdict and the topic under the version as rows by id read it
+  (`TopicsUnder`), kept when the filter matches it. The surface's cursor wraps the registry's with
   the version (`hex(version ‖ request digest ‖ registry token) "_"
   hex(MAC)`), bound to the canonical channel, the filter and the selector;
   an unknown channel is `NotFound`.
@@ -267,7 +272,7 @@ events naming channels: Changed::Channel, ChannelDiscovered (and its seed resour
 AccessRecorded { channel: Some(c) }: the access's resource is on c
 AgentMerged, AgentUnmerged: every listed channel re-read (a merge can hide a channel, an
                             unmerge list it again, without naming it)
-NodeFeeder::apply ─ re-read each id ─▶ agent: canonical id; AgentReads::cluster → label and stored
+NodeFeeder::apply / apply_all (a batch: each id once) ─ re-read each id ─▶ agent: canonical id; AgentReads::cluster → label and stored
                                         parent (the record), state kind, cluster claims; a merged
                                         id's entry removed
                                        channel: ChannelReads::channel; in force → origin, detection
@@ -298,13 +303,43 @@ writes.
 search, projections, alerts, the edge store over the catalog, a
 `Directory` of both and the `NodeCache`, audit log, operators, sinks), an
 `MpscBus` (its dead letters, and the bus `SetPolicy` publishes on), a
-`MemoryBlobStore`, `MemoryEvidence` (spans, accesses and resources the
-seeder adds) and a `SpecExportSource`; spawns the feed writer; loads
-`options.access` and ends sessions for the changes; rebuilds the node
-facts; spawns the relay (outbox → `NodeFeeder::apply`, `Changed` →
-`FeedHandle::append`); and builds `Surface<MemoryStores>`.
-`InProcess::caller` answers `OperatorStore::caller`; `shutdown` stops the
-relay and ends every stream with `ShuttingDown`.
+`MemoryBlobStore`, `MemoryEvidence` and a `SpecExportSource`; spawns the
+feed writer; loads `options.access` and ends sessions for the changes;
+rebuilds the node facts; spawns the relay; builds `Surface<MemoryStores>`;
+and starts the projection fitter when `options.projection_fitting` asks
+for it. `InProcess::caller` answers `OperatorStore::caller`; `shutdown`
+stops the relay and the fitter and ends every stream with `ShuttingDown`.
+
+- **The relay.** Each wake takes every event already queued (outbox, or a
+  bus subscription under `start_with`) and applies them to the node facts
+  together (`NodeFeeder::apply_all`: one re-read per agent and channel
+  named, INV-1075), then appends each `Changed` to the live feed in order.
+  `InProcess::settle` sends the relay a request it answers only when no
+  event is queued (`biased` select, events first), so once it returns
+  every event published before the call is applied (INV-1074);
+  `RelayStopped` once the relay has ended. `seed_world` and the UI's world
+  backend settle before the world is read: a relay left to catch up while
+  tests read showed the node facts thousands of events behind the stores,
+  so channels discovered during the seed had no access edges.
+- **Evidence records** (`MemoryEvidence`): an access and a resource by id
+  are read from the registry that recorded them (`AccessStore::accesses`,
+  `MemoryChannels::resource`); spans are kept as recorded, written through
+  `SpanIndex::record` (a seeded world, as L4's consumer records each
+  originated span) or `insert_span` (the gateway's evidence feeder copying
+  them from its provenance store). INV-1076.
+- **The projection fitter** (`in_process/fitting.rs`, opt-in:
+  `ProjectionFitting::Deterministic { poll }`, default `External`): every
+  `poll` a pass requeues lapsed jobs, then claims each queued job, reads
+  its sample (`InMemoryProjectionSource` over the search index, watermark
+  from the edge store), lays it out with `FakeLayoutFitter`
+  (deterministic; for tests and demos, not UMAP) and completes the job
+  with the frame, or fails it with the `FitFailure` the source or fitter
+  refused it with; a transient failure (`SampleError::Store`,
+  `LayoutError::Backend`) or a fitter output the spec's constructors
+  refuse leaves the job fitting until its lease lapses (INV-1073).
+  `InProcess::fit_projections` starts it; `seed_world` starts it after
+  seeding when `WorldOptions::projection_fitting` asks (the seed claims and
+  settles its own jobs), and the conformance harnesses do.
 
 ## Files
 
@@ -330,8 +365,10 @@ relay and ends every stream with `ShuttingDown`.
 | `crates/surface/src/tests/` | Unit and property tests over the memory stores (`world.rs` wires them) | — |
 | `crates/surface/src/dst/` | Simulation tests under `crosstalk-sim` | — |
 | `crates/surface/src/props.rs` | The excerpt property | — |
-| `crates/api/src/in_process/mod.rs` | The in-process surface | `InProcess`, `InProcessOptions`, `InProcessError` |
-| `crates/api/src/in_process/stores.rs` | The memory stores as `SurfaceStores` | `MemoryStores`, `MemoryEvidence`, `Directory` |
+| `crates/api/src/in_process/mod.rs` | The in-process surface, its relay and settle barrier | `InProcess` (`start`, `start_with`, `settle`, `fit_projections`, `shutdown`), `InProcessOptions`, `InProcessError` |
+| `crates/api/src/in_process/stores.rs` | The memory stores as `SurfaceStores`; evidence records read from the registry and spans as recorded | `MemoryStores`, `MemoryEvidence` (`new`, `insert_span`, `SpanIndex`), `Directory` |
+| `crates/api/src/in_process/fitting.rs` | The opt-in in-process projection fitter | `ProjectionFitting`, `FitRunError`, (crate) `Fitter` |
+| `crates/api/src/tests/in_process.rs` | Settle, evidence reads and fitter passes | — |
 | `crates/api/src/world.rs` | Feature `world`: the in-process surface seeded with `crosstalk-world` (`seed_world`, the memory stores as `WorldStores`: `Seeding`), and served over HTTP on a loopback port with static bearer tokens (`serve_world`), for tests and tools; see [conformance](conformance.md) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `SeededWorld`, `HttpWorld`, `Seeding` |
 | `crates/api/tests/conformance.rs` | The L8 conformance suite against the in-process surface (`--features world`) | `InProcessHarness` |
 
@@ -360,6 +397,13 @@ relay and ends every stream with `ShuttingDown`.
   from `tokio::time::Instant`.
 - No lock is held across an `.await`: the id minter and the search-model
   book are short `std::sync::Mutex` sections, the node cache a `RwLock`.
+- A row's topic under a version is the catalog's assignment under it,
+  else the stored classification's (INV-1072).
+- In process, the node facts reflect every store write made before a
+  completed `InProcess::settle` (INV-1074); a batch of events applies as
+  the same events one by one (INV-1075); evidence records come from the
+  stores that recorded them (INV-1076); the opt-in fitter settles every
+  queued job it can (INV-1073).
 - Cross-agent semantics ([channel_semantics](channel_semantics.md)): no
   list, count or graph the surface returns holds a hidden channel or a
   transmission within one agent; `channel` still answers a hidden row, and
