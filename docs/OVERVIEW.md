@@ -1414,10 +1414,9 @@ Features Index:
       without times pace calls 1 to 5 s apart, seeded and configurable;
       synthetic tool calls are answered in the agent's next request of one
       growing conversation), with typed,
-      JSONL-serialisable ground truth (expected transmissions, access-only
-      expectations for content on a resource its sender never wrote
-      (INV-963, found only by suspected or discarded evidence), negative
-      controls, exemptions, agent clusters, with tiers); predictions converted from
+      JSONL-serialisable ground truth (expected transmissions, out of reach
+      when undecodable or read from a medium the sender never wrote
+      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented

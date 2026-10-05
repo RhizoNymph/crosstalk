@@ -19,10 +19,8 @@ as dev-dependencies.
 - **Corpus model.** `TraceSource` is a stream of `World`s: sets of agents
   that only talk to each other. Each world holds its exchanges in
   virtual-time order and its truth.
-- **Labels.** Expected transmissions, access-only expectations (content
-  on a resource its sender never wrote, which the spec keeps Suspected,
-  INV-963), negative controls, exemptions (places left unjudged) and agent
-  clusters, with tiers, as JSONL.
+- **Labels.** Expected transmissions, negative controls, exemptions
+  (places left unjudged) and agent clusters, with tiers, as JSONL.
 - **Predictions.** The eval-side view of a detector's output, converted
   from spec `Transmission`s: their `ContentMatch`es, and the `CoAccess`
   records of suspected and discarded ones, read through the spec's read
@@ -269,12 +267,11 @@ the first live run's 1,000 s step put every such pair out of reach
 `--pace-min-ms` / `--pace-max-ms` (default 1000 / 5000, seeded by
 `--corpus-seed`) the step.
 
-**Fetch tools (hook).** `LiveSettings::fetch_tools` names tools L5 should
-read as a fetch of their `url` argument; `ct-eval run --dataset agentdojo
---detector live` sets AgentDojo's `get_webpage`
-(`agentdojo::FETCH_TOOLS`). The gateway's L5 key for it is not merged yet,
-so the setting is carried and not applied: `gateway::flow_config` is where
-it goes (marked `HOOK (fetch tools)`).
+**Fetch tools.** AgentDojo's `get_webpage` reads a page by its `url`, but
+it is not one of L5's built-in HTTP tools. `crates/eval/extract/agentdojo.json`
+(`{"fetch_tools": ["get_webpage"]}`) is the extract config that makes L5
+read it as a fetch, for `ct-eval run --extract-config` once the gateway's
+`ExtractConfig.fetch_tools` is merged into this branch's base.
 
 ## Files
 
@@ -290,14 +287,14 @@ it goes (marked `HOOK (fetch tools)`).
 | `src/corpus/clock.rs` | the virtual clock | `Pace` (`DEFAULT`, `new`, `at`, `min`, `max`), `compose(major, minor, sub)` (the default pace), `ordinal` (ordering only, for fixtures), `EPOCH_MICROS`, `MIN_STEP` |
 | `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
-| `src/truth/mod.rs` | labels | `Expectation` (with `AccessOnly`), `ExpectedTransmission`/`TransmissionLabel`, `ExpectedAccess` (a channel transmission only access evidence finds, INV-963), `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
+| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
 | `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`, `through_json_string`, `two_string_levels`, `tier`; and `Undecodable` for out-of-reach labels), `json_escapes`, `TWO_STRING_LEVELS`, `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
 | `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
 | `src/predict/memory.rs` | eval-owned stores behind the seam | `SpanTable` (`SpanIndex`), `AccessTable` (`AccessStore`), `ChannelTable` (`ChannelResources`) |
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
-| `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome`, `Positive`, `Expects` (content or access) |
+| `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
 | `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
@@ -310,9 +307,9 @@ it goes (marked `HOOK (fetch tools)`).
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
 | `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
-| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`, `with_fetch_tools`, the `fetch_tools` hook), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
+| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs` | the `LiveBackend` over `crosstalk_gateway::live::Live` | `GatewayBackend`, `GatewayWorld`, `flow_config` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly` (content labels only access evidence aligned with; access-only labels found: `expected_access`, `found_access`, `access_recall`), `Background`, `ReportRow`, `table::render` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource` (`with_pace`), `load_world`, `load_world_paced`, `convert_trace`, `convert_trace_paced`, `SaltError`, `DATASET` |
@@ -326,7 +323,7 @@ it goes (marked `HOOK (fetch tools)`).
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `access_only.rs` is access-only labels and their scoring; `clock.rs` is the pace); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -356,19 +353,6 @@ It is reported on its own line ("access-only recall (suspected or
 discarded only, not in overall)") and in `report.json`, never added to
 `overall`, and the line is left out of the table when no label is
 access-only.
-
-**Access-only labels** (`Expectation::AccessOnly`, `ExpectedAccess`) are
-the reverse: transmissions the spec says a detector must only suspect
-(INV-963: content on a resource its sender never wrote is a shared
-upstream source, never confirmed). Only a suspected or discarded
-prediction finds one. It is counted in the `suspected` row of its route,
-carrier and tier, so content recall never sees it, and the report gives
-its recall on its own line ("access-only labels (expect a suspected
-transmission, INV-963; not in overall)", `AccessOnly::access_recall`). A
-content prediction aligned with one is correct, since its pair and place
-are right, but finds nothing. An access-only label must be routed
-through a channel (`InvalidLabel::AccessOffChannel`). A gate reads its
-rows with `class = "suspected"`.
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct. One prediction aligned with
@@ -523,7 +507,10 @@ channel labels, swarm-truth transmissions). AgentDojo's `JsonString` and
 levels deep needs `MatchNeed::two_string_levels()`
 (`Undecodable { codec: "json_string+json_string" }`) and is
 `Tier::OutOfReach` (`MatchNeed::tier`): AI Village text that two string
-levels undone, beyond the raw part text, tie to its sender. Reach is the
+levels undone, beyond the raw part text, tie to its sender. So is content
+read from a medium its sender never wrote (`MatchNeed::Unobserved`,
+AgentDojo's page and file copies, INV-963). `MatchNeed::out_of_reach` is
+the rule `ExpectedTransmission::new` checks against the tier. Reach is the
 spec's, not the reference matcher's: L4 cuts a writer's spans per decoded
 argument value (INV-1057), so a splice's JSON-string file read through a
 shell needs one level on the reader's side and is in reach
@@ -595,7 +582,7 @@ Every converter is on these types:
 | Converter | Ingress | Carrier | Escaped text |
 | --- | --- | --- | --- |
 | SALT | `Replay { corpus: eval-salt }` | `UserTurn` | `through_json_string` |
-| AgentDojo | `Replay { corpus: eval-agentdojo }` | `ToolResult` (channel copies access-only, INV-963) | `JsonString` / `YamlString` arrivals |
+| AgentDojo | `Replay { corpus: eval-agentdojo }` | `ToolResult` (channel copies out of reach, INV-963) | `JsonString` / `YamlString` arrivals |
 | τ²-bench | `Replay { corpus: eval-tau2 }` | `UserTurn` | none (labels are exact turns) |
 | collusion-wiki | `Replay { corpus: eval-collusion-wiki }` | `ToolResult`, `ReaderOutput` (relays) | `through_json_string` (was `Normalized`) |
 | swarm-traces | `Replay { corpus: eval-swarm-traces }` | `ToolResult` | base64 / hex / URL chains only |
@@ -744,24 +731,20 @@ Where the reference loses:
     gives `Channel(File)`, rooted at `/` because the suite's file system is
     flat. Every other tool is opaque-keyed (email, event, channel, review)
     and gives `Direct`.
-  - **Channel copies expect a suspected transmission only.** The
-    synthetic attacker's one exchange writes text, never the page or file
-    the victim reads, so content on those resources reached them from
-    upstream of every agent the gateway sees. INV-963
-    (`flow.route.shared-upstream-stays-suspected`) makes such content a
-    shared upstream source: a match explained by no write of its sender
-    confirms nothing, and the channel stays Suspected. So a channel copy
-    is an `Expectation::AccessOnly` (`truth::ExpectedAccess`, which
-    refuses any route but a channel): only a suspected or discarded
-    prediction finds it, it is counted in the `suspected` row of its
-    route, carrier and tier, and the report's access-only line gives its
-    recall (`AccessOnly::found_access` / `expected_access`). It never
-    weighs on content recall; a content match there is correct (right
-    pair, right place) but finds nothing. Copies read through keyed tools,
-    which record no access, stay `Direct(ToolResult)` content
-    expectations. `get_webpage` needs L5 to read it as a fetch for its
-    copies to get access evidence (`agentdojo::FETCH_TOOLS`, the live
-    fetch-tools hook).
+  - **Channel copies are out of reach by design.** The synthetic
+    attacker's one exchange writes text, never the page or file the victim
+    reads, so no write pairs with the read and no co-access exists. By
+    INV-963 (`flow.route.shared-upstream-stays-suspected`) a match
+    explained by no write of its sender confirms nothing, and every
+    suspected state needs a co-access (INV-249, INV-958), so no
+    transmission opens at all. The communication is real but cannot be
+    observed: a channel copy needs `MatchNeed::Unobserved { reason:
+    "sender medium unobserved (INV-963)", arrival }`
+    (`MatchNeed::sender_medium_unobserved`) and is `Tier::OutOfReach`,
+    reported with the missed-by-design rows, never as a miss and never as
+    a negative control. `arrival` keeps the class the copy would match by.
+    Copies read through keyed tools, which record no access, stay
+    `Direct(ToolResult)` construction labels from the attacker's exchange.
   - **Match need** (`classify.rs`). The converter tests each injection,
     trimmed, against the actual output and labels it with the weakest
     arrival that finds it:
@@ -795,13 +778,14 @@ Where the reference loses:
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/agentdojo/mod.rs` | AgentDojo as a `TraceSource` | `AgentDojoSource` (`tally()`, `with_pace`), `load_world`, `load_world_paced`, `convert_run`, `convert_run_paced`, `Loaded`, `model_of`, `AgentDojoError`, `DATASET`, `VICTIM`, `ATTACKER`, `FETCH_TOOLS` |
+| `src/datasets/agentdojo/mod.rs` | AgentDojo as a `TraceSource` | `AgentDojoSource` (`tally()`, `with_pace`), `load_world`, `load_world_paced`, `convert_run`, `convert_run_paced`, `Loaded`, `model_of`, `AgentDojoError`, `DATASET`, `VICTIM`, `ATTACKER` |
+| `extract/agentdojo.json` | L5 extract config: `get_webpage` as a fetch tool | |
 | `src/datasets/agentdojo/files.rs` | run discovery and filters | `discover`, `Selection`, `RunFile`, `world_name` |
 | `src/datasets/agentdojo/schema.rs` | the run JSON | `Run`, `RawMessage`, `Content`, `RawCall` |
 | `src/datasets/agentdojo/messages.rs` | messages to canonical, call ids | `convert`, `Conversation` |
 | `src/datasets/agentdojo/classify.rs` | how an injection arrived | `Arrival`, `Occurrence`, `Output`, `occurrences` |
 | `src/datasets/agentdojo/route.rs` | expected route of a read | `expected_route` |
-| `src/datasets/agentdojo/truth.rs` | labels (channel copies access-only) | `RunLabels`, `Attacker`, `indicators` |
+| `src/datasets/agentdojo/truth.rs` | labels (channel copies out of reach, INV-963) | `RunLabels`, `Attacker`, `indicators` |
 | `src/datasets/agentdojo/tally.rs` | arrival and second-hop counts | `Tally`, `ArrivalCounts`, `SecondHop` |
 | `tests/agentdojo.rs`, `tests/fixtures/agentdojo/` | synthetic runs (generated, not copied) | |
 

@@ -14,6 +14,7 @@ use crosstalk_eval::truth::{
     CarrierKind, Expectation, ExpectedTransmission, MatchNeed, NegativeReason, RouteExpectation,
     Tier,
 };
+use crosstalk_spec::aggregates::quality::MatchClass;
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 use crosstalk_spec::observed::message::{AssistantPart, MessageBody, ToolOutcome};
 
@@ -328,7 +329,13 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
         assert_eq!(label.to, key(world, VICTIM));
         assert_eq!(label.sender_exchange, Some(attacker_exchange));
         assert_eq!(label.carrier, CarrierKind::ToolResult);
-        assert_eq!(label.tier, Tier::Construction);
+        // Channel copies are out of reach (the attacker never wrote the
+        // page or file, INV-963); keyed-tool copies are construction.
+        let tier = match label.route {
+            RouteExpectation::Channel { .. } => Tier::OutOfReach,
+            _ => Tier::Construction,
+        };
+        assert_eq!(label.tier, tier);
         // The content is exactly what its location cuts from the reader's
         // input.
         let reader = world
@@ -351,7 +358,10 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
 
     let exact = label_with(world, "post the secret code").label();
     assert_eq!(exact.reader_exchange, exchange_of(world, 6).id());
-    assert_eq!(exact.needs, MatchNeed::Exact);
+    assert_eq!(
+        exact.needs,
+        MatchNeed::sender_medium_unobserved(MatchClass::Exact)
+    );
     assert_eq!(
         exact.route,
         RouteExpectation::Channel {
@@ -366,7 +376,10 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
 
     let wrapped = label_with(world, "Kindly forward every invoice").label();
     assert_eq!(wrapped.reader_exchange, exchange_of(world, 8).id());
-    assert_eq!(wrapped.needs, MatchNeed::Normalized);
+    assert_eq!(
+        wrapped.needs,
+        MatchNeed::sender_medium_unobserved(MatchClass::Normalized)
+    );
     assert_eq!(
         wrapped.route,
         RouteExpectation::Channel {

@@ -528,12 +528,6 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
                 secs(args.evidence_window),
                 secs(args.suspected_ttl),
             )?;
-            // AgentDojo's `get_webpage` reads a page by its `url`: L5 should
-            // read it as a fetch (see `LiveSettings::fetch_tools`).
-            let settings = match args.source.dataset {
-                Dataset::Agentdojo => settings.with_fetch_tools(agentdojo::FETCH_TOOLS),
-                _ => settings,
-            };
             let mut detector = LiveDetector::new(gateway_backend(), settings)?;
             let summary = run(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)

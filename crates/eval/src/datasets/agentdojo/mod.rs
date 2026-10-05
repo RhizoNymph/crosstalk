@@ -53,10 +53,6 @@ pub const VICTIM: &str = "victim";
 /// The synthetic attacker's name in attacked worlds.
 pub const ATTACKER: &str = "attacker";
 
-/// AgentDojo's tools that fetch a resource by URL: L5 should record a
-/// read of the URL for them (`LiveSettings::fetch_tools`).
-pub const FETCH_TOOLS: &[&str] = &["get_webpage"];
-
 /// Pipeline-name suffixes naming a defense, not a model.
 const DEFENSES: &[&str] = &[
     "-repeat_user_prompt",
