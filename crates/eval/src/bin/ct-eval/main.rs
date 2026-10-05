@@ -3,7 +3,13 @@
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
+//! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
+//! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
 //! ```
+//!
+//! `swarm` scores the gateway's saved export against a demo swarm's ground
+//! truth (see `datasets::swarm_truth`); `swarm-fetch` saves that export and
+//! its evidence from the L8 API.
 //!
 //! `--dataset` is `salt`, `agentdojo` or `tau2`. For AgentDojo, `--include
 //! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
@@ -33,6 +39,8 @@ use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
 use tracing_subscriber::EnvFilter;
 
+mod swarm;
+
 #[derive(Parser)]
 #[command(name = "ct-eval", about = "crosstalk evaluation harness")]
 struct Cli {
@@ -46,6 +54,10 @@ enum Command {
     Run(RunArgs),
     /// Dump the dataset's labels as JSONL.
     Truth(TruthArgs),
+    /// Score the gateway's saved export against a demo swarm's ground truth.
+    Swarm(swarm::SwarmArgs),
+    /// Save the gateway's transmissions export and their evidence.
+    SwarmFetch(swarm::FetchArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -318,6 +330,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run_command(args),
         Command::Truth(args) => truth_command(args),
+        Command::Swarm(args) => swarm::run(args),
+        Command::SwarmFetch(args) => swarm::fetch(args),
     };
     match result {
         Ok(code) => code,
