@@ -25,8 +25,9 @@ General eval concepts (worlds, labels, alignment, scoring) are in
   heuristic repository-channel labels; GUI edits of Google Docs and Gmail
   counted.
 - **Reusable passes**: `tables` (one streaming pass per table, filtered by
-  a window early), `resource` (canonical repository and site resources),
-  `access` (bash command → resource reads and writes).
+  a window early), `resource` (canonical repository and site resources, an
+  L5 locator's canonical form), `access` (bash command → resource reads and
+  writes with their `WriteOutcome` and `http_request` equivalent).
 
 ## Non-scope
 
@@ -111,11 +112,15 @@ ai-village/*.jsonl.gz ──▶ stream::Table::scan (flate2, line by line; creat
   event id to a call (a result the context ended on before any call read it
   does not count) yields: author → Claude Code, `Direct` route,
   `ToolResult` carrier, at the first call carrying the result, located at
-  the escaped content. `needs` is `Exact` when the escaped bytes occur
-  verbatim in the author's response (its chat tool's JSON arguments escape
-  the same way), else `Normalized` after folding, else `Semantic`.
+  the escaped content. `needs` (`text::need`) is `Exact` when the escaped
+  bytes occur verbatim in the author's response (its chat tool's JSON
+  arguments escape the same way); `Decoded([Codec::JsonString])` when one
+  level of JSON string unescaping gives text that occurs verbatim (the
+  author wrote the message as plain text); else `Normalized` after
+  folding; else `Semantic`.
 - **Originating exchanges.** The author's response is the `AGENT_TALK`
-  event's `data.output` (provider-shaped), as an exchange at the event's
+  event's `data.output` (provider-shaped; for Claude models often a bare
+  array of Anthropic content blocks), as an exchange at the event's
   time with an empty request (`Synthetic`). Events without an output are
   counted as `unoriginated` and not labelled.
 - **Direct, not Channel.** The spec's `Channel` is a shared resource written
@@ -206,19 +211,72 @@ ai-village/*.jsonl.gz ──▶ stream::Table::scan (flate2, line by line; creat
   visible text names Google Docs or Gmail are counted, never labelled.
 - **Coverage** is `Partial`.
 
-### What an L5 extractor can see
+### Write outcomes
 
-L5's `HttpTool` extractor reads tool calls named `http_request`, `fetch`,
-`web_fetch` or `curl` with `url` and `method` arguments. AI Village agents
-make none: every repository and web access is inside a `bash` command (or a
-GUI action). So **every access in the table above needs a Bash extractor**:
-`git push/clone/pull/fetch` (with the remote from the output's `To`/`From`
-lines or the shell's directory), `gh`/`glab` issue, PR, MR and `api`
-commands, and `curl`/`wget` inside a command line. For the labels to align,
-such an extractor must also canonicalise as `resource` does (one URL per
-repository across remote, API, raw and Pages forms). The Claude Code
-agent's `WebFetch` calls are the only HTTP-tool-shaped calls in the
-dataset.
+Each write carries the spec's `WriteOutcome` (`access::outcome`), judged
+from the command's output alone (the village's bash turns record no exit
+status, and git and gh write progress to stderr):
+
+- `Rejected`: the output reports a failure: a first line opening with
+  `fatal:`, `error:`, `curl: (`, `HTTP 4xx/5xx`, `GraphQL:`, `gh: `,
+  `Permission denied`, `could not` and the like; a git push's
+  `! [rejected]`, `! [remote rejected]` or `error: failed to push`; or a
+  JSON body whose top-level `message`/`error` is a known API failure (`Bad
+  credentials`, `Not Found`, `Validation Failed`, `401 Unauthorized`, …).
+- `Delivered`: the tool's success shows (a push's `a..b main -> main` or
+  `Everything up-to-date`; a forge CLI's printed URL or `✓`; an API body
+  with `html_url`, `web_url` or `created_at`).
+- `Unknown`: neither (most `curl` writes).
+
+A rejected write is recorded and counted but never pairs, and it does not
+hide the latest earlier write to its resource (`WriteOutcome::pairs`). A
+read whose output reports a failure is no access (the spec's reads need a
+delivered result), so a failed `git clone` or `curl` reads nothing.
+
+### The L5 contract
+
+The agreed L5 `HttpTool` contract: a call of a tool named `http_request`,
+`fetch`, `web_fetch` or `curl` with `url` and `method` arguments; `GET` and
+`HEAD` read, `POST`, `PUT`, `PATCH` and `DELETE` write (the written spans
+from the first of `body`, `content`, `text`, `data`), any other method is
+no access; the locator is the canonical URL.
+
+AI Village agents make no such call. Every repository and web access is
+inside a `bash` command (or a GUI action), and the exchanges keep those
+calls exactly as the model made them. The converter meets the contract in
+three ways:
+
+- **HTTP equivalents.** Each `curl`, `wget`, `gh api` and `glab api`
+  access keeps the `http_request` call it is equivalent to
+  (`Access::http`, `access::HttpRequest`; `HttpRequest::tool_call` builds
+  it): the method as the contract reads it (`-X`/`--request`, `-I` HEAD,
+  `-T` PUT, data or field flags POST unless `-G`, else GET), the URL as
+  written (`gh api <path>` is `https://api.github.com/<path>`, `glab api
+  <path>` is `https://gitlab.com/api/v4/<path>`) and the body (curl's data
+  values joined with `&` as curl sends them; the API fields as a JSON
+  object). A method outside the six is no access, as in L5.
+- **Canonical resources.** A URL off the forges is exactly the locator
+  L5's extractor gives it (`crosstalk_flow::extract::resource::url_locator`:
+  scheme and host lower-cased, default port, user info and fragment
+  dropped, dot segments resolved, percent-encoding normalized, query
+  parameters sorted). A repository is the locator of its lower-cased web
+  URL (`https://github.com/<owner>/<repo>`), which every remote, API, raw,
+  blob and Pages form of it maps to. `resource::canonical` maps any L5
+  locator (a URL, or L5's GitHub file `File { host: "github.com/o/r" }`) to
+  the converter's resource, and a test runs L5's `ToolExtractors` over the
+  equivalent calls to check that the two agree.
+- **Bash-only accesses.** `git push`, `git clone`, `git pull`/`fetch` and
+  the forge CLIs' issue, PR and MR commands speak git or the CLIs' own
+  GraphQL: only a Bash extractor could see them (`Access::http` is
+  `None`). A label counts as `repo_labels_http_visible` when both its write
+  and its read have an HTTP equivalent, else `repo_labels_bash_only`. L5's
+  Bash extractor today reads `curl`/`wget` and learns clones from `git
+  clone`/`gh repo clone`, but records no access for `git push`,
+  `git pull` or any `gh`/`glab` issue command, so it would see the
+  `curl`/`wget` side of a label at most.
+
+The Claude Code agent's `WebFetch` calls are the only fetch-tool-shaped
+calls in the dataset.
 
 ## Files
 
@@ -230,11 +288,13 @@ dataset.
 | `…/schema.rs` | the rows read | `AgentRow`, `RoomRow`, `SessionRow`, `TurnRow`, `EventRow`, `ChatRow`, `MemoryRow`, `VillageGoalRow`, `AgentGoalRow`, `ClaudeCodeRow` |
 | `…/tables.rs` | reusable passes | `load_directory`/`Directory`, `load_sessions`, `scan_turns`, `scan_events`/`EventScan`, `events_by_id`, `leading_id`, `scan_chat`, `scan_memories`/`Memories`, `load_goals`/`Goals` |
 | `…/rooms.rs` | room membership | `RoomTimeline`, `ROOMS_V1_MICROS` |
-| `…/resource.rs` | canonical resources | `from_url`, `from_remote`, `repo`, `Forge`, `urls` |
-| `…/access/mod.rs` | bash accesses | `Shell` (`accesses`), `Access`, `Op`, `Tool`, `HOME` |
+| `…/resource.rs` | canonical resources | `from_url`, `from_remote`, `repo`, `canonical`, `Forge`, `urls` |
+| `…/access/mod.rs` | bash accesses | `Shell` (`accesses`), `Access` (`http_visible`), `Op` (`Read`, `Write(WriteOutcome)`), `Tool`, `HOME` |
+| `…/access/http.rs` | the L5 `HttpTool` contract | `HttpRequest` (`tool_call`), `HttpMethod`, `HTTP_TOOL` |
+| `…/access/outcome.rs` | judging an output | `failed`, `write_outcome` |
 | `…/access/shell.rs` | word splitting | `commands`, `SimpleCommand`, `heredoc_argument` |
 | `…/provider/{mod,anthropic,openai,gemini}.rs` | provider responses → canonical | `response`, `Response`, `arguments`, `anthropic::{block, tool_result}` |
-| `…/text.rs` | locating text, match needs | `json_escape`, `escapes`, `find`, `need`, `visible_text` |
+| `…/text.rs` | locating text, match needs | `json_escape`, `json_unescape`, `escapes`, `find`, `need`, `visible_text` |
 | `…/claude_code/mod.rs` | the Claude Code source | `ClaudeCodeStream`, `ClaudeCodeStats`, `after` |
 | `…/claude_code/entries.rs` | SDK entries | `Entry`, `EntryKind`, `load`, `contexts` |
 | `…/claude_code/calls.rs` | calls and requests | `context`, `Context`, `Call`, `ResultRef`, `ToolUse` |
@@ -246,7 +306,7 @@ dataset.
 | `…/window/repo.rs` | access log and pairs | `AccessLog`, `AccessRecord`, `Pair`, `AccessStats`, `TurnRef`, `payload_line` |
 | `…/window/gui.rs` | GUI edit counts | `GuiStats` |
 | `…/report.rs` | unlabelled predictions | `Unlabelled`, `tool_kind` |
-| `tests/ai_village/` | synthetic fixtures written to a temp dir; units, Claude Code, window | |
+| `tests/ai_village/` | synthetic fixtures written to a temp dir; units, Claude Code, window, the L5 contract (`l5.rs`, runs `crosstalk-flow`'s extractor) | |
 
 ## Invariants and constraints
 
@@ -264,6 +324,16 @@ dataset.
 - **Labels are first deliveries.** Claude Code: the first call carrying an
   event id. Window chat: the first call after the message, within four
   hours. Repository: the first call carrying the read's output.
+- **Rejected writes never pair.** A `Rejected` write is counted and kept
+  in the log but is never the write of a pair; a read with a failed output
+  is no access.
+- **Resources are canonical URLs.** Every label resource is a
+  `Locator::Url`: off the forges, exactly L5's `url_locator`; on them, the
+  repository's lower-cased web URL. `resource::canonical` of L5's locator
+  for an equivalent `http_request` is the access's resource.
+- **The exchanges keep the raw calls.** Bash commands and GUI actions stay
+  as the model made them; HTTP equivalents live beside the accesses, never
+  in the exchanges.
 - **No dataset bytes in the repository.** Tests write synthetic rows.
 
 ## Gaps
@@ -281,3 +351,18 @@ dataset.
 - **Spec: no replayed-request fidelity marker.** Exchanges with a rebuilt
   request travel as ordinary full-history exchanges; only the eval's
   `Fidelity` says so.
+- **Spec: no repository resource.** L5 names a repository's files
+  (`File { host: "github.com/o/r", path }`) and URLs, but nothing names the
+  repository itself, which is what `git push`, `git pull` and an issue
+  comment touch. The converter's repository channel is a `Url` of the
+  repository's web URL, coarser than L5's files: a `curl` of a raw file and
+  a `git push` meet on it here, and on nothing in L5.
+- **Spec: no exit status for shell results.** Village bash turns carry
+  stdout and stderr only, and L5 reads no shell result text (`ContentRule`
+  none for shell tools), so L5 would mark every shell write `Delivered`
+  where this converter judges `Rejected` or `Unknown` from the text.
+- **Spec types not used here.** `IngressMode::Replay { corpus }` is for the
+  corpus client, which the eval core has not moved to yet; the eval core
+  still has its own `CarrierKind` (TODO in `truth/kinds.rs`), so the
+  converter uses that one. `WriteOutcome` and `Codec::JsonString` are the
+  spec's.

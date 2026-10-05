@@ -15,8 +15,8 @@ use crosstalk_flow::extract::{
 };
 use crosstalk_spec::derived::provenance::matching::Codec;
 use crosstalk_spec::observed::message::{
-    AssistantPart, CanonicalJson, Message, MessageBody, Text, ToolArguments, ToolCall,
-    ToolCallId, ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent,
+    AssistantPart, CanonicalJson, Message, MessageBody, Text, ToolArguments, ToolCall, ToolCallId,
+    ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent,
 };
 
 fn one(shell: &mut Shell, command: &str, output: &str) -> Access {
@@ -35,13 +35,21 @@ fn request(access: &Access) -> &HttpRequest {
 #[test]
 fn curl_and_wget_follow_the_http_tool_contract() {
     let mut shell = Shell::default();
-    let get = one(&mut shell, "curl -sL 'https://pages.example/notes?b=2&a=1'", "notes");
+    let get = one(
+        &mut shell,
+        "curl -sL 'https://pages.example/notes?b=2&a=1'",
+        "notes",
+    );
     assert_eq!(get.op, Op::Read);
     assert_eq!(request(&get).method, HttpMethod::Get);
     assert_eq!(request(&get).url, "https://pages.example/notes?b=2&a=1");
     assert_eq!(request(&get).body, None);
 
-    let head = one(&mut shell, "curl -I https://pages.example/notes", "HTTP/2 200");
+    let head = one(
+        &mut shell,
+        "curl -I https://pages.example/notes",
+        "HTTP/2 200",
+    );
     assert_eq!(head.op, Op::Read);
     assert_eq!(request(&head).method, HttpMethod::Head);
 
@@ -80,7 +88,11 @@ fn curl_and_wget_follow_the_http_tool_contract() {
     assert_eq!(request(&delete).method, HttpMethod::Delete);
     assert_eq!(request(&delete).body, None);
     // -G sends the data as a query: a read.
-    let query = one(&mut shell, "curl -G https://api.example.com/notes -d q=1", "");
+    let query = one(
+        &mut shell,
+        "curl -G https://api.example.com/notes -d q=1",
+        "",
+    );
     assert_eq!(query.op, Op::Read);
     assert_eq!(request(&query).method, HttpMethod::Get);
     // A method outside the contract is no access.
@@ -103,7 +115,10 @@ fn curl_and_wget_follow_the_http_tool_contract() {
         request(&posted).body.as_deref(),
         Some("note=left under the bridge")
     );
-    assert_eq!(posted.payload, vec!["note=left under the bridge".to_owned()]);
+    assert_eq!(
+        posted.payload,
+        vec!["note=left under the bridge".to_owned()]
+    );
 }
 
 #[test]
@@ -168,9 +183,15 @@ fn the_l5_extractor_meets_the_converter_on_one_resource() {
     let mut shell = Shell::default();
     for (command, write) in [
         ("curl -s 'https://pages.example/notes?b=2&a=1'", false),
-        ("curl -s https://WWW.Pages.Example:443/x/./y/../z#top", false),
+        (
+            "curl -s https://WWW.Pages.Example:443/x/./y/../z#top",
+            false,
+        ),
         ("curl -X POST https://api.example.com/notes -d 'x=1'", true),
-        ("curl https://raw.githubusercontent.com/O/R/main/README.md", false),
+        (
+            "curl https://raw.githubusercontent.com/O/R/main/README.md",
+            false,
+        ),
         ("curl https://github.com/o/r/blob/main/src/lib.rs", false),
         ("curl https://o.github.io/r/index.html", false),
         ("curl https://api.github.com/repos/o/r/issues/5", false),
