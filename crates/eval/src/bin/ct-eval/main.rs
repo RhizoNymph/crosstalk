@@ -68,6 +68,7 @@ use crosstalk_eval::truth::jsonl;
 use crosstalk_flow::extract::ExtractConfig;
 use tracing_subscriber::EnvFilter;
 
+mod replay;
 mod swarm;
 
 #[derive(Parser)]
@@ -87,6 +88,8 @@ enum Command {
     Swarm(swarm::SwarmArgs),
     /// Save the gateway's transmissions export and their evidence.
     SwarmFetch(swarm::FetchArgs),
+    /// Replay a saved bench run through the live composition and score it.
+    Replay(replay::ReplayArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -676,6 +679,7 @@ fn main() -> ExitCode {
         Command::Truth(args) => truth_command(args),
         Command::Swarm(args) => swarm::run(args),
         Command::SwarmFetch(args) => swarm::fetch(args),
+        Command::Replay(args) => replay::run(args),
     };
     match result {
         Ok(code) => code,
