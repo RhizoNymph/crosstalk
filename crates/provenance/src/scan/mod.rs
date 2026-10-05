@@ -32,6 +32,7 @@
 
 pub mod cache;
 pub mod hits;
+mod inherited;
 pub mod kind;
 pub mod messages;
 mod nearer;
@@ -46,12 +47,12 @@ use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, PositionedFi
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::derived::provenance::span::{OriginatedSpan, Span, SpanState};
 use crosstalk_spec::events::ingest::ConversationDelta;
-use crosstalk_spec::ids::{MessageHash, SpanId};
+use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError, SemanticMatcher};
 use crosstalk_spec::observed::message::Message;
 use crosstalk_spec::support::{Similarity, Timestamp};
 
-use self::cache::KGramCache;
+use self::cache::{KGramCache, TokenCache};
 use self::hits::LiveSpans;
 use self::messages::{LoadError, MessageSource};
 use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
@@ -146,7 +147,10 @@ pub struct Scanner {
     cache: Mutex<KGramCache>,
     /// The fingerprints of the agents' own output messages
     /// (`nearer`), locked like `cache`.
-    own_cache: Mutex<nearer::SetCache>,
+    own_cache: Mutex<nearer::OwnCache>,
+    /// The token sequences each request message gives its reader
+    /// (`provenance.match.inherited-fragment-dropped`). Locked like `cache`.
+    pub(crate) given: Mutex<TokenCache>,
 }
 
 /// State one scan accumulates: live span records fetched so far, origin
@@ -164,6 +168,9 @@ pub(crate) struct Session<'a, I, S, M, L> {
     pub tokens: HashMap<Fingerprint, u64>,
     /// The reader's own paths to text (`nearer`).
     pub nearer: nearer::Nearer,
+    /// What each origin exchange was given, read so far (`None` when its
+    /// request is no longer recorded).
+    pub given: HashMap<ExchangeId, Option<Arc<inherited::Given>>>,
 }
 
 impl<I, S, M, L> Session<'_, I, S, M, L>
@@ -279,7 +286,8 @@ impl Scanner {
             forwarding: config.forwarding(),
             spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
-            own_cache: Mutex::new(nearer::SetCache::new(nearer::DEFAULT_BUDGET)),
+            own_cache: Mutex::new(nearer::OwnCache::new(cache::DEFAULT_BUDGET)),
+            given: Mutex::new(TokenCache::new(cache::DEFAULT_BUDGET)),
         }
     }
 
@@ -374,6 +382,7 @@ impl Scanner {
             bodies: HashMap::new(),
             tokens: HashMap::new(),
             nearer: self.nearer(loaded),
+            given: HashMap::new(),
         };
         let mut found: Vec<ContentMatch> = Vec::new();
         for (message, scanned_as) in loaded.listed() {

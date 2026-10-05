@@ -127,7 +127,9 @@ Overview:
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
-      escape-folded normalization) and L5 flow detection (resource
+      escape-folded normalization, boilerplate rules: template skeletons,
+      fragments the origin was given by its own upstream, and unobserved
+      copies without a rare token are not matched) and L5 flow detection (resource
       extraction with write outcomes, channel registry with promotion and
       supersession, in which a channel exists only once a transmission
       between different agents goes through it, write/read correlation
@@ -209,7 +211,14 @@ Overview:
       apart from overall). The truth's session rows map every gateway
       session to its swarm agent; it scores under
       demo-swarm/<scenario> (headline or boilerplate), and its gates are
-      those named detector "gateway-export".
+      those named detector "gateway-export". A discarded co-access that
+      aligns with no label is dismissed (the detector's own "no"), never a
+      false positive or a control violation. ct-eval replay --run <dir>
+      replays a saved bench run's exchange log and blobs through
+      crosstalk_gateway::live::Live in memory with the run's flow windows
+      (bench.env), reads the export and evidence back through the same L8
+      surface, and scores them as ct-eval swarm does, offline and
+      deterministically.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1227,7 +1236,9 @@ Features Index:
       prompt and the output (k-grams, plus exact hashes of short token
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
-      under stricter length and frequency rules, boilerplate Common) and
+      under stricter length and rare-token rules, boilerplate Common),
+      drops short matches that are template skeletons or that the origin
+      was given token for token in its own request, and
       picks carrier, kind, read range and matched bytes, leaving out hits
       the reader's nearer source explains (its own earlier output in the
       request, and with forwarding on its own direct read of a forward's
@@ -1484,7 +1495,11 @@ Features Index:
       channel resources and L3 attribution), whose adapter
       (detect::live::gateway) drives the merged crosstalk_gateway::live::Live
       (ct-eval run --detector live, with overridable correlation windows and
-      a --predictions JSONL dump); reports (overall, out of reach,
+      a --predictions JSONL dump), and ct-eval replay, which re-runs a
+      saved node0 bench run (exchange log, blobs, truth, bench.env)
+      through Live offline and scores it like ct-eval swarm, discarded
+      co-access aligned with no label counted dismissed rather than false;
+      reports (overall, out of reach,
       access-only recall, background) and regression gates per detector
       (reference or live), found through --gates, CT_EVAL_GATES, the bench
       image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
@@ -1501,6 +1516,7 @@ Features Index:
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
       - crates/eval/src/datasets/swarm_truth/mod.rs
+      - crates/eval/src/datasets/swarm_truth/replay.rs
       - crates/eval/src/predict/reads.rs
       - crates/eval/src/detect/live/mod.rs
       - crates/eval/src/detect/live/gateway.rs

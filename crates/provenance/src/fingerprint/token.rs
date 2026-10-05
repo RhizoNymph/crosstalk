@@ -66,6 +66,16 @@ pub fn observed(text: &str, cap: usize) -> BTreeSet<Fingerprint> {
     seen
 }
 
+/// Every token of `text`, in order, repeats kept: the sequence a run of
+/// another text is looked for in (`provenance.match.inherited-fragment-dropped`).
+pub fn sequence(text: &str) -> Vec<Fingerprint> {
+    let chars: Vec<char> = normalize(text).iter().map(|c| c.ch).collect();
+    spans(&chars)
+        .into_iter()
+        .map(|(_, _, token)| token)
+        .collect()
+}
+
 /// The hashes of the whole tokens inside `text[start..end]` (byte
 /// offsets): tokens cut by either end, where the character outside is
 /// alphanumeric too, are left out, since a cut word was never observed.

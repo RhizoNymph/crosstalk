@@ -18,6 +18,7 @@ pub mod diagnostics;
 pub mod exchange_log;
 pub mod fetch;
 pub mod locate;
+pub mod replay;
 pub mod resolve;
 pub mod schema;
 pub mod truth_file;
@@ -73,6 +74,8 @@ pub enum SwarmTruthError {
     Bodies(#[from] bodies::OpenBodiesError),
     #[error(transparent)]
     Resolve(#[from] resolve::ResolveError),
+    #[error(transparent)]
+    Replay(#[from] replay::ReplayError),
     #[error("export {path}: {source}")]
     Detected {
         path: String,
@@ -234,4 +237,83 @@ pub fn run(
         evidence: &evidence,
     };
     score(&truth, &name, log, bodies, detections, examples, gates)
+}
+
+/// The files `ct-eval replay` reads: a run's truth, and the exchange log
+/// and blobs its gateway wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayInputs {
+    pub truth: PathBuf,
+    pub exchanges: PathBuf,
+    pub blobs: PathBuf,
+}
+
+/// How to replay a run; `since` defaults to the truth header's
+/// `started_at_unix_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayOptions {
+    pub flow: crosstalk_flow::consumer::FlowConfig,
+    pub seed: u64,
+    pub since: Option<crosstalk_spec::support::Timestamp>,
+    pub until: Option<crosstalk_spec::support::Timestamp>,
+}
+
+/// A replayed and scored run.
+#[derive(Debug)]
+pub struct ReplayOutcome {
+    pub replayed: replay::Replayed,
+    pub settings: replay::ReplaySettings,
+    pub scored: SwarmOutcome,
+}
+
+/// Replays the run's exchanges through the live composition
+/// ([`replay::replay`]) and scores the export and evidence it serves
+/// exactly as [`run`] scores a fetched one, against the whole log.
+pub fn run_replay(
+    inputs: &ReplayInputs,
+    options: &ReplayOptions,
+    examples: usize,
+    gates: &Gates,
+) -> Result<ReplayOutcome, SwarmTruthError> {
+    let shown = inputs.truth.display().to_string();
+    let truth =
+        truth_file::read(open(&inputs.truth)?).map_err(|source| SwarmTruthError::Truth {
+            path: shown.clone(),
+            source,
+        })?;
+    let log = exchange_log::read(&inputs.exchanges)?;
+    let settings = replay::ReplaySettings {
+        flow: options.flow,
+        seed: options.seed,
+        since: options.since.unwrap_or_else(|| {
+            crosstalk_spec::support::Timestamp::from_micros(
+                truth.header.started_at_unix_ms.saturating_mul(1000),
+            )
+        }),
+        until: options.until,
+    };
+    let mut bodies = Cached::new(BlobBodies::open(&inputs.blobs)?);
+    let replayed = replay::replay(&log, &mut bodies, &settings)?;
+    let name = inputs
+        .truth
+        .file_name()
+        .map_or_else(|| shown.clone(), |name| name.to_string_lossy().into_owned());
+    let detections = Detections {
+        exported: &replayed.exported,
+        evidence: &replayed.evidence,
+    };
+    let scored = score(
+        &truth,
+        &name,
+        log,
+        BlobBodies::open(&inputs.blobs)?,
+        detections,
+        examples,
+        gates,
+    )?;
+    Ok(ReplayOutcome {
+        replayed,
+        settings,
+        scored,
+    })
 }

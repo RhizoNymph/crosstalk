@@ -35,7 +35,7 @@
 //! it still matches. A peer message repeating text the reader wrote is no
 //! delivery of that text, even when the peer had it first.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, FingerprintHit};
@@ -44,6 +44,7 @@ use crosstalk_spec::ids::MessageHash;
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatcher};
 use crosstalk_spec::observed::message::{Message, MessageBody};
 
+use super::cache::{Bounded, Weighed};
 use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
 use crate::fingerprint::short;
@@ -51,52 +52,17 @@ use crate::segment::{MessageKGrams, PartKind, message_kgrams, text_parts, view};
 use crate::store::ProvenanceStore;
 use crate::text::normalize;
 
-/// How many fingerprints the own-output cache holds at most.
-pub const DEFAULT_BUDGET: usize = 4 << 20;
-
 /// A set of k-gram and short-span fingerprints.
 pub type FingerprintSet = HashSet<Fingerprint>;
 
-/// Fingerprint sets by message, oldest evicted first within a budget of
-/// fingerprints held. Bodies are content-addressed, so a message's set is a
-/// function of its hash.
-#[derive(Debug, Default)]
-pub struct SetCache {
-    entries: HashMap<MessageHash, Arc<FingerprintSet>>,
-    order: VecDeque<MessageHash>,
-    held: usize,
-    budget: usize,
-}
-
-impl SetCache {
-    pub fn new(budget: usize) -> Self {
-        Self {
-            budget,
-            ..Self::default()
-        }
-    }
-
-    pub fn get(&self, hash: MessageHash) -> Option<Arc<FingerprintSet>> {
-        self.entries.get(&hash).cloned()
-    }
-
-    pub fn put(&mut self, hash: MessageHash, set: Arc<FingerprintSet>) {
-        let added = set.len().max(1);
-        if added > self.budget || self.entries.insert(hash, set).is_some() {
-            return;
-        }
-        self.order.push_back(hash);
-        self.held += added;
-        while self.held > self.budget {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if let Some(evicted) = self.entries.remove(&oldest) {
-                self.held -= evicted.len().max(1);
-            }
-        }
+impl Weighed for FingerprintSet {
+    fn weight(&self) -> usize {
+        self.len().max(1)
     }
 }
+
+/// The agents' own output messages' fingerprint sets, by hash.
+pub type OwnCache = Bounded<FingerprintSet>;
 
 /// A forward, by its source message and the forwarder's output message.
 type ForwardKey = (MessageHash, MessageHash);

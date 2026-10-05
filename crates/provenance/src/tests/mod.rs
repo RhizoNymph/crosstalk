@@ -3,6 +3,7 @@
 //! here and runs a scenario from a submodule.
 
 mod agentdojo;
+mod bench_boilerplate;
 mod config;
 mod decode;
 mod fingerprint;

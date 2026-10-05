@@ -20,7 +20,7 @@ fn rate(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_owned(), |v| format!("{:.3}", v))
 }
 
-const HEADER: [&str; 13] = [
+const HEADER: [&str; 14] = [
     "route",
     "carrier",
     "class",
@@ -33,10 +33,11 @@ const HEADER: [&str; 13] = [
     "correct",
     "false",
     "unjudged",
+    "dismissed",
     "precision",
 ];
 
-fn cells(row: &ReportRow) -> [String; 13] {
+fn cells(row: &ReportRow) -> [String; 14] {
     let c = &row.counts;
     [
         name(&row.key.route),
@@ -51,6 +52,7 @@ fn cells(row: &ReportRow) -> [String; 13] {
         c.correct.to_string(),
         c.false_positive.to_string(),
         c.unjudged.to_string(),
+        c.dismissed.to_string(),
         rate(row.precision),
     ]
 }
@@ -119,7 +121,7 @@ pub fn render(report: &Report) -> String {
             forwarding.counts.predicted
         );
     }
-    let rows: Vec<[String; 13]> = report.rows.iter().map(cells).collect();
+    let rows: Vec<[String; 14]> = report.rows.iter().map(cells).collect();
     let mut widths: Vec<usize> = HEADER.iter().map(|h| h.len()).collect();
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row.iter()) {
