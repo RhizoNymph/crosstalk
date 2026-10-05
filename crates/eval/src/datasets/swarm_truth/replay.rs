@@ -387,7 +387,7 @@ fn order_evidence(
     let mut out = Vec::with_capacity(exported.transmissions.len());
     let mut held: BTreeMap<TransmissionId, TransmissionEvidence> = evidence.into_iter().collect();
     for id in &exported.transmissions {
-        match held.remove(&*id) {
+        match held.remove(id) {
             Some(item) => out.push(item),
             None => return Err(ReplayError::NoEvidence(id.ulid_text())),
         }
