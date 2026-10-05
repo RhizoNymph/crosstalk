@@ -19,8 +19,8 @@ dev-dependencies.
 - **Corpus model.** `TraceSource` is a stream of `World`s: sets of agents
   that only talk to each other. Each world holds its exchanges in
   virtual-time order and its truth.
-- **Labels.** Expected transmissions, negative controls and agent clusters,
-  with tiers, as JSONL.
+- **Labels.** Expected transmissions, negative controls, exemptions
+  (places left unjudged) and agent clusters, with tiers, as JSONL.
 - **Predictions.** The eval-side view of a detector's output, converted
   from spec `Transmission`s and their `ContentMatch`es.
 - **Scoring.** One alignment rule, TP/FP/FN broken down by dataset × route
@@ -120,11 +120,11 @@ scoring, reports and gates.
 | `src/corpus/clock.rs` | the virtual clock | `compose(major, minor, sub)`, `ordinal`, `EPOCH_MICROS` |
 | `src/corpus/client.rs` | per-agent client context | `synthetic_client`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
-| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
+| `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
 | `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind`, `MatchNeed` (with spec `Codec`s), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `Directory`, `WorldDirectory`, `from_transmission` |
-| `src/score/align.rs` | **the alignment rule** | `aligns`, `violates`, `specificity` |
+| `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionRow` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
@@ -167,7 +167,10 @@ Match class and carrier never decide alignment; they only pick the row.
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct.
-- A prediction that aligns with nothing is checked against negative
+- A prediction that aligns with nothing is unjudged when an exemption
+  covers it (`exempts`: same reader and reader exchange, overlapping read
+  location; the sender is not compared).
+- Otherwise it is checked against negative
   controls (`violates`, most specific first). If it violates one, it is a
   false positive charged to that control.
 - Otherwise the world's coverage decides. Under `Complete { tier }` it is a
@@ -578,12 +581,25 @@ groups are kept but not labelled, see below), and Parquet exports.
 | `evidence.jsonl` | `GET /transmissions/{id}/evidence?window={"context":0}` | one spec `TransmissionEvidence` per line, for the exported transmissions |
 
 Truth v2 lines: `header` (version, world, run, seed, agent and key counts,
-`claude_code_shape`, start time, gateway and wiki URLs), then
+`claude_code_shape`, start time, gateway and wiki URLs; `run` is a ULID), then
 `agent_cluster` (one per key group), then `transmission`, `self_read` and
 `reread` (writer and reader with key group, session, turn and tool use id,
 `route: {kind: channel, url}`, `carrier: tool_result`, the read tool,
 `content: {blake3, sha256, excerpt, at: {message, block, tool_use_id}}` and
 times) and `miss` (the reader side only).
+
+- Writer == reader is always `self_read`, even on a repeat read; `reread`
+  is cross-agent only: a version the reader already read earlier in the
+  same session.
+- A read whose write event never arrived is an `unattributed_read`: the
+  reader side, the page `version` the wiki's response header reported, and
+  the content, with no writer. These rows come at the run's end, after
+  every other row, in read order.
+- No row is written for a read whose follow-up request was never sent (no
+  exchange carries it), or for a failed `PUT`.
+- `at_unix_ms` is `started_at_unix_ms + at_ms`; `written_at_unix_ms` is
+  when the `PUT`'s response reached the writer. Agent and page names
+  (`agent-NNN`, `<topic>-<n>`) are opaque.
 
 ### Join rules (`resolve.rs`)
 
@@ -618,9 +634,12 @@ times) and `miss` (the reader side only).
 | `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read (the one control whose sender and reader are one agent: it catches a detector that splits one agent in two) |
 | `reread` | `NegativeControl` `Reread`, writer → reader, at the later read |
 | `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
+| `unattributed_read` | `Exemption` `UnknownSender` at the read (joined like any read, hash-checked): a prediction into that reader exchange on that content is unjudged, neither correct nor false |
 | `agent_cluster` | no label: a key group is agents sharing one API key, while an `AgentCluster` is keys that are one agent. Reported as `key_group_not_a_cluster` and kept on `Resolved::key_groups` |
 
-Coverage is `Complete { Construction }`: the swarm logs every read.
+Coverage is `Complete { Construction }`: the swarm logs every read, the
+ones it cannot attribute as exemptions, so only those places are left
+unjudged and the rest of the world stays complete.
 
 ### Detections (`detected.rs`)
 
@@ -665,7 +684,7 @@ exits 2 when a gate fails. A re-run over the same files is byte-identical
 | File | Role | Key exports |
 | --- | --- | --- |
 | `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET`, `SwarmTruthError` |
-| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Delivery`, `Miss`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
+| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
 | `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
 | `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
 | `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |

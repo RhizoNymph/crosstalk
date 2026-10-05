@@ -583,3 +583,17 @@ fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission]) {
     }
     std::fs::write(path, text).expect("write the export");
 }
+
+/// An `unattributed_read` row, in the demo's pinned key order: a read of
+/// `page` whose write was never logged.
+pub fn unattributed(reader: (&str, &str, u32, &str), page: &str, text: &str) -> serde_json::Value {
+    let (reader, reader_session, reader_turn, reader_call) = reader;
+    json!({"kind": "unattributed_read", "world": WORLD, "reader": reader, "reader_key_group": 1,
+        "page": page, "version": 5, "reader_session": reader_session, "reader_turn": reader_turn,
+        "reader_tool_use_id": reader_call,
+        "read_tool": {"name": "http_request", "input": {"method": "GET", "url": url(page)}},
+        "content": {"blake3": blake3_hex(text), "sha256": "00".repeat(32),
+            "excerpt": text.chars().take(80).collect::<String>(),
+            "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
+        "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64})
+}
