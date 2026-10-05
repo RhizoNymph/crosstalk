@@ -37,4 +37,5 @@ hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] 
 [dev-dependencies]
 crosstalk-testkit = { path = "../testkit" }
 crosstalk-sim = { path = "../sim" }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

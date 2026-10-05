@@ -684,3 +684,18 @@ exits 2 when a gate fails. A re-run over the same files is byte-identical
   truth's `content.blake3`, and its content text is exactly that result's
   text.
 - Only a `SelfRead` control may name one agent as sender and reader.
+
+## AI Village
+
+The AI Village converter (`src/datasets/ai_village/`, `ct-eval run
+--dataset ai-village [--mode window|claude-code] [--from DAY --to DAY]`)
+has its own page: [eval_ai_village.md](eval_ai_village.md). It adds
+`SourceError::AiVillage`, an `AiVillage` arm of the CLI's `AnySource`, and an
+`ai-village.json` (source stats and unlabelled predictions by reader source)
+next to the report.
+
+Reference baselines: Claude Code mode recalls 15,776 of 15,798
+construction-tier `get_events` deliveries (0.999); the 2026-07-13..17 window
+gives 116,410 exchanges, 97,978 structural chat labels (recall 0.999) and 10
+heuristic repository labels. Numbers and the false-positive picture are in
+[eval_ai_village.md](eval_ai_village.md#reference-baselines).
