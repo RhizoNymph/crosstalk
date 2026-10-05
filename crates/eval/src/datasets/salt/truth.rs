@@ -7,12 +7,16 @@
 //! the receiver's first call after the turn, located at the content bytes.
 //! It needs an `Exact` match unless the content holds a character JSON
 //! escapes (a quote, a backslash, a control character): the sender's copy
-//! sits escaped inside canonical tool-call arguments, so then it needs
-//! `Normalized`.
+//! sits escaped inside canonical tool-call arguments, so then it needs one
+//! level of JSON string decoding, `Decoded([JsonString])`
+//! (`provenance.match.string-serialised-decoded`).
 //!
 //! **Negative controls.**
 //! - `RejectedSend` (Construction): a `send_message` whose event failed (the
-//!   200-character limit) was never delivered. Its origin is the failed
+//!   200-character limit) was never delivered. The converter gives its
+//!   result `ToolOutcome::Error`, so a gateway's L5 records it as a
+//!   `WriteOutcome::Rejected` write that never pairs; the label checks that
+//!   no detector credits it anyway. Its origin is the failed
 //!   call's arguments: a prediction from the sender to the receiver whose
 //!   matched span lies there, and which no delivered label explains, claims
 //!   text arrived that never did.
@@ -178,7 +182,7 @@ impl EpisodeLabels<'_> {
                 .call_of_event(delivery.event_id)
                 .and_then(|(message, _)| sender.exchange_of_response(message));
             let needs = if needs_escape(&delivery.content) {
-                MatchNeed::Normalized
+                MatchNeed::json_string()
             } else {
                 MatchNeed::Exact
             };
@@ -203,8 +207,9 @@ impl EpisodeLabels<'_> {
         Ok(())
     }
 
-    /// TODO(docs/spec-eval-gaps): with `WriteOutcome` a failed send is a
-    /// rejected write the detector sees itself; this label then checks it.
+    /// A failed send is a rejected write the detector sees itself (its
+    /// result is `ToolOutcome::Error`, so L5 records `WriteOutcome::Rejected`
+    /// and never pairs it); this label checks no detector credits it.
     fn rejected_sends(&self, out: &mut Vec<Expectation>) -> Result<(), SaltError> {
         for (at, event) in self.episode.events.iter().enumerate() {
             if event.tool.as_deref() != Some("send_message") || event.success != Some(false) {

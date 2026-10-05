@@ -8,17 +8,21 @@ use common::{calls, dataset, draft, result, says, system, user};
 use crosstalk_eval::corpus::{Coverage, Driven, HashedMessage, World, WorldBuilder};
 use crosstalk_eval::keys::{AgentKey, WorldKey};
 use crosstalk_eval::location::SpanLocationExt;
-use crosstalk_eval::predict::{PredictedRoute, Prediction, WorldDirectory, from_transmission};
+use crosstalk_eval::predict::reads::Resolved;
+use crosstalk_eval::predict::{
+    AgentMap, EvidenceClass, PredictedRoute, Prediction, WorldDirectory, from_transmission,
+};
+use crosstalk_eval::reference::classify::classify;
 use crosstalk_eval::reference::decode::decode_candidates;
-use crosstalk_eval::reference::fold::fold;
+use crosstalk_eval::reference::fold::{fold, fold_plain, string_codec};
 use crosstalk_eval::reference::opaque::{opaque_ranges, segments};
 use crosstalk_eval::reference::route::{normalize_path, parse_url};
 use crosstalk_eval::reference::shingle::{covered, shingles};
 use crosstalk_eval::reference::{ReferenceConfig, ReferenceOutput, run};
 use crosstalk_eval::truth::{CarrierKind, Tier};
-use crosstalk_spec::aggregates::quality::MatchClass;
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
-use crosstalk_spec::derived::provenance::matching::Codec;
+use crosstalk_spec::derived::provenance::matching::{Codec, MatchKind};
+use crosstalk_spec::support::NonEmpty;
 
 const SENTENCE: &str = "The vendor table has eleven overdue approvals in March";
 
@@ -79,7 +83,20 @@ fn send(content: &str) -> HashedMessage {
 
 fn matched(world: &World) -> (ReferenceOutput, Vec<Prediction>) {
     let output = run(world, ReferenceConfig::default()).unwrap_or_else(|e| panic!("{e}"));
-    let directory = WorldDirectory::new(world, output.channels.clone());
+    let mut channels = std::collections::BTreeMap::new();
+    for transmission in &output.transmissions {
+        if let crosstalk_spec::derived::flow::transmission::Route::Channel(id) = transmission.route
+        {
+            channels.insert(id, output.channels.get(&id).cloned().unwrap_or_default());
+        }
+    }
+    let agents = AgentMap::of_world(world);
+    let mut detector = crosstalk_eval::pipeline::ReferenceDetector::default();
+    let resolved = crosstalk_eval::pipeline::Detector::detect(&mut detector, world)
+        .map(|detection| detection.resolved)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(resolved, read_back(&output, &channels));
+    let directory = WorldDirectory::new(world, &agents, &resolved);
     let predictions = output
         .transmissions
         .iter()
@@ -106,7 +123,7 @@ fn verbatim_delivery_is_an_exact_match() {
     assert!(!predictions.is_empty());
     for p in &predictions {
         assert_eq!((&p.from, &p.to), (&alice, &bob));
-        assert_eq!(p.class, MatchClass::Exact);
+        assert_eq!(p.class, EvidenceClass::Exact);
         assert_eq!(p.carrier, CarrierKind::UserTurn);
         assert_eq!(p.route, PredictedRoute::Direct);
         assert_eq!(p.read_at.message(), message.hash());
@@ -116,19 +133,25 @@ fn verbatim_delivery_is_an_exact_match() {
 }
 
 #[test]
-fn escaped_content_is_a_normalized_match() {
+fn escaped_content_is_a_json_string_match() {
     let content = "First line of the \"audit\" result\nsecond line names the owner Omar";
     let mut pair = pair();
     pair.alice_writes(1, send(content));
     pair.bob_reads(2, vec![delivered(content)]);
     let (world, _, _) = pair.finish();
-    let (_, predictions) = matched(&world);
+    let (output, predictions) = matched(&world);
     assert!(!predictions.is_empty());
     assert!(
         predictions
             .iter()
-            .any(|p| p.class == MatchClass::Normalized)
+            .any(|p| p.class == EvidenceClass::Decoded)
     );
+    assert!(
+        kinds(&output).contains(&MatchKind::Decoded(NonEmpty::new(Codec::JsonString))),
+        "{:?}",
+        kinds(&output)
+    );
+    assert!(!kinds(&output).contains(&MatchKind::Normalized));
 }
 
 #[test]
@@ -139,11 +162,11 @@ fn case_and_whitespace_differences_are_normalized() {
     let (world, _, _) = pair.finish();
     let (_, predictions) = matched(&world);
     assert_eq!(predictions.len(), 1);
-    assert_eq!(predictions[0].class, MatchClass::Normalized);
+    assert_eq!(predictions[0].class, EvidenceClass::Normalized);
 }
 
 #[test]
-fn double_escaped_relays_and_yaml_continuations_are_normalized() {
+fn double_escaped_relays_and_yaml_continuations_are_string_decoded() {
     let content = "Quote: \"the budget gap is 30000\" and the vendor risk is high today";
     let once = serde_json::to_string(content).unwrap_or_default();
     let twice = serde_json::to_string(&once).unwrap_or_default();
@@ -156,7 +179,7 @@ fn double_escaped_relays_and_yaml_continuations_are_normalized() {
     let yaml = "note: \"Quote: \\\"the budget gap is 30000\\\" and the vendor \\\n    risk is high today\"";
     pair.bob_reads(3, vec![user(yaml)]);
     let (world, _, _) = pair.finish();
-    let (_, predictions) = matched(&world);
+    let (output, predictions) = matched(&world);
     let exchanges: std::collections::BTreeSet<_> =
         predictions.iter().map(|p| p.reader_exchange).collect();
     assert_eq!(
@@ -167,8 +190,91 @@ fn double_escaped_relays_and_yaml_continuations_are_normalized() {
     assert!(
         predictions
             .iter()
-            .all(|p| p.class == MatchClass::Normalized)
+            .all(|p| p.class == EvidenceClass::Decoded)
     );
+    let found = kinds(&output);
+    assert!(found.contains(&MatchKind::Decoded(NonEmpty::new(Codec::JsonString))));
+    assert!(found.contains(&MatchKind::Decoded(NonEmpty::new(Codec::YamlString))));
+}
+
+/// Every match kind the matcher reported.
+fn kinds(output: &ReferenceOutput) -> Vec<MatchKind> {
+    output
+        .transmissions
+        .iter()
+        .filter_map(|t| t.state.confirmed())
+        .flat_map(|c| c.content().iter().map(|m| m.kind().clone()))
+        .collect()
+}
+
+/// The matcher's own spans and channels, as the seam should read them back.
+fn read_back(
+    output: &ReferenceOutput,
+    channels: &std::collections::BTreeMap<
+        crosstalk_spec::ids::ChannelId,
+        Vec<crosstalk_spec::derived::flow::resource::Locator>,
+    >,
+) -> Resolved {
+    use crosstalk_eval::predict::memory::{AccessTable, ChannelTable, SpanTable};
+    use crosstalk_eval::predict::reads::{Reads, ready};
+    use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
+    let mut spans = SpanTable::default();
+    for span in &output.spans {
+        spans.insert(
+            span.id,
+            IndexedSpan {
+                exchange: span.exchange,
+                author: span.author,
+                location: span.location,
+            },
+        );
+    }
+    let channels = ChannelTable::new(channels.clone());
+    let reads = Reads {
+        spans: &spans,
+        accesses: &AccessTable::default(),
+        channels: &channels,
+    };
+    ready(Resolved::gather(&output.transmissions, reads))
+        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn hits_are_classed_by_the_weakest_transformation() {
+    // A span as it sits inside JSON tool-call arguments: escaped.
+    let span = r#"Say \"hello\" to\nthe Vendor Desk today"#;
+    let plain = fold_plain(span);
+    assert_eq!(classify(span, &plain, r#"\"hello\" to"#), MatchKind::Exact);
+    assert_eq!(
+        classify(span, &plain, "THE   vendor desk"),
+        MatchKind::Normalized,
+        "case and whitespace only"
+    );
+    assert_eq!(
+        classify(span, &plain, "\"hello\" to\nthe vendor"),
+        MatchKind::Decoded(NonEmpty::new(Codec::JsonString)),
+        "delivered unescaped: one level of JSON string decoding"
+    );
+    let yaml = "a long note that \\\n    continues on the next line";
+    assert_eq!(
+        classify(
+            yaml,
+            &fold_plain(yaml),
+            "a long note that continues on the next line"
+        ),
+        MatchKind::Decoded(NonEmpty::new(Codec::YamlString)),
+        "an escaped line break is YAML's"
+    );
+}
+
+#[test]
+fn string_codecs_are_told_apart_by_their_escapes() {
+    assert_eq!(string_codec(r#"a \"quote\" and é\n"#), Codec::JsonString);
+    assert_eq!(string_codec(r"a \\ backslash then x"), Codec::JsonString);
+    assert_eq!(string_codec(r"bell \a and \x41"), Codec::YamlString);
+    assert_eq!(string_codec("continued \\\n here"), Codec::YamlString);
+    assert_eq!(fold_plain("  Mixed\tCASE  text "), "mixed case text ");
 }
 
 #[test]
@@ -187,7 +293,7 @@ fn encoded_content_is_a_decoded_match() {
         let (world, _, _) = pair.finish();
         let (output, predictions) = matched(&world);
         assert_eq!(predictions.len(), 1, "{codec:?}");
-        assert_eq!(predictions[0].class, MatchClass::Decoded, "{codec:?}");
+        assert_eq!(predictions[0].class, EvidenceClass::Decoded, "{codec:?}");
         let Some(transmission) = output.transmissions.first() else {
             panic!("transmission")
         };

@@ -576,6 +576,7 @@ dependencies = [
  "clap",
  "crosstalk-flow",
  "crosstalk-gateway",
+ "crosstalk-memory",
  "crosstalk-sim",
  "crosstalk-spec",
  "crosstalk-testkit",

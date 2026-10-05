@@ -8,11 +8,11 @@ use crosstalk_eval::config::{EvalConfig, expand};
 use crosstalk_eval::corpus::World;
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::pipeline::{DetectError, Detection, Detector, ReferenceDetector, run};
+use crosstalk_eval::predict::EvidenceClass;
 use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{GateStatus, Gates, Report};
 use crosstalk_eval::score::Selector;
 use crosstalk_eval::truth::{NegativeReason, jsonl};
-use crosstalk_spec::aggregates::quality::MatchClass;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/salt")
@@ -74,13 +74,16 @@ fn the_reference_finds_every_delivery_long_enough_to_match() {
             .iter()
             .all(|m| m.expectation.label().content.text == "OK.")
     );
-    let normalized = report
+    let decoded = report
         .rows
         .iter()
-        .filter(|r| r.key.class == MatchClass::Normalized)
+        .filter(|r| r.key.class == EvidenceClass::Decoded)
         .map(|r| r.counts.found)
         .sum::<u64>();
-    assert_eq!(normalized, 2, "the escaped delivery, in both worlds");
+    assert_eq!(
+        decoded, 2,
+        "the escaped delivery, a JSON string, in both worlds"
+    );
     assert_eq!(report.totals.worlds, 3);
     assert!(!report.gates_failed(), "{:?}", report.gates);
 }

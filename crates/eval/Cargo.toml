@@ -39,3 +39,4 @@ crosstalk-testkit = { path = "../testkit" }
 crosstalk-sim = { path = "../sim" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+crosstalk-memory = { path = "../memory" }

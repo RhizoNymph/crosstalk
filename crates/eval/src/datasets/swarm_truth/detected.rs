@@ -23,14 +23,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 
-use crosstalk_spec::derived::flow::resource::Locator;
+use crosstalk_spec::derived::flow::access::Access;
+use crosstalk_spec::derived::flow::resource::{Locator, Resource};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::provenance::span::SpanLocation;
-use crosstalk_spec::ids::{AgentId, ChannelId, SpanId, TransmissionId};
+use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ExchangeId, SpanId, TransmissionId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::export::digest::{ROW_DIGEST_CONTEXT, RowHasher};
 use crosstalk_spec::interfaces::l8_surface::export::framing::{JsonlExport, read_jsonl};
 use crosstalk_spec::interfaces::l8_surface::export::rows::ExportRow;
+use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::Blake3;
 
 use super::diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, Side};
@@ -203,11 +206,21 @@ impl Directory for SwarmDirectory {
         self.agents.get(&id).cloned()
     }
 
-    fn channel(&self, id: ChannelId) -> Vec<Locator> {
-        self.channels.get(&id).cloned().unwrap_or_default()
+    fn channel(&self, id: ChannelId) -> Option<&[Locator]> {
+        self.channels.get(&id).map(Vec::as_slice)
     }
 
-    fn span(&self, _id: SpanId) -> Option<SpanLocation> {
+    // The saved export carries no span records, accesses or part texts:
+    // predictions from it fall back to what the evidence pages give.
+    fn span(&self, _id: SpanId) -> Option<IndexedSpan> {
+        None
+    }
+
+    fn access(&self, _id: AccessId) -> Option<&(Access, Resource)> {
+        None
+    }
+
+    fn whole_part(&self, _exchange: ExchangeId, _part: PartRef) -> Option<SpanLocation> {
         None
     }
 }
@@ -251,6 +264,16 @@ pub fn predictions(
                 failure: JoinFailure::UnknownDetectedAgent {
                     transmission: transmission.id,
                     agent,
+                },
+                effect: Effect::PredictionsDropped,
+            }),
+            Err(other) => diagnostics.push(Diagnostic {
+                line: None,
+                row: None,
+                side: Side::Row,
+                failure: JoinFailure::Unpredictable {
+                    transmission: transmission.id,
+                    reason: other.to_string(),
                 },
                 effect: Effect::PredictionsDropped,
             }),

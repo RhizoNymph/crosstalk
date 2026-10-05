@@ -13,6 +13,13 @@
 //!   violated, or of the world's coverage): `correct`, `false_positive` or
 //!   `unjudged`. Precision comes from these. Unjudged predictions (no label,
 //!   partial coverage) have no tier.
+//! - Only content evidence finds a label. A suspected or discarded
+//!   prediction (a co-access with no content match) is counted in its own
+//!   row (class `suspected` or `discarded`), and a label it aligns with but
+//!   no content prediction does is `missed` and also `suspected`: the
+//!   detector saw the access pattern but never confirmed it. Selectors and
+//!   the overall summary read content rows unless they name an access
+//!   class.
 //!
 //! Unlike the spec's `DetectionQuality`, which only sees transmissions the
 //! detector opened, the scorer sees total misses: a label no prediction
@@ -32,9 +39,9 @@ pub use judge::{Judge, Outcome};
 
 use crate::corpus::World;
 use crate::keys::{DatasetId, SourceRef};
-use crate::predict::Prediction;
+use crate::predict::{EvidenceClass, Prediction};
 use crosstalk_spec::aggregates::edge::RouteKind;
-use crosstalk_spec::aggregates::quality::MatchClass;
+use crosstalk_spec::aggregates::quality::QualityMatch;
 use crosstalk_spec::ids::TransmissionId;
 
 use crate::location::SpanLocationExt;
@@ -47,7 +54,7 @@ pub struct RowKey {
     pub dataset: DatasetId,
     pub route: RouteKind,
     pub carrier: CarrierKind,
-    pub class: MatchClass,
+    pub class: EvidenceClass,
     /// `None` for unjudged predictions.
     pub tier: Option<Tier>,
 }
@@ -57,10 +64,12 @@ pub struct RowKey {
 pub struct Counts {
     /// Positive labels.
     pub expected: u64,
-    /// Labels some prediction aligned with.
+    /// Labels some content prediction aligned with.
     pub found: u64,
-    /// Labels no prediction aligned with.
+    /// Labels no content prediction aligned with.
     pub missed: u64,
+    /// Missed labels that a suspected or discarded prediction aligned with.
+    pub suspected: u64,
     /// Predictions.
     pub predicted: u64,
     /// Predictions that aligned with a label.
@@ -87,6 +96,7 @@ impl Counts {
         self.expected += other.expected;
         self.found += other.found;
         self.missed += other.missed;
+        self.suspected += other.suspected;
         self.predicted += other.predicted;
         self.correct += other.correct;
         self.false_positive += other.false_positive;
@@ -108,8 +118,9 @@ fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
 pub struct TransmissionKey {
     pub dataset: DatasetId,
     pub route: RouteKind,
-    /// The strongest class among its matches.
-    pub class: MatchClass,
+    /// The detector's call: confirmed by its strongest match's class and
+    /// carrier, suspected or discarded.
+    pub quality: QualityMatch,
 }
 
 impl Ord for RowKey {
@@ -134,7 +145,7 @@ impl Ord for TransmissionKey {
         self.dataset
             .cmp(&other.dataset)
             .then_with(|| cmp_route(self.route, other.route))
-            .then_with(|| self.class.cmp(&other.class))
+            .then_with(|| self.quality.cmp(&other.quality))
     }
 }
 
@@ -145,7 +156,7 @@ impl PartialOrd for TransmissionKey {
 }
 
 /// Transmissions by the verdict the truth implies: the scorer's view of
-/// `DetectionQuality` for confirmed transmissions.
+/// `DetectionQuality`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransmissionCounts {
     pub genuine: u64,
@@ -222,13 +233,15 @@ pub struct Score {
     pub false_positives: Vec<FalsePositive>,
 }
 
-/// What a row selector picks; `None` matches anything.
+/// What a row selector picks; `None` matches anything, except that an
+/// unset `class` matches content classes only: access-only rows
+/// (`suspected`, `discarded`) are selected by naming them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selector {
     pub dataset: Option<DatasetId>,
     pub route: Option<RouteKind>,
     pub carrier: Option<CarrierKind>,
-    pub class: Option<MatchClass>,
+    pub class: Option<EvidenceClass>,
     pub tier: Option<Tier>,
 }
 
@@ -237,7 +250,9 @@ impl Selector {
         self.dataset.as_ref().is_none_or(|d| *d == key.dataset)
             && self.route.is_none_or(|r| r == key.route)
             && self.carrier.is_none_or(|c| c == key.carrier)
-            && self.class.is_none_or(|c| c == key.class)
+            && self
+                .class
+                .map_or(key.class.is_content(), |c| c == key.class)
             && self.tier.is_none_or(|t| Some(t) == key.tier)
     }
 }
@@ -305,13 +320,18 @@ impl Scorer {
         self.totals.predictions += predictions.len() as u64;
 
         let mut found = vec![false; judge.positives().len()];
-        let mut by_transmission: BTreeMap<TransmissionId, (RouteKind, MatchClass, Verdicts)> =
+        let mut suspected = vec![false; judge.positives().len()];
+        let mut by_transmission: BTreeMap<TransmissionId, (RouteKind, QualityMatch, Verdicts)> =
             BTreeMap::new();
         for prediction in predictions {
             let (outcome, control) = judge.judge(prediction);
             let tier = match outcome {
                 Outcome::Correct { expectation, tier } => {
-                    found[expectation] = true;
+                    if prediction.class.is_content() {
+                        found[expectation] = true;
+                    } else {
+                        suspected[expectation] = true;
+                    }
                     Some(tier)
                 }
                 Outcome::False { tier, .. } => Some(tier),
@@ -330,10 +350,9 @@ impl Scorer {
             counts.predicted += 1;
             let entry = by_transmission.entry(prediction.transmission).or_insert((
                 prediction.route.kind(),
-                prediction.class,
+                prediction.quality,
                 Verdicts::default(),
             ));
-            entry.1 = entry.1.min(prediction.class);
             match outcome {
                 Outcome::Correct { .. } => {
                     counts.correct += 1;
@@ -360,13 +379,13 @@ impl Scorer {
                 Outcome::Unjudged => counts.unjudged += 1,
             }
         }
-        for (route, class, verdicts) in by_transmission.into_values() {
+        for (route, quality, verdicts) in by_transmission.into_values() {
             let counts = self
                 .transmissions
                 .entry(TransmissionKey {
                     dataset: dataset.clone(),
                     route,
-                    class,
+                    quality,
                 })
                 .or_default();
             match (verdicts.correct, verdicts.wrong) {
@@ -375,7 +394,7 @@ impl Scorer {
                 (false, false) => counts.unlabeled += 1,
             }
         }
-        for (expected, found) in judge.positives().iter().zip(found) {
+        for ((expected, found), suspected) in judge.positives().iter().zip(found).zip(suspected) {
             let label = expected.label();
             let counts = self
                 .rows
@@ -383,7 +402,7 @@ impl Scorer {
                     dataset: dataset.clone(),
                     route: label.route.kind(),
                     carrier: label.carrier,
-                    class: label.needs.class(),
+                    class: EvidenceClass::from(label.needs.class()),
                     tier: Some(label.tier),
                 })
                 .or_default();
@@ -392,6 +411,9 @@ impl Scorer {
                 counts.found += 1;
             } else {
                 counts.missed += 1;
+                if suspected {
+                    counts.suspected += 1;
+                }
                 if self.misses.len() < self.example_cap {
                     self.misses.push(Miss {
                         expectation: (*expected).clone(),

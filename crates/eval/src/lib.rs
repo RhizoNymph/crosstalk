@@ -5,12 +5,15 @@
 //! [`datasets`]). Any detector's transmissions become [`predict`]ions and are
 //! scored against the labels ([`score`]), and a deliberately naive
 //! [`reference`](mod@reference) matcher validates the labels and sets a baseline;
-//! [`gateway`] runs the gateway's own pipeline as a detector. Reports and
+//! [`gateway`] runs the gateway's own pipeline as a detector, and
+//! [`detect::live`] scores a gateway composition's detection through the
+//! `LiveBackend` seam. Reports and
 //! regression gates are in [`report`]; [`pipeline`] runs the whole thing.
 
 pub mod config;
 pub mod corpus;
 pub mod datasets;
+pub mod detect;
 pub mod gateway;
 pub mod ids;
 pub mod keys;

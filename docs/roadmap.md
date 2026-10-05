@@ -398,7 +398,7 @@ time. Depends on P3; P4 and P5 consume it. Ingested exchanges carry
 (INV-972) and L3 keeps apart from live agents and other corpora (INV-973).
 
 - [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and `crosstalk-eval` registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
-- [ ] `crosstalk-eval` driving the real layers through it on dataset corpora.
+- [ ] `crosstalk-eval` driving the real layers through it on dataset corpora. The eval side is ready: corpus exchanges are replayed under `IngressMode::Replay`, predictions read the spec's `SpanIndex`, `AccessStore` and channel reads, and `detect::live::LiveDetector` scores any `LiveBackend` (tested over crosstalk-memory's stores). Left: the `Live` adapter (`crates/eval/src/detect/live/gateway.rs.in`), wiring only once `crosstalk_gateway::live::Live` merges with `settle`, `TransmissionStore::list` and an L3 exchange-attribution read (`docs/features/eval.md`, "The live seam").
 
 ## P4 Identity and provenance (parallel)
 

@@ -1,6 +1,6 @@
-//! Folding: the normalization `Normalized` matches compare under.
+//! Folding: what the reference matcher compares text under.
 //!
-//! In one pass over the raw text:
+//! [`fold`] is the matching fold. In one pass over the raw text:
 //!
 //! 1. **String escapes are unfolded**, whatever their nesting depth: a run of
 //!    backslashes before `n`, `t`, `r`, `b` or `f` becomes whitespace, before
@@ -16,6 +16,14 @@
 //!
 //! Each folded byte remembers the raw byte range it came from, so a folded
 //! match maps back to a raw location on character boundaries.
+//!
+//! Step 1 is decoding, not normalization: the spec's `Normalized` is case
+//! and whitespace only, and one level of string escaping undone is
+//! `Decoded([JsonString])` or `Decoded([YamlString])`. So matching folds
+//! all three, and a hit is then classified ([`super::classify`]) with
+//! [`fold_plain`] (steps 2 and 3 only) and [`string_codec`].
+
+use crosstalk_spec::derived::provenance::matching::Codec;
 
 /// Folded text and, per folded byte, the raw range `[start, end)` that
 /// produced it.
@@ -71,6 +79,43 @@ impl Writer {
 
 fn to_u32(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Case and whitespace folding only, escapes left as they are: what the
+/// spec's `Normalized` compares under.
+pub fn fold_plain(raw: &str) -> String {
+    let mut writer = Writer {
+        folded: Folded {
+            text: String::with_capacity(raw.len()),
+            raw_start: Vec::new(),
+            raw_end: Vec::new(),
+        },
+        in_space: true,
+    };
+    for (start, ch) in raw.char_indices() {
+        writer.push(ch, start, start + ch.len_utf8());
+    }
+    writer.folded.text
+}
+
+/// The string codec whose escapes `raw` holds: `YamlString` when it holds
+/// an escape only YAML double-quoted scalars have (an escaped line break or
+/// space, `\x`, `\0`, `\a`, `\e`, `\v`, `\N`, `\_`, `\L`, `\P`,
+/// `\U`), otherwise `JsonString`.
+pub fn string_codec(raw: &str) -> Codec {
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            continue;
+        }
+        // A `\\` escapes a backslash: `next` consumes it whole.
+        if let Some('\n' | '\r' | ' ' | 'x' | '0' | 'a' | 'e' | 'v' | 'N' | '_' | 'L' | 'P' | 'U') =
+            chars.next()
+        {
+            return Codec::YamlString;
+        }
+    }
+    Codec::JsonString
 }
 
 /// Folds `raw`; ranges are offset by `base` (the position of `raw` in the

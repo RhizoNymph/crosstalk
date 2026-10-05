@@ -159,9 +159,8 @@ fn every_copy_is_found_with_its_own_weakest_class() {
 fn arrival_classes_map_to_match_needs() {
     assert_eq!(Arrival::Exact.need(), MatchNeed::Exact);
     assert_eq!(Arrival::Whitespace.need(), MatchNeed::Normalized);
-    // TODO(#58): Decoded([JsonString]) / Decoded([YamlString]).
-    assert_eq!(Arrival::JsonString.need(), MatchNeed::Normalized);
-    assert_eq!(Arrival::YamlString.need(), MatchNeed::Normalized);
+    assert_eq!(Arrival::JsonString.need(), MatchNeed::json_string());
+    assert_eq!(Arrival::YamlString.need(), MatchNeed::yaml_string());
 }
 
 // --- discovery -------------------------------------------------------------
@@ -347,7 +346,7 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
     let yaml = label_with(world, "Ping from the test").label();
     assert_eq!(yaml.reader_exchange, exchange_of(world, 4).id());
     assert_eq!(yaml.route, RouteExpectation::Direct);
-    assert_eq!(yaml.needs, MatchNeed::Normalized);
+    assert_eq!(yaml.needs, MatchNeed::yaml_string());
     assert!(yaml.content.text.contains("\\\n"));
 
     let exact = label_with(world, "post the secret code").label();
@@ -380,7 +379,7 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
 
     let json = label_with(world, "passcode").label();
     assert_eq!(json.reader_exchange, exchange_of(world, 10).id());
-    assert_eq!(json.needs, MatchNeed::Normalized);
+    assert_eq!(json.needs, MatchNeed::json_string());
     assert_eq!(json.route, RouteExpectation::Direct);
 }
 
