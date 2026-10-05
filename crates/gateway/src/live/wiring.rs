@@ -9,7 +9,7 @@ use crosstalk_provenance::config::ProvenanceConfig;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use super::classify::Classifier;
-use super::evidence::{EvidenceFeeder, ProvenanceSpans};
+use super::evidence::{EvidenceFeeder, IndexedSpans};
 use super::layers::{Extraction, ProvenanceStage, Reconstruct, Topology, l5};
 use super::stage::{Slot, SlotTaken, StageContext, Stages};
 
@@ -95,7 +95,7 @@ pub fn wire_evidence(stages: &mut Stages, ctx: &StageContext) -> Result<(), Slot
         EvidenceFeeder::new(
             ctx.stores.evidence.clone(),
             ctx.stores.channels.clone(),
-            ProvenanceSpans(ctx.layers.provenance.clone()),
+            IndexedSpans(ctx.layers.provenance.clone()),
         ),
     )
 }

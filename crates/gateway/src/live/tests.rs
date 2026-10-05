@@ -400,6 +400,29 @@ async fn an_access_and_its_resource_reach_the_evidence_records() {
     live.shutdown(Instant::now() + PATIENCE).await;
 }
 
+/// The public defaults start on a read clock with eval's short windows.
+#[tokio::test]
+async fn the_defaults_start_on_any_clock() {
+    let clock: Arc<dyn crosstalk_spec::support::Clock> = Arc::new(ManualClock::at(T0));
+    let flow = FlowConfig {
+        evidence_window_ms: 10_000,
+        suspected_ttl_ms: 60_000,
+        ..FlowConfig::default()
+    };
+    let config = LiveConfig::new(LiveClock::Read(clock), flow, 3);
+    let Ok(config) = config else {
+        panic!("defaults: {config:?}", config = config.err());
+    };
+    let live = match Live::start(config).await {
+        Ok(live) => live,
+        Err(error) => panic!("start: {error}"),
+    };
+    assert_eq!(live.filled(), Slot::ALL);
+    let settled = live.settle(T0).await;
+    assert!(settled.is_ok(), "{settled:?}");
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
 #[tokio::test]
 async fn bodies_can_live_on_the_filesystem() {
     let Ok(root) = tempfile::tempdir() else {

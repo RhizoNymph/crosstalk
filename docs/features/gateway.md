@@ -341,6 +341,8 @@ let live = Live::start(LiveConfig {
     seed: 7,                       // every id generator's entropy
     capture: None,                 // or the proxy's capture receiver
 }).await?;                         // Result<Live, LiveError>
+// Or with the surface's defaults, on any clock:
+// LiveConfig::new(LiveClock::Read(clock), FlowConfig { evidence_window_ms: 10_000, suspected_ttl_ms: 60_000, ..Default::default() }, seed)?
 live.pipeline().ingest(normalized, at).await?;   // replay and live capture take the same path
 let settled = live.settle(until).await?;         // Result<Settled { at, passes }, SettleError>
 let page = live.stores().transmissions.list(&query, &request).await?;  // TransmissionStore::list
@@ -364,7 +366,8 @@ MpscBus, one consumer group per slot (live-<slot>):
                    ─▶ AccessRecorded, ChannelCrossAccessed, TransmissionConfirmed/Suspected
   L6 classify      TransmissionConfirmed ─▶ catalog assignment, Classified state ─▶ TransmissionClassified
   L7 topology      TransmissionClassified, AccessRecorded, VerdictSet, topic versions ─▶ edges ─▶ EdgeUpdated
-  evidence         SpanOriginated/Relayed, AccessRecorded ─▶ MemoryEvidence (span from L4's store,
+  evidence         SpanOriginated, AccessRecorded ─▶ MemoryEvidence (span from SpanIndex::spans on
+                   L4's MemoryProvenanceStore,
                    access and resource from AccessStore::accesses)
   surface relay    every subject but ExchangeCaptured ─▶ node facts, live feed
 stores ─ Outbox ─▶ forward_outbox ─▶ bus      (ChannelDiscovered, Changed::*, AlertRuleChanged, ...)
@@ -439,6 +442,7 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
 | --- | --- |
 | `Live` | `start(LiveConfig)`, `pipeline() -> &Arc<LivePipeline>`, `surface() -> &Arc<Surface<LiveStores>>`, `stores() -> &LiveStores`, `layers() -> &LayerStores`, `context()`, `clock()`, `filled()`, `caller(RequestIdentity)`, `settle(Timestamp) -> Result<Settled, SettleError>`, `shutdown(Instant) -> LiveDrained` |
 | `LiveConfig` | `surface`, `clock: LiveClock`, `blobs: BlobConfig`, `bus`, `pipeline: Settings`, `flow: FlowConfig`, `provenance: ProvenanceConfig`, `ticking: Ticking`, `seed`, `capture` |
+| `LiveConfig::new(LiveClock, FlowConfig, seed)` | the defaults: memory blobs, `Ticking::OnSettle`, trusted access, five-minute buckets (`DEFAULT_BUCKET`), the default provenance config; `DefaultsError` |
 | `LiveError` | `Flow`, `Blobs`, `Bus`, `Surface`, `Pipeline`, `Slot`, `Subscribe { slot, error }` |
 | `LiveClock` | `Read(Arc<dyn Clock>)`, `Manual(ManualClock)`; `reader`, `now`, `advance_to` |
 | `Ticking` | `Periodic`, `OnSettle` |
@@ -448,7 +452,7 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
 | `Stage`, `Stages`, `Slot`, `StageContext`, `StageError`, `Command`, `Control`, `Activity`, `Publisher` | the slot interface (above) |
 | `wiring::wire_all`, `wire_l3` .. `wire_l7`, `wire_evidence` | what fills each slot |
 | `layers::{Reconstruct, ProvenanceStage, Extraction, Topology, l5::fill}` | the layer stages |
-| `Classifier`, `EvidenceFeeder`, `ProvenanceSpans`, `SpanSource` | L6, the evidence feeder and its span source |
+| `Classifier`, `EvidenceFeeder`, `IndexedSpans`, `SpanSource` | L6, the evidence feeder and its span source |
 | `pipeline::Ingester::publish(BusEvent, at)`, `PublishError` | publish a derived event with an id from the pipeline's generator |
 
 ## Persistence: a P3 stopgap
@@ -527,9 +531,10 @@ gracefully.
 | `src/live/wiring.rs` | One function per slot | `wire_all`, `wire_l3`, `wire_l4`, `wire_l5`, `wire_l6`, `wire_l7`, `wire_evidence` |
 | `src/live/layers/` | The layer stages: `l3.rs` (reconstruct), `l4.rs` (provenance), `extract.rs` (L5's extraction step), `l5.rs` (flow task), `l7.rs` (topology) | `Reconstruct`, `ProvenanceStage`, `Extraction`, `ExtractStepError`, `l5::fill`, `Topology` |
 | `src/live/classify.rs` | The minimal L6 classifier | `Classifier` |
-| `src/live/evidence.rs` | Spans, accesses and resources into the surface's evidence records | `EvidenceFeeder`, `SpanSource`, `ProvenanceSpans`, `SpanSourceError` |
+| `src/live/evidence.rs` | Spans, accesses and resources into the surface's evidence records | `EvidenceFeeder`, `SpanSource`, `IndexedSpans`, `SpanSourceError` |
 | `src/live/relay.rs` | The outbox forwarder and the surface relay stage | — |
 | `src/live/clock.rs`, `blobs.rs` | The injected clock; the blob store choice | `LiveClock`; `BlobConfig`, `LiveBlobs` |
+| `src/live/defaults.rs` | `LiveConfig::new`: the surface's defaults | `DEFAULT_BUCKET`, `DefaultsError` |
 | `src/live/tests.rs` | `crosstalk_gateway::live::tests::*` | — |
 | `src/tasks.rs` | Per-task running flags | `Tasks` (`spawn`, `states`) |
 | `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
@@ -566,6 +571,7 @@ gracefully.
 | `live::tests::a_store_event_reaches_the_bus_and_the_live_feed` | A registry write's `Changed::Channel` reaches the bus through the outbox and the live feed through the surface relay |
 | `live::tests::a_confirmed_transmission_is_classified_under_the_active_version` | `TransmissionConfirmed` gives `TransmissionClassified` under version 0, unassigned, an assignment in the catalog and a `Classified` stored state |
 | `live::tests::an_access_and_its_resource_reach_the_evidence_records` | `AccessRecorded` fills the evidence records from `AccessStore::accesses` |
+| `live::tests::the_defaults_start_on_any_clock` | `LiveConfig::new` on a read clock with a 10 s evidence window and 60 s TTL starts every slot and settles |
 | `live::tests::bodies_can_live_on_the_filesystem` | `BlobConfig::Fs` stores bodies the surface reads |
 | unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text (the `normalize_failed` series sum to the health total), healthcheck URL checks, refusal codes |
 

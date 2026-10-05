@@ -4,9 +4,10 @@
 //! ([`MemoryEvidence`]). This stage copies them in as L4 and L5 announce
 //! them, reading each record from the store that wrote it:
 //!
-//! - `SpanOriginated` / `SpanRelayed`: the span from L4's provenance store
-//!   ([`SpanSource`], [`ProvenanceSpans`]); provenance commits a span
-//!   before it publishes the event naming it;
+//! - `SpanOriginated`: the span's record from L4's `SpanIndex`
+//!   ([`SpanSource`], [`IndexedSpans`]); provenance commits a span before
+//!   it publishes the event naming it, and only originated spans are ever
+//!   the origin of a content match;
 //! - `AccessRecorded`: the access and its resource from the registry's
 //!   batch read (`AccessStore::accesses`), as recorded.
 //!
@@ -18,12 +19,12 @@ use std::future::Future;
 use crosstalk_api::in_process::MemoryEvidence;
 use crosstalk_memory::flow::MemoryChannels;
 use crosstalk_memory::reconstruct::MemoryAgents;
-use crosstalk_provenance::store::{MemoryProvenanceStore, ProvenanceStore};
 use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::derived::provenance::span::Span;
+use crosstalk_spec::derived::provenance::span::{Span, SpanState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::{AccessId, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
 use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
 
 use super::stage::{Stage, StageError};
@@ -43,21 +44,33 @@ pub trait SpanSource: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<Span>, SpanSourceError>> + Send;
 }
 
-/// Spans as provenance's store holds them: every classified span
-/// (originated, relayed, common), not only the originated ones a
-/// `SpanIndex` records, since the evidence page shows relayed spans too.
+/// Spans read through the spec's `SpanIndex` (L4's provenance store): an
+/// originated span's record, as the evidence page needs it (its location,
+/// author and exchange). The index keeps no state, so the span is rebuilt
+/// as `Originated`, the state it was recorded in; relayed and common spans
+/// are not in the index and never the origin of a content match.
 #[derive(Debug, Clone, Default)]
-pub struct ProvenanceSpans(pub MemoryProvenanceStore);
+pub struct IndexedSpans<I>(pub I);
 
-impl SpanSource for ProvenanceSpans {
+impl<I: SpanIndex + Send + Sync + 'static> SpanSource for IndexedSpans<I> {
     async fn span(&self, id: SpanId) -> Result<Option<Span>, SpanSourceError> {
-        self.0
-            .span(id)
+        let batch = IdBatch::new([id]).map_err(|error| SpanSourceError {
+            reason: format!("one id is a batch: {error:?}"),
+        })?;
+        let spans = self
+            .0
+            .spans(&batch)
             .await
-            .map(|record| record.map(|record| record.span))
             .map_err(|error| SpanSourceError {
                 reason: format!("{error:?}"),
-            })
+            })?;
+        Ok(spans.get(&id).map(|indexed| Span {
+            id,
+            location: indexed.location,
+            agent: indexed.author,
+            exchange: indexed.exchange,
+            state: SpanState::Originated,
+        }))
     }
 }
 
@@ -119,17 +132,12 @@ impl<S: SpanSource> EvidenceFeeder<S> {
 
 impl<S: SpanSource> Stage for EvidenceFeeder<S> {
     fn subjects(&self) -> Vec<Subject> {
-        vec![
-            Subject::SpanOriginated,
-            Subject::SpanRelayed,
-            Subject::AccessRecorded,
-        ]
+        vec![Subject::SpanOriginated, Subject::AccessRecorded]
     }
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
         match &envelope.event {
-            BusEvent::Detect(DetectEvent::SpanOriginated { span, .. })
-            | BusEvent::Detect(DetectEvent::SpanRelayed { span, .. }) => self.span(*span).await,
+            BusEvent::Detect(DetectEvent::SpanOriginated { span, .. }) => self.span(*span).await,
             BusEvent::Detect(DetectEvent::AccessRecorded { access, .. }) => {
                 self.access(access.id).await
             }

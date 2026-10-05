@@ -27,6 +27,7 @@
 mod blobs;
 mod classify;
 mod clock;
+mod defaults;
 mod evidence;
 pub mod layers;
 mod relay;
@@ -59,7 +60,8 @@ use tokio::time::Instant;
 pub use self::blobs::{BlobConfig, LiveBlobs};
 pub use self::classify::Classifier;
 pub use self::clock::LiveClock;
-pub use self::evidence::{EvidenceFeeder, ProvenanceSpans, SpanSource, SpanSourceError};
+pub use self::defaults::{DEFAULT_BUCKET, DefaultsError};
+pub use self::evidence::{EvidenceFeeder, IndexedSpans, SpanSource, SpanSourceError};
 pub use self::settle::{SettleError, Settled};
 pub use self::stage::{
     Activity, Command, Control, DERIVED_SUBJECTS, LayerStores, LiveStores, Publisher, RunFuture,

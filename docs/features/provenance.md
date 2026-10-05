@@ -46,10 +46,10 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - **Shard routing across nodes.** The index refuses misrouted fingerprints
   (`WrongShard`), and the scanner only sends fingerprints this node owns. A
   multi-node fan-out of lookups is not built.
-- **The spec read traits for L4 records** (`SpanIndex`, a later
-  `ProvenanceReads`). The records and the indexes they need exist (see
-  [Tables](#tables-and-indexes)); binding them to the spec traits happens
-  at merge.
+- **The spec read traits for L4 records on Postgres** (`SpanIndex`, a
+  later `ProvenanceReads`). The records and the indexes they need exist
+  (see [Tables](#tables-and-indexes)); the memory store implements
+  `SpanIndex` (below).
 - **Coverage-guided fuzzing** (`fuzz` evidence) and the
   `span-state-written-only-by-advance` lint.
 
@@ -300,6 +300,12 @@ normal suite:
 - a YAML double-quoted scalar with escaped breaks;
 - collapsed whitespace;
 - verbatim placement.
+
+`MemoryProvenanceStore` also implements the spec's `SpanIndex` over the
+spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
+originated spans (any state whose origin is `Originated`) as recorded,
+leaving out relayed and common spans and unknown ids. `Live`'s evidence
+feeder reads through it. `PgProvenanceStore` does not yet.
 
 ## Files
 

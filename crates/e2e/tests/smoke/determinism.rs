@@ -96,6 +96,14 @@ async fn two_settled_runs_give_identical_transmissions() -> Result<(), Failure> 
             .any(|transmission| transmission.state.confirmed().is_some()),
         "no confirmed transmission after settling; events: {seen:#?}"
     );
+    // The evidence page reads every span and access it names.
+    for transmission in one.iter().filter(|t| t.state.confirmed().is_some()) {
+        let page =
+            crosstalk_e2e::read::evidence(first.surface.as_ref(), &first.caller, transmission.id)
+                .await?
+                .ok_or_else(|| unexpected("no evidence page"))?;
+        assert!(!page.matches().is_empty(), "no content match on the page");
+    }
     first.shutdown().await;
     let (second, _observer) = settled().await?;
     let two = transmissions(&second).await?;
