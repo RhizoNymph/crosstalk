@@ -97,7 +97,7 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
     let mut text = render(&outcome.report);
     let resolved = &outcome.resolved;
     text.push_str(&format!(
-        "\ntruth rows {}: transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), key groups {}, dropped {}\n",
+        "\ntruth rows {}: transmissions {} ({} without a sender exchange), self-reads {}, rereads {}, misses {} ({} controls), unattributed reads {} (unjudged), key groups {}, dropped {}\n",
         resolved.rows,
         resolved.transmissions,
         resolved.without_sender,
@@ -105,6 +105,7 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
         resolved.rereads,
         resolved.misses,
         resolved.miss_controls,
+        resolved.unattributed,
         resolved.key_groups,
         resolved.dropped,
     ));

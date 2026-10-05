@@ -42,16 +42,15 @@ impl Arrival {
         Arrival::YamlString,
     ];
 
-    /// The label's match need.
-    ///
-    /// TODO(#58): `JsonString` and `YamlString` become
-    /// `Decoded([Codec::JsonString])` and `Decoded([Codec::YamlString])` once
-    /// the spec has those codecs; until then the eval folds escape unfolding
-    /// into `Normalized`.
+    /// The label's match need: whitespace re-wrapping is `Normalized`; one
+    /// level of string escaping is `Decoded([JsonString])` or
+    /// `Decoded([YamlString])` (`provenance.match.string-serialised-decoded`).
     pub fn need(self) -> MatchNeed {
         match self {
             Self::Exact => MatchNeed::Exact,
-            Self::Whitespace | Self::JsonString | Self::YamlString => MatchNeed::Normalized,
+            Self::Whitespace => MatchNeed::Normalized,
+            Self::JsonString => MatchNeed::json_string(),
+            Self::YamlString => MatchNeed::yaml_string(),
         }
     }
 }

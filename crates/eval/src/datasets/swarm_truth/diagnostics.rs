@@ -19,6 +19,7 @@ pub enum RowKind {
     SelfRead,
     Reread,
     Miss,
+    UnattributedRead,
     AgentCluster,
 }
 
@@ -108,6 +109,12 @@ pub enum JoinFailure {
     },
     /// One detected agent id tied to two truth agents.
     DetectedAgentConflict { agent: AgentId, agents: Vec<String> },
+    /// A transmission the export's records can't turn into predictions
+    /// (an access the evidence doesn't carry, or one of the wrong kind).
+    Unpredictable {
+        transmission: TransmissionId,
+        reason: String,
+    },
 }
 
 impl JoinFailure {
@@ -128,6 +135,7 @@ impl JoinFailure {
             Self::MissingEvidence { .. } => "missing_evidence",
             Self::UnknownDetectedAgent { .. } => "unknown_detected_agent",
             Self::DetectedAgentConflict { .. } => "detected_agent_conflict",
+            Self::Unpredictable { .. } => "unpredictable",
         }
     }
 }

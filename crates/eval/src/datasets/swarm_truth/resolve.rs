@@ -26,6 +26,7 @@
 //! | `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read |
 //! | `reread` | `NegativeControl` `Reread`, writer → reader, at the read |
 //! | `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
+//! | `unattributed_read` | `Exemption` `UnknownSender` at the read: a prediction there is unjudged |
 //! | `agent_cluster` | none: reported as `key_group_not_a_cluster` |
 //!
 //! A key group lists agents that share one API key; an eval
@@ -45,14 +46,15 @@ use super::bodies::{Bodies, Cached};
 use super::diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, RowKind, Side};
 use super::exchange_log::{Session, Sessions};
 use super::locate::{FoundCall, FoundResult, LocateError, tool_result, write_call};
-use super::schema::{Delivery, HexDigest, KeyGroup, Miss, TruthRoute};
+use super::schema::{Delivery, HexDigest, KeyGroup, Miss, TruthRoute, UnattributedRead};
 use super::truth_file::{DeliveryKind, Row, TruthFile};
 use super::{DATASET, MODEL};
 use crate::corpus::{CorpusError, Coverage, Driven, World, WorldBuilder};
 use crate::keys::{AgentKey, DatasetId, SourceRef, WorldKey};
 use crate::truth::{
-    CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, MatchNeed, NegativeControl,
-    NegativeLabel, NegativeReason, RouteExpectation, Tier, TransmissionLabel,
+    CarrierKind, Exemption, ExemptionReason, Expectation, ExpectedContent, ExpectedTransmission,
+    MatchNeed, NegativeControl, NegativeLabel, NegativeReason, RouteExpectation, Tier,
+    TransmissionLabel,
 };
 
 /// Which agent each captured exchange and session belongs to.
@@ -79,6 +81,8 @@ pub struct ResolveCounts {
     pub misses: u64,
     /// Miss controls: one per other agent per miss.
     pub miss_controls: u64,
+    /// Unattributed reads made exemptions.
+    pub unattributed: u64,
     pub key_groups: u64,
     pub dropped: u64,
 }
@@ -146,6 +150,10 @@ fn agents_and_sessions(
                 claim(&row.reader_session, &row.reader);
             }
             Row::Miss(row) => {
+                agents.insert(row.reader.clone());
+                claim(&row.reader_session, &row.reader);
+            }
+            Row::Unattributed(row) => {
                 agents.insert(row.reader.clone());
                 claim(&row.reader_session, &row.reader);
             }
@@ -237,6 +245,13 @@ pub fn resolve<B: Bodies>(
                     }
                 }
             }
+            Row::Unattributed(row) => match resolver.unattributed(row, line) {
+                Some(made) => {
+                    counts.unattributed += 1;
+                    builder.expect(made);
+                }
+                None => counts.dropped += 1,
+            },
             Row::Cluster(row) => {
                 counts.key_groups += 1;
                 resolver.diagnostics.push(Diagnostic {
@@ -406,6 +421,28 @@ impl<B: Bodies> Resolver<'_, B> {
         })
         .map(Expectation::NoTransmission)
         .map_err(|error| error.to_string())
+    }
+
+    /// An unattributed read: joined like any read (session, turn, tool use
+    /// id and hash), then exempt from judging, since its sender is unknown.
+    fn unattributed(&mut self, row: &UnattributedRead, line: usize) -> Option<Expectation> {
+        let read = self.read(
+            line,
+            RowKind::UnattributedRead,
+            &row.reader_session,
+            row.reader_turn,
+            &row.content.at.tool_use_id,
+            Some(row.content.blake3),
+        )?;
+        Some(Expectation::Unjudged(Exemption {
+            to: self.key(&row.reader),
+            reader_exchange: read.exchange,
+            at: read.found.at,
+            text: Some(read.found.text),
+            reason: ExemptionReason::UnknownSender,
+            tier: Tier::Construction,
+            source: self.source(line),
+        }))
     }
 
     fn miss(&mut self, row: &Miss, line: usize, names: &BTreeSet<String>) -> Vec<Expectation> {

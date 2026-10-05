@@ -83,8 +83,10 @@ Overview:
     drive the real layers under simulated time. crosstalk-eval is that
     harness (eval): it converts public multi-agent datasets (SALT-NLP
     first) into labelled corpora of spec NormalizedExchanges, scores a
-    detector against the labels, and runs both a naive reference matcher
-    and Pipeline::ingest (unscored until detection consumers exist). crosstalk-analysis has
+    detector against the labels, and runs a naive reference matcher,
+    Pipeline::ingest (unscored: it has no detection consumers) and a
+    LiveBackend seam that scores the gateway's live composition once
+    crosstalk_gateway::live::Live merges. crosstalk-analysis has
     L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
     SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
@@ -178,14 +180,17 @@ Overview:
     eval: >
       Crate crosstalk-eval (a composer, beside the gateway rather than in
       it) and its ct-eval binary: dataset converters stream worlds of spec
-      NormalizedExchanges with ground-truth labels; a detector (the naive
-      reference matcher, or the gateway's own Pipeline::ingest, which is
-      unscored until L3 to L5 consume the bus) produces spec Transmissions;
-      the scorer aligns them with the labels and reports per dataset,
-      route, carrier, match class and tier against regression gates. The
-      swarm benchmark (ct-eval swarm) instead scores the live gateway: it
-      joins the demo swarm's ground truth to the gateway's exchange log and
-      blobs, and scores a saved L8 transmissions export and its evidence.
+      NormalizedExchanges (replayed: IngressMode::Replay) with ground-truth
+      labels; a detector (the naive reference matcher, the gateway's own
+      Pipeline::ingest, which is unscored, or a LiveBackend composition)
+      produces spec Transmissions, whose spans, accesses and channel
+      resources are read back through the spec's read traits (SpanIndex,
+      AccessStore, ChannelReads); the scorer aligns them with the labels
+      and reports per dataset, route, carrier, match or access class and
+      tier against regression gates.
+      The swarm benchmark (ct-eval swarm) instead scores the live gateway:
+      it joins the demo swarm's ground truth to the gateway's exchange log
+      and blobs, and scores a saved L8 transmissions export and its evidence.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1244,29 +1249,43 @@ Features Index:
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP first) streaming worlds of checked spec
-      NormalizedExchanges on a deterministic virtual clock, with typed,
+      (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
+      http_request reads and writes of public wiki pages) and swarm-traces (a
+      decode-chain corpus reported by chain, count and length only))
+      streaming worlds of checked
+      spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
-      controls, agent clusters, with tiers); predictions converted from
-      spec Transmissions and ContentMatches; one documented alignment rule
-      and a scorer with TP/FP/FN by dataset, route, carrier, match class
-      and tier, negative-control violations and a DetectionQuality bridge;
-      a Detector seam with the naive reference matcher (escape-aware
-      normalization, decoding, opaque-blob exclusion) and the gateway
-      pipeline (Pipeline::ingest under the corpus clock or a sim clock,
-      reported as unscored until detection consumers exist); reports and
-      regression gates.
+      controls, exemptions, agent clusters, with tiers); predictions converted from
+      spec Transmissions (one per ContentMatch, and one per CoAccess of a
+      suspected or discarded transmission) through a read seam over the
+      spec's SpanIndex, AccessStore and channel reads; one documented
+      alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
+      kind, match or access class and tier, negative-control violations
+      and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      with the naive reference matcher (escape-aware matching classed as
+      Exact, Normalized or Decoded([JsonString | YamlString]), decoding,
+      opaque-blob exclusion, an L4-style boilerplate cutoff on shingle
+      postings), the gateway pipeline (Pipeline::ingest under
+      the corpus clock or a sim clock, reported as unscored), and
+      LiveDetector over the LiveBackend seam (a fresh composition per
+      world: ingest, settle, list transmissions, read spans, accesses,
+      channel resources and L3 attribution), whose real Live adapter is a
+      stub until Live merges; reports and regression gates.
     entry_points:
       - crates/eval/src/lib.rs
       - crates/eval/src/pipeline.rs
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/datasets/wiki/mod.rs
+      - crates/eval/src/datasets/swarm/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
       - crates/eval/src/datasets/swarm_truth/mod.rs
-    depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, sim, testkit]
+      - crates/eval/src/predict/reads.rs
+      - crates/eval/src/detect/live/mod.rs
+    depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
     doc: docs/features/eval.md
   e2e_smoke:
     description: >
@@ -1376,6 +1395,30 @@ Features Index:
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md
+  eval_swe_synthetic:
+    description: >
+      Background and synthetic corpora for crosstalk-eval (ct-eval --dataset
+      open-swe | lmcache | swe-splice | cipher). Open-SWE-Traces and LMCache
+      trajectories (Parquet, read with the parquet crate; Open-SWE tool
+      results paired with calls by position, LMCache responses taken from
+      the next request) are mixed into background worlds with only
+      Boilerplate/SharedSource negative controls. Seeded splices plant one
+      Channel/File transmission from A's file write to B's harness-format
+      read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
+      deliver steganographic-evals payloads encoded: base64, hex, URL and
+      chains are in reach, while rotN, binary8 and substitution are
+      Tier::OutOfReach and reported as missed by design. Reports gain
+      out_of_reach and background (false positives per 1k exchanges, top
+      sources) summaries.
+    entry_points:
+      - crates/eval/src/datasets/background.rs
+      - crates/eval/src/datasets/open_swe/mod.rs
+      - crates/eval/src/datasets/lmcache/mod.rs
+      - crates/eval/src/datasets/swe_splice/mod.rs
+      - crates/eval/src/datasets/cipher/mod.rs
+      - crates/eval/src/score/sources.rs
+    depends_on: [eval, type_spec]
+    doc: docs/features/eval_swe_synthetic.md
   eval_ai_village:
     description: >
       The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval

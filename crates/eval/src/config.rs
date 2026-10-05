@@ -46,41 +46,40 @@ pub enum ConfigError {
 }
 
 impl Default for EvalConfig {
-    /// `~/Data/ai/agents`, with SALT at `salt-nlp`, AgentDojo at `agentdojo`,
-    /// τ²-bench at `tau2-bench/data/tau2/results/final` and AI Village at
-    /// `ai-village`.
+    /// `~/Data/ai/agents`, with each dataset at the path [`DEFAULT_DATASETS`]
+    /// gives it (the shipped `datasets.toml` says the same).
     fn default() -> Self {
-        let mut datasets = BTreeMap::new();
-        datasets.insert(
-            "salt".to_owned(),
-            DatasetConfig {
-                path: "salt-nlp".to_owned(),
-            },
-        );
-        datasets.insert(
-            "agentdojo".to_owned(),
-            DatasetConfig {
-                path: "agentdojo".to_owned(),
-            },
-        );
-        datasets.insert(
-            "tau2".to_owned(),
-            DatasetConfig {
-                path: "tau2-bench/data/tau2/results/final".to_owned(),
-            },
-        );
-        datasets.insert(
-            "ai-village".to_owned(),
-            DatasetConfig {
-                path: "ai-village".to_owned(),
-            },
-        );
+        let datasets = DEFAULT_DATASETS
+            .iter()
+            .map(|(name, path)| {
+                (
+                    (*name).to_owned(),
+                    DatasetConfig {
+                        path: (*path).to_owned(),
+                    },
+                )
+            })
+            .collect();
         Self {
             root: "~/Data/ai/agents".to_owned(),
             datasets,
         }
     }
 }
+
+/// Each dataset's directory under the default root.
+pub const DEFAULT_DATASETS: &[(&str, &str)] = &[
+    ("salt", "salt-nlp"),
+    ("agentdojo", "agentdojo"),
+    ("tau2", "tau2-bench/data/tau2/results/final"),
+    ("ai-village", "ai-village"),
+    ("collusion-wiki", "collusion-wiki"),
+    ("swarm-traces", "swarm-traces"),
+    ("open_swe", "open-swe-traces"),
+    ("lmcache", "lmcache"),
+    ("swe_splice", "open-swe-traces"),
+    ("cipher", "steganographic-evals/datasets/message_data"),
+];
 
 impl EvalConfig {
     pub fn parse(text: &str, path: &str) -> Result<Self, ConfigError> {

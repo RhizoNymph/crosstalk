@@ -22,6 +22,7 @@ base64.workspace = true
 blake3.workspace = true
 clap.workspace = true
 flate2.workspace = true
+parquet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -39,3 +40,4 @@ crosstalk-testkit = { path = "../testkit" }
 crosstalk-sim = { path = "../sim" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+crosstalk-memory = { path = "../memory" }

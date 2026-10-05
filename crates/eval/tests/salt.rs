@@ -239,7 +239,8 @@ fn delivered_messages_are_labelled_where_they_arrive() {
         .collect();
     assert_eq!(
         needs.get("Bob reports the clinical query returned \"21 rows\"\nwith severity three or higher in every row."),
-        Some(&&MatchNeed::Normalized)
+        Some(&&MatchNeed::json_string()),
+        "escaped inside the sender's tool-call arguments: one level of JSON string decoding"
     );
     assert_eq!(needs.get("OK."), Some(&&MatchNeed::Exact));
 }
