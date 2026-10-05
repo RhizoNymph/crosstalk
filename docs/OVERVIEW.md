@@ -1175,7 +1175,7 @@ Features Index:
       (SALT-NLP first) streaming worlds of checked spec
       NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
-      controls, agent clusters, with tiers); predictions converted from
+      controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions and ContentMatches; one documented alignment rule
       and a scorer with TP/FP/FN by dataset, route, carrier, match class
       and tier, negative-control violations and a DetectionQuality bridge;

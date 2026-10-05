@@ -3,7 +3,7 @@
 
 use crate::location::SpanLocationExt;
 use crate::predict::{PredictedRoute, Prediction};
-use crate::truth::{ExpectedTransmission, NegativeControl, RouteExpectation};
+use crate::truth::{Exemption, ExpectedTransmission, NegativeControl, RouteExpectation};
 
 /// Whether `prediction` reports the transmission `expected` labels.
 ///
@@ -82,4 +82,14 @@ pub fn specificity(control: &NegativeControl) -> u8 {
         [false, false, true] => 2,
         [false, false, false] => 3,
     }
+}
+
+/// Whether a prediction that aligns with no label falls under `exemption`:
+/// the same reader and reader exchange, and an overlapping read location.
+/// The sender is not compared: the exemption is for content whose sender
+/// is unknown.
+pub fn exempts(prediction: &Prediction, exemption: &Exemption) -> bool {
+    prediction.to == exemption.to
+        && prediction.reader_exchange == exemption.reader_exchange
+        && prediction.read_at.overlaps(&exemption.at)
 }
