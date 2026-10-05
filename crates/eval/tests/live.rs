@@ -16,7 +16,7 @@ use common::{calls, dataset, draft, result, says, system, tick, user};
 use crosstalk_eval::corpus::{Coverage, Driven, HashedMessage, InMemory, World, WorldBuilder};
 use crosstalk_eval::detect::live::{
     Attribution, BackendError, LiveBackend, LiveDetector, LiveError, LiveSettings, LiveWorld,
-    all_time, gateway_backend,
+    all_time,
 };
 use crosstalk_eval::keys::{AgentKey, SourceRef, WorldKey};
 use crosstalk_eval::location::whole_part;
@@ -942,21 +942,4 @@ fn an_attribution_merging_two_corpus_agents_fails_the_world() {
         "{:?}",
         summary.failures
     );
-}
-
-#[test]
-fn without_the_gateway_the_live_backend_is_unavailable() {
-    let error = gateway_backend()
-        .err()
-        .unwrap_or_else(|| panic!("unavailable"));
-    assert!(matches!(error, BackendError::Unavailable { .. }));
-    assert!(error.to_string().starts_with("live backend unavailable"));
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ct-eval"))
-        .args(["run", "--dataset", "salt", "--detector", "live", "--root"])
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/salt"))
-        .output()
-        .unwrap_or_else(|e| panic!("{e}"));
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("live backend unavailable"), "{stderr}");
 }

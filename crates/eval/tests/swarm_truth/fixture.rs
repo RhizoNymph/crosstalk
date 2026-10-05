@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crosstalk_eval::datasets::swarm_truth::detected::Blake3RowHasher;
+use crosstalk_eval::datasets::swarm_truth::fetch::FETCHED_STATES;
 use crosstalk_eval::datasets::swarm_truth::schema::HexDigest;
 use crosstalk_spec::aggregates::filter::TopologyFilter;
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -40,7 +41,8 @@ use crosstalk_spec::interfaces::l8_surface::excerpt::Excerpted;
 use crosstalk_spec::interfaces::l8_surface::export::rows::TransmissionRow;
 use crosstalk_spec::interfaces::l8_surface::export::{
     ExportBasis, ExportDataset, ExportFormat, ExportHeader, ExportHeaderParts, ExportLine,
-    ExportRequest, ExportRow, ExportScope, ExportSealer, GatewayVersion, settled_window,
+    ExportRequest, ExportRow, ExportScope, ExportSealer, ExportStates, GatewayVersion,
+    TransmissionScope, settled_window,
 };
 use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
 use crosstalk_spec::observed::message::{MessageBody, PartRef, encoding};
@@ -113,6 +115,8 @@ pub struct Written {
     pub a001: Vec<Turn>,
     pub a002: Vec<Turn>,
     pub a003: Vec<Turn>,
+    /// The gateway's confirmed transmissions, as the export holds them.
+    pub transmissions: Vec<Transmission>,
 }
 
 struct Log {
@@ -470,7 +474,12 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         parts.into_iter().map(|parts| parts.transmission).collect();
 
     let export = dir.join("export.jsonl");
-    write_export(&mut ids, &export, &transmissions);
+    write_export(
+        &mut ids,
+        &export,
+        &transmissions,
+        &ExportStates::confirmed(),
+    );
     let evidence_path = dir.join("evidence.jsonl");
     let mut text = String::new();
     for item in &evidence {
@@ -490,6 +499,7 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         a001: a001.turns,
         a002: a002.turns,
         a003: a003.turns,
+        transmissions,
     }
 }
 
@@ -521,17 +531,19 @@ fn evidence_of(parts: &TransmissionParts, resource: &Resource) -> TransmissionEv
     .expect("evidence")
 }
 
-fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission]) {
+/// Writes a sealed transmissions export of `transmissions` in `states`.
+fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission], states: &ExportStates) {
     let window = TimeWindow::new(T0, after(T0, Duration::from_secs(86_400))).expect("a window");
     let filter = TopologyFilter::default();
+    let scope = TransmissionScope {
+        states: states.clone(),
+        ..TransmissionScope::confirmed(ExportScope {
+            window,
+            filter: filter.clone(),
+        })
+    };
     let request = ExportRequest::new(
-        ExportDataset::Transmissions(
-            ExportScope {
-                window,
-                filter: filter.clone(),
-            }
-            .into(),
-        ),
+        ExportDataset::Transmissions(scope),
         ExportFormat::Jsonl,
         false,
     )
@@ -541,12 +553,13 @@ fn write_export(ids: &mut Ids, path: &Path, transmissions: &[Transmission]) {
     let mut rows: Vec<TransmissionRow> = transmissions
         .iter()
         .map(|transmission| {
-            TransmissionRow::of(
+            TransmissionRow::of_in_scope(
                 transmission,
                 NoAliases,
                 |_| None,
                 |_| TopicUnder::Unassigned,
                 None,
+                states,
             )
             .expect("a row")
         })
@@ -607,6 +620,12 @@ pub fn unattributed(reader: (&str, &str, u32, &str), page: &str, text: &str) -> 
 /// in the transmissions export, which holds confirmed ones only, so it
 /// reaches the benchmark through its evidence alone.
 pub fn append_access_only(written: &Written, discarded: bool) {
+    let (parts, p2) = access_only(written, discarded);
+    append_evidence(written, &evidence_of(&parts, &p2));
+}
+
+/// The access-only transmission a001 → a003 over p2, and p2's resource.
+fn access_only(written: &Written, discarded: bool) -> (TransmissionParts, Resource) {
     let mut ids = Ids::seeded(23);
     let (writer, reader) = (ids.agent(), ids.agent());
     let p2 = ResourceBuilder::new(&mut ids)
@@ -636,10 +655,34 @@ pub fn append_access_only(written: &Written, discarded: bool) {
     } else {
         builder.suspected()
     };
-    let parts = builder.build_parts().expect("an access-only transmission");
-    let evidence = evidence_of(&parts, &p2);
+    (
+        builder.build_parts().expect("an access-only transmission"),
+        p2,
+    )
+}
+
+fn append_evidence(written: &Written, evidence: &TransmissionEvidence) {
     let mut text = std::fs::read_to_string(&written.evidence).expect("read the evidence");
-    text.push_str(&serde_json::to_string(&evidence).expect("encode evidence"));
+    text.push_str(&serde_json::to_string(evidence).expect("encode evidence"));
     text.push('\n');
     std::fs::write(&written.evidence, text).expect("write the evidence");
+}
+
+/// Rewrites the fixture's export as `ct-eval swarm-fetch` asks for it (the
+/// confirmed and the discarded transmissions), with the discarded a001 →
+/// a003 transmission over p2 as a row of its own, and appends its evidence.
+/// Returns the discarded transmission.
+pub fn export_discarded(written: &Written) -> Transmission {
+    let (parts, p2) = access_only(written, true);
+    append_evidence(written, &evidence_of(&parts, &p2));
+    let mut transmissions = written.transmissions.clone();
+    transmissions.push(parts.transmission.clone());
+    let states = ExportStates::new(FETCHED_STATES.to_vec()).expect("the fetched states");
+    write_export(
+        &mut Ids::seeded(29),
+        &written.export,
+        &transmissions,
+        &states,
+    );
+    parts.transmission
 }

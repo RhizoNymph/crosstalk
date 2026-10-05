@@ -1,9 +1,8 @@
 //! The gateway's live detection path as a detector.
 //!
 //! [`LiveDetector`] scores whatever implements [`LiveBackend`]: the real
-//! composition (`crosstalk_gateway::live::Live`, wired in `gateway.rs.in`
-//! once it merges), or a test backend over crosstalk-memory's stores. Per
-//! world:
+//! composition (`crosstalk_gateway::live::Live`, wired in [`gateway`]), or
+//! a test backend over crosstalk-memory's stores. Per world:
 //!
 //! ```text
 //! LiveBackend::build(settings, first exchange's time)   a fresh composition: never reused across worlds,
@@ -24,6 +23,8 @@
 //! exchange), so the scorer counts both, and `DetectionQuality` is built
 //! from the verdicts the truth implies (`score::quality`).
 
+pub mod gateway;
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -39,9 +40,10 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::corpus::World;
 use crate::pipeline::{DetectError, Detection, DetectionStatus, Detector};
-use crate::predict::memory::{AccessTable, ChannelTable, SpanTable};
 use crate::predict::reads::{ChannelResources, ReadError, Reads, Resolved};
 use crate::predict::{AgentMap, AgentMapError};
+
+pub use gateway::{GatewayBackend, GatewayWorld};
 
 /// How each world's composition is configured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +69,22 @@ impl LiveSettings {
         .map_err(LiveError::Timing)?;
         Ok(Self { timing, seed })
     }
+
+    /// These settings with any of the three windows replaced.
+    pub fn with_windows(
+        self,
+        correlation: Option<Duration>,
+        evidence: Option<Duration>,
+        suspected_ttl: Option<Duration>,
+    ) -> Result<Self, LiveError> {
+        let timing = CorrelationTiming::new(
+            correlation.unwrap_or(self.timing.correlation_window()),
+            evidence.unwrap_or(self.timing.evidence_window()),
+            suspected_ttl.unwrap_or(self.timing.suspected_ttl()),
+        )
+        .map_err(LiveError::Timing)?;
+        Ok(Self { timing, ..self })
+    }
 }
 
 /// The agent and conversation L3 attributed an exchange to.
@@ -86,9 +104,6 @@ pub enum LiveRead {
 /// Why a backend call failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BackendError {
-    /// No backend is compiled in (the gateway's `Live` has not merged).
-    #[error("live backend unavailable: {reason}")]
-    Unavailable { reason: &'static str },
     #[error("building the composition: {reason}")]
     Build { reason: String },
     #[error("ingesting exchange {exchange:?}: {reason}")]
@@ -182,76 +197,10 @@ pub trait LiveWorld {
     fn shutdown(self) -> impl Future<Output = ()>;
 }
 
-/// No live backend: the build has no gateway `Live` to drive. Uninhabited,
-/// so [`gateway_backend`] can only report that.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unavailable {}
-
-impl LiveBackend for Unavailable {
-    type World = Unavailable;
-
-    async fn build(
-        &mut self,
-        _settings: &LiveSettings,
-        _start: Timestamp,
-    ) -> Result<Unavailable, BackendError> {
-        match *self {}
-    }
-}
-
-impl LiveWorld for Unavailable {
-    type Spans = SpanTable;
-    type Accesses = AccessTable;
-    type Channels = ChannelTable;
-
-    async fn ingest(
-        &mut self,
-        _exchange: NormalizedExchange,
-        _at: Timestamp,
-    ) -> Result<(), BackendError> {
-        match *self {}
-    }
-
-    async fn settle(&mut self, _until: Timestamp) -> Result<(), BackendError> {
-        match *self {}
-    }
-
-    async fn transmissions(&self, _window: TimeWindow) -> Result<Vec<Transmission>, BackendError> {
-        match *self {}
-    }
-
-    fn spans(&self) -> &SpanTable {
-        match *self {}
-    }
-
-    fn accesses(&self) -> &AccessTable {
-        match *self {}
-    }
-
-    fn channels(&self) -> &ChannelTable {
-        match *self {}
-    }
-
-    async fn attribution(
-        &self,
-        _exchanges: &IdBatch<ExchangeId>,
-    ) -> Result<BTreeMap<ExchangeId, Attribution>, BackendError> {
-        match *self {}
-    }
-
-    async fn shutdown(self) {
-        match self {}
-    }
-}
-
-/// The real gateway's backend. `crosstalk_gateway::live::Live` is not in
-/// this build yet, so this reports it unavailable; once it merges, the
-/// adapter in `gateway.rs.in` becomes this module's `gateway` and this
-/// returns it.
-pub fn gateway_backend() -> Result<Unavailable, BackendError> {
-    Err(BackendError::Unavailable {
-        reason: "crosstalk_gateway::live::Live is not in this build",
-    })
+/// The real gateway's backend: a fresh `crosstalk_gateway::live::Live`
+/// per world.
+pub fn gateway_backend() -> GatewayBackend {
+    GatewayBackend
 }
 
 /// `at + by`, saturating.

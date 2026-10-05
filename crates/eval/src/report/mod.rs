@@ -5,7 +5,7 @@ pub mod table;
 
 use serde::{Deserialize, Serialize};
 
-pub use gates::{Check, Gate, GateOutcome, GateStatus, Gates};
+pub use gates::{Check, Gate, GateDetector, GateOutcome, GateStatus, Gates};
 
 use crate::keys::DatasetId;
 use crate::pipeline::Unscored;

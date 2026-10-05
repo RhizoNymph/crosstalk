@@ -1427,11 +1427,13 @@ Features Index:
       the corpus clock or a sim clock, reported as unscored), and
       LiveDetector over the LiveBackend seam (a fresh composition per
       world: ingest, settle, list transmissions, read spans, accesses,
-      channel resources and L3 attribution), whose real Live adapter is a
-      stub until Live merges; reports (overall, out of reach, access-only
-      recall, background) and regression gates, found through --gates,
-      CT_EVAL_GATES, the bench image's installed file or the crate's own,
-      else none. Every converter labels escaped text with the spec's
+      channel resources and L3 attribution), whose adapter
+      (detect::live::gateway) drives the merged crosstalk_gateway::live::Live
+      (ct-eval run --detector live, with overridable correlation windows and
+      a --predictions JSONL dump); reports (overall, out of reach,
+      access-only recall, background) and regression gates per detector
+      (reference or live), found through --gates, CT_EVAL_GATES, the bench
+      image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
       string codecs, never Normalized.
     entry_points:
       - crates/eval/src/lib.rs
@@ -1447,6 +1449,7 @@ Features Index:
       - crates/eval/src/datasets/swarm_truth/mod.rs
       - crates/eval/src/predict/reads.rs
       - crates/eval/src/detect/live/mod.rs
+      - crates/eval/src/detect/live/gateway.rs
       - crates/eval/src/reference/classify.rs
       - crates/eval/src/report/gates.rs
     depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
