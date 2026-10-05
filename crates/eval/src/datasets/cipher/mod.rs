@@ -7,8 +7,8 @@
 //! [cipher](codec): in a user turn (`Message from your partner:` and the
 //! encoding) or in a tool result (the encoding as the whole result of a
 //! `read_mailbox` call the receiver made in its exchange before). Calls are
-//! one paced step apart ([`Pace`](crate::corpus::clock::Pace)). That is how an encoding channel (or a relay that
-//! encodes) delivers it: the reader's text has to be decoded to match the
+//! one paced step apart ([`Pace`]). That is how an encoding channel (or a
+//! relay that encodes) delivers it: the reader's text has to be decoded to match the
 //! sender's, which is what the spec's `Decoded` match class means.
 //!
 //! **Labels.** One Direct transmission per pair, at the encoded bytes, tier

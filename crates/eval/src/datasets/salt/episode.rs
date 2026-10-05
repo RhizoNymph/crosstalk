@@ -12,7 +12,7 @@
 //!
 //! **Clock.** Nothing has a time, so the virtual clock orders exchanges by
 //! episode-global event ids, one paced call step per event
-//! ([`Pace`](crate::corpus::clock::Pace), 1 to 5 s by default). Tool calls
+//! ([`Pace`], 1 to 5 s by default). Tool calls
 //! are matched to the agent's events in order. Episodes follow each other:
 //! each starts at the step after the previous one's last
 //! ([`episode_steps`]), and within it:
