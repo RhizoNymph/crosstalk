@@ -2,12 +2,13 @@
 //! write through.
 //!
 //! Each wiki the export names is hosted somewhere public; a page's canonical
-//! resource is the `https` URL a browser (or an agent's `read_page`) would
-//! fetch. The same string goes into the synthetic `read_page`/`edit_page`
-//! tool arguments, so an L5 extractor parses the identical locator the label
-//! expects. The URL is built, then run through the reference matcher's own
-//! [`parse_url`](crate::reference::route::parse_url), so the label's
-//! [`Locator`] is byte-for-byte what the matcher extracts.
+//! resource is the `https` URL a browser (or an agent's `GET`) would
+//! fetch. The same string goes into both synthetic `http_request` calls'
+//! `url` argument (`GET` to read, `POST` to write), so an L5 extractor
+//! parses the identical locator the label expects. The URL is built, then
+//! run through the reference matcher's own `parse_url`
+//! (`crate::reference::route`), so the label's [`Locator`] is byte-for-byte
+//! what the matcher extracts.
 
 use crosstalk_spec::derived::flow::resource::Locator;
 

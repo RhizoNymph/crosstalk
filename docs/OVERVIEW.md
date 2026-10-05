@@ -999,7 +999,10 @@ Features Index:
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP, collusion-wiki and swarm-traces) streaming worlds of checked
+      (SALT-NLP, AgentDojo, tau2-bench, collusion-wiki (synthesised
+      http_request reads and writes of public wiki pages) and swarm-traces (a
+      decode-chain corpus reported by chain, count and length only))
+      streaming worlds of checked
       spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
       controls, agent clusters, with tiers); predictions converted from
@@ -1007,7 +1010,8 @@ Features Index:
       and a scorer with TP/FP/FN by dataset, route, carrier, match class
       and tier, negative-control violations and a DetectionQuality bridge;
       a Detector seam with the naive reference matcher (escape-aware
-      normalization, decoding, opaque-blob exclusion) and the gateway
+      normalization, decoding, opaque-blob exclusion, an L4-style
+      boilerplate cutoff on shingle postings) and the gateway
       pipeline (Pipeline::ingest under the corpus clock or a sim clock,
       reported as unscored until detection consumers exist); reports and
       regression gates.

@@ -7,10 +7,14 @@ use crosstalk_eval::corpus::{Coverage, Driven, TraceSource, World};
 use crosstalk_eval::datasets::wiki::attribution::{attribute, line_byte_range, runs};
 use crosstalk_eval::datasets::wiki::resource::{page_locator, page_url};
 use crosstalk_eval::datasets::wiki::schema::{Hunk, Revision};
+use crosstalk_eval::datasets::wiki::tools;
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
+use crosstalk_eval::location::SpanLocationExt;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
+use crosstalk_eval::reference::{ReferenceConfig, run as reference_run};
 use crosstalk_eval::truth::{CarrierKind, Expectation, RouteExpectation, Tier};
 use crosstalk_spec::aggregates::edge::RouteKind;
+use crosstalk_spec::observed::message::{AssistantPart, Message, MessageBody, ToolArguments};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wiki/collusion-wiki")
@@ -198,4 +202,234 @@ fn line_ranges_are_body_byte_offsets() {
     // Lines 1..3 = "beta\ngamma", starting after "alpha\n" (6 bytes).
     assert_eq!(line_byte_range(&lines, 1, 3), Some((6, 16)));
     assert_eq!(line_byte_range(&lines, 0, 0), None);
+}
+
+// --- the agreed L5 HttpTool shape ---
+
+/// The first `http_request` call in `message`, as its parsed arguments.
+fn http_call(message: &Message) -> Option<serde_json::Value> {
+    let MessageBody::Assistant(parts) = &message.body else {
+        return None;
+    };
+    parts.iter().find_map(|part| match part {
+        AssistantPart::ToolCall(call) if call.name.0 == tools::TOOL => match &call.arguments {
+            ToolArguments::Json(json) => serde_json::from_str(&json.0).ok(),
+            ToolArguments::Invalid(_) => None,
+        },
+        _ => None,
+    })
+}
+
+#[test]
+fn reads_and_writes_take_the_http_tool_shape() {
+    let all = worlds(&WikiSelection::default());
+    let world = relay_world(&all);
+    let url = page_url("dse", "RelayIndexAlpha");
+    let mut gets = 0;
+    let mut posts = 0;
+    for exchange in world.exchanges() {
+        for message in exchange.request().chain(exchange.response()) {
+            let Some(args) = http_call(message) else {
+                continue;
+            };
+            assert_eq!(args["url"], serde_json::Value::from(url.clone()));
+            match args["method"].as_str() {
+                Some("GET") => {
+                    assert!(args.get("body").is_none(), "a read carries no body");
+                    gets += 1;
+                }
+                Some("POST") => {
+                    assert!(args["body"].is_string(), "a write carries its text");
+                    posts += 1;
+                }
+                other => panic!("unexpected method {other:?}"),
+            }
+        }
+    }
+    assert!(gets >= 2, "reads before each change of author");
+    assert_eq!(posts, 4, "one write per revision of the shared page");
+}
+
+#[test]
+fn channel_labels_sit_in_the_read_tool_result() {
+    // INV-269: the expected text is inside the read call's tool result, and
+    // that result holds the page body as of the previous revision.
+    let all = worlds(&WikiSelection::default());
+    let world = relay_world(&all);
+    for t in transmissions(world) {
+        let label = t.label();
+        if label.carrier != CarrierKind::ToolResult {
+            continue;
+        }
+        let exchange = world
+            .exchanges()
+            .iter()
+            .find(|e| e.id() == label.reader_exchange)
+            .expect("the reader exchange");
+        let message = exchange
+            .message(label.content.at.message())
+            .expect("the labelled message is in the reader exchange");
+        assert!(matches!(message.body, MessageBody::Tool(_)));
+        let text = label
+            .content
+            .at
+            .text(message)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(text, label.content.text);
+        let call = exchange
+            .request()
+            .find_map(http_call)
+            .expect("the read call precedes its result");
+        assert_eq!(call["method"], "GET");
+    }
+}
+
+// --- regression: large bodies of shared text ---
+
+const TEMPLATE: &str = "Describe the new page here and add your notes below";
+
+fn jsonl<T: serde::Serialize>(rows: &[T]) -> String {
+    rows.iter()
+        .map(|row| serde_json::to_string(row).unwrap_or_else(|e| panic!("{e}")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A synthetic export: `writers` agents each create a page whose body is
+/// `copies` lines of the wiki's new-page template and one line of their own;
+/// then one reviewer appends a line to every page, reading it first. The
+/// reviewer links every page into one world.
+fn large_body_export(writers: usize, copies: usize) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("wiki-large-{writers}-{copies}"));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    let mut revisions = Vec::new();
+    let mut pages = Vec::new();
+    for writer in 0..writers {
+        let name = format!("Page{writer:03}");
+        let page_id = format!("dse/{name}");
+        let own = format!(
+            "{} owns this page and keeps its findings here",
+            unique_tag(writer)
+        );
+        let mut body = vec![TEMPLATE; copies].join("\n");
+        body.push('\n');
+        body.push_str(&own);
+        let created_lines = copies + 1;
+        let row = |seq: u64, body: &str, label: &str, hunk: serde_json::Value, minute: usize| {
+            serde_json::json!({
+                "rev_id": format!("dse~{name}@{seq}"),
+                "page_id": page_id,
+                "wiki": "dse",
+                "name": name,
+                "seq": seq,
+                "body": body,
+                "hunks": [hunk],
+                "label": label,
+                "ip16": "10.0",
+                "time": format!("2026-06-01T{:02}:{:02}:00Z", minute / 60, minute % 60),
+            })
+        };
+        revisions.push(row(
+            1,
+            &body,
+            &format!("Writer{writer:03}"),
+            serde_json::json!({"op":"insert","a0":0,"a1":0,"b0":0,"b1":created_lines}),
+            writer,
+        ));
+        let reviewed = format!("{body}\nreviewer checked {} and agrees", unique_tag(writer));
+        revisions.push(row(
+            2,
+            &reviewed,
+            "Reviewer",
+            serde_json::json!({"op":"insert","a0":created_lines,"a1":created_lines,"b0":created_lines,"b1":created_lines + 1}),
+            writers + writer,
+        ));
+        pages.push(serde_json::json!({
+            "page_id": page_id, "wiki": "dse", "name": name, "page_family": "synthetic",
+        }));
+    }
+    std::fs::write(dir.join("revisions.jsonl"), jsonl(&revisions))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(dir.join("pages.jsonl"), jsonl(&pages)).unwrap_or_else(|e| panic!("{e}"));
+    dir
+}
+
+/// A word no other writer's text shares a 24-byte window with.
+fn unique_tag(writer: usize) -> String {
+    let tag: String = [writer / 26 % 26, writer % 26]
+        .iter()
+        .map(|&d| char::from(b'a' + u8::try_from(d).unwrap_or(0)))
+        .collect();
+    (0..4)
+        .map(|word| format!("{tag}{tag}x{word}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[test]
+fn large_template_bodies_stay_linear() {
+    // 40 pages x 40 originators x 300 template lines would be 480,000
+    // matches if every copy matched every page creator's span.
+    let writers = 40;
+    let copies = 300;
+    let root = large_body_export(writers, copies);
+    let mut source =
+        WikiSource::open(&root, &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+    let worlds: Vec<World> = source
+        .worlds()
+        .map(|w| w.unwrap_or_else(|e| panic!("{e}")))
+        .collect();
+    assert_eq!(worlds.len(), 1);
+    let world = &worlds[0];
+    assert_eq!(world.agents().len(), writers + 1);
+    let output = reference_run(world, ReferenceConfig::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        output.matches <= 2 * writers,
+        "matches must not scale with template copies x originators: {}",
+        output.matches
+    );
+    // Every writer's own line still reaches the reviewer.
+    let mut source =
+        WikiSource::open(&root, &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+    let summary = run(&mut source, &mut ReferenceDetector::default(), 0, |_, _| {});
+    let channel = summary.score.total(&crosstalk_eval::score::Selector {
+        route: Some(RouteKind::Channel),
+        ..Default::default()
+    });
+    let writers = u64::try_from(writers).unwrap_or(u64::MAX);
+    assert_eq!(channel.expected, writers);
+    assert_eq!(channel.found, writers);
+}
+
+#[test]
+fn demo_selects_small_relay_coordination_worlds() {
+    let demo = WikiSelection::demo();
+    assert_eq!(demo.families, vec!["relay-coordination".to_owned()]);
+    let selected = worlds(&demo);
+    // The fixture's relay page is one two-agent world; Carol's solo page is
+    // another family and below the agent floor.
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].agents().len(), 2);
+    let max = demo.max_agents.expect("the demo bounds world size");
+    let limit = demo.limit.expect("the demo bounds world count");
+    assert!(max <= 16 && limit <= 10);
+}
+
+#[test]
+fn family_tally_counts_multi_author_pages() {
+    let source =
+        WikiSource::open(&root(), &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+    let tally = source.families();
+    let relay = &tally.families["relay-coordination"];
+    assert_eq!(
+        (relay.pages, relay.multi_author_pages, relay.revisions),
+        (1, 1, 4)
+    );
+    let solo = &tally.families["source-cache-url-list"];
+    assert_eq!(
+        (solo.pages, solo.multi_author_pages, solo.revisions),
+        (1, 0, 1)
+    );
+    let shown = tally.to_string();
+    assert!(shown.contains("relay-coordination"));
 }

@@ -102,7 +102,7 @@ struct RevRecord {
 
 struct EditRecord {
     exchange: ExchangeId,
-    /// The hash of the `edit_page` response message (for relay locations).
+    /// The hash of the write (`POST`) response message (for relay locations).
     response_hash: MessageHash,
 }
 
@@ -219,8 +219,8 @@ fn next_at(counter: &mut u64) -> Result<Timestamp, WikiError> {
     Ok(at)
 }
 
-/// Synthesises the read exchange before `rev`'s edit: a `read_page` call
-/// whose result is `prev`'s body.
+/// Synthesises the read exchange before `rev`'s edit: a `GET` of the page
+/// URL whose tool result is `prev`'s body.
 fn build_read(
     builder: &mut WorldBuilder,
     reader: &AgentKey,
@@ -253,7 +253,7 @@ fn build_read(
     })
 }
 
-/// Synthesises the edit exchange: an `edit_page` call whose `text` is the
+/// Synthesises the edit exchange: a `POST` of the page URL whose `body` is the
 /// lines this revision inserted (those attributed to its own index `li`).
 fn build_edit(
     builder: &mut WorldBuilder,

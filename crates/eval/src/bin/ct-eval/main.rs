@@ -7,7 +7,8 @@
 //!
 //! `--dataset` is `salt`, `agentdojo`, `tau2`, `wiki` (collusion-wiki) or
 //! `swarm` (swarm-traces). For the wiki, `--family`, `--wiki`,
-//! `--min-agents` and `--max-agents` select worlds. For AgentDojo, `--include
+//! `--min-agents` and `--max-agents` select worlds, and `--demo` picks the
+//! small relay-coordination demo subset. For AgentDojo, `--include
 //! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
 //! exactly, and `run` also prints how the injections arrived.
 //!
@@ -137,6 +138,10 @@ struct SourceArgs {
     /// Wiki: drop worlds with more than this many agents (bounds a demo).
     #[arg(long)]
     max_agents: Option<usize>,
+    /// Wiki: the demo subset (`WikiSelection::demo`); overrides the other
+    /// wiki filters and `--limit`.
+    #[arg(long)]
+    demo: bool,
 }
 
 #[derive(Args)]
@@ -183,6 +188,10 @@ struct MatcherArgs {
     /// Fewest letters and digits a span or match must hold.
     #[arg(long)]
     min_word_chars: Option<usize>,
+    /// The most distinct originated spans a shingle may be posted for
+    /// before it is boilerplate.
+    #[arg(long)]
+    max_postings: Option<usize>,
 }
 
 impl MatcherArgs {
@@ -192,6 +201,7 @@ impl MatcherArgs {
             k: self.k.unwrap_or(base.k),
             min_span: self.min_span.unwrap_or(base.min_span),
             min_word_chars: self.min_word_chars.unwrap_or(base.min_word_chars),
+            max_postings: self.max_postings.unwrap_or(base.max_postings),
             ..base
         }
     }
@@ -255,12 +265,16 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         .with_context(|| format!("opening τ²-bench at {}", root.display())),
         Dataset::Wiki => WikiSource::open(
             &root,
-            &WikiSelection {
-                families: args.family.clone(),
-                wikis: args.wiki.clone(),
-                min_agents: args.min_agents,
-                max_agents: args.max_agents,
-                limit: args.limit,
+            &if args.demo {
+                WikiSelection::demo()
+            } else {
+                WikiSelection {
+                    families: args.family.clone(),
+                    wikis: args.wiki.clone(),
+                    min_agents: args.min_agents,
+                    max_agents: args.max_agents,
+                    limit: args.limit,
+                }
             },
         )
         .map(AnySource::Wiki)
@@ -272,6 +286,13 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
 }
 
 fn run_command(args: RunArgs) -> Result<ExitCode> {
+    // swarm-traces labels hold real attack payloads: its reports carry only
+    // counts, lengths and codec chains, never a miss or false-positive
+    // example (which would print the label's text).
+    let examples = match args.source.dataset {
+        Dataset::Swarm => 0,
+        _ => args.examples,
+    };
     let mut source = open_source(&args.source)?;
     let gates_path = args
         .gates
@@ -288,12 +309,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
             let mut detector = ReferenceDetector {
                 config: args.matcher.config(),
             };
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, examples, |_, _| {});
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, examples, |_, _| {});
             (detector.name().to_owned(), summary)
         }
     };
@@ -312,6 +333,14 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         table.push('\n');
         table.push_str(&source.tally().to_string());
     }
+    if let AnySource::Wiki(source) = &source {
+        table.push('\n');
+        table.push_str(&source.families().to_string());
+    }
+    if let AnySource::Swarm(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -327,6 +356,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
 }
 
 fn truth_command(args: TruthArgs) -> Result<ExitCode> {
+    if let Dataset::Swarm = args.source.dataset {
+        // The labels' text is the encoded payload itself.
+        anyhow::bail!(
+            "swarm-traces labels hold real attack payloads; `truth` does not dump them (use `run`, whose report carries only codec chains, counts and lengths)"
+        );
+    }
     let mut source = open_source(&args.source)?;
     let mut out: Box<dyn Write> = match &args.out {
         Some(path) => Box::new(BufWriter::new(

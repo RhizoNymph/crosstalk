@@ -125,7 +125,7 @@ scoring, reports and gates.
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionRow` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
-| `src/reference/mod.rs` | the reference matcher | `run`, `ReferenceConfig`, `ReferenceOutput`, `SpanRecord` |
+| `src/reference/mod.rs` | the reference matcher (with the boilerplate cutoff) | `run`, `ReferenceConfig` (`max_postings`), `ReferenceOutput`, `SpanRecord` |
 | `src/reference/fold.rs` | normalization with offset maps | `fold`, `Folded` |
 | `src/reference/opaque.rs` | opaque blobs | `opaque_ranges`, `segments` |
 | `src/reference/decode.rs` | base64, hex, URL decoding | `decode_candidates` |
@@ -142,6 +142,8 @@ scoring, reports and gates.
 | `src/datasets/salt/messages.rs` | SALT messages to canonical | `convert`, `content_text`, `arguments` |
 | `src/datasets/salt/episode.rs` | exchange reconstruction and clock | `reconstruct`, `AgentEpisode`, `Turn`, `delivered_turn` |
 | `src/datasets/salt/truth.rs` | SALT labels | `EpisodeLabels`, `Labelled`, `SHARED_TOOLS` |
+| `src/datasets/wiki/` | collusion-wiki as a `TraceSource` (see below) | `WikiSource`, `WikiSelection` (`demo`), `tools`, `DATASET` |
+| `src/datasets/swarm/` | swarm-traces as a `TraceSource` (see below) | `SwarmSource`, `SwarmSelection`, `codec::decode`, `ChainTally`, `DATASET` |
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
@@ -223,6 +225,22 @@ its body through the spec's encoding.
 
 The SALT converter maps signatures and encrypted reasoning to
 `Reasoning::Opaque`, which has no part text.
+
+**Boilerplate cutoff.** A shingle posted for more than
+`ReferenceConfig::max_postings` (default 16, `--max-postings`) distinct
+originated spans is boilerplate, as L4's frequency cutoff makes it
+(`interfaces::l4_provenance`). Its postings are dropped, and it is never
+indexed or looked up again in that world (`reference::Postings`, a
+`Spans | Boilerplate` enum). Text that many agents originate independently
+is a shared source, not evidence of who a reader got it from. Examples are a
+wiki's new-page template, or a URL every agent's task names. Without the
+cutoff, each occurrence in a read matches every originating span, so matches
+grow as reads × occurrences × originators. Before the cutoff, collusion-wiki's
+largest world (2,553 agents) held 22.6M content matches and passed 8 GB. With
+it, the whole export takes 2.2 GB (see below). The reference counts only
+originated spans toward the frequency, while L4 also counts scanned inputs.
+It has no retention window, because a world is one replay. SALT, AgentDojo
+and τ²-bench reports are unchanged by it.
 
 **Escapes.** Folding (`reference/fold.rs`) unfolds JSON and YAML string
 escapes at any nesting depth:
@@ -577,9 +595,13 @@ and marks it `Fidelity::Synthetic`.
 - **A world** is one connected component of the agent–page graph (agents linked
   by a page both edited, `plan_worlds`), so a world is a set of agents that
   could only have reached each other through shared pages. Worlds are emitted
-  largest-first; `--limit` caps them, `--family`/`--wiki` filter pages,
-  `--min-agents` drops small worlds. The full export's giant component has 2,553
-  agents; most components are a single agent.
+  largest-first. `--limit` caps them, `--family` and `--wiki` filter pages, and
+  `--min-agents` and `--max-agents` bound world size. The full export's giant
+  component has 2,553 agents; most components are a single agent.
+- **The demo subset** (`WikiSelection::demo`, `--demo`) is the five largest
+  relay-coordination worlds of 2 to 12 agents. It is the M2 "undeclared public
+  wiki channel" case at a size a demo can show end to end: 5 worlds, 33
+  agents, 98 exchanges and 197 labels, in 0.25 s and 85 MB.
 
 Line provenance (`attribution.rs`) replays each page's hunks to attribute every
 body line to the revision that wrote it, so a reader's surviving view of each
@@ -603,9 +625,58 @@ any reader's read of it.
 
 Coverage is `Partial`: the labels are a heuristic sample (surviving lines at or
 above the reference's 24-byte / 20-alphanumeric floor), so an unlabelled
-prediction is unjudged, not a false positive. Recall validates the labels; the
-run reports channel-discovery inputs (pages written by ≥2 agents) per
-`page_family`.
+prediction is unjudged, not a false positive. Recall validates the labels. The
+run also prints the channel-discovery inputs per `page_family`: pages, pages
+two or more agents wrote, and revisions (`WikiSource::families`,
+`FamilyTally`).
+
+### Results on the export
+
+The whole export (`ct-eval run --dataset wiki --examples 0`) has 14,591
+revisions on 4,579 pages. It has 3,216 identities, 114 of them `ip16:`
+fallbacks (899 blank-label revisions). It converts to 591 worlds and 23,691
+exchanges: 14,591 writes and 9,100 synthesised reads. All 41,202 labels are
+Heuristic tier: 40,394 Channel/`ToolResult` and 808 relays (`ReaderOutput`).
+1,268 pages have two or more authors. The largest families are:
+
+| page_family | multi-author / pages |
+| --- | ---: |
+| relay-coordination | 362 / 709 |
+| source-cache-url-list | 305 / 1,231 |
+| source-or-unclassified | 93 / 677 |
+| off_store_unclassified | 86 / 671 |
+| oecd-equity | 52 / 99 |
+| datausa-clothing-workforce | 46 / 98 |
+| datausa-cashiers-masters | 41 / 76 |
+| probe-test | 39 / 236 |
+| loop-chain-infrastructure | 7 / 339 |
+
+Reference matcher, channel route:
+
+| scope | labels | recall | exact | normalized | relay | correct / predicted | time | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| whole export | 41,202 | 0.938 | 0.919 | 0.967 | 0 / 808 | 408,745 / 1,844,405 | 29 s | 2.2 GB |
+| `--wiki dse` | 40,160 | 0.938 | 0.920 | 0.968 | 0 / 800 | 403,554 / 1,787,253 | 31 s | 2.1 GB |
+| `--wiki fractal` | 126 | 0.944 | 1.000 | 0.931 | 0 / 1 | 2,197 / 12,544 | 0.5 s | 85 MB |
+| `--demo` | 197 | 0.975 | 1.000 | 0.970 | none | 247 / 458 | 0.25 s | 85 MB |
+
+Precision is 1.000 wherever it is judged; the rest is unjudged under
+`Partial`. Relays are never found, by design. `--max-postings` trades memory
+for little recall on dse: 4 gives 0.929 at 0.9 GB, 16 gives 0.938 at 2.1 GB,
+and 64 gives 0.942 at 8.1 GB.
+
+**The out-of-memory failure, and its fix.** Conversion was never the cost.
+The largest world converts in 1.7 s at 200 MB, and its biggest revision body
+is 38 KB. The reference matcher was. Text that many identities originate
+independently is posted once per originating span, for example UseMod's
+new-page default text (inserted by 267 identities) and common API URL
+prefixes (up to 1,766 spans per shingle). Every read of a page carrying that
+text matched every one of those spans. One read produced 276,889 hits, and
+the giant world accumulated 22.6M content matches in 1.19M transmissions
+before the 8 GB cap aborted it. The boilerplate cutoff (above) removes that
+fan-out. `tests/wiki.rs::large_template_bodies_stay_linear` and
+`tests/reference.rs::matches_grow_linearly_with_the_read_body` are the
+regressions.
 
 ### The shortener and events
 
@@ -619,9 +690,13 @@ read-before-edit assumption supplies the reads.
 ### M2 pipeline input contract
 
 The converter's output is a valid input to `Pipeline::ingest` (the M2 path:
-converter → ingest (Replay) → L3–L5 → a discovered wiki channel and confirmed
-transmissions). The agreed L5 `HttpTool` shape, emitted from one place
-(`wiki::tools`):
+converter → ingest → L3–L5 → a discovered wiki channel and confirmed
+transmissions). Ingest uses eval core's synthetic `ClientContext`
+(`corpus/client.rs`), as every converter does. It moves to
+`IngressMode::Replay { corpus }` when eval core does (see the shortcuts
+table). The agreed L5 `HttpTool` shape, emitted from one place
+(`wiki::tools`, tested by `reads_and_writes_take_the_http_tool_shape` and
+`channel_labels_sit_in_the_read_tool_result`):
 
 - read: `http_request {"method":"GET","url":<canonical page url>}`; the
   tool_result is the read part and holds the page body (INV-269);
@@ -646,6 +721,7 @@ locator would carry the tool name and split the resource.
 | `src/datasets/wiki/resource.rs` | the page's public URL and `Locator` (`page_url`, `page_locator`) |
 | `src/datasets/wiki/tools.rs` | the one place the read/write tool shape is defined (`TOOL`, `read_args`, `write_args`) |
 | `src/datasets/wiki/build.rs` | the two passes: exchanges, then channel and relay labels |
+| `src/datasets/wiki/tally.rs` | channel-discovery inputs per `page_family` (`FamilyTally`, `FamilyStats`) |
 | `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests |
 
 ## swarm-traces
@@ -673,7 +749,8 @@ that decodes to printable text ≥24 bytes with ≥20 alphanumerics it builds a
 two-agent `World`:
 
 - the **author** originates the decoded plaintext in its output;
-- the **reader** receives the encoded token in an `http_request` tool result.
+- the **reader** receives the encoded token in a `fetch_drop` tool result. The
+  call names no resource, so the route is `Direct`.
 
 The expected transmission is a `Decoded`-class edge author → reader
 (`ToolResult` carrier), labelled `MatchNeed::Decoded { codecs }` with the
@@ -689,8 +766,22 @@ The reference matcher decodes one base64/hex/URL layer in a reader's input and
 matches it against sender spans, so a single-layer token is found and a nested
 chain is a reported miss — the point of the corpus. The run reports the
 `Decoded`-row recall (the decoder's recall) and, from the converter's verified
-chains, codec-chain frequencies. Reports store only hashes, lengths and codec
-chains, never payload text (run with `--examples 0`).
+chains, codec-chain frequencies (`SwarmSource::tally`, `ChainTally`).
+
+Reports carry only codec chains, counts and lengths, never payload text:
+- `run --dataset swarm` forces `--examples 0`, because a miss example prints
+  its label's text;
+- `truth --dataset swarm` refuses, because a label's text is the token;
+- `SwarmError` names a token only by its length.
+
+On the export, 91,037 payloads yield 659,746 distinct candidate tokens. Of
+these, 629 decode through a verified chain to printable text of at least 24
+bytes: `url` 615, `url.url` 13 and `base64` 1. 170 are Construction tier
+and 459 Structural. No `\x..` byte-escape chain reaches the floor, so no gap
+chain is reported on this export. The reference finds 627 of the 629
+`Decoded` labels (recall 0.997, precision 1.000, 2 s, 195 MB). It finds the
+`url.url` chains too, because one URL decode of a double-encoded token
+already exposes most of the plaintext.
 
 ### Files
 
@@ -698,4 +789,5 @@ chains, never payload text (run with `--examples 0`).
 | --- | --- |
 | `src/datasets/swarm/mod.rs` | `SwarmSource` (a `TraceSource`), token extraction, the two-agent decoded worlds, `SwarmSelection` |
 | `src/datasets/swarm/codec.rs` | the nested codec-chain decoder (`decode`, `Layer`, `Decoded`) |
+| `src/datasets/swarm/tally.rs` | decode-chain counts and lengths for the run report (`ChainTally`, `ChainStats`) |
 | `tests/swarm.rs`, `tests/fixtures/swarm/` | synthetic benign fixtures and tests |

@@ -116,3 +116,32 @@ fn reference_decodes_one_layer() {
     assert_eq!(decoded.missed, 1);
     assert_eq!(decoded.correct, decoded.predicted, "no false decoded edges");
 }
+
+#[test]
+fn tally_reports_chains_and_lengths_only() {
+    let source =
+        SwarmSource::open(&root(), &SwarmSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+    let tally = source.tally();
+    assert_eq!(tally.payloads, 4);
+    // Labelled chains: one base64, one nested base64, one hex.
+    let labelled: Vec<(&str, u64)> = tally
+        .labelled
+        .iter()
+        .map(|(chain, stats)| (chain.as_str(), stats.tokens))
+        .collect();
+    assert_eq!(
+        labelled,
+        vec![("base64", 1), ("base64.base64", 1), ("hex", 1)]
+    );
+    assert_eq!(tally.labelled["base64"].construction, 1);
+    assert_eq!(tally.labelled["base64.base64"].structural, 1);
+    // The byte-escape chain has no spec codec: counted as a gap, not a world.
+    assert_eq!(tally.unmapped["byte_escape"].tokens, 1);
+    assert!(tally.unmapped["byte_escape"].plaintext_bytes > 0);
+    // The rendering names chains and counts, never decoded or encoded text.
+    let shown = tally.to_string();
+    assert!(shown.contains("base64.base64"));
+    for text in ["meet the other agents", "leave a note", "bWVldC", "\\x6c"] {
+        assert!(!shown.contains(text), "{text:?} leaked into the tally");
+    }
+}

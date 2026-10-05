@@ -2,18 +2,19 @@
 //!
 //! The export (`revisions.jsonl.gz`, `pages.jsonl.gz`) records page edits on
 //! public UseMod/ProWiki wikis that AI agents wrote to and read from. There
-//! are no model calls, so exchanges are **synthesised** ([`Fidelity::Synthetic`]):
+//! are no model calls, so exchanges are **synthesised** ([`Fidelity::Synthetic`]),
+//! in the agreed L5 `HttpTool` shape ([`tools`]):
 //!
 //! - Each agent **identity** (the chosen username, or the saving `/16`
 //!   address when the username is blank) is one agent.
-//! - Each revision is a **write**: an [`edit_page`] tool call whose `text`
-//!   argument is the lines that revision inserted, so that text is
+//! - Each revision is a **write**: an `http_request` `POST` of the page URL
+//!   whose `body` is the lines that revision inserted, so that text is
 //!   originated there.
 //! - When a revision's author differs from the previous author of the page,
-//!   a **read** is synthesised just before the edit: a [`read_page`] tool
-//!   call whose result is the page body as of the previous revision. This is
-//!   the read-before-edit assumption: an agent that edits a page after
-//!   another agent must have fetched it first.
+//!   a **read** is synthesised just before the edit: an `http_request` `GET`
+//!   of the same URL whose tool result is the page body as of the previous
+//!   revision. This is the read-before-edit assumption: an agent that edits
+//!   a page after another agent must have fetched it first.
 //!
 //! One [`World`] is one connected component of the agent–page graph (agents
 //! linked by a page they both edited), so a world is a set of agents that
@@ -26,8 +27,7 @@
 //! quoting an earlier author's line) is also expected, at a
 //! [`CarrierKind::ReaderOutput`].
 //!
-//! [`edit_page`]: build
-//! [`read_page`]: build
+//! [`Fidelity::Synthetic`]: crate::corpus::Fidelity
 //! [`Locator::Url`]: crosstalk_spec::derived::flow::resource::Locator
 //! [`CarrierKind::ReaderOutput`]: crate::truth::CarrierKind
 
@@ -35,6 +35,7 @@ pub mod attribution;
 pub mod build;
 pub mod resource;
 pub mod schema;
+pub mod tally;
 pub mod tools;
 
 use std::collections::BTreeMap;
@@ -48,6 +49,7 @@ use crate::corpus::{CorpusError, SourceError, TraceSource, World};
 use crate::keys::{DatasetId, WorldKey};
 use attribution::AttributionError;
 use schema::{Page, Revision};
+pub use tally::{FamilyStats, FamilyTally};
 
 /// The dataset's id.
 pub const DATASET: &str = "collusion-wiki";
@@ -103,6 +105,19 @@ pub struct WikiSelection {
 }
 
 impl WikiSelection {
+    /// The demo subset: the five largest relay-coordination worlds of 2 to
+    /// 12 agents, the M2 "undeclared public wiki channel" case at a size a
+    /// demo can show end to end.
+    pub fn demo() -> Self {
+        Self {
+            families: vec!["relay-coordination".to_owned()],
+            wikis: Vec::new(),
+            min_agents: Some(2),
+            max_agents: Some(12),
+            limit: Some(5),
+        }
+    }
+
     fn keep_page(&self, wiki: &str, family: Option<&str>) -> bool {
         let family_ok = self.families.is_empty()
             || family.is_some_and(|f| self.families.iter().any(|want| want == f));
@@ -124,6 +139,7 @@ struct WorldSpec {
 pub struct WikiSource {
     revisions: Vec<Revision>,
     worlds: Vec<WorldSpec>,
+    families: FamilyTally,
 }
 
 impl WikiSource {
@@ -139,7 +155,20 @@ impl WikiSource {
             )
         });
         let worlds = plan_worlds(&revisions, selection);
-        Ok(Self { revisions, worlds })
+        let families = FamilyTally::new(&revisions, |page| {
+            families.get(page).and_then(Option::as_deref)
+        });
+        Ok(Self {
+            revisions,
+            worlds,
+            families,
+        })
+    }
+
+    /// Pages and multi-author pages per `page_family`, over the selected
+    /// pages (before the world-size filters and cap).
+    pub fn families(&self) -> &FamilyTally {
+        &self.families
     }
 
     /// How many worlds were planned.

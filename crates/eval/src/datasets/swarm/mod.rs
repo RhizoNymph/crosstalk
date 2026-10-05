@@ -21,6 +21,7 @@
 //! recovered-text child (the recovery is corroborated), else Structural.
 
 pub mod codec;
+pub mod tally;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -48,6 +49,7 @@ use crate::truth::{
     Tier, TransmissionLabel,
 };
 use codec::decode;
+pub use tally::{ChainStats, ChainTally};
 
 /// The dataset's id.
 pub const DATASET: &str = "swarm-traces";
@@ -83,8 +85,9 @@ pub enum SwarmError {
     Location(#[from] crate::location::LocationError),
     #[error("label: {0}")]
     Label(#[from] crate::truth::InvalidLabel),
-    #[error("token {0:?} no longer decodes")]
-    Undecodable(String),
+    /// Carries only the token's length: the token is payload text.
+    #[error("a planned {len}-byte token no longer decodes")]
+    Undecodable { len: usize },
     #[error("corpus: {0}")]
     Corpus(#[from] CorpusError),
 }
@@ -119,6 +122,7 @@ struct TokenWorld {
 /// swarm-traces as a stream of worlds, one per decodable token.
 pub struct SwarmSource {
     worlds: Vec<TokenWorld>,
+    tally: ChainTally,
 }
 
 impl SwarmSource {
@@ -135,36 +139,49 @@ impl SwarmSource {
             }
         }
         let mut worlds = Vec::new();
+        let mut tally = ChainTally::default();
         for row in &rows {
             if row.kind != "payload" {
                 continue;
             }
+            tally.payloads += 1;
+            let is_corroborated = corroborated.contains(row.id.as_str());
             let mut seen = BTreeSet::new();
             for (index, token) in tokens(&row.text).into_iter().enumerate() {
                 if !seen.insert(token.clone()) {
                     continue;
                 }
+                tally.candidates += 1;
                 let Some(decoded) = decode(&token) else {
                     continue;
                 };
-                if decoded.codecs().is_none()
-                    || decoded.text.len() < MIN_PLAINTEXT
-                    || word_chars(&decoded.text) < MIN_WORD_CHARS
+                if decoded.text.len() < MIN_PLAINTEXT || word_chars(&decoded.text) < MIN_WORD_CHARS
                 {
+                    continue;
+                }
+                tally.add(&decoded, token.len(), is_corroborated);
+                if decoded.codecs().is_none() {
+                    // A layer with no spec codec: a reported gap, not a world.
                     continue;
                 }
                 worlds.push(TokenWorld {
                     payload_id: row.id.clone(),
                     token_index: index,
                     token,
-                    corroborated: corroborated.contains(row.id.as_str()),
+                    corroborated: is_corroborated,
                 });
                 if selection.limit.is_some_and(|limit| worlds.len() >= limit) {
-                    return Ok(Self { worlds });
+                    return Ok(Self { worlds, tally });
                 }
             }
         }
-        Ok(Self { worlds })
+        Ok(Self { worlds, tally })
+    }
+
+    /// Decode-chain counts over the payloads read: chains and lengths only,
+    /// never token or plaintext bytes.
+    pub fn tally(&self) -> &ChainTally {
+        &self.tally
     }
 
     pub fn world_count(&self) -> usize {
@@ -192,7 +209,9 @@ fn build_world(plan: &TokenWorld) -> Result<World, SwarmError> {
     let author = builder.agent("author", Driven::Model, MODEL)?;
     let reader = builder.agent("reader", Driven::Model, MODEL)?;
 
-    let decoded = decode(&plan.token).ok_or_else(|| SwarmError::Undecodable(plan.token.clone()))?;
+    let decoded = decode(&plan.token).ok_or(SwarmError::Undecodable {
+        len: plan.token.len(),
+    })?;
     let codecs = decoded.codecs().unwrap_or_default();
     let plaintext = decoded.text;
 
