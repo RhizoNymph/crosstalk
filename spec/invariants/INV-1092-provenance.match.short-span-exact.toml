@@ -1,0 +1,30 @@
+[invariant]
+id = "provenance.match.short-span-exact"
+statement = "An originated span that is a whole value (its whole text part, trimmed, or one whole string value of a tool call's arguments) of ShortSpans::min_chars to max_chars normalized characters is posted under the exact hash of its normalized text, and a later read by another agent that holds that value as a normalized token run matches it, as Exact when the read bytes are the span's and Normalized otherwise, unless the hash is above the boilerplate cutoff; nothing shorter than min_chars is matched."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+With k = 32 and w = 16 nothing under 32 normalized characters has a
+fingerprint, and only 47 are guaranteed one shared with a reader. Short
+whole messages and argument values went unmatched (SALT: 106 of 106 labels
+under 32 bytes, 181 of 199 at 32 to 46; cipher payloads under 32 bytes).
+Short values are matched exactly instead, by one hash of the whole
+normalized value against the hashes of a read's token runs of the admitted
+lengths. A token run starts and ends on a boundary (the text's ends, a
+space, or a change between word and non-word characters), so a value is
+never matched inside a longer word. The hash is domain-separated from
+k-gram fingerprints. Its frequency is the number of observed texts that
+were that whole value (spans and scanned parts), so a stock phrase many
+agents send whole becomes Common and is neither indexed nor matched.
+Below the floor (24 by default; 16 cost the SALT user-turn precision gate) text matches unrelated texts too often to
+be evidence. The bounds are typed configuration (ProvenanceConfig::short_spans).
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::match_quality::short_whole_value_matches_exact_or_normalized", "crosstalk_provenance::tests::match_quality::short_values_match_only_whole_and_as_token_runs", "crosstalk_provenance::tests::match_quality::short_argument_value_matches", "crosstalk_provenance::tests::match_quality::short_floor_is_respected_and_configurable", "crosstalk_provenance::tests::match_quality::short_values_above_the_cutoff_are_common"]
+property = "crosstalk_provenance::tests::short::whole_value_is_a_token_run_of_any_text_holding_it"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

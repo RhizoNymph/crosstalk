@@ -65,3 +65,14 @@ pub fn normalize(text: &str) -> Vec<NormChar> {
 pub fn normalized_string(text: &str) -> String {
     normalize(text).iter().map(|c| c.ch).collect()
 }
+
+/// How many normalized characters are left without leading and trailing
+/// spaces.
+pub fn trimmed_len(normalized: &[NormChar]) -> usize {
+    let first = normalized.iter().position(|c| c.ch != ' ');
+    let last = normalized.iter().rposition(|c| c.ch != ' ');
+    match (first, last) {
+        (Some(first), Some(last)) => last + 1 - first,
+        _ => 0,
+    }
+}

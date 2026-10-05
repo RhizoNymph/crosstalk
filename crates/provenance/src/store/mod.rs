@@ -18,7 +18,10 @@
 //! republishes the stored outcome instead of scanning again.
 //!
 //! **Span states** change only through `SpanState::advance`
-//! (`provenance.span-state.legal-transitions`).
+//! (`provenance.span-state.legal-transitions`). A forwarded span
+//! (`Relayed` from an input) stays `Relayed`; its indexing is the record's
+//! [`Forwarding`], advanced by `mark_indexed` and `expire` alongside the
+//! originated spans' states.
 
 mod memory;
 mod pg;
@@ -26,7 +29,7 @@ mod pg;
 use std::future::Future;
 
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
-use crosstalk_spec::derived::provenance::span::{IllegalTransition, Span};
+use crosstalk_spec::derived::provenance::span::{IllegalTransition, Span, SpanState};
 use crosstalk_spec::ids::{AgentId, EventId, ExchangeId, MessageHash, SpanId};
 use crosstalk_spec::support::Timestamp;
 
@@ -90,6 +93,26 @@ pub struct MessageScan {
     pub status: ScanStatus,
 }
 
+/// Where a forwarded span stands in the fingerprint index.
+///
+/// A span classified `Relayed(RelaySource::Input(_))` keeps that state for
+/// good (`SpanState::advance` has no edge out of it), yet its text is
+/// indexed under the forwarding agent (`provenance.index.forwarded-indexed`).
+/// This is the record of that indexing, the forwarded counterpart of
+/// `Originated` → `Indexed` → `Expired`. Hits are not counted on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forwarding {
+    /// Committed; its postings not written yet.
+    Pending,
+    /// Its postings are in the index.
+    Indexed { at: Timestamp },
+    /// Past retention: its postings were evicted.
+    Expired {
+        indexed_at: Timestamp,
+        at: Timestamp,
+    },
+}
+
 /// A stored span: the spec's span, its position in its exchange's output,
 /// and the order it was indexed in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,8 +120,51 @@ pub struct SpanRecord {
     pub span: Span,
     /// Position among its exchange's spans (output order).
     pub ordinal: u32,
-    /// Set when the span became `Indexed`: increasing in indexing order.
+    /// Set when the span became `Indexed` (or, forwarded, its forwarding
+    /// `Indexed`): increasing in indexing order.
     pub index_seq: Option<u64>,
+    /// For a forwarded span (`SpanState::is_forwarded`) committed with
+    /// forwarding on, its indexing; `None` for every other span.
+    pub forward: Option<Forwarding>,
+}
+
+impl SpanRecord {
+    /// The record `commit_scan` writes for `span`, not indexed yet: a
+    /// forwarded span's forwarding is pending when `forwarding` is on, and
+    /// absent (the span is never indexed) when it is off.
+    pub fn committed(span: Span, ordinal: u32, forwarding: bool) -> Self {
+        let forward = (forwarding && span.state.is_forwarded()).then_some(Forwarding::Pending);
+        Self {
+            span,
+            ordinal,
+            index_seq: None,
+            forward,
+        }
+    }
+
+    /// When the span's postings were written, while they are in the index:
+    /// an `Indexed` or `Propagated` span, or a forwarded span whose
+    /// forwarding is `Indexed`. `None` otherwise.
+    pub fn indexed_at(&self) -> Option<Timestamp> {
+        match (&self.span.state, self.forward) {
+            (SpanState::Indexed { at }, _) | (SpanState::Propagated { indexed_at: at, .. }, _) => {
+                Some(*at)
+            }
+            (_, Some(Forwarding::Indexed { at })) => Some(at),
+            _ => None,
+        }
+    }
+}
+
+/// A copy of an indexed span in another output: a span classified
+/// `Relayed(RelaySource::Span(source))`, the agent whose output holds it,
+/// and its exchange's start. The spread rule counts copies as
+/// originations (`provenance.match.cross-agent-spread`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Relay {
+    pub source: SpanId,
+    pub agent: AgentId,
+    pub at: Timestamp,
 }
 
 /// A stored content match. Its id is its envelope's.
@@ -125,6 +191,9 @@ pub struct ScanCommit {
     pub matches: Vec<StoredMatch>,
     /// Every message the delta listed and how it was scanned.
     pub messages: Vec<(MessageHash, ScannedAs)>,
+    /// Whether forwarded spans are indexed (`ProvenanceConfig::forwarding`):
+    /// their forwarding is recorded pending only then.
+    pub forwarding: bool,
 }
 
 /// What a commit did.
@@ -180,6 +249,14 @@ pub trait ProvenanceStore {
         ids: &[SpanId],
     ) -> impl Future<Output = Result<Vec<SpanRecord>, ProvenanceStoreError>> + Send;
 
+    /// Every stored span relayed from one of `sources`
+    /// (`Relayed(RelaySource::Span(s))`), with its agent and its
+    /// exchange's start, by source then time.
+    fn relays(
+        &self,
+        sources: &[SpanId],
+    ) -> impl Future<Output = Result<Vec<Relay>, ProvenanceStoreError>> + Send;
+
     /// One stored span: its exchange, message, part and range.
     fn span(
         &self,
@@ -228,7 +305,8 @@ pub trait ProvenanceStore {
         commit: ScanCommit,
     ) -> impl Future<Output = Result<Committed, ProvenanceStoreError>> + Send;
 
-    /// Advance the exchange's `Originated` spans to `Indexed { at }`,
+    /// Advance the exchange's `Originated` spans to `Indexed { at }` and
+    /// its pending forwarded spans to `Forwarding::Indexed { at }`,
     /// assigning index sequences in output order, and mark the exchange
     /// `Indexed`. Idempotent.
     fn mark_indexed(
@@ -245,8 +323,9 @@ pub trait ProvenanceStore {
         failure: ScanFailure,
     ) -> impl Future<Output = Result<(), ProvenanceStoreError>> + Send;
 
-    /// Indexed or propagated spans whose retention has run out at `now`
-    /// (`indexed_at + retention < now`), oldest first, at most `limit`.
+    /// Indexed or propagated spans, and indexed forwarded spans, whose
+    /// retention has run out at `now` (`indexed_at + retention < now`),
+    /// oldest first, at most `limit`.
     fn expiring(
         &self,
         now: Timestamp,
@@ -254,8 +333,9 @@ pub trait ProvenanceStore {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<SpanId>, ProvenanceStoreError>> + Send;
 
-    /// Advance `spans` to `Expired { at }`. Call only after their derived
-    /// data is evicted from every index (`provenance.match.none-after-expiry`).
+    /// Advance `spans` to `Expired { at }` (a forwarded span's forwarding
+    /// to `Forwarding::Expired`). Call only after their derived data is
+    /// evicted from every index (`provenance.match.none-after-expiry`).
     fn expire(
         &mut self,
         spans: &[SpanId],

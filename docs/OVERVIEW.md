@@ -1212,9 +1212,16 @@ Features Index:
       the NovelRunSegmenter, which follows copied runs through every
       decode layer of the exchange's inputs (relayed) and leaves the rest
       originated; the scanner, which looks up new inputs, the new system
-      prompt and the output, resolves originated text against the index
-      (hidden relays become ReaderOutput matches, boilerplate Common) and
-      picks carrier, kind, read range and matched bytes; the engine, which
+      prompt and the output (k-grams, plus exact hashes of short token
+      runs for whole values of 24 to 46 characters), resolves originated
+      text against the index (hidden relays become ReaderOutput matches
+      under stricter length and frequency rules, boilerplate Common) and
+      picks carrier, kind, read range and matched bytes; the index holds
+      originated spans and, with forwarding on (off by default), forwarded
+      ones (relayed from the agent's own input, indexed under the
+      forwarder, state left Relayed), with the
+      k-grams an originated remainder mostly covers next to a forward
+      posted under it; the engine, which
       records exchanges from ExchangeCaptured and scans each
       ConversationDelta, writes the index, republishes the stored outcome
       with deterministic ids on redelivery and evicts after retention;
@@ -1236,6 +1243,7 @@ Features Index:
       - crates/provenance/src/index/pg.rs
       - crates/provenance/src/store/mod.rs
       - crates/provenance/migrations/0001_provenance.sql
+      - crates/provenance/migrations/0002_forwarded_spans.sql
     depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
     doc: docs/features/provenance.md
   deploy:

@@ -11,7 +11,8 @@ one span) makes the origin excerpt show JSON, and fingerprints the path
 together with the page, so another agent's call naming the same path
 matches the writer's page span. Cutting per string value keeps each
 span's view equal to text the tool received; a value too short for one
-k-gram yields no span. Arguments that are not JSON are segmented whole.
+k-gram and under the short-span floor (ShortSpans::min_chars) yields no
+span. Arguments that are not JSON are segmented whole.
 """
 
 [evidence]

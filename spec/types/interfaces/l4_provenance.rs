@@ -3,7 +3,9 @@
 //! `ConversationDelta`.
 //!
 //! For each delta: the output is segmented into spans and the originated
-//! ones are indexed; the new inputs (and a new system prompt) are decoded,
+//! ones are indexed, as are the forwarded ones (relayed from one of the
+//! agent's own inputs, indexed under that agent with their state left
+//! `Relayed`, see `OriginatedSpan`); the new inputs (and a new system prompt) are decoded,
 //! fingerprinted and looked up, and hits on other agents' spans become
 //! content matches. The output is looked up too: another agent's text in an
 //! agent's output that none of its visible inputs contained is a match with
@@ -17,8 +19,8 @@
 //! window (the provenance consumer passes the time of the exchange it is
 //! scanning), so a replay scans with the frequencies it scanned with.
 //!
-//! **Span locations.** The provenance consumer records every originated span
-//! it indexes with [`SpanIndex::record`] (where it sits and who wrote it,
+//! **Span locations.** The provenance consumer records every span it
+//! indexes (originated or forwarded) with [`SpanIndex::record`] (where it sits and who wrote it,
 //! [`IndexedSpan`]), and [`SpanIndex::spans`] reads a batch of them back.
 //! The surface's evidence page cuts a sender's excerpt through it
 //! (`ContentMatch` names only the origin span's id), and evaluation, the
@@ -178,10 +180,12 @@ impl IndexedSpan {
     }
 }
 
-/// The originated spans' records, written once and read back in batches.
+/// The indexed spans' records (originated and forwarded), written once and
+/// read back in batches.
 pub trait SpanIndex {
     /// Record where `span` sits and who wrote it ([`IndexedSpan::of`]). The
-    /// provenance consumer records every originated span it indexes.
+    /// provenance consumer records every span it indexes, originated or
+    /// forwarded.
     /// Idempotent: a span id already recorded keeps its first record and
     /// nothing changes, so a redelivered delta records nothing new.
     fn record(
@@ -193,7 +197,8 @@ pub trait SpanIndex {
     /// was recorded whatever has happened since: eviction drops a span's
     /// fingerprints, not its record, and merges change no stored author
     /// (`provenance.span-index.spans-as-recorded`). An id never recorded (a
-    /// relayed or common span, an unknown id) is absent from the map, so
+    /// common span, a span relayed from another span, an unknown id) is
+    /// absent from the map, so
     /// the map's keys are a subset of `ids`
     /// (`provenance.span-index.keys-within-batch`); the batch is at most
     /// `IdBatch::MAX` ids by construction.

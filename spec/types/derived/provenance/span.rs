@@ -6,6 +6,7 @@
 //! ```text
 //! Extracted ─┬─ classify: absent from inputs ──▶ Originated ─index─▶ Indexed ─hit─▶ Propagated
 //!            ├─ classify: present in inputs ───▶ Relayed (final)        │                │
+//!            │   (from an input: also indexed, state unchanged)          │                │
 //!            └─ classify: otherwise ───────────▶ Common (final)         └─ retention ────┴─▶ Expired
 //! ```
 
@@ -156,6 +157,18 @@ impl SpanState {
         })
     }
 
+    /// Whether the span is forwarded: relayed from one of its agent's
+    /// inputs, and so indexed under that agent although its state stays
+    /// `Relayed` (see [`OriginatedSpan`]).
+    pub fn is_forwarded(&self) -> bool {
+        matches!(
+            self,
+            Self::Relayed {
+                source: RelaySource::Input(_)
+            }
+        )
+    }
+
     pub fn origin(&self) -> Option<Origin> {
         match self {
             Self::Extracted => None,
@@ -169,21 +182,41 @@ impl SpanState {
     }
 }
 
-/// A span classified as originated and not yet expired: the only kind the
+/// A span its agent is the matchable author of: the only kind the
 /// fingerprint index accepts.
+///
+/// - A span classified as originated and not yet expired (`Originated`,
+///   `Indexed` or `Propagated`).
+/// - A forwarded span, when the provenance configuration turns forwarding
+///   on: `Relayed { source: RelaySource::Input(_) }`, text the
+///   agent copied from one of its own inputs (a tool result, a user turn)
+///   and passed on. It is indexed under the forwarding agent, so a peer's
+///   later read of the forwarded text matches it, and its state stays
+///   `Relayed` (`provenance.index.forwarded-indexed`). Whether the sender
+///   wrote the resource a reader read is L5's question
+///   (`flow.route.shared-upstream-stays-suspected`).
+///
+/// Never a span relayed from another indexed span (that text's author is
+/// the source span's agent), a common span, or an expired one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OriginatedSpan(Span);
 
 impl OriginatedSpan {
-    /// `None` unless the span is `Originated`, `Indexed` or `Propagated`.
+    /// `None` unless the span is `Originated`, `Indexed`, `Propagated`, or
+    /// `Relayed` from an input.
     pub fn new(span: Span) -> Option<Self> {
         match span.state {
-            SpanState::Originated | SpanState::Indexed { .. } | SpanState::Propagated { .. } => {
-                Some(Self(span))
-            }
+            SpanState::Originated
+            | SpanState::Indexed { .. }
+            | SpanState::Propagated { .. }
+            | SpanState::Relayed {
+                source: RelaySource::Input(_),
+            } => Some(Self(span)),
             SpanState::Extracted
             | SpanState::Common
-            | SpanState::Relayed { .. }
+            | SpanState::Relayed {
+                source: RelaySource::Span(_),
+            }
             | SpanState::Expired { .. } => None,
         }
     }

@@ -8,18 +8,25 @@
 //! text matching an indexed span is never originated), and when `s` is
 //! another agent's, a `ReaderOutput` match over the same bytes
 //! (`provenance.match.reader-output-detected`,
-//! `provenance.match.reader-output-relayed-span`). The uncovered rest is
+//! `provenance.match.reader-output-relayed-span`) when the stretch passes
+//! the stricter reader-output rules (`provenance.match.reader-output-strict`:
+//! a length floor, and a supporting fingerprint seen in few texts). The
+//! uncovered rest is
 //! resolved again, since its own fingerprints are a different selection.
 //! A candidate with no hits is `Common` when every one of its fingerprints
 //! is above the cutoff at the exchange's time
-//! (`provenance.span.common-above-cutoff`), else `Originated`. Candidates
-//! with no fingerprint get no span. The segmenter guarantees no candidate
+//! (`provenance.span.common-above-cutoff`; a whole short value's short-span
+//! hash counts among them), else `Originated`. A candidate with no
+//! fingerprint is kept `Originated` when it reaches the short-span floor
+//! (a remainder next to a forward, matched through its context k-grams),
+//! and gets no span below it. The segmenter guarantees no candidate
 //! shares a k-gram with the inputs, so a `ReaderOutput` match is only ever
 //! made for text no input explains (`provenance.match.reader-output-unexplained`).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
+use crosstalk_spec::derived::provenance::fingerprint::Fingerprint;
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::{
     Origin, RelaySource, Span, SpanEvent, SpanLocation, SpanState,
@@ -29,13 +36,14 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{extents_by_span, merge};
+use super::hits::{extents_by_span, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
 use crate::segment::{Coverage, TextPart, run_bytes, runs, text_parts, view};
 use crate::span::span_id;
 use crate::store::ProvenanceStore;
+use crate::text::normalize::trimmed_len;
 use crate::text::{normalize, trim_range};
 
 /// One resolved stretch of an output part.
@@ -140,16 +148,22 @@ impl Scanner {
             let Some(text) = slice(&part.text, start, end) else {
                 continue;
             };
-            let kgrams = self.winnowing().winnow_mapped(&view(text, part.kind));
-            if kgrams.is_empty() {
+            let seen = view(text, part.kind);
+            let kgrams = self.winnowing().winnow_mapped(&seen);
+            if kgrams.is_empty() && !self.segmenter().matchable(seen.text()) {
                 continue;
             }
+            // A whole short value is also judged by its short-span hash.
+            let mut fingerprints = kgrams.clone();
+            fingerprints.extend(self.short_fingerprint(part, start, end));
             let owned = self.owned(kgrams.clone());
             let hits = session.lookup(&owned).await?;
             let live = &session.live;
             let by_span = extents_by_span(&hits, &owned, |span| live.get(span).is_some());
             if by_span.is_empty() {
-                let origin = if self.all_boilerplate(session, &kgrams).await? {
+                let origin = if !fingerprints.is_empty()
+                    && self.all_boilerplate(session, &fingerprints).await?
+                {
                     Origin::Common
                 } else {
                     Origin::Originated
@@ -169,6 +183,22 @@ impl Scanner {
                     queue.push((start + at, start + run_start));
                 }
                 at = at.max(run_end);
+                // The hit fingerprints inside the run that name its source.
+                let spread = spread_boilerplate(&hits, &session.live, self.spread());
+                let support: Vec<_> = hits
+                    .iter()
+                    .filter(|hit| !spread.contains(&hit.fingerprint))
+                    .filter(|hit| hit.span == source)
+                    .filter(|hit| {
+                        owned.iter().any(|kgram| {
+                            kgram.start == hit.query_offset
+                                && kgram.fingerprint == hit.fingerprint
+                                && kgram.start >= run_start
+                                && kgram.start < run_end
+                        })
+                    })
+                    .map(|hit| hit.fingerprint)
+                    .collect();
                 let piece = self
                     .relayed_piece(
                         session,
@@ -176,6 +206,7 @@ impl Scanner {
                         draft.location.part,
                         source,
                         (start + run_start, start + run_end),
+                        &support,
                     )
                     .await?;
                 pieces.extend(piece);
@@ -285,8 +316,43 @@ impl Scanner {
         Ok(relayed)
     }
 
+    /// Whether a stretch of the reader's output relayed from another
+    /// agent's span passes the stricter `ReaderOutput` rules
+    /// (`provenance.match.reader-output-strict`): at least
+    /// `ReaderOutputRules::min_chars` normalized characters, and one of the
+    /// hit fingerprints supporting it observed in at most
+    /// `ReaderOutputRules::cutoff` texts. The stretch stays relayed either
+    /// way; only the match is withheld.
+    async fn reader_output_admitted<I, S, M, L>(
+        &self,
+        session: &Session<'_, I, S, M, L>,
+        part: &TextPart<'_>,
+        (start, end): (u32, u32),
+        support: &[Fingerprint],
+    ) -> Result<bool, ScanError>
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        let rules = self.reader_output();
+        let text = slice(&part.text, start, end).unwrap_or_default();
+        let chars = trimmed_len(&normalize(view(text, part.kind).text()));
+        if chars < rules.min_chars() {
+            tracing::debug!(exchange = ?session.exchange, chars, min_chars = rules.min_chars(), "reader-output match below the length floor");
+            return Ok(false);
+        }
+        if support.is_empty() {
+            tracing::debug!(exchange = ?session.exchange, chars, "reader-output match on spread boilerplate only");
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// The piece `[start, end)` relayed from `source`, with a `ReaderOutput`
-    /// match when `source` is another agent's.
+    /// match when `source` is another agent's and the stretch passes the
+    /// stricter reader-output rules.
     async fn relayed_piece<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
@@ -294,6 +360,7 @@ impl Scanner {
         part_ref: PartRef,
         source: SpanId,
         (start, end): (u32, u32),
+        support: &[Fingerprint],
     ) -> Result<Option<Piece>, ScanError>
     where
         I: FingerprintIndex + Sync,
@@ -305,7 +372,11 @@ impl Scanner {
             return Ok(None);
         };
         let mut found = None;
-        if record.span.agent != session.reader {
+        if record.span.agent != session.reader
+            && self
+                .reader_output_admitted(session, part, (start, end), support)
+                .await?
+        {
             let read = slice(&part.text, start, end).unwrap_or_default();
             let origins = session.origin_texts(source).await?;
             let origins: Vec<&str> = origins.iter().map(String::as_str).collect();

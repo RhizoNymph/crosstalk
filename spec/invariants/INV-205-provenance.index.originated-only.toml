@@ -1,15 +1,19 @@
 [invariant]
 id = "provenance.index.originated-only"
-statement = "Every span passed to FingerprintIndex::insert is in state Originated, Indexed or Propagated."
+statement = "Every span passed to FingerprintIndex::insert is in state Originated, Indexed or Propagated, or Relayed with RelaySource::Input (a forwarded span, provenance.index.forwarded-indexed)."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
-Only originated text identifies its author. Indexing a Relayed span would
-credit the relayer as the origin of text it copied, indexing a Common span
-would match boilerplate in every agent's input, and indexing an Expired span
-would undo its eviction. FingerprintIndex::insert takes an &OriginatedSpan,
-whose field is private and whose only constructor, OriginatedSpan::new,
-returns None unless the span is Originated, Indexed or Propagated.
+Only text an agent is the matchable author of identifies it: text it
+originated, or text it forwarded from one of its own inputs, whose
+forwarding the index records under it (provenance.index.forwarded-indexed).
+Indexing a span relayed from another indexed span would credit the relayer
+as the origin of text whose author is already indexed, indexing a Common
+span would match boilerplate in every agent's input, and indexing an
+Expired span would undo its eviction. FingerprintIndex::insert takes an
+&OriginatedSpan, whose field is private and whose only constructor,
+OriginatedSpan::new, returns None unless the span is Originated, Indexed,
+Propagated, or Relayed from an input.
 """
 
 [evidence]
