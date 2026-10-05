@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.extract.fetch-tools-configured"
+statement = "A call of a tool named in ExtractConfig::fetch_tools, with a delivered result, extracts exactly the read of the normalized URL in its url argument (or the page a site rule names for it), Structured, exactly as the built-in fetch tools do; without a result or with an error result it extracts nothing, without a url argument it is an Arguments error, and a name configured both as a fetch tool and as an HTTP tool is refused."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Benchmarks and harnesses name their page-fetching tools freely (AgentDojo's
+get_webpage). A read the extractor does not know records no access, so
+content a page carried routes Direct instead of through the channel. Names
+are configuration, not code: the defaults stay the built-in fetch tools,
+and a deployment or the eval names its own.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::extract::tests::fetch_config::a_configured_fetch_tool_reads_its_url",
+    "crosstalk_flow::extract::tests::fetch_config::a_configured_fetch_tool_meets_site_rules",
+    "crosstalk_flow::extract::tests::fetch_config::fetch_tools_are_configured_not_built_in",
+    "crosstalk_flow::extract::tests::fetch_config::fetch_tool_names_are_checked",
+    "crosstalk_gateway::live::layers::extract::tests::the_configured_fetch_tools_are_extracted",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

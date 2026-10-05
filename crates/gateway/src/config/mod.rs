@@ -13,6 +13,7 @@
 //! | `embeddings` | [`EmbeddingsConfig`], optional; checked, unused until P6 |
 //! | `bus`, `pipeline`, `shutdown` | optional tuning: transport's [`BusConfig`], [`PipelineConfig`], [`ShutdownConfig`] |
 //! | `flow` | optional: L5's [`FlowConfig`] (`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `shards`, `tick_ms`), each key defaulted |
+//! | `extract` | optional: L5's extractors, [`ExtractConfig`] (`mcp_servers`, `http_tools`, `fetch_tools`, `sites`), each key defaulted |
 //!
 //! A relative `blobs.root` is resolved against the directory of the config
 //! file it was read from ([`GatewayConfig::load`]).
@@ -22,6 +23,7 @@ mod sections;
 use std::path::{Path, PathBuf};
 
 pub use crosstalk_flow::consumer::FlowConfig;
+pub use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_ingress::config::IngressConfig;
 use crosstalk_transport::BusConfig;
 use serde::Deserialize;
@@ -53,6 +55,8 @@ pub struct GatewayConfig {
     pub shutdown: ShutdownConfig,
     #[serde(default)]
     pub flow: FlowConfig,
+    #[serde(default)]
+    pub extract: ExtractConfig,
 }
 
 /// Why a config could not be read.

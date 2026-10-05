@@ -122,6 +122,7 @@ fn config(blobs: BlobConfig) -> LiveConfig {
         pipeline: Settings::default(),
         flow: FlowConfig::default(),
         provenance: ProvenanceConfig::default(),
+        extract: crosstalk_flow::extract::ExtractConfig::default(),
         ticking: Ticking::OnSettle,
         seed: 7,
         capture: None,
