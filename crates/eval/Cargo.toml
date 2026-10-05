@@ -16,6 +16,7 @@ path = "src/bin/ct-eval/main.rs"
 crosstalk-spec = { path = "../../spec" }
 crosstalk-flow = { path = "../flow" }
 crosstalk-gateway = { path = "../gateway" }
+crosstalk-flow = { path = "../flow" }
 crosstalk-transport = { path = "../transport" }
 anyhow.workspace = true
 base64.workspace = true
@@ -37,4 +38,5 @@ hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] 
 [dev-dependencies]
 crosstalk-testkit = { path = "../testkit" }
 crosstalk-sim = { path = "../sim" }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
