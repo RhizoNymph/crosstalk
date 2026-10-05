@@ -31,7 +31,13 @@ use crosstalk_spec::interfaces::l8_surface::operators::{
 };
 use crosstalk_world::config::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
 
-const WAIT: Duration = Duration::from_secs(10);
+/// The outer bound on waiting for a condition (a refresh), however busy
+/// the machine.
+const WAIT: Duration = Duration::from_secs(60);
+
+/// How long the live test waits for its own event, however busy the
+/// machine: an outer bound, not the expected time.
+const LIVE_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Every section the navigation links to, and the root.
 const NAV: [&str; 10] = [
@@ -158,13 +164,9 @@ async fn every_nav_page_answers_200_over_http() {
     world.stop().await;
 }
 
+/// The next SSE frame; the caller bounds the wait.
 async fn next_frame(body: &mut BodyDataStream) -> String {
-    let next = tokio::time::timeout(
-        WAIT,
-        std::future::poll_fn(|cx| Pin::new(&mut *body).poll_next(cx)),
-    )
-    .await
-    .expect("a frame in time");
+    let next = std::future::poll_fn(|cx| Pin::new(&mut *body).poll_next(cx)).await;
     let bytes = next.expect("the stream is open").expect("a frame");
     String::from_utf8(bytes.to_vec()).expect("utf8")
 }
@@ -197,18 +199,28 @@ async fn a_live_event_reaches_data_live_over_http() {
         "event: alert\ndata: {{\"id\":\"{}\"}}\nid: ",
         alert.to_ulid()
     );
-    let mut seen = Vec::new();
-    loop {
-        let frame = next_frame(&mut body).await;
-        if frame.starts_with(&wanted) {
-            break;
+    // The world was settled before serving (`HttpWorld::start`), but
+    // another write may still land first: skip any frame that is not ours,
+    // under one generous deadline rather than a frame count.
+    let mut skipped = 0_usize;
+    let found = tokio::time::timeout(LIVE_DEADLINE, async {
+        loop {
+            let frame = next_frame(&mut body).await;
+            if frame.starts_with(&wanted) {
+                return;
+            }
+            assert!(
+                !frame.starts_with("event: end"),
+                "the stream ended after {skipped} other frames: {frame}"
+            );
+            skipped += 1;
         }
-        assert!(
-            seen.len() < 64 && !frame.starts_with("event: end"),
-            "no alert event: {seen:?} then {frame}"
-        );
-        seen.push(frame);
-    }
+    })
+    .await;
+    assert!(
+        found.is_ok(),
+        "no alert event within {LIVE_DEADLINE:?} ({skipped} other frames)"
+    );
     drop(body);
     drop(router);
     world.stop().await;

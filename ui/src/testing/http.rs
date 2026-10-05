@@ -9,6 +9,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crosstalk_api::http::BearerToken as ServerToken;
 use crosstalk_api::world::{self, seed_world, serve_world};
@@ -62,6 +63,7 @@ impl HttpWorld {
             ),
         ];
         let served = serve_world(seeded, tokens).await.expect("the api serves");
+        settle(&surface).await;
         Self {
             base: BaseUrl::parse(&served.base_url()).expect("base url"),
             surface,
@@ -123,6 +125,40 @@ impl HttpWorld {
     pub async fn stop(self) {
         self.served.shutdown().await;
     }
+}
+
+/// How often [`settle`] reads the feed's head, and for how many reads in a
+/// row it must stay put.
+const SETTLE_POLL: Duration = Duration::from_millis(200);
+const SETTLE_READS: u32 = 5;
+/// The outer bound on settling, however busy the machine.
+const SETTLE_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Waits until the in-process relay has drained the seed's changes into
+/// the live feed: the feed's head unchanged for [`SETTLE_READS`] reads.
+/// `seed_world` returns once the stores are written, while the relay is
+/// still appending their `Changed` events to the feed; a stream opened
+/// before then receives that backlog first.
+async fn settle(surface: &WorldSurface) {
+    let settled = tokio::time::timeout(SETTLE_DEADLINE, async {
+        let mut head = surface.feed().head();
+        let mut still = 0;
+        while still < SETTLE_READS {
+            tokio::time::sleep(SETTLE_POLL).await;
+            let now = surface.feed().head();
+            if now == head {
+                still += 1;
+            } else {
+                head = now;
+                still = 0;
+            }
+        }
+    })
+    .await;
+    assert!(
+        settled.is_ok(),
+        "the live feed kept growing for {SETTLE_DEADLINE:?}"
+    );
 }
 
 /// The researcher's id, as the UI config names it.
