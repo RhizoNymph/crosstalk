@@ -11,6 +11,14 @@
 //! level of JSON string decoding, `Decoded([JsonString])`
 //! (`provenance.match.string-serialised-decoded`).
 //!
+//! **Forwarding (`Tier::Forwarding`).** A delivery whose content the sender
+//! relayed from its own tool output (at least half of it, folded, in
+//! 24-byte shingles of a tool result the sender received before the
+//! sending call; [`super::forwarding`]) keeps its label but takes
+//! `Tier::Forwarding` instead of `Construction`: L4 attributes it to the
+//! sender only with forwarding on, and the report keeps it apart from
+//! `overall`.
+//!
 //! **Negative controls.**
 //! - `RejectedSend` (Construction): a `send_message` whose event failed (the
 //!   200-character limit) was never delivered. The converter gives its
@@ -33,7 +41,7 @@
 //!   headers, round prompts, feedback), including the peer's task text the
 //!   communication header quotes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crosstalk_spec::derived::provenance::span::SpanLocation;
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
@@ -41,6 +49,7 @@ use crosstalk_spec::observed::message::{AssistantPart, MessageBody};
 
 use super::SaltError;
 use super::episode::{AgentEpisode, delivered_turn};
+use super::forwarding::ToolOutput;
 use super::messages::{argument, content_text};
 use super::schema::Episode;
 use crate::keys::{AgentKey, SourceRef};
@@ -122,6 +131,12 @@ impl EpisodeLabels<'_> {
     }
 
     fn deliveries(&self, out: &mut Vec<Expectation>) -> Result<(), SaltError> {
+        let outputs: BTreeMap<&str, ToolOutput> = self
+            .agents
+            .iter()
+            .filter(|agent| !agent.scripted)
+            .map(|agent| (agent.key.name.as_str(), tool_output(agent.episode)))
+            .collect();
         for (at, delivery) in self.episode.channel_transcript.iter().enumerate() {
             let (Some(sender), Some(receiver)) =
                 (self.agent(&delivery.sender), self.agent(&delivery.receiver))
@@ -177,11 +192,20 @@ impl EpisodeLabels<'_> {
                 )?));
                 continue;
             }
-            let sender_exchange = sender
-                .episode
-                .call_of_event(delivery.event_id)
-                .and_then(|(message, _)| sender.exchange_of_response(message));
+            let call = sender.episode.call_of_event(delivery.event_id);
+            let sender_exchange =
+                call.and_then(|(message, _)| sender.exchange_of_response(message));
             let needs = MatchNeed::through_json_string(&delivery.content);
+            let forwarded = call.is_some_and(|(message, _)| {
+                outputs
+                    .get(sender.key.name.as_str())
+                    .is_some_and(|output| output.forwards(&delivery.content, message))
+            });
+            let tier = if forwarded {
+                Tier::Forwarding
+            } else {
+                Tier::Construction
+            };
             out.push(Expectation::Transmission(ExpectedTransmission::new(
                 TransmissionLabel {
                     from: sender.key.clone(),
@@ -195,7 +219,7 @@ impl EpisodeLabels<'_> {
                         at: location,
                     },
                     needs,
-                    tier: Tier::Construction,
+                    tier,
                     source,
                 },
             )?));
@@ -323,6 +347,17 @@ impl EpisodeLabels<'_> {
         }
         Ok(())
     }
+}
+
+/// Every tool result in the agent's message list, for the forwarding rule.
+fn tool_output(episode: &AgentEpisode) -> ToolOutput {
+    let mut output = ToolOutput::default();
+    for (index, raw) in episode.raw.iter().enumerate() {
+        if raw.role == "tool" {
+            output.add(index, &content_text(&raw.content));
+        }
+    }
+    output
 }
 
 /// The location of tool call `id`'s arguments (its part text) in message

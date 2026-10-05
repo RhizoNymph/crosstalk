@@ -38,6 +38,8 @@ use crosstalk_spec::interfaces::l4_provenance::SpanIndex;
 use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+use serde::{Deserialize, Serialize};
+
 use crate::corpus::World;
 use crate::pipeline::{DetectError, Detection, DetectionStatus, Detector};
 use crate::predict::reads::{ChannelResources, ReadError, Reads, Resolved};
@@ -54,12 +56,32 @@ pub struct LiveSettings {
     pub timing: CorrelationTiming,
     /// Seeds the composition's envelope ids.
     pub seed: u64,
+    /// Whether L4 indexes forwarded spans under the forwarder
+    /// (`ProvenanceConfig::forwarding`, `provenance.index.forwarded-indexed`).
+    pub forwarding: Forwarding,
+}
+
+/// Whether L4 indexes text an agent relays from its own input under that
+/// agent (`ProvenanceConfig::forwarding`). `Off` is the shipped default and
+/// what the headline live numbers and the live gates are measured with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Forwarding {
+    #[default]
+    Off,
+    On,
+}
+
+impl Forwarding {
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 impl LiveSettings {
     /// The eval's short timing: a 60 s correlation window, a 10 s evidence
     /// window and a 60 s suspected TTL, so a world settles 70 s of virtual
-    /// time after its last exchange.
+    /// time after its last exchange. Forwarding off (the shipped default).
     pub fn short(seed: u64) -> Result<Self, LiveError> {
         let timing = CorrelationTiming::new(
             Duration::from_secs(60),
@@ -67,7 +89,16 @@ impl LiveSettings {
             Duration::from_secs(60),
         )
         .map_err(LiveError::Timing)?;
-        Ok(Self { timing, seed })
+        Ok(Self {
+            timing,
+            seed,
+            forwarding: Forwarding::Off,
+        })
+    }
+
+    /// These settings with forwarding on or off.
+    pub fn with_forwarding(self, forwarding: Forwarding) -> Self {
+        Self { forwarding, ..self }
     }
 
     /// These settings with any of the three windows replaced.
