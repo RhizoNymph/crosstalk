@@ -934,16 +934,14 @@ fn an_exported_discarded_row_is_scored_from_its_evidence() {
     assert_eq!(outcome.report.access_only.labels, 1);
 }
 
+/// A request the test API saw: method, path, body.
+type Seen = (String, String, String);
+
 /// A one-shot HTTP/1.1 API over the fixture's files: `POST /exports`
 /// answers the export, `GET /transmissions/{id}/evidence` the evidence line
 /// of that id (or `null`). Returns the base URL and, when it stops, the
 /// requests it saw (method, path, body).
-fn serve(
-    written: &Written,
-) -> (
-    String,
-    std::thread::JoinHandle<Vec<(String, String, String)>>,
-) {
+fn serve(written: &Written) -> (String, std::thread::JoinHandle<Vec<Seen>>) {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let base = format!("http://{}", listener.local_addr().expect("an address"));
