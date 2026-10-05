@@ -5,7 +5,7 @@ use crosstalk_eval::datasets::ai_village::access::{
     Access, HttpMethod, HttpRequest, Op, Shell, Tool,
 };
 use crosstalk_eval::datasets::ai_village::resource::{canonical, from_url};
-use crosstalk_eval::datasets::ai_village::text::need;
+use crosstalk_eval::datasets::ai_village::text::{json_escape, need};
 use crosstalk_eval::datasets::ai_village::time::{Day, parse_timestamp};
 use crosstalk_eval::datasets::ai_village::window::repo::{AccessLog, TurnRef};
 use crosstalk_eval::truth::MatchNeed;
@@ -368,4 +368,25 @@ fn escaped_reads_need_the_json_string_codec() {
     assert_eq!(need(&plain, "meet at nine"), MatchNeed::Exact);
     assert_eq!(need(&plain, "MEET  at nine"), MatchNeed::Normalized);
     assert_eq!(need(&plain, "an unrelated sentence"), MatchNeed::Semantic);
+}
+
+#[test]
+fn escapes_need_one_string_level_and_two_are_out_of_reach() {
+    use crosstalk_eval::truth::Tier;
+    let content = "She wrote \"bring the ledger\" and left early";
+    let once = json_escape(content);
+    let twice = json_escape(&once);
+    let raw = assistant(vec![AssistantPart::Text(Text(content.to_owned()))]);
+    // Delivered escaped once, with its whitespace re-wrapped: one string
+    // level undone and folded.
+    let rewrapped = once.replace(' ', "  ");
+    assert_eq!(need(&raw, &rewrapped), MatchNeed::json_string());
+    // Escaped twice: no spec decoder undoes two levels.
+    let deep = need(&raw, &twice);
+    assert_eq!(deep, MatchNeed::two_string_levels());
+    assert_eq!(deep.tier(Tier::Structural), Tier::OutOfReach);
+    assert_eq!(
+        MatchNeed::json_string().tier(Tier::Structural),
+        Tier::Structural
+    );
 }

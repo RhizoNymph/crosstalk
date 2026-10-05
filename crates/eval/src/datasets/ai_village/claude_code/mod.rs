@@ -311,6 +311,7 @@ impl ClaudeCodeStream {
                 let at_location =
                     location::in_message(result.message.message(), result.part, start, end)?;
                 let needs = need(message.message(), &talk.escaped);
+                let tier = needs.tier(Tier::Construction);
                 *self
                     .stats
                     .labels_by_need
@@ -330,7 +331,7 @@ impl ClaudeCodeStream {
                             at: at_location,
                         },
                         needs,
-                        tier: Tier::Construction,
+                        tier,
                         source: SourceRef::new(
                             Table::ClaudeCodeMessages.file_name(),
                             format!(

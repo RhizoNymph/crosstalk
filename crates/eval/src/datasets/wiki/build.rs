@@ -29,6 +29,7 @@ use crate::corpus::{
 };
 use crate::keys::{AgentKey, DatasetId, SourceRef, WorldKey};
 use crate::location::location;
+use crate::truth::kinds::json_escapes;
 use crate::truth::{
     CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, MatchNeed, RouteExpectation,
     Tier, TransmissionLabel,
@@ -336,11 +337,7 @@ fn channel_labels(
         let sender_exchange = records
             .get(author.rev_id.as_str())
             .map(|record| record.edit.exchange);
-        let needs = if needs_escape(text) {
-            MatchNeed::Normalized
-        } else {
-            MatchNeed::Exact
-        };
+        let needs = MatchNeed::through_json_string(text);
         let label = TransmissionLabel {
             from: AgentKey::new(world.clone(), author.identity()),
             to: AgentKey::new(world.clone(), reader_id.clone()),
@@ -403,7 +400,7 @@ fn relay_labels(
         if src != own
             || line.len() < MIN_BYTES
             || word_chars(line) < MIN_WORD_CHARS
-            || needs_escape(line)
+            || json_escapes(line)
         {
             continue;
         }
@@ -448,12 +445,4 @@ fn word_chars(text: &str) -> usize {
     text.bytes()
         .filter(|b| b.is_ascii_alphanumeric() || *b >= 0x80)
         .count()
-}
-
-/// Whether `text` changes when written as a JSON string: it holds a quote, a
-/// backslash or a control character, so it is not byte-identical inside
-/// canonical tool-call arguments.
-fn needs_escape(text: &str) -> bool {
-    text.chars()
-        .any(|ch| matches!(ch, '"' | '\\' | '\u{0}'..='\u{1f}'))
 }

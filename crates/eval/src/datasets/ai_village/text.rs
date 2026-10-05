@@ -4,7 +4,7 @@ use crosstalk_spec::observed::message::{Message, MessageBody};
 
 use crosstalk_spec::derived::provenance::matching::Codec;
 
-use crate::reference::fold::fold;
+use crate::reference::fold::{fold, fold_plain, unescape_once};
 use crate::truth::MatchNeed;
 
 /// `text` as the contents of a JSON string (no quotes), escaped the way
@@ -23,8 +23,7 @@ pub fn json_unescape(inner: &str) -> Option<String> {
 
 /// Whether escaping changes `text`.
 pub fn escapes(text: &str) -> bool {
-    text.chars()
-        .any(|ch| matches!(ch, '"' | '\\' | '\u{0}'..='\u{1f}'))
+    crate::truth::kinds::json_escapes(text)
 }
 
 /// The byte range of `needle` in `haystack`: the last occurrence starting
@@ -51,11 +50,23 @@ pub fn part_texts(message: &Message) -> Vec<String> {
 }
 
 /// The weakest match a detector needs to tie `read` (the reader's bytes) to
-/// the sender's `response`: `Exact` when the bytes occur verbatim in one of
-/// its parts; `Decoded([JsonString])` when `read` is the inside of a JSON
-/// string whose value (one level of unescaping, the spec's
-/// `Codec::JsonString`) occurs verbatim; `Normalized` when they do after
-/// folding (escapes, case, whitespace); else `Semantic`.
+/// the sender's `response`:
+///
+/// - `Exact` when the bytes occur verbatim in one of its parts;
+/// - `Decoded([JsonString])` when `read` is the inside of a JSON string
+///   whose value (one level of unescaping, the spec's `Codec::JsonString`)
+///   occurs verbatim;
+/// - `Normalized` when they occur after case and whitespace folding alone;
+/// - `Decoded([JsonString])` when they do once one string level is undone
+///   on either side, then folded;
+/// - out of reach ([`MatchNeed::two_string_levels`]) when undoing exactly
+///   two string levels on one side makes them equal: a decoded chain holds
+///   at most one string codec (`provenance.decode.one-string-level`);
+/// - `Decoded([JsonString])` when only the matching fold (escapes undone
+///   at any depth) makes them equal, with no one- or two-level reading;
+/// - else `Semantic`.
+///
+/// The label's tier follows from it ([`MatchNeed::tier`]).
 pub fn need(response: &Message, read: &str) -> MatchNeed {
     let texts = part_texts(response);
     if texts.iter().any(|text| text.contains(read)) {
@@ -70,13 +81,50 @@ pub fn need(response: &Message, read: &str) -> MatchNeed {
             codecs: vec![Codec::JsonString],
         };
     }
+    let plain = fold_plain(read);
+    let plain = plain.trim_end();
+    if plain.is_empty() {
+        return MatchNeed::Semantic;
+    }
+    let plains: Vec<String> = texts.iter().map(|text| fold_plain(text)).collect();
+    if plains.iter().any(|text| text.contains(plain)) {
+        return MatchNeed::Normalized;
+    }
+    let read_once = fold_plain(&unescape_once(read));
+    let read_once = read_once.trim_end();
+    let unescaped: Vec<String> = texts
+        .iter()
+        .map(|text| fold_plain(&unescape_once(text)))
+        .collect();
+    let one_level = |needle: &str| {
+        !needle.is_empty()
+            && plains
+                .iter()
+                .chain(&unescaped)
+                .any(|text| text.contains(needle))
+    };
+    if one_level(read_once) || unescaped.iter().any(|text| text.contains(plain)) {
+        return MatchNeed::json_string();
+    }
+    let read_twice = fold_plain(&unescape_once(&unescape_once(read)));
+    let read_twice = read_twice.trim_end();
+    let two_levels = (!read_twice.is_empty()
+        && plains.iter().any(|text| text.contains(read_twice)))
+        || texts
+            .iter()
+            .any(|text| fold_plain(&unescape_once(&unescape_once(text))).contains(plain));
+    if two_levels {
+        return MatchNeed::two_string_levels();
+    }
+    // Equal under the matching fold only, with no one- or two-level
+    // reading of the whole text: classed as one string level.
     let folded = fold(read, 0).text;
     if !folded.trim().is_empty()
         && texts
             .iter()
             .any(|text| fold(text, 0).text.contains(&folded))
     {
-        return MatchNeed::Normalized;
+        return MatchNeed::json_string();
     }
     MatchNeed::Semantic
 }
