@@ -363,7 +363,7 @@ fn agents_carry_the_scenario_marker() {
     for scenario in Scenario::ALL {
         let mut config = SwarmConfig::new(wiki(), wiki());
         config.scenario = scenario;
-        let agent = Agent::new(&config, 3);
+        let agent = Agent::new(&config, "01J0000000000000000000000A", 3);
         assert!(
             agent.profile.system.ends_with(&scenario.marker()),
             "{}",

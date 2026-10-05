@@ -259,6 +259,7 @@ fn shared_for(wiki_addr: SocketAddr) -> Shared {
         gateway: wiki.client(wiki_addr, Duration::from_secs(5)),
         wiki: wiki.client(wiki_addr, Duration::from_secs(5)),
         config,
+        run: "01J0000000000000000000000A".to_owned(),
         clock: RunClock::start(&crosstalk_spec::support::SystemClock),
     }
 }
@@ -268,7 +269,7 @@ async fn the_agent_runs_http_requests_against_the_wiki() {
     let server = wiki().await;
     let shared = shared_for(server.addr);
     let wiki = shared.config.wiki.clone();
-    let agent = Agent::new(&shared.config, 3);
+    let agent = Agent::new(&shared.config, &shared.run, 3);
     let (events, mut inbox) = mpsc::channel(64);
     let page = slug("release-plan-8");
     let url = page_url(&wiki, &page);

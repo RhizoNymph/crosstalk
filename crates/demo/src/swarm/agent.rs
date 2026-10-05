@@ -48,6 +48,8 @@ pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.282 (external, cli)";
 #[derive(Debug)]
 pub struct Shared {
     pub config: SwarmConfig,
+    /// The run id (a ULID), which salts agent identities.
+    pub run: String,
     pub gateway: HarnessClient,
     pub wiki: HarnessClient,
     pub clock: RunClock,
@@ -69,14 +71,18 @@ pub fn agent_name(index: u32) -> String {
     format!("agent-{index:03}")
 }
 
-/// The `x-api-key` agents in `group` share: fake, stable per seed.
-pub fn api_key(seed: u64, group: u32) -> String {
-    let hex = Rng::derive(seed, &[b"api-key", &group.to_le_bytes()]).hex(40);
+/// The `x-api-key` agents in `group` share in run `run`: fake, and unique
+/// per run, so a long-lived gateway never sees one run's credentials again
+/// in the next (reproducible from the seed and the run id).
+pub fn api_key(seed: u64, run: &str, group: u32) -> String {
+    let hex = Rng::derive(seed, &[b"api-key", run.as_bytes(), &group.to_le_bytes()]).hex(40);
     format!("sk-ant-demo{group:04}-{hex}")
 }
 
 impl Agent {
-    pub fn new(config: &SwarmConfig, index: u32) -> Self {
+    /// Agent `index` of run `run`: its identity (key, sessions) is unique to
+    /// the run; its behaviour depends on the seed alone.
+    pub fn new(config: &SwarmConfig, run: &str, index: u32) -> Self {
         let name = agent_name(index);
         let group = index / config.agents_per_key;
         let focus = Topic::of(index % config.topics);
@@ -99,7 +105,7 @@ impl Agent {
             },
             name,
             key_group: group,
-            key: api_key(config.seed, group),
+            key: api_key(config.seed, run, group),
         }
     }
 }
@@ -162,9 +168,20 @@ pub async fn run(
 ) {
     let config = &shared.config;
     let mut rng = Rng::derive(config.seed, &[b"agent", &agent.index.to_le_bytes()]);
+    // Session ids come from their own stream, salted with the run id: unique
+    // per run (so runs against one gateway never share a conversation),
+    // without disturbing the seed-only behaviour stream above.
+    let mut ids = Rng::derive(
+        config.seed,
+        &[
+            b"session",
+            shared.run.as_bytes(),
+            &agent.index.to_le_bytes(),
+        ],
+    );
     tracing::debug!(agent = %agent.name, "agent starting");
     while !*stop.borrow() {
-        let mut conversation = Conversation::new(session_id(&mut rng), config.claude_code_shape);
+        let mut conversation = Conversation::new(session_id(&mut ids), config.claude_code_shape);
         let _ = events
             .send(Event::ConversationStarted {
                 agent: agent.name.clone(),
