@@ -141,7 +141,13 @@ pub struct WindowStream {
 impl WindowStream {
     /// Makes the passes over `root` for village days `first..=last`.
     pub fn open(root: &Path, first: Day, last: Day) -> Result<Self, AiVillageError> {
-        let window = Window::days(first, last)?;
+        Self::open_window(root, Window::days(first, last)?)
+    }
+
+    /// Makes the passes over `root` for the turns, events, chat and
+    /// memories inside `window` (whole village days, or the first hours of
+    /// one).
+    pub fn open_window(root: &Path, window: Window) -> Result<Self, AiVillageError> {
         let started = std::time::Instant::now();
         let directory = load_directory(root)?;
         let sessions = load_sessions(root)?;

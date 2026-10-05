@@ -224,6 +224,10 @@ struct SourceArgs {
     /// AI Village window: the last village day, included.
     #[arg(long, default_value = ai_village::DEFAULT_TO)]
     to: String,
+    /// AI Village window: keep only the first this many hours (1 to 24)
+    /// of the village day, from 10:00 UTC; needs `--from` equal to `--to`.
+    #[arg(long)]
+    hours: Option<u32>,
     /// Wiki: keep only pages in these task clusters, e.g. relay-coordination
     /// (repeatable).
     #[arg(long)]
@@ -457,10 +461,16 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
         Dataset::AiVillage => {
             let mode = match args.mode {
                 VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
-                VillageMode::Window => ai_village::Mode::Window {
-                    from: Day::parse(&args.from)?,
-                    to: Day::parse(&args.to)?,
-                },
+                VillageMode::Window => {
+                    let (from, to) = (Day::parse(&args.from)?, Day::parse(&args.to)?);
+                    match args.hours {
+                        None => ai_village::Mode::Window { from, to },
+                        Some(hours) if from == to => {
+                            ai_village::Mode::DaySlice { day: from, hours }
+                        }
+                        Some(_) => anyhow::bail!("--hours needs --from equal to --to"),
+                    }
+                }
             };
             AiVillageSource::open(&root, mode)
                 .map(|source| AnySource::AiVillage(Box::new(source)))

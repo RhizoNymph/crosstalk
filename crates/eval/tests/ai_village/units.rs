@@ -71,6 +71,12 @@ fn village_days_run_from_ten_utc() {
     assert!(window.contains(ts("2026-07-18 09:59:59")));
     assert!(!window.contains(ts("2026-07-18 10:00:00")));
     assert!(Window::days(day("2026-07-17"), day("2026-07-13")).is_err());
+    let slice = Window::first_hours(day("2026-07-13"), 8).unwrap_or_else(|e| panic!("{e}"));
+    assert!(slice.contains(ts("2026-07-13 17:59:59")));
+    assert!(!slice.contains(ts("2026-07-13 18:00:00")));
+    assert!(!slice.contains(ts("2026-07-13 09:59:59")));
+    assert!(Window::first_hours(day("2026-07-13"), 0).is_err());
+    assert!(Window::first_hours(day("2026-07-13"), 25).is_err());
     assert!(Day::parse("2026-7").is_err());
 }
 
