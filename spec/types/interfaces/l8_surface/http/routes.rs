@@ -61,6 +61,7 @@ pub enum Route {
     DetectionQuality,
     Audit,
     Operators,
+    Me,
     Export,
     Present,
     /// `OperatorActions::act`: every kind is `POST /actions`, told apart by
@@ -72,7 +73,7 @@ pub enum Route {
 
 /// The number of routes before the actions: every one but the actions and
 /// the live feed.
-const BEFORE_ACTIONS: usize = 40;
+const BEFORE_ACTIONS: usize = 41;
 
 impl Route {
     /// Every route, in [`Route::index`] order: the non-action routes in
@@ -118,6 +119,7 @@ impl Route {
             Self::DetectionQuality,
             Self::Audit,
             Self::Operators,
+            Self::Me,
             Self::Export,
             Self::Present,
         ];
@@ -168,8 +170,9 @@ impl Route {
             Self::DetectionQuality => 35,
             Self::Audit => 36,
             Self::Operators => 37,
-            Self::Export => 38,
-            Self::Present => 39,
+            Self::Me => 38,
+            Self::Export => 39,
+            Self::Present => 40,
             Self::Action(kind) => BEFORE_ACTIONS + kind.index(),
             Self::Live => BEFORE_ACTIONS + ActionKind::ALL.len(),
         }
@@ -551,6 +554,16 @@ impl Route {
             ),
             Self::Operators => (Method::Get, "/operators", &[], JSON_OK, View, "operators"),
             Self::Present => (Method::Get, "/present", &[], JSON_OK, View, "present"),
+            Self::Me => {
+                return RouteSpec {
+                    method: Method::Get,
+                    path: "/me",
+                    args: &[],
+                    success: JSON_OK,
+                    permission: RoutePermission::AnyCaller,
+                    source: Source::Query("me"),
+                };
+            }
             Self::Export => {
                 return RouteSpec {
                     method: Method::Post,

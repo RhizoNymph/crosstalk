@@ -2,11 +2,15 @@
 //! itself runs offline on files:
 //!
 //! 1. `POST {api}/exports` with an `ExportRequest` for the transmissions
-//!    dataset (JSONL, no content columns) over the window asked for; the
-//!    body is saved as it came (`export.jsonl`) and must verify.
+//!    dataset (JSONL, no content columns) over the window asked for, in
+//!    [`FETCHED_STATES`]: the confirmed ones and the discarded ones, so
+//!    access-only scoring has live input (a settled export never holds a
+//!    suspected or awaiting-content transmission; unconfirmed traffic is
+//!    `discarded` by then). The body is saved as it came (`export.jsonl`)
+//!    and must verify.
 //! 2. `GET {api}/transmissions/{id}/evidence?window={"context":0}` for each
-//!    exported transmission; each non-null answer is one line of
-//!    `evidence.jsonl`.
+//!    exported transmission, discarded ones included; each non-null answer
+//!    is one line of `evidence.jsonl`.
 //!
 //! Plain HTTP/1.1 only (the API on the compose network). A bearer token,
 //! when given, goes in `Authorization`.
@@ -20,8 +24,9 @@ use crosstalk_spec::aggregates::filter::TopologyFilter;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::request::{
-    ExportDataset, ExportFormat, ExportRequest, ExportScope,
+    ExportDataset, ExportFormat, ExportRequest, ExportScope, ExportStates, TransmissionScope,
 };
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 use crosstalk_spec::support::TimeWindow;
 use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request, StatusCode};
@@ -87,6 +92,36 @@ pub enum FetchError {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// The transmission states the export is asked for: every confirmed state
+/// and `Discarded`. A settled export holds no `Suspected` or
+/// `AwaitingContent` row, so asking for them would add nothing.
+pub const FETCHED_STATES: [TransmissionStateKind; 4] = [
+    TransmissionStateKind::Confirmed,
+    TransmissionStateKind::Classified,
+    TransmissionStateKind::Aggregated,
+    TransmissionStateKind::Discarded,
+];
+
+/// The export request the fetch makes: the transmissions in
+/// [`FETCHED_STATES`] over `window`, JSONL, without content.
+pub fn export_request(window: TimeWindow) -> Result<ExportRequest, FetchError> {
+    let states = ExportStates::new(FETCHED_STATES.to_vec())
+        .map_err(|error| FetchError::Request(format!("{error:?}")))?;
+    let scope = TransmissionScope {
+        states,
+        ..TransmissionScope::confirmed(ExportScope {
+            window,
+            filter: TopologyFilter::default(),
+        })
+    };
+    ExportRequest::new(
+        ExportDataset::Transmissions(scope),
+        ExportFormat::Jsonl,
+        false,
+    )
+    .map_err(|error| FetchError::Request(format!("{error:?}")))
 }
 
 /// How much of an error body a message quotes.
@@ -195,18 +230,7 @@ async fn fetch_async(config: &FetchConfig, out: &Path) -> Result<Fetched, FetchE
         base: config.api.clone(),
         token: config.token.clone(),
     };
-    let request = ExportRequest::new(
-        ExportDataset::Transmissions(
-            ExportScope {
-                window: config.window,
-                filter: TopologyFilter::default(),
-            }
-            .into(),
-        ),
-        ExportFormat::Jsonl,
-        false,
-    )
-    .map_err(|error| FetchError::Request(format!("{error:?}")))?;
+    let request = export_request(config.window)?;
     let body = serde_json::to_vec(&request).map_err(FetchError::Encode)?;
     let export = api.call(Method::POST, "/exports", Some(body)).await?;
     let export_path = out.join("export.jsonl");
@@ -259,7 +283,23 @@ async fn fetch_async(config: &FetchConfig, out: &Path) -> Result<Fetched, FetchE
 
 #[cfg(test)]
 mod tests {
-    use super::percent;
+    use super::{export_request, percent};
+    use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+    #[test]
+    fn the_export_asks_for_confirmed_and_discarded_transmissions() {
+        let window = TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(1))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let request = export_request(window).unwrap_or_else(|e| panic!("{e}"));
+        let json = serde_json::to_value(&request).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(json["dataset"]["type"], "transmissions");
+        assert_eq!(
+            json["dataset"]["data"]["states"],
+            serde_json::json!(["confirmed", "classified", "aggregated", "discarded"])
+        );
+        assert_eq!(json["format"], "jsonl");
+        assert_eq!(json["include_content"], false);
+    }
 
     #[test]
     fn query_values_are_percent_encoded() {

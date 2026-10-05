@@ -43,7 +43,7 @@ use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, OperatorActions, Permission,
-    QueryApi, SinkInfo,
+    QueryApi, QueryError, SinkInfo,
 };
 use crosstalk_spec::support::TimeWindow;
 
@@ -475,6 +475,20 @@ impl QueryApi for FixtureBackend {
     async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>> {
         require(caller, Permission::View)?;
         Ok(self.world.directory.operators().cloned().collect())
+    }
+
+    /// The caller's own operator from the directory, with the caller's
+    /// permissions; no permission needed.
+    async fn me(&self, caller: &Caller) -> Result<Operator> {
+        let listed = self
+            .world
+            .directory
+            .get(caller.operator())
+            .ok_or(QueryError::NotFound)?;
+        Ok(Operator {
+            permissions: caller.permissions(),
+            ..listed.clone()
+        })
     }
 
     async fn dead_letters(

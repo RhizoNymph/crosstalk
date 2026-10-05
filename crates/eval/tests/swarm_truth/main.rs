@@ -900,3 +900,155 @@ fn a_suspected_transmission_predicts_from_its_evidence_accesses() {
         assert!(text.contains("access-only recall"), "{text}");
     }
 }
+
+// ---- the all-states export swarm-fetch asks for ----
+
+#[test]
+fn an_exported_discarded_row_is_scored_from_its_evidence() {
+    let dir = fixture::dir("all-states");
+    let written = fixture::write(&dir, &fixture::truth_rows());
+    let discarded = fixture::export_discarded(&written);
+    let bytes = std::fs::read(&written.export).expect("the export");
+    let exported = read_export(&bytes).expect("a complete export");
+    assert_eq!(exported.transmissions.len(), 4);
+    assert!(exported.transmissions.contains(&discarded.id));
+    let outcome = run(&inputs(&written), 50, &Gates::default()).expect("the run scores");
+    assert!(
+        !outcome
+            .diagnostics
+            .entries
+            .iter()
+            .any(|d| matches!(d.failure, JoinFailure::MissingEvidence { .. })),
+        "{:?}",
+        outcome.diagnostics
+    );
+    let made: Vec<_> = outcome
+        .predictions
+        .iter()
+        .filter(|p| p.class == EvidenceClass::Discarded)
+        .collect();
+    assert_eq!(made.len(), 1, "one prediction, not one per source");
+    assert_eq!(made[0].transmission, discarded.id);
+    assert_eq!(made[0].to, key("a003"));
+    assert_eq!(outcome.detected.exported, 4);
+    assert_eq!(outcome.report.access_only.labels, 1);
+}
+
+/// A request the test API saw: method, path, body.
+type Seen = (String, String, String);
+
+/// A one-shot HTTP/1.1 API over the fixture's files: `POST /exports`
+/// answers the export, `GET /transmissions/{id}/evidence` the evidence line
+/// of that id (or `null`). Returns the base URL and, when it stops, the
+/// requests it saw (method, path, body).
+fn serve(written: &Written) -> (String, std::thread::JoinHandle<Vec<Seen>>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let base = format!("http://{}", listener.local_addr().expect("an address"));
+    let export = std::fs::read(&written.export).expect("the export");
+    let evidence: Vec<(String, String)> = std::fs::read_to_string(&written.evidence)
+        .expect("the evidence")
+        .lines()
+        .map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).expect("evidence json");
+            let id = value["transmission"]["id"]
+                .as_str()
+                .expect("a transmission id")
+                .to_owned();
+            (id, line.to_owned())
+        })
+        .collect();
+    let rows = read_export(&export)
+        .expect("the export")
+        .transmissions
+        .len();
+    let handle = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        for stream in listener.incoming().take(rows + 1) {
+            let mut stream = stream.expect("a connection");
+            let mut reader = BufReader::new(stream.try_clone().expect("a clone"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("a request line");
+            let mut parts = line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_owned();
+            let path = parts.next().unwrap_or_default().to_owned();
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).expect("a header");
+                if header.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().expect("a length");
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).expect("the body");
+            let answer: Vec<u8> = if method == "POST" {
+                export.clone()
+            } else {
+                let id = path
+                    .trim_start_matches("/transmissions/")
+                    .split('/')
+                    .next()
+                    .unwrap_or_default();
+                evidence
+                    .iter()
+                    .find(|(known, _)| known == id)
+                    .map_or_else(|| b"null".to_vec(), |(_, line)| line.clone().into_bytes())
+            };
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                answer.len()
+            )
+            .expect("a status line");
+            stream.write_all(&answer).expect("a body");
+            seen.push((method, path, String::from_utf8_lossy(&body).into_owned()));
+        }
+        seen
+    });
+    (base, handle)
+}
+
+#[test]
+fn swarm_fetch_asks_for_discarded_transmissions_and_their_evidence() {
+    use crosstalk_eval::datasets::swarm_truth::fetch::{FetchConfig, fetch};
+    use crosstalk_spec::support::{TimeWindow, Timestamp};
+    let dir = fixture::dir("fetch");
+    let written = fixture::write(&dir, &fixture::truth_rows());
+    let discarded = fixture::export_discarded(&written);
+    let (api, server) = serve(&written);
+    let out = dir.join("fetched");
+    std::fs::create_dir_all(&out).expect("the output directory");
+    let window =
+        TimeWindow::new(Timestamp::from_micros(0), Timestamp::from_micros(1)).expect("a window");
+    let fetched = fetch(
+        &FetchConfig {
+            api,
+            token: None,
+            window,
+        },
+        &out,
+    )
+    .expect("the fetch");
+    let seen = server.join().expect("the server");
+    assert_eq!(fetched.transmissions, 4);
+    assert_eq!(fetched.without_evidence, 0);
+    let (method, path, body) = &seen[0];
+    assert_eq!((method.as_str(), path.as_str()), ("POST", "/exports"));
+    let request: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+    assert_eq!(
+        request["dataset"]["data"]["states"],
+        json!(["confirmed", "classified", "aggregated", "discarded"])
+    );
+    let asked = format!("/transmissions/{}/evidence", discarded.id.ulid_text());
+    assert!(
+        seen.iter().any(|(_, path, _)| path.starts_with(&asked)),
+        "{seen:?}"
+    );
+    let saved = std::fs::read_to_string(&fetched.evidence).expect("the evidence");
+    assert_eq!(saved.lines().count(), 4);
+    assert!(saved.contains("\"discarded\""), "{saved}");
+}

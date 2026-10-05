@@ -1,5 +1,5 @@
 //! The operator directory and permissions on the wire: `QueryApi::operators`
-//! returns `Operator`s, whose `PermissionSet` is an array of permission
+//! returns `Operator`s and `QueryApi::me` the caller's own one, whose `PermissionSet` is an array of permission
 //! strings in `Permission::ALL` order, and whose `OperatorName` is checked
 //! text.
 
@@ -37,6 +37,18 @@ fn operators_golden() {
     }
     let modes = [AccessMode::Trusted, AccessMode::Authenticated].map(mode);
     assert_golden(AREA, "access_modes", &modes.to_vec());
+}
+
+/// `QueryApi::me` (`GET /me`): the caller's own operator, with the
+/// permissions it was authenticated with.
+#[test]
+fn me_golden() {
+    let me = Operator {
+        id: operator(),
+        name: operator_name(),
+        permissions: PermissionSet::of([Permission::View, Permission::Triage]),
+    };
+    assert_golden(AREA, "me", &me);
 }
 
 #[test]

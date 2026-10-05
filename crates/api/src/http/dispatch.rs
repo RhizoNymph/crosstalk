@@ -204,6 +204,7 @@ pub(super) async fn query<S: Surface>(
             &s.audit(c, &i.query("filter")?, &i.query("page")?).await?,
         ),
         Route::Operators => ok(route, &s.operators(c).await?),
+        Route::Me => ok(route, &s.me(c).await?),
         Route::Export => export::serve(s, caller, input).await,
         Route::Present => ok(route, &s.present(c).await?),
         Route::Live => live::serve(s, caller, input).await,

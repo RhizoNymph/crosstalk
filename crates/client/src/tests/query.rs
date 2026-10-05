@@ -272,6 +272,7 @@ async fn every_call(client: &HttpClient, with_none: bool) -> Vec<(Route, Result<
             none(client.audit(c, &AuditFilter::default(), &page()).await),
         ),
         (Route::Operators, none(client.operators(c).await)),
+        (Route::Me, none(client.me(c).await)),
         (
             Route::Export,
             none(client.export(c, &export).await.map(|_| ())),

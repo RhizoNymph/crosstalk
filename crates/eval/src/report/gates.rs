@@ -13,7 +13,8 @@
 //! min = 0.9
 //! ```
 //!
-//! `recall` and `precision` take a `min`; `violations` (negative controls a
+//! A gate checks one detector's runs (`detector = "live"`; unset means the
+//! reference matcher). `recall` and `precision` take a `min`; `violations` (negative controls a
 //! prediction fell under, optionally of one `reason`) takes a `max`. A gate
 //! whose rows hold no data is skipped, not failed, so a small `--limit` run
 //! is not failed by rows it never reached. Thresholds are regression gates
@@ -44,9 +45,27 @@ pub enum Check {
     },
 }
 
+/// The detector a gate is tuned on. A gate checks only runs of its own
+/// detector: the reference matcher and the gateway's live composition
+/// have different baselines.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateDetector {
+    /// The reference matcher (a gate that names no detector).
+    #[default]
+    Reference,
+    /// The gateway pipeline alone (`--detector pipeline`; unscored).
+    Pipeline,
+    /// The gateway's live composition (`--detector live`).
+    Live,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Gate {
     pub name: String,
+    /// Which detector's runs it checks (default: the reference matcher).
+    #[serde(default)]
+    pub detector: GateDetector,
     #[serde(default)]
     pub dataset: Option<DatasetId>,
     #[serde(default)]
@@ -205,6 +224,18 @@ impl Gates {
             source,
         })?;
         Self::parse(&text, &shown)
+    }
+
+    /// The gates tuned on `detector`; the others do not apply to its runs.
+    pub fn for_detector(&self, detector: GateDetector) -> Self {
+        Self {
+            gates: self
+                .gates
+                .iter()
+                .filter(|gate| gate.detector == detector)
+                .cloned()
+                .collect(),
+        }
     }
 
     pub fn evaluate(&self, score: &Score) -> Vec<GateOutcome> {

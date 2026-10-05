@@ -222,6 +222,7 @@ impl QueryApi for AppBackend {
         fn audit(&self, caller: &Caller, filter: &AuditFilter, page: &PageRequest<AuditList>)
             -> Page<AuditEntry, AuditList>;
         fn operators(&self, caller: &Caller) -> Vec<Operator>;
+        fn me(&self, caller: &Caller) -> Operator;
     }
 
     async fn export(

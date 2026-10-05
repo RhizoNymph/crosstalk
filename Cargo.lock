@@ -657,6 +657,7 @@ dependencies = [
  "crosstalk-flow",
  "crosstalk-gateway",
  "crosstalk-memory",
+ "crosstalk-provenance",
  "crosstalk-sim",
  "crosstalk-spec",
  "crosstalk-testkit",

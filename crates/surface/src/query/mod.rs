@@ -12,7 +12,7 @@
 //! | [`content`] | `search`, `transmission`, `transmissions_by_id` |
 //! | [`evidence`] | `transmission_evidence` |
 //! | [`projections`] | `fit_projection`, `projection_status`, `projections`, `projection` |
-//! | [`admin`] | `verdicts`, `detection_quality`, `audit`, `operators` |
+//! | [`admin`] | `verdicts`, `detection_quality`, `audit`, `operators`, `me` |
 //! | `crate::export` | `export` |
 
 mod admin;
@@ -410,6 +410,10 @@ impl<S: SurfaceStores> QueryApi for Surface<S> {
 
     async fn operators(&self, caller: &Caller) -> Result<Vec<Operator>, QueryError> {
         self.operators_query(caller).await
+    }
+
+    async fn me(&self, caller: &Caller) -> Result<Operator, QueryError> {
+        self.me_query(caller).await
     }
 
     async fn export(

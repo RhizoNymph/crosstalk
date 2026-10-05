@@ -157,7 +157,8 @@ Overview:
       retention); typed query and action errors, with one From impl per
       store error behind every query and every action; the operator
       directory with a
-      trusted single-user mode; operator actions with one permission each;
+      trusted single-user mode, and `me`, the caller's own operator, which
+      any caller may read; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
       and trailer manifest; alert sinks; and the HTTP binding of all of it:
@@ -292,8 +293,9 @@ Overview:
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
     completed, reading only data settled before the watermark; a
-    transmissions export's rows are the surface's transmission rows and
-    its quoted text the evidence page's. Every aggregate comes back with
+    transmissions export's rows are the surface's transmission rows (their
+    topics read from the catalog's assignments under the export's version,
+    as rows by id read them) and its quoted text the evidence page's. Every aggregate comes back with
     the watermark read before it; every linked view applies one
     TopologyFilter under one resolved (or pinned) topic-model version,
     with merged agents and superseded channels resolved at read time (a
@@ -513,7 +515,8 @@ Features Index:
       anything is read. Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
       reproduces it; transmission rows are the surface's transmission
-      summaries and their quoted text the evidence page's; content needs
+      summaries (topics as rows by id read them under the export's version)
+      and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
       is audited. In JSONL each line is a tagged header, row or trailer
       (ExportLine, read_jsonl), so any truncation reads as a missing
@@ -1441,11 +1444,13 @@ Features Index:
       the corpus clock or a sim clock, reported as unscored), and
       LiveDetector over the LiveBackend seam (a fresh composition per
       world: ingest, settle, list transmissions, read spans, accesses,
-      channel resources and L3 attribution), whose real Live adapter is a
-      stub until Live merges; reports (overall, out of reach, access-only
-      recall, background) and regression gates, found through --gates,
-      CT_EVAL_GATES, the bench image's installed file or the crate's own,
-      else none. Every converter labels escaped text with the spec's
+      channel resources and L3 attribution), whose adapter
+      (detect::live::gateway) drives the merged crosstalk_gateway::live::Live
+      (ct-eval run --detector live, with overridable correlation windows and
+      a --predictions JSONL dump); reports (overall, out of reach,
+      access-only recall, background) and regression gates per detector
+      (reference or live), found through --gates, CT_EVAL_GATES, the bench
+      image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
       string codecs, never Normalized.
     entry_points:
       - crates/eval/src/lib.rs
@@ -1461,6 +1466,7 @@ Features Index:
       - crates/eval/src/datasets/swarm_truth/mod.rs
       - crates/eval/src/predict/reads.rs
       - crates/eval/src/detect/live/mod.rs
+      - crates/eval/src/detect/live/gateway.rs
       - crates/eval/src/reference/classify.rs
       - crates/eval/src/report/gates.rs
     depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
