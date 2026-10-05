@@ -251,11 +251,39 @@ async fn short_secret_from_a_prompted_writer_matches_the_first_writer() {
 
 /// The tradeoff of inherited fragments, stated as a test: a writer that
 /// re-punctuates a secret it was given (the same tokens, in the same order,
-/// in its own tool result) into a short message is not matched where the
-/// message is read. Like a forwarded span with forwarding off, the fragment
+/// in its own tool result) inside a longer message is not matched where
+/// only the secret is read. Like a forwarded span with forwarding off, the fragment
 /// carries nothing the writer added.
 #[tokio::test]
 async fn a_short_repunctuated_copy_of_a_given_secret_is_not_matched() {
+    let mut world = World::new(real());
+    let writer = world.agent();
+    world
+        .run(
+            Turn::new(writer, at(1))
+                .input(tool_result(
+                    "call_1",
+                    "vault> rendezvous-key=7f3a; node=12; at=03:00",
+                ))
+                .output(assistant_text(
+                    "rendezvous key 7f3a, node 12, at 03:00. Passing this on as asked; nothing \
+                     else to report from the vault today.",
+                )),
+        )
+        .await;
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(10)).input(user_text("rendezvous key 7f3a, node 12, at 03:00")))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(matches.is_empty(), "{}", brief_matches(&matches));
+}
+
+/// SALT's forwarding shape: a writer whose whole message re-punctuates
+/// what it was given is still matched where the whole message is
+/// delivered: a read covering at least half the span is a delivery.
+#[tokio::test]
+async fn a_delivered_whole_message_copied_from_the_writers_input_matches() {
     let mut world = World::new(real());
     let writer = world.agent();
     world
@@ -273,7 +301,13 @@ async fn a_short_repunctuated_copy_of_a_given_secret_is_not_matched() {
         .run(Turn::new(reader, at(10)).input(user_text("rendezvous key 7f3a, node 12, at 03:00")))
         .await;
     let matches = world.matches_of(read.exchange);
-    assert!(matches.is_empty(), "{}", brief_matches(&matches));
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin_agent() == writer),
+        "{}",
+        brief_matches(&matches)
+    );
 }
 
 /// SALT's shape: a short reply composed from words the writer saw spread

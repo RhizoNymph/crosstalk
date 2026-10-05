@@ -20,6 +20,12 @@ read. The bound grows with every copy and every matched read, so a
 broadcast copied by many agents, or copied after many visible reads, keeps
 matching its first writer.
 
+Replaying the run, the rule removes 23 of the 39 ReaderOutput false
+matches the skeleton build makes; the 16 left are generated sentences
+whose topic terms are seen in only a few texts of a 253-exchange world,
+so rarity cannot tell them from copies (a length floor near 100
+characters would).
+
 The tradeoff, flagged for decision: an unobserved copy of 64 characters or
 more made only of words common in the world (each seen in more than
 2 x (originations + copies + reads) + 1 texts) yields no match; with no

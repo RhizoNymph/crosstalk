@@ -210,8 +210,9 @@ impl Default for ReaderOutputRules {
     }
 }
 
-/// Whether a short match all of whose tokens the origin agent was given is
-/// dropped (`provenance.match.inherited-fragment-dropped`).
+/// Whether a short match whose runs repeat, token for token, parts the
+/// origin agent was given is dropped
+/// (`provenance.match.inherited-fragment-dropped`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InheritedFragments {
     /// Dropped: the origin agent added nothing of its own to the fragment,
@@ -241,8 +242,8 @@ pub enum InheritedFragments {
 /// `distinctive_chars` or more is kept whatever the spread. Each scanned
 /// text observes at most `tokens_per_text` distinct tokens. With
 /// `inherited` [`InheritedFragments::Dropped`] (the default), a match of
-/// short runs whose every whole token its origin agent was given in its own
-/// request is dropped too, whatever the spread
+/// short runs each of which repeats, token for token, one part its origin
+/// agent was given in its own request is dropped too, whatever the spread
 /// (`provenance.match.inherited-fragment-dropped`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
@@ -281,8 +282,8 @@ impl SpreadRule {
         self
     }
 
-    /// Whether a short match made only of tokens its origin agent was given
-    /// is dropped (`provenance.match.inherited-fragment-dropped`).
+    /// Whether a short match whose runs repeat parts its origin agent was
+    /// given is dropped (`provenance.match.inherited-fragment-dropped`).
     pub fn inherited(&self) -> InheritedFragments {
         self.inherited
     }

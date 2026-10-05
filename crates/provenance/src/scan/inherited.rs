@@ -10,6 +10,11 @@
 //! wiki page `queue-backpressure-39` ..." shares a k-gram with every
 //! reader's prompt.
 //!
+//! Only a partial overlap is judged: the match must cover less than half
+//! of the origin span, so a read of the whole message (a delivery, even
+//! one split into short runs by escapes) is never dropped, however much of
+//! it the writer pasted from its own input.
+//!
 //! The run's whole tokens (`fingerprint::token`) must appear consecutively
 //! in one given part, so text the agent composed from words scattered over
 //! its history (a reply in a conversation) is never inherited; and a run
@@ -142,7 +147,8 @@ impl Scanner {
     /// is an inherited fragment: inherited fragments are dropped
     /// (`SpreadRule::inherited`), none of its merged runs reaches
     /// `SpreadRule::distinctive_chars`, the span is originated (a forwarded
-    /// span holds its input's text by definition), and the whole tokens of
+    /// span holds its input's text by definition), the runs cover less than
+    /// half of the span's bytes, and the whole tokens of
     /// every run occur consecutively in one part the span's agent was given
     /// in its own exchange's request ([`Given::holds`]).
     pub(crate) async fn inherited_fragment<I, S, M, L>(
@@ -168,8 +174,14 @@ impl Scanner {
         if record.span.state.origin() != Some(Origin::Originated) {
             return Ok(false);
         }
+        let merged = merge(extents.to_vec());
+        let covered = u64::from(super::hits::covered(&merged));
+        let length = u64::from(record.span.location.range.len().get());
+        if covered.saturating_mul(2) >= length {
+            return Ok(false);
+        }
         let exchange = record.span.exchange;
-        let runs: Vec<Vec<Fingerprint>> = merge(extents.to_vec())
+        let runs: Vec<Vec<Fingerprint>> = merged
             .into_iter()
             .map(|(start, end)| {
                 token::whole_tokens_in(
