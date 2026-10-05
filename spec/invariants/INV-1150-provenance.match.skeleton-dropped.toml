@@ -1,0 +1,27 @@
+[invariant]
+id = "provenance.match.skeleton-dropped"
+statement = "A candidate ContentMatch on an origin span, in one decode layer of a read, whose merged hit runs are each shorter than SpreadRule::distinctive_chars normalized characters and of which at least one hit fingerprint is boilerplate by provenance.match.cross-agent-spread, is dropped whole: no ContentMatch is made from it, whatever its other hits."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Generated pages fill one template with different slot words (bench
+transmission 01M46CB4DFC573NNYA711QRNC2: "Our notes on cache invalidation
+still say stale reads is fine; that is no longer true" against "notes on
+cache invalidation still say write-through is fine; that is no longer
+true"). The reader shares only short runs with the origin, broken by the
+slot fillers. The skeleton's runs are written by many agents (6 and 20 of
+20 on the bench), but the run nearest a slot word can be shared by only a
+few (3 for "matters more than write-through at our curre"): dropping only
+the boilerplate hits leaves a match on that run, still a false positive.
+So a match made only of short runs that holds a boilerplate run is a
+skeleton, and is dropped whole. A short copy of one distinctive phrase has
+no boilerplate run and is kept; a match with a run of 64 characters or more
+is a copy or a broadcast and is kept (provenance.match.cross-agent-spread).
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::match_quality::template_skeleton_with_other_slot_words_is_not_matched"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

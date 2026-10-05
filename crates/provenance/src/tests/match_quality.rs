@@ -270,8 +270,10 @@ async fn short_reader_output_yields_no_match_but_tool_results_do() {
 /// `provenance.match.cross-agent-spread` with
 /// `provenance.match.reader-output-strict`, a broadcast: one agent
 /// originates a distinctive message of 64 characters or more; five agents
-/// later (beyond the spread window) reproduce it with no observed read.
-/// Each copy yields a `ReaderOutput` match to the first writer.
+/// later reproduce it with no observed read. Each copy yields a
+/// `ReaderOutput` match to the first writer: a contiguous run of 64
+/// characters or more is kept whatever its spread, so the copies (counted
+/// as originations) never make it boilerplate.
 #[tokio::test]
 async fn broadcast_copies_match_the_first_writer() {
     let mut world = World::new(real(50));
@@ -494,56 +496,139 @@ async fn shared_phrase_fragments_give_no_reader_output_match() {
     );
 }
 
-/// `provenance.match.cross-agent-spread`, boilerplate: five agents
-/// originate the same template within the spread window (no clear first
-/// writer), and a reader of it gets no match. The same template written by
-/// one agent and copied by others later, beyond the window, still matches
-/// its first writer.
+/// `provenance.match.cross-agent-spread`, boilerplate: a short template
+/// written whole by five agents is boilerplate whenever they wrote it, all
+/// at once or minutes apart (the rule has no window), and a reader of it
+/// gets no match.
 #[tokio::test]
-async fn template_originated_together_is_not_matched_but_a_broadcast_is() {
+async fn short_template_written_by_many_agents_is_not_matched() {
     let template = "Please review the plan now!";
-    let mut world = World::new(real(50));
-    for n in 0..5u64 {
-        let agent = world.agent();
-        world
-            .run(Turn::new(agent, at(1 + n)).output(assistant_text(template)))
+    for spacing in [1u64, 200] {
+        let mut world = World::new(real(50));
+        for n in 0..5u64 {
+            let agent = world.agent();
+            world
+                .run(Turn::new(agent, at(1 + n * spacing)).output(assistant_text(template)))
+                .await;
+        }
+        let reader = world.agent();
+        let read = world
+            .run(Turn::new(reader, at(2000)).input(user_text(template)))
             .await;
+        let matches = world.matches_of(read.exchange);
+        assert!(
+            matches.is_empty(),
+            "spacing {spacing}: {}",
+            brief_matches(&matches)
+        );
     }
-    let reader = world.agent();
-    let read = world
-        .run(Turn::new(reader, at(10)).input(user_text(template)))
-        .await;
-    let matches = world.matches_of(read.exchange);
-    assert!(matches.is_empty(), "{}", brief_matches(&matches));
+}
 
+/// `provenance.match.skeleton-dropped`, from bench transmission
+/// 01M46CB4DFC573NNYA711QRNC2: a generator-wide template filled with
+/// different slot words. Many agents write the skeleton over several
+/// minutes; one writes a page with it, another writes its own page with
+/// other slot words, and the reader of the second page shares only short
+/// runs (each under 64 characters) with the first. No match.
+#[tokio::test]
+async fn template_skeleton_with_other_slot_words_is_not_matched() {
+    // The generator's sentences, each with slots; pages pick some of them.
+    let page = |topic: &str, a: &str, b: &str, c: &str| {
+        format!(
+            "Open question: does {a} interact with stampede under the second experiment? \
+             Our notes on {topic} still say {b} is fine; that is no longer true. \
+             For {topic}, {c} matters more than {a} at our current scale."
+        )
+    };
     let mut world = World::new(real(50));
-    let first = world.agent();
-    world
-        .run(Turn::new(first, at(1)).output(assistant_text(template)))
-        .await;
-    for n in 0..5u64 {
+    let slots = [
+        (
+            "cache invalidation",
+            "write-through",
+            "stale reads",
+            "stale reads",
+        ),
+        ("rate limiting", "token buckets", "burst credit", "fairness"),
+        (
+            "schema migration",
+            "dual writes",
+            "backfill lag",
+            "lock time",
+        ),
+        (
+            "cache invalidation",
+            "ttl jitter",
+            "purge queue",
+            "purge queue",
+        ),
+        ("queue sharding", "rebalancing", "hot keys", "ordering"),
+    ];
+    let mut writers = Vec::new();
+    for (n, (topic, a, b, c)) in slots.iter().enumerate() {
         let agent = world.agent();
-        world
-            .run(Turn::new(agent, at(200 + n)).output(assistant_text(template)))
+        writers.push(agent);
+        super::scenarios::originate(&mut world, agent, &page(topic, a, b, c), 1 + 120 * n as u64)
             .await;
     }
+    let origin = writers[0];
     let reader = world.agent();
+    // The bench's read: other slot words, and a sentence the origin page
+    // lacks, so every run it shares with the origin is under 64 characters.
+    let read_text = "Our notes on cache invalidation still say write-through is fine; that is no \
+         longer true. Nobody owns write-through yet, so I propose we track it with the second \
+         experiment. For cache invalidation, purge queue matters more than write-through at our \
+         current scale.";
     let read = world
-        .run(Turn::new(reader, at(300)).input(user_text(template)))
+        .run(Turn::new(reader, at(1000)).input(tool_result("call_1", read_text)))
         .await;
     let matches = world.matches_of(read.exchange);
     assert!(
         matches
             .iter()
-            .any(|stored| stored.content.origin_agent() == first),
+            .all(|stored| stored.content.origin_agent() != origin),
+        "{}",
+        brief_matches(&matches)
+    );
+    assert!(matches.is_empty(), "{}", brief_matches(&matches));
+}
+
+/// A distinctive passage of 64 characters or more inside a templated page
+/// still matches its writer, however widespread the template around it.
+#[tokio::test]
+async fn long_run_inside_a_template_still_matches() {
+    let mut world = World::new(real(50));
+    let template = "Our notes on the rollout still say it is fine; that is no longer true.";
+    for n in 0..4u64 {
+        let agent = world.agent();
+        world
+            .run(Turn::new(agent, at(1 + n)).output(assistant_text(template)))
+            .await;
+    }
+    let writer = world.agent();
+    let secret =
+        "The vault combination moved to the blue binder behind the third shelf of the archive.";
+    world
+        .run(Turn::new(writer, at(10)).output(assistant_text(&format!("{template} {secret}"))))
+        .await;
+    let reader = world.agent();
+    let read = world
+        .run(
+            Turn::new(reader, at(20)).input(tool_result("call_1", &format!("{template} {secret}"))),
+        )
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin_agent() == writer),
         "{}",
         brief_matches(&matches)
     );
 }
 
 /// The node0 bench's shape: short template fragments (34 to 46 bytes) that
-/// several unrelated agents write within the window give no match of any
-/// carrier to a reader holding them.
+/// several unrelated agents write give no match of any carrier to a reader
+/// holding them.
 #[tokio::test]
 async fn short_template_fragments_from_unrelated_agents_give_no_match() {
     let fragments = [

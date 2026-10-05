@@ -153,20 +153,21 @@ watermark.
      before the reader's time and before this scan began
      (index sequence at most the watermark). Hits on the reader's own spans
      are skipped.
-  2b. **The spread rule** (INV-1094, `SpreadRule`). For each hit
-     fingerprint, the originations are its live postings' spans (their
-     agent and indexing time) and their copies in other outputs (spans
-     relayed from them, `ProvenanceStore::relays`: agent and exchange
-     start). The fingerprint is boilerplate when at least `spread.agents`
-     (4) distinct agents originated it within `spread.window` (60 s) of the
-     earliest origination: there is no clear first writer, so it is a
-     template. Later copies of one first writer's text, beyond the window,
-     are a broadcast and stay matchable. The rule applies only to short or
-     low-information runs: a match whose merged run on an origin span in
-     the layer holds `spread.distinctive_chars` (64) normalized characters
-     keeps all its hits; a shorter one drops the hits on boilerplate
-     fingerprints. The index cutoff counts texts, which a world of a few
-     agents never reaches.
+  2b. **The spread rule and skeleton matches** (INV-1094, INV-1150,
+     `SpreadRule`). For each hit fingerprint, the originating agents are
+     the agents of its live postings' spans and of their copies in other
+     outputs (spans relayed from them, `ProvenanceStore::relays`), at any
+     time within retention. The fingerprint is boilerplate for short runs
+     when at least `spread.agents` (4) distinct agents originated or
+     copied it. A candidate match on an origin span in a layer whose
+     merged hit runs are all shorter than `spread.distinctive_chars` (64)
+     normalized characters, and that holds a boilerplate hit, is a template
+     skeleton filled with other slot words (bench transmission
+     01M46CB4DFC573NNYA711QRNC2) and is dropped whole: dropping only the
+     boilerplate hits would leave the runs next to a slot word, shared by
+     fewer agents. A match with a contiguous run of 64 characters or more
+     is a copy or a broadcast and is kept whatever the spread. The index
+     cutoff counts texts, which a world of a few agents never reaches.
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -196,12 +197,12 @@ watermark.
     bodies, the merged hit extents are used.
   - When `s` is another agent's span, a `ReaderOutput` match covers the
     same bytes, if the stretch passes the stricter reader-output rules
-    (INV-1093): at least `reader_output.min_chars` (64) normalized
-    characters, and one of the hit fingerprints inside it naming `s` not
-    boilerplate by the spread rule (below). Otherwise the stretch is still
-    `Relayed(Span(s))` and no match is made. Other carriers keep no length
-    floor. A broadcast (one first writer, copies later) keeps matching the
-    first writer however many copies there are.
+    (INV-1093): the stretch is one contiguous run, so it needs at least
+    `reader_output.min_chars` (64) normalized characters and a hit on `s`.
+    Otherwise the stretch is still `Relayed(Span(s))` and no match is
+    made. Other carriers keep no length floor. A broadcast (one writer,
+    many later copies) keeps matching that writer however many copies
+    there are: a 64-character contiguous run is kept whatever its spread.
   - The rest is resolved again.
   - A candidate without hits is `Common` when every fingerprint is above
     the cutoff, else `Originated`. A whole short value's short-span hash
@@ -356,7 +357,7 @@ and changes span states only through `SpanState::advance`.
 | `semantic_threshold` | 0.85 |
 | `short_spans.min_chars`, `short_spans.max_chars` | 24, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
 | `reader_output.min_chars` | 64 normalized characters |
-| `spread.agents`, `spread.window_secs`, `spread.distinctive_chars` | 4, 60, 64: four agents originating a fragment within 60 s of its earliest origination make it boilerplate for runs under 64 characters |
+| `spread.agents`, `spread.distinctive_chars` | 4, 64: a fragment four agents originated or copied, at any time, is boilerplate for matches whose runs are all under 64 characters; such a match is dropped whole |
 | `forwarding` | false: forwarded spans are not indexed (INV-1090) |
 
 Every value is checked: `k` at least 4, depth 1 to 8, a non-zero retention,
@@ -447,7 +448,8 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - `integration` for INV-206 and INV-225: they name a semantic store that
     awaits P6.2;
   - the lint for INV-227.
-- New invariants (also INV-1094 `provenance.match.cross-agent-spread`):
+- New invariants (also INV-1094 `provenance.match.cross-agent-spread` and
+  INV-1150 `provenance.match.skeleton-dropped`):
   - `provenance.decode.utf8-lossless`;
   - `provenance.scan.status-terminal`;
   - INV-1090 `provenance.index.forwarded-indexed`;

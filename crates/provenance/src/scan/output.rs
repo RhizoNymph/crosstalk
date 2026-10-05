@@ -36,7 +36,7 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{extents_by_span, merge, spread_boilerplate};
+use super::hits::{extents_by_span, merge};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
@@ -184,10 +184,8 @@ impl Scanner {
                 }
                 at = at.max(run_end);
                 // The hit fingerprints inside the run that name its source.
-                let spread = spread_boilerplate(&hits, &session.live, self.spread());
                 let support: Vec<_> = hits
                     .iter()
-                    .filter(|hit| !spread.contains(&hit.fingerprint))
                     .filter(|hit| hit.span == source)
                     .filter(|hit| {
                         owned.iter().any(|kgram| {
@@ -318,11 +316,11 @@ impl Scanner {
 
     /// Whether a stretch of the reader's output relayed from another
     /// agent's span passes the stricter `ReaderOutput` rules
-    /// (`provenance.match.reader-output-strict`): at least
-    /// `ReaderOutputRules::min_chars` normalized characters, and one of the
-    /// hit fingerprints supporting it observed in at most
-    /// `ReaderOutputRules::cutoff` texts. The stretch stays relayed either
-    /// way; only the match is withheld.
+    /// (`provenance.match.reader-output-strict`): one contiguous run of at
+    /// least `ReaderOutputRules::min_chars` normalized characters holding a
+    /// hit on its source. Such a run is distinctive whatever its spread, so
+    /// a broadcast copied by many agents keeps matching its first writer.
+    /// The stretch stays relayed either way; only the match is withheld.
     async fn reader_output_admitted<I, S, M, L>(
         &self,
         session: &Session<'_, I, S, M, L>,
@@ -344,7 +342,7 @@ impl Scanner {
             return Ok(false);
         }
         if support.is_empty() {
-            tracing::debug!(exchange = ?session.exchange, chars, "reader-output match on spread boilerplate only");
+            tracing::debug!(exchange = ?session.exchange, chars, "reader-output stretch holds no hit on its source");
             return Ok(false);
         }
         Ok(true)

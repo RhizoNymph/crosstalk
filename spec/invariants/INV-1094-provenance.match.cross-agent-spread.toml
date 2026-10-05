@@ -1,31 +1,28 @@
 [invariant]
 id = "provenance.match.cross-agent-spread"
-statement = "A fingerprint or short-span hash that at least SpreadRule::agents distinct agents (4 by default) originated within SpreadRule::window (60 s by default) of its earliest origination, counting indexed spans and their copies (spans relayed from them), supports no ContentMatch with any carrier unless the read's run on that origin span holds at least SpreadRule::distinctive_chars normalized characters (64 by default); a fragment whose other originations come after a single first writer, beyond the window, is not boilerplate and matches that first writer."
+statement = "A fingerprint or short-span hash that at least SpreadRule::agents distinct agents (4 by default) originated or copied, at any time within retention, counting indexed spans and the spans relayed from them, is boilerplate for short runs: it supports no ContentMatch of any carrier none of whose contiguous runs holds SpreadRule::distinctive_chars normalized characters (64 by default); a match with such a contiguous run is kept whatever the spread."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
 rationale = """
 The boilerplate cutoff counts texts (50 by default), and a world of a few
-agents never reaches it: on the node0 bench (20 agents) templated user
-prompts and short shared phrase fragments matched readers as deliveries.
-Counting the agents that originated a fragment is not enough on its own:
-when one agent broadcasts a distinctive message through a channel the
-gateway cannot see, the copies other agents write later show up as
-originations (or copies of the first span) too, and suppressing them would
-hide exactly the collusion crosstalk exists to catch. Time order tells the
-two apart. A template has no clear first writer: several agents produce it
-together, within the window of the earliest one. A broadcast has one first
-writer, and the copies come later. The rule applies only to short or
-low-information fragments (short-span hashes, and runs under 64
-characters): a long distinctive run is never suppressed by spread, and only
-the index's text cutoff applies to it. A lookup returns every posting of a
-fingerprint, and the store lists the copies of each span
-(ProvenanceStore::relays), so the earliest origination and the agents
-within the window are computed from the postings' spans and their copies.
+agents never reaches it: on the node0 bench (20 agents) templated prompts,
+short shared phrase fragments and generator-wide page skeletons matched
+readers as deliveries. A template's pieces are written by many agents over
+minutes, so no time window catches them; the count is world-wide and
+timeless. Counting agents alone would also suppress a broadcast: when one
+agent sends a distinctive message through a channel the gateway cannot see
+and five others copy it, the copies count as originations (or copies of the
+first span) too. Length tells the two apart. A broadcast or a copy is one
+contiguous run of 64 characters or more and is kept whatever its spread
+(only the index's text cutoff applies to it); a template is short runs. A
+lookup returns every posting of a fingerprint, and the store lists the
+copies of each span (ProvenanceStore::relays), so the agents are counted
+from the postings' spans and their copies.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::match_quality::template_originated_together_is_not_matched_but_a_broadcast_is", "crosstalk_provenance::tests::match_quality::short_template_fragments_from_unrelated_agents_give_no_match", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer"]
+unit = ["crosstalk_provenance::tests::match_quality::short_template_written_by_many_agents_is_not_matched", "crosstalk_provenance::tests::match_quality::short_template_fragments_from_unrelated_agents_give_no_match", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer", "crosstalk_provenance::tests::match_quality::long_run_inside_a_template_still_matches"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -1707,6 +1707,18 @@ whole user-turn part found nothing (identical to no short spans). The
 normalized user-turn rise (48 to 288) comes with the context k-grams
 (INV-1091); without them recall fell to 0.748 and the gate to 0.805.
 
+**Skeleton matches** (`fix/l4-skeleton-matches`: the spread rule counts
+originating agents at any time, threshold 4, and a match whose runs are
+all under 64 characters and that holds a boilerplate run is dropped whole,
+INV-1094 and INV-1150). Measured on c3cd7f2 against c3cd7f2 plus the
+branch, live, release build: SALT `--limit 53` recall 0.765 and precision
+0.842 on both, wiki `--max-agents 100` 0.950 / 1.000 on both, swarm-traces
+1.000 / 1.000 on both, every table row identical. None of these worlds has
+four agents sharing a fragment (SALT and wiki pair agents; swarm-traces
+plants single tokens), so the rule never fires there. The bench it targets
+(20 agents, template-generated wiki pages) has no local live replay;
+crosstalk-infra's demo `--scenario boilerplate` is its eval regression.
+
 ### Gates
 
 `gates.toml` gates the live detector (`detector = "live"`) a little below

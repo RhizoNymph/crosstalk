@@ -69,7 +69,7 @@ fn short_config_decodes_and_refuses_bad_ranges() {
     let config: ProvenanceConfig = serde_json::from_str(
         r#"{"short_spans": {"min_chars": 20, "max_chars": 40},
             "reader_output": {"min_chars": 80},
-            "spread": {"agents": 5, "window_secs": 30, "distinctive_chars": 90}}"#,
+            "spread": {"agents": 5, "distinctive_chars": 90}}"#,
     )
     .expect("decodes");
     assert_eq!(
@@ -77,10 +77,7 @@ fn short_config_decodes_and_refuses_bad_ranges() {
         ShortSpans::new(20, 40).expect("range")
     );
     assert_eq!(config.reader_output(), ReaderOutputRules::new(80));
-    assert_eq!(
-        config.spread(),
-        SpreadRule::new(5, std::time::Duration::from_secs(30), 90).expect("a rule")
-    );
+    assert_eq!(config.spread(), SpreadRule::new(5, 90).expect("a rule"));
     let defaults = ProvenanceConfig::default();
     assert_eq!(defaults.short_spans().min_chars(), 24);
     assert_eq!(defaults.short_spans().max_chars(), 46);
@@ -89,15 +86,18 @@ fn short_config_decodes_and_refuses_bad_ranges() {
     let on: ProvenanceConfig = serde_json::from_str(r#"{"forwarding": true}"#).expect("decodes");
     assert!(on.forwarding());
     assert_eq!(defaults.spread().agents(), 4);
-    assert_eq!(defaults.spread().window().as_secs(), 60);
     assert_eq!(defaults.spread().distinctive_chars(), 64);
     for agents in [0, 1] {
         assert_eq!(
-            SpreadRule::new(agents, std::time::Duration::from_secs(60), 64),
+            SpreadRule::new(agents, 64),
             Err(ConfigError::SpreadAgents { agents })
         );
     }
     assert!(serde_json::from_str::<ProvenanceConfig>(r#"{"spread": {"agents": 1}}"#).is_err());
+    assert!(
+        serde_json::from_str::<ProvenanceConfig>(r#"{"spread": {"window_secs": 60}}"#).is_err(),
+        "the spread rule has no window"
+    );
     assert!(
         serde_json::from_str::<ProvenanceConfig>(r#"{"reader_output": {"cutoff": 5}}"#).is_err()
     );

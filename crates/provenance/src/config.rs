@@ -15,7 +15,7 @@
 //!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
 //!  "short_spans": {"min_chars": 24, "max_chars": 46},
 //!  "reader_output": {"min_chars": 64},
-//!  "spread": {"agents": 4, "window_secs": 60, "distinctive_chars": 64},
+//!  "spread": {"agents": 4, "distinctive_chars": 64},
 //!  "forwarding": false}
 //! ```
 
@@ -144,10 +144,10 @@ pub const DEFAULT_SHORT_MAX: u16 = 46;
 /// (`provenance.match.reader-output-strict`): text a reader writes that
 /// another agent wrote, with no visible input holding it, is often domain
 /// text both derived from the same task (SQL, shell idioms, stock phrases).
-/// The relayed stretch must have at least `min_chars` normalized
-/// characters, and at least one of the hit fingerprints in it must not be
-/// boilerplate by the spread rule ([`SpreadRule`]). Other carriers keep no
-/// length floor.
+/// The relayed stretch, one contiguous run, must have at least `min_chars`
+/// normalized characters; such a run is distinctive whatever its spread
+/// ([`SpreadRule`]), so a broadcast copied by many agents keeps matching
+/// its first writer. Other carriers keep no length floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderOutputRules {
     min_chars: u32,
@@ -171,69 +171,54 @@ impl Default for ReaderOutputRules {
     }
 }
 
-/// The cross-agent spread rule (`provenance.match.cross-agent-spread`),
-/// which tells a template from a broadcast by time order.
+/// The cross-agent spread rule (`provenance.match.cross-agent-spread`)
+/// and skeleton matches (`provenance.match.skeleton-dropped`).
 ///
-/// For a fingerprint (or short-span hash), the earliest origination is the
-/// earliest indexing time among its live postings' spans. It is
-/// boilerplate for matching when at least `agents` distinct agents
-/// originated it within `window` of that earliest origination: there is no
-/// clear first writer. Copies made after a single first writer, beyond the
-/// window, are a broadcast: not boilerplate, and they match the first
-/// writer. The rule applies only to short or low-information fragments:
-/// short-span hashes, and fingerprints whose supporting run is shorter than
-/// `distinctive_chars` normalized characters; a longer run is never
-/// suppressed by spread (the index's text cutoff still applies). The index
-/// cutoff counts texts, which a world of a few agents never reaches.
+/// A fingerprint (or short-span hash) is boilerplate for short runs when at
+/// least `agents` distinct agents originated or copied it, at any time,
+/// world-wide (its live postings' spans and the spans relayed from them).
+/// A match none of whose contiguous runs reaches `distinctive_chars`
+/// normalized characters, and that holds at least one boilerplate run, is a
+/// template skeleton filled with different slot words, and is dropped
+/// whole. A match with a contiguous run of `distinctive_chars` or more is a
+/// copy or a broadcast and is kept whatever the spread; only the index's
+/// text cutoff applies to it. The index cutoff counts texts, which a world
+/// of a few agents never reaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
     agents: NonZeroU32,
-    window: Duration,
     distinctive_chars: u32,
 }
 
 impl SpreadRule {
-    pub fn new(agents: u32, window: Duration, distinctive_chars: u32) -> Result<Self, ConfigError> {
+    pub fn new(agents: u32, distinctive_chars: u32) -> Result<Self, ConfigError> {
         let agents = NonZeroU32::new(agents)
             .filter(|agents| agents.get() >= 2)
             .ok_or(ConfigError::SpreadAgents { agents })?;
         Ok(Self {
             agents,
-            window,
             distinctive_chars,
         })
     }
 
-    /// How many distinct agents within the window make a fragment
-    /// boilerplate.
+    /// How many distinct originating agents make a fragment boilerplate
+    /// for short runs.
     pub fn agents(&self) -> usize {
         usize::try_from(self.agents.get()).unwrap_or(usize::MAX)
     }
 
-    /// How long after the earliest origination an origination counts as
-    /// simultaneous.
-    pub fn window(&self) -> Duration {
-        self.window
-    }
-
-    /// The window in microseconds, saturating.
-    pub fn window_micros(&self) -> u64 {
-        u64::try_from(self.window.as_micros()).unwrap_or(u64::MAX)
-    }
-
-    /// The run length (normalized characters) from which a match is
-    /// distinctive and exempt from the rule.
+    /// The contiguous run length (normalized characters) from which a
+    /// match is distinctive and exempt from the rule.
     pub fn distinctive_chars(&self) -> usize {
         usize::try_from(self.distinctive_chars).unwrap_or(usize::MAX)
     }
 }
 
 impl Default for SpreadRule {
-    /// 4 agents within 60 s; runs of 64 characters are exempt.
+    /// 4 agents; runs of 64 characters are exempt.
     fn default() -> Self {
         Self {
             agents: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
-            window: Duration::from_secs(60),
             distinctive_chars: 64,
         }
     }
@@ -731,18 +716,12 @@ struct RawConfig {
 struct RawSpread {
     #[serde(default = "default_spread_agents")]
     agents: u32,
-    #[serde(default = "default_spread_window")]
-    window_secs: u64,
     #[serde(default = "default_distinctive")]
     distinctive_chars: u32,
 }
 
 fn default_spread_agents() -> u32 {
     4
-}
-
-fn default_spread_window() -> u64 {
-    60
 }
 
 fn default_distinctive() -> u32 {
@@ -753,7 +732,6 @@ impl Default for RawSpread {
     fn default() -> Self {
         Self {
             agents: default_spread_agents(),
-            window_secs: default_spread_window(),
             distinctive_chars: default_distinctive(),
         }
     }
@@ -841,11 +819,7 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
         let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars);
-        let spread = SpreadRule::new(
-            raw.spread.agents,
-            Duration::from_secs(raw.spread.window_secs),
-            raw.spread.distinctive_chars,
-        )?;
+        let spread = SpreadRule::new(raw.spread.agents, raw.spread.distinctive_chars)?;
         Self::new(
             winnow,
             decode,

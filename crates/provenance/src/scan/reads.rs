@@ -134,8 +134,8 @@ impl Scanner {
     }
 
     /// Whether a span's hit extents in a layer (layer byte offsets) hold a
-    /// run of at least `SpreadRule::distinctive_chars` normalized
-    /// characters: such a run is never suppressed by the spread rule.
+    /// contiguous run of at least `SpreadRule::distinctive_chars` normalized
+    /// characters: such a match is never dropped as a skeleton.
     fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
         merge(extents.to_vec()).iter().any(|(start, end)| {
             let slice = layer
@@ -181,29 +181,26 @@ impl Scanner {
                     .is_some_and(|record: &crate::store::SpanRecord| record.span.agent != reader)
             };
             let by_span = extents_by_span(&hits, &kgrams, keep);
-            // The spread rule: hits on boilerplate fragments count only
-            // inside a distinctive run (`provenance.match.cross-agent-spread`).
+            // Skeleton matches (`provenance.match.skeleton-dropped`): a
+            // match with no distinctive run that holds a boilerplate run
+            // (`provenance.match.cross-agent-spread`) is dropped whole.
             let spread = spread_boilerplate(&hits, live, self.spread());
-            let narrow = if spread.is_empty() {
-                None
+            let boilerplate = if spread.is_empty() {
+                BTreeMap::new()
             } else {
-                let kept: Vec<_> = hits
+                let template: Vec<_> = hits
                     .iter()
-                    .filter(|hit| !spread.contains(&hit.fingerprint))
+                    .filter(|hit| spread.contains(&hit.fingerprint))
                     .cloned()
                     .collect();
-                Some(extents_by_span(&kept, &kgrams, keep))
+                extents_by_span(&template, &kgrams, keep)
             };
             for (span, extents) in by_span {
-                let extents = match &narrow {
-                    Some(narrow) if !self.distinctive(layer.text.text(), &extents) => {
-                        match narrow.get(&span) {
-                            Some(kept) => kept.clone(),
-                            None => continue,
-                        }
-                    }
-                    _ => extents,
-                };
+                if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
+                    continue;
+                }
                 let merged = merge(
                     extents
                         .into_iter()
