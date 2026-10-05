@@ -694,7 +694,12 @@ name = "crosstalk-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crosstalk-api",
+ "crosstalk-memory",
  "crosstalk-spec",
+ "crosstalk-surface",
+ "crosstalk-transport",
+ "crosstalk-world",
  "futures-core",
  "jiff",
  "serde",

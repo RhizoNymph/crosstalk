@@ -320,9 +320,11 @@ mod tests {
             .subscribe(&caller, Resume::Fresh)
             .await
             .expect("subscribe");
-        let response = Sse::new(LiveEvents::new(subscription))
-            .into_response(&Cx::default())
-            .expect("response");
+        let response = Sse::new(LiveEvents::new(
+            crate::backend::dispatch::AppStream::Fixture(subscription),
+        ))
+        .into_response(&Cx::default())
+        .expect("response");
         let mut body = response.into_body().into_data_stream();
         let first = acknowledge(&backend, 1).await;
         let epoch = backend.feed_epoch().0;

@@ -45,6 +45,30 @@ pub enum BackendConfig {
         #[serde(default)]
         replay: Option<ReplayConfig>,
     },
+    /// The real L8 surface in this process (`crosstalk_api::InProcess` over
+    /// the memory stores), seeded with the synthetic world of `seed`
+    /// (`crosstalk-world`).
+    World { seed: u64 },
+    /// The gateway's full composition in this process (proxy, pipeline,
+    /// stores and surface). Needs the `live` cargo feature; provisional
+    /// until the gateway provides it.
+    Live(LiveConfig),
+}
+
+/// Provisional settings of the live composition: the gateway will define
+/// its own config, which replaces this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveConfig {
+    /// Where the composed gateway's capture proxy listens.
+    #[serde(default = "LiveConfig::default_proxy_listen")]
+    pub proxy_listen: SocketAddr,
+}
+
+impl LiveConfig {
+    fn default_proxy_listen() -> SocketAddr {
+        SocketAddr::from(([0, 0, 0, 0], 8080))
+    }
 }
 
 /// What a replay plays: the last `window_minutes` of the data at `speed`
@@ -212,6 +236,23 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn parses_the_world_and_live_backends() {
+        let world = r#"{"listen":"127.0.0.1:1","operator":{"id":"00000000000000000000000001","name":"a"},"backend":{"world":{"seed":7}}}"#;
+        let config = Config::parse(world).ok().expect("world config parses");
+        assert_eq!(config.backend, BackendConfig::World { seed: 7 });
+        let live = r#"{"listen":"127.0.0.1:1","operator":{"id":"00000000000000000000000001","name":"a"},"backend":{"live":{}}}"#;
+        let config = Config::parse(live).ok().expect("live config parses");
+        assert_eq!(
+            config.backend,
+            BackendConfig::Live(LiveConfig {
+                proxy_listen: SocketAddr::from(([0, 0, 0, 0], 8080))
+            })
+        );
+        let unknown = r#"{"listen":"127.0.0.1:1","operator":{"id":"00000000000000000000000001","name":"a"},"backend":{"live":{"port":1}}}"#;
+        assert!(matches!(Config::parse(unknown), Err(ParseError::Json(_))));
     }
 
     #[test]
