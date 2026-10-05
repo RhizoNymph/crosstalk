@@ -266,6 +266,7 @@ where
         .with_transmissions(StoredTransmissions::new(
             transmissions.clone(),
             directory.clone(),
+            catalog.clone(),
         ));
         let evidence = MemoryEvidence::new(channels.clone());
         let stores = MemoryStores {

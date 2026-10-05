@@ -155,7 +155,8 @@ Overview:
       retention); typed query and action errors, with one From impl per
       store error behind every query and every action; the operator
       directory with a
-      trusted single-user mode; operator actions with one permission each;
+      trusted single-user mode, and `me`, the caller's own operator, which
+      any caller may read; operator actions with one permission each;
       the append-only audit log of operator actions, config changes and
       exports; the id-only SSE live feed; streamed exports with a header
       and trailer manifest; alert sinks; and the HTTP binding of all of it:
@@ -287,8 +288,9 @@ Overview:
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
     completed, reading only data settled before the watermark; a
-    transmissions export's rows are the surface's transmission rows and
-    its quoted text the evidence page's. Every aggregate comes back with
+    transmissions export's rows are the surface's transmission rows (their
+    topics read from the catalog's assignments under the export's version,
+    as rows by id read them) and its quoted text the evidence page's. Every aggregate comes back with
     the watermark read before it; every linked view applies one
     TopologyFilter under one resolved (or pinned) topic-model version,
     with merged agents and superseded channels resolved at read time (a
@@ -504,7 +506,8 @@ Features Index:
       anything is read. Reads only data settled before the
       watermark, under resolution captured at the start, so a re-run
       reproduces it; transmission rows are the surface's transmission
-      summaries and their quoted text the evidence page's; content needs
+      summaries (topics as rows by id read them under the export's version)
+      and their quoted text the evidence page's; content needs
       Content; oversized exports are refused before streaming; every export
       is audited. In JSONL each line is a tagged header, row or trailer
       (ExportLine, read_jsonl), so any truncation reads as a missing
@@ -1076,10 +1079,13 @@ Features Index:
       the e2e smoke drives and eval builds against): Live::start(LiveConfig
       { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
       flow: FlowConfig (correlation_window_ms, evidence_window_ms,
-      suspected_ttl_ms, shards, tick_ms), provenance, ticking, seed,
+      suspected_ttl_ms, shards, tick_ms), provenance, extract:
+      ExtractConfig (the gateway config's extract section), ticking, seed,
       capture }) fills one consumer slot per layer (L3
       ReconstructConsumer; L4 Provenance then the extraction step feeding
-      L5 its Extracted inputs; L5 FlowConsumer on its own task; the
+      L5 its Extracted inputs, pairing a tool result with its call
+      wherever the request or the conversation's history carries it and
+      reading a replayed result once; L5 FlowConsumer on its own task; the
       gateway's minimal L6 classifier; L7 topology::consumer::handle; an
       evidence feeder; a surface relay), forwards the stores' outbox onto
       the bus, and builds the surface with InProcess::start_with over the
@@ -1490,9 +1496,10 @@ Features Index:
       ResourceExtractor over every known tool (Claude Code's file, fetch
       and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
       editor equivalents; HTTP tools such as http_request {method, url,
-      body?}, the method deciding the op; MCP tools mapped by typed JSON
-      configuration of tool name and argument paths to a resource and an
-      op). Every locator is canonical, so agents touching one thing meet
+      body?}, the method deciding the op; fetch tools configured by name,
+      fetch_tools, such as AgentDojo's get_webpage; MCP tools mapped by
+      typed JSON configuration of tool name and argument paths to a
+      resource and an op). Every locator is canonical, so agents touching one thing meet
       on one resource: lexical paths, relative paths against the stated
       or tracked working directory (Opaque without one), normalized URLs,
       folded MCP keys, MediaWiki pages as their canonical article URL
@@ -1503,7 +1510,8 @@ Features Index:
       Unknown), judged per tool in one place; reads need a delivered
       result. ConversationContext learns the persistent shell's directory
       and clones from shell calls. Builds the stored AccessOp with the
-      write's spans (originated plus self-relayed sources).
+      write's spans (originated, forwarded from an input, plus
+      self-relayed sources).
     entry_points:
       - crates/flow/src/extract/mod.rs
       - crates/flow/src/extract/context.rs

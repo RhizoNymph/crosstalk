@@ -203,6 +203,23 @@ async fn every_call_leaves_one_entry_naming_what_it_touched_and_created() {
     ));
 }
 
+/// `me` needs no permission: a caller holding only Audit reads its own
+/// operator, named by the directory, with the permissions it holds.
+#[tokio::test]
+async fn me_is_the_callers_own_operator() {
+    let b = shared();
+    let auditor = caller(&[Permission::Audit]);
+    let me = b.me(&auditor).await.expect("me");
+    assert_eq!(
+        (me.id, me.name.as_str(), me.permissions),
+        (
+            OPERATOR_ONCALL,
+            "oncall",
+            PermissionSet::of([Permission::Audit])
+        )
+    );
+}
+
 #[tokio::test]
 async fn operators_are_the_directory() {
     let b = shared();

@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.access.write-spans-include-self-relay"
-statement = "The spans of an Access's AccessOp::Write are exactly the originated spans inside its call's arguments, plus, for every span inside them that provenance classified Relayed(RelaySource::Span(s)) where s is a span of the writing agent, the span s."
+statement = "The spans of an Access's AccessOp::Write are exactly the writing agent's spans inside its call's arguments that are originated or relayed from an input (flow.access.write-spans-include-forwarded-input), plus, for every span inside them that provenance classified Relayed(RelaySource::Span(s)) where s is a span of the writing agent, the span s."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]
@@ -15,7 +15,9 @@ Counting the writer's own relayed spans as written by the retry lets a
 match on s link to both writes; the rejected one is then left out by its
 outcome. Spans relayed from another agent's output stay out: the writer is
 passing that agent's text on, and the match belongs to its originator. No
-new attribution concept is needed.
+new attribution concept is needed. Text relayed from an input (a fetched
+document the writer posts) is the writer's to forward, and counts as
+written (flow.access.write-spans-include-forwarded-input, INV-1112).
 """
 
 [evidence]

@@ -183,10 +183,19 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | GET | `/detection-quality` | window q | 200 JSON | View | `detection_quality` |
 | GET | `/audit` | filter q, page q | 200 JSON | Audit | `audit` |
 | GET | `/operators` | — | 200 JSON | View | `operators` |
+| GET | `/me` | — | 200 JSON (`Operator`) | none: any caller (`RoutePermission::AnyCaller`) | `me` |
 | POST | `/exports` | body `ExportRequest` | 200 `application/x-ndjson` or `application/vnd.apache.parquet` | View, or Content by the request | `export` |
 | GET | `/present` | — | 200 JSON | View | `present` |
 | POST | `/actions` | body `ActionRequest` | 200 JSON (`ActionOutcome`) | the kind's: Govern, Triage or Operate | `OperatorActions::act`, one route per `ActionKind` |
 | GET | `/live` | `last-event-id` header?, cursor query_text? | 200 `text/event-stream` | View | `LiveFeed::subscribe` |
+
+`GET /me` (`Route::Me`, index 38, right after `operators`) answers the
+caller's own operator (INV-1077). It is the one query route with no
+permission: its `RoutePermission` is `AnyCaller`, which the route-table
+test reads from the method's documentation (`Any caller.`), and the
+golden lists it as `none: any caller`. Every authenticated caller is
+served, a caller without View too; an unauthenticated request is still
+401 before dispatch, as for every route.
 
 `POST /actions` is one endpoint with fourteen `Route::Action(kind)` rows.
 The kind comes from the body's `type`, and each row's permission is

@@ -182,6 +182,11 @@ missing }` before anything is read. Then, by area:
 - **Topics, history, verdicts, quality, audit, operators, sinks, dead
   letters** pass through; `policy_history` and `verdicts` turn the store's
   unknown-id error into `None`.
+- **Me** (`query/admin.rs`, `me_query`) checks no permission: it finds the
+  caller's operator in `OperatorStore::operators` and returns it with the
+  caller's own permissions (`NotFound`, logged at warn, if the directory
+  lacks it). In trusted mode that is the trusted operator with every
+  permission (INV-1077).
 
 ### Actions
 
@@ -258,7 +263,7 @@ every row up front (the count must be known first):
 | accesses | `EdgeStore::channel_topology` per bucket of the settled window |
 | edges | `EdgeStore::graph` per bucket under one-topic filters; outliers as what no topic accounts for |
 | topics | `EdgeStore::totals` of the settled window under a one-topic filter (aligned windows only) |
-| transmissions | the source's `TransmissionSource`: refused as `Store` by default (`NoTransmissions`); with `StoredTransmissions` (crosstalk-api's in-process stores), every transmission in the scope's `states` (confirmed, classified and aggregated by default) from `TransmissionStore::list` whose row time (`Confirmed::at`, or `opened_at` for an unconfirmed one) is in the settled window, crossing agents and admitted by the filter (an unconfirmed one tested with its first co-access's writer as sender), as `TransmissionRow::of_in_scope` (no content columns: a content request is refused) (INV-1060, INV-1070) |
+| transmissions | the source's `TransmissionSource`: refused as `Store` by default (`NoTransmissions`); with `StoredTransmissions` (crosstalk-api's in-process stores), every transmission in the scope's `states` (confirmed, classified and aggregated by default) from `TransmissionStore::list` whose row time (`Confirmed::at`, or `opened_at` for an unconfirmed one) is in the settled window, crossing agents and admitted by the filter (an unconfirmed one tested with its first co-access's writer as sender), as `TransmissionRow::of_in_scope` (no content columns: a content request is refused) (INV-1060, INV-1070); each row's topic, and the topic the filter tests, is read under the export's resolved version as rows by id read it: `StoredTransmissions` holds a `TopicCatalog` handle and reads `TopicCatalog::assignments` for the classified and aggregated rows (`read_topics_under`, shared with `transmissions_by_id` and `channel_transmissions`), falling back to the stored classification, so an export row equals its by-id row after a re-fit (INV-1078) |
 | verdicts | the same `TransmissionSource`: refused as `Store` by default; with `StoredTransmissions`, `verdict_rows` of every judgeable transmission (suspected, discarded, confirmed or later) whose `opened_at` is in the settled window, one row per verdict record, from `TransmissionStore::list` and `TransmissionVerdicts::log`; a transmission never judged has no row (INV-1062) |
 
 ### Node facts
@@ -353,7 +358,7 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/cursor.rs` | Surface-issued cursors; search models per cursor | `CursorKey`, `RequestDigest`, `SearchModels` |
 | `crates/surface/src/audit.rs` | Appending entries | (crate) `audit_append` |
 | `crates/surface/src/query/mod.rs` | `impl QueryApi`, one line per method | — |
-| `crates/surface/src/query/{channels,channel_rows,channel_traffic,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers | (crate) `*_query` |
+| `crates/surface/src/query/{channels,channel_rows,channel_traffic,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers (`admin`: verdicts, quality, audit, `operators`, `me`) | (crate) `*_query`; `content::read_topics_under` (a row's topic under a version, shared with the export) |
 | `crates/surface/src/actions/mod.rs` | `impl OperatorActions`, `Surface::request` | — |
 | `crates/surface/src/actions/apply.rs` | Each action's store call | — |
 | `crates/surface/src/actions/errors.rs` | `BusError` for actions | — |
@@ -361,6 +366,7 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/live/{log,writer,stream}.rs` | Feed log, writer task and bus consumer, stream | — |
 | `crates/surface/src/export/mod.rs` | `QueryApi::export` | `ExportRowsOf` |
 | `crates/surface/src/export/{hasher,stream,source}.rs` | Row hasher, audited stream, spec-trait source | `Blake3RowHasher`, `SurfaceExport`, `SpecExportSource`, `PlannedRows` |
+| `crates/surface/src/export/transmissions.rs` | The transmissions and verdicts datasets | `TransmissionSource`, `NoTransmissions`, `StoredTransmissions::new(store, directory, catalog)` |
 | `crates/surface/src/nodes/{mod,feeder,summary}.rs` | Node facts cache, feeder, summaries | `NodeCache`, `NodeFeeder`, `NodeFeedError` |
 | `crates/surface/src/tests/` | Unit and property tests over the memory stores (`world.rs` wires them) | — |
 | `crates/surface/src/dst/` | Simulation tests under `crosstalk-sim` | — |
@@ -398,7 +404,9 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 - No lock is held across an `.await`: the id minter and the search-model
   book are short `std::sync::Mutex` sections, the node cache a `RwLock`.
 - A row's topic under a version is the catalog's assignment under it,
-  else the stored classification's (INV-1072).
+  else the stored classification's (INV-1072); a transmissions export row
+  reads it the same way under the export's version (INV-1078).
+- `me` is the caller's own operator, for every caller (INV-1077).
 - In process, the node facts reflect every store write made before a
   completed `InProcess::settle` (INV-1074); a batch of events applies as
   the same events one by one (INV-1075); evidence records come from the

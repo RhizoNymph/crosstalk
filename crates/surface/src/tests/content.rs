@@ -468,3 +468,123 @@ async fn row_topics_are_the_catalogs_assignments_under_the_version() {
         assert_eq!(topic, Some(expected), "channel rows under {version:?}");
     }
 }
+
+/// INV-1078: a transmissions export's rows read their topic under the
+/// export's version as rows by id do (the catalog's stored assignment,
+/// else the stored classification), so after a re-fit the export row and
+/// the by-id row of a transmission are equal under every version, and a
+/// topic filter keeps it under the version that assigned it.
+#[tokio::test]
+async fn export_rows_and_rows_by_id_agree_under_a_refit() {
+    use crosstalk_memory::model::build::topic_id;
+    use crosstalk_spec::interfaces::l6_analysis::lifecycle::{StoredAssignment, TopicLifecycle};
+    use crosstalk_spec::interfaces::l8_surface::export::{ExportRow, ExportStates};
+    use crosstalk_spec::support::{TimeWindow, Timestamp};
+
+    use crate::export::{StoredTransmissions, TransmissionSource};
+    use crate::tests::world::Directory;
+
+    let fixture = Fixture::new().await;
+    let scene = fixture.scene().await;
+    let caller = fixture.caller(Who::Viewer).await;
+    let t1 = &scene.t1.transmission;
+    let Some(confirmed) = t1.state.confirmed() else {
+        panic!("t1 is confirmed");
+    };
+    // A re-fit assigns t1 under v1 without reclassifying its stored state
+    // (classified under v0).
+    let v1 = fixture.fit(minute(30), &[7], true).await;
+    let mut catalog = fixture.world.catalog.clone();
+    let assigned = catalog
+        .assign(
+            t1.id,
+            v1,
+            StoredAssignment {
+                topic: Some(topic_id(7)),
+                confirmed_at: confirmed.at(),
+                matched_bytes: confirmed.matched_bytes(),
+                from: confirmed.from(),
+                to: t1.to,
+            },
+        )
+        .await;
+    assert!(assigned.is_ok(), "{assigned:?}");
+    let source = StoredTransmissions::new(
+        fixture.world.transmissions.clone(),
+        Directory {
+            agents: fixture.world.agents.clone(),
+            channels: fixture.world.channels.clone(),
+        },
+        fixture.world.catalog.clone(),
+    );
+    let Ok(all_time) = TimeWindow::new(Timestamp::from_micros(0), crosstalk_spec::wire::time::MAX)
+    else {
+        panic!("all time");
+    };
+    let Ok(selection) = TransmissionSelection::new(vec![t1.id]) else {
+        panic!("selection");
+    };
+    for (version, expected) in [
+        (v1, TopicUnder::Topic(topic_id(7))),
+        (TopicModelVersion(0), TopicUnder::Outlier),
+    ] {
+        let by_id = fixture
+            .surface
+            .transmissions_by_id(
+                &caller,
+                &selection,
+                TopicVersionSelector::Pinned(version),
+                &page(10),
+            )
+            .await;
+        let Ok(by_id) = by_id else {
+            panic!("rows under {version:?}: {by_id:?}");
+        };
+        let Some(by_id) = by_id.page.items().first().cloned() else {
+            panic!("no row by id under {version:?}");
+        };
+        assert_eq!(by_id.state.topic(), Some(expected), "{version:?}");
+        let exported = source
+            .rows(
+                &TopologyFilter::default(),
+                version,
+                Some(all_time),
+                &ExportStates::default(),
+                false,
+            )
+            .await;
+        let Ok(exported) = exported else {
+            panic!("export under {version:?}: {exported:?}");
+        };
+        let row = exported.iter().find_map(|row| match row {
+            ExportRow::Transmission(row) if row.summary().id == t1.id => Some(row.summary()),
+            _ => None,
+        });
+        assert_eq!(row, Some(&by_id), "export row under {version:?}");
+        // A topic filter sees the same topic the row shows.
+        let by_topic = TopologyFilter {
+            topics: vec![topic_id(7)],
+            ..TopologyFilter::default()
+        };
+        let kept = source
+            .rows(
+                &by_topic,
+                version,
+                Some(all_time),
+                &ExportStates::default(),
+                false,
+            )
+            .await;
+        let Ok(kept) = kept else {
+            panic!("filtered export under {version:?}: {kept:?}");
+        };
+        let has_t1 = kept
+            .iter()
+            .any(|row| matches!(row, ExportRow::Transmission(row) if row.summary().id == t1.id));
+        assert_eq!(
+            has_t1,
+            expected == TopicUnder::Topic(topic_id(7)),
+            "topic filter under {version:?}"
+        );
+    }
+}

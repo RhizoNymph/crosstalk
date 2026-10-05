@@ -726,6 +726,15 @@
     "permission": "view"
   },
   {
+    "calls": "QueryApi::me",
+    "method": "GET",
+    "path": "/me",
+    "args": [],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "none: any caller"
+  },
+  {
     "calls": "QueryApi::export",
     "method": "POST",
     "path": "/exports",

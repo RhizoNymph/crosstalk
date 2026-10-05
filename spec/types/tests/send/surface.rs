@@ -341,6 +341,9 @@ impl QueryApi for Dummy {
     async fn operators(&self, _caller: &Caller) -> Result<Vec<Operator>, QueryError> {
         match *self {}
     }
+    async fn me(&self, _caller: &Caller) -> Result<Operator, QueryError> {
+        match *self {}
+    }
     async fn present(&self, _caller: &Caller) -> Result<Present, QueryError> {
         match *self {}
     }
@@ -409,6 +412,7 @@ fn query_api<T: QueryApi>(x: &T, never: &Dummy) {
     assert_send(x.detection_quality(arg(never), arg(never)));
     assert_send(x.audit(arg(never), arg(never), arg(never)));
     assert_send(x.operators(arg(never)));
+    assert_send(x.me(arg(never)));
     assert_send(x.present(arg(never)));
     assert_send(x.export(arg(never), arg(never)));
 }

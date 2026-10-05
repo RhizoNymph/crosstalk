@@ -78,6 +78,7 @@ pub async fn compose_with(start: Timestamp, ticking: Ticking) -> Result<Composit
         pipeline: Settings::default(),
         flow: options::flow()?,
         provenance: ProvenanceConfig::default(),
+        extract: crosstalk_flow::extract::ExtractConfig::default(),
         ticking,
         seed: 0xE2E,
         capture: None,

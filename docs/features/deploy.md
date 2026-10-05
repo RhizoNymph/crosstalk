@@ -65,8 +65,10 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
 `pipeline` (blob put retries), `shutdown` (`drain_timeout_ms` 45 000 +
 `flush_timeout_ms` 10 000, chosen to fit compose's 60 s
-`stop_grace_period`) and `flow`, L5's correlation timing, every key
-defaulted:
+`stop_grace_period`), `extract` (L5's extractor configuration,
+crosstalk-flow's `ExtractConfig`: `mcp_servers`, `http_tools`,
+`fetch_tools`, `sites`; see `docs/features/flow_extract.md`) and `flow`,
+L5's correlation timing, every key defaulted:
 
 | `flow` key | Default | Meaning |
 |---|---|---|

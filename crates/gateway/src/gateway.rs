@@ -227,6 +227,7 @@ pub async fn start_on(
             live_config.blobs = BlobConfig::Open(LiveBlobs::Fs(blobs.clone()));
             live_config.bus = config.bus.clone();
             live_config.pipeline = Settings::from_config(config);
+            live_config.extract = config.extract.clone();
             live_config.ticking = Ticking::Periodic;
             live_config.capture = captured;
             live_config.exchange_log = exchange_log;

@@ -506,6 +506,10 @@ impl QueryApi for TableClient {
         self.send(Route::Operators, |b| b)
     }
 
+    async fn me(&self, _: &Caller) -> Result<Operator, QueryError> {
+        self.send(Route::Me, |b| b)
+    }
+
     async fn present(&self, _: &Caller) -> Result<Present, QueryError> {
         self.send(Route::Present, |b| b)
     }
@@ -611,6 +615,7 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     let _ = ready(client.detection_quality(c, w));
     let _ = ready(client.audit(c, &AuditFilter::default(), &page()));
     let _ = ready(client.operators(c));
+    let _ = ready(client.me(c));
     let _ = ready(client.export(c, &export));
     let _ = ready(client.present(c));
     client.calls()
