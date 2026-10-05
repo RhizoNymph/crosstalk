@@ -257,6 +257,17 @@ struct RunArgs {
     /// Seeds the gateway's envelope ids (`--detector pipeline` or `live`).
     #[arg(long, default_value_t = 0)]
     seed: u64,
+    /// `--detector live`: L5's correlation window in seconds of corpus time
+    /// (default 60, `LiveSettings::short`).
+    #[arg(long)]
+    correlation_window: Option<u64>,
+    /// `--detector live`: L5's evidence window in seconds (default 10).
+    #[arg(long)]
+    evidence_window: Option<u64>,
+    /// `--detector live`: how long a suspected transmission lives, in
+    /// seconds (default 60).
+    #[arg(long)]
+    suspected_ttl: Option<u64>,
     #[command(flatten)]
     matcher: MatcherArgs,
 }
@@ -495,7 +506,13 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Live => {
-            let mut detector = LiveDetector::new(gateway_backend(), LiveSettings::short(args.seed)?)?;
+            let secs = |value: Option<u64>| value.map(std::time::Duration::from_secs);
+            let settings = LiveSettings::short(args.seed)?.with_windows(
+                secs(args.correlation_window),
+                secs(args.evidence_window),
+                secs(args.suspected_ttl),
+            )?;
+            let mut detector = LiveDetector::new(gateway_backend(), settings)?;
             let summary = run(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }

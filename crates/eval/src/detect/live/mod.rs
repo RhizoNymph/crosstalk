@@ -69,6 +69,22 @@ impl LiveSettings {
         .map_err(LiveError::Timing)?;
         Ok(Self { timing, seed })
     }
+
+    /// These settings with any of the three windows replaced.
+    pub fn with_windows(
+        self,
+        correlation: Option<Duration>,
+        evidence: Option<Duration>,
+        suspected_ttl: Option<Duration>,
+    ) -> Result<Self, LiveError> {
+        let timing = CorrelationTiming::new(
+            correlation.unwrap_or(self.timing.correlation_window()),
+            evidence.unwrap_or(self.timing.evidence_window()),
+            suspected_ttl.unwrap_or(self.timing.suspected_ttl()),
+        )
+        .map_err(LiveError::Timing)?;
+        Ok(Self { timing, ..self })
+    }
 }
 
 /// The agent and conversation L3 attributed an exchange to.
