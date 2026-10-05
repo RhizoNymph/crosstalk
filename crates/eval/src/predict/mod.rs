@@ -174,7 +174,7 @@ pub fn from_transmission(
             to: to.clone(),
             reader_exchange: content.reader_exchange(),
             route: route.clone(),
-            carrier: CarrierKind::from(content.carrier()),
+            carrier: content.carrier().kind(),
             class: MatchClass::from(content.kind()),
             read_at: content.read_at(),
             origin_at: directory.span(content.origin()),

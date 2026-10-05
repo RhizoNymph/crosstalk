@@ -3,7 +3,7 @@
 //! Each world is two unrelated Open-SWE trajectories (different
 //! repositories): a sender `A` and a reader `B`.
 //!
-//! 1. **The write.** A whole-file write of `A` ([`write`]): an editor
+//! 1. **The write.** A whole-file write of `A` ([`write`](mod@write)): an editor
 //!    `create` or a `cat > P <<EOF` heredoc, at least
 //!    [`MIN_CONTENT`] bytes over three lines or more.
 //! 2. **One working directory.** `A`'s working directory (from its task's
@@ -21,7 +21,8 @@
 //! **Label.** `A → B`, Channel route through `Locator::File` of the
 //! shared absolute path, ToolResult carrier, at `B`'s first exchange
 //! carrying the result, located at the numbered lines, needing what the
-//! variant and read form need, tier Construction. The rest of the world is
+//! variant and read form need, tier Construction (out of reach for the
+//! one nesting the spec cannot decode, see [`variant`]). The rest of the world is
 //! background: complete coverage, and a negative control (Boilerplate, or
 //! SharedSource for one repository) for every other (sender, reader
 //! exchange).
@@ -55,7 +56,7 @@ use crate::location::{self, LocationError, SpanLocationExt};
 use crate::reference::route::normalize_path;
 use crate::truth::{
     CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, InvalidLabel,
-    RouteExpectation, Tier, TransmissionLabel,
+    RouteExpectation, TransmissionLabel,
 };
 
 /// The dataset's id.
@@ -321,6 +322,7 @@ pub fn world(pool: &[Pooled], plan: &Plan) -> Result<World, SpliceError> {
     let sender_exchange = usize::try_from(write_call)
         .ok()
         .and_then(|at| sender_ids.get(at).copied());
+    let (needs, tier) = plan.variant.need(form);
     world.expect(Expectation::Transmission(ExpectedTransmission::new(
         TransmissionLabel {
             from,
@@ -335,8 +337,8 @@ pub fn world(pool: &[Pooled], plan: &Plan) -> Result<World, SpliceError> {
             },
             carrier: CarrierKind::ToolResult,
             content: ExpectedContent { text, at },
-            needs: plan.variant.needs(form),
-            tier: Tier::Construction,
+            needs,
+            tier,
             source: SourceRef::new(
                 b_file,
                 format!(

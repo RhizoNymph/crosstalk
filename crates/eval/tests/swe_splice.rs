@@ -202,18 +202,40 @@ fn variants_render_and_need_what_they_should() {
         "standard base64 of the text"
     );
     let editor = ReadForm::EditorView { observation: false };
-    assert_eq!(Variant::Exact.needs(editor), MatchNeed::Exact);
-    assert_eq!(Variant::Whitespace.needs(editor), MatchNeed::Normalized);
-    assert_eq!(Variant::JsonString.needs(editor), MatchNeed::Normalized);
-    let base64 = MatchNeed::Decoded {
-        codecs: vec![Codec::Base64],
-    };
-    assert_eq!(Variant::Base64.needs(editor), base64);
+    let shell = ReadForm::ShellCat;
+    let reach = |need: MatchNeed| (need, Tier::Construction);
+    let decoded = |codecs: Vec<Codec>| reach(MatchNeed::Decoded { codecs });
+    assert_eq!(Variant::Exact.need(editor), reach(MatchNeed::Exact));
     assert_eq!(
-        Variant::Exact.needs(ReadForm::ShellCat),
-        MatchNeed::Normalized
+        Variant::Whitespace.need(editor),
+        reach(MatchNeed::Normalized)
     );
-    assert_eq!(Variant::Base64.needs(ReadForm::ShellCat), base64);
+    assert_eq!(
+        Variant::JsonString.need(editor),
+        decoded(vec![Codec::JsonString])
+    );
+    assert_eq!(Variant::Base64.need(editor), decoded(vec![Codec::Base64]));
+    // A shell read arrives inside the harness's JSON `output` string.
+    assert_eq!(Variant::Exact.need(shell), decoded(vec![Codec::JsonString]));
+    assert_eq!(
+        Variant::Whitespace.need(shell),
+        decoded(vec![Codec::JsonString])
+    );
+    assert_eq!(
+        Variant::Base64.need(shell),
+        decoded(vec![Codec::JsonString, Codec::Base64])
+    );
+    // A JSON string inside a JSON string is two string levels: the spec
+    // undoes one (provenance.decode.one-string-level).
+    assert_eq!(
+        Variant::JsonString.need(shell),
+        (
+            MatchNeed::Undecodable {
+                codec: "json_string+json_string".into()
+            },
+            Tier::OutOfReach
+        )
+    );
 }
 
 #[test]
@@ -277,7 +299,14 @@ fn splices_plant_one_channel_transmission() {
         let labels = planted(world);
         assert_eq!(labels.len(), 1);
         let label = labels[0].label();
-        assert_eq!(label.tier, Tier::Construction);
+        let nested = variant == Variant::JsonString
+            && world.key().as_str().ends_with(ReadForm::ShellCat.name());
+        let tier = if nested {
+            Tier::OutOfReach
+        } else {
+            Tier::Construction
+        };
+        assert_eq!(label.tier, tier);
         assert_eq!(label.carrier, CarrierKind::ToolResult);
         assert!(label.from.name.starts_with("sender/"));
         assert!(label.to.name.starts_with("reader/"));

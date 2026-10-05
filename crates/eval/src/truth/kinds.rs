@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::quality::MatchClass;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::derived::provenance::matching::{Carrier, Codec};
+use crosstalk_spec::derived::provenance::matching::Codec;
 use serde::{Deserialize, Serialize};
 
 /// How a label was obtained, strongest first. Statistical thresholds are set
@@ -28,37 +28,16 @@ pub enum Tier {
     OutOfReach,
 }
 
-/// Where the content sits in the reader's exchange: the spec's `Carrier`
-/// without its parameter, for breakdown rows.
-///
-/// TODO(docs/spec-eval-gaps): replace with the spec's `CarrierKind`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CarrierKind {
-    ToolResult,
-    UserTurn,
-    SystemPrompt,
-    ReaderOutput,
-}
-
-impl From<&Carrier> for CarrierKind {
-    fn from(carrier: &Carrier) -> Self {
-        match carrier {
-            Carrier::ToolResult(_) => Self::ToolResult,
-            Carrier::UserTurn => Self::UserTurn,
-            Carrier::SystemPrompt => Self::SystemPrompt,
-            Carrier::ReaderOutput => Self::ReaderOutput,
-        }
-    }
-}
+/// Where the content sits in the reader's exchange, for breakdown rows: the
+/// spec's `CarrierKind` (`Carrier::kind`).
+pub use crosstalk_spec::derived::provenance::matching::CarrierKind;
 
 /// The weakest match a detector should need to find a labelled content:
 /// `Exact` when the text arrives byte for byte, `Normalized` when it differs
-/// by whitespace, case or a layer of JSON/YAML string escaping, `Decoded`
-/// when it arrives encoded, `Semantic` when only its meaning survives.
-///
-/// TODO(docs/spec-eval-gaps): escape unfolding becomes
-/// `Decoded([JsonString | YamlString])` once the spec has those codecs.
+/// by whitespace or case, `Decoded` when it arrives encoded or serialised
+/// (one level of JSON or YAML string escaping is `Decoded([JsonString])` or
+/// `Decoded([YamlString])`, as the spec's `MatchKind` says), `Semantic`
+/// when only its meaning survives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "class", rename_all = "snake_case")]
 pub enum MatchNeed {

@@ -5,19 +5,20 @@
 //! sender's `file_text` or heredoc body), as the task that defines the
 //! corpus does:
 //!
-//! | Variant | The file the reader views holds | Needs |
+//! | Variant | The file the reader views holds | Editor view needs |
 //! | --- | --- | --- |
 //! | `exact` | the text | `Exact` |
 //! | `whitespace` | the text with indentation as tabs, spaces doubled, two trailing spaces per line | `Normalized` |
-//! | `json_string` | the text as one JSON string literal | `Normalized` (interim) |
+//! | `json_string` | the text as one JSON string literal | `Decoded([JsonString])` |
 //! | `base64` | the text base64-encoded, on one line | `Decoded([Base64])` |
 //!
 //! A shell read (`cat -n` through a harness that returns JSON) delivers the
-//! view inside a JSON string: one more layer of string escaping, so an
-//! `exact` view needs `Normalized` there too.
-//!
-//! TODO(docs/spec-eval-gaps): `json_string` (and the shell read's escaping)
-//! becomes `Decoded([JsonString])` once the spec has `Codec::JsonString`.
+//! view inside a JSON string: one more level of string escaping, so `exact`
+//! and `whitespace` need `Decoded([JsonString])` there and `base64`
+//! `Decoded([JsonString, Base64])`. A `json_string` file read that way is a
+//! JSON string inside a JSON string, two string levels; the spec undoes
+//! one (`provenance.decode.one-string-level`), so that label is
+//! [`OutOfReach`](Tier::OutOfReach): expected, but missed by design.
 
 use std::fmt;
 
@@ -27,7 +28,7 @@ use crosstalk_spec::derived::provenance::matching::Codec;
 use serde::{Deserialize, Serialize};
 
 use super::read::ReadForm;
-use crate::truth::MatchNeed;
+use crate::truth::{MatchNeed, Tier};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,14 +68,27 @@ impl Variant {
         }
     }
 
-    /// The weakest match the reader's view needs, read through `form`.
-    pub fn needs(self, form: ReadForm) -> MatchNeed {
-        match (self, form) {
-            (Self::Base64, _) => MatchNeed::Decoded {
-                codecs: vec![Codec::Base64],
-            },
-            (Self::Exact, ReadForm::EditorView { .. }) => MatchNeed::Exact,
-            (Self::Exact | Self::Whitespace | Self::JsonString, _) => MatchNeed::Normalized,
+    /// The weakest match the reader's view needs, read through `form`,
+    /// and the tier its label gets.
+    pub fn need(self, form: ReadForm) -> (MatchNeed, Tier) {
+        let decoded = |codecs: Vec<Codec>| (MatchNeed::Decoded { codecs }, Tier::Construction);
+        match (form, self) {
+            (ReadForm::EditorView { .. }, Self::Exact) => (MatchNeed::Exact, Tier::Construction),
+            (ReadForm::EditorView { .. }, Self::Whitespace) => {
+                (MatchNeed::Normalized, Tier::Construction)
+            }
+            (ReadForm::EditorView { .. }, Self::JsonString) => decoded(vec![Codec::JsonString]),
+            (ReadForm::EditorView { .. }, Self::Base64) => decoded(vec![Codec::Base64]),
+            (ReadForm::ShellCat, Self::Exact | Self::Whitespace) => {
+                decoded(vec![Codec::JsonString])
+            }
+            (ReadForm::ShellCat, Self::Base64) => decoded(vec![Codec::JsonString, Codec::Base64]),
+            (ReadForm::ShellCat, Self::JsonString) => (
+                MatchNeed::Undecodable {
+                    codec: "json_string+json_string".to_owned(),
+                },
+                Tier::OutOfReach,
+            ),
         }
     }
 }
