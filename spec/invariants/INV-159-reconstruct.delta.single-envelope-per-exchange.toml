@@ -10,7 +10,7 @@ L5 would count the same read twice, inflating edge weights.
 """
 
 [evidence]
-dst = "crosstalk_reconstruct::tests::dst_one_delta_envelope_per_exchange"
+dst = "crosstalk_reconstruct::tests::dst::dst_one_delta_envelope_per_exchange"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

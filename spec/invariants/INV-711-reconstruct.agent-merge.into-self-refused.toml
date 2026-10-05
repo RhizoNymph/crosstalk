@@ -19,8 +19,8 @@ unit = [
     "crosstalk_spec::tests::agent_reads::merging_two_ids_of_one_cluster_is_into_self",
     "crosstalk_spec::tests::agent_reads::resolve_error_of_conflict_names_the_request",
 ]
-integration = "crosstalk_reconstruct::tests::pg_merge_refuses_one_cluster"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_merge_refuses_one_cluster"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

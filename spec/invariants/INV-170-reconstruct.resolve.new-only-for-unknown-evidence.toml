@@ -14,7 +14,7 @@ agents.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::new_resolution_only_when_deciding_evidence_unheld"
+property = "crosstalk_reconstruct::tests::pg_props::new_resolution_only_when_deciding_evidence_unheld"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
