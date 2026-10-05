@@ -230,6 +230,7 @@ impl Scanner {
             let spread = self
                 .not_distinctive(session, layer.text.text(), &kgrams, widespread)
                 .await?;
+            let counted = self.nearer_hits(session, &hits).await?;
             let reader = session.reader;
             let live = &session.live;
             let keep = |span| {
@@ -246,7 +247,9 @@ impl Scanner {
                     .collect();
                 extents_by_span(&template, &kgrams, keep)
             };
-            let by_span = extents_by_span(&hits, &kgrams, keep);
+            // The reader's nearer source (`nearer`): hits its own output or
+            // its own read of a forward's source explains are not counted.
+            let by_span = extents_by_span(&counted, &kgrams, keep);
             for (span, extents) in by_span {
                 if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
                 {

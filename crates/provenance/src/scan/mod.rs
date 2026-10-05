@@ -34,6 +34,7 @@ pub mod cache;
 pub mod hits;
 pub mod kind;
 pub mod messages;
+mod nearer;
 mod output;
 mod postings;
 mod reads;
@@ -143,6 +144,9 @@ pub struct Scanner {
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
+    /// The fingerprints of the agents' own output messages
+    /// (`nearer`), locked like `cache`.
+    own_cache: Mutex<nearer::SetCache>,
 }
 
 /// State one scan accumulates: live span records fetched so far, origin
@@ -158,6 +162,8 @@ pub(crate) struct Session<'a, I, S, M, L> {
     pub bodies: HashMap<MessageHash, Option<Message>>,
     /// Token frequencies read so far.
     pub tokens: HashMap<Fingerprint, u64>,
+    /// The reader's own paths to text (`nearer`).
+    pub nearer: nearer::Nearer,
 }
 
 impl<I, S, M, L> Session<'_, I, S, M, L>
@@ -193,12 +199,7 @@ where
             return Ok(Vec::new());
         };
         let location = record.span.location;
-        let hash = location.part.message;
-        if !self.bodies.contains_key(&hash) {
-            let message = self.env.messages.message(hash).await?;
-            self.bodies.insert(hash, message);
-        }
-        let Some(Some(message)) = self.bodies.get(&hash) else {
+        let Some(message) = self.body(location.part.message).await? else {
             return Ok(Vec::new());
         };
         let Some(part) = text_parts(message)
@@ -217,6 +218,15 @@ where
             texts.push(view(text, part.kind).into_text());
         }
         Ok(texts)
+    }
+
+    /// The body of `hash`, read once per scan; `None` when it is gone.
+    pub async fn body(&mut self, hash: MessageHash) -> Result<Option<&Message>, ScanError> {
+        if !self.bodies.contains_key(&hash) {
+            let message = self.env.messages.message(hash).await?;
+            self.bodies.insert(hash, message);
+        }
+        Ok(self.bodies.get(&hash).and_then(Option::as_ref))
     }
 
     /// How many live texts hold `token` (`fingerprint::token`), read once
@@ -269,6 +279,7 @@ impl Scanner {
             forwarding: config.forwarding(),
             spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
+            own_cache: Mutex::new(nearer::SetCache::new(nearer::DEFAULT_BUDGET)),
         }
     }
 
@@ -362,6 +373,7 @@ impl Scanner {
             fetched: BTreeSet::new(),
             bodies: HashMap::new(),
             tokens: HashMap::new(),
+            nearer: self.nearer(loaded),
         };
         let mut found: Vec<ContentMatch> = Vec::new();
         for (message, scanned_as) in loaded.listed() {

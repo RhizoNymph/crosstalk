@@ -1,0 +1,38 @@
+[invariant]
+id = "provenance.match.own-output-replay"
+statement = "A lookup hit of a read on another agent's span does not count toward a ContentMatch when the reader's own earlier output holds the same k-gram or short-span run: any text, reasoning or tool-call argument part of an assistant message in the exchange's request (history and new inputs), through any of its decode layers (server tool results excluded). Only those hits are dropped: the match keeps the extents of its other hits, and is made from them when any remain."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A tool result often replays the reader's own call: a log of the reader's
+own queries (SALT get_log), a confirmation echoing the call's arguments
+(AgentDojo send_money: "Transaction to US1330... sent."). When a peer's
+span shares that text (task phrasing both derive from the same prompt, an
+IBAN both copied from one injection), the replay matched the peer: most of
+SALT's 570 direct/tool_result false positives and AgentDojo's 108. The
+reader's own output is the nearer source of text it wrote itself, so the
+replay is the reader's own relay, not a delivery.
+
+The condition is that the reader's own output holds the text, written
+before the read (it is in the request), whoever wrote it first. That loses
+no transmission: if the peer's span is the actual source, the read that
+first brought the text to the reader came before the reader wrote it, held
+no own copy, and was matched then; only the later replay is withheld. A
+peer message that repeats text the reader wrote is no delivery of that
+text either, even when the peer had it first.
+
+The granularity is per run (per hit), not per match: a read holding the
+reader's own text next to text only the peer wrote still matches the peer
+on the latter. All k-grams of the reader's own output are compared, not
+only the winnowed ones, so a replayed stretch is dropped whole whatever
+the two sides' winnowing selected. Only text present in the request
+counts: a reader whose earlier output is not in the request (a WebSocket
+increment, a truncated history) is not covered.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::nearer_source::tool_result_replaying_the_readers_own_call_matches_no_peer", "crosstalk_provenance::tests::nearer_source::tool_result_echoing_the_readers_own_relay_matches_no_peer", "crosstalk_provenance::tests::nearer_source::own_output_explains_only_its_own_runs"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

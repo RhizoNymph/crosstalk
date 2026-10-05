@@ -1228,7 +1228,10 @@ Features Index:
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
       under stricter length and frequency rules, boilerplate Common) and
-      picks carrier, kind, read range and matched bytes; the index holds
+      picks carrier, kind, read range and matched bytes, leaving out hits
+      the reader's nearer source explains (its own earlier output in the
+      request, and with forwarding on its own direct read of a forward's
+      source); the index holds
       originated spans and, with forwarding on (off by default), forwarded
       ones (relayed from the agent's own input, indexed under the
       forwarder, state left Relayed), with the
@@ -1249,6 +1252,7 @@ Features Index:
       - crates/provenance/src/engine.rs
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/scan/nearer.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs

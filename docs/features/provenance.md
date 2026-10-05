@@ -30,6 +30,9 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - Forwarded spans indexed under the forwarding agent, and context k-grams
   that keep an originated remainder next to a forward matchable.
 - The stricter rules for `ReaderOutput` matches.
+- The reader's nearer source: hits explained by the reader's own earlier
+  output, or (forwarding on) by its own direct read of a forward's source,
+  are not counted.
 - The scanner and the engine (`Provenance`): what one delta means, its
   index writes, replay on redelivery, and eviction.
 - `PgFingerprintIndex` (`FingerprintIndex`) on Postgres.
@@ -181,6 +184,42 @@ watermark.
      observation of its own, at most `spread.tokens_per_text` (512) of
      them, within the index's retention; a capped text undercounts, which
      errs toward keeping matches.
+  2c. **The reader's nearer source** (`scan::nearer`). After the spread
+     rule has read the hits, a hit on another agent's span is not counted
+     (its extent is left out of the candidate match) when the reader has
+     its own path to that text:
+     - **Own output** (`provenance.match.own-output-replay`): the reader's
+       own earlier output holds the hit's k-gram or short-span run. That
+       output is every assistant message in the exchange's request (history
+       and new inputs, so written before the read): its text, reasoning and
+       tool-call argument parts (server tool results are reads and do not
+       count), all k-grams and short-span token runs of every decode layer.
+       A tool result that replays the reader's call (SALT `get_log`, reader
+       `01KDVDP6XWRHKQWFYAC1XBWMJN`; AgentDojo `send_money`, reader
+       `01KDVDP3JH5FRHDFQ2CC1ZXZPG`) is the reader's own relay. Whoever wrote
+       the text first does not matter: when the peer's span was the actual
+       source, the read that first brought it to the reader came before the
+       reader's own copy and was matched then; only later replays are
+       withheld. A peer message that repeats text the reader wrote is no
+       delivery of that text either.
+     - **Direct read of a forward's source**
+       (`provenance.match.forward-direct-read`, forwarding on only): the hit
+       is on a forwarded span (relayed from the forwarder's input message
+       `m`) and a decode layer of one of the reader's non-assistant inputs
+       in the request (the read itself included) holds the k-gram and at
+       least `w` (16) k-grams of `m` that the forwarder's output message does
+       not hold. A delivery of the forward carries only what the forwarder
+       wrote; a reader holding the source's text around the forward (the
+       tool's header, rows not pasted) read the source itself. The reader's
+       inputs are indexed by fingerprint once per scan, on the first hit on
+       a forward; `m` and the forwarder's output are read from the blob
+       store (no rule when either is gone).
+     Both are per hit, so a match keeps the runs only its origin explains
+     (per run, not per match). **Tradeoffs:** a forward holding the whole
+     source cannot be told from it (a peer's own read of exactly that
+     source still matches); text the reader wrote but whose output is not
+     in the request (a WebSocket increment, a truncated history) is not
+     covered.
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -262,8 +301,10 @@ are published as `SpanRelayed`. The store records their indexing beside the
 state (`store::Forwarding`: `Pending`, then `Indexed { at }` with an index
 sequence, then `Expired`), hits on them count no `Propagated` state, and
 expiry evicts them like originated spans. A reader that read the same
-upstream source as the forwarder also matches the forward; L5 keeps such a
-shared-upstream match from confirming a channel (INV-963).
+upstream source as the forwarder itself does not match the forward on the
+text its own read holds (`provenance.match.forward-direct-read`, Reads
+step 2c); where that cannot be told (a forward of the whole source), L5
+keeps the shared-upstream match from confirming a channel (INV-963).
 
 ### The engine
 
@@ -437,6 +478,7 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/decode/{mod,base64,hex,url,unicode,escape}.rs` | Decoders and the pipeline | `Step`, `TextDecoder`, `DecodedText`, `DecodePipeline`, `Layer`, `AnyDecoder`, the six decoders |
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |
 | `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `MessageSource`, `BlobMessages`, `MemoryMessages` |
+| `src/scan/nearer.rs` | The reader's nearer source: own output and direct reads of a forward's source | `Nearer`, `SetCache`, `Scanner::nearer_hits` (crate) |
 | `src/scan/postings.rs` | What a span is posted under beyond its own fingerprints: context k-grams, short-span hashes | `Scanner::context_kgrams`, `Scanner::short_fingerprint` (crate) |
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
@@ -469,7 +511,9 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - INV-1090 `provenance.index.forwarded-indexed`;
   - INV-1091 `provenance.index.remainder-around-relay-matchable`;
   - INV-1092 `provenance.match.short-span-exact`;
-  - INV-1093 `provenance.match.reader-output-strict`.
+  - INV-1093 `provenance.match.reader-output-strict`;
+  - `provenance.match.own-output-replay` and
+    `provenance.match.forward-direct-read` (INV-X, numbers pending).
 - Restated for forwarded spans: INV-205 and INV-224 (what the index and
   the semantic matcher accept), INV-218 (the reader-output rules), INV-1057
   (the short-span floor).
