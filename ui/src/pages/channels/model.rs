@@ -205,6 +205,9 @@ pub(crate) mod tests {
         }
     }
 
+    /// When every test channel but `declared` came to exist.
+    const CREATED: Timestamp = Timestamp::from_micros(1_790_900_000_000_000);
+
     /// A discovered, active, unreviewed channel seeded by [`wiki`], with
     /// two writers, three readers and 14 transmissions in the window.
     pub fn discovered(id: u128) -> ChannelRow {
@@ -231,7 +234,7 @@ pub(crate) mod tests {
                 },
             },
         };
-        ChannelRow::new(channel, Some(seed_resource(id)), standing).expect("row")
+        ChannelRow::new(channel, Some(seed_resource(id)), standing, CREATED).expect("row")
     }
 
     /// `discovered(id)` with `policy`.
@@ -239,7 +242,13 @@ pub(crate) mod tests {
         let row = discovered(id);
         let mut channel = row.channel().clone();
         channel.policy = policy;
-        ChannelRow::new(channel, row.seed().cloned(), row.standing()).expect("row")
+        ChannelRow::new(
+            channel,
+            row.seed().cloned(),
+            row.standing(),
+            row.created_at(),
+        )
+        .expect("row")
     }
 
     /// The channel `promoted`, promoted by operator 3, and `id`, a
@@ -278,6 +287,7 @@ pub(crate) mod tests {
             channel,
             Some(seed_resource(id)),
             ChannelStanding::Superseded(into),
+            CREATED,
         )
         .expect("row")
     }
@@ -304,6 +314,7 @@ pub(crate) mod tests {
                 traffic: CrossTraffic::NONE,
                 activity: ChannelActivity::Never,
             },
+            Timestamp::from_micros(0),
         )
         .expect("row")
     }
@@ -369,7 +380,13 @@ pub(crate) mod tests {
             },
             activity,
         };
-        ChannelRow::new(row.channel().clone(), row.seed().cloned(), standing).expect("row")
+        ChannelRow::new(
+            row.channel().clone(),
+            row.seed().cloned(),
+            standing,
+            row.created_at(),
+        )
+        .expect("row")
     }
 
     #[test]

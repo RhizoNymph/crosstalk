@@ -27,6 +27,7 @@ use crate::backend::Result;
 use crate::backend::fixture::clock::{MINUTE, minus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
+use crate::pending::channel_semantics::checked_point;
 
 use super::super::Ctx;
 use super::super::graph::store_error;
@@ -109,7 +110,7 @@ pub fn fit(ctx: &Ctx, spec: &ProjectionSpec, id: ProjectionId, at: Timestamp) ->
         .iter()
         .map(|counted| {
             let (x, y) = position(params, counted);
-            Ok(ProjectedPoint {
+            checked_point(ProjectedPoint {
                 transmission: counted.record.transmission.id,
                 from: counted.from,
                 to: counted.to,
@@ -119,6 +120,7 @@ pub fn fit(ctx: &Ctx, spec: &ProjectionSpec, id: ProjectionId, at: Timestamp) ->
                 x: finite(x)?,
                 y: finite(y)?,
             })
+            .map_err(|e| store_error("projected point", e))
         })
         .collect::<Result<_>>()?;
     let watermark = watermark_at(at);

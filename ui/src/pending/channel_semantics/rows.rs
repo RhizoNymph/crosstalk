@@ -51,15 +51,20 @@ pub struct ChannelRow {
     row: SpecRow,
     /// `Some` exactly when the row is in force.
     traffic: Option<CrossTraffic>,
+    created_at: Timestamp,
 }
 
 impl ChannelRow {
     /// The spec's `ChannelRow::new` checks, and no cross-agent traffic on a
-    /// channel whose stored detection shows none.
+    /// channel whose stored detection shows none. `created_at` is when the
+    /// channel came to exist: the port derives it from the stored origin
+    /// (`ChannelOrigin::created_at`, with `Seed::opened_at` for a discovered
+    /// channel); today's `Seed` holds no time, so the reader passes it.
     pub fn new(
         channel: Channel,
         seed: Option<Resource>,
         standing: ChannelStanding,
+        created_at: Timestamp,
     ) -> Result<Self, InvalidChannelRow> {
         let (spec, traffic) = match standing {
             ChannelStanding::InForce { traffic, activity } => {
@@ -71,7 +76,11 @@ impl ChannelRow {
             ChannelStanding::Superseded(into) => (SpecStanding::Superseded(into), None),
         };
         let row = SpecRow::new(channel, seed, spec).map_err(InvalidChannelRow::Spec)?;
-        Ok(Self { row, traffic })
+        Ok(Self {
+            row,
+            traffic,
+            created_at,
+        })
     }
 
     /// The row as the spec's `QueryApi` returns it, without its traffic.
@@ -111,6 +120,14 @@ impl ChannelRow {
 
     pub fn last_activity(&self) -> Option<Timestamp> {
         self.row.last_activity()
+    }
+
+    /// When the channel came to exist: its declaration's time when declared
+    /// before traffic, otherwise when its first cross-agent transmission
+    /// opened. `channels` lists rows by it, newest first, ties by id
+    /// descending (the port's `ChannelRow::created_at`).
+    pub fn created_at(&self) -> Timestamp {
+        self.created_at
     }
 
     /// The cross-agent traffic of a channel in force; `None` when

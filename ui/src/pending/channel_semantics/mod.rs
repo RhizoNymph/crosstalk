@@ -13,12 +13,13 @@
 //! | [`Confirmation`], [`CrossTraffic`], [`Listing`], [`ListingKind`] | `derived::flow::channel::confirmation` |
 //! | [`Crossing`], [`crossing`] | `Crossing`, `Transmission::crossing` |
 //! | [`UnconfirmedChannels`], [`TopologyFilter`] | `aggregates::filter`: the field `TopologyFilter::unconfirmed_channels`, `admits` refusing a subject within one agent, `AccessSubject::confirmation` |
-//! | [`ChannelRow`], [`ChannelStanding`], [`InvalidChannelRow`] | `l8_surface::channels`: `ChannelStanding::InForce { traffic, activity }`, `ChannelRow::{traffic, listing, confirmation}` |
+//! | [`ChannelRow`], [`ChannelStanding`], [`InvalidChannelRow`] | `l8_surface::channels`: `ChannelStanding::InForce { traffic, activity }`, `ChannelRow::{traffic, listing, confirmation, created_at}` (rows newest created first) |
 //! | [`ChannelFilter`] | `l8_surface::lists::ChannelFilter` with `listings`, `matches(&ChannelRow)` |
 //! | [`QueueCounts`], [`OverviewCounts`] | `l8_surface::overview`: `QueueCounts::unconfirmed_channels`, `tally` over rows and shown alerts |
 //! | [`ChannelTransmission`], [`ChannelTransmissionFilter`], [`ChannelTransmissionPage`], [`ChannelTransmissionList`] | `l8_surface::channel_traffic`, `paging::ChannelTransmissionList`, `QueryApi::channel_transmissions` |
 //! | [`ChannelGraph`] | `aggregates::node::ChannelNode::confirmation` |
 //! | [`alert_shown`] | `AlertSubject::shown` |
+//! | [`checked_point`] | `ProjectedPoint::new` refusing a point within one agent |
 //!
 //! Where the spec it builds on differs from the port and this module cannot
 //! paper over it, the difference is stated where it matters:
@@ -28,8 +29,9 @@
 //!   `CoAccess::writer`).
 //! - A discovered channel's `Seed` names its first access here; in the
 //!   port it names the first cross-agent transmission and when it opened
-//!   (`Seed::{first_transmission, opened_at}`, `ChannelRow::created_at`).
-//!   The fixture records the access that opened that transmission.
+//!   (`Seed::{first_transmission, opened_at}`). The fixture records the
+//!   access that opened that transmission, and passes [`ChannelRow::new`]
+//!   the channel's `created_at`, which the port derives from the origin.
 //! - `TrafficDetection` still has `Observed` and `Candidate` (the port
 //!   removes them); the fixture never builds either, and the pages show
 //!   them like any other detection.
@@ -50,6 +52,7 @@ mod confirmation;
 mod filter;
 mod graph;
 mod overview;
+mod point;
 mod rows;
 mod traffic;
 
@@ -58,6 +61,7 @@ pub use confirmation::{Confirmation, CrossTraffic, Crossing, Listing, ListingKin
 pub use filter::{TopologyFilter, UnconfirmedChannels};
 pub use graph::ChannelGraph;
 pub use overview::{OverviewCounts, QueueCounts};
+pub use point::checked_point;
 pub use rows::{ChannelFilter, ChannelRow, ChannelStanding};
 pub use traffic::{
     ChannelTransmission, ChannelTransmissionFilter, ChannelTransmissionList,

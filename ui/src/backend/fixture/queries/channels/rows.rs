@@ -134,7 +134,8 @@ fn row(ctx: &Ctx, record: &ChannelRecord, counting: &Counting) -> Result<Channel
                 .ok_or_else(|| store_error("unknown seed resource", seed.resource))
         })
         .transpose()?;
-    ChannelRow::new(channel.clone(), seed, standing).map_err(|e| store_error("channel row", e))
+    ChannelRow::new(channel.clone(), seed, standing, record.created)
+        .map_err(|e| store_error("channel row", e))
 }
 
 /// `channels`: the channels `filter` matches, newest first, counted in its
@@ -150,7 +151,7 @@ pub fn list(
         let row = row(ctx, record, &counting)?;
         if filter.matches(&row) {
             items.push((
-                newest_first(record.created, row.channel().id.as_ulid()),
+                newest_first(row.created_at(), row.channel().id.as_ulid()),
                 row,
             ));
         }
