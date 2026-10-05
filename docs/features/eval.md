@@ -306,7 +306,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
 | `src/predict/memory.rs` | eval-owned stores behind the seam | `SpanTable` (`SpanIndex`), `AccessTable` (`AccessStore`), `ChannelTable` (`ChannelResources`) |
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
-| `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
+| `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` (`Correct`, `False`, `Unjudged`, `Dismissed`) |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
 | `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
@@ -336,7 +336,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need; `forwarding.rs` is the SALT forwarding tier, its accounting in the report, `--forwarding` on the real `Live`, and gates by forwarding); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `score_discarded.rs` is a discarded reread co-access dismissed, not a violation; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need; `forwarding.rs` is the SALT forwarding tier, its accounting in the report, `--forwarding` on the real `Live`, and gates by forwarding); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -366,6 +366,23 @@ summed in `Report::forwarding` and never move overall recall or
 precision, whatever the run's forwarding setting. Only `--detector live
 --forwarding on` changes what L4 indexes; the labels are the same in
 every run.
+
+**A discarded co-access aligned with no label is dismissed**
+(`Outcome::Dismissed`, `Counts::dismissed`, the table's `dismissed`
+column). L5 opened it on a co-access and then decided it was not a
+transmission, which is the detector saying "no": it is neither a false
+positive nor charged to a negative control, and its transmission has no
+verdict in the transmission rows or `DetectionQuality` (unlabeled). The
+rule is decided in `Judge::judge` after alignment and before exemptions
+and controls, so the scorer and `quality::verdicts` agree by
+construction. A discarded co-access that does align with a label is still
+`correct` in its row, and that label is still `missed` and `suspected`.
+Suspected predictions are unchanged: unconfirmed but not rejected, they
+are judged like any prediction. Before this rule the node0 bench charged
+every reread's discarded co-access (INV-1122 discards it by design) to
+the `reread` control: 1 violation on the headline run, 5 on the
+boilerplate run, and 12 and 21 `discarded` rows scored false
+(`tests/score_discarded.rs`).
 
 **Access-only recall** (`Report::access_only`, `AccessOnly`) is those
 labels over every in-reach label: `overall.suspected / overall.expected`.
@@ -1137,7 +1154,8 @@ write's agent to the read's agent, at the read's exchange, located at the
 whole tool result, with the write's whole tool call as origin, class
 `suspected` or `discarded`. These are access-only predictions: their own
 rows, never finding a label, out of `overall`, counted in access-only
-recall. A part whose body the blobs lack leaves the co-access unlocated,
+recall; a discarded one aligned with no label is dismissed, not false
+(see the scoring invariants). A part whose body the blobs lack leaves the co-access unlocated,
 reported as `unpredictable`.
 
 `swarm-fetch` asks for the transmissions export in `states`
@@ -1184,6 +1202,77 @@ the diagnostics table, writes `report.json`, `report.txt` and
 exits 2 when a gate fails. A re-run over the same files is byte-identical
 (tested).
 
+### Replay (`ct-eval replay`)
+
+`ct-eval replay` re-runs a saved bench run offline through the gateway's
+own detection path and scores it exactly as `ct-eval swarm` does, so a
+detection or scoring change can be checked against real bench traffic
+without node0:
+
+```text
+ct-eval replay --run <dir> [--out <dir>/replay] [--gates crates/eval/gates.toml]
+               [--exchanges <dir>/exchange-log.jsonl] [--blobs <dir>/blobs]
+               [--evidence-window-ms N] [--suspected-ttl-ms N]
+               [--since-unix-ms N] [--seed 0] [--examples 50]
+```
+
+`<dir>` holds `truth.jsonl`, `bench.env`, and (unless `--exchanges` and
+`--blobs` point elsewhere, such as the gateway's data volume) a copy of the
+gateway's `exchange-log.jsonl` and `blobs/`. stdout is the same text as
+`ct-eval swarm` (the bench's `score.txt`); one summary line goes to stderr
+(exchanges ingested, earlier log entries skipped, the windows, the settled
+clock and watermark). `--out` (default `<dir>/replay`) receives
+`export.jsonl`, `evidence.jsonl` (as `swarm-fetch` saves them),
+`score.txt` and `report/` (`report.json`, `report.txt`,
+`diagnostics.json`). Exit codes are `ct-eval swarm`'s: 0, 2 when a gate
+fails, 1 on any error.
+
+```text
+bench.env ─▶ evidence_window_ms, suspected_ttl_ms, swarm_end_unix_ms (no other key is read)
+FlowConfig = deploy defaults (correlation 600 s, retention 30 d, 1 shard, tick 1 s) + those two windows
+exchange-log.jsonl ─▶ entries whose envelope `at` ≥ since (default: truth header started_at_unix_ms;
+                      the gateway restarted just before, so earlier entries are other runs')
+                    + blobs/ ─▶ NormalizedExchange (request and response bodies, media blobs)
+Live::start(LiveConfig::new(Manual clock, flow, seed))      memory stores, Ticking::OnSettle
+  each entry, in log order:  settle at every whole tick before its `at`
+                             clock ─▶ at; pipeline().ingest(exchange, at); settle(at)
+  then settle tick by tick until the watermark ≥ max(swarm_end, last at)   (the bench's wait)
+surface().export(swarm-fetch's request: confirmed + discarded, since .. clock + 1 h) ─▶ JSONL bytes ─▶ read_export
+surface().transmission_evidence(id, context 0) per exported row
+swarm_truth::score(truth, the whole log, blobs, export, evidence, gates)
+```
+
+The library entry point is `swarm_truth::run_replay(ReplayInputs,
+ReplayOptions, examples, gates) -> ReplayOutcome` (the replay alone is
+`replay::replay`). The replay is deterministic (tested); it differs from
+the running gateway only in when ticks fall (the gateway ticks every
+second of wall time while stages run concurrently; the replay ticks at
+each whole second and at each exchange's capture time after its
+processing drained).
+
+**Reproduction.** On the two node0 runs of 2026-10-05 (staging 02103e9,
+whose detection is integration/impl c3cd7f2), the replay built at c3cd7f2
+reproduces `score.txt` line for line, gates aside (c3cd7f2's ct-eval
+predates the gate-dataset skip, so its other-dataset gates say `pass`
+or `no data` instead of `other dataset`): headline 70 exported, 58 / 58,
+precision 1.000, 1 `reread` violation, 12 `discarded` false; boilerplate
+113 exported, 194 predictions, precision 0.763, 5 `reread` violations, 21
+`discarded` false. The replay also reaches the bench's watermark exactly
+(headline 1791225900000000 µs, as its `healthz.json`).
+
+| Run | Detection | Scorer | Precision (correct / false) | Reread violations | Discarded rows |
+| --- | --- | --- | --- | --- | --- |
+| 20261005T184212Z headline | c3cd7f2 | before | 1.000 (58 / 0) | 1 | 12 false |
+| 20261005T184212Z headline | c3cd7f2 | dismissed | 1.000 (58 / 0) | 0 | 12 dismissed |
+| 20261005T184212Z headline | a0f2f3a | dismissed | 1.000 (58 / 0) | 0 | 12 dismissed |
+| 20261005T184633Z boilerplate | c3cd7f2 | before | 0.763 (132 / 41) | 5 | 21 false |
+| 20261005T184633Z boilerplate | c3cd7f2 | dismissed | 0.763 (132 / 41) | 0 | 21 dismissed |
+| 20261005T184633Z boilerplate | a0f2f3a | dismissed | 0.704 (133 / 56) | 0 | 21 dismissed |
+
+Recall is 1.000 throughout. On a0f2f3a the boilerplate run has 39
+`unobserved` / `reader_output` false positives (24 at c3cd7f2) and one
+more exact channel match: the L4 commits after c3cd7f2, not the scorer.
+
 **Header counts.** The swarm's world holds labels over the log's exchange
 ids, not the exchanges themselves, so the report's `totals.exchanges` (the
 header's "N exchanges", and the denominator of the false positives per 1k
@@ -1201,7 +1290,7 @@ dataset id):
 | --- | --- | --- | --- |
 | `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (58 / 58) |
 | `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.90 | 0.951 |
-| `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 9 (L4's reread dedup is to remove them) |
+| `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 9 (L4's reread dedup is to remove them); 1 on 20261005T184212Z, a discarded co-access, 0 once dismissed |
 | `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 10,000 (placeholder) | not run yet |
 
 The boilerplate ceiling is a loose placeholder, to calibrate from a
@@ -1225,18 +1314,20 @@ rows map them, and they are scored as false positives.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET_PREFIX`, `DETECTOR`, `SwarmTruthError` |
+| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `run_replay`, `ReplayInputs`, `ReplayOptions`, `ReplayOutcome`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET_PREFIX`, `DETECTOR`, `SwarmTruthError` |
 | `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Scenario`, `SessionStart`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
 | `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
-| `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
+| `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog` (with each exchange's envelope time, `captured_at`), `Sessions`, `Session` |
 | `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
 | `src/datasets/swarm_truth/locate.rs` | tool results and `PUT` calls in exchanges | `tool_result`, `write_call`, `FoundResult`, `FoundCall` |
 | `src/datasets/swarm_truth/resolve.rs` | the join | `resolve`, `Resolved`, `AgentIndex`, `ResolveCounts`, `needs` |
 | `src/datasets/swarm_truth/diagnostics.rs` | join failures | `Diagnostics`, `Diagnostic`, `JoinFailure`, `Effect`, `RowKind`, `Side`, `DiagnosticCount` |
 | `src/datasets/swarm_truth/detected.rs` | the export and evidence as predictions | `read_export`, `read_evidence`, `predictions`, `SwarmDirectory`, `Blake3RowHasher`, `Exported` |
-| `src/datasets/swarm_truth/fetch.rs` | saving the gateway's side over HTTP | `fetch`, `FetchConfig`, `Fetched`, `FetchError` |
-| `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | |
-| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence) | |
+| `src/datasets/swarm_truth/fetch.rs` | saving the gateway's side over HTTP | `fetch`, `FetchConfig`, `Fetched`, `FetchError`, `export_request`, `FETCHED_STATES` |
+| `src/datasets/swarm_truth/replay.rs` | a saved run through `Live`, export and evidence read back | `replay`, `ReplaySettings`, `Replayed`, `ReplayError`, `BenchEnv`, `read_bench_env`, `demo_flow` |
+| `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | `outcome_text`, `write_report` |
+| `src/bin/ct-eval/replay.rs` | `ct-eval replay` | |
+| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence); `replay.rs` replays it through `Live` (the reread's co-access is discarded and dismissed; deterministic; `since`) | |
 
 **Invariants.**
 - Every truth row becomes a label or a diagnostic; every exported
