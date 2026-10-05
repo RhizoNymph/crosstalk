@@ -54,8 +54,7 @@ bash deploy/run.sh bench --yes --claude-code-shape -- --agents-per-key 2 --write
 | `--duration D` | 2m | Swarm run time (`crosstalk-demo` duration syntax) |
 | `--seed N` | 42 | Swarm seed |
 | `--claude-code-shape` | off | The swarm's Claude Code request shape |
-| `--settle SECS` | 10 | How long the counters must hold still: one evidence window |
-| `--settle-timeout SECS` | 300 | Give up settling after this long |
+| `--settle-timeout SECS` | 900 | Give up waiting for Live's watermark to pass the swarm's end after this long |
 | `--yes`, `-y` | off | Restart `wiki` and `crosstalk` without asking |
 | `-- ...` | | Any further `crosstalk-demo swarm` options, as is |
 
@@ -68,18 +67,18 @@ when a gate fails, 1 for any failure before or during scoring.
 run.sh bench
  1 confirm_restart ── prints what restarts; asks on a TTY unless --yes
  2 start_stack ────── compose up -d --build   (base + compose.demo.yaml)
- 3 require_detection_api ── bench container: crosstalk-demo healthcheck --url http://crosstalk:8081
- 4 fresh_world ────── compose restart wiki crosstalk; wait until both are healthy
- 5 require_live_pipeline ── (pending: warns only)
- 6 run_swarm ──────── compose run --no-deps swarm --agents … --ground-truth /bench/<run>/truth.jsonl
+ 3 require_detection ── host curl /readyz: tasks `live` and `api` running;
+                        host curl GET /operators with the API token: 200
+ 4 fresh_world ────── compose restart wiki crosstalk; wait until both are healthy; step 3 again
+ 5 run_swarm ──────── compose run --no-deps swarm --agents … --ground-truth /bench/<run>/truth.jsonl
                         swarm ─▶ crosstalk:8080 ─▶ fake-upstream:8070; tool calls ─▶ wiki:8090
                         crosstalk ─▶ data volume: exchanges/exchange-log.jsonl, blobs/
- 7 wait_caught_up ─── host curl <CROSSTALK_BIND>:<CROSSTALK_OPS_PORT>/healthz until
-                        capture.captured and pipeline.published are unchanged across --settle
- 8 fetch_detections ─ compose run --no-deps bench swarm-fetch --api http://crosstalk:8081
+ 6 wait_caught_up ─── host curl <CROSSTALK_BIND>:<CROSSTALK_OPS_PORT>/healthz until
+                        live.watermark_micros ≥ the swarm's end
+ 7 fetch_detections ─ compose run --no-deps bench swarm-fetch --api http://crosstalk:8081
                         --token-env CROSSTALK_API_TOKEN --truth … --out /bench/<run>
                         (POST /exports, GET /transmissions/{id}/evidence)
- 9 score ──────────── compose run --no-deps bench swarm --truth … --exchanges /var/lib/crosstalk/exchanges/exchange-log.jsonl
+ 8 score ──────────── compose run --no-deps bench swarm --truth … --exchanges /var/lib/crosstalk/exchanges/exchange-log.jsonl
                         --blobs /var/lib/crosstalk/blobs --export … --evidence … --gates … --out /bench/<run>/report
                       prints the `overall:` line, the gates, the result; exits with ct-eval's code
 ```
@@ -94,39 +93,49 @@ Step by step:
 2. **Start.** `up -d --build` with the demo override, as `demo up` does. The
    build makes sure the demo image carries `ct-eval`. It then waits for
    `crosstalk` to be healthy.
-3. **Fail fast.** A one-off `bench` container runs the demo image's
-   healthcheck against `http://crosstalk:8081`, inside the compose network.
-   Exit 0, or an `answered <status>` error (an HTTP server answered with a
-   non-2xx), means the API is bound. Anything else (connection refused or
-   reset) stops the run with the message above, before any traffic is sent
-   and before step 4's restarts.
+3. **Fail fast.** From the host, the bench reads the ops listener's
+   `/readyz` and requires two running tasks: `live` (every layer stage of
+   the Live detection pipeline is running) and `api` (the operator API's
+   listener is bound). It then calls `GET /operators` on the published API
+   port with `CROSSTALK_API_TOKEN` from `deploy/.env` and requires a 200.
+   Without `live` the export would be empty and the score a real but
+   meaningless zero; without `api` there is no export. Either stops the run
+   with exit 1, before any traffic is sent and before step 4's restarts.
 4. **A fresh world.** The wiki lives in memory, so restarting it empties it
    and the run has no `unattributed_read` rows (no page version from before
    the run). Restarting `crosstalk` clears its in-memory detection state, so
    the export holds only this run. Both restarts happen here, at the start,
    and never between the swarm and the export. The bench waits for both
    containers to report healthy (Docker resets health to `starting` on a
-   restart).
-5. **Live in serve** (pending): see [Pending](#pending).
-6. **Swarm.** The run id is the UTC start time (`20261005T141500Z`). The
+   restart), then repeats step 3's checks against the restarted gateway.
+5. **Swarm.** The run id is the UTC start time (`20261005T141500Z`). The
    bench creates `deploy/bench/<run>/`, records the parameters and the image
    ids in `bench.env`, and runs the `swarm` service once with the run
    directory mounted at `/bench` and `--ground-truth /bench/<run>/truth.jsonl`.
    It runs as the invoking user (`--user $(id -u):$(id -g)`), so the files
    are theirs. The swarm's report is kept in `swarm.txt`. A missing or empty
    `truth.jsonl` stops the run.
-7. **Settle.** Every `--settle` seconds the bench reads `/healthz` and
-   compares `capture.captured` and `pipeline.published` with the previous
-   reading. When both are unchanged across one window, the gateway has
-   taken in everything the swarm sent; the bench then also waits that one
-   window for the evidence to close. More than `--settle-timeout` seconds
-   without a quiet window stops the run. The last body is kept as
-   `healthz.json`.
-8. **Fetch.** `ct-eval swarm-fetch` exports the transmissions from the
+6. **Caught up.** The bench records the moment the swarm exits
+   (`swarm_end_unix_ms` in `bench.env`) and polls `/healthz` every 10 s
+   until Live's `live.watermark_micros` has passed it. Exports are cut at
+   the watermark, so before that the export would miss the run's tail. The
+   watermark advances only when every layer group is empty, trails the
+   clock by `evidence_window_ms + suspected_ttl_ms` and is aligned down to
+   the 5-minute bucket: with the demo flow config (10 s + 60 s) it is
+   reached about 70 s after the swarm stops, and at worst about 6 minutes
+   after. More than `--settle-timeout` seconds stops the run (the
+   detections stay in `crosstalk` until it restarts). The last body is kept
+   as `healthz.json`.
+7. **Fetch.** `ct-eval swarm-fetch` exports the transmissions from the
    truth header's `started_at_unix_ms` onward and fetches each one's
    evidence, with the deployment's API token. It writes `export.jsonl` and
    `evidence.jsonl`. This must happen before anything restarts `crosstalk`.
-9. **Score.** `ct-eval swarm` reads the run's truth, export and evidence,
+   The transmissions export holds **confirmed** transmissions (with their
+   classifications and aggregates), as the spec defines it; suspected ones
+   are not in it. A transmission is confirmed when its read's evidence
+   window closes, well before the watermark passes, so a short run loses
+   nothing to this.
+8. **Score.** `ct-eval swarm` reads the run's truth, export and evidence,
    and the gateway's exchange log and blobs in place on the `data` volume.
    It writes `report/` (`report.json`, `report.txt`, `diagnostics.json`);
    its stdout goes to `score.txt`. The bench prints the headline, for
@@ -184,31 +193,31 @@ binaries (`crosstalk healthcheck`, `crosstalk-demo healthcheck`) report only
 the status, not the body. Reading the counters from inside the network
 would need a new image or a Rust change, so the bench reads the published
 ops port from the host with `curl`, at `CROSSTALK_BIND` (or 127.0.0.1 when
-that is unset or `0.0.0.0`) and `CROSSTALK_OPS_PORT`. The API probe, which
-only needs "does anything answer", does run inside the network.
+that is unset or `0.0.0.0`) and `CROSSTALK_OPS_PORT`. The token check
+uses the published API port (`CROSSTALK_API_PORT`) the same way.
 
 ## Flow config for the bench
 
-The gateway's flow consumer settles on its own clock. Its keys are
+The gateway's Live pipeline reads an optional top-level `flow` section:
 `correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `shards`
-and `tick_ms`, but where they go in the gateway's JSON config is not decided
-yet. `deploy/demo/crosstalk.demo.json` therefore has none of them: the
-gateway refuses unknown fields, and `crates/demo`'s `tests::deploy` keeps
-the demo config equal to `deploy/config/crosstalk.json` except for the
-upstream URL. They are added to the demo config when the gateway accepts
-them. Recommended bench values:
+and `tick_ms`. `deploy/config/crosstalk.json` spells out the defaults (600 s,
+120 s, 1800 s, 1, 1 s); `deploy/demo/crosstalk.demo.json` shortens two for
+the bench, and `crates/demo`'s `tests::deploy` allows exactly those two (and
+the upstream URL) to differ:
 
-| Key | Value | Why |
+| Key | Demo value | Why |
 | --- | --- | --- |
-| `evidence_window_ms` | 10000 | Short enough that a 2-minute run settles quickly; `--settle` defaults to the same 10 s |
-| `suspected_ttl_ms` | 60000 | Lets a suspected transmission be confirmed within a short run's tail |
+| `evidence_window_ms` | 10000 | A transmission confirms 10 s after its read |
+| `suspected_ttl_ms` | 60000 | Keeps the watermark (which trails by both) about a minute behind, not half an hour |
+
+`bench.env` records both values for each run.
 
 ## Files
 
 | File | Role |
 | --- | --- |
 | `deploy/run.sh` | Usage text and the `bench` subcommand; sources `deploy/bench.sh` |
-| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection_api`, `fresh_world`, `require_live_pipeline`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `default_settle_secs`, `ops_url`, `env_value`, `healthz_counter`, `healthz_sample`, `wait_healthy` |
+| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `api_url`, `env_value`, `ready_task`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
 | `deploy/compose.demo.yaml` | The `bench` service: the demo image with entrypoint `ct-eval`, profile `bench`, `restart: "no"`, `user: ${BENCH_UID:-65532}:${BENCH_GID:-65532}`, `CROSSTALK_API_TOKEN`, `./bench:/bench` and `data:/var/lib/crosstalk:ro` |
 | `deploy/demo.Dockerfile` | Builds `crosstalk-demo` and `ct-eval` in one cargo invocation; ships `ct-eval` at `/usr/local/bin/ct-eval` and `crates/eval/gates.toml` at `/usr/local/share/crosstalk-eval/gates.toml`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
 | `.gitignore` | `/deploy/bench/` |
@@ -227,9 +236,11 @@ like the `DEMO_*` variables they are not in `.env.example`.
   only restart is step 4. Every later `compose run` passes `--no-deps`, so
   compose never recreates a dependency, and the bench service declares
   none.
-- **No fake score.** Without the API the run stops at step 3 with exit 1,
-  before the restarts and before any run directory exists. The pending steps warn or say
-  what they wait for; none invents data.
+- **No fake score.** Without Live or the API, or with a token the API
+  refuses, the run stops at step 3 with exit 1, before the restarts and
+  before any run directory exists.
+- **No truncated export.** The export is fetched only once Live's watermark
+  has passed the swarm's end.
 - **One run, one directory.** The run id is the UTC second the swarm
   starts; an existing directory stops the run.
 - **The world is fresh:** an empty wiki and empty detection state at the
@@ -243,22 +254,12 @@ like the `DEMO_*` variables they are not in `.env.example`.
 
 ## Pending
 
-Each is one function in `deploy/bench.sh` with one marker:
-
-| Marker | Function | What it needs |
-| --- | --- | --- |
-| `TODO(live-http)` | `fetch_detections` | `serve` mounting the L8 HTTP API on `api.listen` (8081) with `POST /exports` and `GET /transmissions/{id}/evidence`, behind the `api.token` bearer (`CROSSTALK_API_TOKEN`). The call is already the agreed one; remove the marker once it lands. Until then step 3 stops the run. |
-| `TODO(live-serve)` | `require_live_pipeline` | `serve` running the `Live` detection pipeline, and a way to see that it does (for example a `live` task in `/readyz`'s `tasks`, or a `/healthz` section), so the bench can refuse a gateway that would export nothing. Today it only warns. |
-| `TODO(live-flow-config)` | `default_settle_secs` | The place of the flow keys in the gateway config. Then read `evidence_window_ms` from `deploy/demo/crosstalk.demo.json` as the default `--settle`, and add the recommended values above to that file. |
-| `TODO(live-lag)` | `wait_caught_up` | A detection lag gauge (Live's watermark against the last published exchange) on `/healthz` or `/metrics`, to replace the counter-stability heuristic. |
-
-Questions for the gateway side, beyond those four:
-
-- Does the export hold only confirmed transmissions, or suspected ones too?
-  If only confirmed, the bench must also wait out `suspected_ttl_ms` (or
-  the gateway must say when nothing is pending).
-- An unauthenticated way to tell "API bound" from "not bound" (a `/healthz`
-  on 8081, or the API listed in the ops `/readyz` tasks) would replace the
-  `answered <status>` probe.
-- A `/healthz` body printer in `crosstalk healthcheck` (or the counters as a
-  flag) would let the settle step run inside the network like the rest.
+- **Suspected transmissions.** The export holds confirmed transmissions
+  only; an all-states export (a `states` scope with a state column) is on
+  the gateway's queue. Until then a detection still suspected at export
+  time is not scored.
+- **Lag gauge.** Waiting on the watermark is exact for exports but coarse
+  (5-minute buckets); a per-consumer lag gauge is on the gateway's
+  observability list.
+- **Gates.** `crates/eval/gates.toml` has no `demo-swarm` gates yet; they
+  are set from the first real run on node0, so until then every run passes.

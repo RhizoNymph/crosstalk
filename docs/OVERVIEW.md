@@ -1273,16 +1273,15 @@ Features Index:
       One run: restart wiki and crosstalk at the start (fresh world, empty
       in-memory detection state), run the demo swarm through the real
       gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
-      run id a UTC timestamp), wait until /healthz capture.captured and
-      pipeline.published hold still over one evidence window, export the
+      run id a UTC timestamp), wait until /healthz live.watermark_micros
+      passes the swarm's end (exports are cut at the watermark), export the
       gateway's detections with ct-eval swarm-fetch over the L8 API, and
       score them with ct-eval swarm against the exchange log and blobs read
       in place from the data volume (mounted read-only into the bench
       service). Prints precision, recall and the gate result and passes
-      ct-eval's exit code through (2 = a gate failed). Fails fast when
-      http://crosstalk:8081 does not answer. ct-eval ships in the
-      crosstalk-demo image. Pending gateway work is behind TODO(live-http),
-      TODO(live-serve), TODO(live-flow-config) and TODO(live-lag).
+      ct-eval's exit code through (2 = a gate failed). Fails fast unless
+      /readyz has the `live` and `api` tasks running and the API takes the
+      token. ct-eval ships in the crosstalk-demo image.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh
