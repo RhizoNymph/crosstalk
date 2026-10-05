@@ -6,9 +6,10 @@ pipeline tools around them. It is designed top-down from the operator's
 jobs and meets the gateway at the spec's L8 surface: every read goes
 through `QueryApi`, every action through `OperatorActions::act`, and live
 updates through `LiveFeed`, all from `crosstalk-spec`
-(`spec/types/interfaces/l8_surface.rs`). Until the gateway exists, a
-deterministic fixture backend implements those traits with the spec's
-semantics. The UI declares no traits of its own: the clock, the bucket
+(`spec/types/interfaces/l8_surface.rs`). Real data reaches it only over
+HTTP, from the gateway's L8 API through `crosstalk-client`; a
+deterministic fixture backend and an in-process world backend implement
+the same traits for development, tests and demos. The UI declares no traits of its own: the clock, the bucket
 width, the export formats and the rule defaults are `QueryApi::present`,
 read once per request. [What the UI uses from
 L8](#what-the-ui-uses-from-l8) maps every screen to the spec methods it
@@ -22,16 +23,23 @@ calls and lists the [remaining gaps](#remaining-gaps).
   WebGL elements (topology graph, UMAP projection, time brush), and the
   contract between them.
 - A deterministic fixture backend for development, tests and demos,
-  implementing the spec's L8 traits.
+  implementing the spec's L8 traits; the world backend (the real surface
+  in process, seeded) for dev and demos; and the http backend, the
+  gateway's surface over HTTP, for real data.
 - What the UI uses from L8, the spec gaps it still works around, and the
   behaviour the spec's semantics give the screens.
 
 ## Non-scope
 
-- The L8 HTTP service and every layer below it.
-- Authentication beyond trusted mode (one configured operator holding
-  every permission). Organisation-wide auth and roles come later and must
-  not need new data paths.
+- The L8 HTTP service and every layer below it; the HTTP client
+  (`crosstalk-client`) is used through its public API only.
+- Hosting the gateway's pipeline in the UI process: real data comes only
+  over HTTP.
+- Sign-in, sessions and per-operator credentials. The local backends run
+  in trusted mode (one configured operator holding every permission); the
+  http backend presents one deployment bearer token and acts as the
+  operator the server gives it. Organisation-wide auth and roles come
+  later and must not need new data paths.
 - Native or terminal clients.
 
 ## Users and permissions
@@ -64,11 +72,11 @@ browser ────────────────────────
 ┌───────────────▼──────────────────────────────▼──────────────────────┐
 │ crosstalk-ui (Topcoat 0.9 app)                                       │
 │   pages/  shards/  data/ (#[route] endpoints for elements, SSE)      │
-│   url/ (view state, bucket-aligned scope)   config::Access (Caller)  │
+│   url/ (view state, bucket-aligned scope)   identity::Identity       │
 │   spec QueryApi + OperatorActions + LiveFeed ─── app::AppBackend:    │
 │     Fixture (seeded synthetic, optional replay)                      │
 │     World   (crosstalk_api::InProcess + crosstalk-world seed)        │
-│     Live    (cargo feature `live`: the gateway composition, a stub)  │
+│     Http    (crosstalk_client::HttpClient) ──HTTP──▶ gateway :8081   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,12 +104,17 @@ browser ────────────────────────
   a page shows agree. Helpers that need one of its values
   (`data::timeline::timeline_grid`, `pages::common::topics::topic_trends`,
   `pages::export::request::parse`) take it as a parameter.
-- **Callers come from the spec's operator directory.** `config::Access`
-  loads the spec's `OperatorDirectory` from `AccessConfig::Trusted` with
-  the configured `TrustedOperator` and asks it once for the request
-  caller (`RequestIdentity::Anonymous`): in trusted mode every request is
-  that operator with every permission. `app::caller(cx)` hands it out;
-  `app::can` is `Caller::has`.
+- **Callers come from a spec operator directory.** `config::Access` is a
+  caller and a display name built from the spec's `OperatorDirectory`:
+  `Access::trusted` for the local backends (`AccessConfig::Trusted` with
+  the configured `TrustedOperator`: every permission), `Access::of_operator`
+  for the http backend (an authenticated directory of the one operator
+  the server lists for the token, with exactly its permissions). The app
+  context holds an `identity::Identity` (a `watch` receiver of the
+  current `Access`: fixed for the local backends, refreshed from the
+  server for http; see [Identity over HTTP](#identity-over-http)).
+  `app::access(cx)` and `app::caller(cx)` read it per request; `app::can`
+  is `Caller::has`.
 - **Errors are the spec's.** `error::UiError` is either the spec's
   `QueryError` (an `ActionError` converts through `QueryError::from`) or
   a field the UI refused before calling anything; `error::describe`
@@ -153,17 +166,20 @@ browser ────────────────────────
 | `{"fixture": {"seed": 7}}` (the default config) | `FixtureBackend::try_live`: the deterministic synthetic world, its clock moving on from the end of the data | none |
 | `{"fixture": {"seed": 7, "replay": {"window_minutes": 240, "speed": 10}}}` | `FixtureBackend::try_replay` ([Replay mode](#replay-mode-demo)) | `Service::Replay`, the replay ticker |
 | `{"world": {"seed": 7}}` | `world::WorldBackend`: `crosstalk_api::InProcess` (the `crosstalk-surface` service over the `crosstalk-memory` stores) seeded with `crosstalk_world::World` (anchored at `UI_ANCHOR`, where the fixture's data ends) through the spec's write traits (`world::stores::Seeding`, the memory stores as `WorldStores`) | `Service::World`, the `InProcess` that owns the relay task and the live feed |
-| `{"live": {"proxy_listen": "0.0.0.0:8080"}}` | `live::LiveBackend` (cargo feature `live`, off by default): the gateway's whole composition (`crosstalk_gateway::live::Live::start`, proxy, pipeline, stores, surface) once the gateway provides it. Until then it has no values and starting it fails with `LiveStartError::NotAvailable` ("Live composition not available yet"); without the feature, with `StartError::LiveNotBuilt`. `LiveConfig` is provisional | (the composition's pipeline and proxy, later) |
+| `{"http": {"url": "http://crosstalk:8081", "token": {"env": "CROSSTALK_API_TOKEN"}}}` (`ui/config.http.json`) | `AppBackend::Http(crosstalk_client::HttpClient)`: the gateway's L8 surface over HTTP (`serve --role all` or `--role api`, `api.listen`), the bearer token on every request. The only backend with real data | `Service::Http`, the identity refresher |
 
 - `backend::dispatch` implements `QueryApi`, `OperatorActions` and
-  `LiveFeed` on `AppBackend` by forwarding; `AppExportRows` and
-  `AppStream` are enums over the backends' export rows and live streams.
-  An HTTP backend is one more arm there. `AppBackend::view_end` is the
-  only method of its own: the fixture's in replay mode, `present.now`
-  otherwise.
-- `main.rs` starts the backend, serves until Ctrl+C or SIGTERM
-  (`topcoat::serve` drains in-flight requests), then shuts the service
-  down (`Service::shutdown`: the ticker aborted, or `InProcess::shutdown`,
+  `LiveFeed` on `AppBackend` by forwarding (`on_spec!`); `AppExportRows`
+  and `AppStream` are enums over the backends' export rows and live
+  streams (`Http` holds `HttpExportRows` and `HttpLiveStream`). The http
+  arm logs every failed call ([Error states](#error-states)).
+  `AppBackend::view_end` is the only method of its own: the fixture's in
+  replay mode, `present.now` otherwise.
+- `backend::start` returns `Started { backend, service, identity }`.
+  `main.rs` starts the backend, puts the `Identity` and the backend in the
+  app context, serves until Ctrl+C or SIGTERM (`topcoat::serve` drains
+  in-flight requests), then shuts the service down (`Service::shutdown`:
+  the ticker or the identity refresher aborted, or `InProcess::shutdown`,
   which ends open live streams with `ShuttingDown`).
 - The world backend's clock (`world::ServeClock`) reads just before the
   world's first config load while the stores start and the world is
@@ -193,6 +209,95 @@ fixture, all store or wiring gaps rather than UI code:
   config (researcher and on-call); the UI's caller comes from its own
   trusted config (`config::Access`), whose operator id is the
   researcher's.
+
+### Config
+
+`config::Config::load` reads the JSON file (`CROSSTALK_UI_CONFIG`, default
+`config.json`) with `deny_unknown_fields` at every level and checks it into
+typed values, so a bad config fails at startup with a typed
+`ConfigError`:
+
+```text
+{"listen", "operator"?, "backend": {"fixture" | "world" | "http": ..}}
+  fixture, world ─▶ need "operator" {id, name}  ─▶ Access::trusted          (MissingOperator)
+  http           ─▶ refuse "operator"           (OperatorBesideHttp: the server names the token's operator)
+                    "url"            ─▶ crosstalk_client::BaseUrl          (Url: not http, no host, a query)
+                    "token": {"env"} ─▶ the variable                       (TokenUnset)
+                                     ─▶ crosstalk_api::http::BearerToken::new: ≥ 16 b64token chars (Token)
+                                     ─▶ crosstalk_client::BearerToken
+                    "operator"?      ─▶ OperatorPick::Id(ULID)             (HttpOperator); absent: TheOnlyOne
+```
+
+- The token is never inline: `"token"` is only `{"env": NAME}`, so a
+  string or any other key does not parse. Its `Debug` is redacted, so the
+  config can be logged.
+- `BackendConfig` carries what each backend needs: the local ones their
+  `Access`, the http one `HttpConfig { url, token, operator }`.
+
+### Identity over HTTP
+
+The spec has no "who am I" read, and over HTTP the `&Caller` the trait
+methods take is ignored: the server derives the caller from the bearer
+token (`surface.api.caller-from-session`), from its own operator store.
+The UI therefore learns who it is from the server's directory,
+`QueryApi::operators`, with the fewest assumptions:
+
+```text
+backend::http::start
+  HttpClient::new(url).with_token(token)
+  identity::resolve: operators() ─▶ the current operators (non-empty permissions)
+    OperatorPick::TheOnlyOne ─▶ exactly one (the gateway: one token, one operator), else NoOperator / Several
+    OperatorPick::Id(id)     ─▶ that one, else NotListed / Former
+    ─▶ Access::of_operator: its name, a caller with exactly its permissions
+  identity::spawn_refresh: every 30 s, operators() again for that id ─▶ watch ─▶ Identity
+```
+
+- **The label and the caller are the server's.** "Signed in as" is the
+  server's name for the operator; `app::caller` carries the server's
+  permissions, so `can(caller, permission)` offers exactly what the server
+  allows (pages still render the server's `Forbidden` when it refuses).
+- **Startup fails rather than guess.** An unreachable server, a refused
+  token (`401`) or a token without View (`403`) is
+  `StartError::Http(IdentityError::Read)`; several current operators
+  without `backend.http.operator`, or a named operator the server does not
+  list as current, are typed errors too. The one assumption left is that
+  `backend.http.operator`, when given, names the token's operator; the
+  gateway never needs it.
+- **Changes follow within a refresh.** The refresher re-reads the operator
+  every `identity::REFRESH` (30 s) and sends a changed `Access`; a failed
+  refresh keeps the last one and logs a warning (the server still refuses
+  what the token may not do).
+- A spec read of the request's own caller (operator and permissions)
+  would replace the directory search and `backend.http.operator`.
+
+### Error states
+
+Over HTTP every failure reaches the pages as the spec's error and renders
+in the UI's existing error states, never a panic:
+
+- `crosstalk-client` folds what the spec's errors have no variant for (a
+  transport failure, a timeout, a `401`, a response the binding does not
+  describe) into `QueryError::Store { reason }` / `ActionError::Store`,
+  the reason naming the cause ("no caller: ..." for a `401`). A `403` is
+  the server's `Forbidden { missing }`.
+- A page whose present cannot be read (every page reads it first) is the
+  UI's 500 (`pages::view::defaults_error`, logged at error); a read that
+  fails later renders the in-page error panel (`error::describe`: "the
+  gateway's store failed: ..." or "this needs the ... permission"); data
+  routes answer 500 or 403 (`data::errors::query_error`).
+- `backend::http::log` logs each failed call with `backend = "http"`,
+  `method` and `error`: `Store` at error, `Forbidden` at warn, answers
+  about the request (not found, invalid input, conflicts) at debug. A live
+  stream that ends (the client gave up reconnecting, or the token was
+  refused) is logged at warn with its `LiveEnd`.
+- **Live updates.** `/data/live` subscribes through `HttpLiveStream`,
+  which reads the gateway's `GET /live` as SSE and, when the connection
+  is cut, reconnects with `Last-Event-ID` (the client's `ReconnectPolicy`:
+  8 tries, 250 ms doubling to 10 s), so the gateway replays what the cut
+  lost. A `401`/`403` on reconnect ends it with `SessionEnded`, running
+  out of tries with `ShuttingDown`; `/data/live` then sends its `end`
+  event and the browser's `EventSource` reconnects to the UI with its
+  last id, which the UI passes on as `Resume`.
 
 ## View state and URLs
 
@@ -974,15 +1079,16 @@ checks a fixture export only.
 | --- | --- |
 | `ui/Cargo.toml` | The `crosstalk-ui` package. Pins `topcoat = "=0.9.0"` and every other dependency exactly. `futures-core` (the version Topcoat already pulls in) names the `Stream` trait Topcoat's `Sse` response takes. |
 | `ui/build.rs`, `ui/styles/app.css` | Tailwind 4.3.3 (checksum-pinned on linux-x64) rendered from classes in `src/`. Route-kind colours are theme tokens shared with the elements. `ct-row*` component classes style the topology list rows, which repeat per agent and channel. |
-| `ui/config.json`, `ui/config.demo.json` | Listen address, trusted operator, backend choice (`fixture { seed, replay? }`, `world { seed }`, `live { proxy_listen }`; see [Backends](#backends)). `CROSSTALK_UI_CONFIG` overrides the path. The demo config replays. |
+| `ui/config.json`, `ui/config.demo.json`, `ui/config.http.json` | Listen address, trusted operator (local backends only), backend choice (`fixture { seed, replay? }`, `world { seed }`, `http { url, token: {env}, operator? }`; see [Backends](#backends) and [Config](#config)). `CROSSTALK_UI_CONFIG` overrides the path. The demo config replays; the http config reads the gateway at `http://crosstalk:8081` with `$CROSSTALK_API_TOKEN`. |
 | `ui/src/main.rs` | Loads config, builds the router (pages, app context, assets, runtime) and serves. Raises `recursion_limit` to 256: pages embedding shards nest component futures past the default depth for the `Send` check. |
-| `ui/src/app.rs` | `AppBackend` (re-exported from `backend`), `backend(cx)`, `caller(cx)` (the request's `Caller` from `config::Access`; shards and procedures call it themselves), `access(cx)`, `can(caller, permission)` (`Caller::has`), `present(cx) -> Result<&Present, &QueryError>` (`QueryApi::present` for the request's caller under `#[memoize(as_ref)]`: read at most once per request). |
-| `ui/src/config.rs` | `Config` (listen address, `Access`, `BackendConfig`; `from_env`, `load`), `Access` (built only by `Access::trusted`: the spec's `OperatorDirectory` loaded from `AccessConfig::Trusted` for the configured `TrustedOperator`, the caller it gives a request, the operator's name), `AccessError`, `ConfigError` (typed: read, parse, operator id, operator name, access). |
+| `ui/src/app.rs` | `AppBackend` (re-exported from `backend`), `backend(cx)`, `caller(cx)` (the request's `Caller` from the current `Access`; shards and procedures call it themselves), `access(cx)` (the `Identity`'s current `Access`), `can(caller, permission)` (`Caller::has`), `present(cx) -> Result<&Present, &QueryError>` (`QueryApi::present` for the request's caller under `#[memoize(as_ref)]`: read at most once per request). |
+| `ui/src/config/` | `mod.rs`: `Config` (listen address, `BackendConfig`; `from_env`, `load`, `parse` with an environment lookup), `BackendConfig` (`Fixture { access, seed, replay }`, `World { access, seed }`, `Http(HttpConfig)`), `Access` (`trusted`, `of_operator`: a caller and name from a spec `OperatorDirectory`), `AccessError`, `ConfigError` (typed: read, parse, operator id and name, access, `MissingOperator`, `OperatorBesideHttp`, `Url`, `TokenUnset`, `Token`, `HttpOperator`). `http.rs`: `HttpConfig { url: BaseUrl, token: BearerToken, operator: OperatorPick }`, `OperatorPick` (`TheOnlyOne`, `Id`), `TokenError`; the token checked as the API server checks it. `tests.rs`: the config tests. |
+| `ui/src/identity.rs` | `Identity`: the app context's current `Access`, a `watch` receiver (`fixed`, `watching`, `current`). |
 | `ui/src/error.rs` | `UiError`: `Query(QueryError)` (the spec's error; `From<QueryError>` and `From<ActionError>` through `QueryError::from`) or `Field { field, reason }` (a value the UI refused before calling anything). `describe` words every `QueryError` (the spec's errors carry no text); `permission_name`; `rejection` (a recorded audit `Rejection` as the error it stands for); `export_failure` and `fit_failure` in words. |
-| `ui/src/backend/mod.rs` | The module's docs, `AppBackend` (`Fixture`, `World`, `Live` under the `live` feature), `start(config) -> Started { backend, service }`, `Service` (`Idle`, `Replay`, `World`; `shutdown`), `StartError`, `Result<T>` (the spec's `QueryError`). |
+| `ui/src/backend/mod.rs` | The module's docs, `AppBackend` (`Fixture`, `World`, `Http(HttpClient)`), `start(config) -> Started { backend, service, identity }`, `Service` (`Idle`, `Replay`, `World`, `Http`; `shutdown`), `StartError` (`Fixture`, `World`, `Http(IdentityError)`), `Result<T>` (the spec's `QueryError`). |
 | `ui/src/backend/dispatch.rs` | `QueryApi`, `OperatorActions`, `LiveFeed` on `AppBackend`, forwarding to the configured backend; `AppExportRows`, `AppStream`; `AppBackend::view_end(&Present) -> Timestamp` (the fixture's `view_end`, the present's `now` for every other backend). |
 | `ui/src/backend/world/` | `WorldBackend::start(seed) -> (WorldBackend, InProcess)`: the in-process surface over the memory stores, configured from and seeded with `crosstalk-world`; `ServeClock` (the clock the surface's present reads); `stores::Seeding` (the memory stores as `WorldStores`); `WorldStartError`. |
-| `ui/src/backend/live.rs` | (feature `live`) `LiveBackend` (no values yet), `LiveStartError::NotAvailable`. |
+| `ui/src/backend/http/` | `mod.rs`: `start(&HttpConfig) -> HttpStarted { client, identity, refresh }`. `identity.rs`: `resolve` (the token's operator from `QueryApi::operators`), `pick`, `spawn_refresh`, `REFRESH`, `IdentityError` (`Read`, `NoOperator`, `Several`, `NotListed`, `Former`, `Access`, `Placeholder`). `log.rs`: `outcome` (a failed call logged by severity), `live_ended`, `CallError`, `Severity`. `tests.rs`: the UI over a real in-process HTTP server (nav pages, live, an action, a bad token, gating, refresh). |
 | `ui/src/backend/fixture/` | `FixtureBackend::try_new(seed)` (fails only on a fixture bug; `main` stops then): a deterministic synthetic world (same seed, same world and answers; generated in well under a second), implementing `QueryApi`, `OperatorActions` and `LiveFeed` with the spec's semantics, and `view_end(&Present)` (one bucket past `clock::NOW` in replay mode, `present.now` otherwise). `identity` is the merge table (spec `Agent`s, `MergeRecord`s, `MergeVeto`s behind private fields, changed only as `IdentityResolver` defines: `merge` refuses unknown agents, then `MergeRequest::conflict` (`MergeIntoSelf` first, then `AgentMerged`), then a resolver merge a veto separates, an operator merge deleting those vetoes, the source merged away with its prior state and the agents merged into it repointed; `unmerge` reverts one record through `Agent::revert` and `Agent::restore`, records its `Reversal` and a `MergeVeto::of` it, `MergeAlreadyReverted` the second time; `rename` through `Agent::rename`; refusals mapped by `ActionError::from(ResolveError)`). `world/` generates it through the spec's checked constructors: `agents` (cast; the planned merges and the revert replayed through the merge table; claims recorded per agent as `ClaimSet`s; activity seeded with each traffic-created agent's first exchange), `drafts` and `channels` (channel table; the policy decisions table, built into each channel's checked `PolicyHistory`; detection from traffic; the team-notes promotion applied through `promotion::plan`, the superseded channel's detection frozen at the promotion and later confirmations on it advancing the promoted channel's), `traffic` and `states` (transmissions and accesses), `evidence` (matches, with the origin span's and the read's locations into stored bodies), `blobs` (span records and the blob store: compact bodies built into the spec's `Message` on read, so `Message::part_text` indexes the generated text; `drop_body` for retention), `retention` (the dropped-bodies scenario), `topics` (the model, its topics and assignments) and `catalog` (the spec `TopicVersionHistory` with v1 pinned and v0 dropped by a `RetentionPolicy` keeping the last two activated versions, and each `TopicLineage` with its best link and the others above a 0.6 floor), `rules` (the spec `SinkInfo`s; the `AlertRuleConfig`; an `AlertRuleSet` whose built-ins deliver to every sink, user rules resolved and stored as `CreateRule` stores them as of their creation, the v1 rule carried to v2 by `AlertRuleDef::remap` over the stored lineage, so its `TopicsUnmapped` is exactly `TopicLineage::remap`'s), `alerts` (spec `Alert`s; the refund rule disabled through the same `set_enabled` as the action), `config` (the spec `OperatorDirectory` loaded from an authenticated `AccessConfig` with the researcher (every permission) and the on-call operator; `caller` gives each historical call its `Caller`; the config audit entries: the directory load's `ConfigChange`s, the declared channels, registered agents and built-in rules of the first document, and the design-docs declaration of a later one, each document its own `ConfigHash`), `history` (every past operator call as an `OperatorRecord` with `AuditOutcome::of` its result: the policy decisions and the promotion (with what it superseded), merges and the revert, renames, triage, verdicts (`Unchanged` for a repeat), and the two refused calls (`Forbidden`, `Rejected`)), `letters` (the four dead letters). `store` holds what actions change behind one `tokio::sync::RwLock` (the topic catalog, a spec `TopicVersionHistory` that pins change; channels are `ChannelRecord`s: a spec `Channel`, supersession in its origin, with its `PolicyHistory`, the policy always the history's current one; agents, merges and vetoes are the `Identity` merge table, a merged agent keeping its prior state in `MergedInto`, verdicts are one spec `VerdictLog` per judged transmission, alerts are spec `Alert`s and rules the spec's `AlertRuleSet`, the audit log is `audit::AuditLog`: spec `AuditEntry`s (ids recorded at one instant ascend in recording order), append-only (no update or delete; `append` idempotent on the id, `IdReused` otherwise), projection jobs are `Job::Ready(Projection)` or `Job::Record(ProjectionInfo)` for every other status); `queries/` resolves merged agents and superseded channels at read time and pages with keyset cursors (`linked`: the one place a linked view resolves its filter's `TopicVersionSelector`, against the store's catalog, a spec `TopicVersionHistory` (unknown `NotFound`, never activated `Conflict(TopicVersionNotActivated)`, not retained `VersionNotRetained`, foreign topics `Conflict(TopicsNotInVersion)`), and counts confirmed transmissions by `Confirmed::at` admitted by `TopologyFilter::admits`, accesses by `admits_access`; `graph`: `topology`, `channel_topology` and `overview` (`EdgeTotals::of` the graph, queues as `QueueCounts::tally` defines them) on bucket-aligned windows, checked by `TopologyGraph::new` / `BipartiteGraph::new`; `nodes`: agent nodes (spec label, canonical state, parent chain and claims as `agents::profile` reads them) and channel nodes (`CanonicalOriginKind`, `DetectionKind`, `PolicyKind`, `locator_summary`); `series`: `EdgeStore::series` on the fixture's bucket width; `topics`: the catalog's reads failing as `CatalogError` maps (the history; `TopicSizes` from the assignments of transmissions confirmed in the window, a dropped version's frozen at its drop and refused with a window; the lineage; a version's topics newest id first, the cursor pinning the version); `projection`: `fit_projection` (version resolved as a linked view, `MAX_PENDING` jobs, a queued `ProjectionInfo` run at once through `start` and `complete` or `fail`), the store's reads (`ProjectionStoreError` mapped by the spec), `sample` (bottom-k of the admitted confirmed transmissions by a seeded SplitMix64 key standing in for the spec's BLAKE3, the frame built with `ProjectionFrame::from_points`, a stand-in layout of theme clusters; too few points fail with `TooFewPoints`) and `seed` (the world's jobs: expired, failed when v0 was dropped while queued, fitting and queued; frames are kept `FRAME_RETENTION`, three days); `transmissions`: `edge_transmissions` (what `linked` counts into the edge, newest confirmation first, `Watermarked`), `transmissions_by_id` (`TransmissionSummary::of` rows, newest id first, unknown ids left out) and `quality` (`DetectionQuality::tally` over every transmission with its current verdict), each traversal pinning its topic version in its cursors (`page::versioned`, `page::pinned`; a pinned version no longer retained is `VersionNotRetained`); `evidence`: `transmission`, `transmission_evidence` (`TransmissionEvidence::assemble`, excerpts by `Excerpted::of` from the span records and the blob store; a missing record is `Store`) and `verdicts`; `search`: a linked view over confirmed transmissions (optional window, filter before ranking, deterministic stand-in scores); `agents`: `list` (canonical `AgentProfile`s admitted by `AgentFilter::matches`, newest agent first, cursors bound to the filter only, unaligned windows refused), `one` (an `AgentCluster`: aliases, children, the merge records and vetoes naming the cluster, `AgentLookup::Redirected` for an alias) and `names` (`AgentName::of` the canonical agent, keyed by the id asked for), `profile` (canonical parent, `ClaimSet::union` over the cluster, last seen over the cluster, shared with graph nodes; `traffic`: the agent nodes' counts of the default-filter topology for the window, `EdgeStore::agent_traffic`); `channels`: the registry as `promotion::Registered` entries, `rows` (`ChannelRow`s newest first, each in force with the read's `CrossTraffic` (the `Ctx` tallies every channel's transmissions once per read, merges resolved, so listings, graph nodes, queues and alert visibility agree), counts as `ChannelCounts::tally` of the resource use and `ChannelCounts::routed` of the default-filter graph for the window, all time as `clock::all_time`, unaligned windows refused, superseded rows with their `SupersededInto`, filtered by `ChannelFilter::matches` on the row), `transmissions` (`channel_transmissions`: `ChannelTransmission::of` the transmissions routed to the canonical channel, newest opened first, the cursor pinning the version), `resources` (`ResourceUse` pages, newest resource first, through the canonical channel, cursors bound to channel and window), `names` (`channels::resolve_names`), `policy_history` and `coverage` (`promotion::coverage` for `promotion_preview`); `alerts`: `alerts` (newest id first; the channel filter compares `AlertSubject::resolved` subjects and resolved routes with the channel in force), `alert`, `alert_rules` (built-ins in `BuiltinRule::ALL` order, then user rules newest first, `AlertRuleFilter::matches`); `lists`: `audit` (exactly `AuditFilter::matches`, newest first by `(at, id)`, the cursor bound to the filter) and `dead_letters` (one group or all, newest envelope first, the cursor bound to the group)); `actions/` applies and audits every action as `OperatorActions::act` defines it (the one `required_permission` checked before any effect, `Forbidden` naming it; author and time stamped from the caller and the acceptance time (`Stamp`); every call appended as one `OperatorRecord` (the caller as authenticated, the action, `AuditOutcome::of` the result); refusals the spec's `ActionError`, mapped with the spec's `From` impls where it has them (`ResolveError`, `PromoteError`, `RuleError`, `SelfMerge`) and as each action documents otherwise (`pins::refusal` for `PinError`, `TransmissionNotJudgeable`, `ChannelSuperseded`); `Unchanged` where the state already matched: a store's `Change`, a duplicate policy decision, the verdict in force, an acknowledged alert acknowledged or a resolved one resolved, a pinned version pinned or an unpinned one unpinned; a policy decision is recorded in the channel's history, a superseded channel refused; a promotion follows `promotion::plan`, keeping the channel's id, recording its decision and superseding the covered channels, and returns them as `SupersededChannels`; `pins`: `TopicVersionHistory::pin`/`unpin` on the store's catalog, an unpin followed by retention; sanctioning suppresses the active alerts about the channel and the channels it superseded; subject and outcome recorded on the entry; a verdict is a `TransmissionVerdict::new` appended with `VerdictLog::record`, a repeat appending nothing, and an appended false detection suppresses the transmission's active alerts with `OperatorRejected`; rules follow `AlertRuleStore`: `rules::resolve` checks sinks (`UnknownSink`), a watched-topic rule's version (unknown `UnknownTopics`, not current `TopicVersionNotCurrent`) and topics (`UnknownTopics`), fills a missing remap threshold from the config and embeds a query (`EmbedError` → `QueryTooLong`), a built-in update is `RuleNotEditable`, `AlertRuleDef::update` retargets and enables a stale rule, `set_enabled` refuses enabling a stale rule (`RuleStale`) and disabling suppresses the rule's active alerts, all mapped by `ActionError::from(RuleError)`; acknowledging an acknowledged alert or resolving a resolved one changes nothing (`Unchanged`), acknowledging a resolved or suppressed alert or resolving a suppressed one is `AlertNotActive`); `surface` implements `QueryApi` (`present` from `queries::present`: the clock, `clock::BUCKET`, `export::FORMATS`, the active version as the rule version, the `AlertRuleConfig`'s default remap threshold (0.8, which `CreateRule` also fills a blank threshold with), `FRAME_RETENTION`), `OperatorActions` and `LiveFeed` over the modules below (`mod.rs` holds the struct, `try_new` and test handles); `live/` is `LiveFeed` (`Feed`: the log (`log`: entries numbered in one epoch, dropped after the retention) behind a `tokio::sync::RwLock` and a `broadcast` fan-out of `LiveConfig::buffer` entries; `publish` appends and sends without waiting; `subscribe` checks View, plans with `FeedWindow::resume` and joins the fan-out under the log's lock; `stream`: `FeedStream`, a `LiveStream` returning the planned resync or replay, then live entries `visible_to` the caller (passed-over ones still advance its cursor), a heartbeat every `LiveConfig::heartbeat`, and `Lagged` or `ShuttingDown` once and for good), fed from `act` (`actions::changes`: the `Changed` each store publishes, from the action and its outcome plus the alerts and topic versions whose state changed) and `fit_projection`; `export/` is `QueryApi::export` (`mod`: the permission first, a Parquet export refused with `Store` (the fixture writes JSONL only, `FORMATS`), the watermark, the plan, `ExportLimits::check` against `MAX_ROWS` (5,000: a week of transmissions or edge buckets fits, a week of access buckets does not), the checked `ExportHeader`, everything under the write lock; every call audited as an `ExportRecord`: `Refused(error)`, or `Started` before the header is returned; `plan`: `Snapshot` implements the spec's `ExportSource` over one `Ctx` (resolution and verdicts captured), resolving the version as a linked view, cutting the window with `settled_window`, refusing unaligned edge and access windows, reading a projection through `queries::projection::stored`, and reading every row up front into `PlannedRows` (a `RowSource`); `rows`: transmissions (`Linked::admitted`, `TransmissionRow::of`, content from the evidence cut with `ExcerptWindow::MATCH_ONLY`), edge and access buckets, topics (zero counts included), `projection_rows`, `verdict_rows`, each sorted by `RowKey`; `stream`: `ExportRows`, the spec's `SealedRows` with a ledger that appends `Ended(trailer)` when the trailer is yielded and `Abandoned { rows }` when the stream is dropped first; `digest`: `RowDigest`, four FNV-1a lanes keyed by `ROW_DIGEST_CONTEXT`, a stand-in for BLAKE3); `world/topics` also holds the fixture's text embedder (`embed`: theme vectors weighted by vocabulary hits plus hashed word axes, text over `QUERY_CONTEXT_CHARS` refused as `EmbedError::TooLong`), used for `CreateRule`/`UpdateRule` and the generated semantic rules; `text/` holds the message templates and codecs; `rng` is SplitMix64; `tests/` holds the fixture's tests by area (world, graph, series, lists, transmissions, topics, projections, channels, promotion, agents, rules, triage, governance, outcomes, audit, export, live, scenarios, view_end). The world: 7 days ending at `now()` (2026-10-03T00:00Z, watermark ten minutes earlier), about 5,000 transmissions on a weekday daytime curve in every state (in-flight states sit in the last quarter hour) and every route, match kind (decode chains such as base64 → url) and carrier. 40 canonical agents across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with sub-agents, three config-registered agents with no traffic, and labels. Scenarios: pi and oh-my-pi agents labelled `pi-scraper` and `omp-orchestrator` (and two unlabelled ones) also claim Claude Code; `atlas-lead` has a resolver-merged alias whose traffic to it becomes a dropped self-edge; one pi agent holds two aliases, one repointed by a later merge; an operator merge was reverted and left a veto (the oh-my-pi agent with a veto on its page). Channels (a discovered channel holds only its seed resource, its other planned locators dropped, as in the port and the world seed; a resource joins a channel only through a declared pattern; 15 stored, 13 listed by default): declared sanctioned `wiki.corp.internal/eng`, `git.corp.internal/platform/monorepo` and `issues.corp.internal` (active); `docs.corp.internal/design` awaiting traffic; `nfs-01:/mnt/shared/releases` unused, with an open sanctioned-unused alert; the hijacked public wiki is the discovered, unreviewed, active channel seeded at `wiki.example.org/wiki/Agent_Coordination` (injection-style text, the busiest channel), with its talk page as a second discovered channel the same `UrlPrefix` pattern covers; `paste.example.net` unsanctioned; the `memory` MCP server reset to unreviewed; `/tmp/agent-handoff` on `devbox-3` sanctioned; `gist.example.com` dormant; an `s3://agent-scratch` object one agent writes and two others read with only suspected traffic (active and unconfirmed: in the unconfirmed tab and the review queue, marked, its suspected transmissions on its page); `/home/dev/.codex/handoff.md` on `devbox-7`, whose only traffic is between `al1` and `cx1`, two ids an operator later merged, so it is hidden (an unmerge of that merge lists it again, and its new-channel alert with it). The `kv_put scratch/notes` entry only `cc7` writes and reads is a resource on no channel (`Scenario::lone_resource`): its accesses are recorded, but it is no channel, has no node and raised no alert; `notes.corp.internal/team-a`, discovered at its retro page and promoted by the researcher with the `/team-a` prefix (sanctioned, same id), whose promotion superseded the discovered `notes.corp.internal/team-a/standup` (detection frozen at the promotion). Policy histories: the config declarations, the `memory` server sanctioned then reset, the pastebin unsanctioned, the handoff directory sanctioned, the promotion's decision. Confirmed transmissions not yet classified have no topic. Topics: v0 (unfitted, once active, dropped by retention when v2 was activated), v1 (six topics, fitted six days ago, pinned) and v2 (ten, two days ago, active); v1's "Engineering chatter" has no link at or above the 0.8 remap threshold in v2, so its watched-topic rule is stale. Projections: four seeded jobs (expired, failed, fitting, queued); every fit adds a ready (or failed) job. Rules: the five built-ins (fixed ids 1 to 5, every sink), a watched-topic rule on v2 (credentials and agent instructions, the configured remap threshold), a v1 rule stale (and still enabled) with `TopicsUnmapped` (no sink), a semantic query on paste sites (with an agent-subject alert) and a disabled refund rule; sinks soc-webhook (last delivery failed), #agent-alerts, local-log. About 650 alerts in every state and suppress reason, deduplicated occurrence counts on channel alerts. Two operators in an authenticated `OperatorDirectory`: `researcher` (the trusted operator in `config.json`, every permission) and `oncall` (view, content, triage), with the config entries that defined them; about 60 verdicts (one withdrawn), the oldest six confirmed transmissions with their sender's or reader's message bodies dropped by content retention (alternating; `Scenario::dropped`), a few hundred audit entries including two refused actions (the on-call operator's forbidden policy change and its acknowledgement of a resolved alert) and the config changes, and four dead letters (one per consumer group). |
 | `ui/src/url/` | `ulid` (Crockford text for every id), `route` (URL text for `Route` and `RouteKind`), `scope` (`Scope`: the window, pinned topic version and `ViewFilter` of a view, including `unconfirmed_channels`, the shared `u` key, with `confirmed_only` and `toggle_confirmed_only`; `Scope::topology_filter`, the one place the spec's `TopologyFilter` is built, pinned to the scope's version; `align_down`, `align_up`, `is_aligned` on a `BucketWidth`), `view_state` (`RawViewState` → `ViewState` and back to the canonical query; `Defaults` with the bucket width; `Parsed` with `complete` and `aligned`, an unaligned window snapped outward). |
 | `ui/src/pages/` | `mod.rs` (root layout; navigation links carry the current view state when the request has a complete one; `<ct-live>` and its script for callers with View, and the page inside `data-live-region="page"`), `view.rs` (`defaults(cx)`: from the request's `app::present`, the default window, the 24 hours before `AppBackend::view_end` on bucket boundaries, the bucket width from its `bucket_width`, and the active version of `topic_versions`; `defaults_error`; async `view_state(cx)`: parse, default, redirect to canonical (an unaligned window to its snapped form); async `current_state(cx)` for the layout; async `state_from_query(cx, query)`: a shard's view-state argument, parsed strictly), one module per screen. |
@@ -999,7 +1105,7 @@ checks a fixture export only.
 | `ui/src/pages/audit/` | `page` (`/audit`, `Audit` first; `AuditRow`: subject cells with page and filter links, `OutcomeCell`), `entry` (`entry_view`: a spec `AuditEntry` as `EntryView` (actor from `AuditEntry::by`, `subjects()`, `OutcomeView`: applied with `Created` subjects, unchanged, rejected in words, forbidden), shared with the alert page), `query` (`op`: an operator or `config` into `AuditFilter::by`; `subject`; `span`), `describe` (operator actions, config changes and export events in words, and notes), `subject` (codes for every spec `AuditSubject`, `tv.<n>` for topic versions, and links). |
 | `ui/src/pages/pipeline/` | `/pipeline` GET (`group` key: `parse_group`) and POST `replay` (back to the same group). |
 | `ui/src/components/` | Shared markup: `live` (`live_watch`, `watch_one`: a page's `data-live-watch` tokens), route and claim badges, content-hidden marker, error and empty states, page header, name and time formatting (`agent_name`, `agent_name_of` for an `AgentName`), `abbrev_digest`. `badge` (`Tone`, the `Badge` trait for policy, origin, detection, agent state, alert state, evidence strength, transmission state and verdict; `state_badge`, `kind_badge`), `table` (`data_table` and cell classes), `paging` (`PageLinks`, `pagination`), `nav` (`tabs`, `filter_chip`, `segmented`), `sparkline` (inline SVG trend; `points`), formatting helpers `format_time_short`, `format_bytes`, `format_share`, `format_duration`, `locator` (`locator_text`, `pattern_text`, text forms), `href` (`href`: a path with the view state and page pairs; `state_pairs`), `form` (control classes, `state_inputs` for `GET` forms), `feedback` (`flash_banner`). |
-| `ui/src/testing/` | Test-only: a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body (a fresh world per request), `Session` (one router, so state carries across requests), `operator` (the trusted `Access`), `caller_with`/`caller_of` (callers holding given permissions), `world`/`agent_id`/`channel_id` (scenario ids from a same-seed copy), and `cx`/`render` for rendering components. |
+| `ui/src/testing/` | Test-only: `http.rs` (`HttpWorld`: the world's surface served by `crosstalk_api::http` on `127.0.0.1:0` with a bearer token per world operator, clients and UI routers over it, `load_access` for a server-side config reload); a router over the fixture backend with an asset catalog built from the test binary, `get`/`post` returning status, location and body (a fresh world per request), `Session` (one router, so state carries across requests), `operator` (the trusted `Access`), `caller_with`/`caller_of` (callers holding given permissions), `world`/`agent_id`/`channel_id` (scenario ids from a same-seed copy), and `cx`/`render` for rendering components. |
 | `ui/src/data/mod.rs` | The data routes' module: route table, `require(caller, permission)` (403). |
 | `ui/src/data/query.rs` | `parse_strict` (every required key, and a window on bucket boundaries, or an error; never a redirect; same `ViewState::parse` and `pages::view::defaults`), `view_state(cx)` (it, as a 400). `buckets(cx)` and `parse_buckets`: `buckets=` in 1..=1000, default 96. |
 | `ui/src/data/errors.rs` | `status_of(UiError)` and `query_error(impl Into<UiError>)`: a refused field and `VersionNotRetained`, `InvalidInput`, `InvalidCursor` and the URL's version and projection conflicts → 400 with the `error::describe` message; `Forbidden` → 403; `NotFound`, `ProjectionNotRetained` → 404; others → 500 (logged). |
@@ -1059,7 +1165,19 @@ checks a fixture export only.
   at most once (`app::present`). Nothing outside `backend/`, `app.rs` and
   the tests names `FixtureBackend`.
 - Every caller comes from the spec's `OperatorDirectory`
-  (`config::Access`); pages never build a `Caller` themselves.
+  (`config::Access`, read through `identity::Identity`); pages never build
+  a `Caller` themselves.
+- Over HTTP, the operator the UI shows and gates on is the server's for
+  the token (`QueryApi::operators`), never config's: the http backend
+  takes no `operator` section, and its permissions are the server's, at
+  most one refresh (30 s) stale.
+- The API token is only ever named by an environment variable in config,
+  checked at startup as the API server checks it, and never logged
+  (`BearerToken`'s `Debug` is redacted).
+- A failed call over HTTP renders as the UI's existing error states and
+  is logged with `backend = "http"` (store and transport failures at
+  error, `Forbidden` at warn); nothing in the http path panics on a
+  server's answer.
 - Every window sent to the backend is on bucket boundaries
   (`url::scope::is_aligned`), and every linked view is sent the scope's
   filter pinned to the URL's topic version (`Scope::topology_filter`).
@@ -1089,9 +1207,10 @@ checks a fixture export only.
   needs rustc 1.98 or newer. The build script downloads the Tailwind CLI
   from GitHub on first build.
 - Workspace: `crosstalk-ui` is a member of the root Cargo workspace; build
-  from the root with `cargo build -p crosstalk-ui` (`--features live` for
-  the live stub). Its dependencies are `crosstalk-spec` and, for the
-  world backend, `crosstalk-api`, `crosstalk-surface`, `crosstalk-memory`,
+  from the root with `cargo build -p crosstalk-ui`. Its dependencies are
+  `crosstalk-spec`, `crosstalk-client` (the http backend) and, for the
+  world backend, `crosstalk-api` (also the token check, and the HTTP
+  server in tests), `crosstalk-surface`, `crosstalk-memory`,
   `crosstalk-transport` and `crosstalk-world` (the architecture test
   classifies the UI as a composer: it may depend on layer crates, and no
   layer crate may depend on it).

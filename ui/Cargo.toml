@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 anyhow = "=1.0.104"
 crosstalk-api = { path = "../crates/api" }
+crosstalk-client = { path = "../crates/client" }
 crosstalk-memory = { path = "../crates/memory" }
 crosstalk-spec = { path = "../spec" }
 crosstalk-surface = { path = "../crates/surface" }
@@ -28,11 +29,6 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 
 [dev-dependencies]
 crosstalk-conformance = { path = "../crates/conformance" }
-
-[features]
-# Hosts the gateway's whole composition (`"backend": {"live": ..}`); a stub
-# until the gateway provides it.
-live = []
 
 [build-dependencies]
 topcoat = { version = "=0.9.0", default-features = false, features = ["tailwind"] }

@@ -98,8 +98,10 @@ Overview:
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
     for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint.
     The operator UI (crosstalk-ui, ui/) runs on the spec's L8 traits,
-    implemented by a fixture backend by default, or by the in-process
-    surface seeded with the synthetic world (ui). The other crates are
+    implemented by a fixture backend by default, by the in-process
+    surface seeded with the synthetic world (dev and demos), or by the
+    gateway's L8 HTTP API through crosstalk-client, the only path for real
+    data (ui). The other crates are
     still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
@@ -225,13 +227,16 @@ Overview:
       and subscribes only through the spec's L8 traits (QueryApi,
       OperatorActions, LiveFeed), called on one concrete backend type, an
       enum over the deterministic fixture, the world (crosstalk-api's
-      InProcess surface seeded by crosstalk-world) and, later,
-      crosstalk-client's HTTP backend as one more arm. The clock, bucket
+      InProcess surface seeded by crosstalk-world) and crosstalk-client's
+      HttpClient over the gateway's API (bearer token from the
+      environment). The clock, bucket
       width, export formats and rule defaults are QueryApi::present, read
       once per request; the one backend question outside the spec is
       where a default view ends (AppBackend::view_end: the present's now,
       unless the fixture replays up to a fixed end). Callers come from the spec's
-      operator directory in trusted mode; view windows are bucket-aligned
+      operator directory: trusted mode for the local backends, and over
+      HTTP the server's operator for the token (found in
+      QueryApi::operators, refreshed every 30 s); view windows are bucket-aligned
       and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
@@ -340,7 +345,11 @@ Overview:
     URL (a bucket-aligned window and a pinned topic version), sends every
     operator action through OperatorActions::act, downloads exports as
     JSON Lines, and re-renders a page's region when the live feed (SSE from
-    LiveFeed) names something the page shows.
+    LiveFeed) names something the page shows. With real data it does all of
+    this over HTTP: crosstalk-client sends each call to the gateway's API
+    with the bearer token, the gateway derives the caller from the token,
+    and the UI's own caller (its label and permission gating) is the
+    server's operator for that token.
 
 Features Index:
   type_spec:
@@ -1358,9 +1367,11 @@ Features Index:
       included, on one of three backends (backend::AppBackend): the
       deterministic fixture (default; optionally replaying its last hours
       for demos), the world backend (crosstalk_api::InProcess over the
-      memory stores, seeded with crosstalk-world), or the gateway's live
-      composition behind the `live` cargo feature (a stub until the
-      gateway provides it). The UI declares no traits of its own: the
+      memory stores, seeded with crosstalk-world; dev and demos), or the
+      http backend (crosstalk_client::HttpClient over the gateway's L8 API,
+      `"backend": {"http": {"url", "token": {"env"}}}`; the operator and
+      its permissions are the server's for the token; transport and auth
+      failures render as the UI's error states and are logged). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
       default view ends from AppBackend::view_end.
@@ -1373,6 +1384,9 @@ Features Index:
       - ui/src/backend/dispatch.rs
       - ui/src/backend/fixture/surface.rs
       - ui/src/backend/world/mod.rs
+      - ui/src/backend/http/mod.rs
+      - ui/src/config/mod.rs
+      - ui/src/identity.rs
       - ui/src/pages/mod.rs
       - ui/src/pages/view.rs
       - ui/src/data/mod.rs
@@ -1383,7 +1397,7 @@ Features Index:
       - ui/elements/src/topology/element.ts
       - ui/elements/src/live/element.ts
       - deploy/ui.Dockerfile
-    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service]
+    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service, http_client, http_server]
     doc: docs/features/ui.md
   eval:
     description: >

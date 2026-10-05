@@ -243,7 +243,7 @@ mod tests {
     ) -> (Router, StatusCode, String, BodyDataStream) {
         let router = Router::builder()
             .discover()
-            .app_context(operator())
+            .app_context(crate::identity::Identity::fixed(operator()))
             .app_context(crate::backend::AppBackend::from(backend))
             .build();
         let mut request = Request::builder().uri("/data/live");

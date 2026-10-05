@@ -176,4 +176,11 @@ impl WorldBackend {
     pub fn surface(&self) -> &WorldSurface {
         &self.surface
     }
+
+    /// The serving clock, for an HTTP server over the same surface in
+    /// tests.
+    #[cfg(test)]
+    pub fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
 }
