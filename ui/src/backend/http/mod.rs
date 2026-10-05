@@ -24,6 +24,7 @@
 //!
 //! Failures render as the pages' error states and are logged ([`log`]).
 
+pub mod failure;
 pub mod identity;
 pub mod log;
 
@@ -51,7 +52,7 @@ pub async fn start(config: &HttpConfig) -> Result<HttpStarted, IdentityError> {
     let access = identity::resolve(&client, config.operator).await?;
     let operator = access.caller().operator();
     tracing::info!(
-        url = %config.url,
+        url = %failure::public_url(&config.url),
         operator = %operator.to_ulid(),
         name = access.name(),
         permissions = ?access.caller().permissions(),

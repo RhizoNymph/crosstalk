@@ -1398,7 +1398,10 @@ Features Index:
       http backend (crosstalk_client::HttpClient over the gateway's L8 API,
       `"backend": {"http": {"url", "token": {"env"}}}`; the operator and
       its permissions are the server's for the token; transport and auth
-      failures render as the UI's error states and are logged). The UI declares no traits of its own: the
+      failures render as the UI's error states and are logged, and a page
+      that cannot read the present because the gateway is unreachable or
+      refused the token is a full-page gateway state, 503 or 502, showing
+      the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
       default view ends from AppBackend::view_end.

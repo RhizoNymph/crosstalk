@@ -24,7 +24,7 @@ use crate::pages::common::paging::first;
 use crate::testing::http::{
     HttpWorld, ONCALL_TOKEN, RESEARCHER_TOKEN, UNKNOWN_TOKEN, oncall, researcher, stranger,
 };
-use crate::testing::{Reply, get_from};
+use crate::testing::{Reply, get_from, send_to};
 use crate::url::ulid::UlidId;
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, OperatorConfig, OperatorName,
@@ -274,28 +274,63 @@ async fn an_operator_action_round_trips_over_http() {
     world.stop().await;
 }
 
+/// Asserts `reply` is the full-page gateway state: `status`, `title`, the
+/// gateway's URL, the layout around it, and no token.
+fn assert_gateway_page(reply: &Reply, status: StatusCode, title: &str, url: &str, context: &str) {
+    assert_eq!(reply.status, status, "{context}: {}", reply.body);
+    assert!(reply.body.contains(title), "{context}: {}", reply.body);
+    assert!(reply.body.contains(url), "{context}: the gateway url {url}");
+    assert!(
+        reply.body.starts_with("<!DOCTYPE html>") && reply.body.contains("signed in as"),
+        "{context}: a full page in the layout"
+    );
+    for token in [RESEARCHER_TOKEN, ONCALL_TOKEN, UNKNOWN_TOKEN] {
+        assert!(
+            !reply.body.contains(token),
+            "{context}: a token on the page"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_bad_token_renders_an_error_page() {
+async fn a_refused_token_renders_the_token_refused_page() {
     let world = HttpWorld::start().await;
     let access = world
         .access(RESEARCHER_TOKEN, researcher())
         .await
         .expect("access");
     // The token is rotated on the server after the UI learned who it is.
-    // Every page reads the present first, and a page whose view defaults
-    // cannot be read is the UI's 500 (`pages::view::defaults_error`, which
-    // logs the client's reason: "no caller").
     let router = world.router(UNKNOWN_TOKEN, access);
+    let url = world.base.to_string();
     for path in NAV {
         let (at, reply) = follow(&router, path).await;
-        assert_eq!(
-            reply.status,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "{path} ({at}): {}",
-            reply.body
+        assert_gateway_page(
+            &reply,
+            StatusCode::BAD_GATEWAY,
+            "The gateway refused the token",
+            &url,
+            &format!("{path} ({at})"),
         );
     }
-    // A data route says the same.
+    // An action posted meanwhile gets the same page, not a 500.
+    let posted = send_to(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri("/pipeline")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("action=replay"))
+            .expect("request"),
+    )
+    .await;
+    assert_gateway_page(
+        &posted,
+        StatusCode::BAD_GATEWAY,
+        "The gateway refused the token",
+        &url,
+        "POST /pipeline",
+    );
+    // Data routes keep their status: the elements show their own error.
     let live = router
         .handle(
             Request::builder()
@@ -305,6 +340,38 @@ async fn a_bad_token_renders_an_error_page() {
         )
         .await;
     assert_eq!(live.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    drop(router);
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_gateway_renders_the_unreachable_page() {
+    let world = HttpWorld::start().await;
+    let access = world
+        .access(RESEARCHER_TOKEN, researcher())
+        .await
+        .expect("access");
+    let router = world.router(RESEARCHER_TOKEN, access);
+    let url = world.base.to_string();
+    world.stop().await;
+    for path in NAV {
+        let (at, reply) = follow(&router, path).await;
+        assert_gateway_page(
+            &reply,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The gateway is unreachable",
+            &url,
+            &format!("{path} ({at})"),
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gateway_page_is_not_a_route_of_its_own() {
+    let world = HttpWorld::start().await;
+    let router = researcher_router(&world).await;
+    let reply = get_from(&router, "/_gateway").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
     drop(router);
     world.stop().await;
 }
